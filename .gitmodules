@@ -1,0 +1,3 @@
+[submodule "cloudstream_ref_android"]
+	path = cloudstream_ref_android
+	url = git@github.com:recloudstream/cloudstream.git
