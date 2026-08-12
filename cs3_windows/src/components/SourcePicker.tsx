@@ -1,0 +1,300 @@
+import React, { useMemo, useState } from 'react';
+import {
+  X, Users, HardDrive, Loader2, AlertTriangle, Filter, ChevronDown,
+  ChevronRight, Play, Download, Info, Zap, ShieldAlert,
+} from 'lucide-react';
+import type { TorrentResult } from '../types/torrent';
+import { Resolution } from '../types/torrent';
+
+export interface SourcePickerData {
+  sources: TorrentResult[];
+  filtered: Array<{ title: string; reason: string; seeders: number }>;
+  indexerOutcomes: Array<{
+    id: string;
+    name: string;
+    ok: boolean;
+    count: number;
+    latencyMs: number;
+    error?: string;
+    skipped?: string;
+  }>;
+  emptyReason?: string;
+  query: { title: string; season?: number; episode?: number; imdbId?: string };
+}
+
+interface SourcePickerProps {
+  isOpen: boolean;
+  isLoading: boolean;
+  data: SourcePickerData | null;
+  error?: string;
+  contextLabel: string;
+  onClose: () => void;
+  onPlay: (source: TorrentResult) => void;
+  onDownload: (source: TorrentResult) => void;
+  onRetry: () => void;
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+/** Seeder count is the strongest predictor of whether a stream will actually start. */
+function healthClass(seeders: number): string {
+  if (seeders >= 50) return 'health-strong';
+  if (seeders >= 10) return 'health-ok';
+  if (seeders >= 1) return 'health-weak';
+  return 'health-dead';
+}
+
+function resolutionLabel(resolution: number): string {
+  switch (resolution) {
+    case Resolution.UHD_4K: return '4K';
+    case Resolution.QHD: return '1440p';
+    case Resolution.FHD: return '1080p';
+    case Resolution.HD: return '720p';
+    case Resolution.SD: return '480p';
+    case Resolution.LD: return '360p';
+    default: return 'SD?';
+  }
+}
+
+/**
+ * Ranked source list.
+ *
+ * The design goal is that the user rarely needs to think: the top row is
+ * pre-selected and "Play best" starts it. Everything else — the score reasons,
+ * the filtered list, per-indexer diagnostics — is available but folded away,
+ * because a source list that demands study on every play is a worse experience
+ * than Android's, not a better one.
+ */
+export const SourcePicker: React.FC<SourcePickerProps> = ({
+  isOpen, isLoading, data, error, contextLabel, onClose, onPlay, onDownload, onRetry,
+}) => {
+  const [showFiltered, setShowFiltered] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [expandedHash, setExpandedHash] = useState<string | null>(null);
+
+  const best = useMemo(() => data?.sources[0] ?? null, [data]);
+
+  if (!isOpen) return null;
+
+  const failedIndexers = data?.indexerOutcomes.filter((o) => !o.ok && !o.skipped) ?? [];
+
+  return (
+    <div className="modal-backdrop" onClick={onClose} role="presentation">
+      <div
+        className="source-picker"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Select a source"
+      >
+        <header className="source-picker__header">
+          <div>
+            <h2>Select a source</h2>
+            <p className="source-picker__context">{contextLabel}</p>
+          </div>
+          <button className="icon-button" onClick={onClose} aria-label="Close">
+            <X size={20} />
+          </button>
+        </header>
+
+        {isLoading && (
+          <div className="source-picker__state">
+            <Loader2 className="spin" size={28} />
+            <p>Searching indexers…</p>
+            <span className="muted">Querying every enabled indexer in parallel.</span>
+          </div>
+        )}
+
+        {!isLoading && error && (
+          <div className="source-picker__state source-picker__state--error">
+            <AlertTriangle size={28} />
+            <p>Source search failed</p>
+            <span className="muted">{error}</span>
+            <button className="btn btn-primary" onClick={onRetry}>Try again</button>
+          </div>
+        )}
+
+        {!isLoading && !error && data && data.sources.length === 0 && (
+          <div className="source-picker__state">
+            <AlertTriangle size={28} />
+            <p>No playable sources found</p>
+            <span className="muted">{data.emptyReason ?? 'Nothing matched this title.'}</span>
+            <div className="source-picker__state-actions">
+              <button className="btn" onClick={onRetry}>Search again</button>
+              {data.filtered.length > 0 && (
+                <button className="btn" onClick={() => setShowFiltered(true)}>
+                  Show {data.filtered.length} filtered
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {!isLoading && !error && data && data.sources.length > 0 && (
+          <>
+            <div className="source-picker__toolbar">
+              <span className="muted">
+                {data.sources.length} source{data.sources.length === 1 ? '' : 's'}
+                {data.query.imdbId && ` · matched on ${data.query.imdbId}`}
+              </span>
+              {best && (
+                <button className="btn btn-primary" onClick={() => onPlay(best)}>
+                  <Zap size={15} /> Play best
+                </button>
+              )}
+            </div>
+
+            {failedIndexers.length > 0 && (
+              <div className="source-picker__warning">
+                <ShieldAlert size={15} />
+                <span>
+                  {failedIndexers.length} indexer{failedIndexers.length === 1 ? '' : 's'} failed —
+                  results may be incomplete.
+                </span>
+                <button className="link-button" onClick={() => setShowDiagnostics((v) => !v)}>
+                  details
+                </button>
+              </div>
+            )}
+
+            <ul className="source-list">
+              {data.sources.map((source, index) => {
+                const isExpanded = expandedHash === source.infoHash;
+                return (
+                  <li
+                    key={`${source.infoHash}-${source.indexerId}`}
+                    className={`source-row${index === 0 ? ' source-row--best' : ''}`}
+                  >
+                    <div className="source-row__main">
+                      <div className="source-row__badges">
+                        <span className={`badge badge--res-${source.parsed.resolution}`}>
+                          {resolutionLabel(source.parsed.resolution)}
+                        </span>
+                        {source.parsed.source !== 'Unknown' && (
+                          <span className="badge">{source.parsed.source}</span>
+                        )}
+                        {source.parsed.videoCodec !== 'Unknown' && (
+                          <span className="badge badge--muted">{source.parsed.videoCodec}</span>
+                        )}
+                        {source.parsed.hdr.map((h) => (
+                          <span key={h} className="badge badge--hdr">{h}</span>
+                        ))}
+                        {source.parsed.isSeasonPack && (
+                          <span className="badge badge--muted">Season pack</span>
+                        )}
+                      </div>
+
+                      <p className="source-row__title" title={source.title}>{source.title}</p>
+
+                      <div className="source-row__meta">
+                        <span className={healthClass(source.seeders)}>
+                          <Users size={13} /> {source.seeders}
+                        </span>
+                        <span><HardDrive size={13} /> {formatBytes(source.sizeBytes)}</span>
+                        <span className="muted">{source.indexerName}</span>
+                        {source.parsed.releaseGroup && (
+                          <span className="muted">{source.parsed.releaseGroup}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="source-row__actions">
+                      <button className="btn btn-primary btn-sm" onClick={() => onPlay(source)}>
+                        <Play size={14} /> Play
+                      </button>
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => onDownload(source)}
+                        title="Download this source"
+                      >
+                        <Download size={14} />
+                      </button>
+                      <button
+                        className="icon-button"
+                        onClick={() => setExpandedHash(isExpanded ? null : source.infoHash)}
+                        aria-label="Why this ranking?"
+                        title="Why this ranking?"
+                      >
+                        <Info size={15} />
+                      </button>
+                    </div>
+
+                    {isExpanded && (
+                      <div className="source-row__why">
+                        <strong>Score {source.score}</strong>
+                        <ul>
+                          {source.scoreReasons.map((reason) => (
+                            <li key={reason}>{reason}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
+
+        {data && (data.filtered.length > 0 || data.indexerOutcomes.length > 0) && (
+          <footer className="source-picker__footer">
+            {data.filtered.length > 0 && (
+              <button className="link-button" onClick={() => setShowFiltered((v) => !v)}>
+                {showFiltered ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                <Filter size={14} /> {data.filtered.length} filtered out
+              </button>
+            )}
+            <button className="link-button" onClick={() => setShowDiagnostics((v) => !v)}>
+              {showDiagnostics ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              Indexer diagnostics
+            </button>
+
+            {showFiltered && (
+              <ul className="filtered-list">
+                {data.filtered.map((item) => (
+                  <li key={`${item.title}-${item.reason}`}>
+                    <span className="filtered-list__title">{item.title}</span>
+                    <span className="muted">{item.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {showDiagnostics && (
+              <table className="diagnostics-table">
+                <thead>
+                  <tr><th>Indexer</th><th>Result</th><th>Latency</th></tr>
+                </thead>
+                <tbody>
+                  {data.indexerOutcomes.map((outcome) => (
+                    <tr key={outcome.id}>
+                      <td>{outcome.name}</td>
+                      <td>
+                        {outcome.skipped
+                          ? <span className="muted">{outcome.skipped}</span>
+                          : outcome.ok
+                            ? `${outcome.count} results`
+                            : <span className="error-text">{outcome.error ?? 'failed'}</span>}
+                      </td>
+                      <td className="muted">{outcome.latencyMs ? `${outcome.latencyMs} ms` : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </footer>
+        )}
+      </div>
+    </div>
+  );
+};

@@ -1,0 +1,70 @@
+{
+  "name": "cloudstream-desktop",
+  "productName": "CloudStream 3 Desktop",
+  "private": true,
+  "version": "1.0.0",
+  "description": "CloudStream 3 Cross-Platform Desktop Application (Windows)",
+  "main": "dist-electron/main.js",
+  "type": "module",
+  "scripts": {
+    "postinstall": "node --experimental-require-module node_modules/electron/install.js",
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "electron:build": "vite build && electron-builder"
+  },
+  "build": {
+    "appId": "com.lagradost.cloudstream3.desktop",
+    "productName": "CloudStream Desktop",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "node_modules/**/*"
+    ],
+    "//asarUnpack": "Native .node binaries cannot be loaded from inside an asar archive, and webtorrent's transitive native deps must be unpacked or the app fails at startup exactly as it does when they are bundled.",
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/node-datachannel/**",
+      "node_modules/utp-native/**"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    }
+  },
+  "//trustedDependencies": "webtorrent pulls in native modules (node-datachannel for WebRTC peers, utp-native for uTP). Their install scripts MUST run or the app fails at runtime with 'Cannot find module node_datachannel.node'. These also need rebuilding per platform/arch against the Electron ABI before packaging.",
+  "trustedDependencies": [
+    "node-datachannel",
+    "utp-native"
+  ],
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "fast-xml-parser": "^5.10.1",
+    "hls.js": "^1.6.18",
+    "lucide-react": "^1.31.0",
+    "parse-torrent": "^11.0.24",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "webtorrent": "^3.0.21",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^6.0.4",
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
+    "oxlint": "^1.75.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.0",
+    "vite-plugin-electron": "^1.1.1",
+    "vite-plugin-electron-renderer": "^1.0.0"
+  }
+}
