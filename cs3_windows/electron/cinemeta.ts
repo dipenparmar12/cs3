@@ -1,5 +1,6 @@
 import { fetchJson } from './torrent/http';
 import { TvType, type Episode, type SearchResponse } from '../src/types/api';
+import { normaliseTitleForMatch, titleSimilarity } from './torrent/releaseParser';
 
 /**
  * Cinemeta — IMDb-keyed catalogue metadata for movies and series.
@@ -104,6 +105,40 @@ function toTvType(type: string | undefined, genres: string[] | undefined): TvTyp
   return isAnime ? TvType.AnimeMovie : TvType.Movie;
 }
 
+/**
+ * Orders catalogue hits by how well they match what was typed.
+ *
+ * Cinemeta returns movies and series from two independent catalogues, each
+ * internally ranked but not comparable to the other. Naively interleaving them
+ * put "El Camino: A Breaking Bad Movie" above the series "Breaking Bad" for the
+ * query "Breaking Bad" — the movie catalogue's top hit always won the first
+ * slot regardless of relevance. Scoring both lists against the query fixes that.
+ */
+function rankByRelevance(results: SearchResponse[], query: string): SearchResponse[] {
+  const normalisedQuery = normaliseTitleForMatch(query);
+
+  const scored = results.map((result) => {
+    const normalisedName = normaliseTitleForMatch(result.name);
+    let score = titleSimilarity(query, result.name) * 100;
+
+    // An exact normalised match is what the user almost certainly meant.
+    if (normalisedName === normalisedQuery) score += 60;
+    // A title that merely *starts* with the query ("Breaking Bad" vs
+    // "Breaking Bad: Original Minisodes") is still a strong hit.
+    else if (normalisedName.startsWith(normalisedQuery)) score += 25;
+
+    // Penalise extra trailing words so the base title outranks its spin-offs.
+    const extraWords =
+      normalisedName.split(' ').length - normalisedQuery.split(' ').length;
+    if (extraWords > 0) score -= Math.min(20, extraWords * 5);
+
+    return { result, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.map((s) => s.result);
+}
+
 export class CinemetaProvider {
   /**
    * Searches both catalogues concurrently.
@@ -145,15 +180,7 @@ export class CinemetaProvider {
     collect(movies, 'movie');
     collect(series, 'series');
 
-    // Interleave so a movie query does not bury its best hit under 20 series.
-    const movieHits = results.filter((r) => r.type === TvType.Movie || r.type === TvType.AnimeMovie);
-    const seriesHits = results.filter((r) => !movieHits.includes(r));
-    const interleaved: SearchResponse[] = [];
-    for (let i = 0; i < Math.max(movieHits.length, seriesHits.length); i++) {
-      if (movieHits[i]) interleaved.push(movieHits[i]);
-      if (seriesHits[i]) interleaved.push(seriesHits[i]);
-    }
-    return interleaved;
+    return rankByRelevance(results, query);
   }
 
   public async load(

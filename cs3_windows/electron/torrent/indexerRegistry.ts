@@ -9,6 +9,7 @@ import { DEFAULT_SOURCE_PREFERENCES, IndexerKind } from '../../src/types/torrent
 import { TvType } from '../../src/types/api';
 import { finaliseResult, type TorrentIndexer } from './indexers/base';
 import { EztvIndexer, NyaaIndexer, YtsIndexer } from './indexers/builtins';
+import { ApiBayIndexer, TorrentioIndexer } from './indexers/aggregators';
 import { TorznabIndexer } from './indexers/torznab';
 import { dedupeByInfoHash, rankResults, type RankContext } from './ranker';
 import type { DatastoreManager } from '../datastore';
@@ -32,31 +33,57 @@ const CIRCUIT_COOLDOWN_MS = 5 * 60 * 1000;
 const PER_INDEXER_TIMEOUT_MS = 20_000;
 
 const SETTINGS_KEY_INDEXERS = 'torrent_indexer_configs';
+const SETTINGS_KEY_INDEXER_VERSION = 'torrent_indexer_configs_version';
 const SETTINGS_KEY_PREFERENCES = 'torrent_source_preferences';
 
+/**
+ * Defaults are ordered by how reliably they work in practice.
+ *
+ * Torrentio and apibay are enabled because they answer on single, stable,
+ * Cloudflare-fronted hosts that survive the ISP DNS blocking which takes out
+ * per-site indexers. YTS/EZTV/Nyaa are shipped but **disabled by default**:
+ * their domains rotate constantly and are blocked on many networks, so leaving
+ * them on mostly buys timeouts and empty results. Users on unfiltered
+ * connections can enable them in Settings → Sources.
+ */
 export const DEFAULT_INDEXER_CONFIGS: IndexerConfig[] = [
+  {
+    id: 'torrentio',
+    name: 'Torrentio',
+    kind: IndexerKind.Builtin,
+    enabled: true,
+  },
+  {
+    id: 'apibay',
+    name: 'The Pirate Bay',
+    kind: IndexerKind.Builtin,
+    enabled: true,
+  },
   {
     id: 'yts',
     name: 'YTS',
     kind: IndexerKind.Builtin,
-    enabled: true,
+    enabled: false,
     supportedTypes: [TvType.Movie],
   },
   {
     id: 'eztv',
     name: 'EZTV',
     kind: IndexerKind.Builtin,
-    enabled: true,
+    enabled: false,
     supportedTypes: [TvType.TvSeries],
   },
   {
     id: 'nyaa',
     name: 'Nyaa',
     kind: IndexerKind.Builtin,
-    enabled: true,
+    enabled: false,
     supportedTypes: [TvType.Anime, TvType.AnimeMovie, TvType.OVA],
   },
 ];
+
+/** Schema version for the stored indexer list, so defaults can be re-seeded. */
+const INDEXER_CONFIG_VERSION = 2;
 
 interface CircuitState {
   consecutiveFailures: number;
@@ -89,12 +116,22 @@ export class IndexerRegistry {
 
   constructor(datastore: DatastoreManager) {
     this.datastore = datastore;
-    const stored = this.datastore.getObject<IndexerConfig[]>(
-      SETTINGS_KEY_INDEXERS,
-      DEFAULT_INDEXER_CONFIGS
-    );
-    this.configs =
-      Array.isArray(stored) && stored.length > 0 ? stored : [...DEFAULT_INDEXER_CONFIGS];
+
+    const storedVersion = this.datastore.getInt(SETTINGS_KEY_INDEXER_VERSION, 0);
+    const stored = this.datastore.getObject<IndexerConfig[]>(SETTINGS_KEY_INDEXERS, null);
+
+    if (storedVersion < INDEXER_CONFIG_VERSION || !Array.isArray(stored) || stored.length === 0) {
+      // Re-seed on upgrade so existing installs pick up newly added indexers.
+      // User-added Torznab entries are preserved — only the built-ins are reset.
+      const userAdded = Array.isArray(stored)
+        ? stored.filter((c) => c.kind === IndexerKind.Torznab)
+        : [];
+      this.configs = [...DEFAULT_INDEXER_CONFIGS, ...userAdded];
+      this.datastore.setObject(SETTINGS_KEY_INDEXERS, this.configs);
+      this.datastore.setInt(SETTINGS_KEY_INDEXER_VERSION, INDEXER_CONFIG_VERSION);
+    } else {
+      this.configs = stored;
+    }
   }
 
   // --- configuration -------------------------------------------------------
@@ -141,6 +178,10 @@ export class IndexerRegistry {
     if (config.kind === IndexerKind.Torznab) return new TorznabIndexer(config);
 
     switch (config.id) {
+      case 'torrentio':
+        return new TorrentioIndexer();
+      case 'apibay':
+        return new ApiBayIndexer();
       case 'yts':
         return new YtsIndexer();
       case 'eztv':

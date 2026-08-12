@@ -5,6 +5,7 @@ import type {
   TorrentResult,
 } from '../src/types/torrent';
 import { MetadataProvider, parseMetadataUrl, type MetadataDetail } from './metadataProvider';
+import { CinemetaProvider, parseCinemetaUrl } from './cinemeta';
 import { IndexerRegistry, type AggregateSearchResult } from './torrent/indexerRegistry';
 import { TorrentEngine, type StreamHandle } from './torrent/torrentEngine';
 import { infoHashFromMagnet } from './torrent/indexers/base';
@@ -66,6 +67,7 @@ function stripQuery(url: string): string {
 }
 
 export class ContentService {
+  private cinemeta = new CinemetaProvider();
   private metadata = new MetadataProvider();
   private registry: IndexerRegistry;
   private engine: TorrentEngine;
@@ -114,11 +116,35 @@ export class ContentService {
     const pluginResults = await this.plugins.searchAll(trimmed);
     results.push(...pluginResults);
 
-    try {
-      results.push(...(await this.metadata.search(trimmed)));
-    } catch (error) {
-      // Metadata failure must not blank the whole search if plugins returned rows.
-      if (results.length === 0) throw error;
+    // Cinemeta is primary: it is the only source that yields an IMDb id for
+    // movies, and the strongest indexer (Torrentio) is addressed solely by IMDb id.
+    const [cinemeta, legacy] = await Promise.allSettled([
+      this.cinemeta.search(trimmed),
+      // TVmaze/AniList stay as a fallback so a Cinemeta outage is not fatal,
+      // and because AniList resolves anime titles Cinemeta indexes poorly.
+      this.metadata.search(trimmed),
+    ]);
+
+    if (cinemeta.status === 'fulfilled') results.push(...cinemeta.value);
+
+    if (legacy.status === 'fulfilled') {
+      // Suppress fallback rows that duplicate a Cinemeta hit by title+year.
+      const seen = new Set(
+        results.map((r) => `${r.name.toLowerCase()}|${r.year ?? ''}`)
+      );
+      for (const item of legacy.value) {
+        const key = `${item.name.toLowerCase()}|${item.year ?? ''}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          results.push(item);
+        }
+      }
+    }
+
+    if (results.length === 0 && cinemeta.status === 'rejected' && legacy.status === 'rejected') {
+      throw cinemeta.reason instanceof Error
+        ? cinemeta.reason
+        : new Error(String(cinemeta.reason));
     }
 
     return results;
@@ -129,6 +155,32 @@ export class ContentService {
 
     const cached = this.detailCache.get(base);
     if (cached) return cached;
+
+    const cinemetaRef = parseCinemetaUrl(base);
+    if (cinemetaRef) {
+      const detail = await this.cinemeta.load(cinemetaRef.type, cinemetaRef.imdbId);
+      if (!detail) return null;
+
+      const mapped: MetadataDetail = {
+        name: detail.name,
+        url: base,
+        apiName: 'Catalogue',
+        type: detail.type,
+        posterUrl: detail.posterUrl,
+        year: detail.year,
+        plot: detail.plot,
+        rating: detail.rating,
+        tags: detail.tags,
+        actors: detail.actors,
+        duration: detail.duration,
+        runtimeMinutes: detail.runtimeMinutes,
+        // The whole point of this path: an IMDb id, for every type.
+        imdbId: detail.imdbId,
+        episodes: detail.episodes,
+      };
+      this.detailCache.set(base, mapped);
+      return mapped;
+    }
 
     if (parseMetadataUrl(base)) {
       const detail = await this.metadata.load(base);
@@ -258,7 +310,10 @@ export class ContentService {
   // --- playback ------------------------------------------------------------
 
   public async startStream(
-    source: Pick<TorrentResult, 'magnet' | 'infoHash' | 'torrentUrl'>,
+    source: Pick<
+      TorrentResult,
+      'magnet' | 'infoHash' | 'torrentUrl' | 'fileIndex' | 'expectedFileName'
+    >,
     season?: number,
     episode?: number
   ): Promise<StreamHandle> {
@@ -266,7 +321,15 @@ export class ContentService {
     if (!torrentId) {
       throw new Error('This source has no magnet link, torrent file, or infohash.');
     }
-    return this.engine.startStream({ torrentId, season, episode });
+    return this.engine.startStream({
+      torrentId,
+      season,
+      episode,
+      // Torrentio names the exact file for season packs; trusting it beats
+      // re-deriving the episode from file names.
+      fileIndex: source.fileIndex,
+      expectedFileName: source.expectedFileName,
+    });
   }
 
   public getPreferences(): SourcePreferences {

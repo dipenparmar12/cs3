@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Download, HardDrive, RefreshCw, Zap, Code, Tv, CheckCircle2 } from 'lucide-react';
+import { SourceSettings } from '../components/SourceSettings';
 
 interface SettingsViewProps {
   hasBinaries?: boolean;
@@ -56,9 +57,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       <div>
         <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>Application Settings</h2>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-          Configure download paths, downloader engines, developer streaming mode, and CS3 Android backup imports
+          Configure sources and ranking, download paths, downloader engines, and CS3 Android backup imports
         </p>
       </div>
+
+      {/* Sources first: it is the only section that determines whether the app
+          can find anything at all, so it should not be buried below downloads. */}
+      <SourceSettings />
 
       {statusMessage && (
         <div style={{
