@@ -20,6 +20,7 @@ import type {
   UpdateOutcome,
   UpdateSettings,
 } from './cs3/extensionUpdater';
+import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
 import type { StreamHandle } from './torrent/torrentEngine';
 
 /**
@@ -81,6 +82,14 @@ export interface CloudStreamElectronAPI {
   getDownloadQueue: () => Promise<DownloadTask[]>;
   revealInFolder: (filePath: string) => Promise<void>;
   onDownloadProgress: (callback: (tasks: DownloadTask[]) => void) => () => void;
+
+  // Season / series batch downloads
+  startBatchDownload: (
+    request: BatchDownloadRequest
+  ) => Promise<Envelope & { progress: BatchProgress | null }>;
+  cancelBatchDownload: (batchId: string) => Promise<boolean>;
+  getActiveBatches: () => Promise<BatchProgress[]>;
+  onBatchProgress: (callback: (progress: BatchProgress) => void) => () => void;
 
   // Binaries
   checkBinaries: () => Promise<{ aria2: boolean; ytdlp: boolean }>;
@@ -162,6 +171,15 @@ const api: CloudStreamElectronAPI = {
     // Returning a disposer lets React effects clean up; the previous version
     // registered listeners that accumulated on every remount.
     return () => ipcRenderer.removeListener('download:progress', listener);
+  },
+
+  startBatchDownload: (request) => ipcRenderer.invoke('download:startBatch', request),
+  cancelBatchDownload: (batchId) => ipcRenderer.invoke('download:cancelBatch', batchId),
+  getActiveBatches: () => ipcRenderer.invoke('download:getActiveBatches'),
+  onBatchProgress: (callback) => {
+    const listener = (_: unknown, progress: BatchProgress) => callback(progress);
+    ipcRenderer.on('download:batchProgress', listener);
+    return () => ipcRenderer.removeListener('download:batchProgress', listener);
   },
 
   checkBinaries: () => ipcRenderer.invoke('binary:check'),

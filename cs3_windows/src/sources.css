@@ -669,3 +669,41 @@
 .pref-grid__check small { font-weight: 400; color: var(--text-muted); font-size: 0.74rem; }
 
 .pref-actions { display: flex; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap; }
+
+/* --- season download dialog ---------------------------------------------- */
+
+.modal {
+  width: min(560px, 100%);
+  max-height: 86vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  padding: 1.25rem;
+  background: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+}
+.modal__head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.modal__head h3 { display: flex; align-items: center; gap: 0.45rem; margin: 0; font-size: 1rem; }
+
+.modal__field { display: flex; flex-direction: column; gap: 0.5rem; }
+.modal__label { font-size: 0.76rem; color: var(--text-muted); }
+.modal__choices { display: flex; gap: 0.5rem; }
+.modal__choices--wrap { flex-wrap: wrap; }
+/* Each choice is one button carrying its own count, so picking a scope needs no
+   second look at a separate summary line. */
+.modal__choices .btn { flex-direction: column; align-items: flex-start; gap: 0.1rem; }
+.modal__choices .btn em { font-style: normal; font-size: 0.68rem; opacity: 0.75; }
+.modal__hint { margin: 0; font-size: 0.71rem; color: var(--text-subtle); line-height: 1.45; }
+.modal__check { display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; cursor: pointer; }
+
+.modal__progress { display: flex; flex-direction: column; gap: 0.5rem; }
+.modal__progress-bar { height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.modal__progress-bar div { height: 100%; background: var(--accent-primary); transition: width 0.2s ease; }
+.modal__progress-text { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-muted); }
+.modal__failures { font-size: 0.74rem; }
+.modal__failures summary { display: flex; align-items: center; gap: 0.35rem; cursor: pointer; color: var(--status-warning, #d19a2f); }
+.modal__failures ul { margin: 0.5rem 0 0; padding-left: 1.1rem; color: var(--text-muted); max-height: 12rem; overflow-y: auto; }
+
+.modal__foot { display: flex; justify-content: flex-end; gap: 0.5rem; }

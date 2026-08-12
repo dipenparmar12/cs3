@@ -10,6 +10,7 @@ import { OFFICIAL_REPOSITORIES } from './officialRepositories';
 import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
+import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import type { DownloadTask } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
 import type { IndexerConfig, SourcePreferences, TorrentResult } from '../src/types/torrent';
@@ -29,6 +30,7 @@ const torrentEngine = new TorrentEngine(
 );
 const contentService = new ContentService(datastore, pluginManager, torrentEngine);
 const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
+const batchDownloader = new BatchDownloader(contentService, downloadService);
 
 downloadService.setTorrentEngine(torrentEngine);
 
@@ -92,6 +94,12 @@ app.whenReady().then(async () => {
     }
   });
   extensionUpdater.schedule();
+
+  batchDownloader.setNotifier((progress) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('download:batchProgress', progress);
+    }
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -232,6 +240,22 @@ ipcMain.handle('download:pause', async (_, id: string) => downloadService.pause(
 ipcMain.handle('download:resume', async (_, id: string) => downloadService.resume(id));
 ipcMain.handle('download:remove', async (_, id: string) => downloadService.remove(id));
 ipcMain.handle('download:getQueue', async () => downloadService.getTasks());
+
+// Season and series downloads. Resolution runs here rather than in the
+// renderer so a long season survives the user navigating away mid-run.
+ipcMain.handle('download:startBatch', async (_, request: BatchDownloadRequest) => {
+  try {
+    return { ok: true, progress: await batchDownloader.start(request) };
+  } catch (error) {
+    return { ...fail(error), progress: null };
+  }
+});
+
+ipcMain.handle('download:cancelBatch', async (_, batchId: string) =>
+  batchDownloader.cancel(batchId)
+);
+
+ipcMain.handle('download:getActiveBatches', async () => batchDownloader.getActive());
 
 ipcMain.handle('download:revealInFolder', async (_, filePath: string) => {
   shell.showItemInFolder(filePath);

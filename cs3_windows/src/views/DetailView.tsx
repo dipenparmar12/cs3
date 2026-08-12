@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Play, Download, Star, ArrowLeft, Loader2, AlertTriangle, Calendar } from 'lucide-react';
+import { Play, Download, Star, ArrowLeft, Loader2, AlertTriangle, Calendar, Layers } from 'lucide-react';
 import type { SearchResponse, Episode } from '../types/api';
 import { TvType } from '../types/api';
 import { DownloadState } from '../types/download';
@@ -7,6 +7,7 @@ import type { DownloadTask } from '../types/download';
 import type { TorrentResult } from '../types/torrent';
 import { SourcePicker, type SourcePickerData } from '../components/SourcePicker';
 import type { SeriesContext } from '../components/player/EpisodePanel';
+import { SeasonDownloadDialog } from '../components/SeasonDownloadDialog';
 
 export interface PlaybackRequest {
   streamUrl: string;
@@ -83,6 +84,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [pendingEpisode, setPendingEpisode] = useState<Episode | null>(null);
   const [startingStream, setStartingStream] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [seasonDownloadOpen, setSeasonDownloadOpen] = useState(false);
 
   // --- load detail ---------------------------------------------------------
 
@@ -375,8 +377,13 @@ export const DetailView: React.FC<DetailViewProps> = ({
               className="btn"
               onClick={() => openSources(isSeries ? episodesInSeason[0] ?? null : null)}
             >
-              <Download size={16} /> Download
+              <Download size={16} /> {isSeries ? 'Download episode' : 'Download'}
             </button>
+            {isSeries && (
+              <button className="btn" onClick={() => setSeasonDownloadOpen(true)}>
+                <Layers size={16} /> Download season
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -445,6 +452,18 @@ export const DetailView: React.FC<DetailViewProps> = ({
         onDownload={handleDownloadSource}
         onRetry={() => openSources(pendingEpisode)}
       />
+
+      {isSeries && (
+        <SeasonDownloadDialog
+          open={seasonDownloadOpen}
+          title={detail.name}
+          parentUrl={detail.url}
+          posterUrl={detail.posterUrl}
+          episodes={detail.episodes ?? []}
+          activeSeason={activeSeason}
+          onClose={() => setSeasonDownloadOpen(false)}
+        />
+      )}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

@@ -29,6 +29,13 @@ e.exposeInMainWorld("cloudstream", {
 		let n = (t, n) => e(n);
 		return t.on("download:progress", n), () => t.removeListener("download:progress", n);
 	},
+	startBatchDownload: (e) => t.invoke("download:startBatch", e),
+	cancelBatchDownload: (e) => t.invoke("download:cancelBatch", e),
+	getActiveBatches: () => t.invoke("download:getActiveBatches"),
+	onBatchProgress: (e) => {
+		let n = (t, n) => e(n);
+		return t.on("download:batchProgress", n), () => t.removeListener("download:batchProgress", n);
+	},
 	checkBinaries: () => t.invoke("binary:check"),
 	setupBinaries: () => t.invoke("binary:setup"),
 	getOfficialRepositories: () => t.invoke("extension:getOfficialRepositories"),

@@ -2772,11 +2772,11 @@ function Wt(e) {
 		episode: i ? parseInt(i, 10) : void 0
 	};
 }
-function Gt(e) {
+function V(e) {
 	let t = e.indexOf("?");
 	return t >= 0 ? e.slice(0, t) : e;
 }
-var Kt = class {
+var Gt = class {
 	cinemeta = new dt();
 	metadata = new it();
 	registry;
@@ -2819,7 +2819,7 @@ var Kt = class {
 		return n;
 	}
 	async load(e) {
-		let t = Gt(e), n = this.detailCache.get(t);
+		let t = V(e), n = this.detailCache.get(t);
 		if (n) return n;
 		let r = ot(t);
 		if (r) {
@@ -2850,7 +2850,7 @@ var Kt = class {
 		return this.plugins.loadMedia(t);
 	}
 	async getSources(e) {
-		let t = Wt(e.mediaUrl), n = e.season ?? t.season, r = e.episode ?? t.episode, i = Gt(e.mediaUrl);
+		let t = Wt(e.mediaUrl), n = e.season ?? t.season, r = e.episode ?? t.episode, i = V(e.mediaUrl);
 		if (i.startsWith("magnet:")) {
 			let e = D(i) ?? "", t = decodeURIComponent(i.match(/dn=([^&]+)/)?.[1] ?? "Magnet link");
 			return {
@@ -2945,7 +2945,7 @@ var Kt = class {
 	savePreferences(e) {
 		return this.registry.savePreferences(e);
 	}
-}, qt = "extension_update_settings", V = "extension_available_updates", Jt = 864e5, H = 3e4, Yt = class {
+}, Kt = "extension_update_settings", H = "extension_available_updates", qt = 864e5, U = 3e4, Jt = class {
 	datastore;
 	plugins;
 	timer = null;
@@ -2963,7 +2963,7 @@ var Kt = class {
 		} catch {}
 	}
 	getSettings() {
-		let e = this.datastore.getObject(qt, {});
+		let e = this.datastore.getObject(Kt, {});
 		return {
 			policy: e?.policy ?? "daily",
 			autoInstall: e?.autoInstall ?? !1,
@@ -2976,10 +2976,10 @@ var Kt = class {
 			...this.getSettings(),
 			...e
 		};
-		return this.datastore.setObject(qt, t), this.schedule(), t;
+		return this.datastore.setObject(Kt, t), this.schedule(), t;
 	}
 	getCachedUpdates() {
-		let e = this.datastore.getObject(V, []);
+		let e = this.datastore.getObject(H, []);
 		return Array.isArray(e) ? e : [];
 	}
 	schedule() {
@@ -2987,10 +2987,10 @@ var Kt = class {
 		let e = this.getSettings();
 		if (e.policy === "manual") return;
 		if (e.policy === "startup") {
-			this.timer = setTimeout(() => this.runScheduledCheck(), H), this.timer.unref?.();
+			this.timer = setTimeout(() => this.runScheduledCheck(), U), this.timer.unref?.();
 			return;
 		}
-		let t = Date.now() - e.lastCheckedAt, n = t >= Jt ? H : Math.max(H, Jt - t);
+		let t = Date.now() - e.lastCheckedAt, n = t >= qt ? U : Math.max(U, qt - t);
 		this.timer = setTimeout(() => this.runScheduledCheck(), n), this.timer.unref?.();
 	}
 	stop() {
@@ -3050,7 +3050,7 @@ var Kt = class {
 			warnings: n,
 			repositoriesChecked: e.length
 		};
-		return this.datastore.setObject(V, i), this.saveSettings({ lastCheckedAt: a.checkedAt }), this.emit("extension:updateCheckFinished", a), a;
+		return this.datastore.setObject(H, i), this.saveSettings({ lastCheckedAt: a.checkedAt }), this.emit("extension:updateCheckFinished", a), a;
 	}
 	async updatePlugin(e) {
 		let t = this.getCachedUpdates().find((t) => t.internalName === e);
@@ -3103,11 +3103,122 @@ var Kt = class {
 		} }), n;
 	}
 	dropCachedUpdate(e) {
-		this.datastore.setObject(V, this.getCachedUpdates().filter((t) => t.internalName !== e));
+		this.datastore.setObject(H, this.getCachedUpdates().filter((t) => t.internalName !== e));
 	}
-}, Xt = c(import.meta.url), U = s.dirname(Xt), W = null, G = new ae(), Zt = new oe(), K = new ce(G, Zt), q = new Te(G), J = new Ee(), Y = new tt(G.getString("torrent_cache_path", "", !0) || void 0), X = new Kt(G, q, Y), Z = new Yt(G, q);
+}, Yt = 600, Xt = class {
+	content;
+	downloads;
+	notify = null;
+	cancelled = /* @__PURE__ */ new Set();
+	active = /* @__PURE__ */ new Map();
+	constructor(e, t) {
+		this.content = e, this.downloads = t;
+	}
+	setNotifier(e) {
+		this.notify = e;
+	}
+	getActive() {
+		return [...this.active.values()];
+	}
+	cancel(e) {
+		return this.active.has(e) ? (this.cancelled.add(e), !0) : !1;
+	}
+	async start(e) {
+		let t = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, n = {
+			batchId: t,
+			total: e.episodes.length,
+			resolved: 0,
+			queued: 0,
+			skipped: 0,
+			failed: 0,
+			finished: !1,
+			cancelled: !1,
+			failures: []
+		};
+		this.active.set(t, n), this.emit(n);
+		let r = new Set(this.downloads.getTasks().map((e) => `${e.parentId}|${e.seasonNumber ?? 0}|${e.episodeNumber ?? 0}`));
+		for (let i of e.episodes) {
+			if (this.cancelled.has(t)) {
+				n.cancelled = !0;
+				break;
+			}
+			let a = Qt(i);
+			n.currentEpisode = a;
+			let o = `${e.parentUrl}|${i.season ?? 0}|${i.episode ?? 0}`;
+			if (e.skipExisting !== !1 && r.has(o)) {
+				n.skipped++, n.resolved++, this.emit(n);
+				continue;
+			}
+			try {
+				let r = await this.content.getSources({
+					mediaUrl: i.url,
+					season: i.season,
+					episode: i.episode,
+					titleOverride: e.title
+				}), o = $t(r.sources, e.maxResolution);
+				o ? (await this.downloads.enqueue(en(e, i, o, t)), n.queued++) : (n.failed++, n.failures.push({
+					episode: a,
+					reason: r.emptyReason ?? "No source matched the requested quality."
+				}));
+			} catch (e) {
+				n.failed++, n.failures.push({
+					episode: a,
+					reason: e instanceof Error ? e.message : String(e)
+				});
+			}
+			n.resolved++, this.emit(n), n.resolved < n.total && await Zt(Yt);
+		}
+		return n.finished = !0, n.currentEpisode = void 0, this.emit(n), this.cancelled.delete(t), this.active.delete(t), n;
+	}
+	emit(e) {
+		try {
+			this.notify?.({
+				...e,
+				failures: [...e.failures]
+			});
+		} catch {}
+	}
+};
+function Zt(e) {
+	return new Promise((t) => setTimeout(t, e));
+}
+function Qt(e) {
+	return `${e.season == null ? "" : `S${String(e.season).padStart(2, "0")}`}${e.episode == null ? "" : `E${String(e.episode).padStart(2, "0")}`}${e.name ? ` ${e.name}` : ""}`.trim() || e.url;
+}
+function $t(e, t) {
+	return !e || e.length === 0 ? null : t ? e.filter((e) => (e.parsed.resolution ?? 0) <= t)[0] ?? e[0] : e[0];
+}
+function en(e, t, n, r) {
+	return {
+		id: `${n.infoHash}-s${t.season ?? 0}e${t.episode ?? 0}`,
+		parentId: e.parentUrl,
+		title: e.title,
+		episodeNumber: t.episode,
+		seasonNumber: t.season,
+		posterUrl: e.posterUrl,
+		targetFilePath: "",
+		link: {
+			source: n.indexerName,
+			name: n.title,
+			url: n.magnet || n.torrentUrl || n.infoHash,
+			referer: "",
+			quality: n.parsed.resolution || 720
+		},
+		headers: {},
+		bytesDownloaded: 0,
+		totalBytes: n.sizeBytes,
+		downloadSpeed: 0,
+		etaSeconds: 0,
+		state: m.Queued,
+		providerName: `${n.indexerName} (${r})`,
+		createdTime: Date.now()
+	};
+}
+//#endregion
+//#region electron/main.ts
+var tn = c(import.meta.url), nn = s.dirname(tn), W = null, G = new ae(), rn = new oe(), K = new ce(G, rn), q = new Te(G), J = new Ee(), Y = new tt(G.getString("torrent_cache_path", "", !0) || void 0), X = new Gt(G, q, Y), Z = new Jt(G, q), Q = new Xt(X, K);
 K.setTorrentEngine(Y);
-function Q() {
+function an() {
 	W = new t({
 		width: 1360,
 		height: 860,
@@ -3117,12 +3228,12 @@ function Q() {
 		backgroundColor: "#0c0f17",
 		show: !1,
 		webPreferences: {
-			preload: s.join(U, "preload.js"),
+			preload: s.join(nn, "preload.js"),
 			contextIsolation: !0,
 			nodeIntegration: !1,
 			sandbox: !1
 		}
-	}), n.setApplicationMenu(null), W.once("ready-to-show", () => W?.show()), W.webContents.setWindowOpenHandler(({ url: e }) => (/^https?:\/\//.test(e) && o.openExternal(e), { action: "deny" })), process.env.VITE_DEV_SERVER_URL ? W.loadURL(process.env.VITE_DEV_SERVER_URL) : W.loadFile(s.join(U, "../dist/index.html")), W.on("closed", () => {
+	}), n.setApplicationMenu(null), W.once("ready-to-show", () => W?.show()), W.webContents.setWindowOpenHandler(({ url: e }) => (/^https?:\/\//.test(e) && o.openExternal(e), { action: "deny" })), process.env.VITE_DEV_SERVER_URL ? W.loadURL(process.env.VITE_DEV_SERVER_URL) : W.loadFile(s.join(nn, "../dist/index.html")), W.on("closed", () => {
 		W = null;
 	});
 }
@@ -3134,10 +3245,12 @@ r.whenReady().then(async () => {
 	}
 	K.setProgressCallback((e) => {
 		W && !W.isDestroyed() && W.webContents.send("download:progress", e);
-	}), Q(), Z.setNotifier((e, t) => {
+	}), an(), Z.setNotifier((e, t) => {
 		W && !W.isDestroyed() && W.webContents.send("extension:updateEvent", e, t);
-	}), Z.schedule(), r.on("activate", () => {
-		t.getAllWindows().length === 0 && Q();
+	}), Z.schedule(), Q.setNotifier((e) => {
+		W && !W.isDestroyed() && W.webContents.send("download:batchProgress", e);
+	}), r.on("activate", () => {
+		t.getAllWindows().length === 0 && an();
 	});
 }), r.on("window-all-closed", () => {
 	K.stop(), Z.stop(), q.shutdown(), process.platform !== "darwin" && r.quit();
@@ -3221,12 +3334,24 @@ a.handle("api:searchAll", async (e, t) => {
 			removed: 0
 		};
 	}
-}), a.handle("torrent:getCachePath", async () => Y.getCachePath()), a.handle("indexer:getConfigs", async () => X.getRegistry().getConfigs()), a.handle("indexer:saveConfig", async (e, t) => (X.getRegistry().upsertConfig(t), X.getRegistry().getConfigs())), a.handle("indexer:removeConfig", async (e, t) => (X.getRegistry().removeConfig(t), X.getRegistry().getConfigs())), a.handle("indexer:test", async (e, t) => X.getRegistry().testIndexer(t)), a.handle("indexer:getHealth", async () => X.getRegistry().getHealth()), a.handle("sources:getPreferences", async () => X.getPreferences()), a.handle("sources:savePreferences", async (e, t) => X.savePreferences(t)), a.handle("download:enqueue", async (e, t) => K.enqueue(t)), a.handle("download:pause", async (e, t) => K.pause(t)), a.handle("download:resume", async (e, t) => K.resume(t)), a.handle("download:remove", async (e, t) => K.remove(t)), a.handle("download:getQueue", async () => K.getTasks()), a.handle("download:revealInFolder", async (e, t) => {
+}), a.handle("torrent:getCachePath", async () => Y.getCachePath()), a.handle("indexer:getConfigs", async () => X.getRegistry().getConfigs()), a.handle("indexer:saveConfig", async (e, t) => (X.getRegistry().upsertConfig(t), X.getRegistry().getConfigs())), a.handle("indexer:removeConfig", async (e, t) => (X.getRegistry().removeConfig(t), X.getRegistry().getConfigs())), a.handle("indexer:test", async (e, t) => X.getRegistry().testIndexer(t)), a.handle("indexer:getHealth", async () => X.getRegistry().getHealth()), a.handle("sources:getPreferences", async () => X.getPreferences()), a.handle("sources:savePreferences", async (e, t) => X.savePreferences(t)), a.handle("download:enqueue", async (e, t) => K.enqueue(t)), a.handle("download:pause", async (e, t) => K.pause(t)), a.handle("download:resume", async (e, t) => K.resume(t)), a.handle("download:remove", async (e, t) => K.remove(t)), a.handle("download:getQueue", async () => K.getTasks()), a.handle("download:startBatch", async (e, t) => {
+	try {
+		return {
+			ok: !0,
+			progress: await Q.start(t)
+		};
+	} catch (e) {
+		return {
+			...$(e),
+			progress: null
+		};
+	}
+}), a.handle("download:cancelBatch", async (e, t) => Q.cancel(t)), a.handle("download:getActiveBatches", async () => Q.getActive()), a.handle("download:revealInFolder", async (e, t) => {
 	o.showItemInFolder(t);
 }), a.handle("binary:check", async () => J.checkBinaries()), a.handle("binary:setup", async () => {
 	try {
 		let e = await J.setupAria2(), t = await J.setupYtDlp();
-		return e && await Zt.start(), {
+		return e && await rn.start(), {
 			success: e || t,
 			message: e ? "aria2c and yt-dlp downloaded and configured." : t ? "yt-dlp configured; aria2c setup failed." : "Binary setup failed."
 		};
