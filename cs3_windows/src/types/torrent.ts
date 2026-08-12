@@ -95,6 +95,14 @@ export interface TorrentResult {
   indexerName: string;
   publishedAt?: number;
   category?: string;
+  /**
+   * Index of the file to play inside a multi-file torrent, when the indexer
+   * knows it. Torrentio supplies this for season packs, which removes the
+   * guesswork the engine would otherwise do from file names.
+   */
+  fileIndex?: number;
+  /** Filename the indexer expects to be played, used to verify file selection. */
+  expectedFileName?: string;
   parsed: ParsedRelease;
   /** Composite ranking score from `rankResults()`. Higher is better. */
   score: number;

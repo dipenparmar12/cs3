@@ -45,6 +45,8 @@ export interface StreamRequest {
   episode?: number;
   /** Explicit file index, overriding automatic selection. */
   fileIndex?: number;
+  /** Filename the indexer expects; matched by name if the index is stale. */
+  expectedFileName?: string;
 }
 
 export interface StreamHandle {
@@ -159,6 +161,17 @@ export class TorrentEngine {
     if (videos.length === 0) return null;
     if (videos.length === 1) return videos[0];
 
+    // 1. Filename the indexer named. Most reliable: it survives the index
+    //    drifting, which happens when a torrent is re-created with extra files.
+    if (request.expectedFileName) {
+      const wanted = request.expectedFileName.toLowerCase();
+      const byName = videos.find(
+        (file) => file.name.toLowerCase() === wanted || file.path.toLowerCase().endsWith(wanted)
+      );
+      if (byName) return byName;
+    }
+
+    // 2. Explicit index from the indexer.
     if (request.fileIndex !== undefined) {
       const explicit = torrent.files[request.fileIndex];
       if (explicit && isVideoFile(explicit)) return explicit;
