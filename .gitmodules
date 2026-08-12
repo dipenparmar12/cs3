@@ -1,6 +1,9 @@
 [submodule "cloudstream_ref_android"]
 	path = cloudstream_ref_android
 	url = git@github.com:recloudstream/cloudstream.git
+[submodule "repositories/extensions"]
+	path = repositories/extensions
+	url = git@github.com:recloudstream/extensions.git
 [submodule "repositories/MegaRepo"]
 	path = repositories/MegaRepo
-	url = https://github.com/self-similarity/MegaRepo.git
+	url = git@github.com:self-similarity/MegaRepo.git
