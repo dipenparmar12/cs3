@@ -1,9 +1,107 @@
 [submodule "cloudstream_ref_android"]
 	path = cloudstream_ref_android
 	url = git@github.com:recloudstream/cloudstream.git
+
 [submodule "repositories/extensions"]
 	path = repositories/extensions
 	url = git@github.com:recloudstream/extensions.git
+
 [submodule "repositories/MegaRepo"]
 	path = repositories/MegaRepo
 	url = git@github.com:self-similarity/MegaRepo.git
+
+[submodule "repositories/AniyomiCompatExtension"]
+	path = repositories/AniyomiCompatExtension
+	url = git@github.com:CranberrySoup/AniyomiCompatExtension.git
+
+[submodule "repositories/ItalianProvider"]
+	path = repositories/ItalianProvider
+	url = git@github.com:Gian-Fr/ItalianProvider.git
+
+[submodule "repositories/cloudstream-extensions-uk"]
+	path = repositories/cloudstream-extensions-uk
+	url = git@github.com:CakesTwix/cloudstream-extensions-uk.git
+
+[submodule "repositories/SkillShare-Repo"]
+	path = repositories/SkillShare-Repo
+	url = git@github.com:techtanic/SkillShare-Repo.git
+
+[submodule "repositories/CSX"]
+	path = repositories/CSX
+	url = git@github.com:SaurabhKaperwan/CSX.git
+
+[submodule "repositories/FStream"]
+	path = repositories/FStream
+	url = https://git.disroot.org/ayza/FStream.git
+
+[submodule "repositories/cloudstream-extensions-phisher"]
+	path = repositories/cloudstream-extensions-phisher
+	url = git@github.com:phisher98/cloudstream-extensions-phisher.git
+
+[submodule "repositories/Luna712-CloudStream-Extensions"]
+	path = repositories/Luna712-CloudStream-Extensions
+	url = git@github.com:Luna712/Luna712-CloudStream-Extensions.git
+
+[submodule "repositories/Redowan-CloudStream"]
+	path = repositories/Redowan-CloudStream
+	url = git@github.com:redowan99/Redowan-CloudStream.git
+
+[submodule "repositories/re-3arabi"]
+	path = repositories/re-3arabi
+	url = git@github.com:Abodabodd/re-3arabi.git
+
+[submodule "repositories/doGiorsHadEnough"]
+	path = repositories/doGiorsHadEnough
+	url = git@github.com:doGior/doGiorsHadEnough.git
+
+[submodule "repositories/ItaliaInStreaming"]
+	path = repositories/ItaliaInStreaming
+	url = git@github.com:DieGon7771/ItaliaInStreaming.git
+
+[submodule "repositories/cloudstream-vietnamese"]
+	path = repositories/cloudstream-vietnamese
+	url = https://gitlab.com/tearrs/cloudstream-vietnamese.git
+
+[submodule "repositories/CuxPlug"]
+	path = repositories/CuxPlug
+	url = git@github.com:ycngmn/CuxPlug.git
+
+[submodule "repositories/GermanProviders"]
+	path = repositories/GermanProviders
+	url = git@github.com:Bnyro/GermanProviders.git
+
+[submodule "repositories/Pitipitii"]
+	path = repositories/Pitipitii
+	url = git@github.com:sarapcanagii/Pitipitii.git
+
+[submodule "repositories/IndoStream"]
+	path = repositories/IndoStream
+	url = git@github.com:TeKuma25/IndoStream.git
+
+[submodule "repositories/saimuelrepo"]
+	path = repositories/saimuelrepo
+	url = git@github.com:saimuelbr/saimuelrepo.git
+
+[submodule "repositories/cs-kraptor"]
+	path = repositories/cs-kraptor
+	url = git@github.com:Kraptor123/cs-kraptor.git
+
+[submodule "repositories/cs-Karma"]
+	path = repositories/cs-Karma
+	url = git@github.com:Kraptor123/cs-Karma.git
+
+[submodule "repositories/storm-ext"]
+	path = repositories/storm-ext
+	url = git@github.com:redblacker8/storm-ext.git
+
+[submodule "repositories/cinephile"]
+	path = repositories/cinephile
+	url = git@github.com:rockhero1234/cinephile.git
+
+[submodule "repositories/cartoonyrepo"]
+	path = repositories/cartoonyrepo
+	url = git@github.com:med1245/cartoonyrepo.git
+
+[submodule "repositories/ReflexRepo"]
+	path = repositories/ReflexRepo
+	url = git@github.com:Reflex755/ReflexRepo.git
