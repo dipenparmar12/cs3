@@ -11,11 +11,21 @@ import os from "os";
 var DatastoreManager = class {
 	dataDir;
 	dbFile;
+	backupSnapshotFile;
 	data;
+	nonTransferableKeyPatterns = [
+		/token/i,
+		/session_id/i,
+		/device_id/i,
+		/auth_bearer/i,
+		/ephemeral_/i,
+		/cache_path/i
+	];
 	constructor() {
 		this.dataDir = app ? app.getPath("userData") : path.join(process.cwd(), "data");
 		if (!fs.existsSync(this.dataDir)) fs.mkdirSync(this.dataDir, { recursive: true });
 		this.dbFile = path.join(this.dataDir, "cs3_datastore.json");
+		this.backupSnapshotFile = path.join(this.dataDir, "cs3_datastore_snapshot.json");
 		this.data = this.loadFromFile();
 	}
 	loadFromFile() {
@@ -43,7 +53,8 @@ var DatastoreManager = class {
 				_Float: {},
 				_Long: {},
 				_StringSet: {}
-			}
+			},
+			version: 1
 		};
 	}
 	save() {
@@ -52,6 +63,29 @@ var DatastoreManager = class {
 		} catch (e) {
 			console.error("Failed to save datastore:", e);
 		}
+	}
+	createSnapshot() {
+		try {
+			fs.writeFileSync(this.backupSnapshotFile, JSON.stringify(this.data, null, 2), "utf-8");
+		} catch (e) {
+			console.error("Failed to create datastore snapshot:", e);
+		}
+	}
+	rollbackSnapshot() {
+		try {
+			if (fs.existsSync(this.backupSnapshotFile)) {
+				const raw = fs.readFileSync(this.backupSnapshotFile, "utf-8");
+				this.data = JSON.parse(raw);
+				this.save();
+				return true;
+			}
+		} catch (e) {
+			console.error("Failed to rollback datastore snapshot:", e);
+		}
+		return false;
+	}
+	isKeyTransferable(key) {
+		return !this.nonTransferableKeyPatterns.some((pattern) => pattern.test(key));
 	}
 	setString(key, value, isSetting = false) {
 		const target = isSetting ? this.data.settings : this.data.datastore;
@@ -99,33 +133,55 @@ var DatastoreManager = class {
 		}
 	}
 	importBackupFile(filePath) {
+		const report = [];
+		let importedKeysCount = 0;
 		try {
+			this.createSnapshot();
 			const content = fs.readFileSync(filePath, "utf-8");
 			const backupData = JSON.parse(content);
-			if (backupData.datastore) {
-				Object.assign(this.data.datastore._Bool ??= {}, backupData.datastore._Bool ?? {});
-				Object.assign(this.data.datastore._Int ??= {}, backupData.datastore._Int ?? {});
-				Object.assign(this.data.datastore._String ??= {}, backupData.datastore._String ?? {});
-				Object.assign(this.data.datastore._Float ??= {}, backupData.datastore._Float ?? {});
-				Object.assign(this.data.datastore._Long ??= {}, backupData.datastore._Long ?? {});
-				Object.assign(this.data.datastore._StringSet ??= {}, backupData.datastore._StringSet ?? {});
-			}
-			if (backupData.settings) {
-				Object.assign(this.data.settings._Bool ??= {}, backupData.settings._Bool ?? {});
-				Object.assign(this.data.settings._Int ??= {}, backupData.settings._Int ?? {});
-				Object.assign(this.data.settings._String ??= {}, backupData.settings._String ?? {});
-				Object.assign(this.data.settings._Float ??= {}, backupData.settings._Float ?? {});
-				Object.assign(this.data.settings._Long ??= {}, backupData.settings._Long ?? {});
-				Object.assign(this.data.settings._StringSet ??= {}, backupData.settings._StringSet ?? {});
-			}
+			report.push(`Starting import from: ${path.basename(filePath)}`);
+			const mergeBucket = (source, target, bucketName = "datastore") => {
+				if (!source || !target) return;
+				for (const t of [
+					"_Bool",
+					"_Int",
+					"_String",
+					"_Float",
+					"_Long",
+					"_StringSet"
+				]) {
+					const sObj = source[t];
+					if (sObj) {
+						if (!target[t]) target[t] = {};
+						const tObj = target[t];
+						for (const [key, val] of Object.entries(sObj)) if (this.isKeyTransferable(key)) {
+							tObj[key] = val;
+							importedKeysCount++;
+						} else report.push(`Skipped non-transferable key [${bucketName}.${t}]: ${key}`);
+					}
+				}
+			};
+			mergeBucket(backupData.datastore, this.data.datastore, "datastore");
+			mergeBucket(backupData.settings, this.data.settings, "settings");
 			this.save();
-			return true;
+			report.push(`Successfully imported ${importedKeysCount} keys into local Datastore.`);
+			return {
+				success: true,
+				importedKeysCount,
+				report
+			};
 		} catch (e) {
-			console.error("Error importing backup:", e);
-			return false;
+			this.rollbackSnapshot();
+			report.push(`Import failed, rolled back snapshot: ${e.message}`);
+			return {
+				success: false,
+				importedKeysCount: 0,
+				report
+			};
 		}
 	}
 	exportBackup() {
+		this.data.exportTimestamp = Date.now();
 		return JSON.stringify(this.data, null, 2);
 	}
 };

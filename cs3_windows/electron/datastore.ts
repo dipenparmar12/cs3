@@ -2,29 +2,43 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 
+export interface DatastoreBucket {
+  _Bool?: Record<string, boolean>;
+  _Int?: Record<string, number>;
+  _String?: Record<string, string>;
+  _Float?: Record<string, number>;
+  _Long?: Record<string, number>;
+  _StringSet?: Record<string, string[]>;
+}
+
 export interface DatastoreBackup {
-  datastore: {
-    _Bool?: Record<string, boolean>;
-    _Int?: Record<string, number>;
-    _String?: Record<string, string>;
-    _Float?: Record<string, number>;
-    _Long?: Record<string, number>;
-    _StringSet?: Record<string, string[]>;
-  };
-  settings: {
-    _Bool?: Record<string, boolean>;
-    _Int?: Record<string, number>;
-    _String?: Record<string, string>;
-    _Float?: Record<string, number>;
-    _Long?: Record<string, number>;
-    _StringSet?: Record<string, string[]>;
-  };
+  datastore: DatastoreBucket;
+  settings: DatastoreBucket;
+  version?: number;
+  exportTimestamp?: number;
+}
+
+export interface ImportBackupResult {
+  success: boolean;
+  importedKeysCount: number;
+  report: string[];
 }
 
 export class DatastoreManager {
   private dataDir: string;
   private dbFile: string;
+  private backupSnapshotFile: string;
   private data: DatastoreBackup;
+
+  // Non-transferable Android key grammar patterns (tokens, ephemeral state, device IDs)
+  private nonTransferableKeyPatterns: RegExp[] = [
+    /token/i,
+    /session_id/i,
+    /device_id/i,
+    /auth_bearer/i,
+    /ephemeral_/i,
+    /cache_path/i
+  ];
 
   constructor() {
     this.dataDir = app ? app.getPath('userData') : path.join(process.cwd(), 'data');
@@ -32,6 +46,7 @@ export class DatastoreManager {
       fs.mkdirSync(this.dataDir, { recursive: true });
     }
     this.dbFile = path.join(this.dataDir, 'cs3_datastore.json');
+    this.backupSnapshotFile = path.join(this.dataDir, 'cs3_datastore_snapshot.json');
     this.data = this.loadFromFile();
   }
 
@@ -47,6 +62,7 @@ export class DatastoreManager {
     return {
       datastore: { _Bool: {}, _Int: {}, _String: {}, _Float: {}, _Long: {}, _StringSet: {} },
       settings: { _Bool: {}, _Int: {}, _String: {}, _Float: {}, _Long: {}, _StringSet: {} },
+      version: 1
     };
   }
 
@@ -56,6 +72,32 @@ export class DatastoreManager {
     } catch (e) {
       console.error('Failed to save datastore:', e);
     }
+  }
+
+  public createSnapshot(): void {
+    try {
+      fs.writeFileSync(this.backupSnapshotFile, JSON.stringify(this.data, null, 2), 'utf-8');
+    } catch (e) {
+      console.error('Failed to create datastore snapshot:', e);
+    }
+  }
+
+  public rollbackSnapshot(): boolean {
+    try {
+      if (fs.existsSync(this.backupSnapshotFile)) {
+        const raw = fs.readFileSync(this.backupSnapshotFile, 'utf-8');
+        this.data = JSON.parse(raw);
+        this.save();
+        return true;
+      }
+    } catch (e) {
+      console.error('Failed to rollback datastore snapshot:', e);
+    }
+    return false;
+  }
+
+  private isKeyTransferable(key: string): boolean {
+    return !this.nonTransferableKeyPatterns.some((pattern) => pattern.test(key));
   }
 
   // --- Key Value Getter/Setters ---
@@ -84,7 +126,6 @@ export class DatastoreManager {
     return target._Bool?.[key] ?? defaultValue;
   }
 
-  // Aliases for compatibility
   public setBoolean(key: string, value: boolean, isSetting = false): void {
     this.setBool(key, value, isSetting);
   }
@@ -119,40 +160,68 @@ export class DatastoreManager {
     }
   }
 
-  // --- Android Backup Import & Export ---
+  // --- Robust Key-Grammar Android Backup Import & Export ---
 
-  public importBackupFile(filePath: string): boolean {
+  public importBackupFile(filePath: string): ImportBackupResult {
+    const report: string[] = [];
+    let importedKeysCount = 0;
+
     try {
+      this.createSnapshot();
+
       const content = fs.readFileSync(filePath, 'utf-8');
       const backupData = JSON.parse(content) as DatastoreBackup;
 
-      if (backupData.datastore) {
-        Object.assign(this.data.datastore._Bool ??={}, backupData.datastore._Bool ?? {});
-        Object.assign(this.data.datastore._Int ??={}, backupData.datastore._Int ?? {});
-        Object.assign(this.data.datastore._String ??={}, backupData.datastore._String ?? {});
-        Object.assign(this.data.datastore._Float ??={}, backupData.datastore._Float ?? {});
-        Object.assign(this.data.datastore._Long ??={}, backupData.datastore._Long ?? {});
-        Object.assign(this.data.datastore._StringSet ??={}, backupData.datastore._StringSet ?? {});
-      }
+      report.push(`Starting import from: ${path.basename(filePath)}`);
 
-      if (backupData.settings) {
-        Object.assign(this.data.settings._Bool ??={}, backupData.settings._Bool ?? {});
-        Object.assign(this.data.settings._Int ??={}, backupData.settings._Int ?? {});
-        Object.assign(this.data.settings._String ??={}, backupData.settings._String ?? {});
-        Object.assign(this.data.settings._Float ??={}, backupData.settings._Float ?? {});
-        Object.assign(this.data.settings._Long ??={}, backupData.settings._Long ?? {});
-        Object.assign(this.data.settings._StringSet ??={}, backupData.settings._StringSet ?? {});
-      }
+      const mergeBucket = (source?: DatastoreBucket, target?: DatastoreBucket, bucketName = 'datastore') => {
+        if (!source || !target) return;
+
+        // Process 6 canonical Android CS3 data buckets
+        const types: Array<keyof DatastoreBucket> = ['_Bool', '_Int', '_String', '_Float', '_Long', '_StringSet'];
+
+        for (const t of types) {
+          const sObj = source[t] as Record<string, any> | undefined;
+          if (sObj) {
+            if (!target[t]) target[t] = {} as any;
+            const tObj = target[t] as Record<string, any>;
+
+            for (const [key, val] of Object.entries(sObj)) {
+              if (this.isKeyTransferable(key)) {
+                tObj[key] = val;
+                importedKeysCount++;
+              } else {
+                report.push(`Skipped non-transferable key [${bucketName}.${t}]: ${key}`);
+              }
+            }
+          }
+        }
+      };
+
+      mergeBucket(backupData.datastore, this.data.datastore, 'datastore');
+      mergeBucket(backupData.settings, this.data.settings, 'settings');
 
       this.save();
-      return true;
-    } catch (e) {
-      console.error('Error importing backup:', e);
-      return false;
+      report.push(`Successfully imported ${importedKeysCount} keys into local Datastore.`);
+
+      return {
+        success: true,
+        importedKeysCount,
+        report
+      };
+    } catch (e: any) {
+      this.rollbackSnapshot();
+      report.push(`Import failed, rolled back snapshot: ${e.message}`);
+      return {
+        success: false,
+        importedKeysCount: 0,
+        report
+      };
     }
   }
 
   public exportBackup(): string {
+    this.data.exportTimestamp = Date.now();
     return JSON.stringify(this.data, null, 2);
   }
 }
