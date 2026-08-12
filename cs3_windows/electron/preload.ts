@@ -14,6 +14,13 @@ import type { OfficialRepository } from './officialRepositories';
 import type { MetadataDetail } from './metadataProvider';
 import type { SourceResponse } from './contentService';
 import type { RepositoryFetchResult } from './pluginManager';
+import type {
+  AvailableUpdate,
+  UpdateCheckResult,
+  UpdateOutcome,
+  UpdateSettings,
+} from './cs3/extensionUpdater';
+import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
 import type { StreamHandle } from './torrent/torrentEngine';
 
 /**
@@ -76,6 +83,14 @@ export interface CloudStreamElectronAPI {
   revealInFolder: (filePath: string) => Promise<void>;
   onDownloadProgress: (callback: (tasks: DownloadTask[]) => void) => () => void;
 
+  // Season / series batch downloads
+  startBatchDownload: (
+    request: BatchDownloadRequest
+  ) => Promise<Envelope & { progress: BatchProgress | null }>;
+  cancelBatchDownload: (batchId: string) => Promise<boolean>;
+  getActiveBatches: () => Promise<BatchProgress[]>;
+  onBatchProgress: (callback: (progress: BatchProgress) => void) => () => void;
+
   // Binaries
   checkBinaries: () => Promise<{ aria2: boolean; ytdlp: boolean }>;
   setupBinaries: () => Promise<{ success: boolean; message: string }>;
@@ -94,6 +109,18 @@ export interface CloudStreamElectronAPI {
   getInstalledRepositories: () => Promise<string[]>;
   removeRepository: (repoUrl: string) => Promise<string[]>;
   getInstalledPlugins: () => Promise<SitePlugin[]>;
+
+  // Extension updates (over-the-air; independent of app updates)
+  checkExtensionUpdates: () => Promise<Envelope & { result: UpdateCheckResult | null }>;
+  getCachedExtensionUpdates: () => Promise<AvailableUpdate[]>;
+  updateExtension: (internalName: string) => Promise<UpdateOutcome>;
+  updateAllExtensions: (internalNames?: string[]) => Promise<UpdateOutcome[]>;
+  getUpdateSettings: () => Promise<UpdateSettings>;
+  saveUpdateSettings: (patch: Partial<UpdateSettings>) => Promise<UpdateSettings>;
+  /** Subscribes to update lifecycle events; returns an unsubscribe function. */
+  onExtensionUpdateEvent: (
+    callback: (event: string, payload: unknown) => void
+  ) => () => void;
 
   // Datastore
   getSetting: (key: string, defaultValue?: unknown) => Promise<string>;
@@ -146,6 +173,15 @@ const api: CloudStreamElectronAPI = {
     return () => ipcRenderer.removeListener('download:progress', listener);
   },
 
+  startBatchDownload: (request) => ipcRenderer.invoke('download:startBatch', request),
+  cancelBatchDownload: (batchId) => ipcRenderer.invoke('download:cancelBatch', batchId),
+  getActiveBatches: () => ipcRenderer.invoke('download:getActiveBatches'),
+  onBatchProgress: (callback) => {
+    const listener = (_: unknown, progress: BatchProgress) => callback(progress);
+    ipcRenderer.on('download:batchProgress', listener);
+    return () => ipcRenderer.removeListener('download:batchProgress', listener);
+  },
+
   checkBinaries: () => ipcRenderer.invoke('binary:check'),
   setupBinaries: () => ipcRenderer.invoke('binary:setup'),
 
@@ -159,6 +195,19 @@ const api: CloudStreamElectronAPI = {
   getInstalledRepositories: () => ipcRenderer.invoke('extension:getInstalledRepositories'),
   removeRepository: (repoUrl) => ipcRenderer.invoke('extension:removeRepository', repoUrl),
   getInstalledPlugins: () => ipcRenderer.invoke('extension:getInstalledPlugins'),
+
+  checkExtensionUpdates: () => ipcRenderer.invoke('extension:checkUpdates'),
+  getCachedExtensionUpdates: () => ipcRenderer.invoke('extension:getCachedUpdates'),
+  updateExtension: (internalName) => ipcRenderer.invoke('extension:update', internalName),
+  updateAllExtensions: (internalNames) =>
+    ipcRenderer.invoke('extension:updateAll', internalNames),
+  getUpdateSettings: () => ipcRenderer.invoke('extension:getUpdateSettings'),
+  saveUpdateSettings: (patch) => ipcRenderer.invoke('extension:saveUpdateSettings', patch),
+  onExtensionUpdateEvent: (callback) => {
+    const listener = (_: unknown, event: string, payload: unknown) => callback(event, payload);
+    ipcRenderer.on('extension:updateEvent', listener);
+    return () => ipcRenderer.removeListener('extension:updateEvent', listener);
+  },
 
   getSetting: (key, defaultValue) => ipcRenderer.invoke('datastore:getSetting', key, defaultValue),
   setSetting: (key, value) => ipcRenderer.invoke('datastore:setSetting', key, value),

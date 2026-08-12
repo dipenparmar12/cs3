@@ -29,6 +29,13 @@ e.exposeInMainWorld("cloudstream", {
 		let n = (t, n) => e(n);
 		return t.on("download:progress", n), () => t.removeListener("download:progress", n);
 	},
+	startBatchDownload: (e) => t.invoke("download:startBatch", e),
+	cancelBatchDownload: (e) => t.invoke("download:cancelBatch", e),
+	getActiveBatches: () => t.invoke("download:getActiveBatches"),
+	onBatchProgress: (e) => {
+		let n = (t, n) => e(n);
+		return t.on("download:batchProgress", n), () => t.removeListener("download:batchProgress", n);
+	},
 	checkBinaries: () => t.invoke("binary:check"),
 	setupBinaries: () => t.invoke("binary:setup"),
 	getOfficialRepositories: () => t.invoke("extension:getOfficialRepositories"),
@@ -39,6 +46,16 @@ e.exposeInMainWorld("cloudstream", {
 	getInstalledRepositories: () => t.invoke("extension:getInstalledRepositories"),
 	removeRepository: (e) => t.invoke("extension:removeRepository", e),
 	getInstalledPlugins: () => t.invoke("extension:getInstalledPlugins"),
+	checkExtensionUpdates: () => t.invoke("extension:checkUpdates"),
+	getCachedExtensionUpdates: () => t.invoke("extension:getCachedUpdates"),
+	updateExtension: (e) => t.invoke("extension:update", e),
+	updateAllExtensions: (e) => t.invoke("extension:updateAll", e),
+	getUpdateSettings: () => t.invoke("extension:getUpdateSettings"),
+	saveUpdateSettings: (e) => t.invoke("extension:saveUpdateSettings", e),
+	onExtensionUpdateEvent: (e) => {
+		let n = (t, n, r) => e(n, r);
+		return t.on("extension:updateEvent", n), () => t.removeListener("extension:updateEvent", n);
+	},
 	getSetting: (e, n) => t.invoke("datastore:getSetting", e, n),
 	setSetting: (e, n) => t.invoke("datastore:setSetting", e, n),
 	getObject: (e, n) => t.invoke("datastore:getObject", e, n),

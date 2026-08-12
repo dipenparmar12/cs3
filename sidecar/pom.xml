@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CloudStream Desktop JVM sidecar (Runtime 3 / drop-in .cs3 support).
+
+  Produces two artifacts:
+    cs3-sidecar.jar       the RPC server, translator and plugin loader
+    cs3-android-shim.jar  the android.* stubs, placed on the plugin classpath
+
+  They are separate on purpose. The shim has to sit on the classpath that plugin
+  code links against; the sidecar's own internals must not. Shipping one jar
+  would put the RPC channel one Class.forName away from untrusted plugin code.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.cloudstream.desktop</groupId>
+  <artifactId>cs3-sidecar</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+  <name>CloudStream Desktop JVM Sidecar</name>
+
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <dex2jar.version>2.4.38</dex2jar.version>
+    <asm.version>9.7.1</asm.version>
+  </properties>
+
+  <dependencies>
+    <!--
+      dex2jar performs the DEX to JVM translation. Version 2.4.38 of the
+      maintained de.femtopedia fork was selected by measurement, not preference:
+      it translated 392/392 real community plugins with zero verification
+      failures across 6,617 Kotlin coroutine state machines. See
+      docs/PRD/35-phase1-translation-spike-results.md and tools/dex-spike.
+    -->
+    <dependency>
+      <groupId>de.femtopedia.dex2jar</groupId>
+      <artifactId>dex2jar</artifactId>
+      <version>${dex2jar.version}</version>
+    </dependency>
+
+    <!-- Bytecode inspection for the linkage analyzer / tier classifier. -->
+    <dependency>
+      <groupId>org.ow2.asm</groupId>
+      <artifactId>asm</artifactId>
+      <version>${asm.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.ow2.asm</groupId>
+      <artifactId>asm-tree</artifactId>
+      <version>${asm.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.11.4</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>cs3-sidecar</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.2</version>
+      </plugin>
+
+      <!-- The sidecar jar: internals only, never the shim. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.2</version>
+        <configuration>
+          <excludes>
+            <exclude>android/**</exclude>
+          </excludes>
+          <archive>
+            <manifest>
+              <mainClass>com.cloudstream.desktop.sidecar.Main</mainClass>
+            </manifest>
+          </archive>
+        </configuration>
+        <executions>
+          <execution>
+            <id>android-shim</id>
+            <phase>package</phase>
+            <goals><goal>jar</goal></goals>
+            <configuration>
+              <classifier>android-shim</classifier>
+              <excludes combine.self="override">
+                <exclude>com/**</exclude>
+              </excludes>
+              <archive>
+                <manifest>
+                  <addDefaultImplementationEntries>false</addDefaultImplementationEntries>
+                </manifest>
+              </archive>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- Runtime dependencies are laid out beside the jar for the launcher. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.8.1</version>
+        <executions>
+          <execution>
+            <id>copy-runtime-deps</id>
+            <phase>package</phase>
+            <goals><goal>copy-dependencies</goal></goals>
+            <configuration>
+              <outputDirectory>${project.build.directory}/lib</outputDirectory>
+              <includeScope>runtime</includeScope>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
