@@ -3,7 +3,7 @@
 **Generated:** 2026-08-12
 **Baseline:** CloudStream Android commit `a72f9e6c` (4.8.0) · community repositories as vendored in `repositories/` on 2026-08-12
 **Status:** Ratified architecture. Supersedes the "providers must be rewritten" premise in earlier revisions of [27](27-plugin-and-extension-architecture.md).
-**Decision:** ADR-12 — Electron host + bundled JVM sidecar. Recorded 2026-08-12.
+**Decision:** ADR-10 — Electron host + bundled JVM sidecar. Recorded 2026-08-12.
 
 ---
 

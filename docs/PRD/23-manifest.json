@@ -1,11 +1,71 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "generated": "2026-08-10",
+  "revised": "2026-08-12",
   "project": {
     "name": "CloudStream Desktop (Electron)",
     "type": "reverse-engineering-and-platform-migration",
-    "targetPlatforms": ["windows", "macos", "linux"],
+    "targetPlatforms": [
+      "windows",
+      "macos",
+      "linux"
+    ],
+    "platformScope": {
+      "decision": "windows-first",
+      "decidedOn": "2026-08-12",
+      "p0": [
+        "windows-x64"
+      ],
+      "phased": [
+        "macos-x64",
+        "macos-arm64",
+        "linux-x64",
+        "linux-arm64",
+        "windows-arm64"
+      ],
+      "document": "29"
+    },
+    "hostArchitecture": {
+      "adr": "ADR-10",
+      "decidedOn": "2026-08-12",
+      "host": "electron",
+      "pluginRuntimes": [
+        {
+          "id": 1,
+          "name": "TypeScript SDK",
+          "engine": "v8-isolate",
+          "priority": "P1"
+        },
+        {
+          "id": 2,
+          "name": "Kotlin Multiplatform JS",
+          "engine": "v8-isolate",
+          "priority": "P1"
+        },
+        {
+          "id": 3,
+          "name": "CS3 Drop-In",
+          "engine": "bundled-jvm-sidecar",
+          "priority": "P0",
+          "document": "31"
+        }
+      ]
+    },
+    "extensionCorpus": {
+      "surveyedOn": "2026-08-12",
+      "localPath": "repositories/",
+      "repositories": 26,
+      "kotlinFiles": 1009,
+      "gradleModules": 325,
+      "pluginEntryClasses": 303,
+      "mainApiProviders": 299,
+      "extractorApiClasses": 110,
+      "providersWithNoAndroidImports": 202,
+      "providersTouchingAndroidUiToolkit": 8,
+      "providersTouchingWebkit": 7,
+      "appModuleSymbolsRequiringShim": 22
+    },
     "sourceOfTruth": {
       "repository": "https://github.com/recloudstream/cloudstream",
       "localPath": "cloudstream_ref_android/",
@@ -15,62 +75,234 @@
       "appVersionCode": 68,
       "applicationId": "com.lagradost.cloudstream3",
       "license": "GPL-3.0",
-      "modules": [":app", ":library", ":docs"],
+      "modules": [
+        ":app",
+        ":library",
+        ":docs"
+      ],
       "totalCommits": 3753
     }
   },
-
   "documents": [
-    { "id": "00", "file": "00-index.md", "title": "Index and baseline" },
-    { "id": "01", "file": "01-executive-summary.md", "title": "Executive summary" },
-    { "id": "02", "file": "02-system-architecture.md", "title": "System architecture" },
-    { "id": "03", "file": "03-feature-specifications.md", "title": "Feature specifications" },
-    { "id": "04", "file": "04-utility-specifications.md", "title": "Utility specifications" },
-    { "id": "05", "file": "05-library-dependencies.md", "title": "Library dependencies" },
-    { "id": "06", "file": "06-data-models.md", "title": "Data models" },
-    { "id": "07", "file": "07-apis-and-contracts.md", "title": "APIs and contracts" },
-    { "id": "08", "file": "08-ui-and-interactions.md", "title": "UI and interactions" },
-    { "id": "09", "file": "09-user-workflows.md", "title": "User workflows" },
-    { "id": "10", "file": "10-user-personas.md", "title": "User personas" },
-    { "id": "11", "file": "11-security-and-compliance.md", "title": "Security and compliance" },
-    { "id": "12", "file": "12-performance-and-limits.md", "title": "Performance and limits" },
-    { "id": "13", "file": "13-testing-and-qa.md", "title": "Testing and QA" },
-    { "id": "14", "file": "14-deployment-and-ci.md", "title": "Deployment and CI" },
-    { "id": "15", "file": "15-upgrade-and-modernization.md", "title": "Upgrade and modernization" },
-    { "id": "16", "file": "16-implementation-plan.md", "title": "Implementation plan" },
-    { "id": "17", "file": "17-acceptance-criteria.md", "title": "Acceptance criteria" },
-    { "id": "18", "file": "18-technical-reference.md", "title": "Technical reference" },
-    { "id": "19", "file": "19-development-history.md", "title": "Development history" },
-    { "id": "20", "file": "20-limitations-and-constraints.md", "title": "Limitations and constraints" },
-    { "id": "21", "file": "21-open-issues-and-assumptions.md", "title": "Open issues and assumptions" },
-    { "id": "22", "file": "22-contributor-guide.md", "title": "Contributor guide" },
-    { "id": "23", "file": "23-manifest.json", "title": "Machine-readable manifest" },
-    { "id": "24", "file": "24-feature-parity-matrix.md", "title": "Feature parity matrix" },
-    { "id": "25", "file": "25-data-portability-and-migration.md", "title": "Data portability and migration" },
-    { "id": "26", "file": "26-electron-desktop-requirements.md", "title": "Electron desktop requirements" },
-    { "id": "27", "file": "27-plugin-and-extension-architecture.md", "title": "Plugin and extension architecture" },
-    { "id": "28", "file": "28-media-playback-requirements.md", "title": "Media playback requirements" },
-    { "id": "29", "file": "29-platform-compatibility.md", "title": "Platform compatibility" },
-    { "id": "30", "file": "30-migration-test-cases.md", "title": "Migration test cases" }
+    {
+      "id": "00",
+      "file": "00-index.md",
+      "title": "Index and baseline"
+    },
+    {
+      "id": "01",
+      "file": "01-executive-summary.md",
+      "title": "Executive summary"
+    },
+    {
+      "id": "02",
+      "file": "02-system-architecture.md",
+      "title": "System architecture"
+    },
+    {
+      "id": "03",
+      "file": "03-feature-specifications.md",
+      "title": "Feature specifications"
+    },
+    {
+      "id": "04",
+      "file": "04-utility-specifications.md",
+      "title": "Utility specifications"
+    },
+    {
+      "id": "05",
+      "file": "05-library-dependencies.md",
+      "title": "Library dependencies"
+    },
+    {
+      "id": "06",
+      "file": "06-data-models.md",
+      "title": "Data models"
+    },
+    {
+      "id": "07",
+      "file": "07-apis-and-contracts.md",
+      "title": "APIs and contracts"
+    },
+    {
+      "id": "08",
+      "file": "08-ui-and-interactions.md",
+      "title": "UI and interactions"
+    },
+    {
+      "id": "09",
+      "file": "09-user-workflows.md",
+      "title": "User workflows"
+    },
+    {
+      "id": "10",
+      "file": "10-user-personas.md",
+      "title": "User personas"
+    },
+    {
+      "id": "11",
+      "file": "11-security-and-compliance.md",
+      "title": "Security and compliance"
+    },
+    {
+      "id": "12",
+      "file": "12-performance-and-limits.md",
+      "title": "Performance and limits"
+    },
+    {
+      "id": "13",
+      "file": "13-testing-and-qa.md",
+      "title": "Testing and QA"
+    },
+    {
+      "id": "14",
+      "file": "14-deployment-and-ci.md",
+      "title": "Deployment and CI"
+    },
+    {
+      "id": "15",
+      "file": "15-upgrade-and-modernization.md",
+      "title": "Upgrade and modernization"
+    },
+    {
+      "id": "16",
+      "file": "16-implementation-plan.md",
+      "title": "Implementation plan"
+    },
+    {
+      "id": "17",
+      "file": "17-acceptance-criteria.md",
+      "title": "Acceptance criteria"
+    },
+    {
+      "id": "18",
+      "file": "18-technical-reference.md",
+      "title": "Technical reference"
+    },
+    {
+      "id": "19",
+      "file": "19-development-history.md",
+      "title": "Development history"
+    },
+    {
+      "id": "20",
+      "file": "20-limitations-and-constraints.md",
+      "title": "Limitations and constraints"
+    },
+    {
+      "id": "21",
+      "file": "21-open-issues-and-assumptions.md",
+      "title": "Open issues and assumptions"
+    },
+    {
+      "id": "22",
+      "file": "22-contributor-guide.md",
+      "title": "Contributor guide"
+    },
+    {
+      "id": "23",
+      "file": "23-manifest.json",
+      "title": "Machine-readable manifest"
+    },
+    {
+      "id": "24",
+      "file": "24-feature-parity-matrix.md",
+      "title": "Feature parity matrix"
+    },
+    {
+      "id": "25",
+      "file": "25-data-portability-and-migration.md",
+      "title": "Data portability and migration"
+    },
+    {
+      "id": "26",
+      "file": "26-electron-desktop-requirements.md",
+      "title": "Electron desktop requirements"
+    },
+    {
+      "id": "27",
+      "file": "27-plugin-and-extension-architecture.md",
+      "title": "Plugin and extension architecture"
+    },
+    {
+      "id": "28",
+      "file": "28-media-playback-requirements.md",
+      "title": "Media playback requirements"
+    },
+    {
+      "id": "29",
+      "file": "29-platform-compatibility.md",
+      "title": "Platform compatibility"
+    },
+    {
+      "id": "30",
+      "file": "30-migration-test-cases.md",
+      "title": "Migration test cases"
+    },
+    {
+      "id": "31",
+      "file": "31-cs3-dropin-compatibility.md",
+      "title": "CS3 drop-in compatibility (JVM sidecar)"
+    }
   ],
-
   "headlineFindings": [
     {
       "id": "F-1",
-      "title": "Android .cs3 extensions cannot execute in Electron",
-      "severity": "fatal-without-mitigation",
-      "evidence": [{ "path": "app/src/main/java/com/lagradost/cloudstream3/plugins/PluginManager.kt", "lines": "611", "symbol": "loadPlugin/PathClassLoader" }],
-      "document": "27",
-      "confidence": "high"
+      "title": "Android .cs3 extensions cannot execute in Node or V8, but run drop-in on a bundled JVM sidecar",
+      "severity": "high",
+      "revisedOn": "2026-08-12",
+      "supersedes": "Android .cs3 extensions cannot execute in Electron (severity: fatal-without-mitigation)",
+      "evidence": [
+        {
+          "path": "app/src/main/java/com/lagradost/cloudstream3/plugins/PluginManager.kt",
+          "lines": "611",
+          "symbol": "loadPlugin/PathClassLoader"
+        },
+        {
+          "path": "library/build.gradle.kts",
+          "lines": "23-42",
+          "symbol": "jvm() target declared"
+        },
+        {
+          "path": "library/src/jvmMain/",
+          "lines": "5 files",
+          "symbol": "JVM actuals for Log, ContextHelper, WebViewResolver, Coroutines, SubtitleHelperPlatform"
+        },
+        {
+          "path": "app/build.gradle.kts",
+          "lines": "305-325",
+          "symbol": "copyJar/makeJar merge library-jvm.jar into the provider classpath"
+        },
+        {
+          "path": "repositories/",
+          "lines": "1009 kotlin files",
+          "symbol": "community extension survey 2026-08-12"
+        }
+      ],
+      "document": "31",
+      "confidence": "high",
+      "residualRisk": "RISK-D1 — DEX to JVM translation is unproven against Kotlin coroutine state machines; blocking spike OQ-2a/OQ-27"
     },
     {
       "id": "F-2",
       "title": "Upstream is building its own cross-platform successor with Kotlin Multiplatform and Compose",
       "severity": "strategic",
       "evidence": [
-        { "path": "COMPOSE.md", "lines": "1-25", "symbol": "migration guide" },
-        { "path": "library/build.gradle.kts", "lines": "20-88", "symbol": "kotlin multiplatform targets" },
-        { "path": "library/src/webMain/", "lines": "6 files", "symbol": "web actuals" }
+        {
+          "path": "COMPOSE.md",
+          "lines": "1-25",
+          "symbol": "migration guide"
+        },
+        {
+          "path": "library/build.gradle.kts",
+          "lines": "20-88",
+          "symbol": "kotlin multiplatform targets"
+        },
+        {
+          "path": "library/src/webMain/",
+          "lines": "6 files",
+          "symbol": "web actuals"
+        }
       ],
       "document": "19",
       "confidence": "high"
@@ -79,7 +311,13 @@
       "id": "F-3",
       "title": "The Android backup format is versionless flat key/value JSON",
       "severity": "high",
-      "evidence": [{ "path": "app/src/main/java/com/lagradost/cloudstream3/utils/BackupUtils.kt", "lines": "123-137", "symbol": "BackupFile/BackupVars" }],
+      "evidence": [
+        {
+          "path": "app/src/main/java/com/lagradost/cloudstream3/utils/BackupUtils.kt",
+          "lines": "123-137",
+          "symbol": "BackupFile/BackupVars"
+        }
+      ],
       "document": "25",
       "confidence": "high"
     },
@@ -87,7 +325,13 @@
       "id": "F-4",
       "title": "Every user record is keyed by a Java String.hashCode()",
       "severity": "critical",
-      "evidence": [{ "path": "app/src/main/java/com/lagradost/cloudstream3/ui/result/ResultViewModel2.kt", "lines": "370-380", "symbol": "getId/getLoadResponseIdFromUrl" }],
+      "evidence": [
+        {
+          "path": "app/src/main/java/com/lagradost/cloudstream3/ui/result/ResultViewModel2.kt",
+          "lines": "370-380",
+          "symbol": "getId/getLoadResponseIdFromUrl"
+        }
+      ],
       "document": "06",
       "confidence": "high"
     },
@@ -95,383 +339,2729 @@
       "id": "F-5",
       "title": "Download state is deliberately excluded from backups",
       "severity": "medium",
-      "evidence": [{ "path": "app/src/main/java/com/lagradost/cloudstream3/utils/BackupUtils.kt", "lines": "90-109", "symbol": "nonTransferableKeys" }],
+      "evidence": [
+        {
+          "path": "app/src/main/java/com/lagradost/cloudstream3/utils/BackupUtils.kt",
+          "lines": "90-109",
+          "symbol": "nonTransferableKeys"
+        }
+      ],
       "document": "20",
       "confidence": "high"
     }
   ],
-
   "features": [
-    { "id": "FEAT-SETUP-1", "name": "First-run setup wizard", "area": "setup", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/ui/setup/"], "confidence": "high" },
-    { "id": "FEAT-SETUP-2", "name": "Layout mode", "area": "setup", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/ui/settings/Globals.kt:14-60"], "confidence": "high" },
-    { "id": "FEAT-SETUP-3", "name": "Localization", "area": "setup", "priority": "P1", "strategy": "R2", "class": "parity", "document": "03", "evidence": ["app/src/main/res/values-*/", "fastlane/metadata/android/"], "confidence": "high" },
-
-    { "id": "FEAT-ACCT-1", "name": "Local profiles", "area": "accounts", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/utils/DataStoreHelper.kt:163-241"], "dataEntities": ["DATA-1"], "confidence": "high" },
-    { "id": "FEAT-ACCT-2", "name": "Profile PIN and biometrics", "area": "accounts", "priority": "P2", "strategy": "R4", "class": "adapt", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/utils/BackupUtils.kt:66-68"], "confidence": "high" },
-    { "id": "FEAT-ACCT-3", "name": "Create/edit profile", "area": "accounts", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-ACCT-4", "name": "Delete profile", "area": "accounts", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "medium" },
-    { "id": "FEAT-ACCT-5", "name": "Skip startup profile selector", "area": "accounts", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-HOME-1", "name": "Provider homepage", "area": "home", "priority": "P0", "strategy": "R1", "class": "adapt", "document": "03", "evidence": ["library/src/commonMain/kotlin/com/lagradost/cloudstream3/MainAPI.kt:630-638"], "confidence": "high" },
-    { "id": "FEAT-HOME-2", "name": "Continue watching row", "area": "home", "priority": "P0", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-HOME-3", "name": "Bookmarks row", "area": "home", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-HOME-4", "name": "Media-type filter", "area": "home", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-HOME-5", "name": "Random item button", "area": "home", "priority": "P3", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-SEARCH-1", "name": "Multi-provider search", "area": "search", "priority": "P0", "strategy": "R1", "class": "adapt", "document": "03", "evidence": ["library/src/commonMain/kotlin/com/lagradost/cloudstream3/MainAPI.kt:646-660"], "confidence": "high" },
-    { "id": "FEAT-SEARCH-2", "name": "Quick search and suggestions", "area": "search", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SEARCH-3", "name": "Provider and type filters", "area": "search", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SEARCH-4", "name": "Search history", "area": "search", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/ui/search/SearchViewModel.kt:33"], "confidence": "high" },
-    { "id": "FEAT-SEARCH-5", "name": "Quality badge filtering", "area": "search", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SEARCH-6", "name": "Sync provider search", "area": "search", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-RESULT-1", "name": "Detail page", "area": "result", "priority": "P0", "strategy": "R1", "class": "adapt", "document": "03", "evidence": ["library/src/commonMain/kotlin/com/lagradost/cloudstream3/MainAPI.kt:1814-2215"], "confidence": "high" },
-    { "id": "FEAT-RESULT-2", "name": "Episode list and seasons", "area": "result", "priority": "P0", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-RESULT-3", "name": "Watch state", "area": "result", "priority": "P0", "strategy": "R1", "class": "parity", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/ui/WatchType.kt:7-18"], "confidence": "high" },
-    { "id": "FEAT-RESULT-4", "name": "Favourites", "area": "result", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "dataEntities": ["DATA-3"], "confidence": "high" },
-    { "id": "FEAT-RESULT-5", "name": "Subscriptions", "area": "result", "priority": "P1", "strategy": "R2", "class": "adapt", "document": "03", "dataEntities": ["DATA-3"], "confidence": "high" },
-    { "id": "FEAT-RESULT-6", "name": "Per-episode watched flag", "area": "result", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-RESULT-7", "name": "Trailers", "area": "result", "priority": "P2", "strategy": "R2", "class": "investigate", "document": "03", "confidence": "high" },
-    { "id": "FEAT-RESULT-8", "name": "Cast and recommendations", "area": "result", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-RESULT-9", "name": "Filler episode marking", "area": "result", "priority": "P3", "strategy": "R2", "class": "parity", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-LIB-1", "name": "Library view", "area": "library", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/ui/library/LibraryViewModel.kt:19-31"], "confidence": "high" },
-    { "id": "FEAT-LIB-2", "name": "Local list aggregation", "area": "library", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-LIB-3", "name": "Library search", "area": "library", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-LIB-4", "name": "Continue watching management", "area": "library", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-LIB-5", "name": "Watch progress persistence", "area": "library", "priority": "P0", "strategy": "R1", "class": "parity", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/utils/DataStoreHelper.kt:243-258,691-695"], "dataEntities": ["DATA-2"], "confidence": "high" },
-    { "id": "FEAT-LIB-6", "name": "Resume watching records", "area": "library", "priority": "P0", "strategy": "R1", "class": "parity", "document": "03", "dataEntities": ["DATA-4"], "confidence": "high" },
-    { "id": "FEAT-LIB-7", "name": "Bulk actions", "area": "library", "priority": "P3", "strategy": "desktop-only", "class": "desktop-only", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-PLAY-1", "name": "Link resolution and playback start", "area": "playback", "priority": "P0", "strategy": "R1", "class": "adapt", "document": "03", "evidence": ["library/src/commonMain/kotlin/com/lagradost/cloudstream3/MainAPI.kt:690-700"], "confidence": "high" },
-    { "id": "FEAT-PLAY-2", "name": "Quality profiles and source priority", "area": "playback", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/ui/player/source_priority/QualityDataHelper.kt:20-42"], "confidence": "high" },
-    { "id": "FEAT-PLAY-3", "name": "Transport controls", "area": "playback", "priority": "P0", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-PLAY-4", "name": "Playback speed", "area": "playback", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-PLAY-5", "name": "Resize / aspect mode", "area": "playback", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-PLAY-6", "name": "Resume position", "area": "playback", "priority": "P0", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-PLAY-7", "name": "Autoplay next episode", "area": "playback", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-PLAY-8", "name": "Player gestures", "area": "playback", "priority": "P1", "strategy": "R4/R6", "class": "adapt", "document": "03", "limitations": ["L-5"], "confidence": "high" },
-    { "id": "FEAT-PLAY-9", "name": "Fullscreen", "area": "playback", "priority": "P0", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-PLAY-10", "name": "Picture-in-picture", "area": "playback", "priority": "P2", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-PLAY-11", "name": "Seekbar preview thumbnails", "area": "playback", "priority": "P2", "strategy": "R1", "class": "investigate", "document": "03", "confidence": "medium" },
-    { "id": "FEAT-PLAY-12", "name": "Audio track selection", "area": "playback", "priority": "P1", "strategy": "R1", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-PLAY-13", "name": "Software decoding toggle", "area": "playback", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-PLAY-14", "name": "Buffer configuration", "area": "playback", "priority": "P2", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-PLAY-15", "name": "Playback rotation", "area": "playback", "priority": "P3", "strategy": "R6", "class": "unsupported", "document": "03", "limitations": ["L-7"], "confidence": "high" },
-    { "id": "FEAT-PLAY-16", "name": "Torrent and magnet streaming", "area": "playback", "priority": "P2", "strategy": "R2", "class": "adapt", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/ui/player/Torrent.kt:206-210"], "confidence": "high" },
-    { "id": "FEAT-PLAY-17", "name": "Intro/outro skip", "area": "playback", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-PLAY-18", "name": "Player metadata overlay", "area": "playback", "priority": "P3", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-SUB-1", "name": "Subtitle rendering and formats", "area": "subtitles", "priority": "P0", "strategy": "R1", "class": "adapt", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/ui/player/CustomSubtitleDecoderFactory.kt:250-280,365-380"], "limitations": ["L-10", "L-11"], "confidence": "high" },
-    { "id": "FEAT-SUB-2", "name": "Caption styling", "area": "subtitles", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "dataEntities": ["DATA-9"], "confidence": "high" },
-    { "id": "FEAT-SUB-3", "name": "Chromecast caption style", "area": "subtitles", "priority": "P3", "strategy": "R6", "class": "unsupported", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SUB-4", "name": "Subtitle timing offset", "area": "subtitles", "priority": "P2", "strategy": "R4", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SUB-5", "name": "Subtitle auto-download", "area": "subtitles", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SUB-6", "name": "Subtitle auto-select", "area": "subtitles", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SUB-7", "name": "Subtitle language filter", "area": "subtitles", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-DL-1", "name": "Download queue", "area": "downloads", "priority": "P1", "strategy": "R2", "class": "adapt", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/utils/downloader/DownloadManager.kt:113,191-204"], "dataEntities": ["DATA-6"], "confidence": "high" },
-    { "id": "FEAT-DL-2", "name": "Download storage location", "area": "downloads", "priority": "P1", "strategy": "R2", "class": "adapt", "document": "03", "limitations": ["L-3"], "confidence": "high" },
-    { "id": "FEAT-DL-3", "name": "Downloaded media browser", "area": "downloads", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-DL-4", "name": "Offline playback", "area": "downloads", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-DL-5", "name": "Download queue UI", "area": "downloads", "priority": "P2", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-DL-6", "name": "Auto-download for subscriptions", "area": "downloads", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-DL-7", "name": "Download button component", "area": "downloads", "priority": "P2", "strategy": "R4", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-DL-8", "name": "Disk space awareness", "area": "downloads", "priority": "P1", "strategy": "desktop-only", "class": "desktop-only", "document": "03", "confidence": "high" },
-    { "id": "FEAT-DL-9", "name": "Download metadata sidecars", "area": "downloads", "priority": "P3", "strategy": "desktop-only", "class": "desktop-only", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-EXT-1", "name": "Repository management", "area": "extensions", "priority": "P0", "strategy": "R1", "class": "parity", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/plugins/RepositoryManager.kt:33-76,132-159,242-284"], "dataEntities": ["DATA-8"], "confidence": "high" },
-    { "id": "FEAT-EXT-2", "name": "Plugin install, update and load", "area": "extensions", "priority": "P0", "strategy": "R1", "class": "adapt", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/plugins/PluginManager.kt:593-686,737-756"], "dataEntities": ["DATA-7"], "limitations": ["L-1"], "confidence": "high" },
-    { "id": "FEAT-EXT-3", "name": "Plugin browser UI", "area": "extensions", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-EXT-4", "name": "Plugin voting", "area": "extensions", "priority": "P3", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-EXT-5", "name": "Auto-update plugins", "area": "extensions", "priority": "P1", "strategy": "R2", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-EXT-6", "name": "Auto-download missing plugins", "area": "extensions", "priority": "P2", "strategy": "R2", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-EXT-7", "name": "Manual plugin update check", "area": "extensions", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-EXT-8", "name": "Provider override / clone site", "area": "extensions", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-EXT-9", "name": "Provider pinning", "area": "extensions", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-EXT-10", "name": "Provider testing tool", "area": "extensions", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-SYNC-1", "name": "Tracker account linking", "area": "sync", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/syncproviders/AccountManager.kt:19-108"], "dataEntities": ["DATA-10"], "limitations": ["L-4"], "confidence": "high" },
-    { "id": "FEAT-SYNC-2", "name": "Tracker library page", "area": "sync", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SYNC-3", "name": "Episode progress push", "area": "sync", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SYNC-4", "name": "Sync id mapping", "area": "sync", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SYNC-5", "name": "Cached tracker lists", "area": "sync", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SYNC-6", "name": "Subtitle service accounts", "area": "sync", "priority": "P1", "strategy": "R1", "class": "adapt", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-SET-1", "name": "General settings", "area": "settings", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SET-2", "name": "Player settings", "area": "settings", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SET-3", "name": "Provider settings", "area": "settings", "priority": "P1", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SET-4", "name": "UI settings", "area": "settings", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SET-5", "name": "Updates and backup settings", "area": "settings", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SET-6", "name": "Account settings", "area": "settings", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SET-7", "name": "Gesture settings", "area": "settings", "priority": "P2", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SET-8", "name": "Android TV / 10-foot settings", "area": "settings", "priority": "P2", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SET-9", "name": "Security settings", "area": "settings", "priority": "P2", "strategy": "R4", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SET-10", "name": "Card display settings", "area": "settings", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SET-11", "name": "Easter egg counter", "area": "settings", "priority": "P3", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SET-12", "name": "Settings search", "area": "settings", "priority": "P3", "strategy": "desktop-only", "class": "desktop-only", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-NET-1", "name": "HTTP client", "area": "network", "priority": "P0", "strategy": "R2", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-NET-2", "name": "DNS over HTTPS", "area": "network", "priority": "P2", "strategy": "R2", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-NET-3", "name": "WebView-based resolution", "area": "network", "priority": "P1", "strategy": "R3", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-NET-4", "name": "JS execution for extraction", "area": "network", "priority": "P1", "strategy": "R3", "class": "adapt", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-BKP-1", "name": "Manual backup", "area": "backup", "priority": "P0", "strategy": "R1", "class": "parity", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/utils/BackupUtils.kt:123-137,200-247"], "confidence": "high" },
-    { "id": "FEAT-BKP-2", "name": "Restore / import", "area": "backup", "priority": "P0", "strategy": "R1", "class": "enhance", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/utils/BackupUtils.kt:249-317"], "confidence": "high" },
-    { "id": "FEAT-BKP-3", "name": "Automatic backup", "area": "backup", "priority": "P2", "strategy": "R2", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-BKP-4", "name": "Backup location", "area": "backup", "priority": "P2", "strategy": "R2", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-BKP-5", "name": "Non-transferable key filter", "area": "backup", "priority": "P0", "strategy": "R1", "class": "parity", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/utils/BackupUtils.kt:55-118"], "confidence": "high" },
-
-    { "id": "FEAT-UPD-1", "name": "In-app update", "area": "updates", "priority": "P1", "strategy": "R2", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-UPD-2", "name": "Prerelease channel", "area": "updates", "priority": "P2", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-UPD-3", "name": "Manual update check", "area": "updates", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-SHARE-1", "name": "Share a title", "area": "sharing", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/MainActivity.kt:383-396"], "confidence": "high" },
-    { "id": "FEAT-SHARE-2", "name": "Protocol handlers", "area": "sharing", "priority": "P1", "strategy": "R2", "class": "adapt", "document": "03", "evidence": ["app/src/main/AndroidManifest.xml:180-243"], "confidence": "high" },
-    { "id": "FEAT-SHARE-3", "name": "File associations", "area": "sharing", "priority": "P2", "strategy": "R2", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-SHARE-4", "name": "Search deep link", "area": "sharing", "priority": "P3", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" },
-
-    { "id": "FEAT-CAST-1", "name": "Chromecast", "area": "external", "priority": "P2", "strategy": "R5/R6", "class": "unsupported", "document": "03", "limitations": ["L-2"], "confidence": "high" },
-    { "id": "FEAT-CAST-2", "name": "External player handoff", "area": "external", "priority": "P1", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-CAST-3", "name": "FCast", "area": "external", "priority": "P2", "strategy": "R2", "class": "parity", "document": "03", "confidence": "high" },
-    { "id": "FEAT-CAST-4", "name": "Android TV watch-next EPG", "area": "external", "priority": "P3", "strategy": "R6", "class": "unsupported", "document": "03", "limitations": ["L-6"], "confidence": "high" },
-
-    { "id": "FEAT-DIAG-1", "name": "In-app log viewer", "area": "diagnostics", "priority": "P2", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-DIAG-2", "name": "Crash reporting", "area": "diagnostics", "priority": "P2", "strategy": "R4", "class": "adapt", "document": "03", "confidence": "high" },
-    { "id": "FEAT-DIAG-3", "name": "Provider self-test", "area": "diagnostics", "priority": "P2", "strategy": "R1", "class": "parity", "document": "03", "confidence": "high" }
+    {
+      "id": "FEAT-SETUP-1",
+      "name": "First-run setup wizard",
+      "area": "setup",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/ui/setup/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SETUP-2",
+      "name": "Layout mode",
+      "area": "setup",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/ui/settings/Globals.kt:14-60"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SETUP-3",
+      "name": "Localization",
+      "area": "setup",
+      "priority": "P1",
+      "strategy": "R2",
+      "class": "parity",
+      "document": "03",
+      "evidence": [
+        "app/src/main/res/values-*/",
+        "fastlane/metadata/android/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-ACCT-1",
+      "name": "Local profiles",
+      "area": "accounts",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/utils/DataStoreHelper.kt:163-241"
+      ],
+      "dataEntities": [
+        "DATA-1"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-ACCT-2",
+      "name": "Profile PIN and biometrics",
+      "area": "accounts",
+      "priority": "P2",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/utils/BackupUtils.kt:66-68"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-ACCT-3",
+      "name": "Create/edit profile",
+      "area": "accounts",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-ACCT-4",
+      "name": "Delete profile",
+      "area": "accounts",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "medium"
+    },
+    {
+      "id": "FEAT-ACCT-5",
+      "name": "Skip startup profile selector",
+      "area": "accounts",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-HOME-1",
+      "name": "Provider homepage",
+      "area": "home",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "library/src/commonMain/kotlin/com/lagradost/cloudstream3/MainAPI.kt:630-638"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-HOME-2",
+      "name": "Continue watching row",
+      "area": "home",
+      "priority": "P0",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-HOME-3",
+      "name": "Bookmarks row",
+      "area": "home",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-HOME-4",
+      "name": "Media-type filter",
+      "area": "home",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-HOME-5",
+      "name": "Random item button",
+      "area": "home",
+      "priority": "P3",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SEARCH-1",
+      "name": "Multi-provider search",
+      "area": "search",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "library/src/commonMain/kotlin/com/lagradost/cloudstream3/MainAPI.kt:646-660"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SEARCH-2",
+      "name": "Quick search and suggestions",
+      "area": "search",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SEARCH-3",
+      "name": "Provider and type filters",
+      "area": "search",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SEARCH-4",
+      "name": "Search history",
+      "area": "search",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/ui/search/SearchViewModel.kt:33"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SEARCH-5",
+      "name": "Quality badge filtering",
+      "area": "search",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SEARCH-6",
+      "name": "Sync provider search",
+      "area": "search",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-RESULT-1",
+      "name": "Detail page",
+      "area": "result",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "library/src/commonMain/kotlin/com/lagradost/cloudstream3/MainAPI.kt:1814-2215"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-RESULT-2",
+      "name": "Episode list and seasons",
+      "area": "result",
+      "priority": "P0",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-RESULT-3",
+      "name": "Watch state",
+      "area": "result",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/ui/WatchType.kt:7-18"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-RESULT-4",
+      "name": "Favourites",
+      "area": "result",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "dataEntities": [
+        "DATA-3"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-RESULT-5",
+      "name": "Subscriptions",
+      "area": "result",
+      "priority": "P1",
+      "strategy": "R2",
+      "class": "adapt",
+      "document": "03",
+      "dataEntities": [
+        "DATA-3"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-RESULT-6",
+      "name": "Per-episode watched flag",
+      "area": "result",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-RESULT-7",
+      "name": "Trailers",
+      "area": "result",
+      "priority": "P2",
+      "strategy": "R2",
+      "class": "investigate",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-RESULT-8",
+      "name": "Cast and recommendations",
+      "area": "result",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-RESULT-9",
+      "name": "Filler episode marking",
+      "area": "result",
+      "priority": "P3",
+      "strategy": "R2",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-LIB-1",
+      "name": "Library view",
+      "area": "library",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/ui/library/LibraryViewModel.kt:19-31"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-LIB-2",
+      "name": "Local list aggregation",
+      "area": "library",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-LIB-3",
+      "name": "Library search",
+      "area": "library",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-LIB-4",
+      "name": "Continue watching management",
+      "area": "library",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-LIB-5",
+      "name": "Watch progress persistence",
+      "area": "library",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/utils/DataStoreHelper.kt:243-258,691-695"
+      ],
+      "dataEntities": [
+        "DATA-2"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-LIB-6",
+      "name": "Resume watching records",
+      "area": "library",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "dataEntities": [
+        "DATA-4"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-LIB-7",
+      "name": "Bulk actions",
+      "area": "library",
+      "priority": "P3",
+      "strategy": "desktop-only",
+      "class": "desktop-only",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-1",
+      "name": "Link resolution and playback start",
+      "area": "playback",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "library/src/commonMain/kotlin/com/lagradost/cloudstream3/MainAPI.kt:690-700"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-2",
+      "name": "Quality profiles and source priority",
+      "area": "playback",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/ui/player/source_priority/QualityDataHelper.kt:20-42"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-3",
+      "name": "Transport controls",
+      "area": "playback",
+      "priority": "P0",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-4",
+      "name": "Playback speed",
+      "area": "playback",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-5",
+      "name": "Resize / aspect mode",
+      "area": "playback",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-6",
+      "name": "Resume position",
+      "area": "playback",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-7",
+      "name": "Autoplay next episode",
+      "area": "playback",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-8",
+      "name": "Player gestures",
+      "area": "playback",
+      "priority": "P1",
+      "strategy": "R4/R6",
+      "class": "adapt",
+      "document": "03",
+      "limitations": [
+        "L-5"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-9",
+      "name": "Fullscreen",
+      "area": "playback",
+      "priority": "P0",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-10",
+      "name": "Picture-in-picture",
+      "area": "playback",
+      "priority": "P2",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-11",
+      "name": "Seekbar preview thumbnails",
+      "area": "playback",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "investigate",
+      "document": "03",
+      "confidence": "medium"
+    },
+    {
+      "id": "FEAT-PLAY-12",
+      "name": "Audio track selection",
+      "area": "playback",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-13",
+      "name": "Software decoding toggle",
+      "area": "playback",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-14",
+      "name": "Buffer configuration",
+      "area": "playback",
+      "priority": "P2",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-15",
+      "name": "Playback rotation",
+      "area": "playback",
+      "priority": "P3",
+      "strategy": "R6",
+      "class": "unsupported",
+      "document": "03",
+      "limitations": [
+        "L-7"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-16",
+      "name": "Torrent and magnet streaming",
+      "area": "playback",
+      "priority": "P2",
+      "strategy": "R2",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/ui/player/Torrent.kt:206-210"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-17",
+      "name": "Intro/outro skip",
+      "area": "playback",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-PLAY-18",
+      "name": "Player metadata overlay",
+      "area": "playback",
+      "priority": "P3",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SUB-1",
+      "name": "Subtitle rendering and formats",
+      "area": "subtitles",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/ui/player/CustomSubtitleDecoderFactory.kt:250-280,365-380"
+      ],
+      "limitations": [
+        "L-10",
+        "L-11"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SUB-2",
+      "name": "Caption styling",
+      "area": "subtitles",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "dataEntities": [
+        "DATA-9"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SUB-3",
+      "name": "Chromecast caption style",
+      "area": "subtitles",
+      "priority": "P3",
+      "strategy": "R6",
+      "class": "unsupported",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SUB-4",
+      "name": "Subtitle timing offset",
+      "area": "subtitles",
+      "priority": "P2",
+      "strategy": "R4",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SUB-5",
+      "name": "Subtitle auto-download",
+      "area": "subtitles",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SUB-6",
+      "name": "Subtitle auto-select",
+      "area": "subtitles",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SUB-7",
+      "name": "Subtitle language filter",
+      "area": "subtitles",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-DL-1",
+      "name": "Download queue",
+      "area": "downloads",
+      "priority": "P1",
+      "strategy": "R2",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/utils/downloader/DownloadManager.kt:113,191-204"
+      ],
+      "dataEntities": [
+        "DATA-6"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-DL-2",
+      "name": "Download storage location",
+      "area": "downloads",
+      "priority": "P1",
+      "strategy": "R2",
+      "class": "adapt",
+      "document": "03",
+      "limitations": [
+        "L-3"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-DL-3",
+      "name": "Downloaded media browser",
+      "area": "downloads",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-DL-4",
+      "name": "Offline playback",
+      "area": "downloads",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-DL-5",
+      "name": "Download queue UI",
+      "area": "downloads",
+      "priority": "P2",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-DL-6",
+      "name": "Auto-download for subscriptions",
+      "area": "downloads",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-DL-7",
+      "name": "Download button component",
+      "area": "downloads",
+      "priority": "P2",
+      "strategy": "R4",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-DL-8",
+      "name": "Disk space awareness",
+      "area": "downloads",
+      "priority": "P1",
+      "strategy": "desktop-only",
+      "class": "desktop-only",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-DL-9",
+      "name": "Download metadata sidecars",
+      "area": "downloads",
+      "priority": "P3",
+      "strategy": "desktop-only",
+      "class": "desktop-only",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-EXT-1",
+      "name": "Repository management",
+      "area": "extensions",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/plugins/RepositoryManager.kt:33-76,132-159,242-284"
+      ],
+      "dataEntities": [
+        "DATA-8"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-EXT-2",
+      "name": "Plugin install, update and load (.cs3 drop-in)",
+      "area": "extensions",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "31",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/plugins/PluginManager.kt:593-686,737-756"
+      ],
+      "dataEntities": [
+        "DATA-7"
+      ],
+      "limitations": [
+        "L-1"
+      ],
+      "confidence": "high",
+      "runtime": 3,
+      "note": "Lifecycle and install-path grammar preserved exactly; DEX translated at install and executed on the bundled JVM sidecar"
+    },
+    {
+      "id": "FEAT-EXT-3",
+      "name": "Plugin browser UI",
+      "area": "extensions",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-EXT-4",
+      "name": "Plugin voting",
+      "area": "extensions",
+      "priority": "P3",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-EXT-5",
+      "name": "Auto-update plugins",
+      "area": "extensions",
+      "priority": "P1",
+      "strategy": "R2",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-EXT-6",
+      "name": "Auto-download missing plugins",
+      "area": "extensions",
+      "priority": "P2",
+      "strategy": "R2",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-EXT-7",
+      "name": "Manual plugin update check",
+      "area": "extensions",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-EXT-8",
+      "name": "Provider override / clone site",
+      "area": "extensions",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-EXT-9",
+      "name": "Provider pinning",
+      "area": "extensions",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-EXT-10",
+      "name": "Provider testing tool",
+      "area": "extensions",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-EXT-2a",
+      "name": "Plugin settings (openSettings)",
+      "area": "extensions",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "31",
+      "confidence": "high",
+      "note": "Android View settings UI disabled with an explanation; declarative schema offered instead (DROP-18/19)"
+    },
+    {
+      "id": "FEAT-EXT-2b",
+      "name": "Plugin compatibility tiering",
+      "area": "extensions",
+      "priority": "P0",
+      "strategy": "desktop-only",
+      "class": "desktop-only",
+      "document": "31",
+      "confidence": "high",
+      "note": "Analyzer assigns T1-T4 at install, re-verified on first call (DROP-28/29)"
+    },
+    {
+      "id": "FEAT-EXT-2c",
+      "name": "WebViewResolver and CloudflareKiller bridge",
+      "area": "extensions",
+      "priority": "P0",
+      "strategy": "R2",
+      "class": "adapt",
+      "document": "31",
+      "confidence": "medium",
+      "note": "Offscreen BrowserWindow per plugin session; upstream JVM actual is a TODO stub, so this is net-new (DROP-13..17)"
+    },
+    {
+      "id": "FEAT-SYNC-1",
+      "name": "Tracker account linking",
+      "area": "sync",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/syncproviders/AccountManager.kt:19-108"
+      ],
+      "dataEntities": [
+        "DATA-10"
+      ],
+      "limitations": [
+        "L-4"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SYNC-2",
+      "name": "Tracker library page",
+      "area": "sync",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SYNC-3",
+      "name": "Episode progress push",
+      "area": "sync",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SYNC-4",
+      "name": "Sync id mapping",
+      "area": "sync",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SYNC-5",
+      "name": "Cached tracker lists",
+      "area": "sync",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SYNC-6",
+      "name": "Subtitle service accounts",
+      "area": "sync",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SET-1",
+      "name": "General settings",
+      "area": "settings",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SET-2",
+      "name": "Player settings",
+      "area": "settings",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SET-3",
+      "name": "Provider settings",
+      "area": "settings",
+      "priority": "P1",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SET-4",
+      "name": "UI settings",
+      "area": "settings",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SET-5",
+      "name": "Updates and backup settings",
+      "area": "settings",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SET-6",
+      "name": "Account settings",
+      "area": "settings",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SET-7",
+      "name": "Gesture settings",
+      "area": "settings",
+      "priority": "P2",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SET-8",
+      "name": "Android TV / 10-foot settings",
+      "area": "settings",
+      "priority": "P2",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SET-9",
+      "name": "Security settings",
+      "area": "settings",
+      "priority": "P2",
+      "strategy": "R4",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SET-10",
+      "name": "Card display settings",
+      "area": "settings",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SET-11",
+      "name": "Easter egg counter",
+      "area": "settings",
+      "priority": "P3",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SET-12",
+      "name": "Settings search",
+      "area": "settings",
+      "priority": "P3",
+      "strategy": "desktop-only",
+      "class": "desktop-only",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-NET-1",
+      "name": "HTTP client",
+      "area": "network",
+      "priority": "P0",
+      "strategy": "R2",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-NET-2",
+      "name": "DNS over HTTPS",
+      "area": "network",
+      "priority": "P2",
+      "strategy": "R2",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-NET-3",
+      "name": "WebView-based resolution",
+      "area": "network",
+      "priority": "P1",
+      "strategy": "R3",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-NET-4",
+      "name": "JS execution for extraction",
+      "area": "network",
+      "priority": "P1",
+      "strategy": "R3",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-BKP-1",
+      "name": "Manual backup",
+      "area": "backup",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/utils/BackupUtils.kt:123-137,200-247"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-BKP-2",
+      "name": "Restore / import",
+      "area": "backup",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "enhance",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/utils/BackupUtils.kt:249-317"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-BKP-3",
+      "name": "Automatic backup",
+      "area": "backup",
+      "priority": "P2",
+      "strategy": "R2",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-BKP-4",
+      "name": "Backup location",
+      "area": "backup",
+      "priority": "P2",
+      "strategy": "R2",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-BKP-5",
+      "name": "Non-transferable key filter",
+      "area": "backup",
+      "priority": "P0",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/utils/BackupUtils.kt:55-118"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-UPD-1",
+      "name": "In-app update",
+      "area": "updates",
+      "priority": "P1",
+      "strategy": "R2",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-UPD-2",
+      "name": "Prerelease channel",
+      "area": "updates",
+      "priority": "P2",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-UPD-3",
+      "name": "Manual update check",
+      "area": "updates",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SHARE-1",
+      "name": "Share a title",
+      "area": "sharing",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/MainActivity.kt:383-396"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SHARE-2",
+      "name": "Protocol handlers",
+      "area": "sharing",
+      "priority": "P1",
+      "strategy": "R2",
+      "class": "adapt",
+      "document": "03",
+      "evidence": [
+        "app/src/main/AndroidManifest.xml:180-243"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SHARE-3",
+      "name": "File associations",
+      "area": "sharing",
+      "priority": "P2",
+      "strategy": "R2",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-SHARE-4",
+      "name": "Search deep link",
+      "area": "sharing",
+      "priority": "P3",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-CAST-1",
+      "name": "Chromecast",
+      "area": "external",
+      "priority": "P2",
+      "strategy": "R5/R6",
+      "class": "unsupported",
+      "document": "03",
+      "limitations": [
+        "L-2"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-CAST-2",
+      "name": "External player handoff",
+      "area": "external",
+      "priority": "P1",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-CAST-3",
+      "name": "FCast",
+      "area": "external",
+      "priority": "P2",
+      "strategy": "R2",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-CAST-4",
+      "name": "Android TV watch-next EPG",
+      "area": "external",
+      "priority": "P3",
+      "strategy": "R6",
+      "class": "unsupported",
+      "document": "03",
+      "limitations": [
+        "L-6"
+      ],
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-DIAG-1",
+      "name": "In-app log viewer",
+      "area": "diagnostics",
+      "priority": "P2",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-DIAG-2",
+      "name": "Crash reporting",
+      "area": "diagnostics",
+      "priority": "P2",
+      "strategy": "R4",
+      "class": "adapt",
+      "document": "03",
+      "confidence": "high"
+    },
+    {
+      "id": "FEAT-DIAG-3",
+      "name": "Provider self-test",
+      "area": "diagnostics",
+      "priority": "P2",
+      "strategy": "R1",
+      "class": "parity",
+      "document": "03",
+      "confidence": "high"
+    }
   ],
-
   "dataModels": [
-    { "id": "DATA-1", "name": "Profile", "androidName": "Account", "storageKey": "data_store_helper/account", "portability": "fully-portable", "document": "06", "evidence": ["app/src/main/java/com/lagradost/cloudstream3/utils/DataStoreHelper.kt:163-176"] },
-    { "id": "DATA-2", "name": "PosDur", "storageKey": "<profile>/video_pos_dur/<id>", "portability": "fully-portable", "document": "06", "notes": "30s write guard; fixVisual normalization" },
-    { "id": "DATA-3", "name": "LibrarySearchResponse family", "androidName": "BookmarkedData / FavoritesData / SubscribedData", "storageKey": "<profile>/result_{watch_state_data,favorites_state_data,subscribed_state_data}/<id>", "portability": "fully-portable", "document": "06", "openQuestions": ["OQ-3"] },
-    { "id": "DATA-4", "name": "ResumeWatching", "storageKey": "<profile>/result_resume_watching_2/<parentId>", "portability": "portable-with-transformation", "document": "06", "migrationRules": ["MIG-2", "MIG-4"] },
-    { "id": "DATA-5", "name": "ResultEpisode", "portability": "desktop-native-only", "document": "06" },
-    { "id": "DATA-6", "name": "Download entities", "portability": "mixed", "document": "06", "notes": "DownloadHeaderCached transferable; all other download state excluded" },
-    { "id": "DATA-7", "name": "PluginData", "storageKey": "PLUGINS_KEY / PLUGINS_KEY_LOCAL", "portability": "non-portable", "document": "06" },
-    { "id": "DATA-8", "name": "RepositoryData / Repository / SitePlugin", "storageKey": "REPOSITORIES_KEY", "portability": "fully-portable", "document": "06" },
-    { "id": "DATA-9", "name": "SaveCaptionStyle", "storageKey": "subtitle_settings", "portability": "fully-portable", "document": "06" },
-    { "id": "DATA-10", "name": "AuthData", "storageKey": "auth_tokens/<prefix>/<profile>", "portability": "non-portable", "document": "06" },
-    { "id": "DATA-11", "name": "Settings map", "portability": "fully-portable-except-paths", "document": "06", "notes": "~100 keys; unknown keys preserved verbatim" }
+    {
+      "id": "DATA-1",
+      "name": "Profile",
+      "androidName": "Account",
+      "storageKey": "data_store_helper/account",
+      "portability": "fully-portable",
+      "document": "06",
+      "evidence": [
+        "app/src/main/java/com/lagradost/cloudstream3/utils/DataStoreHelper.kt:163-176"
+      ]
+    },
+    {
+      "id": "DATA-2",
+      "name": "PosDur",
+      "storageKey": "<profile>/video_pos_dur/<id>",
+      "portability": "fully-portable",
+      "document": "06",
+      "notes": "30s write guard; fixVisual normalization"
+    },
+    {
+      "id": "DATA-3",
+      "name": "LibrarySearchResponse family",
+      "androidName": "BookmarkedData / FavoritesData / SubscribedData",
+      "storageKey": "<profile>/result_{watch_state_data,favorites_state_data,subscribed_state_data}/<id>",
+      "portability": "fully-portable",
+      "document": "06",
+      "openQuestions": [
+        "OQ-3"
+      ]
+    },
+    {
+      "id": "DATA-4",
+      "name": "ResumeWatching",
+      "storageKey": "<profile>/result_resume_watching_2/<parentId>",
+      "portability": "portable-with-transformation",
+      "document": "06",
+      "migrationRules": [
+        "MIG-2",
+        "MIG-4"
+      ]
+    },
+    {
+      "id": "DATA-5",
+      "name": "ResultEpisode",
+      "portability": "desktop-native-only",
+      "document": "06"
+    },
+    {
+      "id": "DATA-6",
+      "name": "Download entities",
+      "portability": "mixed",
+      "document": "06",
+      "notes": "DownloadHeaderCached transferable; all other download state excluded"
+    },
+    {
+      "id": "DATA-7",
+      "name": "PluginData",
+      "storageKey": "PLUGINS_KEY / PLUGINS_KEY_LOCAL",
+      "portability": "non-portable",
+      "document": "06"
+    },
+    {
+      "id": "DATA-8",
+      "name": "RepositoryData / Repository / SitePlugin",
+      "storageKey": "REPOSITORIES_KEY",
+      "portability": "fully-portable",
+      "document": "06"
+    },
+    {
+      "id": "DATA-9",
+      "name": "SaveCaptionStyle",
+      "storageKey": "subtitle_settings",
+      "portability": "fully-portable",
+      "document": "06"
+    },
+    {
+      "id": "DATA-10",
+      "name": "AuthData",
+      "storageKey": "auth_tokens/<prefix>/<profile>",
+      "portability": "non-portable",
+      "document": "06"
+    },
+    {
+      "id": "DATA-11",
+      "name": "Settings map",
+      "portability": "fully-portable-except-paths",
+      "document": "06",
+      "notes": "~100 keys; unknown keys preserved verbatim"
+    }
   ],
-
   "apis": [
-    { "id": "API-PROVIDER", "name": "MainAPI provider contract", "document": "07", "evidence": ["library/src/commonMain/kotlin/com/lagradost/cloudstream3/MainAPI.kt:494-702"], "desktopRequirement": "behaviorally equivalent plugin API, versioned independently" },
-    { "id": "API-EXTRACTOR", "name": "ExtractorApi contract", "document": "07", "evidence": ["library/src/commonMain/kotlin/com/lagradost/cloudstream3/utils/ExtractorApi.kt:368-458,578-834"] },
-    { "id": "API-PLUGIN", "name": "BasePlugin lifecycle", "document": "07", "evidence": ["library/src/commonMain/kotlin/com/lagradost/cloudstream3/plugins/BasePlugin.kt:14-78"] },
-    { "id": "API-IPC", "name": "Desktop IPC contract", "document": "07", "desktopOnly": true },
-    { "id": "API-GITHUB", "name": "GitHub Releases update feed", "document": "07", "external": true },
-    { "id": "API-REPO", "name": "Plugin repository JSON", "document": "07", "external": true },
-    { "id": "API-TRACKERS", "name": "MAL / AniList / Kitsu / Simkl", "document": "07", "external": true, "openQuestions": ["OQ-5", "OQ-6"] },
-    { "id": "API-SUBTITLES", "name": "OpenSubtitles / Addic7ed / SubDL / SubSource", "document": "07", "external": true },
-    { "id": "API-SKIP", "name": "AniSkip / AnimeSkip / TheIntroDB", "document": "07", "external": true }
+    {
+      "id": "API-PROVIDER",
+      "name": "MainAPI provider contract",
+      "document": "07",
+      "evidence": [
+        "library/src/commonMain/kotlin/com/lagradost/cloudstream3/MainAPI.kt:494-702"
+      ],
+      "desktopRequirement": "behaviorally equivalent plugin API, versioned independently"
+    },
+    {
+      "id": "API-EXTRACTOR",
+      "name": "ExtractorApi contract",
+      "document": "07",
+      "evidence": [
+        "library/src/commonMain/kotlin/com/lagradost/cloudstream3/utils/ExtractorApi.kt:368-458,578-834"
+      ]
+    },
+    {
+      "id": "API-PLUGIN",
+      "name": "BasePlugin lifecycle",
+      "document": "07",
+      "evidence": [
+        "library/src/commonMain/kotlin/com/lagradost/cloudstream3/plugins/BasePlugin.kt:14-78"
+      ]
+    },
+    {
+      "id": "API-IPC",
+      "name": "Desktop IPC contract",
+      "document": "07",
+      "desktopOnly": true
+    },
+    {
+      "id": "API-GITHUB",
+      "name": "GitHub Releases update feed",
+      "document": "07",
+      "external": true
+    },
+    {
+      "id": "API-REPO",
+      "name": "Plugin repository JSON",
+      "document": "07",
+      "external": true
+    },
+    {
+      "id": "API-TRACKERS",
+      "name": "MAL / AniList / Kitsu / Simkl",
+      "document": "07",
+      "external": true,
+      "openQuestions": [
+        "OQ-5",
+        "OQ-6"
+      ]
+    },
+    {
+      "id": "API-SUBTITLES",
+      "name": "OpenSubtitles / Addic7ed / SubDL / SubSource",
+      "document": "07",
+      "external": true
+    },
+    {
+      "id": "API-SKIP",
+      "name": "AniSkip / AnimeSkip / TheIntroDB",
+      "document": "07",
+      "external": true
+    }
   ],
-
   "plugins": {
     "androidFormat": {
       "extension": ".cs3",
       "container": "zip",
       "payload": "android-dex-bytecode",
-      "manifest": ["name", "pluginClassName", "requiresResources", "version"],
+      "manifest": [
+        "name",
+        "pluginClassName",
+        "requiresResources",
+        "version"
+      ],
       "loader": "dalvik.system.PathClassLoader",
       "verification": "sha256 when repository supplies fileHash",
       "installPath": "<filesDir>/Extensions/<sanitize(repoUrl)>.<hash(repoUrl)>/<sanitize(internalName)>.<hash(internalName)>.cs3"
     },
-    "desktopCompatibility": "none-without-a-new-runtime",
+    "desktopCompatibility": "drop-in-via-bundled-jvm-sidecar",
     "strategies": [
-      { "id": "A", "name": "JVM sidecar", "ecosystemContinuity": "highest", "effort": "high", "recommended": false },
-      { "id": "B", "name": "Zipline / QuickJS aligned with upstream", "ecosystemContinuity": "future", "effort": "high", "recommended": false },
-      { "id": "C", "name": "Native JS/TS plugin API", "ecosystemContinuity": "none", "effort": "medium", "recommended": true },
-      { "id": "D", "name": "Headless browser provider host", "ecosystemContinuity": "medium", "effort": "medium-high", "recommended": "as-component" }
+      {
+        "id": "A",
+        "name": "JVM sidecar (Runtime 3, .cs3 drop-in)",
+        "ecosystemContinuity": "highest",
+        "effort": "high",
+        "recommended": true,
+        "priority": "P0"
+      },
+      {
+        "id": "B",
+        "name": "Zipline/QuickJS aligned with upstream (Runtime 2, KMP/JS)",
+        "ecosystemContinuity": "future",
+        "effort": "high",
+        "recommended": true,
+        "priority": "P1"
+      },
+      {
+        "id": "C",
+        "name": "Native JS/TS plugin API (Runtime 1)",
+        "ecosystemContinuity": "none",
+        "effort": "medium",
+        "recommended": true,
+        "priority": "P1"
+      },
+      {
+        "id": "D",
+        "name": "Headless browser provider host",
+        "ecosystemContinuity": "medium",
+        "effort": "medium-high",
+        "recommended": "as-component"
+      }
     ],
     "document": "27",
-    "blockingDecision": "OQ-2"
+    "blockingDecision": null,
+    "dropIn": {
+      "decidedOn": "2026-08-12",
+      "adr": "ADR-10",
+      "document": "31",
+      "mechanism": "install-time DEX to .class translation, URLClassLoader in a sandboxed JVM child process",
+      "linksUpstreamArtifact": "library-jvm.jar (com.lagradost.api 1.0.1)",
+      "shims": [
+        {
+          "name": "cs3-app-shim.jar",
+          "surface": "22 :app types"
+        },
+        {
+          "name": "cs3-android-shim.jar",
+          "surface": "android.util.Log, android.util.Base64, android.content.Context, android.content.SharedPreferences, android.webkit.CookieManager, plus a small tail"
+        }
+      ],
+      "tiers": [
+        {
+          "id": "T1",
+          "name": "drop-in",
+          "estimatedShare": 0.68,
+          "measured": false
+        },
+        {
+          "id": "T2",
+          "name": "drop-in-with-brokered-webview",
+          "estimatedShare": 0.07,
+          "measured": false
+        },
+        {
+          "id": "T3",
+          "name": "degraded-settings-ui",
+          "estimatedShare": 0.03,
+          "measured": false
+        },
+        {
+          "id": "T4",
+          "name": "blocked",
+          "estimatedShare": null,
+          "measured": false
+        }
+      ],
+      "tierSharesAreProjections": true,
+      "notCovered": [
+        "android-view-settings-ui",
+        "native-so-libraries",
+        "ambient-app-privileges-MANAGE_EXTERNAL_STORAGE",
+        "android-system-services",
+        "byte-identical-output"
+      ],
+      "requirementIdPrefix": "DROP-",
+      "requirementCount": 35
+    },
+    "resolvedBy": "ADR-10 (2026-08-12): all three runtimes funded; Runtime 3 is P0"
   },
-
   "migrations": [
-    { "id": "MIG-1", "rule": "Legacy rating to score", "trigger": "rating present, score absent", "reported": "transformed" },
-    { "id": "MIG-2", "rule": "Legacy resume key migration", "trigger": "result_resume_watching present", "reported": "transformed" },
-    { "id": "MIG-3", "rule": "Preserve ids verbatim", "trigger": "always", "reported": "imported", "critical": true },
-    { "id": "MIG-4", "rule": "Download-backed resume marked unresolved", "trigger": "isFromDownload true", "reported": "transformed" },
-    { "id": "MIG-5", "rule": "Path keys reset to desktop defaults", "trigger": "path keys present", "reported": "skipped" },
-    { "id": "MIG-6", "rule": "Plugin records ignored, repositories kept", "trigger": "plugin records present", "reported": "skipped" },
-    { "id": "MIG-7", "rule": "Layout mode semantic remap", "trigger": "app_layout_key present", "reported": "transformed" },
-    { "id": "MIG-8", "rule": "Inert settings imported but hidden", "trigger": "platform-inert keys", "reported": "imported" },
-    { "id": "MIG-9", "rule": "Profile avatar index mapping", "trigger": "defaultImageIndex present", "reported": "imported" },
-    { "id": "MIG-10", "rule": "Unknown keys preserved verbatim", "trigger": "unrecognized key", "reported": "unrecognized", "critical": true },
-    { "id": "MIG-11", "rule": "Type bucket mismatch coercion", "trigger": "value in wrong bucket", "reported": "transformed-or-skipped" },
-    { "id": "MIG-12", "rule": "Malformed nested JSON skipped per record", "trigger": "unparseable value", "reported": "skipped" },
-    { "id": "MIG-13", "rule": "Synthesize default profile", "trigger": "account array absent", "reported": "transformed" },
-    { "id": "MIG-14", "rule": "Orphan progress imported anyway", "trigger": "progress without library parent", "reported": "imported" },
-    { "id": "MIG-15", "rule": "Duplicate keys, last wins", "trigger": "duplicate key in document", "reported": "transformed" },
-    { "id": "MIG-16", "rule": "Id collisions never overwrite", "trigger": "two records, same id", "reported": "conflict", "critical": true },
-    { "id": "MIG-17", "rule": "Excluded-by-design keys never imported", "trigger": "tokens, caches, download state, biometric", "reported": "skipped" }
+    {
+      "id": "MIG-1",
+      "rule": "Legacy rating to score",
+      "trigger": "rating present, score absent",
+      "reported": "transformed"
+    },
+    {
+      "id": "MIG-2",
+      "rule": "Legacy resume key migration",
+      "trigger": "result_resume_watching present",
+      "reported": "transformed"
+    },
+    {
+      "id": "MIG-3",
+      "rule": "Preserve ids verbatim",
+      "trigger": "always",
+      "reported": "imported",
+      "critical": true
+    },
+    {
+      "id": "MIG-4",
+      "rule": "Download-backed resume marked unresolved",
+      "trigger": "isFromDownload true",
+      "reported": "transformed"
+    },
+    {
+      "id": "MIG-5",
+      "rule": "Path keys reset to desktop defaults",
+      "trigger": "path keys present",
+      "reported": "skipped"
+    },
+    {
+      "id": "MIG-6",
+      "rule": "Plugin records ignored, repositories kept",
+      "trigger": "plugin records present",
+      "reported": "skipped"
+    },
+    {
+      "id": "MIG-7",
+      "rule": "Layout mode semantic remap",
+      "trigger": "app_layout_key present",
+      "reported": "transformed"
+    },
+    {
+      "id": "MIG-8",
+      "rule": "Inert settings imported but hidden",
+      "trigger": "platform-inert keys",
+      "reported": "imported"
+    },
+    {
+      "id": "MIG-9",
+      "rule": "Profile avatar index mapping",
+      "trigger": "defaultImageIndex present",
+      "reported": "imported"
+    },
+    {
+      "id": "MIG-10",
+      "rule": "Unknown keys preserved verbatim",
+      "trigger": "unrecognized key",
+      "reported": "unrecognized",
+      "critical": true
+    },
+    {
+      "id": "MIG-11",
+      "rule": "Type bucket mismatch coercion",
+      "trigger": "value in wrong bucket",
+      "reported": "transformed-or-skipped"
+    },
+    {
+      "id": "MIG-12",
+      "rule": "Malformed nested JSON skipped per record",
+      "trigger": "unparseable value",
+      "reported": "skipped"
+    },
+    {
+      "id": "MIG-13",
+      "rule": "Synthesize default profile",
+      "trigger": "account array absent",
+      "reported": "transformed"
+    },
+    {
+      "id": "MIG-14",
+      "rule": "Orphan progress imported anyway",
+      "trigger": "progress without library parent",
+      "reported": "imported"
+    },
+    {
+      "id": "MIG-15",
+      "rule": "Duplicate keys, last wins",
+      "trigger": "duplicate key in document",
+      "reported": "transformed"
+    },
+    {
+      "id": "MIG-16",
+      "rule": "Id collisions never overwrite",
+      "trigger": "two records, same id",
+      "reported": "conflict",
+      "critical": true
+    },
+    {
+      "id": "MIG-17",
+      "rule": "Excluded-by-design keys never imported",
+      "trigger": "tokens, caches, download state, biometric",
+      "reported": "skipped"
+    }
   ],
-
   "acceptanceCriteria": {
     "document": "17",
-    "total": 82,
-    "releaseBlocking": 46,
+    "total": 91,
+    "releaseBlocking": 52,
     "categories": [
-      { "name": "data-portability", "range": "AC-1..AC-22", "blocking": 15 },
-      { "name": "feature-parity", "range": "AC-23..AC-33", "blocking": 6 },
-      { "name": "plugin-ecosystem", "range": "AC-34..AC-43", "blocking": 6 },
-      { "name": "playback", "range": "AC-44..AC-52", "blocking": 4 },
-      { "name": "downloads", "range": "AC-53..AC-58", "blocking": 2 },
-      { "name": "security", "range": "AC-59..AC-66", "blocking": 8 },
-      { "name": "platform", "range": "AC-67..AC-72", "blocking": 3 },
-      { "name": "performance", "range": "AC-73..AC-76", "blocking": 1 },
-      { "name": "quality-compliance", "range": "AC-77..AC-82", "blocking": 3 }
+      {
+        "name": "data-portability",
+        "range": "AC-1..AC-22",
+        "blocking": 15
+      },
+      {
+        "name": "feature-parity",
+        "range": "AC-23..AC-33",
+        "blocking": 6
+      },
+      {
+        "name": "plugin-ecosystem",
+        "range": "AC-34..AC-43",
+        "blocking": 6
+      },
+      {
+        "name": "playback",
+        "range": "AC-44..AC-52",
+        "blocking": 4
+      },
+      {
+        "name": "downloads",
+        "range": "AC-53..AC-58",
+        "blocking": 2
+      },
+      {
+        "name": "security",
+        "range": "AC-59..AC-66",
+        "blocking": 8
+      },
+      {
+        "name": "platform",
+        "range": "AC-67..AC-72",
+        "blocking": 3
+      },
+      {
+        "name": "performance",
+        "range": "AC-73..AC-76",
+        "blocking": 1
+      },
+      {
+        "name": "quality-compliance",
+        "range": "AC-77..AC-82",
+        "blocking": 3
+      },
+      {
+        "name": "cs3-drop-in",
+        "range": "AC-D1..AC-D9",
+        "blocking": 6,
+        "document": "31"
+      }
     ]
   },
-
   "tests": {
     "document": "13",
-    "migrationCorpus": { "document": "30", "cases": 45, "blocking": 27 },
+    "migrationCorpus": {
+      "document": "30",
+      "cases": 45,
+      "blocking": 27
+    },
     "suites": [
-      { "id": "TEST-HASH", "name": "Java hash equivalence", "count": 7, "gate": "blocking" },
-      { "id": "TEST-SER", "name": "Serialization round trip", "count": 6, "gate": "blocking" },
-      { "id": "TEST-KEY", "name": "Key grammar", "count": 4, "gate": "blocking" },
-      { "id": "TEST-PAR", "name": "Behavioral parity", "count": 10, "gate": "release-candidate" },
-      { "id": "TEST-PLG", "name": "Plugin runtime and sandbox", "count": 12, "gate": "blocking" },
-      { "id": "TEST-PLAY", "name": "Playback", "count": 12, "gate": "release-candidate" },
-      { "id": "TEST-DL", "name": "Downloads", "count": 10, "gate": "release-candidate" },
-      { "id": "TEST-XP", "name": "Cross platform", "count": 6, "gate": "merge" },
-      { "id": "TEST-UPG", "name": "Upgrade", "count": 5, "gate": "release-candidate" }
+      {
+        "id": "TEST-HASH",
+        "name": "Java hash equivalence",
+        "count": 7,
+        "gate": "blocking"
+      },
+      {
+        "id": "TEST-SER",
+        "name": "Serialization round trip",
+        "count": 6,
+        "gate": "blocking"
+      },
+      {
+        "id": "TEST-KEY",
+        "name": "Key grammar",
+        "count": 4,
+        "gate": "blocking"
+      },
+      {
+        "id": "TEST-PAR",
+        "name": "Behavioral parity",
+        "count": 10,
+        "gate": "release-candidate"
+      },
+      {
+        "id": "TEST-PLG",
+        "name": "Plugin runtime and sandbox",
+        "count": 12,
+        "gate": "blocking"
+      },
+      {
+        "id": "TEST-PLAY",
+        "name": "Playback",
+        "count": 12,
+        "gate": "release-candidate"
+      },
+      {
+        "id": "TEST-DL",
+        "name": "Downloads",
+        "count": 10,
+        "gate": "release-candidate"
+      },
+      {
+        "id": "TEST-XP",
+        "name": "Cross platform",
+        "count": 6,
+        "gate": "merge"
+      },
+      {
+        "id": "TEST-UPG",
+        "name": "Upgrade",
+        "count": 5,
+        "gate": "release-candidate"
+      }
     ]
   },
-
   "risks": [
-    { "id": "RISK-1", "title": "No viable plugin runtime means no content", "impact": "fatal", "mitigation": "Resolve OQ-2 before Phase 6; spike in Phase 1", "document": "27" },
-    { "id": "RISK-2", "title": "Codec gap makes real streams unplayable in Chromium", "impact": "severe", "mitigation": "Dual backend (ADR-3); validate against a real stream corpus", "document": "28" },
-    { "id": "RISK-3", "title": "Hash mismatch orphans every imported record", "impact": "severe", "mitigation": "UTIL-1 with a JVM oracle; TEST-HASH gate", "document": "06" },
-    { "id": "RISK-4", "title": "Ecosystem fork splits provider maintenance", "impact": "severe", "mitigation": "Prefer upstream-compatible strategies; engage maintainers", "document": "27" },
-    { "id": "RISK-5", "title": "GPL-3.0 and FFmpeg licensing mishandled", "impact": "legal", "mitigation": "Legal review before packaging", "document": "11" },
-    { "id": "RISK-6", "title": "Untrusted plugins gain Node.js access", "impact": "critical-security", "mitigation": "Sandbox model; hostile plugin suite in CI", "document": "11" },
-    { "id": "RISK-7", "title": "Upstream KMP desktop ships first", "impact": "strategic", "mitigation": "Resolve OQ-1 with the sponsor now", "document": "19" }
+    {
+      "id": "RISK-1",
+      "title": "Plugin runtime fails and the app has no content",
+      "impact": "fatal",
+      "mitigation": "ADR-10 makes Runtime 3 the day-one path; residual risk moved to RISK-D1",
+      "document": "31",
+      "status": "mitigated-pending-spike"
+    },
+    {
+      "id": "RISK-2",
+      "title": "Codec gap makes real streams unplayable in Chromium",
+      "impact": "severe",
+      "mitigation": "Dual backend (ADR-3); validate against a real stream corpus",
+      "document": "28"
+    },
+    {
+      "id": "RISK-3",
+      "title": "Hash mismatch orphans every imported record",
+      "impact": "severe",
+      "mitigation": "UTIL-1 with a JVM oracle; TEST-HASH gate",
+      "document": "06"
+    },
+    {
+      "id": "RISK-4",
+      "title": "Ecosystem fork splits provider maintenance",
+      "impact": "severe",
+      "mitigation": "Prefer upstream-compatible strategies; engage maintainers",
+      "document": "27"
+    },
+    {
+      "id": "RISK-5",
+      "title": "GPL-3.0 and FFmpeg licensing mishandled",
+      "impact": "legal",
+      "mitigation": "Legal review before packaging",
+      "document": "11"
+    },
+    {
+      "id": "RISK-6",
+      "title": "Untrusted plugins gain Node.js access",
+      "impact": "critical-security",
+      "mitigation": "Sandbox model; hostile plugin suite in CI",
+      "document": "11"
+    },
+    {
+      "id": "RISK-7",
+      "title": "Upstream KMP desktop ships first",
+      "impact": "strategic",
+      "mitigation": "Resolve OQ-1 with the sponsor now",
+      "document": "19"
+    },
+    {
+      "id": "RISK-D1",
+      "title": "DEX to JVM translation fails on Kotlin coroutine state machines",
+      "impact": "critical",
+      "mitigation": "Phase 1 spike (OQ-2a/OQ-27) against the full vendored corpus, before Phase 2 starts",
+      "document": "31",
+      "status": "open"
+    },
+    {
+      "id": "RISK-D2",
+      "title": "library-jvm.jar JVM actuals diverge behaviorally from the Android actuals",
+      "impact": "high",
+      "mitigation": "Differential testing, AC-D7 / TC-D3",
+      "document": "31",
+      "status": "open"
+    },
+    {
+      "id": "RISK-D3",
+      "title": "Upstream :app signature drift breaks every translated plugin at link time",
+      "impact": "high",
+      "mitigation": "Automated ABI diff against upstream master, DROP-10/DROP-11",
+      "document": "31",
+      "status": "open"
+    },
+    {
+      "id": "RISK-D4",
+      "title": "Bundled JRE inflates the installer and triggers endpoint-protection heuristics",
+      "impact": "medium",
+      "mitigation": "jlink minimization (DROP-31), EV signing (SIGN-1a), EPP validation (DROP-35)",
+      "document": "31",
+      "status": "open"
+    },
+    {
+      "id": "RISK-D5",
+      "title": "Drop-in success removes the incentive to migrate to Runtimes 1 and 2",
+      "impact": "medium",
+      "mitigation": "Accepted deliberately; cli migrate (DX-6) provides the path",
+      "document": "31",
+      "status": "accepted"
+    },
+    {
+      "id": "RISK-D6",
+      "title": "A provider works on desktop but returns different links than on Android, unnoticed",
+      "impact": "medium",
+      "mitigation": "TC-D3 differential corpus in CI against recorded fixtures",
+      "document": "31",
+      "status": "open"
+    }
   ],
-
   "openQuestions": [
-    { "id": "OQ-1", "question": "Electron, or contribute to upstream's KMP desktop target?", "type": "decision", "severity": "blocking", "owner": "sponsor", "neededBy": "phase-0" },
-    { "id": "OQ-2", "question": "Which plugin runtime strategy is funded?", "type": "decision", "severity": "blocking", "owner": "sponsor", "neededBy": "phase-0" },
-    { "id": "OQ-3", "question": "Exact JSON encoding of SubscribedData.lastSeenEpisodeCount", "type": "data", "severity": "high", "resolvedBy": "real-backup-corpus", "confidence": "low" },
-    { "id": "OQ-4", "question": "Exact shape and key derivation of search_history records", "type": "data", "severity": "high", "resolvedBy": "real-backup-corpus", "confidence": "low" },
-    { "id": "OQ-5", "question": "Which OAuth client credentials will the desktop app use?", "type": "product", "severity": "high", "owner": "product", "neededBy": "phase-10" },
-    { "id": "OQ-6", "question": "How is Trakt actually provided? No TraktApi exists in app sources", "type": "behavior", "severity": "medium", "confidence": "medium" },
-    { "id": "OQ-7", "question": "Concrete shape of user_custom_sites", "type": "data", "severity": "high", "resolvedBy": "real-backup-corpus", "confidence": "low" },
-    { "id": "OQ-8", "question": "Shapes of video_profile_settings and video_profile_types_2", "type": "data", "severity": "high", "resolvedBy": "real-backup-corpus", "confidence": "low" },
-    { "id": "OQ-9", "question": "How toJsonLiteral serializes primitives", "type": "data", "severity": "high", "confidence": "medium" },
-    { "id": "OQ-10", "question": "Which keys use the _StringSet bucket in practice?", "type": "data", "severity": "medium", "confidence": "low" },
-    { "id": "OQ-11", "question": "Real-world backup sizes for heavy users", "type": "data", "severity": "medium", "confidence": "low" },
-    { "id": "OQ-12", "question": "Key shapes present in older Android versions", "type": "data", "severity": "medium", "confidence": "low" },
-    { "id": "OQ-13", "question": "What happens to scoped keys when a profile is deleted?", "type": "behavior", "severity": "medium", "confidence": "medium" },
-    { "id": "OQ-14", "question": "Exact value of NEXT_WATCH_EPISODE_PERCENTAGE", "type": "behavior", "severity": "medium", "confidence": "medium" },
-    { "id": "OQ-15", "question": "Exact sanitizeFilename transformation", "type": "behavior", "severity": "medium", "confidence": "medium" },
-    { "id": "OQ-16", "question": "Exact EpisodeSortType enum order", "type": "behavior", "severity": "medium", "confidence": "low" },
-    { "id": "OQ-17", "question": "Is the download queue key profile-prefixed?", "type": "behavior", "severity": "low", "confidence": "medium" },
-    { "id": "OQ-18", "question": "How are duplicate downloads detected?", "type": "behavior", "severity": "low", "confidence": "low" },
-    { "id": "OQ-19", "question": "SearchQuality enum order and int values", "type": "behavior", "severity": "low", "confidence": "low" },
-    { "id": "OQ-20", "question": "Are there user-data keys not covered by this survey?", "type": "behavior", "severity": "medium", "confidence": "medium" },
-    { "id": "OQ-21", "question": "Will provider developers port to the desktop API?", "type": "strategic", "severity": "high", "owner": "community" },
-    { "id": "OQ-22", "question": "Should we engage upstream about a shared plugin format?", "type": "strategic", "severity": "medium", "owner": "sponsor" },
-    { "id": "OQ-23", "question": "FFmpeg / mpv / libVLC licensing outcome", "type": "legal", "severity": "blocking", "owner": "legal", "neededBy": "phase-0" },
-    { "id": "OQ-24", "question": "Distribution posture per platform and jurisdiction", "type": "legal", "severity": "blocking", "owner": "legal", "neededBy": "phase-0" },
-    { "id": "OQ-25", "question": "Can upstream's Weblate translation catalogue be reused?", "type": "legal", "severity": "medium", "owner": "legal" },
-    { "id": "OQ-26", "question": "Will the project rebrand?", "type": "strategic", "severity": "medium", "owner": "sponsor" },
-    { "id": "OQ-27", "question": "Can DEX to JVM conversion produce working providers?", "type": "technical", "severity": "high", "resolvedBy": "phase-1-spike" },
-    { "id": "OQ-28", "question": "mpv or libVLC for the native backend?", "type": "technical", "severity": "high", "resolvedBy": "phase-1-or-7-spike" },
-    { "id": "OQ-29", "question": "What fraction of real streams does Chromium handle?", "type": "technical", "severity": "high", "resolvedBy": "stream-corpus-measurement" },
-    { "id": "OQ-30", "question": "IPC overhead for chatty providers", "type": "technical", "severity": "medium", "resolvedBy": "phase-6-benchmark" },
-    { "id": "OQ-31", "question": "Can streaming JSON parse meet the 400MB memory bound?", "type": "technical", "severity": "high", "resolvedBy": "phase-1-spike" },
-    { "id": "OQ-32", "question": "Does better-sqlite3 package cleanly for all six targets?", "type": "technical", "severity": "medium", "resolvedBy": "phase-2" },
-    { "id": "OQ-33", "question": "Bundle size impact of the native player backend", "type": "technical", "severity": "medium", "resolvedBy": "phase-7" }
+    {
+      "id": "OQ-1",
+      "question": "Electron, or contribute to upstream's KMP desktop target?",
+      "type": "decision",
+      "severity": "blocking",
+      "owner": "sponsor",
+      "neededBy": "phase-0",
+      "status": "resolved",
+      "resolution": "ADR-10 (2026-08-12): Electron host + bundled JVM sidecar, Windows-first"
+    },
+    {
+      "id": "OQ-2",
+      "question": "Which plugin runtime strategy is funded?",
+      "type": "decision",
+      "severity": "blocking",
+      "owner": "sponsor",
+      "neededBy": "phase-0",
+      "status": "resolved",
+      "resolution": "ADR-10 (2026-08-12): all three runtimes funded; Runtime 3 is P0"
+    },
+    {
+      "id": "OQ-3",
+      "question": "Exact JSON encoding of SubscribedData.lastSeenEpisodeCount",
+      "type": "data",
+      "severity": "high",
+      "resolvedBy": "real-backup-corpus",
+      "confidence": "low"
+    },
+    {
+      "id": "OQ-4",
+      "question": "Exact shape and key derivation of search_history records",
+      "type": "data",
+      "severity": "high",
+      "resolvedBy": "real-backup-corpus",
+      "confidence": "low"
+    },
+    {
+      "id": "OQ-5",
+      "question": "Which OAuth client credentials will the desktop app use?",
+      "type": "product",
+      "severity": "high",
+      "owner": "product",
+      "neededBy": "phase-10"
+    },
+    {
+      "id": "OQ-6",
+      "question": "How is Trakt actually provided? No TraktApi exists in app sources",
+      "type": "behavior",
+      "severity": "medium",
+      "confidence": "medium"
+    },
+    {
+      "id": "OQ-7",
+      "question": "Concrete shape of user_custom_sites",
+      "type": "data",
+      "severity": "high",
+      "resolvedBy": "real-backup-corpus",
+      "confidence": "low"
+    },
+    {
+      "id": "OQ-8",
+      "question": "Shapes of video_profile_settings and video_profile_types_2",
+      "type": "data",
+      "severity": "high",
+      "resolvedBy": "real-backup-corpus",
+      "confidence": "low"
+    },
+    {
+      "id": "OQ-9",
+      "question": "How toJsonLiteral serializes primitives",
+      "type": "data",
+      "severity": "high",
+      "confidence": "medium"
+    },
+    {
+      "id": "OQ-10",
+      "question": "Which keys use the _StringSet bucket in practice?",
+      "type": "data",
+      "severity": "medium",
+      "confidence": "low"
+    },
+    {
+      "id": "OQ-11",
+      "question": "Real-world backup sizes for heavy users",
+      "type": "data",
+      "severity": "medium",
+      "confidence": "low"
+    },
+    {
+      "id": "OQ-12",
+      "question": "Key shapes present in older Android versions",
+      "type": "data",
+      "severity": "medium",
+      "confidence": "low"
+    },
+    {
+      "id": "OQ-13",
+      "question": "What happens to scoped keys when a profile is deleted?",
+      "type": "behavior",
+      "severity": "medium",
+      "confidence": "medium"
+    },
+    {
+      "id": "OQ-14",
+      "question": "Exact value of NEXT_WATCH_EPISODE_PERCENTAGE",
+      "type": "behavior",
+      "severity": "medium",
+      "confidence": "medium"
+    },
+    {
+      "id": "OQ-15",
+      "question": "Exact sanitizeFilename transformation",
+      "type": "behavior",
+      "severity": "medium",
+      "confidence": "medium"
+    },
+    {
+      "id": "OQ-16",
+      "question": "Exact EpisodeSortType enum order",
+      "type": "behavior",
+      "severity": "medium",
+      "confidence": "low"
+    },
+    {
+      "id": "OQ-17",
+      "question": "Is the download queue key profile-prefixed?",
+      "type": "behavior",
+      "severity": "low",
+      "confidence": "medium"
+    },
+    {
+      "id": "OQ-18",
+      "question": "How are duplicate downloads detected?",
+      "type": "behavior",
+      "severity": "low",
+      "confidence": "low"
+    },
+    {
+      "id": "OQ-19",
+      "question": "SearchQuality enum order and int values",
+      "type": "behavior",
+      "severity": "low",
+      "confidence": "low"
+    },
+    {
+      "id": "OQ-20",
+      "question": "Are there user-data keys not covered by this survey?",
+      "type": "behavior",
+      "severity": "medium",
+      "confidence": "medium"
+    },
+    {
+      "id": "OQ-21",
+      "question": "Will provider developers port to the desktop API?",
+      "type": "strategic",
+      "severity": "high",
+      "owner": "community"
+    },
+    {
+      "id": "OQ-22",
+      "question": "Should we engage upstream about a shared plugin format?",
+      "type": "strategic",
+      "severity": "medium",
+      "owner": "sponsor"
+    },
+    {
+      "id": "OQ-23",
+      "question": "FFmpeg / mpv / libVLC licensing outcome",
+      "type": "legal",
+      "severity": "blocking",
+      "owner": "legal",
+      "neededBy": "phase-0"
+    },
+    {
+      "id": "OQ-24",
+      "question": "Distribution posture per platform and jurisdiction",
+      "type": "legal",
+      "severity": "blocking",
+      "owner": "legal",
+      "neededBy": "phase-0"
+    },
+    {
+      "id": "OQ-25",
+      "question": "Can upstream's Weblate translation catalogue be reused?",
+      "type": "legal",
+      "severity": "medium",
+      "owner": "legal"
+    },
+    {
+      "id": "OQ-26",
+      "question": "Will the project rebrand?",
+      "type": "strategic",
+      "severity": "medium",
+      "owner": "sponsor"
+    },
+    {
+      "id": "OQ-27",
+      "question": "Can DEX to JVM conversion produce working providers?",
+      "type": "technical",
+      "severity": "blocking",
+      "resolvedBy": "phase-1-spike",
+      "status": "open",
+      "note": "Elevated: RISK-D1. Run against the full vendored corpus before Phase 2"
+    },
+    {
+      "id": "OQ-28",
+      "question": "mpv or libVLC for the native backend?",
+      "type": "technical",
+      "severity": "high",
+      "resolvedBy": "phase-1-or-7-spike"
+    },
+    {
+      "id": "OQ-29",
+      "question": "What fraction of real streams does Chromium handle?",
+      "type": "technical",
+      "severity": "high",
+      "resolvedBy": "stream-corpus-measurement"
+    },
+    {
+      "id": "OQ-30",
+      "question": "IPC overhead for chatty providers",
+      "type": "technical",
+      "severity": "medium",
+      "resolvedBy": "phase-6-benchmark"
+    },
+    {
+      "id": "OQ-31",
+      "question": "Can streaming JSON parse meet the 400MB memory bound?",
+      "type": "technical",
+      "severity": "high",
+      "resolvedBy": "phase-1-spike"
+    },
+    {
+      "id": "OQ-32",
+      "question": "Does better-sqlite3 package cleanly for all six targets?",
+      "type": "technical",
+      "severity": "medium",
+      "resolvedBy": "phase-2"
+    },
+    {
+      "id": "OQ-33",
+      "question": "Bundle size impact of the native player backend",
+      "type": "technical",
+      "severity": "medium",
+      "resolvedBy": "phase-7"
+    },
+    {
+      "id": "OQ-2a",
+      "question": "Does DEX to JVM translation survive Kotlin coroutine state machines?",
+      "severity": "blocking",
+      "owner": "engineering",
+      "neededBy": "Phase 1",
+      "document": "31",
+      "status": "open"
+    },
+    {
+      "id": "OQ-34",
+      "question": "Can an offscreen Electron BrowserWindow reproduce WebViewResolver semantics including Cloudflare challenges?",
+      "severity": "high",
+      "owner": "engineering",
+      "neededBy": "Phase 1",
+      "document": "31",
+      "status": "open"
+    },
+    {
+      "id": "OQ-35",
+      "question": "Does a Windows job object plus AppContainer restricted token actually sandbox the JVM child, given SecurityManager is unavailable?",
+      "severity": "high",
+      "owner": "engineering",
+      "neededBy": "Phase 1",
+      "document": "31",
+      "status": "open"
+    },
+    {
+      "id": "OQ-36",
+      "question": "How large is the jlink-minimized JRE, and does the installer stay under the 250 MB cap?",
+      "severity": "medium",
+      "owner": "engineering",
+      "neededBy": "Phase 2",
+      "document": "31",
+      "status": "open"
+    },
+    {
+      "id": "OQ-37",
+      "question": "Which behavioral differences exist between library-jvm.jar JVM actuals and the Android actuals?",
+      "severity": "medium",
+      "owner": "engineering",
+      "neededBy": "ongoing",
+      "document": "31",
+      "status": "open"
+    },
+    {
+      "id": "OQ-38",
+      "question": "What is the measured T1-T4 tier distribution across the 299 surveyed providers?",
+      "severity": "medium",
+      "owner": "engineering",
+      "neededBy": "Phase 1",
+      "document": "31",
+      "status": "open"
+    }
   ],
-
   "limitations": [
-    { "id": "L-1", "title": "Android .cs3 extensions do not run on desktop", "severity": "fatal-without-mitigation", "userFacing": true },
-    { "id": "L-2", "title": "Chromecast unsupported", "severity": "medium", "userFacing": true },
-    { "id": "L-3", "title": "Downloads cannot migrate from Android", "severity": "medium", "userFacing": true },
-    { "id": "L-4", "title": "Auth tokens cannot migrate", "severity": "low", "userFacing": true },
-    { "id": "L-5", "title": "Screen brightness control unavailable", "severity": "low", "userFacing": true },
-    { "id": "L-6", "title": "Android TV watch-next EPG unsupported", "severity": "low", "userFacing": false },
-    { "id": "L-7", "title": "Rotation and battery settings inapplicable", "severity": "low", "userFacing": false },
-    { "id": "L-8", "title": "Biometric setting cannot migrate", "severity": "low", "userFacing": true },
-    { "id": "L-9", "title": "Codec coverage gap in Chromium", "severity": "high", "userFacing": true },
-    { "id": "L-10", "title": "Bitmap subtitles need the native backend", "severity": "medium", "userFacing": true },
-    { "id": "L-11", "title": "ASS/SSA styling fidelity", "severity": "medium", "userFacing": true },
-    { "id": "L-12", "title": "Seekbar thumbnails backend-dependent", "severity": "low", "userFacing": true },
-    { "id": "L-13", "title": "Trailer playback needs a desktop solution", "severity": "low", "userFacing": true },
-    { "id": "L-14", "title": "Provider capability drift", "severity": "medium", "userFacing": false },
-    { "id": "L-15", "title": "Backup format carries no version", "severity": "medium", "userFacing": false },
-    { "id": "L-16", "title": "32-bit hash ids can collide", "severity": "low", "userFacing": false },
-    { "id": "L-17", "title": "Provider domain changes orphan ids", "severity": "medium", "userFacing": true },
-    { "id": "L-18", "title": "Ids depend on provider installation state", "severity": "high", "userFacing": false },
-    { "id": "L-19", "title": "Android restore performs no validation", "severity": "high", "userFacing": false },
-    { "id": "L-20", "title": "Large backups are memory-hostile", "severity": "medium", "userFacing": false },
-    { "id": "L-21", "title": "Path semantics differ across platforms", "severity": "medium", "userFacing": false },
-    { "id": "L-22", "title": "Linux desktop fragmentation", "severity": "medium", "userFacing": true },
-    { "id": "L-23", "title": "macOS App Store not a viable channel", "severity": "low", "userFacing": false },
-    { "id": "L-24", "title": "Windows SmartScreen friction", "severity": "low", "userFacing": true },
-    { "id": "L-25", "title": "No mobile-style background execution", "severity": "medium", "userFacing": true },
-    { "id": "L-26", "title": "GPL-3.0 copyleft obligations", "severity": "legal", "userFacing": false },
-    { "id": "L-27", "title": "FFmpeg licensing requires review", "severity": "legal", "userFacing": false },
-    { "id": "L-28", "title": "Branding not GPL-licensed", "severity": "legal", "userFacing": false },
-    { "id": "L-29", "title": "Provider legality varies by jurisdiction", "severity": "legal", "userFacing": true },
-    { "id": "L-30", "title": "No first-party content", "severity": "by-design", "userFacing": true },
-    { "id": "L-31", "title": "Provider availability outside our control", "severity": "by-design", "userFacing": true },
-    { "id": "L-32", "title": "Upstream divergence over time", "severity": "strategic", "userFacing": false }
+    {
+      "id": "L-1",
+      "title": "Android .cs3 extensions run drop-in, but without Android privileges",
+      "severity": "medium",
+      "userFacing": true,
+      "revisedOn": "2026-08-12",
+      "supersedes": "Android .cs3 extensions do not run on desktop (severity: fatal-without-mitigation)",
+      "document": "31"
+    },
+    {
+      "id": "L-2",
+      "title": "Chromecast unsupported",
+      "severity": "medium",
+      "userFacing": true
+    },
+    {
+      "id": "L-3",
+      "title": "Downloads cannot migrate from Android",
+      "severity": "medium",
+      "userFacing": true
+    },
+    {
+      "id": "L-4",
+      "title": "Auth tokens cannot migrate",
+      "severity": "low",
+      "userFacing": true
+    },
+    {
+      "id": "L-5",
+      "title": "Screen brightness control unavailable",
+      "severity": "low",
+      "userFacing": true
+    },
+    {
+      "id": "L-6",
+      "title": "Android TV watch-next EPG unsupported",
+      "severity": "low",
+      "userFacing": false
+    },
+    {
+      "id": "L-7",
+      "title": "Rotation and battery settings inapplicable",
+      "severity": "low",
+      "userFacing": false
+    },
+    {
+      "id": "L-8",
+      "title": "Biometric setting cannot migrate",
+      "severity": "low",
+      "userFacing": true
+    },
+    {
+      "id": "L-9",
+      "title": "Codec coverage gap in Chromium",
+      "severity": "high",
+      "userFacing": true
+    },
+    {
+      "id": "L-10",
+      "title": "Bitmap subtitles need the native backend",
+      "severity": "medium",
+      "userFacing": true
+    },
+    {
+      "id": "L-11",
+      "title": "ASS/SSA styling fidelity",
+      "severity": "medium",
+      "userFacing": true
+    },
+    {
+      "id": "L-12",
+      "title": "Seekbar thumbnails backend-dependent",
+      "severity": "low",
+      "userFacing": true
+    },
+    {
+      "id": "L-13",
+      "title": "Trailer playback needs a desktop solution",
+      "severity": "low",
+      "userFacing": true
+    },
+    {
+      "id": "L-14",
+      "title": "Provider capability drift",
+      "severity": "medium",
+      "userFacing": false
+    },
+    {
+      "id": "L-15",
+      "title": "Backup format carries no version",
+      "severity": "medium",
+      "userFacing": false
+    },
+    {
+      "id": "L-16",
+      "title": "32-bit hash ids can collide",
+      "severity": "low",
+      "userFacing": false
+    },
+    {
+      "id": "L-17",
+      "title": "Provider domain changes orphan ids",
+      "severity": "medium",
+      "userFacing": true
+    },
+    {
+      "id": "L-18",
+      "title": "Ids depend on provider installation state",
+      "severity": "high",
+      "userFacing": false
+    },
+    {
+      "id": "L-19",
+      "title": "Android restore performs no validation",
+      "severity": "high",
+      "userFacing": false
+    },
+    {
+      "id": "L-20",
+      "title": "Large backups are memory-hostile",
+      "severity": "medium",
+      "userFacing": false
+    },
+    {
+      "id": "L-21",
+      "title": "Path semantics differ across platforms",
+      "severity": "medium",
+      "userFacing": false
+    },
+    {
+      "id": "L-22",
+      "title": "Linux desktop fragmentation",
+      "severity": "medium",
+      "userFacing": true
+    },
+    {
+      "id": "L-23",
+      "title": "macOS App Store not a viable channel",
+      "severity": "low",
+      "userFacing": false
+    },
+    {
+      "id": "L-24",
+      "title": "Windows SmartScreen friction",
+      "severity": "low",
+      "userFacing": true
+    },
+    {
+      "id": "L-25",
+      "title": "No mobile-style background execution",
+      "severity": "medium",
+      "userFacing": true
+    },
+    {
+      "id": "L-26",
+      "title": "GPL-3.0 copyleft obligations",
+      "severity": "legal",
+      "userFacing": false
+    },
+    {
+      "id": "L-27",
+      "title": "FFmpeg licensing requires review",
+      "severity": "legal",
+      "userFacing": false
+    },
+    {
+      "id": "L-28",
+      "title": "Branding not GPL-licensed",
+      "severity": "legal",
+      "userFacing": false
+    },
+    {
+      "id": "L-29",
+      "title": "Provider legality varies by jurisdiction",
+      "severity": "legal",
+      "userFacing": true
+    },
+    {
+      "id": "L-30",
+      "title": "No first-party content",
+      "severity": "by-design",
+      "userFacing": true
+    },
+    {
+      "id": "L-31",
+      "title": "Provider availability outside our control",
+      "severity": "by-design",
+      "userFacing": true
+    },
+    {
+      "id": "L-32",
+      "title": "Upstream divergence over time",
+      "severity": "strategic",
+      "userFacing": false
+    }
   ],
-
   "decisionRecords": [
-    { "id": "ADR-1", "area": "storage", "decision": "SQLite for collections plus a JSON settings document", "document": "15" },
-    { "id": "ADR-2", "area": "plugin-runtime", "decision": "Native JS/TS API behind an adapter boundary", "document": "15", "blockedBy": "OQ-2" },
-    { "id": "ADR-3", "area": "playback", "decision": "Dual backend: Chromium plus an embedded native player", "document": "15" },
-    { "id": "ADR-4", "area": "export-format", "decision": "Two formats: Android-compatible and desktop-native", "document": "15" },
-    { "id": "ADR-5", "area": "networking", "decision": "Main-process service with a brokered plugin interface", "document": "15" },
-    { "id": "ADR-6", "area": "credentials", "decision": "OS keychain", "document": "15" },
-    { "id": "ADR-7", "area": "background-work", "decision": "Main-process scheduler with missed-run catch-up", "document": "15" },
-    { "id": "ADR-8", "area": "torrent", "decision": "Bundled engine as a supervised child process", "document": "15" },
-    { "id": "ADR-9", "area": "ui-state", "decision": "Unidirectional flow; main process is the source of truth", "document": "15" }
+    {
+      "id": "ADR-1",
+      "area": "storage",
+      "decision": "SQLite for collections plus a JSON settings document",
+      "document": "15"
+    },
+    {
+      "id": "ADR-2",
+      "area": "plugin-runtime",
+      "decision": "Native JS/TS API behind an adapter boundary",
+      "document": "15",
+      "blockedBy": "OQ-2"
+    },
+    {
+      "id": "ADR-3",
+      "area": "playback",
+      "decision": "Dual backend: Chromium plus an embedded native player",
+      "document": "15"
+    },
+    {
+      "id": "ADR-4",
+      "area": "export-format",
+      "decision": "Two formats: Android-compatible and desktop-native",
+      "document": "15"
+    },
+    {
+      "id": "ADR-5",
+      "area": "networking",
+      "decision": "Main-process service with a brokered plugin interface",
+      "document": "15"
+    },
+    {
+      "id": "ADR-6",
+      "area": "credentials",
+      "decision": "OS keychain",
+      "document": "15"
+    },
+    {
+      "id": "ADR-7",
+      "area": "background-work",
+      "decision": "Main-process scheduler with missed-run catch-up",
+      "document": "15"
+    },
+    {
+      "id": "ADR-8",
+      "area": "torrent",
+      "decision": "Bundled engine as a supervised child process",
+      "document": "15"
+    },
+    {
+      "id": "ADR-9",
+      "area": "ui-state",
+      "decision": "Unidirectional flow; main process is the source of truth",
+      "document": "15"
+    },
+    {
+      "id": "ADR-10",
+      "area": "host-architecture",
+      "decision": "Electron host plus a bundled, sandboxed JVM sidecar for .cs3 drop-in; Windows-first platform scope",
+      "decidedOn": "2026-08-12",
+      "supersedes": [
+        "OQ-1",
+        "OQ-2"
+      ],
+      "document": "31"
+    }
   ],
-
   "upgradeRecommendations": [
-    { "id": "MOD-1", "recommendation": "Sandbox the plugin runtime", "compatibilityRisk": "medium", "document": "15" },
-    { "id": "MOD-2", "recommendation": "Store tokens in the OS keychain", "compatibilityRisk": "none", "document": "15" },
-    { "id": "MOD-3", "recommendation": "Version the desktop-native export format", "compatibilityRisk": "none", "document": "15" },
-    { "id": "MOD-4", "recommendation": "Validated, previewed, rollback-capable import", "compatibilityRisk": "none", "document": "15" },
-    { "id": "MOD-5", "recommendation": "Attribute and surface failures instead of swallowing them", "compatibilityRisk": "none", "document": "15" },
-    { "id": "MOD-6", "recommendation": "Optional watch-progress retention, off by default", "compatibilityRisk": "medium", "document": "15" },
-    { "id": "MOD-7", "recommendation": "Cap provider fan-out concurrency", "compatibilityRisk": "none", "document": "15" },
-    { "id": "MOD-8", "recommendation": "Detect and report id collisions", "compatibilityRisk": "none", "document": "15" },
-    { "id": "MOD-9", "recommendation": "User-initiated provider id remap tool", "compatibilityRisk": "high-if-automatic", "document": "15" },
-    { "id": "MOD-10", "recommendation": "Bulk operations", "compatibilityRisk": "none", "document": "15" },
-    { "id": "MOD-11", "recommendation": "Full keyboard and screen-reader support", "compatibilityRisk": "none", "document": "15" },
-    { "id": "MOD-12", "recommendation": "Download metadata sidecars", "compatibilityRisk": "none", "document": "15" }
+    {
+      "id": "MOD-1",
+      "recommendation": "Sandbox the plugin runtime",
+      "compatibilityRisk": "medium",
+      "document": "15"
+    },
+    {
+      "id": "MOD-2",
+      "recommendation": "Store tokens in the OS keychain",
+      "compatibilityRisk": "none",
+      "document": "15"
+    },
+    {
+      "id": "MOD-3",
+      "recommendation": "Version the desktop-native export format",
+      "compatibilityRisk": "none",
+      "document": "15"
+    },
+    {
+      "id": "MOD-4",
+      "recommendation": "Validated, previewed, rollback-capable import",
+      "compatibilityRisk": "none",
+      "document": "15"
+    },
+    {
+      "id": "MOD-5",
+      "recommendation": "Attribute and surface failures instead of swallowing them",
+      "compatibilityRisk": "none",
+      "document": "15"
+    },
+    {
+      "id": "MOD-6",
+      "recommendation": "Optional watch-progress retention, off by default",
+      "compatibilityRisk": "medium",
+      "document": "15"
+    },
+    {
+      "id": "MOD-7",
+      "recommendation": "Cap provider fan-out concurrency",
+      "compatibilityRisk": "none",
+      "document": "15"
+    },
+    {
+      "id": "MOD-8",
+      "recommendation": "Detect and report id collisions",
+      "compatibilityRisk": "none",
+      "document": "15"
+    },
+    {
+      "id": "MOD-9",
+      "recommendation": "User-initiated provider id remap tool",
+      "compatibilityRisk": "high-if-automatic",
+      "document": "15"
+    },
+    {
+      "id": "MOD-10",
+      "recommendation": "Bulk operations",
+      "compatibilityRisk": "none",
+      "document": "15"
+    },
+    {
+      "id": "MOD-11",
+      "recommendation": "Full keyboard and screen-reader support",
+      "compatibilityRisk": "none",
+      "document": "15"
+    },
+    {
+      "id": "MOD-12",
+      "recommendation": "Download metadata sidecars",
+      "compatibilityRisk": "none",
+      "document": "15"
+    }
   ],
-
   "implementationPhases": [
-    { "id": 0, "name": "Decisions", "blocking": true, "exit": "OQ-1, OQ-2, legal engaged, corpus collection begun" },
-    { "id": 1, "name": "Baseline and risk spikes", "exit": "Hash tests pass; a provider returns real results; 400MB backup parses within bounds" },
-    { "id": 2, "name": "Electron shell and foundation", "exit": "Signed, notarized empty app on three platforms; security audit green" },
-    { "id": 3, "name": "Canonical data model and storage", "exit": "500k synthetic records within performance targets" },
-    { "id": 4, "name": "Migration subsystem", "exit": "Real corpus imports; desktop export restores on real Android" },
-    { "id": 5, "name": "Core UI and navigation", "exit": "Migrated user can import and browse their library" },
-    { "id": 6, "name": "Providers, search, discovery", "exit": "Install a provider, search, open, bookmark; sandbox holds" },
-    { "id": 7, "name": "Playback", "exit": "Playback corpus passes; progress round-trips to Android" },
-    { "id": 8, "name": "Downloads", "exit": "Download tests pass on three platforms" },
-    { "id": 9, "name": "Plugin ecosystem maturity", "exit": "External developer ports a provider from docs alone" },
-    { "id": 10, "name": "Settings, sync, personalization", "exit": "Sync and profile workflows pass end to end" },
-    { "id": 11, "name": "Deep links, OS integration, updates", "exit": "Deep links work from a browser on three platforms" },
-    { "id": 12, "name": "Torrent and optional subsystems", "exit": "Torrent playback works; 10-foot mode navigable without a mouse" },
-    { "id": 13, "name": "Packaging and distribution", "exit": "Signed installers and working updates; legal sign-off" },
-    { "id": 14, "name": "Security hardening", "exit": "No unresolved critical or high findings" },
-    { "id": 15, "name": "Performance", "exit": "All targets met on three platforms including low-end hardware" },
-    { "id": 16, "name": "Parity validation and release", "exit": "All acceptance criteria met" }
+    {
+      "id": 0,
+      "name": "Decisions",
+      "blocking": true,
+      "exit": "OQ-1, OQ-2, legal engaged, corpus collection begun"
+    },
+    {
+      "id": 1,
+      "name": "Baseline and risk spikes",
+      "exit": "Hash tests pass; a provider returns real results; 400MB backup parses within bounds"
+    },
+    {
+      "id": 2,
+      "name": "Electron shell and foundation",
+      "exit": "Signed, notarized empty app on three platforms; security audit green"
+    },
+    {
+      "id": 3,
+      "name": "Canonical data model and storage",
+      "exit": "500k synthetic records within performance targets"
+    },
+    {
+      "id": 4,
+      "name": "Migration subsystem",
+      "exit": "Real corpus imports; desktop export restores on real Android"
+    },
+    {
+      "id": 5,
+      "name": "Core UI and navigation",
+      "exit": "Migrated user can import and browse their library"
+    },
+    {
+      "id": 6,
+      "name": "Providers, search, discovery",
+      "exit": "Install a provider, search, open, bookmark; sandbox holds"
+    },
+    {
+      "id": 7,
+      "name": "Playback",
+      "exit": "Playback corpus passes; progress round-trips to Android"
+    },
+    {
+      "id": 8,
+      "name": "Downloads",
+      "exit": "Download tests pass on three platforms"
+    },
+    {
+      "id": 9,
+      "name": "Plugin ecosystem maturity",
+      "exit": "External developer ports a provider from docs alone"
+    },
+    {
+      "id": 10,
+      "name": "Settings, sync, personalization",
+      "exit": "Sync and profile workflows pass end to end"
+    },
+    {
+      "id": 11,
+      "name": "Deep links, OS integration, updates",
+      "exit": "Deep links work from a browser on three platforms"
+    },
+    {
+      "id": 12,
+      "name": "Torrent and optional subsystems",
+      "exit": "Torrent playback works; 10-foot mode navigable without a mouse"
+    },
+    {
+      "id": 13,
+      "name": "Packaging and distribution",
+      "exit": "Signed installers and working updates; legal sign-off"
+    },
+    {
+      "id": 14,
+      "name": "Security hardening",
+      "exit": "No unresolved critical or high findings"
+    },
+    {
+      "id": 15,
+      "name": "Performance",
+      "exit": "All targets met on three platforms including low-end hardware"
+    },
+    {
+      "id": 16,
+      "name": "Parity validation and release",
+      "exit": "All acceptance criteria met"
+    }
   ],
-
   "confidenceAudit": {
-    "high": ["backup-format", "datastore-keys", "id-derivation", "settings-catalogue", "plugin-format-and-lifecycle", "provider-api", "subtitle-formats", "enum-ordinals", "upstream-kmp-direction"],
-    "medium": ["nested-value-json-shapes", "dataset-sizing", "provider-portability", "codec-coverage-detail"],
-    "low": ["real-world-codec-distribution", "upstream-desktop-timeline", "several-nested-data-shapes-pending-corpus"]
+    "high": [
+      "backup-format",
+      "datastore-keys",
+      "id-derivation",
+      "settings-catalogue",
+      "plugin-format-and-lifecycle",
+      "provider-api",
+      "subtitle-formats",
+      "enum-ordinals",
+      "upstream-kmp-direction"
+    ],
+    "medium": [
+      "nested-value-json-shapes",
+      "dataset-sizing",
+      "provider-portability",
+      "codec-coverage-detail"
+    ],
+    "low": [
+      "real-world-codec-distribution",
+      "upstream-desktop-timeline",
+      "several-nested-data-shapes-pending-corpus"
+    ]
   }
 }

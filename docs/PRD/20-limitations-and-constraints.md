@@ -9,12 +9,26 @@ What will not work, and why. Every limitation here must appear in user-facing re
 
 ## 1. Hard limitations — cannot be reproduced
 
-### L-1 · Android extensions (`.cs3`) do not run on desktop ★
-**Severity: Fatal without mitigation.**
-`.cs3` files contain Android DEX bytecode loaded by `dalvik.system.PathClassLoader`. No Electron, Node, or Chromium configuration executes DEX. Even a JVM sidecar requires DEX→JVM conversion, which is imperfect and fails on providers using Android-specific APIs.
-**Consequence.** The desktop app launches with an empty catalogue until providers exist for its runtime.
-**Mitigation.** [27](27-plugin-and-extension-architecture.md) §6. Whatever is chosen, the ecosystem forks to some degree.
-**Evidence.** `app/.../plugins/PluginManager.kt:611`. **Confidence: High.**
+### L-1 · Android extensions (`.cs3`) run drop-in, but not with Android privileges ★
+**Revised 2026-08-12 (ADR-10). This entry previously read "do not run on desktop" and was rated Fatal. That rating was based on a JavaScript-runtime-only reading and is withdrawn.**
+
+`.cs3` files contain Android DEX bytecode loaded by `dalvik.system.PathClassLoader`. No Electron, Node, or Chromium configuration executes DEX — but a **bundled JVM sidecar** does, after an install-time DEX→`.class` translation, linking upstream's own `library-jvm.jar`. Existing plugins therefore run without rebuild or source change ([31](31-cs3-dropin-compatibility.md)).
+
+**What remains genuinely limited**, and the tier it maps to in [31](31-cs3-dropin-compatibility.md) §7:
+
+| Limitation | Tier | Est. share of 299 surveyed providers |
+|---|---|---|
+| Plugins that hand-build settings UI from Android Views | T3 — content works, settings disabled | **2.7%** |
+| Plugins requiring native `.so` libraries | T4 — blocked | Unmeasured, believed near-zero |
+| Plugins relying on ambient app privilege (`MANAGE_EXTERNAL_STORAGE`) | T4 — blocked **by design** | Unmeasured |
+| Plugins reaching an unimplemented `android.*` API | T4 — blocked, API named to the user | Unknown until Phase 1 |
+| Plugins whose DEX fails translation | T4 — blocked | **Unknown — see RISK-D1** |
+
+**The residual fatal risk moved, it did not disappear.** It is now RISK-D1: DEX→JVM translation must survive Kotlin coroutine state machines, and *every* provider is coroutine-heavy, so a failure there is systemic rather than long-tail. Until the Phase 1 spike (OQ-27) passes against the full vendored corpus, treat the drop-in commitment as unproven.
+
+**Deliberate divergence.** Drop-in covers plugin *code*, never plugin *privileges*. Android annotates `MANAGE_EXTERNAL_STORAGE` as "Plugin API"; desktop grants no filesystem, no sockets, and no native code at any runtime ([31](31-cs3-dropin-compatibility.md) §6). A provider that reads arbitrary user files on Android **will** fail on desktop, and that is the correct outcome.
+
+**Evidence.** `app/.../plugins/PluginManager.kt:611`; `library/build.gradle.kts:23-42`; `app/build.gradle.kts:305-325`; survey of `repositories/**` 2026-08-12. **Confidence: High** for the mechanism; **Low** for translation success until the spike runs.
 
 ### L-2 · Chromecast is unsupported
 The Google Cast SDK targets Android, iOS, and web *pages* — there is no Electron-native sender. `CastHelper`, `CastOptionsProvider`, `MiniControllerFragment`, `ControllerActivity`, and the chromecast subtitle style all become inert.

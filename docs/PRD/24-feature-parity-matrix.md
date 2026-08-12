@@ -132,7 +132,10 @@ Every meaningful Android feature, classified. Full specifications in [03](03-fea
 | Feature | Android | Desktop | Strategy | Data | Platform | Class | Prio |
 |---|---|---|---|---|---|---|---|
 | FEAT-EXT-1 Repositories | 4 URL forms, jsDelivr rewrite | Identical grammar | R1 | `REPOSITORIES_KEY` ✅ | None | Parity | **P0** |
-| FEAT-EXT-2 Install/update/load | DEX via `PathClassLoader` | Lifecycle preserved; **execution replaced** | R1 lifecycle | `PLUGINS_KEY` ❌ | **Fundamental** | Adapt | **P0** |
+| FEAT-EXT-2 Install/update/load | DEX via `PathClassLoader` | **Drop-in** — lifecycle and install-path grammar preserved exactly; DEX translated at install, run on a bundled JVM sidecar ([31](31-cs3-dropin-compatibility.md)) | R1 | `PLUGINS_KEY` ✅ | Sandbox mechanism only (XP-0d) | **Parity** | **P0** |
+| FEAT-EXT-2a Plugin settings (`openSettings`) | Android View / Dialog | Declarative schema; hand-built View UI disabled with an explanation (DROP-18/19) — **~2.7% of providers** | R4 | — | **Fundamental** | Adapt | P1 |
+| FEAT-EXT-2b Plugin compatibility tiering | None — Android just loads it | Analyzer assigns T1–T4 at install, re-verified on first call; surfaced in the Extension Manager (DROP-28/29) | desktop-only | — | None | Desktop-only | **P0** |
+| FEAT-EXT-2c `WebViewResolver` / `CloudflareKiller` | Android `WebView` | Offscreen `BrowserWindow` per plugin session (DROP-13..17). Upstream's JVM actual is a `TODO` stub, so this is net-new | R2 | — | Reimplementation | Adapt | **P0** |
 | FEAT-EXT-3 Plugin browser | Two fragments | Two-pane | R4 | — | Layout | Adapt | P1 |
 | FEAT-EXT-4 Voting | `VotingApi` | Same | R1 | — | None | Parity | P3 |
 | FEAT-EXT-5 Auto-update | On start | + scheduled | R2 | Settings | Background | Adapt | P1 |

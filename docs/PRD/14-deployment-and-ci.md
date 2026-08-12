@@ -42,11 +42,26 @@
 
 ## 3. Desktop build matrix
 
-| Platform | Arch | Formats |
+**Revised 2026-08-12: Windows-first ([29](29-platform-compatibility.md) §1).** Only the Windows row gates the v1 release; the others build when their phase opens.
+
+| Platform | Phase | Arch | Formats |
+|---|---|---|---|
+| **Windows** | **P0** | x64 | NSIS installer, portable `.exe`, optional MSI |
+| Windows | P2 | arm64 | Needs an arm64 JRE and arm64 native modules |
+| macOS | P1 | x64, arm64 (universal preferred) | `.dmg`, `.zip` for updater |
+| Linux | P1 | x64, arm64 | AppImage (primary), `.deb`, `.rpm`, optional Flatpak |
+
+### 3.1 Bundled JVM runtime (ADR-10)
+
+Every artifact above ships a `jlink`-minimized JRE for the `.cs3` drop-in sidecar ([31](31-cs3-dropin-compatibility.md)).
+
+| ID | Requirement | Priority |
 |---|---|---|
-| Windows | x64, arm64 | NSIS installer, portable `.exe`, optional MSI |
-| macOS | x64, arm64 (universal preferred) | `.dmg`, `.zip` for updater |
-| Linux | x64, arm64 | AppImage (primary), `.deb`, `.rpm`, optional Flatpak |
+| REL-6 | The JRE is `jlink`-minimized to the modules the sidecar actually resolves, bundled with the app, and **never** an external prerequisite (DROP-31). | P0 |
+| REL-7 | The bundled runtime is a GPL-3.0-compatible distribution (Temurin, GPLv2+Classpath Exception) with its license and source offer included in the installer (DROP-32; [11](11-security-and-compliance.md) §6). | P0 |
+| REL-8 | Total Windows installer size ≤ 250 MB including the JRE (AC-D8). | P1 |
+| REL-9 | Per-platform, per-arch JRE builds are produced by the CI matrix. A host-arch JRE shipped to a different arch is a silent, install-time-only failure. | P0 |
+| REL-10 | Portable mode (REL-2) relocates the extension store and the translated-bytecode cache alongside the executable, not just user data. | P2 |
 
 | ID | Requirement | Priority |
 |---|---|---|
@@ -62,8 +77,10 @@
 
 | ID | Requirement | Priority |
 |---|---|---|
-| SIGN-1 | Windows: Authenticode signing (EV strongly preferred to avoid SmartScreen friction). | P0 |
-| SIGN-2 | macOS: Developer ID signing **and notarization**. Unnotarized builds are effectively unusable on modern macOS. | P0 |
+| SIGN-1 | Windows: Authenticode signing (EV strongly preferred to avoid SmartScreen friction). **Long lead time — order the certificate in Phase 0.** | P0 |
+| SIGN-1a | **Every** shipped executable and JAR is signed, including the bundled `java.exe`, the sidecar launcher, and the shim JARs (DROP-33). An unsigned child process spawned by a signed parent is exactly the pattern endpoint protection flags. | P0 |
+| SIGN-1b | The signed build is validated against Windows Defender and at least two common third-party EPPs before release (DROP-35). A submission-and-whitelisting process with major vendors is started at first release, not after the first user report. | P1 |
+| SIGN-2 | macOS: Developer ID signing **and notarization**. Unnotarized builds are effectively unusable on modern macOS. **Applies from the macOS phase**; the bundled JRE must be signed and hardened-runtime-compatible, which is a known source of notarization failures. | P0 (macOS phase) |
 | SIGN-3 | Linux: GPG-signed repository metadata and checksums for AppImage. | P1 |
 | SIGN-4 | Update packages are signature-verified before installation; verification failure aborts and reports. | P0 |
 | SIGN-5 | Signing keys live in CI secrets, never in the repository. | P0 |
@@ -72,7 +89,7 @@
 | SIGN-8 | Update download is resumable and does not block app use. | P2 |
 | SIGN-9 | A failed update never leaves an unusable installation; roll back to the previous version. | P0 |
 
-**Note.** macOS notarization has multi-day lead time for first-time setup. Start it in Phase 2, not Phase 13.
+**Note.** Windows EV Authenticode issuance involves organizational vetting and hardware-token shipping — **weeks, not days**. Order it in Phase 0. macOS notarization has a similar multi-day first-time lead and should be started when the macOS phase opens, not at its Phase 13 equivalent.
 
 ---
 
@@ -167,12 +184,15 @@ Detailed in [29](29-platform-compatibility.md) §2. Summary:
 
 ## 9. Release checklist
 
-- [ ] All CI gates green on all three platforms
-- [ ] Migration corpus passes on all three platforms
+- [ ] All CI gates green on every release-gating configuration ([29](29-platform-compatibility.md) §10)
+- [ ] Migration corpus passes on every release-gating configuration
+- [ ] Drop-in corpus (TC-D1..TC-D15) passes; measured tier statistics published (DROP-30)
+- [ ] Bundled JRE license text and source offer included (LIC-11)
+- [ ] Sidecar and all bundled binaries Authenticode-signed (SIGN-1a); EPP validation done (SIGN-1b)
 - [ ] Manual playback and subtitle QA signed off
 - [ ] Accessibility spot-check passed
 - [ ] Android-compatible export verified on a **real Android device**
-- [ ] Artifacts signed; macOS notarized
+- [ ] Artifacts signed (macOS notarized, from the macOS phase onward)
 - [ ] SBOM and license notices current
 - [ ] Release notes and known limitations published
 - [ ] Rollback plan documented

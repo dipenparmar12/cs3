@@ -1,8 +1,10 @@
 # CloudStream Desktop (Electron) — Reverse-Engineering & Migration PRD
 
-**Generated:** 2026-08-10
-**Status:** Baseline draft, evidence-based, ready for engineering review
-**Document set version:** 1.0.0
+**Generated:** 2026-08-10 · **Revised:** 2026-08-12
+**Status:** Evidence-based, ready for engineering review. Architecture ratified as ADR-10.
+**Document set version:** 1.1.0
+
+**What changed in 1.1.0.** Two decisions were taken and propagated through the set: (a) **`.cs3` drop-in compatibility** via a bundled JVM sidecar is a P0 product commitment — F-1 below is rewritten, and [31](31-cs3-dropin-compatibility.md) is new; (b) **Windows-first** platform scope — Windows 10/11 is the P0 shipping target, with macOS and Linux specified but phased later ([29](29-platform-compatibility.md) §1).
 
 ---
 
@@ -38,6 +40,8 @@ The governing principle throughout:
 | Gradle modules | `:app`, `:library`, `:docs` (`settings.gradle.kts:23`) |
 | Kotlin source files in `:app` | 232 |
 | Target desktop project | `cs3_windows/` (this repository) |
+| Primary target platform | **Windows 10 (1809+) / 11, x64** — macOS and Linux specified but phased later |
+| Community extension corpus | 26 repositories vendored at `repositories/` — 1,009 Kotlin files, 325 Gradle modules, 303 `@CloudstreamPlugin` classes, 299 `MainAPI` providers, 110 `ExtractorApi` classes (surveyed 2026-08-12) |
 
 Every requirement in this document set is traceable to a file path and line range in the analyzed commit. If the upstream repository moves ahead of this commit, re-run the analysis and bump the document set version.
 
@@ -47,11 +51,25 @@ Every requirement in this document set is traceable to a file path and line rang
 
 These are the conclusions that most strongly determine cost, risk, and scope. Each is expanded in the referenced document.
 
-### F-1 — Android extensions are Android bytecode and cannot run in Electron
-`.cs3` plugin files are ZIP archives containing Android DEX bytecode, loaded at runtime through `dalvik.system.PathClassLoader` (`app/.../plugins/PluginManager.kt:611`). There is no path by which an unmodified `.cs3` file executes inside Node.js or Chromium. **The entire content-provider ecosystem — the reason the app has value — requires a new runtime.** See [27-plugin-and-extension-architecture.md](27-plugin-and-extension-architecture.md).
+### F-1 — Android extensions cannot run in Node or V8, but they *can* run drop-in on a bundled JVM
+**Revised 2026-08-12 (ADR-10). This finding previously read "cannot run in Electron" and drove the entire PRD toward a provider rewrite. That conclusion was overstated.**
+
+`.cs3` plugin files are ZIP archives containing Android DEX bytecode, loaded through `dalvik.system.PathClassLoader` (`app/.../plugins/PluginManager.kt:611`). No configuration of Node.js or V8 executes such a file — that part stands.
+
+But the barrier is to *JavaScript runtimes*, not to *desktop*. Three facts, each verified against source, invert the conclusion:
+
+1. `:library` **already declares a `jvm()` target** and ships JVM actuals (`library/build.gradle.kts:23-42`; `library/src/jvmMain/`, 5 files).
+2. Upstream's `makeJar` **already merges `library-jvm.jar`** into the classpath every community provider compiles against (`app/build.gradle.kts:305-325`).
+3. A survey of all 26 vendored community repositories (1,009 Kotlin files, 299 `MainAPI` providers) shows **67.6% import no `android.*` at all**, and five stubbable classes — `Log`, `Base64`, `Context`, `SharedPreferences`, `CookieManager` — cover ~93%. The `:app`-side surface is **22 named types**.
+
+The desktop app therefore bundles a sandboxed JVM sidecar, and existing `.cs3` plugins run **with no rebuild, no source change, and no maintainer action**. The ecosystem is available on day one. See [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md) and [27-plugin-and-extension-architecture.md](27-plugin-and-extension-architecture.md) §2.
+
+**Two caveats that are not negotiable.** Drop-in applies to plugin *code*, not plugin *privileges* — Android grants plugins `MANAGE_EXTERNAL_STORAGE`; desktop grants nothing. And the whole approach rests on DEX→JVM translation surviving Kotlin coroutine state machines, which is untested and which every provider depends on (RISK-D1). **Fund that spike before anything else.**
 
 ### F-2 — Upstream is already building its own cross-platform successor
 `COMPOSE.md` states outright that the project is migrating to MVI + Compose Multiplatform, that "this is part of the effort to make CloudStream cross platform," and that new code must use KMP-compatible libraries only. The `:library` module is already a Kotlin Multiplatform module with a populated `webMain` source set (`library/src/webMain/`, 6 files), and the project has replaced QuickJS with **Zipline** (commit `#2256`, 2025-12-24). An independent Electron rewrite therefore competes with, rather than complements, upstream's own roadmap. This is a strategic decision the sponsor must make consciously. See [15-upgrade-and-modernization.md](15-upgrade-and-modernization.md) and [21-open-issues-and-assumptions.md](21-open-issues-and-assumptions.md).
+
+**Revised 2026-08-12.** ADR-10 materially reduces this tension without eliminating it. Runtime 3 **consumes upstream's `library-jvm.jar` as a dependency** rather than reimplementing the provider API, so upstream's KMP investment flows directly into the desktop app; Runtime 2 (KMP/JS) is explicitly positioned to track upstream's direction as it lands. What remains genuinely divergent is the **UI and application layer**, which is a rewrite either way. The residual strategic question — whether to contribute that layer upstream instead — is retained as OQ-1.
 
 ### F-3 — The backup format is a versionless flat key/value dump
 A backup is a JSON file (`CS3_Backup_<timestamp>.txt`) with exactly two top-level objects, `datastore` and `settings`, each split into six type buckets (`_Bool`, `_Int`, `_String`, `_Float`, `_Long`, `_StringSet`) — `app/.../utils/BackupUtils.kt:123-137`. It carries **no schema version, no app version, and no platform marker**. All structure lives in the shape of the key strings themselves. Importing it safely requires the desktop app to parse a key grammar rather than a declared schema. See [25-data-portability-and-migration.md](25-data-portability-and-migration.md).
@@ -106,6 +124,7 @@ Content identity is `url.replace(mainUrl,"").replace("/","").hashCode()` (`app/.
 | 28 | [28-media-playback-requirements.md](28-media-playback-requirements.md) | Playback subsystem in depth |
 | 29 | [29-platform-compatibility.md](29-platform-compatibility.md) | Windows vs macOS vs Linux differences |
 | 30 | [30-migration-test-cases.md](30-migration-test-cases.md) | Concrete migration test corpus |
+| 31 | [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md) | **The drop-in contract** — how unmodified `.cs3` plugins run on Windows, and what that does not cover |
 
 ---
 
@@ -115,7 +134,9 @@ Content identity is `url.replace(mainUrl,"").replace("/","").hashCode()` (`app/.
 
 **Implementing the migration subsystem** → 25 → 06 → 18 → 30.
 
-**Implementing the plugin runtime** → 27 → 07 → 11 → 05.
+**Implementing the plugin runtime** → 27 → **31** → 07 → 11 → 05.
+
+**Implementing `.cs3` drop-in specifically** → 31 → 27 §2 → 02 B2.4b → 30 (TC-D*).
 
 **Implementing playback** → 28 → 03 (FEAT-PLAY-*) → 12.
 
@@ -164,8 +185,9 @@ This PRD does **not** authorize, specify, or endorse the redistribution of third
 
 ## 8. Next steps
 
-1. Sponsor decision on **F-2** — Electron rewrite vs. contributing to upstream's KMP/Compose desktop target. Everything downstream depends on this. See [21-open-issues-and-assumptions.md](21-open-issues-and-assumptions.md) OQ-1.
-2. Sponsor decision on **F-1** — which plugin-runtime strategy from [27-plugin-and-extension-architecture.md](27-plugin-and-extension-architecture.md) §6 is funded.
+0. **Run the DEX→JVM translation spike (OQ-27) against the full vendored corpus.** It is cheap, it gates the drop-in commitment that now shapes the whole document set, and RISK-D1 would be systemic rather than long-tail. Nothing else in this list is worth starting until it passes.
+1. ~~Sponsor decision on **F-2**~~ — **Resolved 2026-08-12 (ADR-10): Electron host + bundled JVM sidecar, Windows-first.** Retained in [21](21-open-issues-and-assumptions.md) OQ-1 as a decision record. Note that ADR-10 does not *compete* with upstream's KMP direction — Runtime 2 tracks it, and Runtime 3 links upstream's own `library-jvm.jar` rather than forking it.
+2. ~~Sponsor decision on **F-1**~~ — **Resolved 2026-08-12: all three runtimes in [27](27-plugin-and-extension-architecture.md) §6.2 are funded, with Runtime 3 (drop-in) as the P0 day-one path.** See [31](31-cs3-dropin-compatibility.md).
 3. Collect a **real backup corpus** (see [30-migration-test-cases.md](30-migration-test-cases.md) §2) from live Android installs; several Medium/Low-confidence claims in [25-data-portability-and-migration.md](25-data-portability-and-migration.md) resolve immediately once real files exist.
 4. Ratify [17-acceptance-criteria.md](17-acceptance-criteria.md) as the contractual definition of done.
 5. Begin Phase 1 of [16-implementation-plan.md](16-implementation-plan.md).

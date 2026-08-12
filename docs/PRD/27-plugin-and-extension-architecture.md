@@ -64,7 +64,7 @@ Everything the app can. They run in the app process with app privileges, includi
 
 ## 2. Why this cannot run in Node or V8 — and what that does and does not imply
 
-**Revised 2026-08-12 (ADR-12).** An earlier revision of this section concluded that `.cs3` files could never run on desktop. That conclusion was correct about **Node.js and V8** and wrong as a statement about **desktop**. The corrected reading is below; the full analysis is in [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
+**Revised 2026-08-12 (ADR-10).** An earlier revision of this section concluded that `.cs3` files could never run on desktop. That conclusion was correct about **Node.js and V8** and wrong as a statement about **desktop**. The corrected reading is below; the full analysis is in [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
 
 ### 2.1 The barriers to running `.cs3` in a JavaScript runtime — all real
 
@@ -229,7 +229,7 @@ Rather than assuming 100% compatibility for arbitrary `.cs3` binaries, CloudStre
 * **Positioning**: **The day-one path to a populated app, not a fallback.** Runtimes 1 and 2 are where the ecosystem is going; Runtime 3 is how it gets there without a flag day. Supported indefinitely, expected to shrink as providers migrate.
 * **Full specification**: [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
 
-**Revised 2026-08-12 (ADR-12).** This runtime was previously described as a "compatibility-only fallback layer". That framing understated it: without Runtime 3 the app ships with no content, because Runtimes 1 and 2 have zero providers on day one. Runtime 3 is P0.
+**Revised 2026-08-12 (ADR-10).** This runtime was previously described as a "compatibility-only fallback layer". That framing understated it: without Runtime 3 the app ships with no content, because Runtimes 1 and 2 have zero providers on day one. Runtime 3 is P0.
 
 ---
 

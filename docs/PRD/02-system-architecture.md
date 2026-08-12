@@ -35,7 +35,7 @@ CloudStream (Gradle root)
 
 Declared targets are `android { }` and `jvm()` only (`library/build.gradle.kts:23-42`). `webMain` is therefore staged-but-dormant: upstream has written the actuals ahead of enabling the target (commit `#3072`, 2026-07-15).
 
-**Why this matters for the migration:** a JVM artifact of the provider API already builds today (`library-jvm.jar`, produced by `:app:copyJar`, `app/build.gradle.kts:305-317`). That is the technical basis for plugin strategy A in [27](27-plugin-and-extension-architecture.md).
+**Why this matters for the migration — this is the single most consequential fact in the document.** A JVM artifact of the provider API already builds today (`library-jvm.jar`, produced by `:app:copyJar`, `app/build.gradle.kts:305-317`), and upstream's `makeJar` already merges it into the very classpath every community provider compiles against (`app/build.gradle.kts:319-325`). The desktop app therefore **links upstream's real provider API rather than reimplementing it**, and existing `.cs3` plugins run drop-in on a bundled JVM. That is the technical basis for Runtime 3 in [27](27-plugin-and-extension-architecture.md) §6.2 and [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
 
 **Confidence: High** for the source-set facts; **Medium** for the inference that a JS target is imminent.
 
@@ -145,6 +145,8 @@ Most user data keys are prefixed with the current profile index: `"$currentAccou
 
 ## B1. Process topology
 
+**Revised 2026-08-12 (ADR-10).** The topology gained a third child-process class — a bundled JVM sidecar — when drop-in `.cs3` compatibility became a P0 product commitment. See [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
+
 ```
 ┌──── MAIN PROCESS (Node.js, full privilege) ────────────────────┐
 │  App lifecycle · windows · menus · tray · protocol handlers    │
@@ -156,21 +158,31 @@ Most user data keys are prefixed with the current profile index: `"$currentAccou
 │  │ UpdateService      auto-update, channels                 │  │
 │  │ MediaService       external player control, thumbnails   │  │
 │  │ LogService         rotating logs, crash capture          │  │
+│  │ ExtensionManager   install · verify · analyze · tier     │  │
+│  │ Supervisor         spawn · timeout · kill · quarantine   │  │
 │  └──────────────────────────────────────────────────────────┘  │
-└───────────────┬──────────────────────────┬─────────────────────┘
-                │ contextBridge IPC        │ child process / IPC
-                │ (typed, allow-listed)    │
-┌───────────────▼──────────────┐  ┌────────▼──────────────────────┐
-│ RENDERER (UI)                │  │ PLUGIN HOST (isolated)        │
-│ contextIsolation: true       │  │ No Electron APIs.             │
-│ nodeIntegration: false       │  │ No direct filesystem.         │
-│ sandbox: true                │  │ Network only via broker.      │
-│ CSP enforced                 │  │ Per-call timeouts + kill.     │
-│ No provider code runs here.  │  │ Crash ≠ app crash.            │
-└──────────────────────────────┘  └───────────────────────────────┘
+└──────┬────────────────────┬─────────────────────┬──────────────┘
+       │ contextBridge IPC  │ child process       │ child process
+       │ (typed, allowlist) │ + typed JSON-RPC    │ + typed JSON-RPC
+┌──────▼─────────────┐ ┌────▼───────────────┐ ┌───▼────────────────┐
+│ RENDERER (UI)      │ │ V8 PLUGIN HOST     │ │ JVM SIDECAR        │
+│ contextIsolation   │ │ Runtimes 1 & 2     │ │ Runtime 3          │
+│ nodeIntegration:no │ │ TS SDK · KMP/JS    │ │ .cs3 drop-in       │
+│ sandbox: true      │ │ No Electron APIs.  │ │ jlink'd JRE 17     │
+│ CSP enforced       │ │ No filesystem.     │ │ OS-level sandbox   │
+│ No provider code.  │ │ Broker-only net.   │ │ Broker-only net.   │
+└────────────────────┘ └────────────────────┘ └────────────────────┘
+                                                        │ IPC
+                                              ┌─────────▼──────────┐
+                                              │ OFFSCREEN WINDOW   │
+                                              │ WebViewResolver    │
+                                              │ per-plugin session │
+                                              └────────────────────┘
 ```
 
 **Requirement ARCH-1 (P0).** Provider code never executes in the UI renderer and never receives Node.js capabilities. Rationale in [11-security-and-compliance.md](11-security-and-compliance.md) §3.
+
+**Requirement ARCH-1b (P0).** The JVM sidecar is subject to every constraint the V8 plugin host is, enforced by OS-level sandboxing and class-loader denial rather than by V8 isolate limits — Java's `SecurityManager` is deprecated and disabled (JEP 411/486), so no design may assume it. Mechanism mapping in [31](31-cs3-dropin-compatibility.md) §6.
 
 **Requirement ARCH-2 (P0).** All IPC crosses a typed, allow-listed `contextBridge` surface. No `remote`, no `nodeIntegration`, no wildcard channel names.
 
@@ -227,6 +239,18 @@ Each subsystem below is specified as: responsibility · inputs · outputs · dep
 - **Errors.** Timeout, crash, and malformed response are all recoverable and attributed to the specific provider.
 - **Security.** The critical boundary. Full model in [27](27-plugin-and-extension-architecture.md) §7.
 
+### B2.4b JvmSidecar (Runtime 3 — `.cs3` drop-in)
+
+- **Responsibility.** Execute unmodified `.cs3` plugins from the existing Android ecosystem. Full specification in [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
+- **Inputs.** The same provider operation calls as B2.4, over typed JSON-RPC.
+- **Outputs.** The same typed responses as B2.4. **Callers cannot tell which runtime served a request** — that is the point of the adapter boundary.
+- **Dependencies.** A bundled `jlink`-minimized JRE 17; upstream's `library-jvm.jar`; `cs3-app-shim.jar` (22 `:app` types); `cs3-android-shim.jar` (5 core `android.*` stubs); a DEX→`.class` translator; the offscreen `BrowserWindow` bridge for `WebViewResolver`.
+- **Lifecycle.** Spawned lazily on first `.cs3` provider use, so it stays out of the PERF-1 cold-start budget (DSK-57). Idle-evicted. Force-killed on timeout. A quarantined plugin may be given its own sidecar process.
+- **Errors.** Translation failure, unimplemented `android.*` API, timeout, OOM, and crash are each distinct, attributable, reportable outcomes — never a bare stack trace and never a silent empty result (AC-D5).
+- **Security.** The critical boundary, and the one most likely to be got wrong: it hosts translated third-party Android bytecode. ARCH-1b; [31](31-cs3-dropin-compatibility.md) §6.
+- **Platform.** Windows is the P0 target; the sandbox uses an AppContainer/job-object restricted token. macOS and Linux need equivalent mechanisms (sandbox-exec, seccomp/namespaces) before those platforms ship — see [29](29-platform-compatibility.md) §1.
+- **Testing.** TC-D1..TC-D12 in [30](30-migration-test-cases.md); differential testing against Android output (AC-D7).
+
 ### B2.5 MediaService and playback
 
 Specified in full in [28-media-playback-requirements.md](28-media-playback-requirements.md). Architectural requirement here: playback is behind an `IPlayer`-equivalent interface with at least two backends — Chromium `<video>`/MSE, and an embedded native player (mpv or libVLC) — selectable per-source and per-user-preference.
@@ -253,7 +277,12 @@ Rotating file logs in the platform log directory, in-app log viewer (parity with
 | Jetpack Navigation | Renderer-side router | Replace |
 | Fragments + ViewBinding | Component tree | Replace |
 | ViewModel + LiveData | Renderer state store | Replace |
-| `PathClassLoader` / DEX | PluginHost ([27](27-plugin-and-extension-architecture.md)) | Reimplement natively |
+| `PathClassLoader` / DEX | JVM sidecar: install-time DEX→`.class` + `URLClassLoader` ([31](31-cs3-dropin-compatibility.md)) | **Drop-in — plugins run unmodified** |
+| `MainAPI` / `ExtractorApi` / `M3u8Helper` | Upstream `library-jvm.jar`, linked as-is | **Reused, not reimplemented** |
+| `:app` provider-facing types (22) | `cs3-app-shim.jar`, ABI-diffed against upstream in CI | Shim |
+| `android.util.Log`, `Base64`, `Context`, `SharedPreferences`, `CookieManager` | `cs3-android-shim.jar` | Shim |
+| `WebViewResolver` / `CloudflareKiller` | Offscreen `BrowserWindow` over IPC — upstream's JVM actual is a `TODO` stub | Reimplement natively |
+| Plugin app-level privilege (`MANAGE_EXTERNAL_STORAGE`) | **Not granted at any runtime** | Deliberate security divergence |
 | ExoPlayer/Media3 | `<video>`/MSE + embedded native player | Reimplement natively |
 | `nextlib` FFmpeg decoders | Native player's decoders | Replace |
 | `torrServer` (Go, in-process) | Bundled torrent engine as a child process | Replace |
@@ -289,6 +318,6 @@ Rotating file logs in the platform log directory, in-app log viewer (parity with
 ## Next steps
 
 1. Ratify the process topology in B1 — it is the security foundation and is expensive to retrofit.
-2. Prototype the PluginHost boundary in Phase 1 to de-risk RISK-1.
+2. Prototype the PluginHost boundary in Phase 1 to de-risk RISK-1, and run the DEX→JVM translation spike (OQ-27) to de-risk RISK-D1. The second gates whether B2.4b exists at all.
 3. Confirm ADR-1 (SQLite + JSON) against the dataset sizes in [12-performance-and-limits.md](12-performance-and-limits.md).
 4. Produce interface definitions for B2.1–B2.8 as the Phase 2/3 deliverable.

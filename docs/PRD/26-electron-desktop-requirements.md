@@ -1,8 +1,10 @@
 # 26 — Electron Desktop Requirements
 
-**Generated:** 2026-08-10
+**Generated:** 2026-08-10 · **Revised:** 2026-08-12 (Windows-first scope; JVM sidecar)
 
 Desktop capabilities that either replace an Android mechanism or exist only on desktop. Documented separately from parity features so the desktop surface is auditable on its own.
+
+**Scope note.** Windows 10/11 x64 is the P0 shipping target ([29](29-platform-compatibility.md) §1). Requirements below that name macOS or Linux behavior remain binding **for those platforms' phases**; they do not gate the Windows release. Requirements written behind a platform abstraction (XP-0a) are P0 regardless of which implementations are filled in.
 
 ---
 
@@ -55,7 +57,9 @@ Desktop capabilities that either replace an Android mechanism or exist only on d
 
 | ID | Requirement | Priority |
 |---|---|---|
-| DSK-25 | Register all six protocol handlers plus `https://cs.repo`. | P1 |
+| DSK-25 | Register all six protocol handlers plus `https://cs.repo`. On Windows this is registry-based and must survive both per-user and per-machine installs. | P1 |
+| DSK-25a | `cloudstreamrepo://` and `csshare://` links opened from a browser install a repository or open shared content in a **running** instance, forwarding through the single-instance guard (DSK-58). This is how Android users actually add repositories, and it is the primary drop-in onboarding path. | P1 |
+| DSK-26a | `.cs3` files are associated with the app on Windows, so a downloaded extension installs by double-click, and dragging one onto the window installs it (DX-10). | P2 |
 | DSK-26 | File associations for common video extensions, `magnet:`, and `.torrent`. | P2 |
 | DSK-27 | Native notifications for download completion, subscription updates, and background backup results — click-to-focus. | P1 |
 | DSK-28 | Optional tray icon with show/hide and playback controls. | P3 |
@@ -109,7 +113,9 @@ Detailed in [14](14-deployment-and-ci.md) §4.
 | DSK-53 | An interrupted import is detected on next launch and offers rollback or resume. | P0 |
 | DSK-54 | An interrupted download resumes on next launch. | P1 |
 | DSK-55 | A corrupt data store loads the most recent good snapshot with an explicit recovery dialog — **never a silent reset**. | P0 |
-| DSK-56 | A safe-mode launch (modifier key held, or after repeated crashes) starts with plugins disabled. | P1 |
+| DSK-56 | A safe-mode launch (modifier key held, or after repeated crashes) starts with plugins disabled — both runtimes, including the JVM sidecar (DROP-27). | P1 |
+| DSK-56a | A JVM sidecar that fails to start — blocked by endpoint protection, AppLocker, or a corrupt bundle — degrades the app to "extensions unavailable" with an actionable message. **It never prevents launch** (DROP-34). | P0 |
+| DSK-56b | A sidecar crash, hang, or OOM leaves the app running and the other providers usable, and attributes the failure to the specific plugin (AC-D4). | P0 |
 
 ---
 
@@ -117,7 +123,8 @@ Detailed in [14](14-deployment-and-ci.md) §4.
 
 | ID | Requirement | Priority |
 |---|---|---|
-| DSK-57 | Cold start to interactive under 2 s (PERF-1). | P0 |
+| DSK-57 | Cold start to interactive under 2 s (PERF-1). The JVM sidecar is spawned **lazily on first provider use** and is explicitly outside this budget. | P0 |
+| DSK-57a | Sidecar spawn to first provider response under 3 s (AC-D9). A warm sidecar is kept alive while any `.cs3` provider is enabled and idle-evicted after a configurable interval. | P1 |
 | DSK-58 | Single-instance enforcement; a second launch focuses the existing window and forwards deep links. | P1 |
 | DSK-59 | Graceful shutdown: flush state, pause downloads resumably, release wake locks. | P0 |
 | DSK-60 | Confirm-on-exit honoring `confirm_exit_key`, particularly during active downloads or playback. | P1 |
@@ -172,4 +179,5 @@ Features Android does not have, justified by desktop context.
 
 1. Implement DSK-1..6, 37..44, 50..62 in Phase 2 — they are foundational.
 2. Defer DSK-68..75 until parity is demonstrated; enhancements before parity is a common failure mode.
-3. Validate DSK-25..36 per platform in Phase 11; OS integration is where cross-platform assumptions break.
+3. Validate DSK-25..36 on Windows in Phase 11, and again per platform as macOS and Linux phases open; OS integration is where cross-platform assumptions break.
+4. Treat DSK-56a as a Phase 2 deliverable, not a polish item. A bundled JVM is exactly the kind of component corporate endpoint protection blocks, and "the app won't start" is a far worse failure than "extensions are unavailable".

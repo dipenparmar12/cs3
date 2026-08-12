@@ -78,16 +78,25 @@ Improvements the desktop version should make, each with a compatibility note.
 **Testing.** Crash-during-write; 500k-row load; concurrent access; corruption recovery.
 
 ### ADR-2 — Plugin runtime
-Full analysis in [27](27-plugin-and-extension-architecture.md) §6.
+**Superseded 2026-08-12 by [ADR-10](#adr-10--host-architecture-and-cs3-drop-in).** Retained for the reasoning trail.
+Full analysis in [27](27-plugin-and-extension-architecture.md) §6 and [31](31-cs3-dropin-compatibility.md).
 **Android.** DEX bytecode via `PathClassLoader`.
-**Problem on desktop.** Cannot execute. **No workaround exists.**
+**Problem on desktop.** Cannot execute *in Node or V8*. The original wording — "Cannot execute. **No workaround exists.**" — overgeneralized from JavaScript runtimes to desktop, and that error drove the decision below.
 **Options.** (a) JVM sidecar running converted `.cs3`. (b) Zipline/QuickJS aligned with upstream. (c) A native JS/TS plugin API. (d) A headless-browser provider host.
-**Decision.** **(c) first, behind an adapter boundary permitting (a) or (b) later.**
-**Reason.** (c) is the only option that reliably produces a working product on a predictable schedule. The adapter boundary preserves the option value of (a)/(b) without paying for them now.
-**Tradeoffs.** Forks the ecosystem — the single largest strategic cost of this project.
-**Compatibility impact.** Severe. Every provider needs a port.
-**Migration impact.** Repository URLs migrate; plugin binaries do not.
-**Testing.** TEST-PLG-1..12.
+**Original decision.** (c) first, behind an adapter boundary permitting (a) or (b) later.
+**Revised decision (ADR-10).** **(a), (b) and (c) together, behind that same adapter boundary, with (a) as P0** — it is what gives the app content on day one. (d) is retained as a component: the offscreen `WebViewResolver` bridge.
+**What held up.** The adapter boundary. It is the reason serving three runtimes is tractable rather than a rewrite.
+**Compatibility impact.** Reversed: existing providers run unmodified; porting becomes optional and incremental.
+**Migration impact.** Repository URLs migrate; plugin binaries are re-downloaded from those repositories and run as-is.
+**Testing.** TEST-PLG-1..20.
+
+### ADR-10 — Host architecture and `.cs3` drop-in
+**Decided 2026-08-12.** Supersedes ADR-2 and resolves OQ-1/OQ-2.
+**Decision.** Electron host + a bundled, sandboxed JVM sidecar executing translated `.cs3` plugins; Windows-first platform scope.
+**Reason.** Three verified facts: `:library` already declares a `jvm()` target with JVM actuals; upstream's `makeJar` already merges `library-jvm.jar` into the provider classpath; and 67.6% of surveyed providers import no `android.*` at all, with a 22-type `:app` surface. The desktop app links upstream's provider API rather than reimplementing it.
+**Tradeoffs.** A bundled JRE (installer size, endpoint-protection friction, an extra licensing obligation), a second sandbox to design and defend, and a long-term dependency on translated Android bytecode (RISK-D5, accepted).
+**Risk.** RISK-D1 — DEX→JVM translation is unproven against Kotlin coroutine state machines and is the gate on the whole decision.
+**Full record.** [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
 
 ### ADR-3 — Media playback
 **Android.** ExoPlayer/Media3 + nextlib FFmpeg + a custom Matroska extractor + a custom subtitle decoder factory.

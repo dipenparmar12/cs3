@@ -2,7 +2,7 @@
 
 **Generated:** 2026-08-10
 
-The concrete corpus that validates [25](25-data-portability-and-migration.md). Every case has a fixture, steps, and a pass condition. **The entire corpus runs on every commit and on all three platforms for release candidates.**
+The concrete corpus that validates [25](25-data-portability-and-migration.md). Every case has a fixture, steps, and a pass condition. **The entire corpus runs on every commit, and on every release-gating configuration ([29](29-platform-compatibility.md) §10) for release candidates.**
 
 ---
 
@@ -285,14 +285,54 @@ Every migration bug ever fixed becomes a permanent case here.
 
 ---
 
+## 10b. `.cs3` drop-in corpus (TC-D1..TC-D12)
+
+**Added 2026-08-12 (ADR-10).** These are not migration cases in the backup sense, but they belong in the same corpus discipline: a fixed, version-controlled body of real inputs, run in CI, whose failures block the merge. The inputs are real community `.cs3` artifacts, built from the 26 repositories vendored at `repositories/`.
+
+### Corpus construction
+
+| ID | Requirement |
+|---|---|
+| MTC-5 | The drop-in corpus is built by resolving each vendored repository's published repository JSON and downloading its actual `.cs3` artifacts — **the same bytes a user would install**. Locally rebuilding from source would test a different artifact than the one that ships. |
+| MTC-6 | Artifact hashes are pinned. A silently updated upstream plugin must show up as a corpus change, not as a mysterious CI failure. |
+| MTC-7 | Providers that require live third-party sites use recorded HTTP fixtures for CI, with a separate nightly live run whose failures warn rather than block. |
+
+### Cases
+
+| ID | Case | Validates | Expected |
+|---|---|---|---|
+| **TC-D1 ★** | Install one unmodified community `.cs3` from a real repository URL; search; open a title | AC-D1 | Works end to end, no rebuild, no source change |
+| **TC-D2 ★** | Run the full corpus through install → tier → search | AC-D2 | ≥60% of 299 providers at T1/T2 return correct results |
+| **TC-D3** | Differential: fixed provider+query pairs, Android output vs sidecar output | AC-D7 | Structurally equal — same result count, URLs, quality labels |
+| **TC-D4 ★** | Plugin attempts to read a file outside its scoped directory | AC-D3 | Denied by the OS sandbox |
+| **TC-D5 ★** | Plugin attempts a raw socket connection | AC-D3 | Denied; only brokered HTTP succeeds |
+| **TC-D6 ★** | Plugin attempts `Runtime.exec` / `ProcessBuilder` / `System.exit` | AC-D3 | Denied by the class loader and the job object |
+| **TC-D7 ★** | Plugin attempts `System.loadLibrary` | AC-D3 | Denied |
+| **TC-D8 ★** | Plugin hangs, then a second plugin OOMs, then a third throws | AC-D4 | App survives; each failure attributed to its plugin; other providers usable |
+| **TC-D9 ★** | Plugin calls an `android.*` API the shim does not implement | AC-D5 | Typed `UnsupportedAndroidApiException`, class and method named to the user, recorded for DROP-8 aggregation |
+| **TC-D10 ★** | A T4 plugin is installed | AC-D6 | Never silently enabled; blocking reason shown |
+| **TC-D11** | Measure the signed Windows installer with the bundled JRE | AC-D8 | ≤250 MB |
+| **TC-D12** | Measure app cold start and sidecar cold start separately | AC-D9 | App <2 s (PERF-1); sidecar→first response <3 s; sidecar outside the app budget |
+| **TC-D13** | Translation of a deliberately malformed / bomb `.cs3` | DROP-4/DROP-5 | Reported as `TRANSLATION_FAILED` with the offending class named; no host memory exhaustion |
+| **TC-D14** | Upstream `:app` signature drift simulated in the shim | DROP-10/RISK-D3 | ABI diff fails CI before any plugin breaks at runtime |
+| **TC-D15** | Sidecar blocked from starting (simulating endpoint protection) | DSK-56a/DROP-34 | App launches, reports "extensions unavailable" actionably; does **not** fail to launch |
+
+★ = release-blocking.
+
+---
+
 ## 11. Execution
+
+Revised 2026-08-12 for Windows-first scope and the drop-in corpus.
 
 | When | Scope |
 |---|---|
-| Every commit | Full corpus on the CI platform |
-| Every merge to main | Full corpus on all three platforms |
-| Every release candidate | Full corpus on all three platforms **plus TC-32 on real Android hardware** |
-| Nightly | TC-8 (large-dataset performance) |
+| Every commit | Full migration corpus + TC-D1, TC-D4..D10, TC-D13..D15 on Windows |
+| Every merge to main | Full migration corpus on Windows, plus the Linux unit/integration canary (XP-0c) |
+| Every release candidate | Full migration corpus + **full drop-in corpus (TC-D2, TC-D3)** on every release-gating configuration, **plus TC-32 on real Android hardware** |
+| Nightly | TC-8 (large-dataset performance); TC-D2/TC-D3 against **live** provider sites, warning rather than blocking (MTC-7) |
+
+macOS and Linux acquire their own gating runs when their phases open ([29](29-platform-compatibility.md) §10).
 
 | ID | Requirement |
 |---|---|
@@ -305,7 +345,8 @@ Every migration bug ever fixed becomes a permanent case here.
 
 ## Next steps
 
-1. **Begin corpus collection immediately** — it is on the critical path and depends on volunteers.
-2. Build the synthetic generator (TC-8, TC-18..20) in Phase 1.
-3. Secure a physical Android device for TC-32.
-4. Wire the corpus into CI during Phase 4, not later.
+1. **Begin backup corpus collection immediately** — it is on the critical path and depends on volunteers.
+2. **Build the drop-in corpus in Phase 1**, before the translation spike, so the spike runs against real artifacts rather than a hand-picked sample. It needs no volunteers — the repositories are already vendored.
+3. Build the synthetic generator (TC-8, TC-18..20) in Phase 1.
+4. Secure a physical Android device for TC-32 and for the TC-D3 differential baseline.
+5. Wire the migration corpus into CI during Phase 4, and the drop-in corpus during Phase 1.

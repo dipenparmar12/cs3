@@ -20,34 +20,37 @@ Ordered by **dependency and risk**, not by user-visible value. The two highest-r
 
 **Not an engineering phase.** Nothing downstream is safe until these are settled.
 
-| Deliverable |
-|---|
-| OQ-1 resolved: Electron vs. contributing to upstream's KMP desktop target |
-| ADR-2 resolved: which plugin-runtime strategy is funded |
-| Legal engagement started: GPL-3.0 derivative status, FFmpeg/mpv licensing, distribution posture |
-| Real Android backup corpus collection begun (consent + anonymization) |
-| macOS Developer ID enrolment started (long lead time) |
+| Deliverable | Status |
+|---|---|
+| OQ-1: host architecture | ✅ **Resolved 2026-08-12 (ADR-10)** — Electron host + bundled JVM sidecar, Windows-first |
+| ADR-2 / OQ-2: which plugin-runtime strategy is funded | ✅ **Resolved 2026-08-12** — all three runtimes; Runtime 3 (`.cs3` drop-in) is P0 |
+| Legal engagement started: GPL-3.0 derivative status, FFmpeg/mpv licensing, **bundled JRE licensing (DROP-32)**, distribution posture | Open |
+| Real Android backup corpus collection begun (consent + anonymization) | Open |
+| ~~macOS Developer ID enrolment~~ | Deferred to the macOS phase (Windows-first). **Windows EV code-signing certificate procurement started instead — it has the long lead time now** (XP-29) |
 
-**Exit.** Written decisions on OQ-1 and ADR-2; legal engaged; corpus collection underway.
+**Exit.** ADR-10 recorded; legal engaged; corpus collection underway; EV certificate ordered.
 
 ---
 
 ## Phase 1 — Reverse-engineering baseline and risk spikes
 
-**Goal.** Prove the two things that could kill the project.
+**Goal.** Prove the three things that could kill the project. **The drop-in spike runs first and gates the rest.**
 
-| Deliverable | Notes |
-|---|---|
-| **UTIL-1 hash implementation + JVM oracle** | `hash-vectors.json` generated from a real JVM; property test over 100k random strings |
-| **Plugin runtime spike** | A trivial provider running under the chosen strategy, returning real search results from a real site |
-| **Streaming JSON import parser spike** | Proves PERF-19 against a synthetic 400 MB backup |
-| Android backup corpus, anonymized and catalogued | Resolves several Medium/Low confidence items in [21](21-open-issues-and-assumptions.md) |
-| Key-grammar parser | Reads any backup into the canonical model, in memory, read-only |
-| This PRD updated with corpus findings | |
+| # | Deliverable | Notes |
+|---|---|---|
+| 1 | **★ DEX→JVM translation spike (OQ-27 / RISK-D1)** | Run the candidate translators against **every** `.cs3` producible from the 26 vendored repositories — not a sample. Assert specifically on Kotlin `suspend` call paths, default arguments, and inline classes. **This is the highest-severity unknown in the project** ([31](31-cs3-dropin-compatibility.md) §8) |
+| 2 | **Drop-in end-to-end spike** | One real, unmodified community `.cs3` installs and returns real search results from a real site through the JVM sidecar — the minimum proof that AC-D1 is achievable |
+| 3 | **Compatibility Analyzer corpus run (DROP-30)** | Produces the measured tier distribution across all 299 providers, replacing the static-analysis projections in [27](27-plugin-and-extension-architecture.md) §6.1 and [31](31-cs3-dropin-compatibility.md) §7 |
+| 4 | **UTIL-1 hash implementation + JVM oracle** | `hash-vectors.json` generated from a real JVM; property test over 100k random strings |
+| 5 | **Streaming JSON import parser spike** | Proves PERF-19 against a synthetic 400 MB backup |
+| 6 | Sandbox spike (DROP-23/24) | Prove a Windows job-object + AppContainer restricted token actually denies sockets, process spawn, and `System.loadLibrary` from inside a plugin |
+| 7 | Android backup corpus, anonymized and catalogued | Resolves several Medium/Low confidence items in [21](21-open-issues-and-assumptions.md) |
+| 8 | Key-grammar parser | Reads any backup into the canonical model, in memory, read-only |
+| 9 | This PRD updated with corpus and tier findings | Replaces every estimated share in [31](31-cs3-dropin-compatibility.md) with a measured one |
 
-**Exit.** Hash tests pass 100%. A provider returns real results. A 400 MB backup parses within the PERF-15 memory bound.
+**Exit.** Translation succeeds on a large majority of the corpus. One unmodified community plugin returns real results. The sandbox denies all four escape attempts. Hash tests pass 100%. A 400 MB backup parses within the PERF-15 memory bound.
 
-**If the plugin spike fails**, stop and revisit ADR-2 before Phase 2.
+**If deliverable 1 fails**, stop. Do not proceed to Phase 2 on the assumption it can be fixed later — the entire drop-in commitment, and with it the day-one content story, depends on it. The fallback is the pre-ADR-10 position: TypeScript/KMP runtimes only, an empty catalogue at launch, and a provider-porting campaign. That is a different project with a different budget, and the sponsor must be told immediately.
 
 ---
 
@@ -56,16 +59,19 @@ Ordered by **dependency and risk**, not by user-visible value. The two highest-r
 | Deliverable |
 |---|
 | Main/renderer/preload skeleton with SEC-1..14 enforced and audited in CI |
-| Three-OS CI matrix (build, test, lint, security audit) |
+| **JVM sidecar process skeleton**: lazy spawn, typed JSON-RPC, Supervisor kill/timeout, OS sandbox from the Phase 1 spike (DROP-23..27) |
+| **`cs3-android-shim` and `cs3-app-shim`** built from the [31](31-cs3-dropin-compatibility.md) §2.3/§2.4 inventories, with the ABI diff against upstream running in CI (DROP-10/11) |
+| **`jlink` JRE bundling** proven inside a signed installer (DROP-31..33), including the DSK-56a degradation path when the sidecar is blocked |
+| Windows CI matrix (build, test, lint, security audit) + Linux unit/integration canary (XP-0c) |
 | Window management: sizing, state persistence, multi-monitor (UI-5/6) |
 | Application data directory resolution per [29](29-platform-compatibility.md) §2 |
 | Logging with rotation and redaction (SEC-33) |
 | Crash capture |
 | Native dialog wrappers (UI-8) |
 | Typed IPC scaffold with schema validation (IPC-1..7) |
-| macOS signing and notarization pipeline proven end-to-end on a hello-world build |
+| Windows Authenticode signing pipeline proven end-to-end on a hello-world build (macOS notarization deferred to the macOS phase) |
 
-**Exit.** A signed, notarized, empty app installs and launches on all three platforms. The security audit is green and blocking.
+**Exit.** A signed, empty app installs and launches on Windows 10 and 11, spawns and kills the sidecar cleanly, and degrades correctly when the sidecar is blocked. The security audit is green and blocking.
 
 ---
 
@@ -129,9 +135,13 @@ Ordered by **dependency and risk**, not by user-visible value. The two highest-r
 
 | Deliverable |
 |---|
-| Plugin host per ADR-2, with the sandbox from [11](11-security-and-compliance.md) §4 |
-| Repository management (FEAT-EXT-1), full URL grammar |
-| Plugin install lifecycle with SHA-256 and atomic move (FEAT-EXT-2) |
+| **JVM sidecar promoted from skeleton to production: Runtime 3 serves real `.cs3` providers (AC-D1, AC-D2)** |
+| **Offscreen `BrowserWindow` WebView bridge (DROP-13..17) + `CloudflareKiller`** — the largest net-new component, with no upstream JVM implementation to copy |
+| **Compatibility Analyzer wired into the install path**, with tier re-verification on first call (DROP-28) and tiers surfaced in the Extension Manager (DX-11, DROP-29) |
+| **Differential test harness (AC-D7)**: fixed provider+query corpus, Android output vs sidecar output, structural comparison in CI |
+| V8 plugin host (Runtimes 1 & 2) per ADR-2, with the sandbox from [11](11-security-and-compliance.md) §4 |
+| Repository management (FEAT-EXT-1), full URL grammar — **unchanged from Android, since drop-in reuses the same repository JSON** |
+| Plugin install lifecycle with SHA-256 and atomic move (FEAT-EXT-2), reproducing Android's install-path grammar exactly (DROP-1) |
 | Provider API surface ([07](07-apis-and-contracts.md) §3) |
 | Network service with brokering (NET-1..10) |
 | Home screen with sequential-loading semantics |
@@ -141,7 +151,7 @@ Ordered by **dependency and risk**, not by user-visible value. The two highest-r
 | Provider testing tool (FEAT-DIAG-3) |
 | Hostile plugin suite in CI (TEST-PLG-8) |
 
-**Exit.** Install a provider, search, open a title, bookmark it. Sandbox escape attempts all fail.
+**Exit.** Install an **unmodified community `.cs3`** from a real repository URL, search, open a title, bookmark it. ≥60% of the 299 surveyed providers reach T1/T2 and return correct results (AC-D2). Sandbox escape attempts all fail, in both the V8 host and the JVM sidecar.
 
 ---
 
@@ -178,7 +188,7 @@ Ordered by **dependency and risk**, not by user-visible value. The two highest-r
 | Downloaded-media browser and offline playback |
 | Sidecar metadata (FEAT-DL-9) |
 
-**Exit.** TEST-DL-1..10 pass on all three platforms.
+**Exit.** TEST-DL-1..10 pass on Windows (and on each further platform as its phase opens).
 
 ---
 
@@ -190,12 +200,15 @@ Ordered by **dependency and risk**, not by user-visible value. The two highest-r
 | Reference provider implementation |
 | API conformance suite (TEST-PLG-11) |
 | Plugin API ABI validation (TEST-PLG-12) |
-| Provider porting guide |
-| At least 5 real providers ported and validated |
-| Hot-reload developer workflow |
-| Auto-update and safe mode |
+| Provider porting guide — framed as **optional migration**, not a prerequisite, since drop-in already works |
+| `cli analyze` and `cli migrate` (DX-4..7), driven off the Phase 1 tier matrix |
+| `cs3-desktop` Gradle bridge (DX-1..3) for Kotlin maintainers' hot-reload workflow |
+| At least 5 real providers ported to Runtime 1 or 2 and validated **against their Runtime 3 behavior** |
+| Hot-reload developer workflow across all three runtimes; Inspector Panel runtime-agnostic (DX-8) |
+| Auto-update and safe mode (safe mode disables the sidecar entirely, DROP-27) |
+| Published measured tier statistics for the release (DROP-30) |
 
-**Exit.** An external developer ports a provider using only the published documentation.
+**Exit.** An external developer ports a provider using only the published documentation — **and a maintainer who does nothing still has a working provider on desktop.**
 
 ---
 
@@ -227,7 +240,7 @@ Ordered by **dependency and risk**, not by user-visible value. The two highest-r
 | Drag-and-drop (UI-9) |
 | Portable mode |
 
-**Exit.** WF-11 passes; deep links work from a browser on all three platforms.
+**Exit.** WF-11 passes; deep links work from a browser on Windows (and on each further platform as its phase opens).
 
 ---
 
@@ -286,7 +299,7 @@ Ordered by **dependency and risk**, not by user-visible value. The two highest-r
 | Performance gates in CI (PERF-46) |
 | Low-end HTPC hardware validation |
 
-**Exit.** Targets met on all three platforms, including low-end hardware.
+**Exit.** Targets met on Windows including low-end HTPC hardware; app cold start under PERF-1 with the sidecar excluded, sidecar cold start under AC-D9.
 
 ---
 
@@ -309,9 +322,11 @@ Ordered by **dependency and risk**, not by user-visible value. The two highest-r
 ## Critical path
 
 ```
+             ★ DEX→JVM translation spike gates everything below
+                │
 Phase 0 ──► Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 ──► Phase 5 ──┐
                 │                                                      │
-                └──► (plugin spike) ──────────────────► Phase 6 ◄──────┘
+                └──► (drop-in spike) ─────────────────► Phase 6 ◄──────┘
                                                           │
                                             Phase 7 ──────┴──► Phase 8
                                                 │                 │

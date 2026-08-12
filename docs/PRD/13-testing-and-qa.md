@@ -115,6 +115,21 @@ Each acceptance criterion in [03](03-feature-specifications.md) becomes at least
 | TEST-PLG-11 | Plugin API conformance suite — a reference provider exercising every operation |
 | TEST-PLG-12 | Plugin API ABI stability across app versions (mirrors upstream's `abiValidation`) |
 
+### 5.1 `.cs3` drop-in (ADR-10)
+
+Runtime 3 hosts translated third-party Android bytecode, so it needs its own suite. Test cases are TC-D1..TC-D15 in [30](30-migration-test-cases.md) §10b; criteria are AC-D1..AC-D9 in [17](17-acceptance-criteria.md) §3.1.
+
+| ID | Test |
+|---|---|
+| TEST-PLG-13 | **DEX→JVM translation corpus** — every `.cs3` producible from the 26 vendored repositories, asserting specifically on Kotlin `suspend` call paths, default arguments, and inline classes (RISK-D1). Permanent CI fixture |
+| TEST-PLG-14 | **Hostile JVM plugin suite** — the sidecar counterpart to TEST-PLG-8: attempts filesystem escape, raw sockets, `Runtime.exec`, `ProcessBuilder`, `System.exit`, `System.loadLibrary`, and reflection into shim internals. All must fail (SEC-28..31) |
+| TEST-PLG-15 | **Differential provider testing** — fixed provider+query corpus run on Android and on the sidecar; outputs compared structurally (AC-D7). Catches the failure mode where a provider "works" but returns different links |
+| TEST-PLG-16 | **`:app` shim ABI diff** against upstream `master`, on a schedule. Drift fails CI before it breaks a user's plugin at link time (DROP-10/11) |
+| TEST-PLG-17 | Unimplemented `android.*` API produces a typed, named, aggregated report — never a stack trace, never a silent empty result (DROP-7/8) |
+| TEST-PLG-18 | Tier re-verification: a plugin that statically analyzes as T1 but throws at runtime is automatically reclassified T4 (DROP-28) |
+| TEST-PLG-19 | Offscreen `WebViewResolver` bridge — interception, `additionalUrls` matching, script injection, timeout destruction, per-plugin session isolation (DROP-13..17, SEC-32) |
+| TEST-PLG-20 | Sidecar unavailable (blocked by endpoint protection): the app launches and degrades to "extensions unavailable" (DSK-56a/DROP-34) |
+
 ---
 
 ## 6. Category 4 — Playback
@@ -192,7 +207,7 @@ Enumerated in [11](11-security-and-compliance.md) §8. All are CI gates. The Ele
 |---|---|
 | QA-1 | Every fixed bug gets a regression test before the fix merges. |
 | QA-2 | The parity tests in §4 run on every release candidate. |
-| QA-3 | The migration corpus ([30](30-migration-test-cases.md)) runs on every release candidate on all three platforms. |
+| QA-3 | The migration corpus ([30](30-migration-test-cases.md)) runs on every release candidate on every release-gating configuration ([29](29-platform-compatibility.md) §10). Windows-first: macOS and Linux join when their phases open. |
 | QA-4 | Performance gates ([12](12-performance-and-limits.md) PERF-46) run nightly. |
 | QA-5 | Security gates run on every commit. |
 | QA-6 | A real Android device is used to validate WF-10 each release. There is no substitute. |

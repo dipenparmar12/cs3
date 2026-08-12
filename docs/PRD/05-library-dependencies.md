@@ -18,6 +18,28 @@ Complete inventory of the Android dependency set, each mapped to a desktop strat
 | minSdk / targetSdk / compileSdk | 23 / 36 / 37 | minSdk 23 is why Jackson and Rhino are pinned to old versions |
 | versionCode / versionName | 68 / 4.8.0 | The migration baseline |
 
+---
+
+## 1b. Desktop-side additions for the JVM sidecar (ADR-10)
+
+Drop-in `.cs3` support ([31](31-cs3-dropin-compatibility.md)) adds a JVM dependency set that has no Android counterpart. It is listed here because its **licensing and packaging obligations are as binding as the media stack's**.
+
+| Item | Purpose | Strategy | License note |
+|---|---|---|---|
+| **JRE 17, `jlink`-minimized** | Hosts Runtime 3 | Bundled; the user is never asked to install Java (DROP-31) | **Eclipse Temurin (GPLv2+CPE) or equivalent.** The Classpath Exception is what makes bundling compatible with GPL-3.0 distribution — confirm with legal alongside OQ-23 (DROP-32) |
+| **`library-jvm.jar`** (upstream `com.lagradost.api`, v1.0.1) | The real provider API — `MainAPI`, `ExtractorApi`, `M3u8Helper`, extractor catalogue | **Consumed as a dependency, not reimplemented.** Built by `:library:jvmJar` | GPL-3.0, same as upstream — a compatible combination, and the reason the desktop app is a derivative work |
+| **DEX→`.class` translator** (`dex-translator` or `dex2jar`) | Install-time bytecode translation (DROP-2) | Selected by the Phase 1 spike (OQ-27) | **Must be verified GPL-3.0-compatible and free of native dependencies** before selection |
+| `cs3-app-shim.jar` | The 22 `:app` types providers import ([31](31-cs3-dropin-compatibility.md) §2.4) | Written by this project; ABI-diffed against upstream in CI (DROP-10/11) | Ours, GPL-3.0 |
+| `cs3-android-shim.jar` | `android.util.Log`, `Base64`, `Context`, `SharedPreferences`, `CookieManager`, and the smaller tail | Written by this project | Ours, GPL-3.0 |
+| OkHttp / NiceHttp (transitively, via `library-jvm`) | Providers' HTTP surface | Present on the sidecar classpath, but **all egress is marshalled to `NetworkBroker`** — the sidecar has no network permission (DROP-23) | Apache-2.0 |
+| jsoup, Jackson, Rhino (transitively) | HTML parsing, JSON, JS unpacking inside providers | Inherited from `library-jvm`; **not** pinned to Android's minSdk-driven versions | Various permissive |
+
+**Insight — the minSdk pins do not apply, but do not "upgrade" them casually either.** Android pins `jackson-module-kotlin` 2.13.1, `rhino` 1.8.1 and `conscrypt-android` 2.5.2 for minSdk 23 reasons that are irrelevant on desktop. However, the sidecar hosts **provider bytecode compiled against those exact versions**. Bumping a transitive version changes behavior under providers that were tested against the old one, and the failure surfaces as "this provider returns no results", not as a build error. Version drift between the Android and desktop classpaths is a differential-testing concern (AC-D7), not a free win.
+
+**Bundle-size impact.** The JRE is the single largest addition. AC-D8 caps the Windows installer at 250 MB inclusive.
+
+---
+
 **Insight.** Several pins exist purely because of Android's minSdk 23 constraint — `jackson-module-kotlin` at 2.13.1 ("Later versions don't support minSdk <26 (Crashes on Android TV's and FireSticks)"), `rhino` at 1.8.1 ("Requires minSdk 26 or later beginning at version 1.9.0"), `conscrypt-android` at 2.5.2 ("2.5.3 crashes everything"), `coil` at 3.3.0 ("Later versions require jvmTarget 11 or later"). **None of these constraints apply to desktop.** A desktop port should not inherit them.
 
 **Evidence.** `gradle/libs.versions.toml:1-66`; `app/build.gradle.kts:104-108`. **Confidence: High.**

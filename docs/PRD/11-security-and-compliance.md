@@ -90,7 +90,23 @@ The full runtime design is in [27](27-plugin-and-extension-architecture.md) §7.
 | SEC-26 | Plugin capabilities are declared and displayed at install time; anything beyond the default set requires explicit consent. | P2 |
 | SEC-27 | An optional publisher-signature scheme, with unsigned plugins clearly labelled. | P3 |
 
-**A note on honesty.** The Extensions UI must state plainly that plugins are third-party code and that installation is a trust decision. Android does not say this clearly enough. A calm, factual banner is better than either silence or a scary modal that trains users to click through.
+### 4.1 The JVM sidecar (ADR-10) — same controls, different mechanisms
+
+Drop-in `.cs3` support ([31](31-cs3-dropin-compatibility.md)) introduces a second untrusted-code host that runs **translated third-party Android bytecode**. SEC-15..27 apply to it in full. The mechanisms differ, and the difference matters.
+
+| ID | Control | Priority |
+|---|---|---|
+| SEC-28 | **Java's `SecurityManager` is deprecated and disabled (JEP 411/486). No control in this document may be implemented with it.** The sidecar sandbox is OS-level (Windows AppContainer + job object with a restricted token) and class-loader-level. Any design review that finds a `SecurityManager` assumption should reject the design. | P0 |
+| SEC-29 | The sidecar process has **no network egress at the OS level**. SEC-16's brokering is not a convention the sidecar cooperates with — it is the only path that physically works. Verified by a test that attempts a raw socket from inside a plugin and asserts failure. | P0 |
+| SEC-30 | `System.exit`, `Runtime.exec`, `ProcessBuilder`, `System.loadLibrary`, and reflection into shim internals are denied by the sidecar's class loader. Process creation is additionally denied by the job object. | P0 |
+| SEC-31 | The shim `Context` (DROP-12) grants **no ambient authority**: `getFilesDir()` is a per-plugin scoped directory, and there is no path from a `Context` to the user's filesystem, another plugin's data, or the host process. | P0 |
+| SEC-32 | The offscreen `BrowserWindow` used for `WebViewResolver` (DROP-13..17) runs with `contextIsolation` on, no Node integration, and a **separate session partition per plugin**. It never shares the app's cookies or storage, and it is destroyed on timeout and on unload. | P0 |
+| SEC-33a | DEX→`.class` translation runs inside the sidecar under the same resource caps as execution. A malicious archive must not be able to exhaust host memory through the translator (DROP-5). | P0 |
+| SEC-34 | Android's plugin privilege model is **not** reproduced. Android grants plugins app-level privilege including `MANAGE_EXTERNAL_STORAGE` (annotated "Plugin API" in its manifest); desktop grants none of it, at any runtime. A provider that reads arbitrary user files on Android fails on desktop, and that is the intended outcome. | P0 |
+
+**Threat note.** §1's assessment of Android's posture applies with more force here: the sidecar executes bytecode that was written expecting app-level privilege. Do not assume provider authors have been careful about what they touch — assume they have not, and let SEC-28..34 make it not matter.
+
+**A note on honesty.** The Extensions UI must state plainly that plugins are third-party code and that installation is a trust decision. Android does not say this clearly enough. A calm, factual banner is better than either silence or a scary modal that trains users to click through. With drop-in, add one more honest line: **a plugin that worked on Android may do less here, because it is given less.**
 
 ---
 
@@ -126,10 +142,14 @@ The full runtime design is in [27](27-plugin-and-extension-architecture.md) §7.
 | LIC-8 | The "CloudStream" name and logo are **not** licensed by GPL. A redistributed fork may need to rebrand. | P1 |
 | LIC-9 | The Weblate-managed translation catalogue can only be reused if contributor licensing permits it. | P1 |
 | LIC-10 | Anti-tivoization: if distributed on locked-down hardware, GPL-3.0 §6 installation-information requirements apply. | P2 |
+| LIC-11 | **The bundled JRE** (DROP-31/32) must be a GPL-3.0-compatible distribution. Eclipse Temurin ships under GPLv2 **with the Classpath Exception**, and that exception is what makes bundling and linking compatible here — verify the specific build, and ship its license text and source offer in the installer. | P0 |
+| LIC-12 | **The DEX→`.class` translator** must be verified GPL-3.0-compatible before it is selected in the Phase 1 spike (OQ-27). Choosing a translator on technical merit and discovering a license problem afterwards would invalidate the drop-in path late. Make license a selection criterion, not a post-hoc check. | P0 |
+| LIC-13 | Runtime 3 links upstream's `library-jvm.jar` (GPL-3.0) directly, which reinforces LIC-1: the desktop application is unambiguously a derivative work. This is expected and consistent with the project's posture, not a problem to solve. | P0 |
+| LIC-14 | Translated plugin bytecode is **derived from third-party `.cs3` artifacts that the user supplies at runtime**, and is cached locally. The application never redistributes plugin binaries or their translations ([00](00-index.md) §7). Confirm with counsel that install-time translation for local execution raises no distribution obligation. | P1 |
 
 **Evidence.** `LICENSE:1-2`; `gradle/libs.versions.toml` (dependency coordinates); `app/build.gradle.kts:212-289`. **Confidence: High** that GPL-3.0 applies; **Medium** on the precise obligations, which require legal advice.
 
-**This is a legal review item, not an engineering decision.** Do not begin packaging (Phase 13) without sign-off.
+**This is a legal review item, not an engineering decision.** Do not begin packaging (Phase 13) without sign-off. **LIC-12 is the exception to that timing: it must be settled in Phase 1, because it constrains a technical selection made there.**
 
 ---
 

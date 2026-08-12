@@ -1,6 +1,6 @@
 # 29 — Platform Compatibility
 
-**Generated:** 2026-08-10
+**Generated:** 2026-08-10 · **Revised:** 2026-08-12 (Windows-first scope)
 
 Where Windows, macOS, and Linux differ, and what the application must do about it. Every difference here is a place where "it works on my machine" hides a real bug.
 
@@ -8,13 +8,26 @@ Where Windows, macOS, and Linux differ, and what the application must do about i
 
 ## 1. Supported targets
 
-| Platform | Minimum | Architectures | Notes |
-|---|---|---|---|
-| Windows | 10 (1809+) | x64, arm64 | Windows 11 primary test target |
-| macOS | 12 Monterey | x64, arm64 | Universal binary preferred |
-| Linux | glibc 2.28+ | x64, arm64 | Ubuntu 22.04 LTS and Fedora as primary test targets |
+**Scope decision, 2026-08-12: Windows-first.** Windows is the P0 shipping target. macOS and Linux remain fully specified in this document and are not descoped — they are **phased**, and no release gate blocks on them until their phase.
+
+| Platform | Phase | Minimum | Architectures | Notes |
+|---|---|---|---|---|
+| **Windows** | **P0 — ships first** | 10 (1809+) | x64 | Windows 11 primary test target; x64 only for v1 |
+| Windows arm64 | P2 | 11 | arm64 | Deferred; the bundled JRE and native modules both need an arm64 build |
+| macOS | P1 — after Windows GA | 12 Monterey | x64, arm64 | Universal binary preferred |
+| Linux | P1 — after Windows GA | glibc 2.28+ | x64, arm64 | Ubuntu 22.04 LTS and Fedora as primary test targets |
 
 Linux desktop environments are not uniform. Test on at least GNOME (Wayland) and KDE (X11).
+
+### 1.1 What Windows-first means in practice
+
+| ID | Requirement | Priority |
+|---|---|---|
+| XP-0a | **No cross-platform abstraction is skipped for expedience.** Path handling, the sandbox interface, notifications, and the keychain are written behind interfaces from day one, with only the Windows implementation filled in. Retrofitting an abstraction after a platform-specific v1 is the expensive failure mode this clause exists to prevent. | P0 |
+| XP-0b | Windows-only assumptions are **named in code and in this document**, never left implicit. A `TODO(platform)` that is not traceable to a row in this document is a defect. | P1 |
+| XP-0c | CI builds and runs the unit and integration suites on Linux from day one — even before Linux ships — because it is the cheapest continuous check that no unportable assumption has leaked in. | P1 |
+| XP-0d | The JVM sidecar sandbox ([31](31-cs3-dropin-compatibility.md) §6) is the **least portable** component: it uses Windows AppContainer and job objects. macOS (`sandbox-exec` / App Sandbox) and Linux (seccomp-bpf + namespaces) equivalents are a hard prerequisite for those platforms and must be designed before, not after, the Windows implementation hardens around its own mechanism. | P0 |
+| XP-0e | Drop-in `.cs3` support is **not** Windows-specific — the JVM and the translated bytecode are portable. Only the sandbox mechanism (XP-0d) is per-platform. | P1 |
 
 ---
 
@@ -174,6 +187,9 @@ Linux desktop environments are not uniform. Test on at least GNOME (Wayland) and
 | Windows | SmartScreen warns on unsigned/low-reputation installers | EV certificate; document the warning |
 | Windows | Defender scanning slows many-small-file writes | Batch writes; prefer fewer larger files |
 | Windows | `MAX_PATH` breaks deep download trees | Enable long paths; keep generated paths short |
+| Windows | Endpoint protection flags a bundled JVM spawning a sandboxed child process | Authenticode-sign the sidecar (DROP-33); validate against Defender and common EPPs pre-release (DROP-35); degrade to "extensions unavailable" rather than failing to launch (DROP-34) |
+| Windows | Corporate policy or AppLocker blocks the bundled `java.exe` | DROP-34 degradation path; document the executable path for allowlisting |
+| All | Java's `SecurityManager` is deprecated and disabled (JEP 411/486), so the sidecar sandbox **must** be OS-level — and OS sandboxing is the least portable thing in the product | XP-0d: design the macOS and Linux mechanisms before the Windows one hardens |
 | macOS | Gatekeeper blocks unnotarized apps | Notarize |
 | macOS | App Nap throttles background work | Request the appropriate activity assertion |
 | macOS | APFS NFD normalization creates apparent duplicates | Normalize to NFC (XP-8) |
@@ -187,26 +203,31 @@ Linux desktop environments are not uniform. Test on at least GNOME (Wayland) and
 
 ## 10. Testing matrix
 
-| Configuration | Priority |
-|---|---|
-| Windows 11 x64 | P0 |
-| Windows 10 x64 | P0 |
-| macOS latest, Apple Silicon | P0 |
-| macOS latest, Intel | P1 |
-| Ubuntu LTS x64, GNOME/Wayland | P0 |
-| Ubuntu LTS x64, X11 | P1 |
-| Fedora latest, GNOME/Wayland | P1 |
-| Windows 11 arm64 | P2 |
-| Linux arm64 | P2 |
-| Low-end HTPC hardware | P1 |
+Revised 2026-08-12 for Windows-first scope.
 
-Full E2E and migration suites run on every P0 configuration for each release candidate.
+| Configuration | Priority | Gates v1 release? |
+|---|---|---|
+| Windows 11 x64 | P0 | **Yes** |
+| Windows 10 x64 (1809+) | P0 | **Yes** |
+| Windows 11 x64, Defender + a third-party EPP | P0 | **Yes** — the bundled JVM spawning a sandboxed child triggers heuristics (DROP-35) |
+| Ubuntu LTS x64 (unit + integration only, XP-0c) | P1 | No — portability canary, not a shipping target |
+| Low-end HTPC hardware, Windows | P1 | No |
+| macOS latest, Apple Silicon | P1 | No — gates the macOS release |
+| macOS latest, Intel | P2 | No |
+| Ubuntu LTS x64, GNOME/Wayland (full E2E) | P1 | No — gates the Linux release |
+| Ubuntu LTS x64, X11 | P2 | No |
+| Fedora latest, GNOME/Wayland | P2 | No |
+| Windows 11 arm64 | P2 | No |
+| Linux arm64 | P3 | No |
+
+Full E2E and migration suites run on every release-gating configuration for each release candidate. macOS and Linux acquire their own gating sets when their phase opens; until then they run best-effort and failures do not block Windows.
 
 ---
 
 ## Next steps
 
-1. Stand up the P0 CI matrix in Phase 2.
-2. Prototype XP-11/12/13 (Linux graceful degradation) early — it is where cross-platform assumptions most often break.
-3. Validate XP-32 (native module packaging) in Phase 2, before it blocks a release.
-4. Acquire Apple Silicon, Intel Mac, and low-end HTPC test hardware.
+1. Stand up the Windows P0 CI matrix in Phase 2, plus the Linux unit/integration canary (XP-0c).
+2. Design the three sandbox mechanisms (XP-0d) before implementing any of them. This is the one place where Windows-first can quietly become Windows-only.
+3. Validate XP-32 (native module packaging) and the `jlink` JRE bundle in Phase 2, before either blocks a release.
+4. Validate DROP-35 (endpoint-protection behavior) on real corporate images, not just a clean VM — it is the most likely cause of "installs fine for us, blocked for the user".
+5. Acquire low-end HTPC Windows hardware now; Apple Silicon, Intel Mac and Linux hardware when those phases open.

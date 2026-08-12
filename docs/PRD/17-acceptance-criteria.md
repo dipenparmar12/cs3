@@ -71,6 +71,22 @@ The project's premise. Failure on any of these means the desktop application is 
 | **AC-42** | The plugin SDK is published, versioned, and documented; an external developer can port a provider from documentation alone. | M5 demo |
 | **AC-43** | At least 5 real providers are ported and validated before release. | Manual |
 
+### 3.1 `.cs3` drop-in ★ (ADR-10)
+
+Full specification in [31](31-cs3-dropin-compatibility.md) §9. These are the criteria that decide whether the app has content on day one.
+
+| ID | Criterion | Verification |
+|---|---|---|
+| **AC-D1 ★** | A `.cs3` downloaded from any of the 26 vendored community repositories installs and runs on Windows with **no rebuild and no source change**. | TC-D1 |
+| **AC-D2 ★** | ≥60% of the 299 surveyed `MainAPI` providers reach tier T1 or T2 and return correct search results against live or recorded fixtures. | TC-D2 |
+| **AC-D3 ★** | No plugin, at any tier, can read outside its scoped directory, open a socket, spawn a process, or load a native library. Four separate passing tests. | TC-D4..D7 |
+| **AC-D4 ★** | A plugin that hangs, OOMs, or crashes the sidecar leaves the app running and other providers usable. | TC-D8 |
+| **AC-D5 ★** | An unsupported `android.*` API produces a named, actionable message — never a stack trace, never a silent empty result. | TC-D9 |
+| **AC-D6 ★** | A T4 plugin is never silently enabled. | TC-D10 |
+| **AC-D7** | Differential test: for a fixed provider+query corpus, sidecar output matches Android output structurally (same result count, same URLs, same quality labels). | TC-D3 |
+| **AC-D8** | The Windows installer with the bundled JRE stays under 250 MB. | TC-D11 |
+| **AC-D9** | Sidecar cold start to first provider response under 3 s, and it does not delay app cold start (DSK-57). | TC-D12 |
+
 ---
 
 ## 4. Playback
