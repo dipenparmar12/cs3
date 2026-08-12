@@ -110,9 +110,11 @@ Regardless of strategy:
 | PLG-9 | Support action registration (Android's `registerVideoClickAction`). | P1 |
 | PLG-10 | Provide HTML parsing, HTTP, JSON, crypto, and string-similarity utilities equivalent to the Android surface. | P0 |
 | PLG-11 | Version the plugin API independently of the app. | P0 |
-| PLG-12 | Offer hot reload for development. | P2 |
+| PLG-12 | Offer hot reload for development. | P0 |
 | PLG-13 | Preserve safe mode. | P0 |
 | PLG-14 | Preserve the recursion guard. | P1 |
+
+**PLG-12 raised from P2 to P0 (2026-08-12).** All 325 `build.gradle.kts` files across the 26 community repositories audited in `repositories/` are Kotlin/Gradle projects that already rely on Android's `deployWithAdb` hot-reload intent (§1.6). Every existing maintainer's workflow depends on hot reload today; shipping it late would regress DX for 100% of the current ecosystem, not just new TypeScript authors. See §8.4.
 
 ---
 
@@ -258,6 +260,55 @@ npx @cloudstream/cli test --url "https://example.com/movie/123"
 
 ---
 
+### 8.4 Gradle Bridge — day-one parity for existing Kotlin maintainers
+
+**Problem.** §8's tooling is TypeScript-first (`npx @cloudstream/cli`), but the empirical survey of all 26 community repositories (`repositories/`) shows **zero** existing npm/TS tooling — every provider today is authored and hot-reloaded through Gradle + `deployWithAdb`. A TS-only rollout gives the entire current maintainer base nothing to use on day one and creates pressure to hand-rewrite ~325 Gradle modules before they get any desktop support at all.
+
+| ID | Requirement | Priority |
+|---|---|---|
+| DX-1 | Ship a `cs3-desktop` Gradle plugin that wraps existing `build.gradle.kts` provider projects and emits the same plugin bundle format the desktop app loads from `@cloudstream/cli` — no source rewrite required. | P0 |
+| DX-2 | The Gradle plugin drives the same WebSocket hot-reload channel as `@cloudstream/cli dev` (§8.1), so a Kotlin provider hot-reloads into CloudStream Desktop exactly like a TS one. | P0 |
+| DX-3 | Existing `deployWithAdb`-style workflows keep working unmodified against desktop builds during the migration window (see §6.2 Runtime 3, Legacy JVM Compatibility Adapter). | P1 |
+
+### 8.5 Compatibility Analyzer as a CLI subcommand
+
+Today §6.1's Plugin Compatibility Analyzer only runs inside the app, after a user has already installed a plugin — maintainers find out it's incompatible from a user bug report, not before shipping.
+
+| ID | Requirement | Priority |
+|---|---|---|
+| DX-4 | `npx @cloudstream/cli analyze <repo-or-path>` runs the same `PluginCompatibilityReport` inspection as §6.1 locally, so maintainers self-check before publishing. | P0 |
+| DX-5 | CI template (GitHub Action) that runs `cli analyze` + `cli test` (§8.3) on every push and fails the build below a configurable confidence threshold. | P1 |
+
+### 8.6 Migration codemod
+
+Manually porting 26 repositories is not a plan; it's a request for volunteer labor that won't materialize. §6.1 already classifies providers as ~85% pure HTTP+Jsoup (mechanically portable) vs. ~15% Android-API-dependent (needs a human).
+
+| ID | Requirement | Priority |
+|---|---|---|
+| DX-6 | `npx @cloudstream/cli migrate <kotlin-provider-path>` auto-translates the pure-HTTP+Jsoup majority to `@cloudstream/sdk` TypeScript scaffolding (HTTP calls, CSS selectors, `MainAPI` method shapes translated 1:1). | P1 |
+| DX-7 | Providers the codemod cannot safely translate (Android `Context`/`SharedPreferences`/native usage, per §6.1's analyzer) are left untouched and flagged with the specific blocking API, not silently skipped. | P1 |
+
+### 8.7 Inspector Panel covers all three runtimes, not just TypeScript
+
+§8.2's Provider Inspector Panel (`F12`) must attach to whichever runtime is actually executing (§6.2) — TypeScript, KMP/JS, or the Legacy JVM Compatibility Adapter — so the majority of maintainers still on Runtime 3 during the migration window get the same HTTP/DOM/extractor debugging UI as TS-native authors, instead of being told to migrate before they can debug at all.
+
+| ID | Requirement | Priority |
+|---|---|---|
+| DX-8 | Inspector Panel data source is runtime-agnostic: it reads from the `NetworkBroker`/`StorageBroker` attribution layer (§7) common to all three runtimes, not from TS-specific instrumentation. | P0 |
+
+### 8.8 Native Windows desktop UX for plugin management
+
+Beyond the authoring tools above, the *installing/managing* side of DX is a first-class Windows desktop UX surface, not a ported Android settings screen:
+
+| ID | Requirement | Priority |
+|---|---|---|
+| DX-9 | Native Windows notifications (Action Center) for plugin install/update/quarantine events, replacing Android's in-app toast. | P1 |
+| DX-10 | Drag-and-drop `.cs3`/plugin-bundle install onto the app window or its taskbar icon. | P2 |
+| DX-11 | Compatibility Analyzer report (§6.1) rendered as a native, filterable table in the Extension Manager UI — sortable by confidence, runtime, and blocking API — not a raw JSON dump. | P1 |
+| DX-12 | Inspector Panel (§8.2/§8.7) opens as a real detachable window (multi-monitor friendly), matching Chromium DevTools ergonomics, since Windows desktop users expect a undockable debugger, not a fixed in-app tab. | P2 |
+
+---
+
 ## 9. Plugin API Versioning
 
 | ID | Requirement |
@@ -274,3 +325,6 @@ npx @cloudstream/cli test --url "https://example.com/movie/123"
 1. **Run Automated Compatibility Analyzer across all 26 Community Repositories** (`repositories/`) in Phase 1 to generate an empirical plugin compatibility matrix.
 2. Build the V8 Sandboxed Plugin Host (`PLG-S-1..6`) in Phase 2.
 3. Release the `@cloudstream/sdk` (TypeScript) and KMP plugin templates alongside the Provider Inspector UI (`F12`).
+4. Ship the `cs3-desktop` Gradle bridge (DX-1..3) in Phase 1, in parallel with item 1 — it is what lets the 26 existing repositories run on desktop *before* any TS migration work starts.
+5. Land `cli analyze` and `cli migrate` (DX-4..7) in Phase 2, driven directly off the Phase 1 compatibility matrix.
+6. Build the native Windows Extension Manager UI and detachable Inspector window (DX-9..12) in Phase 2, alongside the Sandboxed Plugin Host.
