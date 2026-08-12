@@ -1,12 +1,13 @@
 import type { ExtractorLink, SubtitleFile } from './api';
 
-export enum DownloadState {
-  Downloading = 'Downloading',
-  Queued = 'Queued',
-  Paused = 'Paused',
-  Completed = 'Completed',
-  Failed = 'Failed',
-}
+export const DownloadState = {
+  Downloading: 'Downloading',
+  Queued: 'Queued',
+  Paused: 'Paused',
+  Completed: 'Completed',
+  Failed: 'Failed',
+} as const;
+export type DownloadState = (typeof DownloadState)[keyof typeof DownloadState];
 
 export interface DownloadTask {
   id: string; // Unique task GUID or 32-bit Java hashCode string

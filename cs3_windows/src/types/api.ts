@@ -1,21 +1,29 @@
-export enum TvType {
-  Movie = 'Movie',
-  TvSeries = 'TvSeries',
-  Anime = 'Anime',
-  AnimeMovie = 'AnimeMovie',
-  OVA = 'OVA',
-  Documentary = 'Documentary',
-  Live = 'Live',
-  NSFW = 'NSFW',
-  AsianDrama = 'AsianDrama',
-  Torrent = 'Torrent',
-}
+/**
+ * Erasable const-object enums. `erasableSyntaxOnly` is enabled in tsconfig.app.json,
+ * which forbids TS `enum` declarations. This pattern keeps identical call-site
+ * ergonomics (`TvType.Movie` as a value, `TvType` as a type) while emitting nothing
+ * that requires type-directed transformation.
+ */
+export const TvType = {
+  Movie: 'Movie',
+  TvSeries: 'TvSeries',
+  Anime: 'Anime',
+  AnimeMovie: 'AnimeMovie',
+  OVA: 'OVA',
+  Documentary: 'Documentary',
+  Live: 'Live',
+  NSFW: 'NSFW',
+  AsianDrama: 'AsianDrama',
+  Torrent: 'Torrent',
+} as const;
+export type TvType = (typeof TvType)[keyof typeof TvType];
 
-export enum DubStatus {
-  Subbed = 'Subbed',
-  Dubbed = 'Dubbed',
-  Raw = 'Raw',
-}
+export const DubStatus = {
+  Subbed: 'Subbed',
+  Dubbed: 'Dubbed',
+  Raw: 'Raw',
+} as const;
+export type DubStatus = (typeof DubStatus)[keyof typeof DubStatus];
 
 export interface SearchResponse {
   name: string;

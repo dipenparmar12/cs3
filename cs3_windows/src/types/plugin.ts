@@ -1,12 +1,14 @@
 import type { TvType } from './api';
 
-export enum PluginRuntimeTier {
-  TierA_SourceJVM = 'Tier A (Source-Rebuilt JVM)',
-  TierB_LegacyDEX = 'Tier B (Legacy DEX Translator)',
-  TierC_NativeTS = 'Tier C (Native TypeScript SDK)',
-  TierC_NativeKMP = 'Tier C (Kotlin Multiplatform JS)',
-  Unsupported = 'Unsupported',
-}
+export const PluginRuntimeTier = {
+  TierA_SourceJVM: 'Tier A (Source-Rebuilt JVM)',
+  TierB_LegacyDEX: 'Tier B (Legacy DEX Translator)',
+  TierC_NativeTS: 'Tier C (Native TypeScript SDK)',
+  TierC_NativeKMP: 'Tier C (Kotlin Multiplatform JS)',
+  NotAnalyzed: 'Not analyzed',
+  Unsupported: 'Unsupported',
+} as const;
+export type PluginRuntimeTier = (typeof PluginRuntimeTier)[keyof typeof PluginRuntimeTier];
 
 export interface SitePlugin {
   url: string;

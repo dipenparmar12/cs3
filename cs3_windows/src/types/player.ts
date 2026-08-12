@@ -1,17 +1,19 @@
 import type { ExtractorLink, SubtitleFile } from './api';
 
-export enum PlaybackBackend {
-  Web = 'WebBackend (HTML5/MSE)',
-  Native = 'NativeBackend (MPV/VLC)',
-}
+export const PlaybackBackend = {
+  Web: 'WebBackend (HTML5/MSE)',
+  Native: 'NativeBackend (MPV/VLC)',
+} as const;
+export type PlaybackBackend = (typeof PlaybackBackend)[keyof typeof PlaybackBackend];
 
-export enum AspectRatioMode {
-  Fit = 'Fit',
-  Crop = 'Crop',
-  Stretch = 'Stretch',
-  SixteenNine = '16:9',
-  FourThree = '4:3',
-}
+export const AspectRatioMode = {
+  Fit: 'Fit',
+  Crop: 'Crop',
+  Stretch: 'Stretch',
+  SixteenNine: '16:9',
+  FourThree: '4:3',
+} as const;
+export type AspectRatioMode = (typeof AspectRatioMode)[keyof typeof AspectRatioMode];
 
 export interface PlaybackState {
   isPlaying: boolean;
