@@ -62,9 +62,16 @@ But the barrier is to *JavaScript runtimes*, not to *desktop*. Three facts, each
 2. Upstream's `makeJar` **already merges `library-jvm.jar`** into the classpath every community provider compiles against (`app/build.gradle.kts:305-325`).
 3. A survey of all 26 vendored community repositories (1,009 Kotlin files, 299 `MainAPI` providers) shows **67.6% import no `android.*` at all**, and five stubbable classes — `Log`, `Base64`, `Context`, `SharedPreferences`, `CookieManager` — cover ~93%. The `:app`-side surface is **22 named types**.
 
+<!-- The desktop app therefore implements a **3-Tier Plugin Architecture**:
+- **Tier A (Source Rebuild)**: Known/vendored community providers (299 providers across 26 repos) are compiled directly from Kotlin source against `library-jvm.jar` + 22 `:app` stubs using `kotlinc-jvm`. This **eliminates DEX translation risk (`RISK-D1`) entirely** for all vendored repos.
+- **Tier B (Dynamic DEX Translation)**: Custom third-party `.cs3` URLs added by users at runtime are translated dynamically via `dex-translator` / `dex2jar` in the JVM sidecar, guarded by the automated Plugin Compatibility Analyzer.
+- **Tier C (Native Desktop SDKs)**: Modern TypeScript SDK (`@cloudstream/sdk`) and KMP/JS SDK for native, sandboxed desktop extension development.
+
 The desktop app therefore bundles a sandboxed JVM sidecar, and existing `.cs3` plugins run **with no rebuild, no source change, and no maintainer action**. The ecosystem is available on day one. See [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md) and [27-plugin-and-extension-architecture.md](27-plugin-and-extension-architecture.md) §2.
 
-**Two caveats that are not negotiable.** Drop-in applies to plugin *code*, not plugin *privileges* — Android grants plugins `MANAGE_EXTERNAL_STORAGE`; desktop grants nothing. And the whole approach rests on DEX→JVM translation surviving Kotlin coroutine state machines, which is untested and which every provider depends on (RISK-D1). **Fund that spike before anything else.**
+**Two caveats that are not negotiable.** Drop-in applies to plugin *code*, not plugin *privileges* — Android grants plugins `MANAGE_EXTERNAL_STORAGE`; desktop grants nothing. And the whole approach rests on DEX→JVM translation surviving Kotlin coroutine state machines, which is untested and which every provider depends on (RISK-D1). **Fund that spike before anything else.** -->
+
+See [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md) and [27-plugin-and-extension-architecture.md](27-plugin-and-extension-architecture.md) §6.
 
 ### F-2 — Upstream is already building its own cross-platform successor
 `COMPOSE.md` states outright that the project is migrating to MVI + Compose Multiplatform, that "this is part of the effort to make CloudStream cross platform," and that new code must use KMP-compatible libraries only. The `:library` module is already a Kotlin Multiplatform module with a populated `webMain` source set (`library/src/webMain/`, 6 files), and the project has replaced QuickJS with **Zipline** (commit `#2256`, 2025-12-24). An independent Electron rewrite therefore competes with, rather than complements, upstream's own roadmap. This is a strategic decision the sponsor must make consciously. See [15-upgrade-and-modernization.md](15-upgrade-and-modernization.md) and [21-open-issues-and-assumptions.md](21-open-issues-and-assumptions.md).

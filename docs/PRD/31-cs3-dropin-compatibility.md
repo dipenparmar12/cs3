@@ -168,6 +168,46 @@ The 22 `:app` symbols are the entire application-side compatibility surface:
 
 ---
 
+## 4. Multi-Tiered Plugin Build & Translation Architecture
+
+To eliminate translation risk (`RISK-D1`) for known providers while retaining runtime flexibility for user-added custom URLs, CloudStream Desktop implements a **3-Tiered Plugin Strategy**:
+
+```
+                               CloudStream Desktop
+                                        |
+                                Extension Manager
+                                        |
+                          Plugin Compatibility Analyzer
+                                        |
+         +------------------------------+------------------------------+
+         |                              |                              |
+         v                              v                              v
+      TIER A                         TIER B                         TIER C
+ Source-Rebuilt JVM             DEX-to-JVM Translation           Native TS / KMP
+ (Known/Vendored Repos)        (Custom Runtime URLs)          (Desktop-Native SDK)
+         |                              |                              |
+  • 26 Vendored Repos            • User-added custom repo URLs  • Sandboxed V8 isolate
+  • 0% DEX translation risk      • Dynamic dex-translator       • @cloudstream/sdk
+  • Compiled via kotlinc         • Compatibility Analyzer       • Fast, zero-JVM
+  • 100% Deterministic           • Fallback adapter layer       • Long-term destination
+```
+
+### 4.1 Tier A — Source-Rebuild for Known Repositories (Preferred)
+For the 26 vendored community repositories in `repositories/` (299 `MainAPI` providers), we possess the original Kotlin source code.
+* **Direct JVM Compile**: Since upstream's `makeJar` compiles provider Kotlin code against `library-jvm.jar` (§2.2), Tier A compiles these `.kt` source files directly against `library-jvm.jar` + 22 `:app` stubs using `kotlinc-jvm`.
+* **Zero Translation Risk**: Completely sidesteps DEX-to-JVM translation (`RISK-D1`). Coroutine state machines, inline functions, and generics are compiled deterministically by the official Kotlin compiler.
+* **Pre-Signed Catalog**: Ships as a pre-built, verified, and signed provider bundle alongside the Windows Desktop installer for instant Day-1 usability.
+
+### 4.2 Tier B — Dynamic DEX-to-JVM Translation (Runtime Custom URLs)
+For dynamic third-party `.cs3` repository URLs added by users at runtime where source code is unavailable:
+| ID | Requirement | Priority |
+|---|---|---|
+| DROP-2 | DEX→`.class` translation happens **once at install time** via `dex-translator` / `dex2jar`, cached beside the `.cs3` and invalidated on version change. | P0 |
+| DROP-3 | The original `.cs3` is retained byte-for-byte for exact export reproduction. | P0 |
+| DROP-4 | Translation failure is a **first-class, reportable outcome** (`TRANSLATION_FAILED`), surfacing offending class names cleanly. | P0 |
+| DROP-5 | Multi-DEX archives (`classes.dex`, `classes2.dex`, …) are fully handled. | P1 |
+
+<!-- 
 ## 4. Bytecode translation
 
 `.cs3` archives contain DEX. The JVM executes `.class`. One translation step bridges them.
@@ -182,7 +222,7 @@ The 22 `:app` symbols are the entire application-side compatibility surface:
 
 **Implementation note.** Candidate translators are `dex-translator` (Kotlin, in-process, no shell-out) and `dex2jar`. The Phase 1 spike (OQ-27) selects one by running it against a corpus of real `.cs3` files drawn from the 26 vendored repositories. Selection criteria: correctness on Kotlin-generated DEX (default arguments, `suspend` state machines, inline classes), absence of a native dependency, and license compatibility with GPL-3.0.
 
-**Known risk.** Kotlin `suspend` functions compile to state machines whose DEX form is well-trodden, but coroutine-heavy providers are the population most likely to expose translator bugs. Every provider in the ecosystem is coroutine-heavy. **This is the highest-severity unknown in the drop-in plan** — see RISK-D1 in §8.
+**Known risk.** Kotlin `suspend` functions compile to state machines whose DEX form is well-trodden, but coroutine-heavy providers are the population most likely to expose translator bugs. Every provider in the ecosystem is coroutine-heavy. **This is the highest-severity unknown in the drop-in plan** — see RISK-D1 in §8. -->
 
 ---
 
