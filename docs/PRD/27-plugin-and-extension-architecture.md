@@ -62,7 +62,11 @@ Everything the app can. They run in the app process with app privileges, includi
 
 ---
 
-## 2. Why this cannot be reused
+## 2. Why this cannot run in Node or V8 — and what that does and does not imply
+
+**Revised 2026-08-12 (ADR-12).** An earlier revision of this section concluded that `.cs3` files could never run on desktop. That conclusion was correct about **Node.js and V8** and wrong as a statement about **desktop**. The corrected reading is below; the full analysis is in [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
+
+### 2.1 The barriers to running `.cs3` in a JavaScript runtime — all real
 
 | Barrier | Detail |
 |---|---|
@@ -72,7 +76,23 @@ Everything the app can. They run in the app process with app privileges, includi
 | **The library dependency** | Providers compile against `MainAPI`, `ExtractorApi`, jsoup, nicehttp, gson, fuzzywuzzy — a JVM-shaped surface. |
 | **Reflection** | Loading depends on reflective construction and, for resourced plugins, reflection on `AssetManager` internals. |
 
-There is no configuration of Electron, Node, or Chromium that runs a `.cs3` file. **This is a hard constraint, not an engineering difficulty.**
+There is no configuration of Node or V8 that executes a `.cs3` file. That remains a hard constraint.
+
+### 2.2 Why it nonetheless runs on desktop
+
+Every barrier in 2.1 is a statement about *JavaScript runtimes*, not about *Windows*. Read against a JVM, the same five rows invert:
+
+| Barrier | Against a JVM |
+|---|---|
+| **Bytecode** | DEX→`.class` is a one-time, well-understood translation ([31](31-cs3-dropin-compatibility.md) §4). |
+| **Class loading** | `URLClassLoader` reproduces `PathClassLoader`'s semantics, including the manifest-through-the-loader read order. |
+| **Android APIs** | Empirically small: **67.6%** of the 299 surveyed `MainAPI` providers import no `android.*` at all, and five stubbable classes cover ~93% ([31](31-cs3-dropin-compatibility.md) §2.3). |
+| **The library dependency** | Decisive — **the JVM-shaped surface is the point.** `:library` already declares a `jvm()` target and ships JVM actuals, and upstream's own `makeJar` already merges `library-jvm.jar` into the classpath providers compile against. |
+| **Reflection** | Ordinary JVM reflection. |
+
+**Consequence.** The desktop app bundles a JVM as a sandboxed sidecar process, and `.cs3` plugins from the existing ecosystem run drop-in — no rebuild, no source change, no maintainer action. The application-side compatibility shim is a bounded list of **22 `:app` types plus 5 `android.*` stubs**, enumerated in [31](31-cs3-dropin-compatibility.md) §2.4.
+
+**What is still true:** drop-in compatibility of a plugin's *code* does not extend to its *privileges*. On Android, plugins run with app privilege including `MANAGE_EXTERNAL_STORAGE`. On desktop they run in an OS-level sandbox with no filesystem, no sockets, and no native code ([31](31-cs3-dropin-compatibility.md) §6). This divergence is deliberate.
 
 ---
 
@@ -113,6 +133,7 @@ Regardless of strategy:
 | PLG-12 | Offer hot reload for development. | P0 |
 | PLG-13 | Preserve safe mode. | P0 |
 | PLG-14 | Preserve the recursion guard. | P1 |
+| PLG-15 | **Execute unmodified `.cs3` artifacts from the existing community repositories** — no rebuild, no source change, no maintainer action. Full contract in [31](31-cs3-dropin-compatibility.md). | P0 |
 
 **PLG-12 raised from P2 to P0 (2026-08-12).** All 325 `build.gradle.kts` files across the 26 community repositories audited in `repositories/` are Kotlin/Gradle projects that already rely on Android's `deployWithAdb` hot-reload intent (§1.6). Every existing maintainer's workflow depends on hot reload today; shipping it late would regress DX for 100% of the current ecosystem, not just new TypeScript authors. See §8.4.
 
@@ -153,9 +174,11 @@ To balance ecosystem continuity with long-term desktop sustainability, CloudStre
           +-----------------------+-----------------------+
           |                       |                       |
           v                       v                       v
-     TypeScript               KMP/JS                 Legacy JVM
-      Runtime                 Runtime                 Runtime
-  (@cloudstream/sdk)   (Kotlin Multiplatform)   (CS3 Compatibility)
+     TypeScript               KMP/JS                  CS3 Drop-In
+      Runtime                 Runtime                   Runtime
+  (@cloudstream/sdk)   (Kotlin Multiplatform)   (bundled JVM sidecar)
+          |                       |                       |
+     [V8 isolate]            [V8 isolate]      [JVM child process, doc 31]
           |                       |                       |
           +-----------------------+-----------------------+
                                   |
@@ -174,10 +197,15 @@ To balance ecosystem continuity with long-term desktop sustainability, CloudStre
 Rather than assuming 100% compatibility for arbitrary `.cs3` binaries, CloudStream Desktop incorporates a **Plugin Compatibility Analyzer**. When a user adds a repository URL or installs a plugin:
 
 1. **Inspection**: The analyzer inspects `manifest.json`, `classes.dex`, class method references, Android OS API imports (`Context`, `SharedPreferences`, `Log`, `AssetManager`), reflection usage, and native C/C++ libraries.
-2. **Compatibility Report**: Generates a structured `PluginCompatibilityReport`:
-   * **TypeScript/KMP Native**: 100% compatibility (Sandboxed JS Runtime).
-   * **Legacy JVM Compatible**: ~80–95% confidence (Runs via Legacy JVM Compatibility Adapter with Android stubs).
-   * **Android-Only / Unsupported**: Low confidence due to hard Android OS hardware/native dependencies.
+2. **Compatibility Report**: Generates a structured `PluginCompatibilityReport` assigning one of the four tiers defined in [31](31-cs3-dropin-compatibility.md) §7:
+   * **T1 — Drop-in** (~68% of surveyed providers): translates cleanly, touches only shimmed APIs.
+   * **T2 — Drop-in with brokered WebView** (~7%): additionally uses `WebViewResolver`/`CloudflareKiller`.
+   * **T3 — Degraded** (~3%): content works; Android-View settings UI does not.
+   * **T4 — Blocked**: unimplemented `android.*` API, translation failure, or native library dependency.
+
+   TypeScript and KMP/JS plugins bypass tiering entirely — they are native to Runtimes 1 and 2.
+
+   **These shares are static-analysis projections over the 26 vendored repositories and must be replaced with measured values after the Phase 1 corpus run (DROP-30).**
 3. **Automatic Runtime Selection**: The Extension Manager selects the appropriate isolated runtime transparently based on the report.
 
 ---
@@ -195,10 +223,13 @@ Rather than assuming 100% compatibility for arbitrary `.cs3` binaries, CloudStre
 * **Mechanism**: Compiles Kotlin source to Kotlin/JS modules targetable to both Android and Desktop.
 * **Upstream Alignment**: Matches upstream's cross-platform roadmap (`COMPOSE.md`).
 
-#### Runtime 3: Legacy CloudStream CS3 Compatibility Adapter (JVM)
-* **Target Audience**: Existing `.cs3` Android plugins from community repositories.
-* **Mechanism**: In-memory `classes.dex` $\rightarrow$ Java `.class` bytecode translation via `dex-translator`, coupled with Android framework stubs (`Context`, `Log`, `NiceHttp`).
-* **Positioning**: **Compatibility-only fallback layer**, subject to automated Plugin Compatibility Analyzer checks.
+#### Runtime 3: CloudStream CS3 Drop-In Runtime (bundled JVM sidecar)
+* **Target Audience**: The **entire existing ecosystem** — all 303 `@CloudstreamPlugin` entry classes across the 26 vendored community repositories, unmodified.
+* **Mechanism**: Install-time `classes.dex` → Java `.class` translation, loaded by a `URLClassLoader` in a sandboxed JVM child process, linked against upstream's real `library-jvm.jar` plus `cs3-app-shim.jar` (22 types) and `cs3-android-shim.jar` (5 core stubs).
+* **Positioning**: **The day-one path to a populated app, not a fallback.** Runtimes 1 and 2 are where the ecosystem is going; Runtime 3 is how it gets there without a flag day. Supported indefinitely, expected to shrink as providers migrate.
+* **Full specification**: [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
+
+**Revised 2026-08-12 (ADR-12).** This runtime was previously described as a "compatibility-only fallback layer". That framing understated it: without Runtime 3 the app ships with no content, because Runtimes 1 and 2 have zero providers on day one. Runtime 3 is P0.
 
 ---
 
@@ -234,6 +265,8 @@ Plugins are third-party untrusted code and **MUST NEVER** have unrestricted acce
 | PLG-S-4 | Storage scoped per plugin ID; cross-plugin data access prohibited. | P0 |
 | PLG-S-5 | Hard per-call execution timeouts; hung plugin instances are terminated by the Supervisor. | P0 |
 | PLG-S-6 | Extracted links and HTML outputs are schema-validated before passing to renderer/player (SEC-23). | P0 |
+| PLG-S-7 | **The JVM sidecar gets no exemption from PLG-S-1..6.** The controls are enforced by different mechanisms (OS-level process sandbox and class-loader denial rather than V8 isolate limits), because Java's `SecurityManager` is deprecated and disabled (JEP 411/486). Mechanism-by-mechanism mapping in [31](31-cs3-dropin-compatibility.md) §6. | P0 |
+| PLG-S-8 | Android grants plugins app-level privilege including `MANAGE_EXTERNAL_STORAGE` (§1.6). Desktop does not, at any runtime. A provider relying on ambient filesystem authority fails on desktop **by design**, and this is documented to users rather than worked around. | P0 |
 
 ---
 
@@ -322,9 +355,12 @@ Beyond the authoring tools above, the *installing/managing* side of DX is a firs
 
 ## 10. Next Steps
 
-1. **Run Automated Compatibility Analyzer across all 26 Community Repositories** (`repositories/`) in Phase 1 to generate an empirical plugin compatibility matrix.
-2. Build the V8 Sandboxed Plugin Host (`PLG-S-1..6`) in Phase 2.
-3. Release the `@cloudstream/sdk` (TypeScript) and KMP plugin templates alongside the Provider Inspector UI (`F12`).
-4. Ship the `cs3-desktop` Gradle bridge (DX-1..3) in Phase 1, in parallel with item 1 — it is what lets the 26 existing repositories run on desktop *before* any TS migration work starts.
-5. Land `cli analyze` and `cli migrate` (DX-4..7) in Phase 2, driven directly off the Phase 1 compatibility matrix.
-6. Build the native Windows Extension Manager UI and detachable Inspector window (DX-9..12) in Phase 2, alongside the Sandboxed Plugin Host.
+0. **Run the DEX→JVM translation spike (OQ-27) against the full vendored corpus first.** RISK-D1 ([31](31-cs3-dropin-compatibility.md) §8) — systemic failure on Kotlin coroutine state machines — can invalidate Runtime 3 entirely, and every provider in the ecosystem is coroutine-heavy. It is cheap to test and gates everything else here.
+1. **Run Automated Compatibility Analyzer across all 26 Community Repositories** (`repositories/`) in Phase 1 to generate an empirical plugin compatibility matrix, replacing the §6.1 projections.
+2. Build the JVM sidecar and its two shims ([31](31-cs3-dropin-compatibility.md) §5) in Phase 1–2 — this is what makes the app non-empty at launch.
+3. Build the offscreen WebView bridge (DROP-13..17) — the largest net-new component, with no upstream JVM reference implementation to copy.
+4. Build the V8 Sandboxed Plugin Host (`PLG-S-1..6`) in Phase 2.
+5. Release the `@cloudstream/sdk` (TypeScript) and KMP plugin templates alongside the Provider Inspector UI (`F12`).
+6. Ship the `cs3-desktop` Gradle bridge (DX-1..3) in Phase 1, in parallel with item 1. Note that its urgency drops once Runtime 3 lands: with drop-in working, existing repositories run on desktop *as already-published `.cs3` artifacts*, so the Gradle bridge becomes a hot-reload **developer** convenience rather than the ecosystem's only on-ramp.
+7. Land `cli analyze` and `cli migrate` (DX-4..7) in Phase 2, driven directly off the Phase 1 compatibility matrix.
+8. Build the native Windows Extension Manager UI and detachable Inspector window (DX-9..12) in Phase 2, alongside the Sandboxed Plugin Host.
