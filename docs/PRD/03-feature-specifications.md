@@ -651,34 +651,41 @@ Compact form.
 
 **Android behavior.** `VideoDownloadManager` (2,095 lines) plus `DownloadQueueManager` and two services (`VideoDownloadService`, `DownloadQueueService`). A queue item is a `DownloadQueueWrapper` wrapping either a `DownloadResumePackage` (resume) or a `DownloadQueueItem` (new), with `id`/`parentId` derived from the episode. State keys: `download_resume_2` (`KEY_RESUME_PACKAGES`), `download_info` (`KEY_DOWNLOAD_INFO`), `download_resume_queue_key`, and the queue key. `DOWNLOAD_PARTIAL_MIN_SIZE` is 50 MiB. Concurrency is governed by `download_parallel_key` and `download_concurrent_key`. Progress is reported through notifications at a 1 s update rate.
 
-**Desktop behavior.** Same queue semantics in a main-process service. Notifications become OS notifications plus an in-app queue view with per-item progress. Storage location uses a native folder picker (no SAF).
+**Desktop behavior.** TypeScript `DownloadService` main-process manager backed by `MediaDownloadResolver`.
+- **Progressive HTTP/BitTorrent:** Routed to embedded `aria2c` daemon over loopback JSON-RPC (`UTIL-17`).
+- **HLS/DASH Segmented:** Dedicated segment downloader + `FFmpeg` remuxing pipeline.
+- **Provider-Attributed Errors:** Surfacing provider error context ("Source URL expired", "Choose alternate mirror") rather than generic failures.
+- **Auto-Resume Queue:** Queue state stored in `better-sqlite3` DB; automatically resumes transfers on app launch.
+- **Desktop System Folder Organization:** Default path `%USERPROFILE%\Downloads\CloudStream\MediaCategory\Title\S01E01.mp4`.
+- **Direct Dialog Action:** Integrated "Download" button directly inside the episode quality/source selector dialog.
 
 **Actors.** User.
 **Trigger.** Download action on an episode/season/movie.
 **Preconditions.** The provider advertises `hasDownloadSupport`; a writable download directory; sufficient free space.
 
-**Main workflow.** Enqueue → resolve links → segment/stream to disk → update progress → complete → record metadata for offline playback.
+**Main workflow.** Enqueue → `MediaDownloadResolver` checks `ExtractorLink` → dispatch to `aria2c` or `HLS/DASH Engine` → update progress → `FFmpeg` remux if needed → complete → record metadata in `better-sqlite3`.
 
-**Alternative workflows.** Pause / resume / cancel / retry. Bulk-enqueue a season. Reorder the queue (desktop enhancement). Auto-download for subscribed shows (`AutoDownloadMode`).
+**Alternative workflows.** Pause / resume / cancel / retry. Bulk-enqueue a season. Reorder queue via drag-and-drop. Auto-download for subscribed shows (`AutoDownloadMode`).
 
-**Error workflows.** Network loss ⇒ retry with backoff, then park as resumable. Disk full ⇒ pause the queue and surface a clear message; never write a truncated file that looks complete. Link expiry ⇒ re-resolve via the provider. Corrupt partial ⇒ restart the segment.
+**Error workflows.** Network loss ⇒ retry with backoff, then park as resumable. Disk full ⇒ pause queue and surface low-space notification; never write incomplete truncated files. Link expiry ⇒ auto-re-resolve via provider `loadLinks`. Corrupt partial ⇒ restart chunk. Source error ⇒ attribute provider and offer alternative mirror.
 
 **Postconditions.** Download metadata written; the item becomes offline-playable.
 
 **Data affected.** `download_header_cache`, `download_episode_cache` (+ their `BACKUP_` variants), `download_info`, `download_resume_2`, `download_resume_queue_key`, queue key. **All except the download-header caches are excluded from backup.**
 
-**Dependencies.** FEAT-PLAY-1 (link resolution), FEAT-EXT-*.
+**Dependencies.** FEAT-PLAY-1 (link resolution), FEAT-EXT-*, UTIL-17 (`aria2`), UTIL-18 (`yt-dlp`).
 
 **Platform differences.** Android SAF/`SafeFile` URIs are replaced by native absolute paths. Android's `MANAGE_EXTERNAL_STORAGE` model has no desktop analogue. Path rules in [18](18-technical-reference.md) §5.
 
 **Acceptance criteria.**
-- AC: Pause/resume survives an app restart.
+- AC: Pause/resume survives an app restart automatically.
 - AC: Concurrency honors both parallel and concurrent settings.
 - AC: A disk-full condition never produces a file that is reported complete.
 - AC: Downloaded items play offline with their subtitles.
-- AC: The download directory is user-selectable through a native dialog.
+- AC: The download directory is user-selectable through a native dialog and follows automatic subfolder organization.
+- AC: `aria2` engine details remain 100% hidden from the end user.
 
-**Priority.** P1. **Strategy.** R2.
+**Priority.** P0. **Strategy.** R2.
 
 **Evidence.**
 - `app/.../utils/downloader/DownloadManager.kt:113, 191-204, 683` — manager object, size threshold, state keys, update rate.
@@ -695,18 +702,19 @@ Compact form.
 
 ---
 
-## FEAT-DL-2..9 — compact
+## FEAT-DL-2..10 — compact
 
 | ID | Feature | Android | Desktop | Prio | Strat | Evidence | Conf |
 |---|---|---|---|---|---|---|---|
 | FEAT-DL-2 | Download storage location | `download_path_key` + `download_path_key_visual`; SAF content URIs via `SafeFile` | Native folder picker; absolute path. **Both keys are backup-excluded on Android and must be excluded on desktop too** | P1 | R2 | `BackupUtils.kt:72-75`; `utils/downloader/DownloadFileManagement.kt` | High |
 | FEAT-DL-3 | Downloaded-media browser | `ui/download/` fragments list downloaded titles/episodes | Same, plus "reveal in file manager" | P1 | R4 | `ui/download/` (5 files) | High |
 | FEAT-DL-4 | Offline playback | `OfflinePlaybackHelper` + `DownloadFileGenerator` | Same | P1 | R1 | `ui/player/OfflinePlaybackHelper.kt`, `DownloadFileGenerator.kt` | High |
-| FEAT-DL-5 | Download queue UI | `ui/download/queue/` + `download_queue.xml` menu | Dedicated queue panel with drag-reorder (enhancement) | P2 | R4 | `ui/download/queue/`; `res/menu/download_queue.xml` | High |
+| FEAT-DL-5 | Download queue UI | `ui/download/queue/` + `download_queue.xml` menu | Dedicated queue panel with drag-reorder, Pause All, Resume All, and provider error attribution | P2 | R4 | `ui/download/queue/`; `res/menu/download_queue.xml` | High |
 | FEAT-DL-6 | Auto-download for subscriptions | `AutoDownloadMode` enum | Same | P2 | R1 | `MainAPI.kt:1144-1150` | High |
-| FEAT-DL-7 | Download button component | `ui/download/button/` custom progress control | Equivalent component | P2 | R4 | `ui/download/button/` (4 files) | High |
+| FEAT-DL-7 | Download button component | `ui/download/button/` custom progress control | Equivalent component embedded in media detail & source/quality picker | P2 | R4 | `ui/download/button/` (4 files) | High |
 | FEAT-DL-8 | Disk-space awareness | Implicit | **Explicit desktop requirement:** pre-flight free-space check and a live low-space warning | P1 | Desktop-only | — | High (new) |
-| FEAT-DL-9 | Download metadata export | Not supported (deliberately) | **Desktop-only:** an optional sidecar metadata file per download directory, enabling library reconstruction after a move — addresses the "in the future we may write metadata to files" note in `BackupUtils.kt:92-93` | P3 | Desktop-only | `BackupUtils.kt:90-94` | High |
+| FEAT-DL-9 | Download metadata export | Not supported (deliberately) | **Desktop-only:** an optional sidecar metadata file per download directory, enabling library reconstruction after a move | P3 | Desktop-only | `BackupUtils.kt:90-94` | High |
+| FEAT-DL-10 | `yt-dlp` Fallback Extraction & Universal Link Paste | Not supported | **Desktop Enhancement:** Used as an optional fallback extractor (`ExtractorApi` fallback) when native provider scripts fail, and for direct URL paste in search bar | P2 | Desktop-only | `https://github.com/yt-dlp/yt-dlp` | High (new) |
 
 ---
 

@@ -163,7 +163,13 @@ Store: default `SharedPreferences`. Values are native primitives. Names below ar
 
 **Download states.** `DownloadStatus{retrySame, tryNext, success}` drives retry policy: retry the same source, try the next mirror, or accept.
 
-**Evidence.** `app/.../utils/downloader/DownloadManager.kt:109-204, 683`; `app/.../utils/downloader/DownloadObjects.kt:184-201`; `app/.../services/SubscriptionWorkManager.kt:29-46`; `app/.../services/BackupWorkManager.kt:20-24`; `app/.../plugins/PluginManager.kt:73-75`. **Confidence: High.**
+**Desktop Download Engine (`aria2`).** Desktop utilizes an embedded **`aria2` daemon (`aria2c`)** controlled via JSON-RPC over loopback `127.0.0.1` with WebSocket/token authentication.
+- **Segmented Acceleration:** Spans up to 16 parallel connections per file (`-s 16 -x 16`) for maximum speed.
+- **Header Forwarding:** Passes per-link `Referer`, `User-Agent`, and Cookie headers to bypass CDN blockades.
+- **Protocol Unified:** Handles both HTTP/HTTPS progressive video files and BitTorrent magnet links.
+- **HLS/DASH Integration:** Combined with `ffmpeg` for segment stitching on `.m3u8` playlists.
+
+**Evidence.** `app/.../utils/downloader/DownloadManager.kt:109-204, 683`; `app/.../utils/downloader/DownloadObjects.kt:184-201`; `aria2` repo (`https://github.com/aria2/aria2`). **Confidence: High.**
 
 ---
 

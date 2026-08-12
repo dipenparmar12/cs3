@@ -43,11 +43,13 @@ Complete inventory of the Android dependency set, each mapped to a desktop strat
 
 ---
 
-## 3. Networking
+## 3. Networking & Downloads
 
 | Dependency | Version | Purpose | Desktop strategy | License |
 |---|---|---|---|---|
 | `nicehttp` (Blatzar) | 0.4.18 | HTTP wrapper over OkHttp; the API providers actually call | **Reimplement.** This is part of the provider-facing surface — the desktop plugin API must offer an equivalent shape | Verify |
+| `aria2` (`aria2c`) | 1.37.0+ | Multi-connection & multi-protocol download engine (HTTP/BitTorrent) | **Embedded Binary Utility.** Electron Main Process manages daemon over loopback JSON-RPC (`UTIL-17`) | GPL-2.0 |
+| `yt-dlp` | Latest | Secondary link extraction fallback & universal URL parsing adapter | **Embedded Executable Adapter.** Wrapped inside `YtDlpExtractorAdapter` (`UTIL-18`) for metadata extraction only | Unlicense / Public Domain |
 | `conscrypt-android` | 2.5.2 | TLS fix for Android 9 | **Not needed** | Apache-2.0 |
 | `ktor-http` | 3.5.0 | HTTP primitives in `:library` | Node equivalents | Apache-2.0 |
 | `okhttp` | transitive | Underlying client | Node HTTP stack | Apache-2.0 |

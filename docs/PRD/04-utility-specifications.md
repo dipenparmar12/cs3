@@ -206,9 +206,42 @@ Additionally, **`setViewPos` refuses to write when `duration < 30_000` ms.**
 
 ---
 
+## UTIL-17 — aria2 Multi-Threaded & Multi-Protocol Download Engine
+
+**Purpose.** High-performance, resilient downloading for media content (progressive HTTP/HTTPS MP4/MKV files and BitTorrent magnet links).
+
+**Android behavior.** Native `VideoDownloadService`, `DownloadManager`, and custom socket stream fetchers with single/multi-stream chunking and `torrentserver` daemon.
+
+**Desktop requirement (P0).** Embedded **`aria2` C++ binary (`aria2c`)** managed by Electron Main Process over secure JSON-RPC (loopback `127.0.0.1` with WebSocket/RPC secret auth token).
+- **Multi-Connection Segmented Download:** Multiplies download speeds (up to 16 threads per video file) to bypass CDN per-IP throttling on video hosts.
+- **Unified Engine:** Handles both progressive video files (HTTP/HTTPS) and BitTorrent/Magnet links in a single binary.
+- **HTTP Header Injection:** Applies per-download `Referer`, `User-Agent`, and Cookie headers (`--header`) supplied by `ExtractorLink` / `MainAPI`.
+- **HLS/DASH Pairing:** Combined with `ffmpeg` or `N_m3u8DL-RE` for `.m3u8` segment stitching.
+- **Dynamic Control:** Full pause, resume, queue reordering, and global/per-file bandwidth throttling without process restarts.
+
+**Evidence.** `aria2` GitHub repository (`https://github.com/aria2/aria2`); `app/.../utils/downloader/DownloadManager.kt:109-204`. **Confidence: High.**
+
+---
+
+## UTIL-18 — yt-dlp Fallback Extraction & Universal URL Parsing Adapter
+
+**Purpose.** Secondary metadata and media stream extraction fallback utility to boost DX/UX when native provider extractors fail or when users submit direct video page URLs.
+
+**Android behavior.** Extractors strictly inherit `ExtractorApi` Kotlin classes in `:library`.
+
+**Desktop requirement (P2).** Embedded `yt-dlp` executable adapter wrapping the `ExtractorApi` contract (`YtDlpExtractorAdapter`).
+- **Fallback Extraction:** If a native `ExtractorApi` script fails or encounters broken obfuscation, `yt-dlp --dump-json <url>` executes as an automated fallback to parse stream URLs, headers (`Referer`/`User-Agent`), formats, and subtitles.
+- **Universal URL Paste:** Allows users to paste any video webpage URL into the desktop search bar for instant extraction and playback/download.
+- **Strict Decoupling:** `yt-dlp` is used **only for link/metadata extraction**. Actual file downloading is handed off to `DownloadService` (`aria2c` / `HlsDashEngine`), preserving a unified download queue.
+
+**Evidence.** `yt-dlp` GitHub repository (`https://github.com/yt-dlp/yt-dlp`). **Confidence: High.**
+
+---
+
 ## Next steps
 
 1. Implement and property-test **UTIL-1** in Phase 1. Nothing else in the migration is trustworthy until it is proven.
 2. Build the JVM vector-generation harness alongside it ([30](30-migration-test-cases.md) TC-14).
 3. Catalogue every enum whose **ordinal** is persisted (UTIL-2) before writing the importer; see [06](06-data-models.md) §5.
-4. Decide whether `fuzzywuzzy`-equivalent similarity is part of the public desktop plugin API (UTIL-10) — it affects the plugin contract.
+4. Integrate **aria2** (`UTIL-17`) into the main-process IPC download service with `--rpc-secret` token authentication.
+5. Implement `YtDlpExtractorAdapter` (`UTIL-18`) as an optional secondary fallback link extractor inside `MediaDownloadResolver`.
