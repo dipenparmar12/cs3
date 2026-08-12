@@ -996,7 +996,7 @@ var PluginManager = class {
 	analyzePlugin(plugin) {
 		return this.analyzer.analyzePlugin(plugin.name, plugin.internalName, plugin.url);
 	}
-	async searchAll(query) {
+	async searchAll(query, targetProviders) {
 		const results = [];
 		if (!query) return results;
 		if (query.startsWith("http://") || query.startsWith("https://")) {
@@ -1012,7 +1012,12 @@ var PluginManager = class {
 			return results;
 		}
 		const seenUrls = /* @__PURE__ */ new Set();
-		for (const [name, provider] of this.activeProviders.entries()) try {
+		let providersToSearch = Array.from(this.activeProviders.entries());
+		if (targetProviders && targetProviders.length > 0 && !targetProviders.includes("All")) {
+			const targetSet = new Set(targetProviders);
+			providersToSearch = providersToSearch.filter(([name]) => targetSet.has(name));
+		}
+		for (const [name, provider] of providersToSearch) try {
 			const res = await provider.search(query);
 			if (Array.isArray(res)) {
 				for (const item of res) if (!seenUrls.has(item.name.toLowerCase())) {
@@ -1217,8 +1222,8 @@ ipcMain.handle("binary:setup", async () => {
 		};
 	}
 });
-ipcMain.handle("api:searchAll", async (_, query) => {
-	return await pluginManager.searchAll(query);
+ipcMain.handle("api:searchAll", async (_, query, targetProviders) => {
+	return await pluginManager.searchAll(query, targetProviders);
 });
 ipcMain.handle("api:loadMedia", async (_, apiName, url) => {
 	return await pluginManager.loadMedia(apiName, url);

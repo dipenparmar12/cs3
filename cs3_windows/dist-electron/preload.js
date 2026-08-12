@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 //#region electron/preload.ts
 contextBridge.exposeInMainWorld("cloudstream", {
-	searchAll: (query) => ipcRenderer.invoke("api:searchAll", query),
+	searchAll: (query, targetProviders) => ipcRenderer.invoke("api:searchAll", query, targetProviders),
 	loadMedia: (apiName, url) => ipcRenderer.invoke("api:loadMedia", apiName, url),
 	loadLinks: (apiName, url) => ipcRenderer.invoke("api:loadLinks", apiName, url),
 	getProvidersList: () => ipcRenderer.invoke("api:getProvidersList"),

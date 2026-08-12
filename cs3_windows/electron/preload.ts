@@ -6,7 +6,7 @@ import type { OfficialRepository } from './officialRepositories';
 
 export interface CloudStreamElectronAPI {
   // Core Media & Providers
-  searchAll: (query: string) => Promise<SearchResponse[]>;
+  searchAll: (query: string, targetProviders?: string[]) => Promise<SearchResponse[]>;
   loadMedia: (apiName: string, url: string) => Promise<LoadResponse | null>;
   loadLinks: (apiName: string, url: string) => Promise<ExtractorLink[]>;
   getProvidersList: () => Promise<string[]>;
@@ -40,7 +40,7 @@ export interface CloudStreamElectronAPI {
 }
 
 const api: CloudStreamElectronAPI = {
-  searchAll: (query) => ipcRenderer.invoke('api:searchAll', query),
+  searchAll: (query, targetProviders) => ipcRenderer.invoke('api:searchAll', query, targetProviders),
   loadMedia: (apiName, url) => ipcRenderer.invoke('api:loadMedia', apiName, url),
   loadLinks: (apiName, url) => ipcRenderer.invoke('api:loadLinks', apiName, url),
   getProvidersList: () => ipcRenderer.invoke('api:getProvidersList'),

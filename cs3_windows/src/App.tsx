@@ -49,7 +49,6 @@ export const App: React.FC = () => {
       });
     }
 
-    // F12 Global hotkey for Provider Inspector
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'F12') {
         e.preventDefault();
@@ -60,13 +59,13 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const handleSearch = async (query: string) => {
+  const handleSearch = async (query: string, targetProviders?: string[]) => {
     setSearchQuery(query);
     setActiveTab('search');
     setIsSearching(true);
 
     if (window.cloudstream) {
-      const results = await window.cloudstream.searchAll(query);
+      const results = await window.cloudstream.searchAll(query, targetProviders);
       setSearchResults(results);
     }
     setIsSearching(false);

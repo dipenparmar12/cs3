@@ -91,7 +91,6 @@ ipcMain.handle('binary:setup', async () => {
     const aria2Ok = await binaryDownloader.setupAria2();
     const ytdlpOk = await binaryDownloader.setupYtDlp();
 
-    // Re-initialize aria2 engine if binary is now ready
     if (aria2Ok) {
       await aria2.start();
     }
@@ -105,8 +104,8 @@ ipcMain.handle('binary:setup', async () => {
   }
 });
 
-ipcMain.handle('api:searchAll', async (_, query: string) => {
-  return await pluginManager.searchAll(query);
+ipcMain.handle('api:searchAll', async (_, query: string, targetProviders?: string[]) => {
+  return await pluginManager.searchAll(query, targetProviders);
 });
 
 ipcMain.handle('api:loadMedia', async (_, apiName: string, url: string) => {

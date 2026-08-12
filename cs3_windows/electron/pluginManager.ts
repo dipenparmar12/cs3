@@ -101,7 +101,6 @@ export class PluginManager {
       ];
     }
 
-    // Actual Live Media Stream Mirrors
     return [
       {
         source: 'FastCDN Master HLS',
@@ -140,7 +139,7 @@ export class PluginManager {
   }
 
   private registerLiveSearchProviders(): void {
-    // 1. Live Movies & TV Shows Provider (TVMaze Public Search API)
+    // 1. Live Movies & TV Shows Provider
     this.activeProviders.set('MegaRepo Movies & TV', {
       name: 'MegaRepo Movies & TV',
       search: async (query: string): Promise<SearchResponse[]> => {
@@ -200,7 +199,7 @@ export class PluginManager {
       }
     });
 
-    // 2. Live Anime Provider (AniList Public GraphQL Search API)
+    // 2. Live Anime Provider
     this.activeProviders.set('Official Extensions Anime', {
       name: 'Official Extensions Anime',
       search: async (query: string): Promise<SearchResponse[]> => {
@@ -283,7 +282,6 @@ export class PluginManager {
       }
     });
 
-    // Register all remaining official repositories
     for (const repo of OFFICIAL_REPOSITORIES) {
       if (!this.activeProviders.has(repo.name)) {
         this.registerProviderFromPlugin({
@@ -411,7 +409,7 @@ export class PluginManager {
     return this.analyzer.analyzePlugin(plugin.name, plugin.internalName, plugin.url);
   }
 
-  public async searchAll(query: string): Promise<SearchResponse[]> {
+  public async searchAll(query: string, targetProviders?: string[]): Promise<SearchResponse[]> {
     const results: SearchResponse[] = [];
     if (!query) return results;
 
@@ -430,7 +428,14 @@ export class PluginManager {
 
     const seenUrls = new Set<string>();
 
-    for (const [name, provider] of this.activeProviders.entries()) {
+    // Determine target provider list
+    let providersToSearch: Array<[string, any]> = Array.from(this.activeProviders.entries());
+    if (targetProviders && targetProviders.length > 0 && !targetProviders.includes('All')) {
+      const targetSet = new Set(targetProviders);
+      providersToSearch = providersToSearch.filter(([name]) => targetSet.has(name));
+    }
+
+    for (const [name, provider] of providersToSearch) {
       try {
         const res = await provider.search(query);
         if (Array.isArray(res)) {
