@@ -192,6 +192,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
+  // Only show Skip Intro during intro segment (10s to 120s)
+  const showSkipIntro = currentTime >= 10 && currentTime <= 120;
+
   return (
     <div
       ref={containerRef}
@@ -267,30 +270,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }}
       />
 
-      {/* Skip Intro Overlay Button */}
-      <button
-        onClick={() => seekRelative(85)}
-        style={{
-          position: 'absolute',
-          bottom: '90px',
-          right: '30px',
-          backgroundColor: 'rgba(0,0,0,0.8)',
-          border: '1px solid var(--accent-primary)',
-          color: '#fff',
-          padding: '0.6rem 1.2rem',
-          borderRadius: 'var(--radius-md)',
-          fontSize: '0.85rem',
-          fontWeight: 600,
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-          cursor: 'pointer',
-          zIndex: 10
-        }}
-      >
-        <SkipForward size={16} style={{ color: 'var(--accent-light)' }} />
-        <span>Skip Intro (85s)</span>
-      </button>
+      {/* Conditional Skip Intro Overlay Button */}
+      {showSkipIntro && (
+        <button
+          onClick={() => seekRelative(85)}
+          style={{
+            position: 'absolute',
+            bottom: '90px',
+            right: '30px',
+            backgroundColor: 'rgba(0,0,0,0.85)',
+            border: '1px solid var(--accent-primary)',
+            color: '#fff',
+            padding: '0.6rem 1.2rem',
+            borderRadius: 'var(--radius-md)',
+            fontSize: '0.85rem',
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            cursor: 'pointer',
+            zIndex: 10,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.6)'
+          }}
+        >
+          <SkipForward size={16} style={{ color: 'var(--accent-light)' }} />
+          <span>Skip Intro (85s)</span>
+        </button>
+      )}
 
       {/* Bottom Controls Bar */}
       <div style={{
