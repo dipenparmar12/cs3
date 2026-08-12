@@ -137,140 +137,140 @@ Derived from the Android dependency surface. **A desktop plugin API missing any 
 
 ---
 
-## 6. Strategy options
+## 6. Multi-Runtime Plugin Architecture & Strategy
 
-### Strategy A — JVM sidecar
-Bundle a JRE; convert `.cs3` DEX to JVM bytecode (`dex2jar` or equivalent); run providers in a Java process communicating with Electron over IPC.
+To balance ecosystem continuity with long-term desktop sustainability, CloudStream Desktop adopts a **Multi-Runtime Plugin Architecture** managed by a central **Extension Compatibility Layer**:
 
-| | |
-|---|---|
-| **Ecosystem** | Highest — many existing providers could work with modest changes |
-| **Effort** | High — conversion pipeline, JVM host, IPC bridge, shims for Android APIs |
-| **Bundle** | +60–100 MB (JRE), reducible with `jlink` |
-| **Risks** | DEX→JVM conversion is imperfect; any Android API usage fails; each provider needs individual verification; sandboxing a JVM is harder than sandboxing QuickJS |
-| **Verdict** | Best ecosystem continuity; highest technical risk. **Spike it in Phase 1** — the answer to "what fraction of real providers survive conversion?" is worth knowing regardless of the chosen path. |
-
-### Strategy B — Zipline / QuickJS
-Adopt upstream's own direction: providers compiled to Kotlin/JS, executed in QuickJS via Zipline.
-
-| | |
-|---|---|
-| **Ecosystem** | Shares upstream's *future*, not its present. Zero benefit until upstream ships Kotlin/JS providers |
-| **Effort** | High — a Zipline-compatible host, and a dependency on upstream's timeline |
-| **Bundle** | Small (QuickJS is compact) |
-| **Risks** | Upstream may not ship; the API may change; **betting on someone else's roadmap** |
-| **Verdict** | Strategically correct **if** upstream ships. Premature today. Revisit quarterly. |
-
-### Strategy C — Native JS/TS plugin API ★ recommended for v1
-Define a clean-room TypeScript provider API mirroring `MainAPI`'s behavior. Providers are JS/TS modules run in an isolated context.
-
-| | |
-|---|---|
-| **Ecosystem** | **None initially — full fork.** Every provider must be written or ported |
-| **Effort** | Medium — the runtime is the easy part; the ecosystem is the cost |
-| **Bundle** | Zero additional |
-| **Risks** | Ecosystem fragmentation; the desktop app may launch with very few providers; provider developers may not follow |
-| **Verdict** | The only option that reliably produces a working product on a predictable schedule, with the best security story. **Adopt for v1, behind an adapter boundary.** |
-
-### Strategy D — Headless-browser provider host
-Run provider logic inside a locked-down, offscreen renderer.
-
-| | |
-|---|---|
-| **Ecosystem** | Medium — suits providers that already need a browser (`usesWebView`) |
-| **Effort** | Medium-High |
-| **Bundle** | Zero additional |
-| **Risks** | Heavy per-provider memory; weak for CPU-bound extraction; sandboxing a full renderer is subtler than sandboxing an isolate |
-| **Verdict** | Not a primary strategy. **Adopt as a component** — the `WebViewResolver` replacement (FEAT-NET-3) is exactly this. |
-
-### Recommendation
-
-> **Strategy C as the v1 runtime, with D as its browser-context component, behind an adapter boundary that permits A or B to be added later.**
-
-Rationale: C is the only path with a predictable schedule and a defensible security model. The adapter boundary preserves the option value of A and B at low cost. Spike A in Phase 1 anyway — knowing the conversion success rate informs whether to fund it later.
-
-**The ecosystem fork is the single largest strategic cost of this project and must be acknowledged explicitly to the sponsor.** Do not promise `.cs3` compatibility in any public communication until a strategy is proven against real providers.
+```
+                         CloudStream Desktop
+                                  |
+                           Extension Manager
+                                  |
+                    Extension Compatibility Layer
+                                  |
+          +-----------------------+-----------------------+
+          |                       |                       |
+          v                       v                       v
+     TypeScript               KMP/JS                 Legacy JVM
+      Runtime                 Runtime                 Runtime
+  (@cloudstream/sdk)   (Kotlin Multiplatform)   (CS3 Compatibility)
+          |                       |                       |
+          +-----------------------+-----------------------+
+                                  |
+                          CloudStream Plugin API
+                                  |
+          +-----------------------+-----------------------+
+          |                       |                       |
+        HTTP                    Parser                Extractor
+   (Brokered Client)        (Cheerio/Jsoup)        (ExtractorApi)
+```
 
 ---
 
-## 7. Sandbox model
+### 6.1 Plugin Compatibility Analyzer
 
-Applies to whichever runtime is chosen.
+Rather than assuming 100% compatibility for arbitrary `.cs3` binaries, CloudStream Desktop incorporates a **Plugin Compatibility Analyzer**. When a user adds a repository URL or installs a plugin:
+
+1. **Inspection**: The analyzer inspects `manifest.json`, `classes.dex`, class method references, Android OS API imports (`Context`, `SharedPreferences`, `Log`, `AssetManager`), reflection usage, and native C/C++ libraries.
+2. **Compatibility Report**: Generates a structured `PluginCompatibilityReport`:
+   * **TypeScript/KMP Native**: 100% compatibility (Sandboxed JS Runtime).
+   * **Legacy JVM Compatible**: ~80–95% confidence (Runs via Legacy JVM Compatibility Adapter with Android stubs).
+   * **Android-Only / Unsupported**: Low confidence due to hard Android OS hardware/native dependencies.
+3. **Automatic Runtime Selection**: The Extension Manager selects the appropriate isolated runtime transparently based on the report.
+
+---
+
+### 6.2 The Three Official Plugin Runtimes
+
+#### Runtime 1: Primary Desktop TypeScript SDK (`@cloudstream/sdk`)
+* **Target Audience**: Web developers, community creators, and rapid prototyping.
+* **Mechanism**: Runs pure JS/TS modules in a V8 isolated context.
+* **API Surface**: Clean-room TypeScript API mirroring `MainAPI` (`search`, `load`, `loadLinks`, `ExtractorApi`).
+* **Performance & Security**: Zero JVM overhead, fast boot time, 100% sandboxed.
+
+#### Runtime 2: Official Kotlin Multiplatform (KMP/JS) SDK
+* **Target Audience**: Existing CloudStream Kotlin contributors sharing code between Android and Desktop.
+* **Mechanism**: Compiles Kotlin source to Kotlin/JS modules targetable to both Android and Desktop.
+* **Upstream Alignment**: Matches upstream's cross-platform roadmap (`COMPOSE.md`).
+
+#### Runtime 3: Legacy CloudStream CS3 Compatibility Adapter (JVM)
+* **Target Audience**: Existing `.cs3` Android plugins from community repositories.
+* **Mechanism**: In-memory `classes.dex` $\rightarrow$ Java `.class` bytecode translation via `dex-translator`, coupled with Android framework stubs (`Context`, `Log`, `NiceHttp`).
+* **Positioning**: **Compatibility-only fallback layer**, subject to automated Plugin Compatibility Analyzer checks.
+
+---
+
+## 7. Sandbox & Security Model (P0 Constraint)
+
+Plugins are third-party untrusted code and **MUST NEVER** have unrestricted access to the host operating system.
 
 ```
 ┌─ MAIN PROCESS ────────────────────────────────────────────┐
-│  PluginManager     install, verify, update, enable/disable │
-│  NetworkBroker     policy, attribution, rate limiting      │
-│  StorageBroker     per-plugin scoped key/value store       │
-│  Supervisor        spawn, timeout, kill, restart, quarantine│
+│  ExtensionManager   install, verify, analyze, enable/disable│
+│  NetworkBroker      policy, attribution, rate limiting     │
+│  StorageBroker      per-plugin scoped key/value store      │
+│  Supervisor         spawn, timeout, kill, quarantine       │
 └───────────────┬───────────────────────────────────────────┘
-                │ typed IPC, schema-validated both directions
+                │ typed IPC (schema-validated both directions)
 ┌───────────────▼───────────────────────────────────────────┐
-│  PLUGIN HOST (isolated)                                    │
-│    ✗ require / import of host modules   ✗ process          │
-│    ✗ filesystem                         ✗ child_process    │
-│    ✗ raw sockets                        ✗ Electron APIs    │
-│    ✗ native modules                     ✗ environment vars │
-│    ✓ brokered HTTP        ✓ scoped storage                 │
-│    ✓ HTML/JSON parsing    ✓ crypto primitives              │
-│    ✓ sandboxed JS eval    ✓ attributed logging             │
-│    ✓ brokered browser context (Strategy D component)        │
+│  ISOLATED PLUGIN HOST                                     │
+│    ❌ require / import of host Node modules  ❌ process      │
+│    ❌ filesystem (fs)                        ❌ child_process│
+│    ❌ raw network sockets                    ❌ Electron APIs│
+│    ❌ native binary modules                  ❌ env vars    │
+│    ✅ brokered HTTP      ✅ scoped storage                 │
+│    ✅ HTML/JSON parsing  ✅ crypto primitives              │
+│    ✅ attributed logging ✅ sandboxed JS isolate           │
 └───────────────────────────────────────────────────────────┘
 ```
 
-| ID | Control | Priority |
+| ID | Security Control | Priority |
 |---|---|---|
-| PLG-S-1 | No host module access of any kind. | P0 |
-| PLG-S-2 | All network via the broker; policy-checked, attributed, rate-limited (SEC-16). | P0 |
-| PLG-S-3 | `file://`, loopback, link-local, and RFC1918 denied without explicit user consent (SEC-17). | P0 |
-| PLG-S-4 | Storage is scoped per plugin; no cross-plugin reads. | P0 |
-| PLG-S-5 | No access to credentials or tracker tokens (SEC-25). | P0 |
-| PLG-S-6 | Hard per-call timeouts; hung hosts are killed. | P0 |
-| PLG-S-7 | Memory and CPU caps; breach terminates the host only. | P1 |
-| PLG-S-8 | Returned values are schema-validated and sanitized before reaching the UI (SEC-23). | P0 |
-| PLG-S-9 | Repeated crashes quarantine the plugin and surface safe mode. | P1 |
-| PLG-S-10 | Declared capabilities shown at install; anything beyond default requires consent. | P2 |
+| PLG-S-1 | No access to Node.js `fs`, `child_process`, `process`, or native binary modules. | P0 |
+| PLG-S-2 | All network requests proxied through `NetworkBroker`; rate-limited and attributed (SEC-16). | P0 |
+| PLG-S-3 | `file://`, loopback (`127.0.0.1`), and local network IPs denied without user consent (SEC-17). | P0 |
+| PLG-S-4 | Storage scoped per plugin ID; cross-plugin data access prohibited. | P0 |
+| PLG-S-5 | Hard per-call execution timeouts; hung plugin instances are terminated by the Supervisor. | P0 |
+| PLG-S-6 | Extracted links and HTML outputs are schema-validated before passing to renderer/player (SEC-23). | P0 |
 
 ---
 
-## 8. Migration path for the ecosystem
+## 8. Developer Experience (DX) & Tooling
 
-| Step | Action |
-|---|---|
-| 1 | Publish the plugin API specification and SDK early, in Phase 9 at the latest. |
-| 2 | Provide a reference provider implementation. |
-| 3 | Provide a porting guide mapping `MainAPI` concepts to the desktop API one-to-one. |
-| 4 | Port 5–10 popular providers in-house to prove the API and seed the ecosystem. |
-| 5 | Provide the in-app provider tester (FEAT-DIAG-3) and a request inspector (DSK-74). |
-| 6 | Preserve `PLUGINS_KEY`-shaped records and repository URLs so migration recovers repositories. |
-| 7 | Engage upstream about a shared format — a common plugin format would benefit both projects. |
+To ensure rapid extension authoring and debugging, CloudStream Desktop provides three primary developer tools:
 
-**User migration.** Android backups carry `REPOSITORIES_KEY` but not plugin binaries. On import, repositories are restored and the user is shown which providers were installed on Android and which desktop equivalents exist. That is the best achievable outcome and should be presented honestly rather than hidden.
+### 1. Live Hot-Reloading CLI (`npx @cloudstream/cli dev`)
+Developers run `npx @cloudstream/cli dev` in their extension repo. The CLI spins up a local WebSocket dev server; CloudStream Desktop connects to `localhost`, auto-reloading plugin changes in real-time (<200ms) without app restarts.
+
+### 2. In-App Provider Inspector Panel (`F12`)
+A dedicated visual inspection tab inside CloudStream Desktop showing:
+* Raw HTTP Request / Response logs (Headers, Status, Body).
+* Interactive Jsoup DOM selector sandbox.
+* Extracted `ExtractorLink` metadata inspector.
+* Single-click **Test Extractor** runner for custom media URLs.
+
+### 3. Automated CLI Test Suite (`npx @cloudstream/cli test`)
+Allows extension developers to run automated test vectors against their providers in CI/CD:
+```bash
+npx @cloudstream/cli test --url "https://example.com/movie/123"
+# Returns: 9/9 passed (Search ✓ Load ✓ Extractors ✓ Subtitles ✓ Headers ✓)
+```
 
 ---
 
-## 9. Plugin API versioning
+## 9. Plugin API Versioning
 
 | ID | Requirement |
 |---|---|
 | PLG-V-1 | Semantic versioning, independent of the app version. |
-| PLG-V-2 | Plugins declare a minimum API version; incompatible plugins are refused with a clear message. |
-| PLG-V-3 | Breaking changes bump major and are announced at least one release ahead. |
-| PLG-V-4 | ABI/shape validation in CI, mirroring upstream's `abiValidation` on `:library`. |
-| PLG-V-5 | Deprecations follow a documented policy — upstream's `DeprecationLevel.ERROR` churn shows what happens without one. |
+| PLG-V-2 | Plugins declare minimum API version; incompatible versions yield an explicit warning. |
+| PLG-V-3 | Breaking changes bump major version and are announced at least one release ahead. |
+| PLG-V-4 | CI automated ABI compatibility validation against the community repository index. |
 
 ---
 
-## 10. Open questions
+## 10. Next Steps
 
-Tracked in [21](21-open-issues-and-assumptions.md): OQ-2 (strategy funding), OQ-21 (developer adoption), OQ-22 (upstream engagement), OQ-27 (DEX→JVM viability), OQ-30 (IPC overhead).
-
----
-
-## Next steps
-
-1. **Resolve OQ-2 before Phase 6.** Everything about the product's content depends on it.
-2. Spike Strategy A in Phase 1 to quantify conversion success against 10 real providers.
-3. Draft the plugin API specification in Phase 3, alongside the data model.
-4. Contact upstream maintainers about a shared plugin format — the cost of asking is a message.
-5. Build the hostile plugin suite while building the sandbox, not after.
+1. **Run Automated Compatibility Analyzer across all 26 Community Repositories** (`repositories/`) in Phase 1 to generate an empirical plugin compatibility matrix.
+2. Build the V8 Sandboxed Plugin Host (`PLG-S-1..6`) in Phase 2.
+3. Release the `@cloudstream/sdk` (TypeScript) and KMP plugin templates alongside the Provider Inspector UI (`F12`).
