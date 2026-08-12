@@ -1,0 +1,279 @@
+import { TvType, type SearchResponse } from '../src/types/api';
+import type {
+  IndexerQuery,
+  SourcePreferences,
+  TorrentResult,
+} from '../src/types/torrent';
+import { MetadataProvider, parseMetadataUrl, type MetadataDetail } from './metadataProvider';
+import { IndexerRegistry, type AggregateSearchResult } from './torrent/indexerRegistry';
+import { TorrentEngine, type StreamHandle } from './torrent/torrentEngine';
+import { infoHashFromMagnet } from './torrent/indexers/base';
+import { parseReleaseName } from './torrent/releaseParser';
+import type { DatastoreManager } from './datastore';
+import type { PluginManager } from './pluginManager';
+
+/**
+ * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
+ *
+ *   search ──► MetadataProvider ──► user picks a title/episode
+ *                                        │
+ *                                        ▼
+ *   getSources ──► IndexerRegistry ──► ranked TorrentResult[]
+ *                                        │
+ *                                        ▼
+ *   startStream ──► TorrentEngine ──► http://127.0.0.1:PORT/... ──► <video>
+ *
+ * Extension-supplied providers (`PluginManager`) are consulted first when any
+ * are actually runnable; torrents are the fallback that works today. There is
+ * deliberately **no** synthetic fallback source — when nothing real is found the
+ * caller gets an empty list and a reason, never a placeholder video.
+ */
+
+export interface SourceQuery {
+  /** A `cs3meta://` URL, a magnet, or a direct http(s) media URL. */
+  mediaUrl: string;
+  season?: number;
+  episode?: number;
+  /** Overrides the title derived from metadata. */
+  titleOverride?: string;
+}
+
+export interface SourceResponse {
+  sources: TorrentResult[];
+  filtered: Array<{ title: string; reason: string; seeders: number }>;
+  indexerOutcomes: AggregateSearchResult['indexerOutcomes'];
+  /** Present when zero sources were produced; explains why, for the UI. */
+  emptyReason?: string;
+  query: { title: string; season?: number; episode?: number; imdbId?: string };
+}
+
+/** Extracts `?s=1&e=2` appended to episode URLs by the metadata provider. */
+function parseEpisodeParams(url: string): { season?: number; episode?: number } {
+  const query = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
+  if (!query) return {};
+  const params = new URLSearchParams(query);
+  const s = params.get('s');
+  const e = params.get('e');
+  return {
+    season: s ? parseInt(s, 10) : undefined,
+    episode: e ? parseInt(e, 10) : undefined,
+  };
+}
+
+function stripQuery(url: string): string {
+  const index = url.indexOf('?');
+  return index >= 0 ? url.slice(0, index) : url;
+}
+
+export class ContentService {
+  private metadata = new MetadataProvider();
+  private registry: IndexerRegistry;
+  private engine: TorrentEngine;
+  private plugins: PluginManager;
+  private detailCache = new Map<string, MetadataDetail>();
+
+  constructor(datastore: DatastoreManager, plugins: PluginManager, engine: TorrentEngine) {
+    this.registry = new IndexerRegistry(datastore);
+    this.plugins = plugins;
+    this.engine = engine;
+  }
+
+  public getRegistry(): IndexerRegistry {
+    return this.registry;
+  }
+
+  public getEngine(): TorrentEngine {
+    return this.engine;
+  }
+
+  // --- search --------------------------------------------------------------
+
+  public async search(query: string): Promise<SearchResponse[]> {
+    const trimmed = query.trim();
+    if (!trimmed) return [];
+
+    // A pasted magnet is directly playable — surface it as its own result
+    // rather than sending it to a catalogue search that cannot understand it.
+    if (trimmed.startsWith('magnet:')) {
+      const infoHash = infoHashFromMagnet(trimmed);
+      const name = decodeURIComponent(trimmed.match(/dn=([^&]+)/)?.[1] ?? 'Magnet link');
+      return [
+        {
+          name,
+          url: trimmed,
+          apiName: 'Magnet',
+          type: TvType.Torrent,
+          quality: infoHash ? infoHash.slice(0, 8) : undefined,
+        },
+      ];
+    }
+
+    const results: SearchResponse[] = [];
+
+    // Runnable extension providers get first refusal, matching Android's ordering.
+    const pluginResults = await this.plugins.searchAll(trimmed);
+    results.push(...pluginResults);
+
+    try {
+      results.push(...(await this.metadata.search(trimmed)));
+    } catch (error) {
+      // Metadata failure must not blank the whole search if plugins returned rows.
+      if (results.length === 0) throw error;
+    }
+
+    return results;
+  }
+
+  public async load(url: string): Promise<MetadataDetail | null> {
+    const base = stripQuery(url);
+
+    const cached = this.detailCache.get(base);
+    if (cached) return cached;
+
+    if (parseMetadataUrl(base)) {
+      const detail = await this.metadata.load(base);
+      if (detail) {
+        // Backfill an IMDb id when the catalogue did not supply one; it
+        // materially improves indexer precision.
+        if (!detail.imdbId) {
+          detail.imdbId = await this.metadata.resolveImdbId(detail.name, detail.year);
+        }
+        this.detailCache.set(base, detail);
+      }
+      return detail;
+    }
+
+    return this.plugins.loadMedia(base);
+  }
+
+  // --- sources -------------------------------------------------------------
+
+  public async getSources(request: SourceQuery): Promise<SourceResponse> {
+    const fromUrl = parseEpisodeParams(request.mediaUrl);
+    const season = request.season ?? fromUrl.season;
+    const episode = request.episode ?? fromUrl.episode;
+    const base = stripQuery(request.mediaUrl);
+
+    // A magnet needs no search at all — it *is* the source.
+    if (base.startsWith('magnet:')) {
+      const infoHash = infoHashFromMagnet(base) ?? '';
+      const title = decodeURIComponent(base.match(/dn=([^&]+)/)?.[1] ?? 'Magnet link');
+      return {
+        sources: [
+          {
+            infoHash,
+            title,
+            magnet: base,
+            sizeBytes: 0,
+            seeders: 0,
+            leechers: 0,
+            indexerId: 'magnet',
+            indexerName: 'Direct magnet',
+            parsed: parseReleaseName(title),
+            score: 0,
+            scoreReasons: ['Supplied directly by the user'],
+          },
+        ],
+        filtered: [],
+        indexerOutcomes: [],
+        query: { title, season, episode },
+      };
+    }
+
+    const detail = await this.load(base);
+    const title = request.titleOverride ?? detail?.name;
+
+    if (!title) {
+      return {
+        sources: [],
+        filtered: [],
+        indexerOutcomes: [],
+        emptyReason: 'Could not determine a title to search for.',
+        query: { title: '', season, episode },
+      };
+    }
+
+    const isAnime = detail?.type === TvType.Anime || detail?.type === TvType.AnimeMovie;
+
+    const indexerQuery: IndexerQuery = {
+      // Including the year for movies sharply reduces wrong-title matches.
+      query: detail?.year && episode === undefined ? `${title} ${detail.year}` : title,
+      type: detail?.type,
+      season,
+      episode,
+      year: detail?.year,
+      imdbId: detail?.imdbId,
+      limit: 100,
+    };
+
+    const outcome = await this.registry.search(indexerQuery, {
+      expectedTitle: title,
+      // Anime releases rarely carry a year; enforcing one loses good sources.
+      expectedYear: isAnime ? undefined : detail?.year,
+      season,
+      episode,
+      runtimeMinutes: detail?.runtimeMinutes,
+    });
+
+    const response: SourceResponse = {
+      sources: outcome.results,
+      filtered: outcome.rejected.slice(0, 50).map((r) => ({
+        title: r.result.title,
+        reason: r.reason,
+        seeders: r.result.seeders,
+      })),
+      indexerOutcomes: outcome.indexerOutcomes,
+      query: { title, season, episode, imdbId: detail?.imdbId },
+    };
+
+    if (outcome.results.length === 0) {
+      response.emptyReason = this.explainEmptyResult(outcome);
+    }
+    return response;
+  }
+
+  /**
+   * Turns "no results" into an actionable message. The distinction between
+   * "every indexer is unreachable" and "the indexers worked and nothing matched"
+   * is the difference between a network problem and a search problem, and the
+   * user cannot fix either without being told which it is.
+   */
+  private explainEmptyResult(outcome: AggregateSearchResult): string {
+    const attempted = outcome.indexerOutcomes.filter((o) => !o.skipped);
+    const failed = attempted.filter((o) => !o.ok);
+
+    if (attempted.length === 0) {
+      return 'No indexers are enabled for this content type. Add a Jackett or Prowlarr indexer in Settings → Sources.';
+    }
+    if (failed.length === attempted.length) {
+      const reasons = [...new Set(failed.map((f) => f.error ?? 'unknown error'))];
+      return `All ${failed.length} indexer(s) failed: ${reasons.join('; ')}. Public torrent sites are often DNS-blocked by ISPs — a local Jackett/Prowlarr instance is the reliable route.`;
+    }
+    if (outcome.rejected.length > 0) {
+      return `Found ${outcome.rejected.length} result(s), but all were filtered out by your source preferences. Loosen the filters in Settings → Sources, or view the filtered list.`;
+    }
+    return 'No sources found for this title. Try a different episode, or add more indexers.';
+  }
+
+  // --- playback ------------------------------------------------------------
+
+  public async startStream(
+    source: Pick<TorrentResult, 'magnet' | 'infoHash' | 'torrentUrl'>,
+    season?: number,
+    episode?: number
+  ): Promise<StreamHandle> {
+    const torrentId = source.magnet || source.torrentUrl || source.infoHash;
+    if (!torrentId) {
+      throw new Error('This source has no magnet link, torrent file, or infohash.');
+    }
+    return this.engine.startStream({ torrentId, season, episode });
+  }
+
+  public getPreferences(): SourcePreferences {
+    return this.registry.getPreferences();
+  }
+
+  public savePreferences(prefs: Partial<SourcePreferences>): SourcePreferences {
+    return this.registry.savePreferences(prefs);
+  }
+}
