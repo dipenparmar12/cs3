@@ -18,6 +18,15 @@ export interface PlaybackRequest {
   subtitles: Array<{ name: string; url: string }>;
   /** Series context, so the player can show episodes and offer next/previous. */
   series?: SeriesContext;
+  /** Identity for recording watch progress, and where to resume from. */
+  progress?: {
+    mediaUrl: string;
+    year?: number;
+    posterUrl?: string;
+    season?: number;
+    episode?: number;
+    resumeAt?: number;
+  };
   /**
    * Switches episode without leaving the player.
    *
@@ -47,6 +56,28 @@ interface DetailData {
   duration?: string;
   episodes?: Episode[];
   imdbId?: string;
+}
+
+/**
+ * Finds a saved playback position for this title, if there is one.
+ *
+ * Looked up through the library entry rather than by URL, so a title the user
+ * previously watched through a different provider still resumes.
+ */
+async function resumePositionFor(
+  detail: { name: string; url: string },
+  episode: Episode | null
+): Promise<number | undefined> {
+  if (!window.cloudstream) return undefined;
+  const entry = await window.cloudstream.getLibraryEntryForUrl(detail.url);
+  if (!entry) return undefined;
+
+  const rows = await window.cloudstream.getProgressForKey(entry.key);
+  const match = rows.find(
+    (r) => r.season === episode?.season && r.episode === episode?.episode
+  );
+  if (!match || match.completed) return undefined;
+  return match.positionSeconds;
 }
 
 /** Groups episodes by season so a 200-episode series is navigable. */
@@ -216,6 +247,14 @@ export const DetailView: React.FC<DetailViewProps> = ({
         return;
       }
 
+      window.cloudstream.upsertLibraryEntry({
+        title: detail.name,
+        year: detail.year,
+        type: detail.type,
+        posterUrl: detail.posterUrl,
+        mediaUrl: detail.url,
+      });
+
       onPlay({
         streamUrl: stream.handle.streamUrl,
         mimeType: stream.handle.mimeType,
@@ -225,6 +264,14 @@ export const DetailView: React.FC<DetailViewProps> = ({
         subtitles: stream.handle.subtitleUrls,
         series: seriesContextFor(episode),
         onRequestEpisode: (next) => playEpisodeDirectlyRef.current(next),
+        progress: {
+          mediaUrl: episode.url,
+          year: detail.year,
+          posterUrl: detail.posterUrl,
+          season: episode.season,
+          episode: episode.episode,
+          resumeAt: await resumePositionFor(detail, episode),
+        },
       });
     },
     [detail, onPlay, openSources, seriesContextFor]
@@ -255,6 +302,13 @@ export const DetailView: React.FC<DetailViewProps> = ({
       }
 
       setPickerOpen(false);
+      window.cloudstream.upsertLibraryEntry({
+        title: detail.name,
+        year: detail.year,
+        type: detail.type,
+        posterUrl: detail.posterUrl,
+        mediaUrl: detail.url,
+      });
       onPlay({
         streamUrl: response.handle.streamUrl,
         mimeType: response.handle.mimeType,
@@ -264,6 +318,14 @@ export const DetailView: React.FC<DetailViewProps> = ({
         subtitles: response.handle.subtitleUrls,
         series: seriesContextFor(pendingEpisode),
         onRequestEpisode: (episode) => playEpisodeDirectlyRef.current(episode),
+        progress: {
+          mediaUrl: pendingEpisode?.url ?? detail.url,
+          year: detail.year,
+          posterUrl: detail.posterUrl,
+          season: pendingEpisode?.season,
+          episode: pendingEpisode?.episode,
+          resumeAt: await resumePositionFor(detail, pendingEpisode),
+        },
       });
     },
     [detail, pendingEpisode, onPlay, seriesContextFor]

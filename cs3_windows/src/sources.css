@@ -707,3 +707,55 @@
 .modal__failures ul { margin: 0.5rem 0 0; padding-left: 1.1rem; color: var(--text-muted); max-height: 12rem; overflow-y: auto; }
 
 .modal__foot { display: flex; justify-content: flex-end; gap: 0.5rem; }
+
+/* --- library and continue-watching cards ---------------------------------- */
+
+/* Progress sits on the poster itself rather than below it, so scanning a grid
+   for "what am I partway through" needs no reading. */
+.poster-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.55);
+}
+.poster-progress div { height: 100%; background: var(--accent-primary); }
+
+.poster-image--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 2 / 3;
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text-subtle);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.poster-resume {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+  font-size: 0.7rem;
+  color: var(--accent-light);
+}
+
+.library-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+.library-card__actions select {
+  flex: 1;
+  min-width: 0;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.7rem;
+  color: #e5e7eb;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  cursor: pointer;
+}

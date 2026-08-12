@@ -1,72 +1,207 @@
-import React, { useState } from 'react';
-import { TvType } from '../types/api';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Trash2, Star, Clock, Library as LibraryIcon } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
+import { TvType } from '../types/api';
+import type { LibraryEntry, WatchProgress, WatchStatus } from '../../electron/cs3/libraryStore';
+
+/**
+ * The user's own library, built from what they actually watched.
+ *
+ * This view previously displayed two hardcoded titles with stock photography —
+ * the same entries for every user, regardless of what they had ever opened.
+ * Everything here now comes from recorded watch state.
+ */
 
 interface LibraryViewProps {
   onSelectMedia: (item: SearchResponse) => void;
 }
 
-export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia }) => {
-  const [activeCategory, setActiveCategory] = useState<string>('Watching');
+const BUCKETS: Array<{ status: WatchStatus; label: string }> = [
+  { status: 'Watching', label: 'Watching' },
+  { status: 'Completed', label: 'Completed' },
+  { status: 'OnHold', label: 'On hold' },
+  { status: 'PlanToWatch', label: 'Plan to watch' },
+  { status: 'Dropped', label: 'Dropped' },
+];
 
-  const libraryItems: SearchResponse[] = [
-    {
-      name: 'Cyberpunk: Edgerunners',
-      url: 'https://example.com/anime/cyberpunk-edgerunners',
-      apiName: 'CloudStream Builtin',
-      type: TvType.Anime,
-      posterUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=500&q=80',
-      year: 2022,
-      quality: '1080p'
-    },
-    {
-      name: 'Interstellar',
-      url: 'https://example.com/movie/interstellar',
-      apiName: 'CloudStream Builtin',
-      type: TvType.Movie,
-      posterUrl: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=500&q=80',
-      year: 2014,
-      quality: '4K'
+function formatWatched(progress: WatchProgress | undefined): string | null {
+  if (!progress || progress.durationSeconds <= 0) return null;
+  const percent = Math.round((progress.positionSeconds / progress.durationSeconds) * 100);
+  const remaining = Math.max(0, progress.durationSeconds - progress.positionSeconds);
+  const minutes = Math.round(remaining / 60);
+  return `${percent}% · ${minutes} min left`;
+}
+
+export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia }) => {
+  const [activeStatus, setActiveStatus] = useState<WatchStatus>('Watching');
+  const [entries, setEntries] = useState<LibraryEntry[]>([]);
+  const [progressByKey, setProgressByKey] = useState<Map<string, WatchProgress>>(new Map());
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    if (!window.cloudstream) {
+      setLoading(false);
+      return;
     }
-  ];
+    setLoading(true);
+
+    const all = await window.cloudstream.getLibraryEntries();
+    const tally: Record<string, number> = {};
+    for (const entry of all) tally[entry.status] = (tally[entry.status] ?? 0) + 1;
+    setCounts(tally);
+    setEntries(all.filter((e) => e.status === activeStatus));
+
+    // Continue-watching rows are already collapsed to one per title, which is
+    // exactly the granularity a poster card needs.
+    const resume = await window.cloudstream.getContinueWatching(200);
+    setProgressByKey(new Map(resume.map((p) => [p.key, p])));
+    setLoading(false);
+  }, [activeStatus]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const openEntry = (entry: LibraryEntry) => {
+    // Entries collapse every provider URL seen for a title. The first is the one
+    // it was originally added from, which is the most likely to still resolve.
+    const url = entry.urls[0];
+    if (!url) return;
+    onSelectMedia({
+      name: entry.title,
+      url,
+      apiName: 'Library',
+      type: entry.type ?? TvType.Movie,
+      posterUrl: entry.posterUrl,
+      year: entry.year,
+    });
+  };
+
+  const changeStatus = async (entry: LibraryEntry, status: WatchStatus) => {
+    await window.cloudstream?.setLibraryStatus(entry.key, status);
+    refresh();
+  };
+
+  const remove = async (entry: LibraryEntry) => {
+    await window.cloudstream?.removeLibraryEntry(entry.key);
+    refresh();
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
       <div>
-        <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>Library & Watchlists</h2>
+        <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>Library</h2>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-          Your saved bookmarks, watch progress, and synced titles
+          Titles you have watched or saved, with where you left off
         </p>
       </div>
 
-      <div style={{ display: 'flex', gap: '0.5rem' }}>
-        {['Watching', 'Completed', 'On Hold', 'Plan to Watch', 'Dropped'].map((cat) => (
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+        {BUCKETS.map(({ status, label }) => (
           <button
-            key={cat}
-            onClick={() => setActiveCategory(cat)}
-            className={`chip ${activeCategory === cat ? 'active' : ''}`}
+            key={status}
+            onClick={() => setActiveStatus(status)}
+            className={`chip ${activeStatus === status ? 'active' : ''}`}
           >
-            {cat}
+            {label}
+            {counts[status] ? ` (${counts[status]})` : ''}
           </button>
         ))}
       </div>
 
-      <div className="poster-grid">
-        {libraryItems.map((item, idx) => (
-          <div key={idx} onClick={() => onSelectMedia(item)} className="poster-card">
-            <div className="poster-image-container">
-              <img src={item.posterUrl} alt={item.name} className="poster-image" />
-              <span className="poster-badge">{item.type}</span>
-            </div>
-            <div className="poster-info">
-              <h4 className="poster-title">{item.name}</h4>
-              <div className="poster-meta">
-                <span>{item.year}</span>
+      {loading ? (
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
+      ) : entries.length === 0 ? (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '0.6rem',
+            padding: '4rem 2rem',
+            color: 'var(--text-muted)',
+            textAlign: 'center',
+          }}
+        >
+          <LibraryIcon size={30} />
+          <p style={{ fontWeight: 600, color: '#e5e7eb' }}>Nothing in {activeStatus} yet</p>
+          <span style={{ fontSize: '0.82rem', maxWidth: '46ch', lineHeight: 1.5 }}>
+            Titles land here automatically as you watch them, and you can move any of them
+            between buckets from the card.
+          </span>
+        </div>
+      ) : (
+        <div className="poster-grid">
+          {entries.map((entry) => {
+            const progress = progressByKey.get(entry.key);
+            const watched = formatWatched(progress);
+            const percent =
+              progress && progress.durationSeconds > 0
+                ? (progress.positionSeconds / progress.durationSeconds) * 100
+                : 0;
+
+            return (
+              <div key={entry.key} className="poster-card library-card">
+                <div className="poster-image-container" onClick={() => openEntry(entry)}>
+                  {entry.posterUrl ? (
+                    <img src={entry.posterUrl} alt="" className="poster-image" loading="lazy" />
+                  ) : (
+                    <div className="poster-image poster-image--empty">{entry.title.slice(0, 1)}</div>
+                  )}
+                  {entry.type && <span className="poster-badge">{entry.type}</span>}
+                  {percent > 0 && (
+                    <div className="poster-progress">
+                      <div style={{ width: `${Math.min(100, percent)}%` }} />
+                    </div>
+                  )}
+                </div>
+
+                <div className="poster-info">
+                  <h4 className="poster-title" title={entry.title}>
+                    {entry.title}
+                  </h4>
+                  <div className="poster-meta">
+                    {entry.year && <span>{entry.year}</span>}
+                    {entry.userRating != null && (
+                      <span>
+                        <Star size={11} /> {entry.userRating}
+                      </span>
+                    )}
+                  </div>
+                  {watched && (
+                    <div className="poster-resume">
+                      <Clock size={11} /> {watched}
+                    </div>
+                  )}
+
+                  <div className="library-card__actions">
+                    <select
+                      value={entry.status}
+                      onChange={(e) => changeStatus(entry, e.target.value as WatchStatus)}
+                      aria-label={`Status for ${entry.title}`}
+                    >
+                      {BUCKETS.map(({ status, label }) => (
+                        <option key={status} value={status}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="icon-button"
+                      onClick={() => remove(entry)}
+                      aria-label={`Remove ${entry.title}`}
+                      title="Remove from library"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        ))}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

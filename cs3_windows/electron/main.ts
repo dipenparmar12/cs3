@@ -11,6 +11,7 @@ import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
+import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
 import type { DownloadTask } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
 import type { IndexerConfig, SourcePreferences, TorrentResult } from '../src/types/torrent';
@@ -31,6 +32,7 @@ const torrentEngine = new TorrentEngine(
 const contentService = new ContentService(datastore, pluginManager, torrentEngine);
 const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
 const batchDownloader = new BatchDownloader(contentService, downloadService);
+const libraryStore = new LibraryStore(datastore);
 
 downloadService.setTorrentEngine(torrentEngine);
 
@@ -343,6 +345,62 @@ ipcMain.handle('extension:getUpdateSettings', async () => extensionUpdater.getSe
 
 ipcMain.handle('extension:saveUpdateSettings', async (_, patch: Partial<UpdateSettings>) =>
   extensionUpdater.saveSettings(patch)
+);
+
+// --- library, watch progress and source memory ---------------------------
+
+ipcMain.handle('library:getEntries', async (_, status?: WatchStatus) =>
+  libraryStore.getEntries(status)
+);
+
+ipcMain.handle('library:upsertEntry', async (_, input: Parameters<LibraryStore['upsertEntry']>[0]) =>
+  libraryStore.upsertEntry(input)
+);
+
+ipcMain.handle('library:setStatus', async (_, key: string, status: WatchStatus) =>
+  libraryStore.setStatus(key, status)
+);
+
+ipcMain.handle('library:setUserRating', async (_, key: string, rating?: number) =>
+  libraryStore.setUserRating(key, rating)
+);
+
+ipcMain.handle('library:removeEntry', async (_, key: string) => libraryStore.removeEntry(key));
+
+ipcMain.handle('library:getEntryForUrl', async (_, mediaUrl: string) =>
+  libraryStore.getEntryForUrl(mediaUrl)
+);
+
+ipcMain.handle(
+  'library:recordProgress',
+  async (_, input: Parameters<LibraryStore['recordProgress']>[0]) =>
+    libraryStore.recordProgress(input)
+);
+
+ipcMain.handle('library:getProgressForKey', async (_, key: string) =>
+  libraryStore.getProgressForKey(key)
+);
+
+ipcMain.handle('library:getContinueWatching', async (_, limit?: number) =>
+  libraryStore.getContinueWatching(limit)
+);
+
+ipcMain.handle('library:clearProgress', async (_, key: string, season?: number, episode?: number) =>
+  libraryStore.clearProgress(key, season, episode)
+);
+
+ipcMain.handle('library:rememberSource', async (_, input: Parameters<LibraryStore['rememberSource']>[0]) => {
+  libraryStore.rememberSource(input);
+});
+
+ipcMain.handle('library:recallSource', async (_, key: string, season?: number, episode?: number) =>
+  libraryStore.recallSource(key, season, episode)
+);
+
+ipcMain.handle('library:export', async () => libraryStore.exportAll());
+
+ipcMain.handle('library:import', async (_, payload: Parameters<LibraryStore['importAll']>[0]) =>
+  libraryStore.importAll(payload)
 );
 
 // --- datastore -----------------------------------------------------------
