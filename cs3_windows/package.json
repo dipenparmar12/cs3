@@ -32,10 +32,13 @@
   },
   "dependencies": {
     "cheerio": "^1.2.0",
+    "fast-xml-parser": "^5.10.1",
     "hls.js": "^1.6.18",
     "lucide-react": "^1.31.0",
+    "parse-torrent": "^11.0.24",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "webtorrent": "^3.0.21",
     "ws": "^8.21.3"
   },
   "devDependencies": {
