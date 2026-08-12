@@ -89,6 +89,8 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   downloadService.stop();
+  // The sidecar is a child process; leaving it running would orphan a JVM.
+  pluginManager.shutdown();
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -143,6 +145,10 @@ ipcMain.handle('api:getSources', async (_, request: SourceQuery) => {
 });
 
 ipcMain.handle('api:getPluginRuntimeStatus', async () => pluginManager.getRuntimeStatus());
+
+ipcMain.handle('extension:getRuntimeReport', async (_, internalName: string) =>
+  pluginManager.getRuntimeReport(internalName)
+);
 
 // --- torrent streaming ---------------------------------------------------
 

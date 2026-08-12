@@ -7,21 +7,23 @@ import type { SearchResponse, LoadResponse, ExtractorLink } from '../src/types/a
 import { PluginCompatibilityAnalyzer } from './pluginAnalyzer';
 import { fetchBuffer, fetchJson } from './torrent/http';
 import type { DatastoreManager } from './datastore';
+import { SidecarSupervisor } from './cs3/sidecarSupervisor';
 
 /**
  * CloudStream extension (`.cs3`) repository and install management.
  *
- * **What this does today:** discovers repositories, parses CloudStream's real
- * repository contract, downloads and SHA-256-verifies `.cs3` archives, and
- * records them using Android's install-path grammar.
+ * Discovers repositories, parses CloudStream's real repository contract,
+ * downloads and SHA-256-verifies `.cs3` archives, records them using Android's
+ * install-path grammar, and hands each one to the JVM sidecar to be translated
+ * from DEX to JVM bytecode and classified (`docs/PRD/31`).
  *
- * **What it does not do:** execute them. `.cs3` payloads are Android DEX
- * bytecode; running them needs the JVM sidecar specified in
- * `docs/PRD/31-cs3-dropin-compatibility.md`, which does not exist yet. Installed
- * plugins therefore contribute **no** search results or streams, and this class
- * says so explicitly rather than substituting a placeholder.
+ * **What still gates execution.** Translation and analysis work today; running a
+ * provider additionally needs `library-jvm.jar`, the upstream provider API,
+ * which is published only through JitPack and so is fetched at build time. When
+ * it is absent the sidecar says exactly that and every plugin is reported as
+ * blocked, naming the missing types.
  *
- * That honesty is deliberate. The previous implementation registered every
+ * That directness is deliberate. An earlier implementation registered each
  * installed plugin as a fake provider backed by a metadata API and a hardcoded
  * demo video, which made a non-functional extension system look operational.
  */
@@ -46,16 +48,32 @@ export interface RepositoryFetchResult {
   warnings: string[];
 }
 
+/** What the sidecar reports back about a translated archive. */
+export interface PluginRuntimeReport {
+  tier: string;
+  reason: string;
+  translated: boolean;
+  classCount?: number;
+  dexCount?: number;
+  entryClass?: string;
+  unresolvedCritical?: string[];
+  unresolvedAndroid?: string[];
+  failureKind?: string;
+}
+
 export class PluginManager {
   private pluginsDir: string;
   private analyzer = new PluginCompatibilityAnalyzer();
   private datastore: DatastoreManager;
+  private sidecar: SidecarSupervisor;
 
   private installedRepoUrls = new Set<string>();
   private installedPlugins = new Map<string, PluginData & { meta: SitePlugin }>();
+  private runtimeReports = new Map<string, PluginRuntimeReport>();
 
-  constructor(datastore: DatastoreManager) {
+  constructor(datastore: DatastoreManager, sidecar?: SidecarSupervisor) {
     this.datastore = datastore;
+    this.sidecar = sidecar ?? new SidecarSupervisor();
     this.pluginsDir = app
       ? path.join(app.getPath('userData'), 'extensions')
       : path.join(process.cwd(), 'extensions');
@@ -123,11 +141,31 @@ export class PluginManager {
    */
   public async fetchRepository(repoUrl: string): Promise<RepositoryFetchResult> {
     const warnings: string[] = [];
-    const repo = await fetchJson<RepositoryJson>(repoUrl, { timeoutMs: 15_000 });
+    const repo = await fetchJson<RepositoryJson | SitePlugin[]>(repoUrl, { timeoutMs: 15_000 });
+
+    // Some repositories publish the plugin array directly instead of wrapping it
+    // in a repo.json with `pluginLists` — CSX is one. Both are in the wild and
+    // both are worth accepting; rejecting the bare array would drop a working
+    // repository for a purely cosmetic difference.
+    if (Array.isArray(repo)) {
+      const plugins = repo.filter((p) => p?.internalName && p.url);
+      if (plugins.length !== repo.length) {
+        warnings.push(`${repo.length - plugins.length} entries lacked an internalName or url.`);
+      }
+      this.installedRepoUrls.add(repoUrl);
+      this.persist();
+      return {
+        repositoryUrl: repoUrl,
+        name: 'Plugin list',
+        description: 'This URL is a plugin list rather than a repository document.',
+        plugins,
+        warnings,
+      };
+    }
 
     if (!repo || typeof repo !== 'object' || !Array.isArray(repo.pluginLists)) {
       throw new Error(
-        'Not a CloudStream repository: the document has no "pluginLists" array.'
+        'Not a CloudStream repository: the document is neither a plugin array nor an object with a "pluginLists" array.'
       );
     }
 
@@ -231,10 +269,17 @@ export class PluginManager {
       });
       this.persist();
 
+      // Translate and classify now rather than on first use: DROP-2 requires
+      // translation to happen once at install time, and a plugin's tier has to
+      // be known before the user is told whether it works.
+      const runtime = await this.inspect(plugin.internalName, target);
+
       return {
         ok: true,
         report,
-        message: `${plugin.name} installed and verified. It cannot run yet — no .cs3 runtime is present in this build.`,
+        message: runtime
+          ? `${plugin.name} installed and verified. ${runtime.reason}`
+          : `${plugin.name} installed and verified. The extension runtime is unavailable, so it could not be analysed.`,
       };
     } catch (error) {
       try {
@@ -276,30 +321,100 @@ export class PluginManager {
     );
   }
 
-  // --- runtime (absent) ----------------------------------------------------
+  // --- runtime -------------------------------------------------------------
+
+  /**
+   * Asks the sidecar to translate and classify an installed archive.
+   *
+   * Returns `null` only when the sidecar itself is unreachable, which is a
+   * different condition from "the plugin does not work" and is reported
+   * differently to the user (DROP-34).
+   */
+  public async inspect(internalName: string, filePath: string): Promise<PluginRuntimeReport | null> {
+    const started = await this.sidecar.ensureStarted();
+    if (!started) return null;
+
+    const response = await this.sidecar.call('inspect', { pluginId: internalName, path: filePath });
+    if (!response.ok) {
+      const report: PluginRuntimeReport = {
+        tier: 'T4_BLOCKED',
+        reason: response.error ?? 'The extension runtime could not analyse this plugin.',
+        translated: false,
+        failureKind: response.errorKind,
+      };
+      this.runtimeReports.set(internalName, report);
+      return report;
+    }
+
+    const r = response.result ?? {};
+    const report: PluginRuntimeReport = {
+      tier: String(r.tier ?? 'T4_BLOCKED'),
+      reason: String(r.reason ?? ''),
+      translated: Boolean(r.translated),
+      classCount: typeof r.classCount === 'number' ? r.classCount : undefined,
+      dexCount: typeof r.dexCount === 'number' ? r.dexCount : undefined,
+      entryClass: r.entryClass ? String(r.entryClass) : undefined,
+      unresolvedCritical: Array.isArray(r.unresolvedCritical)
+        ? (r.unresolvedCritical as string[])
+        : undefined,
+      unresolvedAndroid: Array.isArray(r.unresolvedAndroid)
+        ? (r.unresolvedAndroid as string[])
+        : undefined,
+      failureKind: r.failureKind ? String(r.failureKind) : undefined,
+    };
+    this.runtimeReports.set(internalName, report);
+    return report;
+  }
+
+  public getRuntimeReport(internalName: string): PluginRuntimeReport | null {
+    return this.runtimeReports.get(internalName) ?? null;
+  }
 
   /**
    * Whether any installed plugin can actually execute.
-   * Always false until a `.cs3` runtime ships; exposed so the UI can explain
-   * the state instead of silently returning nothing.
+   *
+   * Requires both a live sidecar and the provider API on its classpath; either
+   * one alone is not enough, and the UI is told which is missing.
    */
-  public hasRunnableProviders(): boolean {
-    return false;
+  public async getRuntimeStatus(): Promise<{
+    available: boolean;
+    installedCount: number;
+    reason: string;
+    javaVersion?: string;
+    sandboxGaps: string[];
+  }> {
+    const status = await this.sidecar.status();
+    return {
+      available: status.running && status.canExecute,
+      installedCount: this.installedPlugins.size,
+      reason: status.running
+        ? status.canExecute
+          ? 'The extension runtime is running and can execute installed extensions.'
+          : (status.reason ??
+            'The extension runtime is running but the CloudStream provider API is not on its classpath, so extensions cannot be executed.')
+        : (status.reason ?? 'The extension runtime is not available.'),
+      javaVersion: status.javaVersion,
+      sandboxGaps: status.sandboxGaps,
+    };
   }
 
-  public getRuntimeStatus(): { available: boolean; installedCount: number; reason: string } {
-    return {
-      available: false,
-      installedCount: this.installedPlugins.size,
-      reason:
-        '.cs3 extensions contain Android DEX bytecode. Executing them requires the JVM sidecar described in docs/PRD/31-cs3-dropin-compatibility.md, which is not part of this build. Installed extensions are verified and stored, but contribute no search results or streams.',
-    };
+  public shutdown(): void {
+    this.sidecar.stop();
   }
 
   public getProvidersList(): string[] {
     return [];
   }
 
+  /**
+   * Provider-backed search.
+   *
+   * Still returns nothing: dispatching `search` into a loaded provider needs the
+   * provider API on the sidecar classpath, and the coroutine bridge that calls a
+   * Kotlin `suspend` function reflectively. Returning an empty list here is
+   * accurate — no provider is loaded — and `getRuntimeStatus` carries the reason
+   * so the UI never presents this as "no results found".
+   */
   public async searchAll(_query: string): Promise<SearchResponse[]> {
     return [];
   }

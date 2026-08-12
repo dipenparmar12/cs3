@@ -1,0 +1,233 @@
+package com.cloudstream.desktop.sidecar;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class SidecarTest {
+
+    // --- translator ---------------------------------------------------------
+
+    @Test
+    void reportsMissingManifestAsAFailureNotAnException(@TempDir Path dir) throws Exception {
+        Path cs3 = dir.resolve("no-manifest.cs3");
+        try (ZipOutputStream z = new ZipOutputStream(Files.newOutputStream(cs3))) {
+            z.putNextEntry(new ZipEntry("classes.dex"));
+            z.write("dex\n035\0".getBytes(StandardCharsets.ISO_8859_1));
+            z.closeEntry();
+        }
+
+        DexTranslator.Outcome o = new DexTranslator(dir.resolve("cache")).translate(cs3);
+
+        assertFalse(o.ok());
+        assertEquals("MANIFEST_INVALID", o.failureKind());
+    }
+
+    @Test
+    void reportsAnArchiveWithNoDexDistinctly(@TempDir Path dir) throws Exception {
+        Path cs3 = dir.resolve("no-dex.cs3");
+        try (ZipOutputStream z = new ZipOutputStream(Files.newOutputStream(cs3))) {
+            z.putNextEntry(new ZipEntry("manifest.json"));
+            z.write("{\"pluginClassName\":\"a.B\",\"name\":\"x\",\"version\":1}"
+                    .getBytes(StandardCharsets.UTF_8));
+            z.closeEntry();
+        }
+
+        DexTranslator.Outcome o = new DexTranslator(dir.resolve("cache")).translate(cs3);
+
+        assertFalse(o.ok());
+        assertEquals("NO_DEX", o.failureKind());
+    }
+
+    @Test
+    void malformedDexFailsAsDataRatherThanCrashingTheSidecar(@TempDir Path dir) throws Exception {
+        Path cs3 = dir.resolve("bad.cs3");
+        try (ZipOutputStream z = new ZipOutputStream(Files.newOutputStream(cs3))) {
+            z.putNextEntry(new ZipEntry("manifest.json"));
+            z.write("{\"pluginClassName\":\"a.B\"}".getBytes(StandardCharsets.UTF_8));
+            z.closeEntry();
+            z.putNextEntry(new ZipEntry("classes.dex"));
+            z.write(new byte[]{'d', 'e', 'x', '\n', 0, 0, 0, 0, 1, 2, 3});
+            z.closeEntry();
+        }
+
+        DexTranslator.Outcome o = new DexTranslator(dir.resolve("cache")).translate(cs3);
+
+        // DROP-4: a translation failure is a reportable outcome, never a throw.
+        assertFalse(o.ok());
+        assertTrue(o.failureKind().startsWith("TRANSLATION"), o.failureKind());
+        assertNotNull(o.failureDetail());
+    }
+
+    @Test
+    void missingArchiveIsReportedNotThrown(@TempDir Path dir) throws Exception {
+        DexTranslator.Outcome o = new DexTranslator(dir.resolve("cache"))
+                .translate(dir.resolve("absent.cs3"));
+
+        assertFalse(o.ok());
+        assertEquals("ARCHIVE_MISSING", o.failureKind());
+    }
+
+    // --- Base64 Android semantics -------------------------------------------
+
+    @Test
+    void base64DefaultWrapsAndNoWrapDoesNot() {
+        byte[] input = new byte[120];
+        for (int i = 0; i < input.length; i++) input[i] = (byte) i;
+
+        String wrapped = android.util.Base64.encodeToString(input, android.util.Base64.DEFAULT);
+        String flat = android.util.Base64.encodeToString(input, android.util.Base64.NO_WRAP);
+
+        // Providers that build URLs depend on NO_WRAP suppressing the newlines
+        // Android's DEFAULT inserts every 76 characters.
+        assertTrue(wrapped.contains("\n"));
+        assertFalse(flat.contains("\n"));
+        assertEquals(flat, wrapped.replace("\n", ""));
+    }
+
+    @Test
+    void base64RoundTripsAcrossFlagCombinations() {
+        byte[] input = "CloudStream Desktop ✓ 1234".getBytes(StandardCharsets.UTF_8);
+        int[] flags = {
+                android.util.Base64.DEFAULT,
+                android.util.Base64.NO_WRAP,
+                android.util.Base64.URL_SAFE | android.util.Base64.NO_WRAP,
+                android.util.Base64.NO_PADDING | android.util.Base64.NO_WRAP,
+                android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING | android.util.Base64.NO_WRAP,
+        };
+        for (int f : flags) {
+            String enc = android.util.Base64.encodeToString(input, f);
+            assertArrayEquals(input, android.util.Base64.decode(enc, f), "flags=" + f);
+        }
+    }
+
+    @Test
+    void base64DecodesUnpaddedAndUrlSafeInputLikeAndroid() {
+        // java.util.Base64's strict decoder rejects both of these; Android accepts
+        // them, and providers in the wild rely on that tolerance.
+        assertArrayEquals("hi".getBytes(StandardCharsets.UTF_8),
+                android.util.Base64.decode("aGk", android.util.Base64.DEFAULT));
+        assertArrayEquals(new byte[]{(byte) 0xfb, (byte) 0xff},
+                android.util.Base64.decode("-_8=", android.util.Base64.DEFAULT));
+        assertArrayEquals("hi".getBytes(StandardCharsets.UTF_8),
+                android.util.Base64.decode("a G\nk=", android.util.Base64.DEFAULT));
+    }
+
+    @Test
+    void urlSafeEncodingAvoidsPlusAndSlash() {
+        byte[] input = {(byte) 0xfb, (byte) 0xff, (byte) 0xfe};
+        String std = android.util.Base64.encodeToString(input, android.util.Base64.NO_WRAP);
+        String url = android.util.Base64.encodeToString(input,
+                android.util.Base64.URL_SAFE | android.util.Base64.NO_WRAP);
+
+        assertTrue(std.contains("+") || std.contains("/"));
+        assertFalse(url.contains("+"));
+        assertFalse(url.contains("/"));
+    }
+
+    // --- scoped context and preferences -------------------------------------
+
+    @Test
+    void contextGrantsOnlyScopedStorage(@TempDir Path dir) {
+        android.content.Context a =
+                android.content.Context.cs3CreateScoped("plugin.a", dir.toString());
+        android.content.Context b =
+                android.content.Context.cs3CreateScoped("plugin.b", dir.toString());
+
+        assertNotEquals(a.getFilesDir().toPath(), b.getFilesDir().toPath());
+        assertTrue(a.getFilesDir().toPath().startsWith(dir));
+        // DROP-12: no ambient authority beyond the plugin's own directory.
+        assertThrows(android.content.UnsupportedAndroidApiException.class,
+                () -> a.getSystemService("window"));
+        assertThrows(android.content.UnsupportedAndroidApiException.class, a::getPackageManager);
+    }
+
+    @Test
+    void preferencesPersistAcrossReloadAndStayPerPlugin(@TempDir Path dir) {
+        android.content.Context a =
+                android.content.Context.cs3CreateScoped("plugin.a", dir.toString());
+        a.getSharedPreferences("s", 0).edit().putString("token", "abc").putInt("n", 7).apply();
+
+        // A fresh Context reads the same backing file, as it would after a restart.
+        android.content.Context reopened =
+                android.content.Context.cs3CreateScoped("plugin.a", dir.toString());
+        assertEquals("abc", reopened.getSharedPreferences("s", 0).getString("token", null));
+        assertEquals(7, reopened.getSharedPreferences("s", 0).getInt("n", 0));
+
+        android.content.Context other =
+                android.content.Context.cs3CreateScoped("plugin.b", dir.toString());
+        assertNull(other.getSharedPreferences("s", 0).getString("token", null));
+    }
+
+    @Test
+    void unsupportedAndroidApiNamesTheApiItRefused() {
+        var e = assertThrows(android.content.UnsupportedAndroidApiException.class,
+                () -> android.content.Context.cs3CreateScoped("p", "/tmp").getResources());
+
+        // AC-D5: the message must identify the API, not just fail.
+        assertTrue(e.getMessage().contains("android.content.Context.getResources"));
+        assertEquals("android.content.Context.getResources", e.api());
+    }
+
+    // --- class loader isolation ---------------------------------------------
+
+    @Test
+    void pluginLoaderRefusesToResolveSidecarInternals() throws Exception {
+        try (PluginClassLoader loader = new PluginClassLoader(
+                "test", new java.net.URL[0], getClass().getClassLoader())) {
+
+            ClassNotFoundException e = assertThrows(ClassNotFoundException.class,
+                    () -> loader.loadClass("com.cloudstream.desktop.sidecar.PluginHost"));
+            assertTrue(e.getMessage().contains("sidecar internal"));
+
+            // Ordinary classes still resolve through the parent.
+            assertNotNull(loader.loadClass("java.util.ArrayList"));
+        }
+    }
+
+    // --- protocol -----------------------------------------------------------
+
+    @Test
+    void jsonRoundTripsNestedStructuresAndEscapes() {
+        Map<String, Object> value = Map.of(
+                "s", "quote\" back\\slash\nnewline\ttab",
+                "n", 42L,
+                "b", true,
+                "list", List.of("a", "b"));
+
+        Map<String, Object> back = Json.parseObject(Json.write(value));
+
+        assertEquals(value.get("s"), back.get("s"));
+        assertEquals(42L, back.get("n"));
+        assertEquals(true, back.get("b"));
+        assertEquals(List.of("a", "b"), back.get("list"));
+    }
+
+    @Test
+    void jsonEscapesControlCharactersSoFramingSurvives() {
+        String encoded = Json.write(Map.of("k", "ab"));
+
+        assertTrue(encoded.contains("\\u0001"));
+        assertEquals("ab", Json.parseObject(encoded).get("k"));
+    }
+
+    @Test
+    void manifestFieldsAreReadWithoutAFullParse() {
+        String manifest = "{\"requiresResources\":false,\"version\":2,"
+                + "\"pluginClassName\":\"com.mega.MegaPlugin\",\"name\":\"MegaProvider\"}";
+
+        assertEquals("com.mega.MegaPlugin", Json.string(manifest, "pluginClassName"));
+        assertEquals(2, Json.integer(manifest, "version"));
+        assertEquals(Boolean.FALSE, Json.bool(manifest, "requiresResources"));
+        assertNull(Json.string(manifest, "absent"));
+    }
+}

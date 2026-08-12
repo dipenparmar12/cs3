@@ -229,7 +229,17 @@ export const ExtensionManagerUI: React.FC = () => {
 
                   <div style={{ display: 'flex', gap: '1rem', marginTop: '0.75rem', fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
                     <span>Language: <strong>{repo.language}</strong></span>
-                    <span>Providers: <strong>{repo.providerCount}</strong></span>
+                    {/* The provider count shown here used to be a fixed number in
+                        the catalogue that matched no repository. The real count is
+                        only known after fetching, so state whether the URL is
+                        known-good instead of inventing a total. */}
+                    <span title={repo.rawRepoUrl}>
+                      {repo.verified ? (
+                        <strong style={{ color: 'var(--status-success)' }}>Reachable</strong>
+                      ) : (
+                        <strong style={{ color: 'var(--status-warning, #d19a2f)' }}>Unverified link</strong>
+                      )}
+                    </span>
                   </div>
                 </div>
 
@@ -246,7 +256,7 @@ export const ExtensionManagerUI: React.FC = () => {
                   ) : (
                     <>
                       <Plus size={15} />
-                      <span>Add Repository ({repo.providerCount} Providers)</span>
+                      <span>Add Repository</span>
                     </>
                   )}
                 </button>
