@@ -253,6 +253,19 @@ export class PluginManager {
       }
 
       fs.writeFileSync(tempPath, buffer);
+
+      // The loader marks installed archives read-only, matching Android
+      // (PluginManager.kt:602). On Windows a rename over a read-only file
+      // fails, so an update would leave the old version in place while
+      // reporting success. Clear the flag on the outgoing file first.
+      if (fs.existsSync(target)) {
+        try {
+          fs.chmodSync(target, 0o666);
+        } catch {
+          // If the mode cannot be changed the rename below reports the real
+          // problem; nothing is lost by trying.
+        }
+      }
       fs.renameSync(tempPath, target);
 
       const report = this.analyzer.analyzePlugin(plugin.name, plugin.internalName, target);
@@ -265,7 +278,9 @@ export class PluginManager {
         version: plugin.version ?? 1,
         tier: report.recommendedTier,
         isEnabled: true,
-        meta: plugin,
+        // Stamp the originating repository so the updater can re-check this
+        // plugin later; a repository's plugin list does not always carry it.
+        meta: { ...plugin, repositoryUrl: repoUrl },
       });
       this.persist();
 
@@ -310,6 +325,17 @@ export class PluginManager {
 
   public getInstalledPlugins(): SitePlugin[] {
     return [...this.installedPlugins.values()].map((p) => p.meta);
+  }
+
+  /**
+   * Install records rather than repository metadata.
+   *
+   * The updater needs the version that is actually on disk, which is the
+   * install record's. `meta` is the repository's description of the plugin at
+   * the moment it was fetched, so after an update it can disagree.
+   */
+  public getInstalledPluginRecords(): Array<PluginData & { meta: SitePlugin }> {
+    return [...this.installedPlugins.values()];
   }
 
   public analyzePlugin(plugin: SitePlugin): PluginCompatibilityReport {

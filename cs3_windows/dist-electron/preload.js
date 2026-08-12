@@ -39,6 +39,16 @@ e.exposeInMainWorld("cloudstream", {
 	getInstalledRepositories: () => t.invoke("extension:getInstalledRepositories"),
 	removeRepository: (e) => t.invoke("extension:removeRepository", e),
 	getInstalledPlugins: () => t.invoke("extension:getInstalledPlugins"),
+	checkExtensionUpdates: () => t.invoke("extension:checkUpdates"),
+	getCachedExtensionUpdates: () => t.invoke("extension:getCachedUpdates"),
+	updateExtension: (e) => t.invoke("extension:update", e),
+	updateAllExtensions: (e) => t.invoke("extension:updateAll", e),
+	getUpdateSettings: () => t.invoke("extension:getUpdateSettings"),
+	saveUpdateSettings: (e) => t.invoke("extension:saveUpdateSettings", e),
+	onExtensionUpdateEvent: (e) => {
+		let n = (t, n, r) => e(n, r);
+		return t.on("extension:updateEvent", n), () => t.removeListener("extension:updateEvent", n);
+	},
 	getSetting: (e, n) => t.invoke("datastore:getSetting", e, n),
 	setSetting: (e, n) => t.invoke("datastore:setSetting", e, n),
 	getObject: (e, n) => t.invoke("datastore:getObject", e, n),

@@ -9,6 +9,7 @@ import { BinaryDownloader } from './binaryDownloader';
 import { OFFICIAL_REPOSITORIES } from './officialRepositories';
 import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
+import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import type { DownloadTask } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
 import type { IndexerConfig, SourcePreferences, TorrentResult } from '../src/types/torrent';
@@ -27,6 +28,7 @@ const torrentEngine = new TorrentEngine(
   datastore.getString('torrent_cache_path', '', true) || undefined
 );
 const contentService = new ContentService(datastore, pluginManager, torrentEngine);
+const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
 
 downloadService.setTorrentEngine(torrentEngine);
 
@@ -82,6 +84,15 @@ app.whenReady().then(async () => {
 
   createWindow();
 
+  // Extension updates flow from the original Android maintainers straight to the
+  // user's install, so a provider fix never waits on an app release.
+  extensionUpdater.setNotifier((event, payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('extension:updateEvent', event, payload);
+    }
+  });
+  extensionUpdater.schedule();
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -89,6 +100,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   downloadService.stop();
+  extensionUpdater.stop();
   // The sidecar is a child process; leaving it running would orphan a JVM.
   pluginManager.shutdown();
   if (process.platform !== 'darwin') app.quit();
@@ -282,6 +294,32 @@ ipcMain.handle('extension:removeRepository', async (_, repoUrl: string) => {
 });
 
 ipcMain.handle('extension:getInstalledPlugins', async () => pluginManager.getInstalledPlugins());
+
+// --- extension updates (over-the-air) ------------------------------------
+
+ipcMain.handle('extension:checkUpdates', async () => {
+  try {
+    return { ok: true, result: await extensionUpdater.checkForUpdates() };
+  } catch (error) {
+    return { ...fail(error), result: null };
+  }
+});
+
+ipcMain.handle('extension:getCachedUpdates', async () => extensionUpdater.getCachedUpdates());
+
+ipcMain.handle('extension:update', async (_, internalName: string) =>
+  extensionUpdater.updatePlugin(internalName)
+);
+
+ipcMain.handle('extension:updateAll', async (_, internalNames?: string[]) =>
+  extensionUpdater.updateAll(internalNames)
+);
+
+ipcMain.handle('extension:getUpdateSettings', async () => extensionUpdater.getSettings());
+
+ipcMain.handle('extension:saveUpdateSettings', async (_, patch: Partial<UpdateSettings>) =>
+  extensionUpdater.saveSettings(patch)
+);
 
 // --- datastore -----------------------------------------------------------
 

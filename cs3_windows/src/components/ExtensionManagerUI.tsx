@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import type { SitePlugin, PluginCompatibilityReport } from '../types/plugin';
 import type { OfficialRepository } from '../../electron/officialRepositories';
 import { Puzzle, Plus, Download, ShieldCheck, Globe, CheckCircle2, Layers } from 'lucide-react';
+import { ExtensionUpdates } from './ExtensionUpdates';
 
 export const ExtensionManagerUI: React.FC = () => {
   const [repoUrlInput, setRepoUrlInput] = useState('');
@@ -10,35 +11,11 @@ export const ExtensionManagerUI: React.FC = () => {
   const [installedRepoUrls, setInstalledRepoUrls] = useState<Set<string>>(new Set());
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const [plugins, setPlugins] = useState<SitePlugin[]>([
-    {
-      name: 'SuperStream',
-      internalName: 'SuperStreamProvider',
-      version: 4,
-      url: 'https://raw.githubusercontent.com/recloudstream/cs-repos/master/SuperStream.cs3',
-      tvTypes: [],
-      authors: ['Community'],
-      status: 1
-    },
-    {
-      name: 'Sflix',
-      internalName: 'SflixProvider',
-      version: 2,
-      url: 'https://raw.githubusercontent.com/recloudstream/cs-repos/master/Sflix.cs3',
-      tvTypes: [],
-      authors: ['Community'],
-      status: 1
-    },
-    {
-      name: 'GogoAnime',
-      internalName: 'GogoAnimeProvider',
-      version: 5,
-      url: 'https://raw.githubusercontent.com/recloudstream/cs-repos/master/GogoAnime.cs3',
-      tvTypes: [],
-      authors: ['AnimeTeam'],
-      status: 1
-    }
-  ]);
+  // Starts empty. This list previously opened with three hardcoded entries
+  // (SuperStream, Sflix, GogoAnime) whose download URLs pointed at a repository
+  // that does not exist, so the manager showed installable extensions that could
+  // never install. Real entries arrive from fetchRepository below.
+  const [plugins, setPlugins] = useState<SitePlugin[]>([]);
 
   const [installedPluginNames, setInstalledPluginNames] = useState<Set<string>>(new Set());
   const [activeReport, setActiveReport] = useState<PluginCompatibilityReport | null>(null);
@@ -119,9 +96,17 @@ export const ExtensionManagerUI: React.FC = () => {
       <div>
         <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>Official Extension Library & Repositories</h2>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-          Browse 26 community repositories or add custom `.json` repository endpoints
+          Browse {officialRepos.length} community repositories or add a custom repository URL
         </p>
       </div>
+
+      <ExtensionUpdates
+        onUpdated={() => {
+          window.cloudstream?.getInstalledPlugins().then((list) => {
+            setInstalledPluginNames(new Set(list.map((p) => p.internalName)));
+          });
+        }}
+      />
 
       {/* Success Toast */}
       {toastMessage && (
