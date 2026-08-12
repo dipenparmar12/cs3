@@ -243,6 +243,11 @@
       "id": "31",
       "file": "31-cs3-dropin-compatibility.md",
       "title": "CS3 drop-in compatibility (JVM sidecar)"
+    },
+    {
+      "id": "32",
+      "file": "32-cs3-desktop-feature-additions.md",
+      "title": "CS3 desktop feature additions and architecture"
     }
   ],
   "headlineFindings": [
