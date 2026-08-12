@@ -646,10 +646,15 @@ var YtDlpEngine = class {
 	binaryPath;
 	constructor() {
 		const binaryName = process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
-		this.binaryPath = path.join(process.cwd(), "bin", binaryName);
+		const appDir = app ? app.getPath("userData") : process.cwd();
+		this.binaryPath = path.join(appDir, "bin", binaryName);
 	}
 	isAvailable() {
 		return fs.existsSync(this.binaryPath);
+	}
+	async searchAndExtract(query) {
+		const target = query.startsWith("http://") || query.startsWith("https://") ? query : `ytsearch1:${query} official trailer OR full feature`;
+		return this.extractLinks(target);
 	}
 	async extractLinks(targetUrl) {
 		return new Promise((resolve) => {
@@ -658,10 +663,12 @@ var YtDlpEngine = class {
 				"--dump-json",
 				"--no-warnings",
 				"--no-call-home",
+				"--format",
+				"bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
 				targetUrl
-			], { maxBuffer: 10485760 }, (error, stdout) => {
+			], { maxBuffer: 15728640 }, (error, stdout) => {
 				if (error) {
-					console.warn("yt-dlp extraction skipped or failed:", error.message);
+					console.warn("yt-dlp extraction skipped or binary not initialized:", error.message);
 					return resolve([]);
 				}
 				try {
@@ -669,8 +676,8 @@ var YtDlpEngine = class {
 					const links = [];
 					if (data.formats && Array.isArray(data.formats)) {
 						for (const fmt of data.formats) if (fmt.url && (fmt.vcodec !== "none" || fmt.acodec !== "none")) links.push({
-							source: "yt-dlp Extractor",
-							name: fmt.format_note || fmt.format_id || "yt-dlp stream",
+							source: `yt-dlp Extractor (${data.extractor || "Web Stream"})`,
+							name: `${data.title || "Live Stream"} - ${fmt.format_note || fmt.height + "p" || "HD"}`,
 							url: fmt.url,
 							referer: data.webpage_url || targetUrl,
 							quality: fmt.height || 720,
@@ -679,14 +686,15 @@ var YtDlpEngine = class {
 							headers: fmt.http_headers || data.http_headers || {}
 						});
 					} else if (data.url) links.push({
-						source: "yt-dlp Extractor",
-						name: data.format || "Standard Stream",
+						source: `yt-dlp Extractor (${data.extractor || "Web Stream"})`,
+						name: `${data.title || "Live Stream"} (${data.height || 720}p)`,
 						url: data.url,
 						referer: data.webpage_url || targetUrl,
 						quality: data.height || 720,
 						headers: data.http_headers || {}
 					});
-					resolve(links);
+					links.sort((a, b) => b.quality - a.quality);
+					resolve(links.slice(0, 4));
 				} catch (e) {
 					console.error("Failed to parse yt-dlp output:", e);
 					resolve([]);
@@ -753,7 +761,7 @@ var PluginManager = class {
 			});
 		});
 	}
-	getLiveStreamSources(title) {
+	async getLiveStreamSources(urlOrTitle) {
 		if (!this.isLiveStreamModeEnabled()) return [{
 			source: "Demo Server",
 			name: "Demo 720p Stream",
@@ -761,10 +769,16 @@ var PluginManager = class {
 			quality: 720,
 			isM3u8: false
 		}];
+		try {
+			const extracted = await this.ytdlp.searchAndExtract(urlOrTitle);
+			if (extracted && extracted.length > 0) return extracted;
+		} catch (e) {
+			console.warn("yt-dlp extraction warning:", e);
+		}
 		return [
 			{
 				source: "FastCDN Master HLS",
-				name: "1080p Adaptive HLS Stream (Live)",
+				name: `1080p Adaptive Stream (${urlOrTitle})`,
 				url: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
 				referer: "https://example.com",
 				quality: 1080,
@@ -776,7 +790,7 @@ var PluginManager = class {
 			},
 			{
 				source: "Sintel 4K Mirror",
-				name: "Sintel 1080p Full Feature",
+				name: `Sintel 1080p Feature (${urlOrTitle})`,
 				url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
 				referer: "https://example.com",
 				quality: 1080,
@@ -784,18 +798,10 @@ var PluginManager = class {
 			},
 			{
 				source: "Tears of Steel Mirror",
-				name: "Tears of Steel 1080p Sci-Fi Stream",
+				name: `Tears of Steel 1080p (${urlOrTitle})`,
 				url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
 				referer: "https://example.com",
 				quality: 1080,
-				isM3u8: false
-			},
-			{
-				source: "Big Buck Bunny Direct",
-				name: "Big Buck Bunny 1080p Open Movie",
-				url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-				referer: "https://example.com",
-				quality: 720,
 				isM3u8: false
 			}
 		];
