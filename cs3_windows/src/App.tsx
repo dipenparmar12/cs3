@@ -13,7 +13,7 @@ import { DetailView, type PlaybackRequest } from './views/DetailView';
 import { LibraryView } from './views/LibraryView';
 import { SettingsView } from './views/SettingsView';
 
-import type { SearchResponse } from './types/api';
+import type { Episode, SearchResponse } from './types/api';
 import type { DownloadTask } from './types/download';
 
 export const App: React.FC = () => {
@@ -78,6 +78,23 @@ export const App: React.FC = () => {
 
   const handleSelectMedia = (item: SearchResponse) => {
     setSelectedMedia(item);
+  };
+
+  /**
+   * Switches episode from inside the player.
+   *
+   * The outgoing torrent stream is stopped first. Without this, moving through
+   * a season would leave one live swarm per episode watched, each still holding
+   * sockets and seeding in the background.
+   */
+  const handleSwitchEpisode = async (episode: Episode) => {
+    const request = playback;
+    if (!request?.onRequestEpisode) return;
+
+    if (request.infoHash && window.cloudstream) {
+      await window.cloudstream.stopStream(request.infoHash, true);
+    }
+    request.onRequestEpisode(episode);
   };
 
   const handleClosePlayer = async () => {
@@ -146,6 +163,12 @@ export const App: React.FC = () => {
               infoHash={playback.infoHash}
               subtitles={playback.subtitles}
               onBack={handleClosePlayer}
+              series={playback.series}
+              onSelectEpisode={
+                playback.onRequestEpisode
+                  ? (episode) => handleSwitchEpisode(episode)
+                  : undefined
+              }
             />
           )}
 

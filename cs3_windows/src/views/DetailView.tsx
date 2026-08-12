@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Play, Download, Star, ArrowLeft, Loader2, AlertTriangle, Calendar } from 'lucide-react';
 import type { SearchResponse, Episode } from '../types/api';
 import { TvType } from '../types/api';
@@ -6,6 +6,7 @@ import { DownloadState } from '../types/download';
 import type { DownloadTask } from '../types/download';
 import type { TorrentResult } from '../types/torrent';
 import { SourcePicker, type SourcePickerData } from '../components/SourcePicker';
+import type { SeriesContext } from '../components/player/EpisodePanel';
 
 export interface PlaybackRequest {
   streamUrl: string;
@@ -14,6 +15,16 @@ export interface PlaybackRequest {
   episodeTitle?: string;
   infoHash: string;
   subtitles: Array<{ name: string; url: string }>;
+  /** Series context, so the player can show episodes and offer next/previous. */
+  series?: SeriesContext;
+  /**
+   * Switches episode without leaving the player.
+   *
+   * Supplied by this view because it owns source resolution. The player asks
+   * for an episode; resolving a source for it and restarting the stream stays
+   * here rather than being duplicated in the player.
+   */
+  onRequestEpisode?: (episode: Episode) => void;
 }
 
 interface DetailViewProps {
@@ -150,6 +161,80 @@ export const DetailView: React.FC<DetailViewProps> = ({
     [detail]
   );
 
+  /** Series context handed to the player, so it can browse without coming back. */
+  const seriesContextFor = useCallback(
+    (episode: Episode | null): SeriesContext | undefined => {
+      if (!detail || !isSeries) return undefined;
+      return {
+        title: detail.name,
+        posterUrl: detail.posterUrl,
+        plot: detail.plot,
+        year: detail.year,
+        rating: detail.rating,
+        tags: detail.tags,
+        duration: detail.duration,
+        episodes: detail.episodes ?? [],
+        currentEpisodeUrl: episode?.url,
+      };
+    },
+    [detail, isSeries]
+  );
+
+  /**
+   * Plays an episode straight from the player, picking a source automatically.
+   *
+   * Pressing "next episode" should behave like pressing next episode, not like
+   * being returned to a source list. `getSources` already ranks its results, so
+   * the first entry is the one the picker would recommend anyway; falling back
+   * to the picker only when nothing ranks avoids guessing when there is nothing
+   * to guess from.
+   */
+  const playEpisodeDirectly = useCallback(
+    async (episode: Episode) => {
+      if (!window.cloudstream || !detail) return;
+
+      setSelectedEpisode(episode);
+      const response = await window.cloudstream.getSources({
+        mediaUrl: episode.url,
+        season: episode.season,
+        episode: episode.episode,
+      });
+
+      const best = response.sources?.[0];
+      if (!response.ok || !best) {
+        // No automatic choice available — fall back to the picker so the user
+        // can see why, rather than silently doing nothing.
+        openSources(episode);
+        return;
+      }
+
+      const stream = await window.cloudstream.startStream(best, episode.season, episode.episode);
+      if (!stream.ok || !stream.handle) {
+        openSources(episode);
+        return;
+      }
+
+      onPlay({
+        streamUrl: stream.handle.streamUrl,
+        mimeType: stream.handle.mimeType,
+        title: detail.name,
+        episodeTitle: episode.name,
+        infoHash: stream.handle.infoHash,
+        subtitles: stream.handle.subtitleUrls,
+        series: seriesContextFor(episode),
+        onRequestEpisode: (next) => playEpisodeDirectlyRef.current(next),
+      });
+    },
+    [detail, onPlay, openSources, seriesContextFor]
+  );
+
+  // The handler is embedded in the request it produces, so it needs a stable
+  // reference to itself; a ref keeps that from becoming a circular dependency.
+  const playEpisodeDirectlyRef = useRef(playEpisodeDirectly);
+  useEffect(() => {
+    playEpisodeDirectlyRef.current = playEpisodeDirectly;
+  }, [playEpisodeDirectly]);
+
   const handlePlaySource = useCallback(
     async (source: TorrentResult) => {
       if (!window.cloudstream || !detail) return;
@@ -175,9 +260,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
         episodeTitle: pendingEpisode?.name,
         infoHash: response.handle.infoHash,
         subtitles: response.handle.subtitleUrls,
+        series: seriesContextFor(pendingEpisode),
+        onRequestEpisode: (episode) => playEpisodeDirectlyRef.current(episode),
       });
     },
-    [detail, pendingEpisode, onPlay]
+    [detail, pendingEpisode, onPlay, seriesContextFor]
   );
 
   const handleDownloadSource = useCallback(
