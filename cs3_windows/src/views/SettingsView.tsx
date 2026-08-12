@@ -1,13 +1,33 @@
-import React, { useState } from 'react';
-import { Download, HardDrive, ShieldCheck, RefreshCw, Zap } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Download, HardDrive, RefreshCw, Zap, Code, Tv, CheckCircle2 } from 'lucide-react';
 
 interface SettingsViewProps {
+  hasBinaries?: boolean;
   onOpenBinarySetup?: () => void;
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenBinarySetup }) => {
+export const SettingsView: React.FC<SettingsViewProps> = ({
+  hasBinaries = true,
+  onOpenBinarySetup
+}) => {
   const [downloadDir, setDownloadDir] = useState('%USERPROFILE%\\Downloads\\CloudStream');
+  const [useLiveStreams, setUseLiveStreams] = useState(true);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (window.cloudstream) {
+      window.cloudstream.getSetting('use_live_streaming_sources', true).then(setUseLiveStreams);
+    }
+  }, []);
+
+  const handleToggleLiveStreams = async (enabled: boolean) => {
+    setUseLiveStreams(enabled);
+    if (window.cloudstream) {
+      await window.cloudstream.setSetting('use_live_streaming_sources', enabled);
+      setStatusMessage(enabled ? '✓ Dev Mode: Live Content Streaming Mode Enabled!' : '✓ Dev Mode: Demo Fallback Streaming Mode Active');
+      setTimeout(() => setStatusMessage(null), 3000);
+    }
+  };
 
   const handleSelectDirectory = async () => {
     if (window.cloudstream) {
@@ -24,6 +44,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenBinarySetup })
       if (selectedFile) {
         const success = await window.cloudstream.importBackup(selectedFile);
         setStatusMessage(success ? '✓ CS3 Android Backup Imported Successfully!' : 'Failed to import backup.');
+        setTimeout(() => setStatusMessage(null), 3000);
       }
     }
   };
@@ -33,7 +54,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenBinarySetup })
       <div>
         <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>Application Settings</h2>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-          Configure download paths, downloader engines, and CS3 Android backup imports
+          Configure download paths, downloader engines, developer streaming mode, and CS3 Android backup imports
         </p>
       </div>
 
@@ -50,7 +71,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenBinarySetup })
         </div>
       )}
 
-      {/* Downloader Engine 1-Click Setup Section */}
+      {/* Developer Options & Streaming Engine Toggle Section */}
       <div style={{
         background: 'var(--bg-card)',
         borderRadius: 'var(--radius-md)',
@@ -58,18 +79,85 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenBinarySetup })
         padding: '1.25rem',
         display: 'flex',
         flexDirection: 'column',
-        gap: '0.75rem'
+        gap: '1rem'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fff' }}>
-          <Zap size={18} style={{ color: 'var(--accent-light)' }} />
-          <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>1-Click Downloader Engine Setup</h3>
+          <Code size={18} style={{ color: 'var(--accent-light)' }} />
+          <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>Developer Options & Media Streaming Engine</h3>
         </div>
+
         <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-          Auto-configure portable <strong>aria2c</strong> (16-thread multi-connection stream downloader) and <strong>yt-dlp</strong> fallback engine automatically upon prompt confirmation.
+          Toggle between <strong>Live Actual Content Mode</strong> (scrapes and streams real 1080p/4K master streams and open-source movies live) and <strong>Demo Fallback Mode</strong> for offline development testing.
         </p>
-        <button onClick={onOpenBinarySetup} className="btn btn-primary" style={{ width: 'fit-content', marginTop: '0.25rem' }}>
+
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          background: 'var(--bg-input)',
+          padding: '0.75rem 1rem',
+          borderRadius: 'var(--radius-sm)',
+          border: '1px solid var(--border-color)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <Tv size={20} style={{ color: useLiveStreams ? 'var(--status-success)' : 'var(--text-subtle)' }} />
+            <div>
+              <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#fff' }}>
+                {useLiveStreams ? 'Actual Content Streaming Mode (Live)' : 'Demo Content Streaming Mode (Demo)'}
+              </div>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
+                {useLiveStreams ? 'Streams real 1080p/4K media & live master playlists' : 'Uses offline demo streams for testing'}
+              </span>
+            </div>
+          </div>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={useLiveStreams}
+              onChange={(e) => handleToggleLiveStreams(e.target.checked)}
+              style={{ width: '18px', height: '18px', accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+            />
+            <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#fff' }}>
+              {useLiveStreams ? 'ON' : 'OFF'}
+            </span>
+          </label>
+        </div>
+      </div>
+
+      {/* Downloader Engine Setup & Re-install Section */}
+      <div style={{
+        background: 'var(--bg-card)',
+        borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--border-color)',
+        padding: '1.25rem',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.75rem'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fff' }}>
+            <Zap size={18} style={{ color: 'var(--accent-light)' }} />
+            <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>Downloader Engine Configuration</h3>
+          </div>
+
+          {hasBinaries && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--status-success)', fontSize: '0.8rem', fontWeight: 600 }}>
+              <CheckCircle2 size={16} />
+              <span>Engines Configured & Ready</span>
+            </div>
+          )}
+        </div>
+
+        <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          {hasBinaries
+            ? 'The portable aria2c (16-thread multi-connection stream downloader) and yt-dlp engines are configured and active.'
+            : 'Auto-configure portable aria2c and yt-dlp fallback engine automatically upon prompt confirmation.'}
+        </p>
+
+        <button onClick={onOpenBinarySetup} className={`btn ${hasBinaries ? 'btn-secondary' : 'btn-primary'}`} style={{ width: 'fit-content', marginTop: '0.25rem' }}>
           <Download size={16} />
-          <span>⚡ 1-Click Auto Setup Engines</span>
+          <span>{hasBinaries ? 'Reinstall / Update Downloader Engines' : '⚡ 1-Click Auto Setup Engines'}</span>
         </button>
       </div>
 

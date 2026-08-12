@@ -32,6 +32,7 @@ export const App: React.FC = () => {
 
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const [isBinaryModalOpen, setIsBinaryModalOpen] = useState(false);
+  const [hasBinaries, setHasBinaries] = useState(true);
 
   // Initialize Electron IPC listeners
   useEffect(() => {
@@ -42,11 +43,9 @@ export const App: React.FC = () => {
         setDownloadQueue(tasks);
       });
 
-      // Check downloader binaries
+      // Check downloader binaries status
       window.cloudstream.checkBinaries().then((status) => {
-        if (!status.aria2) {
-          console.info('aria2 binary not initialized. Prompting 1-click downloader setup.');
-        }
+        setHasBinaries(status.aria2);
       });
     }
 
@@ -100,6 +99,10 @@ export const App: React.FC = () => {
 
   const handleRemoveDownload = async (id: string) => {
     if (window.cloudstream) await window.cloudstream.removeDownload(id);
+  };
+
+  const handleBinarySetupSuccess = () => {
+    setHasBinaries(true);
   };
 
   return (
@@ -158,6 +161,7 @@ export const App: React.FC = () => {
               {activeTab === 'downloads' && (
                 <DownloadCenter
                   tasks={downloadQueue}
+                  hasBinaries={hasBinaries}
                   onPause={handlePauseDownload}
                   onResume={handleResumeDownload}
                   onRemove={handleRemoveDownload}
@@ -166,7 +170,10 @@ export const App: React.FC = () => {
               )}
               {activeTab === 'extensions' && <ExtensionManagerUI />}
               {activeTab === 'settings' && (
-                <SettingsView onOpenBinarySetup={() => setIsBinaryModalOpen(true)} />
+                <SettingsView
+                  hasBinaries={hasBinaries}
+                  onOpenBinarySetup={() => setIsBinaryModalOpen(true)}
+                />
               )}
             </>
           )}
@@ -184,7 +191,7 @@ export const App: React.FC = () => {
       <BinarySetupModal
         isOpen={isBinaryModalOpen}
         onClose={() => setIsBinaryModalOpen(false)}
-        onSuccess={() => console.log('Binary setup completed!')}
+        onSuccess={handleBinarySetupSuccess}
       />
     </div>
   );

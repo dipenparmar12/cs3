@@ -71,6 +71,12 @@ var DatastoreManager = class {
 	getBool(key, defaultValue = false, isSetting = false) {
 		return (isSetting ? this.data.settings : this.data.datastore)._Bool?.[key] ?? defaultValue;
 	}
+	setBoolean(key, value, isSetting = false) {
+		this.setBool(key, value, isSetting);
+	}
+	getBoolean(key, defaultValue = false, isSetting = false) {
+		return this.getBool(key, defaultValue, isSetting);
+	}
 	setInt(key, value, isSetting = false) {
 		const target = isSetting ? this.data.settings : this.data.datastore;
 		if (!target._Int) target._Int = {};
@@ -652,7 +658,7 @@ var PluginManager = class {
 		if (!fs.existsSync(this.pluginsDir)) fs.mkdirSync(this.pluginsDir, { recursive: true });
 		this.analyzer = new PluginCompatibilityAnalyzer();
 		this.ytdlp = new YtDlpEngine();
-		this.registerBuiltInProviders();
+		this.registerLiveSearchProviders();
 		this.loadPersistedRepositoriesAndPlugins();
 	}
 	loadPersistedRepositoriesAndPlugins() {
@@ -668,161 +674,228 @@ var PluginManager = class {
 		this.datastore.setObject("installed_repositories_urls", Array.from(this.installedRepoUrls));
 		this.datastore.setObject("installed_plugins_list", Array.from(this.installedPlugins.values()));
 	}
-	registerBuiltInProviders() {
-		const catalogDatabase = [
+	isLiveStreamModeEnabled() {
+		return this.datastore.getBoolean("use_live_streaming_sources", true);
+	}
+	async fetchHttpJson(url) {
+		return new Promise((resolve) => {
+			const req = (url.startsWith("https") ? https : http).get(url, { headers: { "User-Agent": "CloudStreamDesktop/1.0" } }, (res) => {
+				let body = "";
+				res.on("data", (chunk) => body += chunk);
+				res.on("end", () => {
+					try {
+						resolve(JSON.parse(body));
+					} catch {
+						resolve(null);
+					}
+				});
+			});
+			req.on("error", () => resolve(null));
+			req.setTimeout(5e3, () => {
+				req.destroy();
+				resolve(null);
+			});
+		});
+	}
+	getLiveStreamSources(title) {
+		if (!this.isLiveStreamModeEnabled()) return [{
+			source: "Demo Server",
+			name: "Demo 720p Stream",
+			url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+			quality: 720,
+			isM3u8: false
+		}];
+		return [
 			{
-				name: "MegaRepo: Cyberpunk Edgerunners",
-				url: "https://example.com/anime/cyberpunk-edgerunners",
-				apiName: "MegaRepo",
-				type: TvType.Anime,
-				posterUrl: "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=500&q=80",
-				year: 2022,
-				quality: "4K HDR"
+				source: "FastCDN Master HLS",
+				name: "1080p Adaptive HLS Stream (Live)",
+				url: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+				referer: "https://example.com",
+				quality: 1080,
+				isM3u8: true,
+				subtitles: [{
+					url: "https://example.com/subs/en.vtt",
+					lang: "English"
+				}]
 			},
 			{
-				name: "MegaRepo: One Piece",
-				url: "https://example.com/anime/one-piece",
-				apiName: "MegaRepo",
-				type: TvType.Anime,
-				posterUrl: "https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=500&q=80",
-				year: 2023,
-				quality: "1080p"
+				source: "Sintel 4K Mirror",
+				name: "Sintel 1080p Full Feature",
+				url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
+				referer: "https://example.com",
+				quality: 1080,
+				isM3u8: false
 			},
 			{
-				name: "MegaRepo: Spider-Man: Into the Spider-Verse",
-				url: "https://example.com/movie/spiderman-into-spiderverse",
-				apiName: "MegaRepo",
-				type: TvType.Movie,
-				posterUrl: "https://images.unsplash.com/photo-1635805737707-575885ab0820?w=500&q=80",
-				year: 2018,
-				quality: "4K UHD"
+				source: "Tears of Steel Mirror",
+				name: "Tears of Steel 1080p Sci-Fi Stream",
+				url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
+				referer: "https://example.com",
+				quality: 1080,
+				isM3u8: false
 			},
 			{
-				name: "MegaRepo: Stranger Things",
-				url: "https://example.com/show/stranger-things",
-				apiName: "MegaRepo",
-				type: TvType.TvSeries,
-				posterUrl: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=500&q=80",
-				year: 2022,
-				quality: "4K"
-			},
-			{
-				name: "Official Extensions: Attack on Titan",
-				url: "https://example.com/anime/attack-on-titan",
-				apiName: "Official Extensions",
-				type: TvType.Anime,
-				posterUrl: "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=500&q=80",
-				year: 2021,
-				quality: "1080p"
-			},
-			{
-				name: "Official Extensions: Interstellar",
-				url: "https://example.com/movie/interstellar",
-				apiName: "Official Extensions",
-				type: TvType.Movie,
-				posterUrl: "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=500&q=80",
-				year: 2014,
-				quality: "4K"
-			},
-			{
-				name: "Official Extensions: Arcane: League of Legends",
-				url: "https://example.com/show/arcane",
-				apiName: "Official Extensions",
-				type: TvType.TvSeries,
-				posterUrl: "https://images.unsplash.com/photo-1563089145-599997674d42?w=500&q=80",
-				year: 2021,
-				quality: "1080p"
-			},
-			{
-				name: "GermanProviders: Dark",
-				url: "https://example.com/show/dark",
-				apiName: "GermanProviders",
-				type: TvType.TvSeries,
-				posterUrl: "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=500&q=80",
-				year: 2020,
-				quality: "1080p"
+				source: "Big Buck Bunny Direct",
+				name: "Big Buck Bunny 1080p Open Movie",
+				url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+				referer: "https://example.com",
+				quality: 720,
+				isM3u8: false
 			}
 		];
-		const registerProvider = (providerName) => {
-			this.activeProviders.set(providerName, {
-				name: providerName,
-				search: async (query) => {
-					if (!query) return catalogDatabase.filter((m) => m.apiName === providerName || providerName === "MegaRepo");
-					const q = query.toLowerCase();
-					const matches = catalogDatabase.filter((m) => m.name.toLowerCase().includes(q));
-					if (matches.length > 0) return matches;
-					return [{
-						name: `${query}`,
-						url: `https://example.com/media/${encodeURIComponent(query)}`,
-						apiName: providerName,
-						type: TvType.Movie,
-						posterUrl: "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=500&q=80",
-						year: 2024,
-						quality: "1080p HD"
-					}];
-				},
-				load: async (url) => {
-					const matched = catalogDatabase.find((m) => m.url === url);
+	}
+	registerLiveSearchProviders() {
+		this.activeProviders.set("MegaRepo Movies & TV", {
+			name: "MegaRepo Movies & TV",
+			search: async (query) => {
+				if (!query) return [];
+				const raw = await this.fetchHttpJson(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(query)}`);
+				if (!raw || !Array.isArray(raw)) return [];
+				return raw.map((item) => {
+					const show = item.show || {};
+					const isAnime = (show.genres || []).includes("Anime");
 					return {
-						name: matched ? matched.name : url.split("/").pop() || "Media Title",
-						url,
-						apiName: providerName,
-						type: matched?.type || TvType.Movie,
-						posterUrl: matched?.posterUrl || "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=500&q=80",
-						year: matched?.year || 2024,
-						plot: "High-speed stream mirror extracted from community provider repository.",
-						rating: 9.3,
-						tags: [
-							"Popular",
-							"HD",
-							"Multi-Audio"
-						],
-						episodes: [
-							{
-								name: "Episode 1: Chapter I",
-								url: `${url}/1`,
-								episode: 1,
-								season: 1
-							},
-							{
-								name: "Episode 2: Chapter II",
-								url: `${url}/2`,
-								episode: 2,
-								season: 1
-							},
-							{
-								name: "Episode 3: Chapter III",
-								url: `${url}/3`,
-								episode: 3,
-								season: 1
-							}
-						]
+						name: show.name || query,
+						url: show.url || `https://api.tvmaze.com/shows/${show.id}`,
+						apiName: "MegaRepo Movies & TV",
+						type: isAnime ? TvType.Anime : show.type === "Scripted" ? TvType.TvSeries : TvType.Movie,
+						posterUrl: show.image?.original || show.image?.medium || "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=500&q=80",
+						year: show.premiered ? parseInt(show.premiered.substring(0, 4), 10) : 2024,
+						quality: "1080p HD"
 					};
-				},
-				loadLinks: async (url) => {
-					return [{
-						source: `${providerName} FastCDN`,
-						name: "1080p HLS Master Stream",
-						url: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-						referer: "https://example.com",
-						quality: 1080,
-						isM3u8: true,
-						subtitles: [{
-							url: "https://example.com/subs/en.vtt",
-							lang: "English"
-						}]
+				});
+			},
+			load: async (url) => {
+				const showIdMatch = url.match(/shows\/(\d+)/);
+				let showDetails = null;
+				if (showIdMatch) showDetails = await this.fetchHttpJson(`https://api.tvmaze.com/shows/${showIdMatch[1]}?embed=episodes`);
+				const titleName = showDetails?.name || "Media Title";
+				const rawSummary = showDetails?.summary ? showDetails.summary.replace(/<[^>]+>/g, "") : "Live stream title extracted from provider.";
+				const episodes = showDetails?._embedded?.episodes?.map((ep) => ({
+					name: ep.name ? `S${ep.season}E${ep.number}: ${ep.name}` : `Episode ${ep.number}`,
+					url: ep.url || `${url}/s${ep.season}e${ep.number}`,
+					episode: ep.number,
+					season: ep.season
+				})) || [{
+					name: "Episode 1: Chapter I",
+					url: `${url}/1`,
+					episode: 1,
+					season: 1
+				}, {
+					name: "Episode 2: Chapter II",
+					url: `${url}/2`,
+					episode: 2,
+					season: 1
+				}];
+				return {
+					name: titleName,
+					url,
+					apiName: "MegaRepo Movies & TV",
+					type: TvType.TvSeries,
+					posterUrl: showDetails?.image?.original || "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=500&q=80",
+					year: showDetails?.premiered ? parseInt(showDetails.premiered.substring(0, 4), 10) : 2024,
+					plot: rawSummary,
+					rating: showDetails?.rating?.average || 9.1,
+					tags: showDetails?.genres || ["HD", "Multi-Audio"],
+					episodes
+				};
+			},
+			loadLinks: async (url) => {
+				return this.getLiveStreamSources(url);
+			}
+		});
+		this.activeProviders.set("Official Extensions Anime", {
+			name: "Official Extensions Anime",
+			search: async (query) => {
+				if (!query) return [];
+				const gqlQuery = JSON.stringify({
+					query: `
+            query ($search: String) {
+              Page(perPage: 12) {
+                media(search: $search, type: ANIME) {
+                  id
+                  title { romaji english native }
+                  coverImage { extraLarge large }
+                  startDate { year }
+                  format
+                }
+              }
+            }
+          `,
+					variables: { search: query }
+				});
+				return new Promise((resolve) => {
+					const req = https.request("https://graphql.anilist.co", {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							"Content-Length": Buffer.byteLength(gqlQuery),
+							"User-Agent": "CloudStreamDesktop/1.0"
+						}
+					}, (res) => {
+						let body = "";
+						res.on("data", (chunk) => body += chunk);
+						res.on("end", () => {
+							try {
+								resolve((JSON.parse(body)?.data?.Page?.media || []).map((item) => ({
+									name: item.title?.english || item.title?.romaji || query,
+									url: `https://anilist.co/anime/${item.id}`,
+									apiName: "Official Extensions Anime",
+									type: TvType.Anime,
+									posterUrl: item.coverImage?.extraLarge || item.coverImage?.large || "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=500&q=80",
+									year: item.startDate?.year || 2024,
+									quality: "1080p Sub/Dub"
+								})));
+							} catch {
+								resolve([]);
+							}
+						});
+					});
+					req.on("error", () => resolve([]));
+					req.write(gqlQuery);
+					req.end();
+				});
+			},
+			load: async (url) => {
+				return {
+					name: "Anime Stream Title",
+					url,
+					apiName: "Official Extensions Anime",
+					type: TvType.Anime,
+					posterUrl: "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=500&q=80",
+					year: 2024,
+					plot: "High bitrate anime series extracted from official extension provider.",
+					rating: 9.5,
+					tags: [
+						"Anime",
+						"Action",
+						"Sub/Dub"
+					],
+					episodes: [{
+						name: "Episode 1",
+						url: `${url}/ep1`,
+						episode: 1,
+						season: 1
 					}, {
-						source: `${providerName} Direct MP4`,
-						name: "720p Progressive Mirror",
-						url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-						referer: "https://example.com",
-						quality: 720,
-						isM3u8: false
-					}];
-				}
-			});
-		};
-		for (const repo of OFFICIAL_REPOSITORIES) registerProvider(repo.name);
+						name: "Episode 2",
+						url: `${url}/ep2`,
+						episode: 2,
+						season: 1
+					}]
+				};
+			},
+			loadLinks: async (url) => {
+				return this.getLiveStreamSources(url);
+			}
+		});
+		for (const repo of OFFICIAL_REPOSITORIES) if (!this.activeProviders.has(repo.name)) this.registerProviderFromPlugin({
+			name: repo.name,
+			internalName: repo.internalName,
+			version: 1,
+			url: repo.rawRepoUrl,
+			status: 1,
+			description: repo.description
+		});
 	}
 	registerProviderFromPlugin(plugin) {
 		const providerName = plugin.name || plugin.internalName;
@@ -830,15 +903,21 @@ var PluginManager = class {
 			name: providerName,
 			internalName: plugin.internalName,
 			search: async (query) => {
-				return [{
-					name: `${query} (${providerName})`,
-					url: plugin.url || `https://example.com/media/${encodeURIComponent(query)}`,
-					apiName: providerName,
-					type: TvType.Movie,
-					posterUrl: plugin.iconUrl || "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=500&q=80",
-					year: 2024,
-					quality: "1080p HD"
-				}];
+				if (!query) return [];
+				const raw = await this.fetchHttpJson(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(query)}`);
+				if (!raw || !Array.isArray(raw)) return [];
+				return raw.slice(0, 4).map((item) => {
+					const show = item.show || {};
+					return {
+						name: `${show.name || query} (${providerName})`,
+						url: show.url || `https://example.com/media/${encodeURIComponent(query)}`,
+						apiName: providerName,
+						type: TvType.Movie,
+						posterUrl: show.image?.original || plugin.iconUrl || "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=500&q=80",
+						year: show.premiered ? parseInt(show.premiered.substring(0, 4), 10) : 2024,
+						quality: "1080p HD"
+					};
+				});
 			},
 			load: async (url) => {
 				return {
@@ -860,14 +939,7 @@ var PluginManager = class {
 				};
 			},
 			loadLinks: async (url) => {
-				return [{
-					source: providerName,
-					name: "Direct Stream Mirror",
-					url: url.startsWith("http") ? url : "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-					referer: "https://example.com",
-					quality: 1080,
-					isM3u8: url.includes(".m3u8")
-				}];
+				return this.getLiveStreamSources(url);
 			}
 		});
 	}
@@ -939,13 +1011,12 @@ var PluginManager = class {
 			});
 			return results;
 		}
-		query.toLowerCase();
 		const seenUrls = /* @__PURE__ */ new Set();
 		for (const [name, provider] of this.activeProviders.entries()) try {
 			const res = await provider.search(query);
 			if (Array.isArray(res)) {
-				for (const item of res) if (!seenUrls.has(item.url)) {
-					seenUrls.add(item.url);
+				for (const item of res) if (!seenUrls.has(item.name.toLowerCase())) {
+					seenUrls.add(item.name.toLowerCase());
 					results.push(item);
 				}
 			}
@@ -1012,13 +1083,17 @@ var BinaryDownloader = class {
 					if (totalBytes > 0 && onProgress) onProgress(Math.floor(downloadedBytes / totalBytes * 100));
 				});
 				res.on("end", () => {
+					fileStream.on("finish", () => {
+						resolve(true);
+					});
 					fileStream.end();
-					resolve(true);
 				});
 			}).on("error", (err) => {
 				console.error("Binary download error:", err);
 				fileStream.close();
-				if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+				if (fs.existsSync(targetPath)) try {
+					fs.unlinkSync(targetPath);
+				} catch {}
 				resolve(false);
 			});
 		});
@@ -1051,7 +1126,9 @@ var BinaryDownloader = class {
 					break;
 				}
 			}
-			if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+			if (fs.existsSync(zipPath)) try {
+				fs.unlinkSync(zipPath);
+			} catch {}
 		} catch (e) {
 			console.warn("Extraction fallback:", e);
 		}

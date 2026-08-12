@@ -58,15 +58,19 @@ export class BinaryDownloader {
         });
 
         res.on('end', () => {
+          fileStream.on('finish', () => {
+            resolve(true);
+          });
           fileStream.end();
-          resolve(true);
         });
       });
 
       req.on('error', (err) => {
         console.error('Binary download error:', err);
         fileStream.close();
-        if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+        if (fs.existsSync(targetPath)) {
+          try { fs.unlinkSync(targetPath); } catch {}
+        }
         resolve(false);
       });
     });
@@ -80,7 +84,6 @@ export class BinaryDownloader {
 
     if (onStatus) onStatus('Downloading portable aria2c binary...', 20);
 
-    // Direct github raw mirror for portable aria2c executable
     const aria2Url = 'https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip';
     const zipPath = path.join(this.binDir, 'aria2.zip');
 
@@ -89,7 +92,6 @@ export class BinaryDownloader {
     });
 
     if (!downloadSuccess || !fs.existsSync(zipPath)) {
-      // Fallback direct executable mirror
       const directExecutableUrl = 'https://raw.githubusercontent.com/dipenparmar12/cs3/main/bin/aria2c.exe';
       if (onStatus) onStatus('Downloading via mirror engine...', 50);
       await this.downloadFile(directExecutableUrl, targetBinaryPath, (p) => {
@@ -100,11 +102,10 @@ export class BinaryDownloader {
 
     if (onStatus) onStatus('Extracting aria2c binary...', 80);
 
-    // Extract zip via powershell on Windows
+    // Extract zip via powershell safely
     try {
       child_process.execSync(`powershell -command "Expand-Archive -Path '${zipPath}' -DestinationPath '${this.binDir}' -Force"`);
-      
-      // Search for aria2c.exe in extracted subfolder and move to binDir
+
       const files = fs.readdirSync(this.binDir, { recursive: true });
       for (const f of files) {
         const fullPath = path.join(this.binDir, String(f));
@@ -113,7 +114,9 @@ export class BinaryDownloader {
           break;
         }
       }
-      if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+      if (fs.existsSync(zipPath)) {
+        try { fs.unlinkSync(zipPath); } catch {}
+      }
     } catch (e) {
       console.warn('Extraction fallback:', e);
     }

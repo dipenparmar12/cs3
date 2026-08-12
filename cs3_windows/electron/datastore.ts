@@ -84,6 +84,15 @@ export class DatastoreManager {
     return target._Bool?.[key] ?? defaultValue;
   }
 
+  // Aliases for compatibility
+  public setBoolean(key: string, value: boolean, isSetting = false): void {
+    this.setBool(key, value, isSetting);
+  }
+
+  public getBoolean(key: string, defaultValue = false, isSetting = false): boolean {
+    return this.getBool(key, defaultValue, isSetting);
+  }
+
   public setInt(key: string, value: number, isSetting = false): void {
     const target = isSetting ? this.data.settings : this.data.datastore;
     if (!target._Int) target._Int = {};
@@ -116,8 +125,7 @@ export class DatastoreManager {
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
       const backupData = JSON.parse(content) as DatastoreBackup;
-      
-      // Merge imported data safely into current Datastore
+
       if (backupData.datastore) {
         Object.assign(this.data.datastore._Bool ??={}, backupData.datastore._Bool ?? {});
         Object.assign(this.data.datastore._Int ??={}, backupData.datastore._Int ?? {});

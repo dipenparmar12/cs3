@@ -1,10 +1,11 @@
 import React from 'react';
 import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
-import { Play, Pause, Trash2, ArrowDown, Folder, ShieldCheck, Zap } from 'lucide-react';
+import { Play, Pause, Trash2, ArrowDown, Folder, Zap } from 'lucide-react';
 
 interface DownloadCenterProps {
   tasks: DownloadTask[];
+  hasBinaries?: boolean;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onRemove: (id: string) => void;
@@ -13,6 +14,7 @@ interface DownloadCenterProps {
 
 export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   tasks,
+  hasBinaries = true,
   onPause,
   onResume,
   onRemove,
@@ -43,7 +45,8 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
           </p>
         </div>
 
-        {onOpenBinarySetup && (
+        {/* Hide banner/button if binaries are already configured */}
+        {!hasBinaries && onOpenBinarySetup && (
           <button onClick={onOpenBinarySetup} className="btn btn-secondary" style={{ borderColor: 'var(--accent-primary)' }}>
             <Zap size={16} style={{ color: 'var(--accent-light)' }} />
             <span>⚡ 1-Click Engine Setup</span>
