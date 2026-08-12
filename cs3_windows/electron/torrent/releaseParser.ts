@@ -32,10 +32,15 @@ const SOURCE_PATTERNS: Array<[RegExp, ReleaseSource]> = [
   [/\b(?:hdcam|camrip|cam|telecine|tc)\b/i, ReleaseSource.CAM],
 ];
 
+/**
+ * Note the `[\s.]?` between letter and digits: `normalise()` has already turned
+ * separator dots into spaces, so `H.265` arrives here as `H 265`. Matching only
+ * `h\.?265` silently missed every dotted-codec release — which is most of them.
+ */
 const CODEC_PATTERNS: Array<[RegExp, VideoCodec]> = [
   [/\bav1\b/i, VideoCodec.AV1],
-  [/\b(?:x\.?265|h\.?265|hevc)\b/i, VideoCodec.H265],
-  [/\b(?:x\.?264|h\.?264|avc)\b/i, VideoCodec.H264],
+  [/\b(?:x[\s.]?265|h[\s.]?265|hevc)\b/i, VideoCodec.H265],
+  [/\b(?:x[\s.]?264|h[\s.]?264|avc)\b/i, VideoCodec.H264],
   [/\b(?:xvid|divx)\b/i, VideoCodec.XviD],
   [/\bvp9\b/i, VideoCodec.VP9],
 ];
@@ -49,17 +54,22 @@ const RESOLUTION_PATTERNS: Array<[RegExp, Resolution]> = [
   [/\b(?:360p?|240p?)\b/i, Resolution.LD],
 ];
 
+/**
+ * Channel counts are glued to the codec in practice (`DDP5.1`, `AC3 2.0`), and
+ * dots are already spaces by this point, so these allow an optional trailing
+ * channel digit rather than requiring a word boundary straight after the name.
+ */
 const AUDIO_PATTERNS: Array<[RegExp, string]> = [
   [/\batmos\b/i, 'Atmos'],
   [/\btruehd\b/i, 'TrueHD'],
   [/\bdts-?hd(?:\s*ma)?\b/i, 'DTS-HD'],
   [/\bdts-?x\b/i, 'DTS-X'],
   [/\bdts\b/i, 'DTS'],
-  [/\b(?:ddp|eac-?3|e-?ac-?3|dd\+)\b/i, 'EAC3'],
-  [/\b(?:dd(?!\+)|ac-?3)\b/i, 'AC3'],
-  [/\bflac\b/i, 'FLAC'],
+  [/\b(?:ddp|eac-?3|e-?ac-?3|dd\+)\d*\b/i, 'EAC3'],
+  [/\b(?:dd(?!p)(?!\+)|ac-?3)\d*\b/i, 'AC3'],
+  [/\bflac\d*\b/i, 'FLAC'],
   [/\bopus\b/i, 'Opus'],
-  [/\baac\b/i, 'AAC'],
+  [/\baac\d*\b/i, 'AAC'],
   [/\bmp3\b/i, 'MP3'],
 ];
 
@@ -106,7 +116,7 @@ const TITLE_TERMINATOR_RE = new RegExp(
     String.raw`\b(?:2160|1440|1080|720|480|360)[pi]?\b`,
     String.raw`\b(?:4k|uhd|fhd)\b`,
     String.raw`\b(?:bluray|blu-ray|bdrip|brrip|web-?dl|webrip|web|hdtv|dvdrip|remux|hdcam|cam|hdts|telesync)\b`,
-    String.raw`\b(?:x\.?26[45]|h\.?26[45]|hevc|avc|av1|xvid|divx)\b`,
+    String.raw`\b(?:x[\s.]?26[45]|h[\s.]?26[45]|hevc|avc|av1|xvid|divx)\b`,
     String.raw`\bcomplete\b`,
   ].join('|'),
   'i'

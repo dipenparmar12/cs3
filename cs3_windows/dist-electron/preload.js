@@ -1,31 +1,51 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge as e, ipcRenderer as t } from "electron";
 //#region electron/preload.ts
-contextBridge.exposeInMainWorld("cloudstream", {
-	searchAll: (query, targetProviders) => ipcRenderer.invoke("api:searchAll", query, targetProviders),
-	loadMedia: (apiName, url) => ipcRenderer.invoke("api:loadMedia", apiName, url),
-	loadLinks: (apiName, url) => ipcRenderer.invoke("api:loadLinks", apiName, url),
-	getProvidersList: () => ipcRenderer.invoke("api:getProvidersList"),
-	enqueueDownload: (task) => ipcRenderer.invoke("download:enqueue", task),
-	pauseDownload: (id) => ipcRenderer.invoke("download:pause", id),
-	resumeDownload: (id) => ipcRenderer.invoke("download:resume", id),
-	removeDownload: (id) => ipcRenderer.invoke("download:remove", id),
-	getDownloadQueue: () => ipcRenderer.invoke("download:getQueue"),
-	onDownloadProgress: (callback) => {
-		ipcRenderer.on("download:progress", (_, tasks) => callback(tasks));
+e.exposeInMainWorld("cloudstream", {
+	searchAll: (e) => t.invoke("api:searchAll", e),
+	loadMedia: (e) => t.invoke("api:loadMedia", e),
+	getSources: (e) => t.invoke("api:getSources", e),
+	getPluginRuntimeStatus: () => t.invoke("api:getPluginRuntimeStatus"),
+	startStream: (e, n, r) => t.invoke("torrent:startStream", e, n, r),
+	getStreamStats: (e) => t.invoke("torrent:getStats", e),
+	selectStreamFile: (e, n) => t.invoke("torrent:selectFile", e, n),
+	stopStream: (e, n) => t.invoke("torrent:stopStream", e, n),
+	getActiveStreams: () => t.invoke("torrent:getActiveStreams"),
+	clearTorrentCache: () => t.invoke("torrent:clearCache"),
+	getTorrentCachePath: () => t.invoke("torrent:getCachePath"),
+	getIndexerConfigs: () => t.invoke("indexer:getConfigs"),
+	saveIndexerConfig: (e) => t.invoke("indexer:saveConfig", e),
+	removeIndexerConfig: (e) => t.invoke("indexer:removeConfig", e),
+	testIndexer: (e) => t.invoke("indexer:test", e),
+	getIndexerHealth: () => t.invoke("indexer:getHealth"),
+	getSourcePreferences: () => t.invoke("sources:getPreferences"),
+	saveSourcePreferences: (e) => t.invoke("sources:savePreferences", e),
+	enqueueDownload: (e) => t.invoke("download:enqueue", e),
+	pauseDownload: (e) => t.invoke("download:pause", e),
+	resumeDownload: (e) => t.invoke("download:resume", e),
+	removeDownload: (e) => t.invoke("download:remove", e),
+	getDownloadQueue: () => t.invoke("download:getQueue"),
+	revealInFolder: (e) => t.invoke("download:revealInFolder", e),
+	onDownloadProgress: (e) => {
+		let n = (t, n) => e(n);
+		return t.on("download:progress", n), () => t.removeListener("download:progress", n);
 	},
-	checkBinaries: () => ipcRenderer.invoke("binary:check"),
-	setupBinaries: () => ipcRenderer.invoke("binary:setup"),
-	getOfficialRepositories: () => ipcRenderer.invoke("extension:getOfficialRepositories"),
-	fetchRepository: (repoUrl) => ipcRenderer.invoke("extension:fetchRepository", repoUrl),
-	analyzePlugin: (plugin) => ipcRenderer.invoke("extension:analyzePlugin", plugin),
-	installPlugin: (plugin) => ipcRenderer.invoke("extension:installPlugin", plugin),
-	getInstalledRepositories: () => ipcRenderer.invoke("extension:getInstalledRepositories"),
-	getInstalledPlugins: () => ipcRenderer.invoke("extension:getInstalledPlugins"),
-	getSetting: (key, defaultValue) => ipcRenderer.invoke("datastore:getSetting", key, defaultValue),
-	setSetting: (key, value) => ipcRenderer.invoke("datastore:setSetting", key, value),
-	importBackup: (filePath) => ipcRenderer.invoke("datastore:importBackup", filePath),
-	exportBackup: () => ipcRenderer.invoke("datastore:exportBackup"),
-	selectDirectory: () => ipcRenderer.invoke("dialog:selectDirectory")
+	checkBinaries: () => t.invoke("binary:check"),
+	setupBinaries: () => t.invoke("binary:setup"),
+	getOfficialRepositories: () => t.invoke("extension:getOfficialRepositories"),
+	fetchRepository: (e) => t.invoke("extension:fetchRepository", e),
+	analyzePlugin: (e) => t.invoke("extension:analyzePlugin", e),
+	installPlugin: (e, n) => t.invoke("extension:installPlugin", e, n),
+	uninstallPlugin: (e) => t.invoke("extension:uninstallPlugin", e),
+	getInstalledRepositories: () => t.invoke("extension:getInstalledRepositories"),
+	removeRepository: (e) => t.invoke("extension:removeRepository", e),
+	getInstalledPlugins: () => t.invoke("extension:getInstalledPlugins"),
+	getSetting: (e, n) => t.invoke("datastore:getSetting", e, n),
+	setSetting: (e, n) => t.invoke("datastore:setSetting", e, n),
+	getObject: (e, n) => t.invoke("datastore:getObject", e, n),
+	setObject: (e, n) => t.invoke("datastore:setObject", e, n),
+	importBackup: (e) => t.invoke("datastore:importBackup", e),
+	exportBackup: () => t.invoke("datastore:exportBackup"),
+	selectDirectory: () => t.invoke("dialog:selectDirectory")
 });
 //#endregion
 export {};

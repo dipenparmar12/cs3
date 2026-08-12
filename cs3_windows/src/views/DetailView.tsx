@@ -1,14 +1,55 @@
-import React, { useEffect, useState } from 'react';
-import type { SearchResponse, LoadResponse, Episode, ExtractorLink } from '../types/api';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Play, Download, Star, ArrowLeft, Loader2, AlertTriangle, Calendar } from 'lucide-react';
+import type { SearchResponse, Episode } from '../types/api';
+import { TvType } from '../types/api';
 import { DownloadState } from '../types/download';
 import type { DownloadTask } from '../types/download';
-import { Play, Download, Star, ArrowLeft, Server, Zap, CheckCircle2 } from 'lucide-react';
+import type { TorrentResult } from '../types/torrent';
+import { SourcePicker, type SourcePickerData } from '../components/SourcePicker';
+
+export interface PlaybackRequest {
+  streamUrl: string;
+  mimeType: string;
+  title: string;
+  episodeTitle?: string;
+  infoHash: string;
+  subtitles: Array<{ name: string; url: string }>;
+}
 
 interface DetailViewProps {
   mediaItem: SearchResponse;
   onBack: () => void;
-  onPlay: (sources: ExtractorLink[], episodeTitle?: string) => void;
+  onPlay: (request: PlaybackRequest) => void;
   onEnqueueDownload: (task: DownloadTask) => void;
+}
+
+interface DetailData {
+  name: string;
+  url: string;
+  type: TvType;
+  posterUrl?: string;
+  year?: number;
+  plot?: string;
+  rating?: number;
+  tags?: string[];
+  duration?: string;
+  episodes?: Episode[];
+  imdbId?: string;
+}
+
+/** Groups episodes by season so a 200-episode series is navigable. */
+function groupBySeason(episodes: Episode[]): Map<number, Episode[]> {
+  const map = new Map<number, Episode[]>();
+  for (const episode of episodes) {
+    const season = episode.season ?? 1;
+    const list = map.get(season) ?? [];
+    list.push(episode);
+    map.set(season, list);
+  }
+  for (const list of map.values()) {
+    list.sort((a, b) => (a.episode ?? 0) - (b.episode ?? 0));
+  }
+  return map;
 }
 
 export const DetailView: React.FC<DetailViewProps> = ({
@@ -17,308 +58,308 @@ export const DetailView: React.FC<DetailViewProps> = ({
   onPlay,
   onEnqueueDownload,
 }) => {
-  const [loadData, setLoadData] = useState<LoadResponse | null>(null);
-  const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
-  const [availableSources, setAvailableSources] = useState<ExtractorLink[]>([]);
+  const [detail, setDetail] = useState<DetailData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isExtracting, setIsExtracting] = useState(false);
-  const [downloadSuccessToast, setDownloadSuccessToast] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [activeSeason, setActiveSeason] = useState<number>(1);
+  const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
+
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerData, setPickerData] = useState<SourcePickerData | null>(null);
+  const [pickerError, setPickerError] = useState<string | undefined>();
+  const [pendingEpisode, setPendingEpisode] = useState<Episode | null>(null);
+  const [startingStream, setStartingStream] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // --- load detail ---------------------------------------------------------
 
   useEffect(() => {
-    let isMounted = true;
-    const fetchDetails = async () => {
+    let cancelled = false;
+
+    (async () => {
       setIsLoading(true);
-      if (window.cloudstream) {
-        const details = await window.cloudstream.loadMedia(mediaItem.apiName, mediaItem.url);
-        if (isMounted && details) {
-          setLoadData(details);
-          if (details.episodes && details.episodes.length > 0) {
-            setSelectedEpisode(details.episodes[0]);
-            fetchLinks(details.episodes[0]);
-          }
-        }
+      setLoadError(null);
+      setDetail(null);
+
+      if (!window.cloudstream) {
+        setLoadError('Desktop bridge unavailable.');
+        setIsLoading(false);
+        return;
+      }
+
+      const response = await window.cloudstream.loadMedia(mediaItem.url);
+      if (cancelled) return;
+
+      if (!response.ok || !response.detail) {
+        setLoadError(response.error ?? 'Could not load details for this title.');
+      } else {
+        const data = response.detail as DetailData;
+        setDetail(data);
+        const seasons = groupBySeason(data.episodes ?? []);
+        const first = [...seasons.keys()].sort((a, b) => a - b)[0];
+        if (first !== undefined) setActiveSeason(first);
       }
       setIsLoading(false);
+    })();
+
+    return () => {
+      cancelled = true;
     };
-    fetchDetails();
-    return () => { isMounted = false; };
-  }, [mediaItem]);
+  }, [mediaItem.url]);
 
-  const fetchLinks = async (episode: Episode): Promise<ExtractorLink[]> => {
-    setIsExtracting(true);
-    let links: ExtractorLink[] = [];
-    if (window.cloudstream) {
-      links = await window.cloudstream.loadLinks(mediaItem.apiName, episode.url);
-      setAvailableSources(links);
-    }
-    setIsExtracting(false);
-    return links;
-  };
+  const seasons = useMemo(() => groupBySeason(detail?.episodes ?? []), [detail]);
+  const seasonNumbers = useMemo(
+    () => [...seasons.keys()].sort((a, b) => a - b),
+    [seasons]
+  );
+  const isSeries = (detail?.episodes?.length ?? 0) > 0;
 
-  const handleEpisodeSelect = (ep: Episode) => {
-    setSelectedEpisode(ep);
-    fetchLinks(ep);
-  };
+  // --- sources -------------------------------------------------------------
 
-  const handleStartPlay = async () => {
-    let sources = availableSources;
-    if (sources.length === 0 && selectedEpisode) {
-      sources = await fetchLinks(selectedEpisode);
-    }
+  const openSources = useCallback(
+    async (episode: Episode | null) => {
+      if (!window.cloudstream || !detail) return;
 
-    if (sources.length === 0) {
-      sources = [
-        {
-          source: mediaItem.apiName || 'Live HLS Server',
-          name: '1080p Adaptive HLS Master Stream',
-          url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-          referer: 'https://example.com',
-          quality: 1080,
-          isM3u8: true
-        }
-      ];
-    }
+      setPendingEpisode(episode);
+      setPickerOpen(true);
+      setPickerLoading(true);
+      setPickerError(undefined);
+      setPickerData(null);
 
-    onPlay(sources, selectedEpisode?.name || mediaItem.name);
-  };
+      const response = await window.cloudstream.getSources({
+        mediaUrl: episode?.url ?? detail.url,
+        season: episode?.season,
+        episode: episode?.episode,
+      });
 
-  const handleTriggerDownload = (link?: ExtractorLink) => {
-    const targetLink: ExtractorLink = link || availableSources[0] || {
-      source: mediaItem.apiName || 'FastCDN',
-      name: '1080p Full Stream',
-      url: mediaItem.url,
-      referer: 'https://example.com',
-      quality: 1080
-    };
+      setPickerLoading(false);
+      if (!response.ok && response.error) {
+        setPickerError(response.error);
+        return;
+      }
+      setPickerData({
+        sources: response.sources,
+        filtered: response.filtered,
+        indexerOutcomes: response.indexerOutcomes,
+        emptyReason: response.emptyReason,
+        query: response.query,
+      });
+    },
+    [detail]
+  );
 
-    const task: DownloadTask = {
-      id: `${mediaItem.name}_${selectedEpisode?.episode || 1}_${Date.now()}`,
-      parentId: String(mediaItem.id || 1),
-      title: mediaItem.name,
-      episodeNumber: selectedEpisode?.episode || 1,
-      seasonNumber: selectedEpisode?.season || 1,
-      posterUrl: mediaItem.posterUrl,
-      targetFilePath: '',
-      link: targetLink,
-      headers: targetLink.headers || { Referer: targetLink.referer },
-      bytesDownloaded: 0,
-      totalBytes: 0,
-      downloadSpeed: 0,
-      etaSeconds: 0,
-      state: DownloadState.Queued,
-      providerName: targetLink.source,
-      createdTime: Date.now()
-    };
+  const handlePlaySource = useCallback(
+    async (source: TorrentResult) => {
+      if (!window.cloudstream || !detail) return;
 
-    onEnqueueDownload(task);
-    setDownloadSuccessToast(`⚡ 1-Click Download started: ${mediaItem.name}`);
-    setTimeout(() => setDownloadSuccessToast(null), 4000);
-  };
+      setStartingStream(true);
+      const response = await window.cloudstream.startStream(
+        source,
+        pendingEpisode?.season,
+        pendingEpisode?.episode
+      );
+      setStartingStream(false);
+
+      if (!response.ok || !response.handle) {
+        setPickerError(response.error ?? 'Could not start the stream.');
+        return;
+      }
+
+      setPickerOpen(false);
+      onPlay({
+        streamUrl: response.handle.streamUrl,
+        mimeType: response.handle.mimeType,
+        title: detail.name,
+        episodeTitle: pendingEpisode?.name,
+        infoHash: response.handle.infoHash,
+        subtitles: response.handle.subtitleUrls,
+      });
+    },
+    [detail, pendingEpisode, onPlay]
+  );
+
+  const handleDownloadSource = useCallback(
+    (source: TorrentResult) => {
+      if (!detail) return;
+
+      const task: DownloadTask = {
+        id: `${source.infoHash}-${pendingEpisode?.episode ?? 'movie'}`,
+        parentId: detail.url,
+        title: detail.name,
+        episodeNumber: pendingEpisode?.episode,
+        seasonNumber: pendingEpisode?.season,
+        posterUrl: detail.posterUrl,
+        targetFilePath: '',
+        link: {
+          source: source.indexerName,
+          name: source.title,
+          url: source.magnet || source.torrentUrl || source.infoHash,
+          referer: '',
+          quality: source.parsed.resolution || 720,
+        },
+        headers: {},
+        bytesDownloaded: 0,
+        totalBytes: source.sizeBytes,
+        downloadSpeed: 0,
+        etaSeconds: 0,
+        state: DownloadState.Queued,
+        providerName: source.indexerName,
+        createdTime: Date.now(),
+      };
+
+      onEnqueueDownload(task);
+      setPickerOpen(false);
+      setToast(`Added “${detail.name}” to downloads.`);
+      setTimeout(() => setToast(null), 4000);
+    },
+    [detail, pendingEpisode, onEnqueueDownload]
+  );
+
+  // --- render --------------------------------------------------------------
 
   if (isLoading) {
     return (
-      <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-        <p>Loading title details...</p>
+      <div className="detail-view detail-view--state">
+        <Loader2 className="spin" size={32} />
+        <p>Loading {mediaItem.name}…</p>
       </div>
     );
   }
 
-  const data = loadData || {
-    name: mediaItem.name,
-    url: mediaItem.url,
-    apiName: mediaItem.apiName,
-    type: mediaItem.type,
-    posterUrl: mediaItem.posterUrl,
-    plot: 'High quality streaming media title.',
-    rating: 9.0,
-    tags: ['Action', 'Sci-Fi'],
-    episodes: [{ name: 'Episode 1', url: mediaItem.url, episode: 1, season: 1 }]
-  };
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-      {/* Back Button & Top Navigation */}
-      <div>
-        <button onClick={onBack} className="btn btn-secondary" style={{ padding: '0.4rem 0.85rem' }}>
-          <ArrowLeft size={16} />
-          <span>Back to Browse</span>
+  if (loadError || !detail) {
+    return (
+      <div className="detail-view detail-view--state">
+        <AlertTriangle size={32} />
+        <p>{loadError ?? 'No details available.'}</p>
+        <button className="btn" onClick={onBack}>
+          <ArrowLeft size={16} /> Back
         </button>
       </div>
+    );
+  }
 
-      {/* Download Success Notification Toast */}
-      {downloadSuccessToast && (
-        <div style={{
-          background: 'rgba(16, 185, 129, 0.15)',
-          border: '1px solid var(--status-success)',
-          padding: '0.75rem 1.25rem',
-          borderRadius: 'var(--radius-md)',
-          color: '#fff',
-          fontSize: '0.85rem',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.75rem'
-        }}>
-          <CheckCircle2 size={18} style={{ color: 'var(--status-success)' }} />
-          <span>{downloadSuccessToast}</span>
-        </div>
-      )}
+  const episodesInSeason = seasons.get(activeSeason) ?? [];
 
-      {/* Main Details Hero */}
-      <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
-        {/* Poster Image */}
-        <div style={{
-          width: '220px',
-          height: '320px',
-          borderRadius: 'var(--radius-lg)',
-          overflow: 'hidden',
-          border: '1px solid var(--border-color)',
-          flexShrink: 0
-        }}>
-          <img src={data.posterUrl || mediaItem.posterUrl} alt={data.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-        </div>
+  return (
+    <div className="detail-view">
+      <button className="btn btn-ghost detail-view__back" onClick={onBack}>
+        <ArrowLeft size={16} /> Back
+      </button>
 
-        {/* Info Column */}
-        <div style={{ flex: 1, minWidth: '300px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <span className="poster-badge">{data.type}</span>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{data.year || '2024'}</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#f59e0b', fontSize: '0.85rem' }}>
-              <Star size={14} fill="#f59e0b" />
-              <span>{data.rating || '9.0'}</span>
+      <header className="detail-hero">
+        {detail.posterUrl && (
+          <img className="detail-hero__poster" src={detail.posterUrl} alt="" loading="lazy" />
+        )}
+        <div className="detail-hero__body">
+          <h1>{detail.name}</h1>
+
+          <div className="detail-hero__meta">
+            {detail.year && (
+              <span><Calendar size={14} /> {detail.year}</span>
+            )}
+            {detail.rating !== undefined && (
+              <span><Star size={14} /> {detail.rating.toFixed(1)}</span>
+            )}
+            {detail.duration && <span>{detail.duration}</span>}
+            <span className="badge badge--muted">{detail.type}</span>
+          </div>
+
+          {detail.tags && detail.tags.length > 0 && (
+            <div className="detail-hero__tags">
+              {detail.tags.slice(0, 6).map((tag) => (
+                <span key={tag} className="badge badge--muted">{tag}</span>
+              ))}
             </div>
-          </div>
+          )}
 
-          <h1 style={{ fontSize: '2rem', fontWeight: 800, color: '#fff', letterSpacing: '-0.02em' }}>{data.name}</h1>
+          {detail.plot && <p className="detail-hero__plot">{detail.plot}</p>}
 
-          <p style={{ fontSize: '0.88rem', color: 'var(--text-muted)', lineHeight: 1.6, maxWidth: '700px' }}>
-            {data.plot}
-          </p>
-
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            {data.tags?.map((t) => (
-              <span key={t} className="chip">{t}</span>
-            ))}
-          </div>
-
-          {/* Direct Play & 1-Click Fast Download Buttons */}
-          <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
+          <div className="detail-hero__actions">
             <button
-              onClick={handleStartPlay}
               className="btn btn-primary"
-              style={{ padding: '0.65rem 1.5rem', fontSize: '0.95rem' }}
+              onClick={() => openSources(isSeries ? episodesInSeason[0] ?? null : null)}
+              disabled={startingStream}
             >
-              <Play size={18} fill="#fff" />
-              <span>Play Stream ({data.name})</span>
+              <Play size={16} /> {isSeries ? 'Play first episode' : 'Find sources'}
             </button>
-
             <button
-              onClick={() => handleTriggerDownload()}
-              className="btn btn-secondary"
-              style={{ padding: '0.65rem 1.5rem', fontSize: '0.95rem', borderColor: 'var(--accent-primary)' }}
+              className="btn"
+              onClick={() => openSources(isSeries ? episodesInSeason[0] ?? null : null)}
             >
-              <Zap size={18} style={{ color: 'var(--accent-light)' }} />
-              <span>⚡ 1-Click Download</span>
+              <Download size={16} /> Download
             </button>
           </div>
         </div>
-      </div>
+      </header>
 
-      {/* Episodes & Server Selection Section */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '1.5rem' }}>
-        {/* Episodes List Grid */}
-        <div style={{
-          background: 'var(--bg-card)',
-          borderRadius: 'var(--radius-md)',
-          border: '1px solid var(--border-color)',
-          padding: '1.25rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '1rem'
-        }}>
-          <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff' }}>Episodes</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '0.75rem' }}>
-            {data.episodes?.map((ep) => {
-              const isSelected = selectedEpisode?.url === ep.url;
-              return (
+      {isSeries && (
+        <section className="episode-section">
+          {seasonNumbers.length > 1 && (
+            <div className="season-tabs" role="tablist">
+              {seasonNumbers.map((season) => (
                 <button
-                  key={ep.url}
-                  onClick={() => handleEpisodeSelect(ep)}
-                  style={{
-                    padding: '0.75rem',
-                    borderRadius: 'var(--radius-md)',
-                    backgroundColor: isSelected ? 'var(--bg-card-hover)' : 'var(--bg-input)',
-                    border: '1px solid',
-                    borderColor: isSelected ? 'var(--accent-primary)' : 'var(--border-color)',
-                    color: isSelected ? '#fff' : 'var(--text-main)',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    fontSize: '0.82rem',
-                    fontWeight: isSelected ? 600 : 400
+                  key={season}
+                  role="tab"
+                  aria-selected={season === activeSeason}
+                  className={`season-tab${season === activeSeason ? ' season-tab--active' : ''}`}
+                  onClick={() => setActiveSeason(season)}
+                >
+                  Season {season}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <ul className="episode-list">
+            {episodesInSeason.map((episode) => (
+              <li
+                key={episode.url}
+                className={`episode-row${selectedEpisode?.url === episode.url ? ' episode-row--active' : ''}`}
+              >
+                {episode.posterUrl && (
+                  <img className="episode-row__thumb" src={episode.posterUrl} alt="" loading="lazy" />
+                )}
+                <div className="episode-row__body">
+                  <p className="episode-row__title">{episode.name}</p>
+                  {episode.date && <span className="muted">{episode.date}</span>}
+                  {episode.description && (
+                    <p className="episode-row__desc">{episode.description}</p>
+                  )}
+                </div>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => {
+                    setSelectedEpisode(episode);
+                    openSources(episode);
                   }}
                 >
-                  <div style={{ fontSize: '0.75rem', color: 'var(--accent-light)', marginBottom: '2px' }}>
-                    Episode {ep.episode || 1}
-                  </div>
-                  <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {ep.name}
-                  </div>
+                  <Play size={14} /> Play
                 </button>
-              );
-            })}
-          </div>
-        </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
-        {/* Server & Mirror Direct Action List */}
-        <div style={{
-          background: 'var(--bg-card)',
-          borderRadius: 'var(--radius-md)',
-          border: '1px solid var(--border-color)',
-          padding: '1.25rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '1rem'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fff' }}>
-            <Server size={18} style={{ color: 'var(--accent-light)' }} />
-            <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>Available Mirrors</h3>
-          </div>
+      <SourcePicker
+        isOpen={pickerOpen}
+        isLoading={pickerLoading || startingStream}
+        data={pickerData}
+        error={pickerError}
+        contextLabel={
+          pendingEpisode
+            ? `${detail.name} — ${pendingEpisode.name}`
+            : `${detail.name}${detail.year ? ` (${detail.year})` : ''}`
+        }
+        onClose={() => setPickerOpen(false)}
+        onPlay={handlePlaySource}
+        onDownload={handleDownloadSource}
+        onRetry={() => openSources(pendingEpisode)}
+      />
 
-          {isExtracting ? (
-            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>Extracting stream links...</p>
-          ) : availableSources.length === 0 ? (
-            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>No stream mirrors found for this episode.</p>
-          ) : (
-            availableSources.map((link, idx) => (
-              <div
-                key={idx}
-                style={{
-                  background: 'var(--bg-input)',
-                  padding: '0.75rem 1rem',
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--border-color)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between'
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#fff' }}>{link.name} ({link.quality}p)</div>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>{link.source}</div>
-                </div>
-
-                <button
-                  onClick={() => handleTriggerDownload(link)}
-                  className="btn btn-secondary btn-icon"
-                  title="1-Click Download via aria2c"
-                  style={{ height: '32px', width: '32px' }}
-                >
-                  <Download size={15} />
-                </button>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
+      {toast && <div className="toast">{toast}</div>}
     </div>
   );
 };

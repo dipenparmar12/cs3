@@ -19,7 +19,7 @@ export class Aria2Engine {
   private aria2Process: ChildProcess | null = null;
   private rpcSecret: string;
   private port: number = 6800;
-  private isInitialized = false;
+
 
   constructor() {
     this.rpcSecret = crypto.randomUUID();
@@ -63,7 +63,7 @@ export class Aria2Engine {
         this.aria2Process = null;
       });
 
-      this.isInitialized = true;
+
       return true;
     } catch (e) {
       console.warn('Failed to start aria2 engine:', e);

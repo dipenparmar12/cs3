@@ -126,15 +126,17 @@ export class TorrentEngine {
     this.server = this.client.createServer({ pathname: '/webtorrent' }, 'node');
 
     this.serverPort = await new Promise<number>((resolve, reject) => {
-      const server = this.server;
-      if (!server) return reject(new Error('Failed to create torrent server'));
+      const wrapper = this.server;
+      if (!wrapper) return reject(new Error('Failed to create torrent server'));
 
-      server.on('error', reject);
+      // Error events live on the wrapped http.Server, not the wrapper.
+      wrapper.server.once('error', reject);
+
       // Port 0 = let the OS assign, matching Android's ephemeral-port approach.
       // Bind to loopback only: this server exposes file contents and must never
       // be reachable from the network.
-      server.listen(0, '127.0.0.1', () => {
-        const address = server.address();
+      wrapper.listen(0, '127.0.0.1', () => {
+        const address = wrapper.address();
         if (address && typeof address === 'object') resolve(address.port);
         else reject(new Error('Torrent server did not report a port'));
       });

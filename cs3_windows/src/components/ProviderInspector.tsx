@@ -25,8 +25,18 @@ export const ProviderInspector: React.FC<ProviderInspectorProps> = ({
     setIsLoading(true);
     try {
       if (window.cloudstream) {
-        const links = await window.cloudstream.loadLinks(selectedProvider, testUrl);
-        setExtractedLinks(links);
+        // loadLinks is gone: sources now come from the indexer pipeline, which
+        // returns torrent sources rather than direct extractor links.
+        const response = await window.cloudstream.getSources({ mediaUrl: testUrl });
+        setExtractedLinks(
+          response.sources.map((source) => ({
+            source: source.indexerName,
+            name: source.title,
+            url: source.magnet || source.torrentUrl || source.infoHash,
+            referer: '',
+            quality: source.parsed.resolution || 0,
+          }))
+        );
       }
     } catch (e) {
       console.error('Inspection failed:', e);

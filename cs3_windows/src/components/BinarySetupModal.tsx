@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Zap, Download, CheckCircle2, AlertCircle, RefreshCw, X } from 'lucide-react';
+import { Zap, Download, CheckCircle2, RefreshCw, X } from 'lucide-react';
 
 interface BinarySetupModalProps {
   isOpen: boolean;

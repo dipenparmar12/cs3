@@ -1,380 +1,378 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
-import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, SkipForward, ArrowLeft, Shield } from 'lucide-react';
-import type { ExtractorLink, SubtitleFile } from '../types/api';
-import { PlaybackBackend, AspectRatioMode } from '../types/player';
+import {
+  Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
+  Loader2, Users, Gauge, Subtitles, AlertTriangle,
+} from 'lucide-react';
+import type { TorrentStreamStats } from '../types/torrent';
+import { AspectRatioMode } from '../types/player';
 
 interface VideoPlayerProps {
-  sources: ExtractorLink[];
+  streamUrl: string;
+  mimeType: string;
   title: string;
   episodeTitle?: string;
+  /** Present for torrent-backed streams; drives the buffer/peer readout. */
+  infoHash?: string;
+  subtitles: Array<{ name: string; url: string }>;
   onBack: () => void;
 }
 
+const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+function formatTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  return h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function formatSpeed(bytesPerSecond: number): string {
+  if (bytesPerSecond <= 0) return '0 KB/s';
+  const mb = bytesPerSecond / 1e6;
+  return mb >= 1 ? `${mb.toFixed(1)} MB/s` : `${(bytesPerSecond / 1e3).toFixed(0)} KB/s`;
+}
+
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
-  sources,
-  title,
-  episodeTitle,
-  onBack,
+  streamUrl, mimeType, title, episodeTitle, infoHash, subtitles, onBack,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-
-  const [activeSource, setActiveSource] = useState<ExtractorLink>(sources[0] || {
-    source: 'Default Stream',
-    name: '1080p',
-    url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-    referer: '',
-    quality: 1080,
-    isM3u8: true
-  });
+  const hideControlsTimer = useRef<number | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [buffered, setBuffered] = useState(0);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
-  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+  const [speed, setSpeed] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [aspectRatio] = useState<AspectRatioMode>(AspectRatioMode.Fit);
-  const [activeBackend, setActiveBackend] = useState<PlaybackBackend>(PlaybackBackend.Web);
+  const [aspect, setAspect] = useState<AspectRatioMode>(AspectRatioMode.Fit);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [stats, setStats] = useState<TorrentStreamStats | null>(null);
+  const [activeSubtitle, setActiveSubtitle] = useState<string | null>(null);
 
-  // Initialize HLS.js or native HTML5 video
+  // --- source attachment ---------------------------------------------------
+
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !activeSource) return;
+    if (!video || !streamUrl) return;
 
+    setError(null);
     let hls: Hls | null = null;
 
-    if (activeSource.isM3u8 && Hls.isSupported()) {
-      hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: true,
-      });
+    const isHls = /\.m3u8(\?|$)/i.test(streamUrl) || mimeType === 'application/x-mpegURL';
 
-      hls.loadSource(activeSource.url);
+    if (isHls && Hls.isSupported()) {
+      hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+      hls.loadSource(streamUrl);
       hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        video.play().catch(() => setIsPlaying(false));
-        setIsPlaying(true);
-      });
-
-      hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) {
-          console.warn('HLS.js fatal error, switching to Native Backend fallback:', data);
-          setActiveBackend(PlaybackBackend.Native);
-        }
+      hls.on(Hls.Events.ERROR, (_evt, data) => {
+        if (data.fatal) setError(`Playback error: ${data.details}`);
       });
     } else {
-      video.src = activeSource.url;
-      video.play().catch(() => setIsPlaying(false));
-      setIsPlaying(true);
+      video.src = streamUrl;
     }
+
+    video.play().catch(() => {
+      // Autoplay can be refused; the user can press play. Not an error state.
+      setIsPlaying(false);
+    });
 
     return () => {
-      if (hls) {
-        hls.destroy();
-      }
+      hls?.destroy();
+      video.removeAttribute('src');
+      video.load();
     };
-  }, [activeSource]);
+  }, [streamUrl, mimeType]);
 
-  // Desktop Keyboard Shortcuts Engine
+  // --- torrent stats -------------------------------------------------------
+
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (!infoHash || !window.cloudstream) return;
 
-      switch (e.key.toLowerCase()) {
-        case ' ':
-        case 'k':
-          e.preventDefault();
-          togglePlay();
-          break;
-        case 'f':
-          e.preventDefault();
-          toggleFullscreen();
-          break;
-        case 'm':
-          e.preventDefault();
-          toggleMute();
-          break;
-        case 'arrowleft':
-        case 'j':
-          e.preventDefault();
-          seekRelative(-5);
-          break;
-        case 'arrowright':
-        case 'l':
-          e.preventDefault();
-          seekRelative(5);
-          break;
-        case 'arrowup':
-          e.preventDefault();
-          adjustVolume(0.05);
-          break;
-        case 'arrowdown':
-          e.preventDefault();
-          adjustVolume(-0.05);
-          break;
-        case '[':
-          e.preventDefault();
-          changeSpeed(-0.25);
-          break;
-        case ']':
-          e.preventDefault();
-          changeSpeed(0.25);
-          break;
-      }
+    let active = true;
+    const poll = async () => {
+      const next = await window.cloudstream?.getStreamStats(infoHash);
+      if (active && next) setStats(next);
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, volume, isMuted, duration]);
+    poll();
+    const timer = window.setInterval(poll, 1000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [infoHash]);
 
-  const togglePlay = () => {
+  // --- video element events ------------------------------------------------
+
+  useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    if (isPlaying) {
-      video.pause();
-      setIsPlaying(false);
-    } else {
-      video.play();
-      setIsPlaying(true);
-    }
-  };
 
-  const seekRelative = (seconds: number) => {
+    const onTime = () => {
+      setCurrentTime(video.currentTime);
+      if (video.buffered.length > 0) {
+        setBuffered(video.buffered.end(video.buffered.length - 1));
+      }
+    };
+    const onMeta = () => setDuration(video.duration);
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    const onError = () =>
+      setError(
+        'The browser could not decode this file. It may use a codec Chromium does not support (HEVC is common) — try another source.'
+      );
+
+    video.addEventListener('timeupdate', onTime);
+    video.addEventListener('progress', onTime);
+    video.addEventListener('loadedmetadata', onMeta);
+    video.addEventListener('play', onPlay);
+    video.addEventListener('pause', onPause);
+    video.addEventListener('error', onError);
+
+    return () => {
+      video.removeEventListener('timeupdate', onTime);
+      video.removeEventListener('progress', onTime);
+      video.removeEventListener('loadedmetadata', onMeta);
+      video.removeEventListener('play', onPlay);
+      video.removeEventListener('pause', onPause);
+      video.removeEventListener('error', onError);
+    };
+  }, []);
+
+  // --- controls ------------------------------------------------------------
+
+  const togglePlay = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
-    video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + seconds));
-  };
+    if (video.paused) video.play().catch(() => undefined);
+    else video.pause();
+  }, []);
 
-  const adjustVolume = (delta: number) => {
+  const seekBy = useCallback((delta: number) => {
     const video = videoRef.current;
-    if (!video) return;
-    const newVol = Math.max(0, Math.min(1, volume + delta));
-    video.volume = newVol;
-    setVolume(newVol);
-    setIsMuted(newVol === 0);
-  };
+    if (video) video.currentTime = Math.max(0, video.currentTime + delta);
+  }, []);
 
-  const toggleMute = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.muted = !isMuted;
-    setIsMuted(!isMuted);
-  };
-
-  const changeSpeed = (delta: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    const newSpeed = Math.max(0.25, Math.min(3.0, playbackSpeed + delta));
-    video.playbackRate = newSpeed;
-    setPlaybackSpeed(newSpeed);
-  };
-
-  const toggleFullscreen = () => {
+  const toggleFullscreen = useCallback(async () => {
     const container = containerRef.current;
     if (!container) return;
-
-    if (!document.fullscreenElement) {
-      container.requestFullscreen();
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen();
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
       setIsFullscreen(false);
+    } else {
+      await container.requestFullscreen();
+      setIsFullscreen(true);
     }
-  };
+  }, []);
 
-  const formatTime = (seconds: number) => {
-    if (isNaN(seconds)) return '00:00';
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      switch (e.key) {
+        case ' ': case 'k': e.preventDefault(); togglePlay(); break;
+        case 'ArrowRight': seekBy(10); break;
+        case 'ArrowLeft': seekBy(-10); break;
+        case 'l': seekBy(30); break;
+        case 'j': seekBy(-30); break;
+        case 'f': toggleFullscreen(); break;
+        case 'm': setIsMuted((v) => !v); break;
+        case 'Escape': if (!document.fullscreenElement) onBack(); break;
+        default: break;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [togglePlay, seekBy, toggleFullscreen, onBack]);
 
-  // Only show Skip Intro during intro segment (10s to 120s)
-  const showSkipIntro = currentTime >= 10 && currentTime <= 120;
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = volume;
+    video.muted = isMuted;
+    video.playbackRate = speed;
+  }, [volume, isMuted, speed]);
+
+  const revealControls = useCallback(() => {
+    setControlsVisible(true);
+    if (hideControlsTimer.current) window.clearTimeout(hideControlsTimer.current);
+    hideControlsTimer.current = window.setTimeout(() => setControlsVisible(false), 3000);
+  }, []);
+
+  // Playback cannot start until enough leading data exists; showing the real
+  // reason beats an indefinite spinner over a black frame.
+  const isBuffering = Boolean(stats && !stats.isPlayable && !stats.error);
 
   return (
     <div
       ref={containerRef}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        backgroundColor: '#000',
-        zIndex: 9999,
-        display: 'flex',
-        flexDirection: 'column'
-      }}
+      className={`player${controlsVisible ? '' : ' player--idle'}`}
+      onMouseMove={revealControls}
     >
-      {/* Top Header Overlay */}
-      <div style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        padding: '1.25rem 2rem',
-        background: 'linear-gradient(to bottom, rgba(0,0,0,0.85) 0%, transparent 100%)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        zIndex: 10
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <button
-            onClick={onBack}
-            className="btn btn-secondary btn-icon"
-            style={{ borderRadius: '50%' }}
-          >
-            <ArrowLeft size={20} />
-          </button>
-          <div>
-            <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>{title}</h2>
-            {episodeTitle && (
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{episodeTitle}</span>
-            )}
-          </div>
-        </div>
-
-        {/* Backend Indicator Badge */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.4rem',
-          padding: '0.35rem 0.75rem',
-          borderRadius: 'var(--radius-full)',
-          background: 'rgba(255,255,255,0.1)',
-          fontSize: '0.72rem',
-          color: '#fff',
-          border: '1px solid rgba(255,255,255,0.15)'
-        }}>
-          <Shield size={14} style={{ color: 'var(--status-success)' }} />
-          <span>{activeBackend}</span>
-        </div>
-      </div>
-
-      {/* Main Video Element */}
       <video
         ref={videoRef}
-        onTimeUpdate={() => {
-          if (videoRef.current) {
-            setCurrentTime(videoRef.current.currentTime);
-            setDuration(videoRef.current.duration || 0);
-          }
-        }}
+        className={`player__video player__video--${aspect}`}
+        playsInline
         onClick={togglePlay}
-        style={{
-          width: '100%',
-          height: '100%',
-          objectFit: aspectRatio === AspectRatioMode.Crop ? 'cover' : aspectRatio === AspectRatioMode.Stretch ? 'fill' : 'contain'
-        }}
-      />
+        crossOrigin="anonymous"
+      >
+        {subtitles.map((sub) => (
+          <track
+            key={sub.url}
+            kind="subtitles"
+            label={sub.name}
+            src={sub.url}
+            default={activeSubtitle === sub.url}
+          />
+        ))}
+      </video>
 
-      {/* Conditional Skip Intro Overlay Button */}
-      {showSkipIntro && (
-        <button
-          onClick={() => seekRelative(85)}
-          style={{
-            position: 'absolute',
-            bottom: '90px',
-            right: '30px',
-            backgroundColor: 'rgba(0,0,0,0.85)',
-            border: '1px solid var(--accent-primary)',
-            color: '#fff',
-            padding: '0.6rem 1.2rem',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '0.85rem',
-            fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            cursor: 'pointer',
-            zIndex: 10,
-            boxShadow: '0 4px 14px rgba(0,0,0,0.6)'
-          }}
-        >
-          <SkipForward size={16} style={{ color: 'var(--accent-light)' }} />
-          <span>Skip Intro (85s)</span>
-        </button>
+      {(isBuffering || error) && (
+        <div className="player__overlay">
+          {error ? (
+            <>
+              <AlertTriangle size={36} />
+              <p>{error}</p>
+              <button className="btn" onClick={onBack}>Choose another source</button>
+            </>
+          ) : (
+            <>
+              <Loader2 className="spin" size={36} />
+              <p>Buffering from peers…</p>
+              {stats && (
+                <span className="muted">
+                  {formatSpeed(stats.downloadSpeed)} · {stats.peers} peer
+                  {stats.peers === 1 ? '' : 's'} · {(stats.progress * 100).toFixed(1)}%
+                </span>
+              )}
+              {stats && stats.peers === 0 && (
+                <span className="muted">
+                  No peers yet. If this persists the swarm may be dead — try a source with more seeders.
+                </span>
+              )}
+            </>
+          )}
+        </div>
       )}
 
-      {/* Bottom Controls Bar */}
-      <div style={{
-        position: 'absolute',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        padding: '1rem 2rem',
-        background: 'linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 100%)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '0.75rem',
-        zIndex: 10
-      }}>
-        {/* Timeline Slider */}
-        <input
-          type="range"
-          min={0}
-          max={duration || 100}
-          value={currentTime}
-          onChange={(e) => {
-            const val = parseFloat(e.target.value);
-            if (videoRef.current) videoRef.current.currentTime = val;
-            setCurrentTime(val);
-          }}
-          style={{
-            width: '100%',
-            accentColor: 'var(--accent-primary)',
-            cursor: 'pointer'
-          }}
-        />
-
-        {/* Controls Row */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <button onClick={togglePlay} className="btn btn-secondary btn-icon">
-              {isPlaying ? <Pause size={20} /> : <Play size={20} />}
-            </button>
-            <button onClick={toggleMute} className="btn btn-secondary btn-icon">
-              {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
-            </button>
-            <span style={{ fontSize: '0.85rem', color: '#fff', fontWeight: 500 }}>
-              {formatTime(currentTime)} / {formatTime(duration)}
-            </span>
+      <header className={`player__top${controlsVisible ? '' : ' hidden'}`}>
+        <button className="icon-button" onClick={onBack} aria-label="Back">
+          <ArrowLeft size={22} />
+        </button>
+        <div className="player__titles">
+          <h2>{title}</h2>
+          {episodeTitle && <p>{episodeTitle}</p>}
+        </div>
+        {stats && (
+          <div className="player__stats">
+            <span title="Peers"><Users size={14} /> {stats.peers}</span>
+            <span title="Download speed"><Gauge size={14} /> {formatSpeed(stats.downloadSpeed)}</span>
           </div>
+        )}
+      </header>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            {/* Source Selector Dropdown */}
+      <footer className={`player__controls${controlsVisible ? '' : ' hidden'}`}>
+        <div className="player__seek">
+          {/* Two stacked bars: browser-buffered ahead of the playhead, and the
+              torrent's downloaded fraction, which is what actually gates seeking. */}
+          {stats && (
+            <div className="player__seek-torrent" style={{ width: `${stats.progress * 100}%` }} />
+          )}
+          <div
+            className="player__seek-buffer"
+            style={{ width: duration ? `${(buffered / duration) * 100}%` : '0%' }}
+          />
+          <input
+            type="range"
+            min={0}
+            max={duration || 0}
+            step={0.1}
+            value={currentTime}
+            onChange={(e) => {
+              const video = videoRef.current;
+              if (video) video.currentTime = Number(e.target.value);
+            }}
+            aria-label="Seek"
+          />
+        </div>
+
+        <div className="player__buttons">
+          <button className="icon-button" onClick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'}>
+            {isPlaying ? <Pause size={20} /> : <Play size={20} />}
+          </button>
+
+          <span className="player__time">
+            {formatTime(currentTime)} / {formatTime(duration)}
+          </span>
+
+          <button className="icon-button" onClick={() => setIsMuted((v) => !v)} aria-label="Mute">
+            {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
+          </button>
+          <input
+            className="player__volume"
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={isMuted ? 0 : volume}
+            onChange={(e) => {
+              setVolume(Number(e.target.value));
+              setIsMuted(false);
+            }}
+            aria-label="Volume"
+          />
+
+          <div className="player__spacer" />
+
+          {subtitles.length > 0 && (
             <select
-              value={activeSource.url}
-              onChange={(e) => {
-                const s = sources.find((x) => x.url === e.target.value);
-                if (s) setActiveSource(s);
-              }}
-              style={{
-                backgroundColor: 'rgba(255,255,255,0.1)',
-                border: '1px solid rgba(255,255,255,0.2)',
-                color: '#fff',
-                padding: '0.4rem 0.75rem',
-                borderRadius: 'var(--radius-md)',
-                fontSize: '0.8rem',
-                outline: 'none',
-                cursor: 'pointer'
-              }}
+              className="player__select"
+              value={activeSubtitle ?? ''}
+              onChange={(e) => setActiveSubtitle(e.target.value || null)}
+              aria-label="Subtitles"
             >
-              {sources.map((s, idx) => (
-                <option key={idx} value={s.url}>
-                  {s.name} ({s.quality}p) — {s.source}
-                </option>
+              <option value="">
+                <Subtitles size={14} /> Off
+              </option>
+              {subtitles.map((sub) => (
+                <option key={sub.url} value={sub.url}>{sub.name}</option>
               ))}
             </select>
+          )}
 
-            <button onClick={toggleFullscreen} className="btn btn-secondary btn-icon">
-              {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
-            </button>
-          </div>
+          <select
+            className="player__select"
+            value={speed}
+            onChange={(e) => setSpeed(Number(e.target.value))}
+            aria-label="Playback speed"
+          >
+            {SPEEDS.map((s) => (
+              <option key={s} value={s}>{s}×</option>
+            ))}
+          </select>
+
+          <select
+            className="player__select"
+            value={aspect}
+            onChange={(e) => setAspect(e.target.value as AspectRatioMode)}
+            aria-label="Aspect ratio"
+          >
+            {Object.values(AspectRatioMode).map((mode) => (
+              <option key={mode} value={mode}>{mode}</option>
+            ))}
+          </select>
+
+          <button className="icon-button" onClick={toggleFullscreen} aria-label="Fullscreen">
+            {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
+          </button>
         </div>
-      </div>
+      </footer>
     </div>
   );
 };

@@ -63,16 +63,28 @@ export const ExtensionManagerUI: React.FC = () => {
     if (!targetUrl) return;
 
     if (window.cloudstream) {
-      const fetched = await window.cloudstream.fetchRepository(targetUrl);
-      if (fetched && fetched.length > 0) {
-        setPlugins((prev) => [...prev, ...fetched]);
+      const response = await window.cloudstream.fetchRepository(targetUrl);
+
+      if (!response.ok || !response.repository) {
+        setToastMessage(`✗ ${repoName || 'Repository'} failed: ${response.error ?? 'unknown error'}`);
+        setTimeout(() => setToastMessage(null), 6000);
+        return;
+      }
+
+      const { repository } = response;
+      if (repository.plugins.length > 0) {
+        setPlugins((prev) => [...prev, ...repository.plugins]);
       }
 
       const updatedUrls = await window.cloudstream.getInstalledRepositories();
       setInstalledRepoUrls(new Set(updatedUrls));
 
-      setToastMessage(`✓ ${repoName || 'Custom Repository'} successfully added & registered!`);
-      setTimeout(() => setToastMessage(null), 3500);
+      // Report the real plugin count, and any plugin-list URLs that failed.
+      const warning = repository.warnings.length > 0 ? ` (${repository.warnings.length} list(s) unreadable)` : '';
+      setToastMessage(
+        `✓ ${repository.name}: ${repository.plugins.length} extension(s) found${warning}`
+      );
+      setTimeout(() => setToastMessage(null), 5000);
     }
 
     if (!urlToFetch) {

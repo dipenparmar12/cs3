@@ -16,7 +16,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   useEffect(() => {
     if (window.cloudstream) {
-      window.cloudstream.getSetting('use_live_streaming_sources', true).then(setUseLiveStreams);
+      window.cloudstream
+        .getSetting('use_live_streaming_sources', 'true')
+        .then((value) => setUseLiveStreams(value !== 'false'));
     }
   }, []);
 

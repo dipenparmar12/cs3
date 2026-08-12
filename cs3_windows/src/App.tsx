@@ -9,11 +9,11 @@ import { ExtensionManagerUI } from './components/ExtensionManagerUI';
 import { BinarySetupModal } from './components/BinarySetupModal';
 import { HomeView } from './views/HomeView';
 import { SearchView } from './views/SearchView';
-import { DetailView } from './views/DetailView';
+import { DetailView, type PlaybackRequest } from './views/DetailView';
 import { LibraryView } from './views/LibraryView';
 import { SettingsView } from './views/SettingsView';
 
-import type { SearchResponse, ExtractorLink } from './types/api';
+import type { SearchResponse } from './types/api';
 import type { DownloadTask } from './types/download';
 
 export const App: React.FC = () => {
@@ -21,32 +21,31 @@ export const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResponse[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   const [selectedMedia, setSelectedMedia] = useState<SearchResponse | null>(null);
-  const [activePlayerSources, setActivePlayerSources] = useState<ExtractorLink[] | null>(null);
-  const [activeEpisodeTitle, setActiveEpisodeTitle] = useState<string | undefined>();
+  const [playback, setPlayback] = useState<PlaybackRequest | null>(null);
 
   const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>([]);
-  const [providersList, setProvidersList] = useState<string[]>(['CloudStream Builtin']);
+  const [providersList, setProvidersList] = useState<string[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<string>('All');
 
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const [isBinaryModalOpen, setIsBinaryModalOpen] = useState(false);
   const [hasBinaries, setHasBinaries] = useState(true);
 
-  // Initialize Electron IPC listeners
   useEffect(() => {
-    if (window.cloudstream) {
-      window.cloudstream.getProvidersList().then(setProvidersList);
-      window.cloudstream.getDownloadQueue().then(setDownloadQueue);
-      window.cloudstream.onDownloadProgress((tasks) => {
-        setDownloadQueue(tasks);
-      });
+    let disposeProgress: (() => void) | undefined;
 
-      // Check downloader binaries status
-      window.cloudstream.checkBinaries().then((status) => {
-        setHasBinaries(status.aria2);
-      });
+    if (window.cloudstream) {
+      window.cloudstream.getDownloadQueue().then(setDownloadQueue);
+      // The listener now returns a disposer; previously listeners accumulated
+      // on every remount and fired the setter N times per tick.
+      disposeProgress = window.cloudstream.onDownloadProgress(setDownloadQueue);
+      window.cloudstream.checkBinaries().then((status) => setHasBinaries(status.aria2));
+      window.cloudstream
+        .getIndexerConfigs()
+        .then((configs) => setProvidersList(configs.filter((c) => c.enabled).map((c) => c.name)));
     }
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -56,17 +55,23 @@ export const App: React.FC = () => {
       }
     };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      disposeProgress?.();
+    };
   }, []);
 
-  const handleSearch = async (query: string, targetProviders?: string[]) => {
+  const handleSearch = async (query: string) => {
     setSearchQuery(query);
     setActiveTab('search');
     setIsSearching(true);
+    setSearchError(null);
 
     if (window.cloudstream) {
-      const results = await window.cloudstream.searchAll(query, targetProviders);
-      setSearchResults(results);
+      const response = await window.cloudstream.searchAll(query);
+      setSearchResults(response.results);
+      if (!response.ok && response.error) setSearchError(response.error);
     }
     setIsSearching(false);
   };
@@ -75,9 +80,13 @@ export const App: React.FC = () => {
     setSelectedMedia(item);
   };
 
-  const handlePlayMedia = (sources: ExtractorLink[], episodeTitle?: string) => {
-    setActivePlayerSources(sources);
-    setActiveEpisodeTitle(episodeTitle);
+  const handleClosePlayer = async () => {
+    // Streaming torrents keep sockets and disk cache alive; tearing the stream
+    // down on exit is what stops a session leaking peers in the background.
+    if (playback?.infoHash && window.cloudstream) {
+      await window.cloudstream.stopStream(playback.infoHash, true);
+    }
+    setPlayback(null);
   };
 
   const handleEnqueueDownload = async (task: DownloadTask) => {
@@ -128,12 +137,15 @@ export const App: React.FC = () => {
 
         <main className="view-viewport">
           {/* Active Fullscreen Video Player Overlay */}
-          {activePlayerSources && (
+          {playback && (
             <VideoPlayer
-              sources={activePlayerSources}
-              title={selectedMedia?.name || 'CloudStream Player'}
-              episodeTitle={activeEpisodeTitle}
-              onBack={() => setActivePlayerSources(null)}
+              streamUrl={playback.streamUrl}
+              mimeType={playback.mimeType}
+              title={playback.title}
+              episodeTitle={playback.episodeTitle}
+              infoHash={playback.infoHash}
+              subtitles={playback.subtitles}
+              onBack={handleClosePlayer}
             />
           )}
 
@@ -142,7 +154,7 @@ export const App: React.FC = () => {
             <DetailView
               mediaItem={selectedMedia}
               onBack={() => setSelectedMedia(null)}
-              onPlay={handlePlayMedia}
+              onPlay={setPlayback}
               onEnqueueDownload={handleEnqueueDownload}
             />
           ) : (
@@ -154,6 +166,7 @@ export const App: React.FC = () => {
                   results={searchResults}
                   onSelectMedia={handleSelectMedia}
                   isLoading={isSearching}
+                  error={searchError}
                 />
               )}
               {activeTab === 'library' && <LibraryView onSelectMedia={handleSelectMedia} />}

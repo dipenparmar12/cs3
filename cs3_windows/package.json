@@ -21,7 +21,14 @@
     },
     "files": [
       "dist/**/*",
-      "dist-electron/**/*"
+      "dist-electron/**/*",
+      "node_modules/**/*"
+    ],
+    "//asarUnpack": "Native .node binaries cannot be loaded from inside an asar archive, and webtorrent's transitive native deps must be unpacked or the app fails at startup exactly as it does when they are bundled.",
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/node-datachannel/**",
+      "node_modules/utp-native/**"
     ],
     "win": {
       "target": [
@@ -30,6 +37,11 @@
       ]
     }
   },
+  "//trustedDependencies": "webtorrent pulls in native modules (node-datachannel for WebRTC peers, utp-native for uTP). Their install scripts MUST run or the app fails at runtime with 'Cannot find module node_datachannel.node'. These also need rebuilding per platform/arch against the Electron ABI before packaging.",
+  "trustedDependencies": [
+    "node-datachannel",
+    "utp-native"
+  ],
   "dependencies": {
     "cheerio": "^1.2.0",
     "fast-xml-parser": "^5.10.1",

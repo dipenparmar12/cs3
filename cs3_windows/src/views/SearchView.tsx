@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import type { SearchResponse } from '../types/api';
-import { Play, Star, Filter, Layers } from 'lucide-react';
+import { Play, Filter } from 'lucide-react';
 
 interface SearchViewProps {
   query: string;
   results: SearchResponse[];
   onSelectMedia: (item: SearchResponse) => void;
   isLoading: boolean;
+  /** Surfaced when the search itself failed, so the user sees a cause not an empty grid. */
+  error?: string | null;
 }
 
 export const SearchView: React.FC<SearchViewProps> = ({
@@ -14,6 +16,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
   results,
   onSelectMedia,
   isLoading,
+  error,
 }) => {
   const [activeProviderFilter, setActiveProviderFilter] = useState<string>('All');
 
@@ -48,10 +51,28 @@ export const SearchView: React.FC<SearchViewProps> = ({
             {query ? `Search Results for "${query}"` : 'Search Media'}
           </h2>
           <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Found {results.length} titles across {distinctProviders.length} providers
+            Found {results.length} titles across {distinctProviders.length} catalogue
+            {distinctProviders.length === 1 ? '' : 's'}
           </p>
         </div>
       </div>
+
+      {/* A failed search must not look like a search that found nothing. */}
+      {error && (
+        <div
+          style={{
+            padding: '0.85rem 1rem',
+            borderRadius: 8,
+            background: 'rgba(220, 60, 60, 0.12)',
+            border: '1px solid rgba(220, 60, 60, 0.35)',
+            color: '#ffb4b4',
+            fontSize: '0.85rem',
+          }}
+          role="alert"
+        >
+          Search failed: {error}
+        </div>
+      )}
 
       {/* Layer 2: Post-Search Result Provider Filter Chips / Banners */}
       {results.length > 0 && distinctProviders.length > 1 && (

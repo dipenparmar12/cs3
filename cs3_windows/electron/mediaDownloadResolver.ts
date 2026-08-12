@@ -1,6 +1,6 @@
 import path from 'path';
 import os from 'os';
-import { DownloadTask, DownloadState } from '../src/types/download';
+import type { DownloadTask } from '../src/types/download';
 import { Aria2Engine } from './aria2Engine';
 
 export class MediaDownloadResolver {

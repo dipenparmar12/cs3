@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { SearchResponse } from '../types/api';
-import { TvType } from '../types/api';
-import { Play, TrendingUp, Sparkles, Film, Tv } from 'lucide-react';
+import { Play, Sparkles, Film, Tv } from 'lucide-react';
 
 interface HomeViewProps {
   onSelectMedia: (item: SearchResponse) => void;
@@ -27,9 +26,9 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia }) => {
         ]);
 
         if (isMounted) {
-          if (movies && movies.length > 0) setTrendingMovies(movies);
-          if (anime && anime.length > 0) setTrendingAnime(anime);
-          if (series && series.length > 0) setPopularSeries(series);
+          if (movies.results.length > 0) setTrendingMovies(movies.results);
+          if (anime.results.length > 0) setTrendingAnime(anime.results);
+          if (series.results.length > 0) setPopularSeries(series.results);
         }
       }
       setIsLoading(false);

@@ -75,8 +75,19 @@ declare module 'webtorrent' {
     tracker?: boolean | Record<string, unknown>;
   }
 
-  export interface NodeServer extends Server {
+  /**
+   * WebTorrent's `NodeServer` **wraps** an `http.Server` rather than extending
+   * it — the real server is at `.server`, and `listen`/`close` are rebound onto
+   * the wrapper. Treating it as an `http.Server` fails at runtime with
+   * "server.on is not a function".
+   */
+  export interface NodeServer {
+    server: Server;
     pathname: string;
+    listen(port: number, host?: string, cb?: () => void): Server;
+    close(cb?: () => void): void;
+    destroy(cb?: () => void): void;
+    address(): { port: number; address: string; family: string } | string | null;
   }
 
   export default class WebTorrent {
