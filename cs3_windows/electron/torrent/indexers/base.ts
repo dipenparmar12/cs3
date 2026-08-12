@@ -17,6 +17,9 @@ export interface RawTorrent {
   leechers?: number;
   publishedAt?: number;
   category?: string;
+  /** Index of the playable file inside a multi-file torrent, when known. */
+  fileIndex?: number;
+  expectedFileName?: string;
 }
 
 export interface TorrentIndexer {
@@ -154,7 +157,9 @@ export function finaliseResult(
       indexerName: indexer.name,
       publishedAt: raw.publishedAt,
       category: raw.category,
-      parsed: parseReleaseName(raw.title),
+      fileIndex: raw.fileIndex,
+      expectedFileName: raw.expectedFileName,
+      parsed: parseReleaseName(raw.expectedFileName || raw.title),
       score: 0,
       scoreReasons: [],
     };
@@ -174,7 +179,11 @@ export function finaliseResult(
     indexerName: indexer.name,
     publishedAt: raw.publishedAt,
     category: raw.category,
-    parsed: parseReleaseName(raw.title),
+    fileIndex: raw.fileIndex,
+    expectedFileName: raw.expectedFileName,
+    // When the indexer names the exact file, parse that instead of the pack
+    // title: a season-pack name carries no episode number, but its file does.
+    parsed: parseReleaseName(raw.expectedFileName || raw.title),
     score: 0,
     scoreReasons: [],
   };
