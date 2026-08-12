@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import type { SearchResponse } from '../types/api';
-import { Play, Sparkles, Film, Tv } from 'lucide-react';
+import { Play, Sparkles, Film, Tv, History } from 'lucide-react';
+import type { WatchProgress } from '../../electron/cs3/libraryStore';
+import { TvType } from '../types/api';
 
 interface HomeViewProps {
   onSelectMedia: (item: SearchResponse) => void;
@@ -11,6 +13,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia }) => {
   const [trendingAnime, setTrendingAnime] = useState<SearchResponse[]>([]);
   const [popularSeries, setPopularSeries] = useState<SearchResponse[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [continueWatching, setContinueWatching] = useState<WatchProgress[]>([]);
 
   useEffect(() => {
     let isMounted = true;
@@ -33,6 +36,13 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia }) => {
       }
       setIsLoading(false);
     };
+
+    // Continue Watching is the row most likely to be used, and it comes from
+    // local state, so it is loaded independently of the network fetches above
+    // rather than waiting behind them.
+    window.cloudstream?.getContinueWatching(12).then((rows) => {
+      if (isMounted) setContinueWatching(rows);
+    });
 
     fetchHomeContent();
     return () => { isMounted = false; };
@@ -116,6 +126,75 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia }) => {
               <Play size={16} fill="#fff" />
               <span>Watch Now</span>
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Continue watching — resumes without a search */}
+      {continueWatching.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fff' }}>
+            <History size={18} style={{ color: 'var(--accent-light)' }} />
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Continue watching</h3>
+          </div>
+
+          <div className="poster-grid">
+            {continueWatching.map((row) => {
+              const percent = row.durationSeconds
+                ? (row.positionSeconds / row.durationSeconds) * 100
+                : 0;
+              const minutesLeft = Math.round(
+                Math.max(0, row.durationSeconds - row.positionSeconds) / 60
+              );
+
+              return (
+                <div
+                  key={`${row.key}-${row.season ?? ''}-${row.episode ?? ''}`}
+                  className="poster-card"
+                  onClick={() =>
+                    onSelectMedia({
+                      name: row.title,
+                      url: row.mediaUrl,
+                      apiName: 'Continue watching',
+                      type: TvType.Movie,
+                      posterUrl: row.posterUrl,
+                    })
+                  }
+                >
+                  <div className="poster-container">
+                    {row.posterUrl ? (
+                      <img src={row.posterUrl} alt="" loading="lazy" />
+                    ) : (
+                      <div className="poster-image poster-image--empty">
+                        {row.title.slice(0, 1)}
+                      </div>
+                    )}
+                    <div className="poster-overlay">
+                      <button className="play-button-overlay">
+                        <Play size={20} fill="#fff" />
+                      </button>
+                    </div>
+                    <div className="poster-progress">
+                      <div style={{ width: `${Math.min(100, percent)}%` }} />
+                    </div>
+                  </div>
+
+                  <div className="poster-info">
+                    <h4 className="poster-title">{row.title}</h4>
+                    <div className="poster-meta">
+                      <span>
+                        {row.season != null && row.episode != null
+                          ? `S${row.season}E${row.episode}`
+                          : `${Math.round(percent)}% watched`}
+                      </span>
+                      <span style={{ color: 'var(--accent-light)', fontSize: '0.72rem' }}>
+                        {minutesLeft} min left
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

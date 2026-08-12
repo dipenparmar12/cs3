@@ -21,6 +21,12 @@ import type {
   UpdateSettings,
 } from './cs3/extensionUpdater';
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
+import type {
+  LibraryEntry,
+  SourceMemory,
+  WatchProgress,
+  WatchStatus,
+} from './cs3/libraryStore';
 import type { StreamHandle } from './torrent/torrentEngine';
 
 /**
@@ -122,6 +128,48 @@ export interface CloudStreamElectronAPI {
     callback: (event: string, payload: unknown) => void
   ) => () => void;
 
+  // Library, watch progress and source memory
+  getLibraryEntries: (status?: WatchStatus) => Promise<LibraryEntry[]>;
+  upsertLibraryEntry: (input: {
+    title: string;
+    year?: number;
+    type?: string;
+    posterUrl?: string;
+    mediaUrl: string;
+    status?: WatchStatus;
+  }) => Promise<LibraryEntry>;
+  setLibraryStatus: (key: string, status: WatchStatus) => Promise<LibraryEntry | null>;
+  setLibraryUserRating: (key: string, rating?: number) => Promise<LibraryEntry | null>;
+  removeLibraryEntry: (key: string) => Promise<boolean>;
+  getLibraryEntryForUrl: (mediaUrl: string) => Promise<LibraryEntry | null>;
+  recordWatchProgress: (input: {
+    title: string;
+    year?: number;
+    mediaUrl: string;
+    posterUrl?: string;
+    episodeTitle?: string;
+    season?: number;
+    episode?: number;
+    positionSeconds: number;
+    durationSeconds: number;
+    type?: string;
+  }) => Promise<WatchProgress | null>;
+  getProgressForKey: (key: string) => Promise<WatchProgress[]>;
+  getContinueWatching: (limit?: number) => Promise<WatchProgress[]>;
+  clearWatchProgress: (key: string, season?: number, episode?: number) => Promise<boolean>;
+  rememberSource: (input: Omit<SourceMemory, 'chosenAt'>) => Promise<void>;
+  recallSource: (key: string, season?: number, episode?: number) => Promise<SourceMemory | null>;
+  exportLibrary: () => Promise<{
+    entries: LibraryEntry[];
+    progress: WatchProgress[];
+    sources: SourceMemory[];
+  }>;
+  importLibrary: (payload: {
+    entries?: LibraryEntry[];
+    progress?: WatchProgress[];
+    sources?: SourceMemory[];
+  }) => Promise<{ entries: number; progress: number; sources: number }>;
+
   // Datastore
   getSetting: (key: string, defaultValue?: unknown) => Promise<string>;
   setSetting: (key: string, value: unknown) => Promise<void>;
@@ -208,6 +256,23 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.on('extension:updateEvent', listener);
     return () => ipcRenderer.removeListener('extension:updateEvent', listener);
   },
+
+  getLibraryEntries: (status) => ipcRenderer.invoke('library:getEntries', status),
+  upsertLibraryEntry: (input) => ipcRenderer.invoke('library:upsertEntry', input),
+  setLibraryStatus: (key, status) => ipcRenderer.invoke('library:setStatus', key, status),
+  setLibraryUserRating: (key, rating) => ipcRenderer.invoke('library:setUserRating', key, rating),
+  removeLibraryEntry: (key) => ipcRenderer.invoke('library:removeEntry', key),
+  getLibraryEntryForUrl: (mediaUrl) => ipcRenderer.invoke('library:getEntryForUrl', mediaUrl),
+  recordWatchProgress: (input) => ipcRenderer.invoke('library:recordProgress', input),
+  getProgressForKey: (key) => ipcRenderer.invoke('library:getProgressForKey', key),
+  getContinueWatching: (limit) => ipcRenderer.invoke('library:getContinueWatching', limit),
+  clearWatchProgress: (key, season, episode) =>
+    ipcRenderer.invoke('library:clearProgress', key, season, episode),
+  rememberSource: (input) => ipcRenderer.invoke('library:rememberSource', input),
+  recallSource: (key, season, episode) =>
+    ipcRenderer.invoke('library:recallSource', key, season, episode),
+  exportLibrary: () => ipcRenderer.invoke('library:export'),
+  importLibrary: (payload) => ipcRenderer.invoke('library:import', payload),
 
   getSetting: (key, defaultValue) => ipcRenderer.invoke('datastore:getSetting', key, defaultValue),
   setSetting: (key, value) => ipcRenderer.invoke('datastore:setSetting', key, value),

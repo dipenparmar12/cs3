@@ -164,6 +164,7 @@ export const App: React.FC = () => {
               subtitles={playback.subtitles}
               onBack={handleClosePlayer}
               series={playback.series}
+              progress={playback.progress}
               onSelectEpisode={
                 playback.onRequestEpisode
                   ? (episode) => handleSwitchEpisode(episode)

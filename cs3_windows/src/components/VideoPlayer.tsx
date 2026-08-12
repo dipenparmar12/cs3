@@ -25,7 +25,21 @@ interface VideoPlayerProps {
   series?: SeriesContext;
   /** Asked to play another episode; the host resolves a source and restarts. */
   onSelectEpisode?: (episode: Episode) => void;
+  /** Identity for recording watch progress, and where to resume from. */
+  progress?: {
+    mediaUrl: string;
+    year?: number;
+    posterUrl?: string;
+    season?: number;
+    episode?: number;
+    /** Seconds to seek to on load, from a previous session. */
+    resumeAt?: number;
+  };
 }
+
+/** How often playback position is written. Frequent enough to be useful, rare
+ *  enough not to write on every timeupdate tick (which fires ~4x/second). */
+const PROGRESS_SAVE_INTERVAL_MS = 5_000;
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const SKIP_SECONDS = 10;
@@ -51,7 +65,7 @@ function formatSpeed(bytesPerSecond: number): string {
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamUrl, mimeType, title, episodeTitle, infoHash, subtitles, onBack,
-  series, onSelectEpisode,
+  series, onSelectEpisode, progress,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -232,6 +246,54 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video.addEventListener('ended', onEnded);
     return () => video.removeEventListener('ended', onEnded);
   }, [nextEpisode, onSelectEpisode]);
+
+  // --- watch progress ------------------------------------------------------
+
+  // Held in a ref so the save interval reads current values without being torn
+  // down and rebuilt four times a second by timeupdate.
+  const progressSnapshot = useRef({ currentTime: 0, duration: 0 });
+  progressSnapshot.current = { currentTime, duration };
+
+  useEffect(() => {
+    if (!progress || !window.cloudstream) return;
+
+    const save = () => {
+      const { currentTime: at, duration: total } = progressSnapshot.current;
+      if (total <= 0 || at <= 0) return;
+      window.cloudstream?.recordWatchProgress({
+        title,
+        year: progress.year,
+        mediaUrl: progress.mediaUrl,
+        posterUrl: progress.posterUrl,
+        episodeTitle,
+        season: progress.season,
+        episode: progress.episode,
+        positionSeconds: at,
+        durationSeconds: total,
+      });
+    };
+
+    const timer = window.setInterval(save, PROGRESS_SAVE_INTERVAL_MS);
+    // Closing the player is the moment the position matters most, and the
+    // interval will not have fired since the last few seconds of playback.
+    return () => {
+      window.clearInterval(timer);
+      save();
+    };
+  }, [progress, title, episodeTitle]);
+
+  // Resume from where the last session stopped, once the media knows how long
+  // it is. Seeking before metadata loads is silently ignored by the element.
+  const resumedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const video = videoRef.current;
+    const resumeAt = progress?.resumeAt;
+    if (!video || !resumeAt || duration <= 0) return;
+    if (resumedRef.current === streamUrl) return;
+
+    resumedRef.current = streamUrl;
+    if (resumeAt < duration - 10) video.currentTime = resumeAt;
+  }, [progress?.resumeAt, duration, streamUrl]);
 
   // --- controls ------------------------------------------------------------
 

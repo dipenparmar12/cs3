@@ -5,13 +5,13 @@ import { fileURLToPath as c } from "url";
 import l from "fs";
 import u, { spawn as d } from "child_process";
 import f from "crypto";
-import p from "http";
-import ee from "https";
-import te from "os";
-import ne from "webtorrent";
-import { XMLParser as re } from "fast-xml-parser";
+import ee from "http";
+import te from "https";
+import ne from "os";
+import re from "webtorrent";
+import { XMLParser as ie } from "fast-xml-parser";
 //#region \0rolldown/runtime.js
-var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
+var ae = /* @__PURE__ */ e(import.meta.url), oe = class {
 	dataDir;
 	dbFile;
 	backupSnapshotFile;
@@ -162,7 +162,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 	exportBackup() {
 		return this.data.exportTimestamp = Date.now(), JSON.stringify(this.data, null, 2);
 	}
-}, oe = class {
+}, se = class {
 	aria2Process = null;
 	rpcSecret;
 	port = 6800;
@@ -205,7 +205,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 				id: f.randomUUID(),
 				method: `aria2.${e}`,
 				params: [`token:${this.rpcSecret}`, ...t]
-			}), a = p.request({
+			}), a = ee.request({
 				hostname: "127.0.0.1",
 				port: this.port,
 				path: "/jsonrpc",
@@ -281,17 +281,17 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 	stop() {
 		this.aria2Process &&= (this.aria2Process.kill(), null);
 	}
-}, m = {
+}, p = {
 	Downloading: "Downloading",
 	Queued: "Queued",
 	Paused: "Paused",
 	Completed: "Completed",
 	Failed: "Failed"
-}, se = class {
+}, ce = class {
 	aria2;
 	defaultDownloadDir;
 	constructor(e) {
-		this.aria2 = e, this.defaultDownloadDir = s.join(te.homedir(), "Downloads", "CloudStream");
+		this.aria2 = e, this.defaultDownloadDir = s.join(ne.homedir(), "Downloads", "CloudStream");
 	}
 	getDefaultDirectory() {
 		return this.defaultDownloadDir;
@@ -314,7 +314,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 		let t = e.targetFilePath || this.generateTargetFilePath(e), n = s.dirname(t), r = s.basename(t);
 		return await this.aria2.addUri(e.link.url, n, r, e.headers);
 	}
-}, ce = class e {
+}, le = class e {
 	datastore;
 	aria2;
 	resolver;
@@ -326,7 +326,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 	pollInterval = null;
 	onProgressCallback;
 	constructor(e, t) {
-		this.datastore = e, this.aria2 = t, this.resolver = new se(t), this.loadQueueFromStorage();
+		this.datastore = e, this.aria2 = t, this.resolver = new ce(t), this.loadQueueFromStorage();
 	}
 	setTorrentEngine(e) {
 		this.torrentEngine = e;
@@ -336,7 +336,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 	}
 	loadQueueFromStorage() {
 		let e = this.datastore.getObject("download_queue_list", []);
-		if (e && Array.isArray(e)) for (let t of e) t.state === m.Downloading && (t.state = m.Queued), this.queue.set(t.id, t);
+		if (e && Array.isArray(e)) for (let t of e) t.state === p.Downloading && (t.state = p.Queued), this.queue.set(t.id, t);
 	}
 	saveQueueToStorage() {
 		let e = Array.from(this.queue.values());
@@ -356,7 +356,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 	async pollStatus() {
 		if (await this.pollTorrentTasks(), this.aria2.isRunning()) for (let [e, t] of this.gidToTaskId.entries()) try {
 			let n = await this.aria2.getStatus(e), r = this.queue.get(t);
-			r && (r.bytesDownloaded = n.completedLength, r.totalBytes = n.totalLength, r.downloadSpeed = n.downloadSpeed, r.etaSeconds = n.downloadSpeed > 0 && n.totalLength > n.completedLength ? Math.ceil((n.totalLength - n.completedLength) / n.downloadSpeed) : 0, n.status === "completed" ? (r.state = m.Completed, this.gidToTaskId.delete(e)) : n.status === "error" && (r.state = m.Failed, r.errorMessage = n.errorMessage || "aria2 transfer error", this.gidToTaskId.delete(e)), this.saveQueueToStorage());
+			r && (r.bytesDownloaded = n.completedLength, r.totalBytes = n.totalLength, r.downloadSpeed = n.downloadSpeed, r.etaSeconds = n.downloadSpeed > 0 && n.totalLength > n.completedLength ? Math.ceil((n.totalLength - n.completedLength) / n.downloadSpeed) : 0, n.status === "completed" ? (r.state = p.Completed, this.gidToTaskId.delete(e)) : n.status === "error" && (r.state = p.Failed, r.errorMessage = n.errorMessage || "aria2 transfer error", this.gidToTaskId.delete(e)), this.saveQueueToStorage());
 		} catch {}
 	}
 	async pollTorrentTasks() {
@@ -369,12 +369,12 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 				continue;
 			}
 			let i = await this.torrentEngine.getStats(n);
-			i && (r.bytesDownloaded = i.downloaded, r.totalBytes = i.fileSize, r.downloadSpeed = i.downloadSpeed, r.etaSeconds = Math.round(i.timeRemainingMs / 1e3) || 0, i.error ? (r.state = m.Failed, r.errorMessage = i.error, this.torrentTasks.delete(t)) : i.progress >= 1 ? (r.state = m.Completed, r.downloadSpeed = 0, r.etaSeconds = 0, this.torrentTasks.delete(t)) : r.state = i.isPaused ? m.Paused : m.Downloading, e = !0);
+			i && (r.bytesDownloaded = i.downloaded, r.totalBytes = i.fileSize, r.downloadSpeed = i.downloadSpeed, r.etaSeconds = Math.round(i.timeRemainingMs / 1e3) || 0, i.error ? (r.state = p.Failed, r.errorMessage = i.error, this.torrentTasks.delete(t)) : i.progress >= 1 ? (r.state = p.Completed, r.downloadSpeed = 0, r.etaSeconds = 0, this.torrentTasks.delete(t)) : r.state = i.isPaused ? p.Paused : p.Downloading, e = !0);
 		}
 		e && this.saveQueueToStorage();
 	}
 	async enqueue(t) {
-		t.state = m.Downloading, t.createdTime = Date.now(), t.targetFilePath ||= this.resolver.generateTargetFilePath(t);
+		t.state = p.Downloading, t.createdTime = Date.now(), t.targetFilePath ||= this.resolver.generateTargetFilePath(t);
 		let n = s.dirname(t.targetFilePath);
 		if (l.existsSync(n) || l.mkdirSync(n, { recursive: !0 }), e.isMagnet(t.link.url) && this.torrentEngine) try {
 			this.torrentEngine.setDownloadPath(n);
@@ -385,9 +385,9 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 			});
 			return this.torrentTasks.set(t.id, e.infoHash), t.totalBytes = e.fileSize, t.targetFilePath = s.join(n, e.fileName), this.queue.set(t.id, t), this.saveQueueToStorage(), t.id;
 		} catch (e) {
-			return t.state = m.Failed, t.errorMessage = e instanceof Error ? e.message : String(e), this.queue.set(t.id, t), this.saveQueueToStorage(), t.id;
+			return t.state = p.Failed, t.errorMessage = e instanceof Error ? e.message : String(e), this.queue.set(t.id, t), this.saveQueueToStorage(), t.id;
 		}
-		if (/\.m3u8(\?|$)/i.test(t.link.url) || t.link.isM3u8) return t.state = m.Failed, t.errorMessage = "HLS streams need segment muxing, which this build cannot do yet. Install yt-dlp from Settings and download via the source URL instead.", this.queue.set(t.id, t), this.saveQueueToStorage(), t.id;
+		if (/\.m3u8(\?|$)/i.test(t.link.url) || t.link.isM3u8) return t.state = p.Failed, t.errorMessage = "HLS streams need segment muxing, which this build cannot do yet. Install yt-dlp from Settings and download via the source URL instead.", this.queue.set(t.id, t), this.saveQueueToStorage(), t.id;
 		if (this.aria2.isRunning()) try {
 			let e = await this.resolver.dispatchDownload(t);
 			return this.gidToTaskId.set(e, t.id), this.queue.set(t.id, t), this.saveQueueToStorage(), t.id;
@@ -397,7 +397,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 		return this.startNativeHttpDownload(t), this.queue.set(t.id, t), this.saveQueueToStorage(), t.id;
 	}
 	startNativeHttpDownload(e) {
-		let t = e.link.url, n = t.startsWith("https") ? ee : p, r = l.createWriteStream(e.targetFilePath), i = Date.now(), a = 0, o = n.get(t, { headers: e.headers || {
+		let t = e.link.url, n = t.startsWith("https") ? te : ee, r = l.createWriteStream(e.targetFilePath), i = Date.now(), a = 0, o = n.get(t, { headers: e.headers || {
 			"User-Agent": "CloudStreamDesktop/1.0",
 			Referer: e.link.referer || ""
 		} }, (t) => {
@@ -412,11 +412,11 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 				let o = Date.now(), s = (o - i) / 1e3;
 				s >= 1 && (e.downloadSpeed = Math.floor((n - a) / s), a = n, i = o, e.totalBytes > n && e.downloadSpeed > 0 && (e.etaSeconds = Math.ceil((e.totalBytes - n) / e.downloadSpeed)), this.saveQueueToStorage());
 			}), t.on("end", () => {
-				r.end(), e.state = m.Completed, e.bytesDownloaded = e.totalBytes || n, e.downloadSpeed = 0, e.etaSeconds = 0, this.activeFallbackStreams.delete(e.id), this.saveQueueToStorage();
+				r.end(), e.state = p.Completed, e.bytesDownloaded = e.totalBytes || n, e.downloadSpeed = 0, e.etaSeconds = 0, this.activeFallbackStreams.delete(e.id), this.saveQueueToStorage();
 			});
 		});
 		o.on("error", (t) => {
-			r.close(), e.state = m.Failed, e.errorMessage = t.message || "Stream download error", this.activeFallbackStreams.delete(e.id), this.saveQueueToStorage();
+			r.close(), e.state = p.Failed, e.errorMessage = t.message || "Stream download error", this.activeFallbackStreams.delete(e.id), this.saveQueueToStorage();
 		}), this.activeFallbackStreams.set(e.id, {
 			req: o,
 			fileStream: r
@@ -425,7 +425,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 	async pause(e) {
 		let t = this.queue.get(e);
 		if (!t) return;
-		t.state = m.Paused;
+		t.state = p.Paused;
 		let n = this.torrentTasks.get(e);
 		if (n && this.torrentEngine) {
 			await this.torrentEngine.pause(n), this.saveQueueToStorage();
@@ -437,19 +437,19 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 	}
 	async resume(e) {
 		let t = this.queue.get(e);
-		if (!t || t.state !== m.Paused) return;
+		if (!t || t.state !== p.Paused) return;
 		let n = this.torrentTasks.get(e);
 		if (n && this.torrentEngine) {
-			t.state = m.Downloading, await this.torrentEngine.resume(n), this.saveQueueToStorage();
+			t.state = p.Downloading, await this.torrentEngine.resume(n), this.saveQueueToStorage();
 			return;
 		}
-		t.state = m.Downloading, await this.enqueue(t), this.saveQueueToStorage();
+		t.state = p.Downloading, await this.enqueue(t), this.saveQueueToStorage();
 	}
 	async remove(e) {
 		let t = this.queue.get(e);
 		if (!t) return;
 		let n = this.torrentTasks.get(e);
-		n && this.torrentEngine && (await this.torrentEngine.stopStream(n, t.state === m.Completed), this.torrentTasks.delete(e));
+		n && this.torrentEngine && (await this.torrentEngine.stopStream(n, t.state === p.Completed), this.torrentTasks.delete(e));
 		for (let [t, n] of this.gidToTaskId.entries()) n === e && (await this.aria2.remove(t), this.gidToTaskId.delete(t));
 		let r = this.activeFallbackStreams.get(e);
 		r && (r.req.destroy(), r.fileStream.close(), this.activeFallbackStreams.delete(e)), this.queue.delete(e), this.saveQueueToStorage();
@@ -462,19 +462,19 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 		for (let [, e] of this.activeFallbackStreams) e.req.destroy(), e.fileStream.close();
 		this.aria2.stop();
 	}
-}, h = {
+}, m = {
 	TierA_SourceJVM: "Tier A (Source-Rebuilt JVM)",
 	TierB_LegacyDEX: "Tier B (Legacy DEX Translator)",
 	TierC_NativeTS: "Tier C (Native TypeScript SDK)",
 	TierC_NativeKMP: "Tier C (Kotlin Multiplatform JS)",
 	NotAnalyzed: "Not analyzed",
 	Unsupported: "Unsupported"
-}, le = Buffer.from([
+}, ue = Buffer.from([
 	100,
 	101,
 	120,
 	10
-]), ue = Buffer.from([80, 75]), de = [
+]), de = Buffer.from([80, 75]), fe = [
 	"Landroid/util/Log;",
 	"Landroid/util/Base64;",
 	"Landroid/content/Context;",
@@ -482,7 +482,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 	"Landroid/webkit/CookieManager;",
 	"Landroid/net/Uri;",
 	"Landroid/os/Build;"
-], fe = [
+], pe = [
 	"Landroid/view/",
 	"Landroid/widget/",
 	"Landroid/app/Activity;",
@@ -492,11 +492,11 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 	"Landroid/hardware/",
 	"Landroid/telephony/",
 	"Landroid/content/pm/PackageManager;"
-], pe = [
+], me = [
 	"Landroid/webkit/WebView;",
 	"WebViewResolver",
 	"CloudflareKiller"
-], me = class {
+], he = class {
 	analyzePlugin(e, t, n) {
 		if (/\.(ts|js|mjs)$/i.test(n)) return {
 			pluginName: e,
@@ -504,7 +504,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 			format: "JS",
 			compatibilityScore: 100,
 			confidence: "High",
-			recommendedTier: h.TierC_NativeTS,
+			recommendedTier: m.TierC_NativeTS,
 			androidApiReferences: 0,
 			hasNativeLibs: !1,
 			hasReflection: !1,
@@ -522,7 +522,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 		if (!r.isZip) return {
 			...this.notAnalyzed(e, t, "Not a ZIP archive — not a valid .cs3 file."),
 			confidence: "Unsupported",
-			recommendedTier: h.Unsupported,
+			recommendedTier: m.Unsupported,
 			compatibilityScore: 0
 		};
 		let i = [`Archive size: ${(r.sizeBytes / 1024).toFixed(1)} KB`];
@@ -532,7 +532,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 			format: "CS3",
 			compatibilityScore: 0,
 			confidence: "Unsupported",
-			recommendedTier: h.Unsupported,
+			recommendedTier: m.Unsupported,
 			androidApiReferences: 0,
 			hasNativeLibs: r.hasNativeLibs,
 			hasReflection: !1,
@@ -540,9 +540,9 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 			htmlParser: "Unknown",
 			details: i
 		};
-		let a = r.dexPayload?.toString("latin1") ?? "", o = de.filter((e) => a.includes(e)), s = fe.filter((e) => a.includes(e)), c = pe.some((e) => a.includes(e)), u = a.includes("Ljava/lang/reflect/") || a.includes("Ljava/lang/Class;"), d = 100;
+		let a = r.dexPayload?.toString("latin1") ?? "", o = fe.filter((e) => a.includes(e)), s = pe.filter((e) => a.includes(e)), c = me.some((e) => a.includes(e)), u = a.includes("Ljava/lang/reflect/") || a.includes("Ljava/lang/Class;"), d = 100;
 		s.length > 0 && (d -= Math.min(45, s.length * 12)), r.hasNativeLibs && (d -= 60), c && (d -= 10), d = Math.max(0, d), o.length > 0 && i.push(`Shimmed Android APIs referenced: ${o.length} (${o.join(", ")})`), s.length > 0 && i.push(`Android APIs with no shim: ${s.join(", ")} — these would degrade or fail.`), c && i.push("References WebView/Cloudflare bypass — needs the offscreen browser bridge."), r.hasNativeLibs && i.push("Contains native .so libraries — not loadable in a sandboxed JVM."), u && i.push("Uses reflection — expected for plugin entry points, but worth noting."), i.push("Static analysis only. Nothing in this build can execute a .cs3; see docs/PRD/31-cs3-dropin-compatibility.md.");
-		let f = r.hasNativeLibs ? h.Unsupported : h.TierB_LegacyDEX;
+		let f = r.hasNativeLibs ? m.Unsupported : m.TierB_LegacyDEX;
 		return {
 			pluginName: e,
 			internalName: t,
@@ -565,7 +565,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 			format: "CS3",
 			compatibilityScore: 0,
 			confidence: "Low",
-			recommendedTier: h.NotAnalyzed,
+			recommendedTier: m.NotAnalyzed,
 			androidApiReferences: 0,
 			hasNativeLibs: !1,
 			hasReflection: !1,
@@ -576,7 +576,7 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 	}
 	inspectArchive(e) {
 		let t = l.readFileSync(e), n = {
-			isZip: t.subarray(0, 2).equals(ue),
+			isZip: t.subarray(0, 2).equals(de),
 			hasDex: !1,
 			hasNativeLibs: !1,
 			sizeBytes: t.length,
@@ -594,14 +594,14 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 				try {
 					if (e === 0) t = Buffer.from(d);
 					else if (e === 8) {
-						let { inflateRawSync: e } = ie("zlib");
+						let { inflateRawSync: e } = ae("zlib");
 						t = e(d);
 					}
 				} catch {
 					t = null;
 				}
 				if (t) {
-					if (/\.dex$/i.test(l)) t.subarray(0, 4).equals(le) && (n.hasDex = !0, r.push(t));
+					if (/\.dex$/i.test(l)) t.subarray(0, 4).equals(ue) && (n.hasDex = !0, r.push(t));
 					else try {
 						let e = JSON.parse(t.toString("utf8")), r = e.pluginClassName ?? e.pluginClass;
 						typeof r == "string" && (n.manifestClassName = r);
@@ -612,14 +612,14 @@ var ie = /* @__PURE__ */ e(import.meta.url), ae = class {
 		}
 		return r.length > 0 && (n.dexPayload = Buffer.concat(r)), n;
 	}
-}, he = 12e3, ge = 1, _e = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) CloudStreamDesktop/1.0", ve = class extends Error {
+}, ge = 12e3, _e = 1, ve = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) CloudStreamDesktop/1.0", ye = class extends Error {
 	status;
 	url;
 	constructor(e, t, n) {
 		super(e), this.name = "HttpError", this.status = t, this.url = n;
 	}
 };
-function ye(e) {
+function be(e) {
 	let t = e.filter((e) => !!e);
 	if (t.length === 1) return t[0];
 	let n = new AbortController();
@@ -632,34 +632,34 @@ function ye(e) {
 	}
 	return n.signal;
 }
-async function be(e, t) {
-	let n = t.timeoutMs ?? he, r = ye([AbortSignal.timeout(n), t.signal]), i = await fetch(e, {
+async function xe(e, t) {
+	let n = t.timeoutMs ?? ge, r = be([AbortSignal.timeout(n), t.signal]), i = await fetch(e, {
 		signal: r,
 		redirect: "follow",
 		headers: {
-			"User-Agent": _e,
+			"User-Agent": ve,
 			Accept: "*/*",
 			"Accept-Language": "en-US,en;q=0.9",
 			...t.headers
 		}
 	});
-	if (!i.ok) throw new ve(`HTTP ${i.status} ${i.statusText}`, i.status, e);
+	if (!i.ok) throw new ye(`HTTP ${i.status} ${i.statusText}`, i.status, e);
 	return i;
 }
-async function g(e, t) {
-	let n = t.retries ?? ge, r;
+async function h(e, t) {
+	let n = t.retries ?? _e, r;
 	for (let i = 0; i <= n; i++) try {
-		return await be(e, t);
+		return await xe(e, t);
 	} catch (e) {
 		r = e;
-		let a = e instanceof ve && e.status !== void 0 && e.status >= 400 && e.status < 500, o = t.signal?.aborted === !0;
+		let a = e instanceof ye && e.status !== void 0 && e.status >= 400 && e.status < 500, o = t.signal?.aborted === !0;
 		if (a || o || i === n) break;
 		await new Promise((e) => setTimeout(e, 400 * (i + 1)));
 	}
 	throw r;
 }
-async function _(e, t = {}) {
-	return await (await g(e, {
+async function g(e, t = {}) {
+	return await (await h(e, {
 		...t,
 		headers: {
 			Accept: "application/json",
@@ -667,16 +667,16 @@ async function _(e, t = {}) {
 		}
 	})).json();
 }
-async function v(e, t = {}) {
-	return await (await g(e, t)).text();
+async function _(e, t = {}) {
+	return await (await h(e, t)).text();
 }
-async function xe(e, t = {}) {
-	let n = await g(e, t);
+async function Se(e, t = {}) {
+	let n = await h(e, t);
 	return Buffer.from(await n.arrayBuffer());
 }
 //#endregion
 //#region electron/cs3/sidecarSupervisor.ts
-var Se = 6e4, Ce = 3, we = class {
+var Ce = 6e4, we = 3, Te = class {
 	proc = null;
 	pending = /* @__PURE__ */ new Map();
 	nextId = 1;
@@ -691,7 +691,7 @@ var Se = 6e4, Ce = 3, we = class {
 		this.dataDir = e ?? (r ? s.join(r.getPath("userData"), "cs3-runtime") : s.join(process.cwd(), "cs3-runtime")), this.resourceDir = t ?? (r?.isPackaged ? s.join(process.resourcesPath, "sidecar") : s.join(process.cwd(), "..", "sidecar", "target")), l.mkdirSync(this.dataDir, { recursive: !0 });
 	}
 	async ensureStarted() {
-		return this.proc && !this.proc.killed ? !0 : this.restarts > Ce ? !1 : (this.starting ||= this.start().finally(() => {
+		return this.proc && !this.proc.killed ? !0 : this.restarts > we ? !1 : (this.starting ||= this.start().finally(() => {
 			this.starting = null;
 		}), this.starting);
 	}
@@ -747,7 +747,7 @@ var Se = 6e4, Ce = 3, we = class {
 	onExit(e, t) {
 		this.proc = null;
 		let n = `exit code ${e ?? "none"}${t ? `, signal ${t}` : ""}`;
-		this.failAllPending("SIDECAR_CRASHED", `The extension runtime stopped (${n}). A plugin can crash it; the app itself is unaffected.`), this.restarts++, this.restarts > Ce && (this.startFailure = `The extension runtime has crashed ${this.restarts} times this session and will not be restarted again. Extensions are unavailable until the app is restarted.`);
+		this.failAllPending("SIDECAR_CRASHED", `The extension runtime stopped (${n}). A plugin can crash it; the app itself is unaffected.`), this.restarts++, this.restarts > we && (this.startFailure = `The extension runtime has crashed ${this.restarts} times this session and will not be restarted again. Extensions are unavailable until the app is restarted.`);
 	}
 	failAllPending(e, t) {
 		for (let [, n] of this.pending) clearTimeout(n.timer), n.resolve({
@@ -791,7 +791,7 @@ var Se = 6e4, Ce = 3, we = class {
 			errorKind: t.errorKind
 		}));
 	}
-	async call(e, t = {}, n = Se) {
+	async call(e, t = {}, n = Ce) {
 		if (!this.proc || this.proc.killed) return {
 			ok: !1,
 			errorKind: "SIDECAR_UNAVAILABLE",
@@ -848,16 +848,16 @@ var Se = 6e4, Ce = 3, we = class {
 			restarts: this.restarts
 		};
 	}
-}, Te = class e {
+}, Ee = class e {
 	pluginsDir;
-	analyzer = new me();
+	analyzer = new he();
 	datastore;
 	sidecar;
 	installedRepoUrls = /* @__PURE__ */ new Set();
 	installedPlugins = /* @__PURE__ */ new Map();
 	runtimeReports = /* @__PURE__ */ new Map();
 	constructor(e, t) {
-		this.datastore = e, this.sidecar = t ?? new we(), this.pluginsDir = r ? s.join(r.getPath("userData"), "extensions") : s.join(process.cwd(), "extensions"), l.mkdirSync(this.pluginsDir, { recursive: !0 }), this.restore();
+		this.datastore = e, this.sidecar = t ?? new Te(), this.pluginsDir = r ? s.join(r.getPath("userData"), "extensions") : s.join(process.cwd(), "extensions"), l.mkdirSync(this.pluginsDir, { recursive: !0 }), this.restore();
 	}
 	restore() {
 		let e = this.datastore.getObject("installed_repositories_urls", []);
@@ -881,7 +881,7 @@ var Se = 6e4, Ce = 3, we = class {
 		return s.join(this.pluginsDir, r, i);
 	}
 	async fetchRepository(e) {
-		let t = [], n = await _(e, { timeoutMs: 15e3 });
+		let t = [], n = await g(e, { timeoutMs: 15e3 });
 		if (Array.isArray(n)) {
 			let r = n.filter((e) => e?.internalName && e.url);
 			return r.length !== n.length && t.push(`${n.length - r.length} entries lacked an internalName or url.`), this.installedRepoUrls.add(e), this.persist(), {
@@ -893,7 +893,7 @@ var Se = 6e4, Ce = 3, we = class {
 			};
 		}
 		if (!n || typeof n != "object" || !Array.isArray(n.pluginLists)) throw Error("Not a CloudStream repository: the document is neither a plugin array nor an object with a \"pluginLists\" array.");
-		let r = await Promise.allSettled(n.pluginLists.map((e) => _(e, { timeoutMs: 15e3 }))), i = [];
+		let r = await Promise.allSettled(n.pluginLists.map((e) => g(e, { timeoutMs: 15e3 }))), i = [];
 		return r.forEach((e, r) => {
 			if (e.status === "rejected") {
 				t.push(`Plugin list ${n.pluginLists[r]} could not be read: ${e.reason instanceof Error ? e.reason.message : String(e.reason)}`);
@@ -927,7 +927,7 @@ var Se = 6e4, Ce = 3, we = class {
 		let n = t ?? e.repositoryUrl ?? "unknown-repository", r = this.installPathFor(n, e.internalName), i = `${r}.tmp`;
 		try {
 			l.mkdirSync(s.dirname(r), { recursive: !0 });
-			let t = await xe(e.url, { timeoutMs: 6e4 }), a = f.createHash("sha256").update(t).digest("hex");
+			let t = await Se(e.url, { timeoutMs: 6e4 }), a = f.createHash("sha256").update(t).digest("hex");
 			if (e.fileHash && e.fileHash.replace(/^sha256-/i, "").toLowerCase() !== a) return {
 				ok: !1,
 				message: "SHA-256 mismatch — the download does not match the hash the repository published. Install aborted."
@@ -1040,7 +1040,7 @@ var Se = 6e4, Ce = 3, we = class {
 	async loadLinks(e) {
 		return [];
 	}
-}, Ee = class {
+}, De = class {
 	binDir;
 	constructor() {
 		this.binDir = r ? s.join(r.getPath("userData"), "bin") : s.join(process.cwd(), "bin"), l.existsSync(this.binDir) || l.mkdirSync(this.binDir, { recursive: !0 });
@@ -1058,7 +1058,7 @@ var Se = 6e4, Ce = 3, we = class {
 	async downloadFile(e, t, n) {
 		return new Promise((r) => {
 			let i = l.createWriteStream(t);
-			(e.startsWith("https") ? ee : p).get(e, { headers: { "User-Agent": "CloudStreamDesktop/1.0" } }, (e) => {
+			(e.startsWith("https") ? te : ee).get(e, { headers: { "User-Agent": "CloudStreamDesktop/1.0" } }, (e) => {
 				if ((e.statusCode === 301 || e.statusCode === 302) && e.headers.location) return i.close(), this.downloadFile(e.headers.location, t, n).then(r);
 				let a = parseInt(e.headers["content-length"] || "0", 10), o = 0;
 				e.on("data", (e) => {
@@ -1111,7 +1111,7 @@ var Se = 6e4, Ce = 3, we = class {
 			e && e(`Configuring yt-dlp... ${t}%`, Math.floor(30 + t * .7));
 		}), e && e("yt-dlp configured successfully!", 100), l.existsSync(n));
 	}
-}, De = /* @__PURE__ */ JSON.parse("[{\"id\":\"megarepo\",\"name\":\"MegaRepo\",\"internalName\":\"MegaRepo\",\"description\":\"Official CloudStream Mega Repository containing unified multi-provider extractors and high-speed mirrors.\",\"url\":\"https://github.com/self-similarity/MegaRepo\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/self-similarity/MegaRepo/builds/repo.json\",\"category\":\"Official\",\"language\":\"Multilingual\",\"iconUrl\":\"https://raw.githubusercontent.com/recloudstream/cloudstream/master/app/src/main/res/drawable/ic_splash_logo.png\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"extensions\",\"name\":\"Official Extensions\",\"internalName\":\"extensions\",\"description\":\"Primary CloudStream Community Extensions Repository covering popular movies, TV series, and anime.\",\"url\":\"https://github.com/recloudstream/extensions\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/recloudstream/extensions/master/repo.json\",\"category\":\"Official\",\"language\":\"English / Global\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"aniyomi_compat\",\"name\":\"Aniyomi Compatibility Repo\",\"internalName\":\"AniyomiCompatExtension\",\"description\":\"Aniyomi & Tachiyomi extension bridge adapter, enabling playback from Aniyomi provider sources.\",\"url\":\"https://github.com/CranberrySoup/AniyomiCompatExtension\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/CranberrySoup/AniyomiCompatExtension/master/repo.json\",\"category\":\"Compatibility\",\"language\":\"Multilingual\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"german_providers\",\"name\":\"German Providers\",\"internalName\":\"GermanProviders\",\"description\":\"German language streaming providers including Movie4k, Kinox, AniWorld, and SerienStream.\",\"url\":\"https://github.com/Bnyro/GermanProviders\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Bnyro/GermanProviders/master/repo.json\",\"category\":\"Regional\",\"language\":\"German (DE)\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"italia_in_streaming\",\"name\":\"Italia In Streaming\",\"internalName\":\"ItaliaInStreaming\",\"description\":\"Italian language movie and anime providers including CB01, Filmpertutti, and StreamingCommunity.\",\"url\":\"https://github.com/DieGon7771/ItaliaInStreaming\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/DieGon7771/ItaliaInStreaming/builds/repo.json\",\"category\":\"Regional\",\"language\":\"Italian (IT)\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"re_3arabi\",\"name\":\"Arabic Media Repo (re-3arabi)\",\"internalName\":\"re-3arabi\",\"description\":\"Arabic language streaming extractors including EgyBest, Shahid4u, FaselHD, and CimaClub.\",\"url\":\"https://github.com/Abodabodd/re-3arabi\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Abodabodd/re-3arabi/master/repo.json\",\"category\":\"Regional\",\"language\":\"Arabic (AR)\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"cloudstream_vietnamese\",\"name\":\"Vietnamese Providers\",\"internalName\":\"cloudstream-vietnamese\",\"description\":\"Vietnamese language media providers including PhimMoi, Motphim, and Bilutv.\",\"url\":\"https://gitlab.com/tearrs/cloudstream-vietnamese\",\"rawRepoUrl\":\"https://gitlab.com/tearrs/cloudstream-vietnamese/-/raw/main/repo.json\",\"category\":\"Regional\",\"language\":\"Vietnamese (VI)\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"csx\",\"name\":\"CloudStream X (CSX)\",\"internalName\":\"CSX\",\"description\":\"High-performance premium stream extractors and fast direct link resolvers.\",\"url\":\"https://github.com/SaurabhKaperwan/CSX\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/SaurabhKaperwan/CSX/builds/plugins.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"pluginList\"},{\"id\":\"cuxplug\",\"name\":\"CuxPlug Repo\",\"internalName\":\"CuxPlug\",\"description\":\"Cux custom extension pack providing multi-server link extraction.\",\"url\":\"https://github.com/ycngmn/CuxPlug\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/ycngmn/CuxPlug/master/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"fstream\",\"name\":\"FStream French Repo\",\"internalName\":\"FStream\",\"description\":\"French language streaming providers including FrenchStream, Wawacity, and VoirAnime.\",\"url\":\"https://git.disroot.org/ayza/FStream\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/recloudstream/FStream/builds/repo.json\",\"category\":\"Regional\",\"language\":\"French (FR)\",\"verified\":false,\"documentKind\":\"unknown\"},{\"id\":\"indostream\",\"name\":\"IndoStream Repo\",\"internalName\":\"IndoStream\",\"description\":\"Indonesian language streaming providers including Idlix and LK21.\",\"url\":\"https://github.com/TeKuma25/IndoStream\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/TeKuma25/IndoStream/builds/repo.json\",\"category\":\"Regional\",\"language\":\"Indonesian (ID)\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"luna712\",\"name\":\"Luna712 Extensions\",\"internalName\":\"Luna712-CloudStream-Extensions\",\"description\":\"Luna712 curated anime & multi-source high-bitrate extractors.\",\"url\":\"https://github.com/Luna712/Luna712-CloudStream-Extensions\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Luna712/Luna712-CloudStream-Extensions/master/repo.json\",\"category\":\"Anime\",\"language\":\"Multilingual\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"cartoonyrepo\",\"name\":\"Cartoony Repo\",\"internalName\":\"cartoonyrepo\",\"description\":\"Cartoons, Animated Shows, and Kids Media specialized repository.\",\"url\":\"https://github.com/med1245/cartoonyrepo\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/med1245/cartoonyrepo/builds/repo.json\",\"category\":\"Movies & Shows\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"cinephile\",\"name\":\"Cinephile Repo\",\"internalName\":\"cinephile\",\"description\":\"Cinephile Movies & Shows high-bitrate 4K/1080p stream extractors.\",\"url\":\"https://github.com/rockhero1234/cinephile\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/rockhero1234/cinephile/builds/repo.json\",\"category\":\"Movies & Shows\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"redowan\",\"name\":\"Redowan CloudStream Repo\",\"internalName\":\"Redowan-CloudStream\",\"description\":\"Redowan community extension collection for movies, anime, and live TV.\",\"url\":\"https://github.com/redowan99/Redowan-CloudStream\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/redowan99/Redowan-CloudStream/master/repo.json\",\"category\":\"Community\",\"language\":\"Multilingual\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"uk_extensions\",\"name\":\"UK Extensions\",\"internalName\":\"cloudstream-extensions-uk\",\"description\":\"United Kingdom & English language media providers and BBC/ITV resolvers.\",\"url\":\"https://github.com/CakesTwix/cloudstream-extensions-uk\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/CakesTwix/cloudstream-extensions-uk/master/repo.json\",\"category\":\"Regional\",\"language\":\"English (UK)\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"storm_ext\",\"name\":\"Storm Extensions\",\"internalName\":\"storm-ext\",\"description\":\"Storm fast extractors and direct video link resolvers.\",\"url\":\"https://github.com/redblacker8/storm-ext\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/redblacker8/storm-ext/builds/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"reflex_repo\",\"name\":\"Reflex Repo\",\"internalName\":\"ReflexRepo\",\"description\":\"Reflex high-speed mirror resolvers and multi-host extractors.\",\"url\":\"https://github.com/Reflex755/ReflexRepo\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Reflex755/ReflexRepo/builds/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"pitipitii\",\"name\":\"Pitipitii Repo\",\"internalName\":\"Pitipitii\",\"description\":\"Pitipitii custom extension pack.\",\"url\":\"https://github.com/sarapcanagii/Pitipitii\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/sarapcanagii/Pitipitii/master/repo.json\",\"category\":\"Community\",\"language\":\"Multilingual\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"cs_karma\",\"name\":\"Karma Repo\",\"internalName\":\"cs-Karma\",\"description\":\"Karma community provider collection.\",\"url\":\"https://github.com/Kraptor123/cs-Karma\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Kraptor123/cs-Karma/master/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"cs_kraptor\",\"name\":\"Kraptor Repo\",\"internalName\":\"cs-kraptor\",\"description\":\"Kraptor media extractors.\",\"url\":\"https://github.com/Kraptor123/cs-kraptor\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Kraptor123/cs-kraptor/master/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"dogiors\",\"name\":\"doGiors Repo\",\"internalName\":\"doGiorsHadEnough\",\"description\":\"doGiors custom provider extensions.\",\"url\":\"https://github.com/doGior/doGiorsHadEnough\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/doGior/doGiorsHadEnough/builds/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"phisher\",\"name\":\"Phisher Extensions\",\"internalName\":\"cloudstream-extensions-phisher\",\"description\":\"Phisher community media extensions.\",\"url\":\"https://github.com/phisher98/cloudstream-extensions-phisher\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/builds/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"skillshare\",\"name\":\"SkillShare Repo\",\"internalName\":\"SkillShare-Repo\",\"description\":\"Educational & documentary video content providers.\",\"url\":\"https://github.com/techtanic/SkillShare-Repo\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/techtanic/SkillShare-Repo/builds/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"saimuelrepo\",\"name\":\"Saimuel Repo\",\"internalName\":\"saimuelrepo\",\"description\":\"Saimuel curated extensions.\",\"url\":\"https://github.com/saimuelbr/saimuelrepo\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/saimuelbr/saimuelrepo/builds/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":false,\"documentKind\":\"unknown\"},{\"id\":\"italian_provider\",\"name\":\"Italian Dedicated Provider\",\"internalName\":\"ItalianProvider\",\"description\":\"Italian dedicated anime and movie providers.\",\"url\":\"https://github.com/Gian-Fr/ItalianProvider\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Gian-Fr/ItalianProvider/builds/repo.json\",\"category\":\"Regional\",\"language\":\"Italian (IT)\",\"verified\":true,\"documentKind\":\"repository\"}]"), y = {
+}, Oe = /* @__PURE__ */ JSON.parse("[{\"id\":\"megarepo\",\"name\":\"MegaRepo\",\"internalName\":\"MegaRepo\",\"description\":\"Official CloudStream Mega Repository containing unified multi-provider extractors and high-speed mirrors.\",\"url\":\"https://github.com/self-similarity/MegaRepo\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/self-similarity/MegaRepo/builds/repo.json\",\"category\":\"Official\",\"language\":\"Multilingual\",\"iconUrl\":\"https://raw.githubusercontent.com/recloudstream/cloudstream/master/app/src/main/res/drawable/ic_splash_logo.png\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"extensions\",\"name\":\"Official Extensions\",\"internalName\":\"extensions\",\"description\":\"Primary CloudStream Community Extensions Repository covering popular movies, TV series, and anime.\",\"url\":\"https://github.com/recloudstream/extensions\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/recloudstream/extensions/master/repo.json\",\"category\":\"Official\",\"language\":\"English / Global\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"aniyomi_compat\",\"name\":\"Aniyomi Compatibility Repo\",\"internalName\":\"AniyomiCompatExtension\",\"description\":\"Aniyomi & Tachiyomi extension bridge adapter, enabling playback from Aniyomi provider sources.\",\"url\":\"https://github.com/CranberrySoup/AniyomiCompatExtension\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/CranberrySoup/AniyomiCompatExtension/master/repo.json\",\"category\":\"Compatibility\",\"language\":\"Multilingual\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"german_providers\",\"name\":\"German Providers\",\"internalName\":\"GermanProviders\",\"description\":\"German language streaming providers including Movie4k, Kinox, AniWorld, and SerienStream.\",\"url\":\"https://github.com/Bnyro/GermanProviders\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Bnyro/GermanProviders/master/repo.json\",\"category\":\"Regional\",\"language\":\"German (DE)\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"italia_in_streaming\",\"name\":\"Italia In Streaming\",\"internalName\":\"ItaliaInStreaming\",\"description\":\"Italian language movie and anime providers including CB01, Filmpertutti, and StreamingCommunity.\",\"url\":\"https://github.com/DieGon7771/ItaliaInStreaming\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/DieGon7771/ItaliaInStreaming/builds/repo.json\",\"category\":\"Regional\",\"language\":\"Italian (IT)\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"re_3arabi\",\"name\":\"Arabic Media Repo (re-3arabi)\",\"internalName\":\"re-3arabi\",\"description\":\"Arabic language streaming extractors including EgyBest, Shahid4u, FaselHD, and CimaClub.\",\"url\":\"https://github.com/Abodabodd/re-3arabi\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Abodabodd/re-3arabi/master/repo.json\",\"category\":\"Regional\",\"language\":\"Arabic (AR)\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"cloudstream_vietnamese\",\"name\":\"Vietnamese Providers\",\"internalName\":\"cloudstream-vietnamese\",\"description\":\"Vietnamese language media providers including PhimMoi, Motphim, and Bilutv.\",\"url\":\"https://gitlab.com/tearrs/cloudstream-vietnamese\",\"rawRepoUrl\":\"https://gitlab.com/tearrs/cloudstream-vietnamese/-/raw/main/repo.json\",\"category\":\"Regional\",\"language\":\"Vietnamese (VI)\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"csx\",\"name\":\"CloudStream X (CSX)\",\"internalName\":\"CSX\",\"description\":\"High-performance premium stream extractors and fast direct link resolvers.\",\"url\":\"https://github.com/SaurabhKaperwan/CSX\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/SaurabhKaperwan/CSX/builds/plugins.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"pluginList\"},{\"id\":\"cuxplug\",\"name\":\"CuxPlug Repo\",\"internalName\":\"CuxPlug\",\"description\":\"Cux custom extension pack providing multi-server link extraction.\",\"url\":\"https://github.com/ycngmn/CuxPlug\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/ycngmn/CuxPlug/master/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"fstream\",\"name\":\"FStream French Repo\",\"internalName\":\"FStream\",\"description\":\"French language streaming providers including FrenchStream, Wawacity, and VoirAnime.\",\"url\":\"https://git.disroot.org/ayza/FStream\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/recloudstream/FStream/builds/repo.json\",\"category\":\"Regional\",\"language\":\"French (FR)\",\"verified\":false,\"documentKind\":\"unknown\"},{\"id\":\"indostream\",\"name\":\"IndoStream Repo\",\"internalName\":\"IndoStream\",\"description\":\"Indonesian language streaming providers including Idlix and LK21.\",\"url\":\"https://github.com/TeKuma25/IndoStream\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/TeKuma25/IndoStream/builds/repo.json\",\"category\":\"Regional\",\"language\":\"Indonesian (ID)\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"luna712\",\"name\":\"Luna712 Extensions\",\"internalName\":\"Luna712-CloudStream-Extensions\",\"description\":\"Luna712 curated anime & multi-source high-bitrate extractors.\",\"url\":\"https://github.com/Luna712/Luna712-CloudStream-Extensions\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Luna712/Luna712-CloudStream-Extensions/master/repo.json\",\"category\":\"Anime\",\"language\":\"Multilingual\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"cartoonyrepo\",\"name\":\"Cartoony Repo\",\"internalName\":\"cartoonyrepo\",\"description\":\"Cartoons, Animated Shows, and Kids Media specialized repository.\",\"url\":\"https://github.com/med1245/cartoonyrepo\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/med1245/cartoonyrepo/builds/repo.json\",\"category\":\"Movies & Shows\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"cinephile\",\"name\":\"Cinephile Repo\",\"internalName\":\"cinephile\",\"description\":\"Cinephile Movies & Shows high-bitrate 4K/1080p stream extractors.\",\"url\":\"https://github.com/rockhero1234/cinephile\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/rockhero1234/cinephile/builds/repo.json\",\"category\":\"Movies & Shows\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"redowan\",\"name\":\"Redowan CloudStream Repo\",\"internalName\":\"Redowan-CloudStream\",\"description\":\"Redowan community extension collection for movies, anime, and live TV.\",\"url\":\"https://github.com/redowan99/Redowan-CloudStream\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/redowan99/Redowan-CloudStream/master/repo.json\",\"category\":\"Community\",\"language\":\"Multilingual\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"uk_extensions\",\"name\":\"UK Extensions\",\"internalName\":\"cloudstream-extensions-uk\",\"description\":\"United Kingdom & English language media providers and BBC/ITV resolvers.\",\"url\":\"https://github.com/CakesTwix/cloudstream-extensions-uk\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/CakesTwix/cloudstream-extensions-uk/master/repo.json\",\"category\":\"Regional\",\"language\":\"English (UK)\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"storm_ext\",\"name\":\"Storm Extensions\",\"internalName\":\"storm-ext\",\"description\":\"Storm fast extractors and direct video link resolvers.\",\"url\":\"https://github.com/redblacker8/storm-ext\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/redblacker8/storm-ext/builds/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"reflex_repo\",\"name\":\"Reflex Repo\",\"internalName\":\"ReflexRepo\",\"description\":\"Reflex high-speed mirror resolvers and multi-host extractors.\",\"url\":\"https://github.com/Reflex755/ReflexRepo\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Reflex755/ReflexRepo/builds/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"pitipitii\",\"name\":\"Pitipitii Repo\",\"internalName\":\"Pitipitii\",\"description\":\"Pitipitii custom extension pack.\",\"url\":\"https://github.com/sarapcanagii/Pitipitii\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/sarapcanagii/Pitipitii/master/repo.json\",\"category\":\"Community\",\"language\":\"Multilingual\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"cs_karma\",\"name\":\"Karma Repo\",\"internalName\":\"cs-Karma\",\"description\":\"Karma community provider collection.\",\"url\":\"https://github.com/Kraptor123/cs-Karma\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Kraptor123/cs-Karma/master/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"cs_kraptor\",\"name\":\"Kraptor Repo\",\"internalName\":\"cs-kraptor\",\"description\":\"Kraptor media extractors.\",\"url\":\"https://github.com/Kraptor123/cs-kraptor\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Kraptor123/cs-kraptor/master/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"dogiors\",\"name\":\"doGiors Repo\",\"internalName\":\"doGiorsHadEnough\",\"description\":\"doGiors custom provider extensions.\",\"url\":\"https://github.com/doGior/doGiorsHadEnough\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/doGior/doGiorsHadEnough/builds/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"phisher\",\"name\":\"Phisher Extensions\",\"internalName\":\"cloudstream-extensions-phisher\",\"description\":\"Phisher community media extensions.\",\"url\":\"https://github.com/phisher98/cloudstream-extensions-phisher\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/builds/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"skillshare\",\"name\":\"SkillShare Repo\",\"internalName\":\"SkillShare-Repo\",\"description\":\"Educational & documentary video content providers.\",\"url\":\"https://github.com/techtanic/SkillShare-Repo\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/techtanic/SkillShare-Repo/builds/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":true,\"documentKind\":\"repository\"},{\"id\":\"saimuelrepo\",\"name\":\"Saimuel Repo\",\"internalName\":\"saimuelrepo\",\"description\":\"Saimuel curated extensions.\",\"url\":\"https://github.com/saimuelbr/saimuelrepo\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/saimuelbr/saimuelrepo/builds/repo.json\",\"category\":\"Community\",\"language\":\"English\",\"verified\":false,\"documentKind\":\"unknown\"},{\"id\":\"italian_provider\",\"name\":\"Italian Dedicated Provider\",\"internalName\":\"ItalianProvider\",\"description\":\"Italian dedicated anime and movie providers.\",\"url\":\"https://github.com/Gian-Fr/ItalianProvider\",\"rawRepoUrl\":\"https://raw.githubusercontent.com/Gian-Fr/ItalianProvider/builds/repo.json\",\"category\":\"Regional\",\"language\":\"Italian (IT)\",\"verified\":true,\"documentKind\":\"repository\"}]"), v = {
 	UHD_4K: 2160,
 	QHD: 1440,
 	FHD: 1080,
@@ -1119,7 +1119,7 @@ var Se = 6e4, Ce = 3, we = class {
 	SD: 480,
 	LD: 360,
 	Unknown: 0
-}, b = {
+}, y = {
 	Remux: "Remux",
 	BluRay: "BluRay",
 	WebDL: "WEB-DL",
@@ -1130,19 +1130,19 @@ var Se = 6e4, Ce = 3, we = class {
 	TS: "TS",
 	CAM: "CAM",
 	Unknown: "Unknown"
-}, x = {
+}, b = {
 	AV1: "AV1",
 	H265: "x265",
 	H264: "x264",
 	XviD: "XviD",
 	VP9: "VP9",
 	Unknown: "Unknown"
-}, S = {
+}, x = {
 	Builtin: "builtin",
 	Torznab: "torznab"
-}, Oe = {
-	preferredResolution: y.FHD,
-	minResolution: y.Unknown,
+}, ke = {
+	preferredResolution: v.FHD,
+	minResolution: v.Unknown,
 	minSeeders: 1,
 	excludeLowQualitySources: !0,
 	preferH264: !1,
@@ -1151,31 +1151,31 @@ var Se = 6e4, Ce = 3, we = class {
 	preferredGroups: [],
 	blockedGroups: [],
 	blockedKeywords: []
-}, ke = /[._]+/g, Ae = /[[\](){}]/g, je = [
-	[/\bremux\b/i, b.Remux],
-	[/\b(?:bluray|blu-ray|bdrip|brrip|bdremux|bd25|bd50|bdmv)\b/i, b.BluRay],
-	[/\b(?:web-?dl|webdl|amzn|nf|dsnp|hmax|atvp|itunes)\b/i, b.WebDL],
-	[/\b(?:web-?rip|webrip)\b/i, b.WebRip],
-	[/\bweb\b/i, b.WebDL],
-	[/\b(?:hdtv|pdtv|sdtv|dvbrip|tvrip)\b/i, b.HDTV],
-	[/\b(?:dvdrip|dvd-?r|dvd5|dvd9|ntsc|pal)\b/i, b.DVDRip],
-	[/\b(?:screener|scr|dvdscr|bdscr)\b/i, b.SCR],
-	[/\b(?:hdts|telesync|ts)\b/i, b.TS],
-	[/\b(?:hdcam|camrip|cam|telecine|tc)\b/i, b.CAM]
-], Me = [
-	[/\bav1\b/i, x.AV1],
-	[/\b(?:x[\s.]?265|h[\s.]?265|hevc)\b/i, x.H265],
-	[/\b(?:x[\s.]?264|h[\s.]?264|avc)\b/i, x.H264],
-	[/\b(?:xvid|divx)\b/i, x.XviD],
-	[/\bvp9\b/i, x.VP9]
+}, Ae = /[._]+/g, je = /[[\](){}]/g, Me = [
+	[/\bremux\b/i, y.Remux],
+	[/\b(?:bluray|blu-ray|bdrip|brrip|bdremux|bd25|bd50|bdmv)\b/i, y.BluRay],
+	[/\b(?:web-?dl|webdl|amzn|nf|dsnp|hmax|atvp|itunes)\b/i, y.WebDL],
+	[/\b(?:web-?rip|webrip)\b/i, y.WebRip],
+	[/\bweb\b/i, y.WebDL],
+	[/\b(?:hdtv|pdtv|sdtv|dvbrip|tvrip)\b/i, y.HDTV],
+	[/\b(?:dvdrip|dvd-?r|dvd5|dvd9|ntsc|pal)\b/i, y.DVDRip],
+	[/\b(?:screener|scr|dvdscr|bdscr)\b/i, y.SCR],
+	[/\b(?:hdts|telesync|ts)\b/i, y.TS],
+	[/\b(?:hdcam|camrip|cam|telecine|tc)\b/i, y.CAM]
 ], Ne = [
-	[/\b(?:2160p?|4k|uhd|3840x2160)\b/i, y.UHD_4K],
-	[/\b(?:1440p?|2560x1440|qhd)\b/i, y.QHD],
-	[/\b(?:1080[pi]?|1920x1080|fhd)\b/i, y.FHD],
-	[/\b(?:720p?|1280x720)\b/i, y.HD],
-	[/\b(?:480[pi]?|640x480|sd)\b/i, y.SD],
-	[/\b(?:360p?|240p?)\b/i, y.LD]
+	[/\bav1\b/i, b.AV1],
+	[/\b(?:x[\s.]?265|h[\s.]?265|hevc)\b/i, b.H265],
+	[/\b(?:x[\s.]?264|h[\s.]?264|avc)\b/i, b.H264],
+	[/\b(?:xvid|divx)\b/i, b.XviD],
+	[/\bvp9\b/i, b.VP9]
 ], Pe = [
+	[/\b(?:2160p?|4k|uhd|3840x2160)\b/i, v.UHD_4K],
+	[/\b(?:1440p?|2560x1440|qhd)\b/i, v.QHD],
+	[/\b(?:1080[pi]?|1920x1080|fhd)\b/i, v.FHD],
+	[/\b(?:720p?|1280x720)\b/i, v.HD],
+	[/\b(?:480[pi]?|640x480|sd)\b/i, v.SD],
+	[/\b(?:360p?|240p?)\b/i, v.LD]
+], Fe = [
 	[/\batmos\b/i, "Atmos"],
 	[/\btruehd\b/i, "TrueHD"],
 	[/\bdts-?hd(?:\s*ma)?\b/i, "DTS-HD"],
@@ -1187,13 +1187,13 @@ var Se = 6e4, Ce = 3, we = class {
 	[/\bopus\b/i, "Opus"],
 	[/\baac\d*\b/i, "AAC"],
 	[/\bmp3\b/i, "MP3"]
-], Fe = [
+], Ie = [
 	[/\bhdr10\+|\bhdr10plus\b/i, "HDR10+"],
 	[/\bhdr10\b/i, "HDR10"],
 	[/\b(?:dolby\s*vision|dovi|\bdv\b)\b/i, "DV"],
 	[/\bhlg\b/i, "HLG"],
 	[/\bhdr\b/i, "HDR"]
-], Ie = [
+], Le = [
 	[/\b(?:english|eng)\b/i, "en"],
 	[/\b(?:spanish|espanol|castellano|latino|esp)\b/i, "es"],
 	[/\b(?:french|francais|vostfr|truefrench|vff|vfq)\b/i, "fr"],
@@ -1215,7 +1215,7 @@ var Se = 6e4, Ce = 3, we = class {
 	[/\b(?:indonesian|ind)\b/i, "id"],
 	[/\b(?:vietnamese|vie)\b/i, "vi"],
 	[/\b(?:ukrainian|ukr)\b/i, "uk"]
-], Le = new RegExp([
+], Re = new RegExp([
 	String.raw`\b(19|20)\d{2}\b`,
 	String.raw`\bs\d{1,3}(?:\s*[-–]\s*s?\d{1,3})?\b`,
 	String.raw`\bs\d{1,3}\s*e\d{1,4}\b`,
@@ -1227,19 +1227,19 @@ var Se = 6e4, Ce = 3, we = class {
 	String.raw`\b(?:x[\s.]?26[45]|h[\s.]?26[45]|hevc|avc|av1|xvid|divx)\b`,
 	String.raw`\bcomplete\b`
 ].join("|"), "i");
-function Re(e) {
-	return e.replace(ke, " ").replace(Ae, " ").replace(/\s+/g, " ").trim();
+function ze(e) {
+	return e.replace(Ae, " ").replace(je, " ").replace(/\s+/g, " ").trim();
 }
-function C(e, t, n) {
+function S(e, t, n) {
 	for (let [n, r] of t) if (n.test(e)) return r;
 	return n;
 }
-function w(e, t) {
+function C(e, t) {
 	let n = [];
 	for (let [r, i] of t) r.test(e) && !n.includes(i) && n.push(i);
 	return n;
 }
-function ze(e) {
+function Be(e) {
 	let t = e.match(/^\[([^\]]{2,30})\]/);
 	if (t) return t[1].trim();
 	let n = e.match(/-\s*([A-Za-z0-9_.]{2,25})(?:\.[a-z0-9]{2,4})?\s*$/);
@@ -1248,7 +1248,7 @@ function ze(e) {
 		if (!/^(?:2160p?|1080p?|720p?|480p?|x26[45]|h26[45]|hevc|av1)$/i.test(e)) return e;
 	}
 }
-function Be(e) {
+function Ve(e) {
 	let t = /\b(?:complete|full)\s*(?:series|collection)\b/i.test(e), n = e.match(/\bs(?:eason)?\s*(\d{1,3})\s*[-–]\s*s?(?:eason)?\s*(\d{1,3})\b/i);
 	if (n) return {
 		season: parseInt(n[1], 10),
@@ -1309,32 +1309,32 @@ function Be(e) {
 		isCompleteSeries: t
 	};
 }
-function Ve(e) {
+function He(e) {
 	let t = [...e.matchAll(/\b(19\d{2}|20\d{2})\b/g)].map((e) => parseInt(e[1], 10));
 	if (t.length === 0) return;
 	let n = (/* @__PURE__ */ new Date()).getFullYear(), r = t.filter((e) => e >= 1900 && e <= n + 2);
 	return r.length > 0 ? r[0] : void 0;
 }
-function He(e) {
-	let t = e.match(Le);
+function Ue(e) {
+	let t = e.match(Re);
 	return (t && t.index !== void 0 ? e.slice(0, t.index) : e).replace(/^\[[^\]]*\]\s*/, "").replace(/[-–\s]+$/, "").replace(/\s+/g, " ").trim();
 }
-function T(e) {
-	let t = Re(e), n = Be(t);
+function w(e) {
+	let t = ze(e), n = Ve(t);
 	return {
-		cleanTitle: He(t),
-		year: Ve(t),
+		cleanTitle: Ue(t),
+		year: He(t),
 		season: n.season,
 		episode: n.episode,
 		absoluteEpisode: n.absoluteEpisode,
 		isSeasonPack: n.isSeasonPack,
 		isCompleteSeries: n.isCompleteSeries,
-		resolution: C(t, Ne, y.Unknown),
-		source: C(t, je, b.Unknown),
-		videoCodec: C(t, Me, x.Unknown),
-		audioCodecs: w(t, Pe),
-		hdr: w(t, Fe),
-		languages: w(t, Ie),
+		resolution: S(t, Pe, v.Unknown),
+		source: S(t, Me, y.Unknown),
+		videoCodec: S(t, Ne, b.Unknown),
+		audioCodecs: C(t, Fe),
+		hdr: C(t, Ie),
+		languages: C(t, Le),
 		isMultiAudio: /\b(?:multi|multi-?audio|dual)\b/i.test(t),
 		isDualAudio: /\bdual\s*-?\s*audio\b/i.test(t),
 		hasHardcodedSubs: /\b(?:hardsub|hc|hardcoded)\b/i.test(t),
@@ -1342,25 +1342,25 @@ function T(e) {
 		isProper: /\bproper\b/i.test(t),
 		isRemastered: /\bremaster(?:ed)?\b/i.test(t),
 		is3D: /\b3d\b|\bhsbs\b|\bhou\b/i.test(t),
-		releaseGroup: ze(e)
+		releaseGroup: Be(e)
 	};
 }
-function E(e) {
+function T(e) {
 	return e.toLowerCase().replace(/['’]/g, "").replace(/[^a-z0-9]+/g, " ").replace(/\b(?:the|a|an)\b/g, " ").replace(/\s+/g, " ").trim();
 }
-function Ue(e, t) {
-	let n = new Set(E(e).split(" ").filter(Boolean)), r = new Set(E(t).split(" ").filter(Boolean));
+function We(e, t) {
+	let n = new Set(T(e).split(" ").filter(Boolean)), r = new Set(T(t).split(" ").filter(Boolean));
 	if (n.size === 0 || r.size === 0) return 0;
 	let i = 0;
 	for (let e of n) r.has(e) && i++;
 	return 2 * i / (n.size + r.size);
 }
-function We(e, t, n) {
+function Ge(e, t, n) {
 	return t === void 0 && n === void 0 || e.isCompleteSeries ? !0 : t !== void 0 && e.season !== void 0 && e.season !== t ? !1 : e.isSeasonPack ? t === void 0 || e.season === t : n !== void 0 && e.episode !== void 0 ? e.episode === n : e.absoluteEpisode !== void 0 || t !== void 0 && e.season === t;
 }
 //#endregion
 //#region electron/torrent/indexers/base.ts
-var Ge = [
+var Ke = [
 	"udp://tracker.opentrackr.org:1337/announce",
 	"udp://open.demonii.com:1337/announce",
 	"udp://open.stealth.si:80/announce",
@@ -1370,19 +1370,19 @@ var Ge = [
 	"udp://explodie.org:6969/announce",
 	"udp://tracker.opentrackr.org:1337",
 	"wss://tracker.openwebtorrent.com"
-], Ke = /\b([a-f0-9]{40})\b/i, qe = /\b([a-z2-7]{32})\b/i;
-function D(e) {
+], qe = /\b([a-f0-9]{40})\b/i, Je = /\b([a-z2-7]{32})\b/i;
+function E(e) {
 	let t = e.match(/xt=urn:btih:([^&]+)/i);
 	if (!t) return;
 	let n = decodeURIComponent(t[1]);
-	if (Ke.test(n)) return n.toLowerCase();
-	if (qe.test(n)) try {
-		return Je(n.toUpperCase());
+	if (qe.test(n)) return n.toLowerCase();
+	if (Je.test(n)) try {
+		return Ye(n.toUpperCase());
 	} catch {
 		return;
 	}
 }
-function Je(e) {
+function Ye(e) {
 	let t = "";
 	for (let n of e) {
 		let e = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".indexOf(n);
@@ -1393,13 +1393,13 @@ function Je(e) {
 	for (let e = 0; e + 4 <= t.length; e += 4) n += parseInt(t.slice(e, e + 4), 2).toString(16);
 	return n.toLowerCase().slice(0, 40);
 }
-function O(e, t) {
+function D(e, t) {
 	let n = [`xt=urn:btih:${e.toLowerCase()}`];
 	t && n.push(`dn=${encodeURIComponent(t)}`);
-	for (let e of Ge) n.push(`tr=${encodeURIComponent(e)}`);
+	for (let e of Ke) n.push(`tr=${encodeURIComponent(e)}`);
 	return `magnet:?${n.join("&")}`;
 }
-function k(e) {
+function O(e) {
 	if (typeof e == "number" && Number.isFinite(e)) return e;
 	if (!e) return 0;
 	let t = String(e).trim();
@@ -1421,13 +1421,13 @@ function k(e) {
 		tib: 1024 ** 4
 	}[i] ?? 1));
 }
-function A(e, t = 0) {
+function k(e, t = 0) {
 	let n = typeof e == "number" ? e : parseInt(String(e ?? ""), 10);
 	return Number.isFinite(n) && n >= 0 ? n : t;
 }
-function Ye(e, t) {
+function Xe(e, t) {
 	let n = e.infoHash?.toLowerCase(), r = e.magnet;
-	return !n && r && (n = D(r)), n && !r && (r = O(n, e.title)), !n || !r ? e.torrentUrl ? {
+	return !n && r && (n = E(r)), n && !r && (r = D(n, e.title)), !n || !r ? e.torrentUrl ? {
 		infoHash: n ?? "",
 		title: e.title,
 		magnet: r ?? "",
@@ -1441,7 +1441,7 @@ function Ye(e, t) {
 		category: e.category,
 		fileIndex: e.fileIndex,
 		expectedFileName: e.expectedFileName,
-		parsed: T(e.expectedFileName || e.title),
+		parsed: w(e.expectedFileName || e.title),
 		score: 0,
 		scoreReasons: []
 	} : null : /^[a-f0-9]{40}$/.test(n) ? {
@@ -1458,14 +1458,14 @@ function Ye(e, t) {
 		category: e.category,
 		fileIndex: e.fileIndex,
 		expectedFileName: e.expectedFileName,
-		parsed: T(e.expectedFileName || e.title),
+		parsed: w(e.expectedFileName || e.title),
 		score: 0,
 		scoreReasons: []
 	} : null;
 }
 //#endregion
 //#region electron/torrent/torrentEngine.ts
-var Xe = /* @__PURE__ */ new Set([
+var Ze = /* @__PURE__ */ new Set([
 	".mp4",
 	".mkv",
 	".avi",
@@ -1482,21 +1482,21 @@ var Xe = /* @__PURE__ */ new Set([
 	".3gp",
 	".divx",
 	".vob"
-]), Ze = /* @__PURE__ */ new Set([
+]), Qe = /* @__PURE__ */ new Set([
 	".srt",
 	".ass",
 	".ssa",
 	".vtt",
 	".sub",
 	".idx"
-]), Qe = 8388608, $e = 45e3;
-function j(e) {
+]), $e = 8388608, et = 45e3;
+function A(e) {
 	return s.extname(e).toLowerCase();
 }
-function M(e) {
-	return Xe.has(j(e.name));
+function j(e) {
+	return Ze.has(A(e.name));
 }
-function et(e) {
+function tt(e) {
 	switch (e) {
 		case ".mp4":
 		case ".m4v": return "video/mp4";
@@ -1506,7 +1506,7 @@ function et(e) {
 		default: return "video/mp4";
 	}
 }
-var tt = class {
+var nt = class {
 	client = null;
 	server = null;
 	serverPort = 0;
@@ -1514,7 +1514,7 @@ var tt = class {
 	selectedFile = /* @__PURE__ */ new Map();
 	lastError = /* @__PURE__ */ new Map();
 	constructor(e) {
-		this.downloadPath = e ?? s.join(te.tmpdir(), "cloudstream-desktop", "torrent-cache");
+		this.downloadPath = e ?? s.join(ne.tmpdir(), "cloudstream-desktop", "torrent-cache");
 	}
 	setDownloadPath(e) {
 		this.downloadPath = e;
@@ -1523,7 +1523,7 @@ var tt = class {
 		return this.client && !this.client.destroyed && this.server && this.serverPort > 0 ? {
 			client: this.client,
 			port: this.serverPort
-		} : (l.mkdirSync(this.downloadPath, { recursive: !0 }), this.client = new ne({
+		} : (l.mkdirSync(this.downloadPath, { recursive: !0 }), this.client = new re({
 			maxConns: 100,
 			dht: !0,
 			lsd: !0,
@@ -1543,7 +1543,7 @@ var tt = class {
 		});
 	}
 	pickFile(e, t) {
-		let n = e.files.filter(M);
+		let n = e.files.filter(j);
 		if (n.length === 0) return null;
 		if (n.length === 1) return n[0];
 		if (t.expectedFileName) {
@@ -1552,11 +1552,11 @@ var tt = class {
 		}
 		if (t.fileIndex !== void 0) {
 			let n = e.files[t.fileIndex];
-			if (n && M(n)) return n;
+			if (n && j(n)) return n;
 		}
 		if (t.episode !== void 0) {
 			let e = n.filter((e) => {
-				let n = T(e.name);
+				let n = w(e.name);
 				return t.season !== void 0 && n.season !== void 0 && n.season !== t.season ? !1 : n.episode === t.episode || n.absoluteEpisode === t.episode;
 			});
 			if (e.length > 0) return e.reduce((e, t) => t.length > e.length ? t : e);
@@ -1576,7 +1576,7 @@ var tt = class {
 		let { client: t, port: n } = await this.ensureStarted(), r = await this.addTorrent(t, e.torrentId), i = this.pickFile(r, e);
 		if (!i) throw Error("This torrent contains no playable video file.");
 		this.focusOn(r, i), this.selectedFile.set(r.infoHash, r.files.indexOf(i));
-		let a = r.files.filter((e) => Ze.has(j(e.name))).map((e) => ({
+		let a = r.files.filter((e) => Qe.has(A(e.name))).map((e) => ({
 			name: e.name,
 			url: this.fileUrl(n, r.infoHash, e)
 		}));
@@ -1587,7 +1587,7 @@ var tt = class {
 			fileSize: i.length,
 			files: this.describeFiles(r),
 			subtitleUrls: a,
-			mimeType: et(j(i.name))
+			mimeType: tt(A(i.name))
 		};
 	}
 	async addTorrent(e, t) {
@@ -1599,14 +1599,14 @@ var tt = class {
 		return new Promise((n, r) => {
 			let i = !1, a = setTimeout(() => {
 				i || (i = !0, r(/* @__PURE__ */ Error("Timed out fetching torrent metadata. The swarm may be dead or unreachable — try a source with more seeders.")));
-			}, $e), o = (e, t) => {
+			}, et), o = (e, t) => {
 				i || (i = !0, clearTimeout(a), e ? r(e) : t && n(t));
 			}, s;
 			try {
 				s = e.add(t, {
 					path: this.downloadPath,
 					strategy: "sequential",
-					announce: [...Ge]
+					announce: [...Ke]
 				}, (e) => o(null, e));
 			} catch (e) {
 				return o(e instanceof Error ? e : Error(String(e)));
@@ -1629,7 +1629,7 @@ var tt = class {
 			name: e.name,
 			path: e.path,
 			length: e.length,
-			isVideo: M(e),
+			isVideo: j(e),
 			isSelected: n === t
 		}));
 	}
@@ -1665,7 +1665,7 @@ var tt = class {
 			peers: t.numPeers,
 			seeds: t.numPeers,
 			readyBytes: i,
-			isPlayable: i >= Math.min(Qe, r.length * .02),
+			isPlayable: i >= Math.min($e, r.length * .02),
 			timeRemainingMs: Number.isFinite(t.timeRemaining) ? t.timeRemaining : 0,
 			isPaused: t.paused,
 			error: this.lastError.get(e)
@@ -1676,17 +1676,17 @@ var tt = class {
 		let n = await Promise.resolve(this.client.get(e));
 		if (!n) return null;
 		let r = n.files[t];
-		return !r || !M(r) ? null : (this.focusOn(n, r), this.selectedFile.set(e, t), {
+		return !r || !j(r) ? null : (this.focusOn(n, r), this.selectedFile.set(e, t), {
 			infoHash: e,
 			streamUrl: this.fileUrl(this.serverPort, e, r),
 			fileName: r.name,
 			fileSize: r.length,
 			files: this.describeFiles(n),
-			subtitleUrls: n.files.filter((e) => Ze.has(j(e.name))).map((t) => ({
+			subtitleUrls: n.files.filter((e) => Qe.has(A(e.name))).map((t) => ({
 				name: t.name,
 				url: this.fileUrl(this.serverPort, e, t)
 			})),
-			mimeType: et(j(r.name))
+			mimeType: tt(A(r.name))
 		});
 	}
 	async pause(e) {
@@ -1729,7 +1729,7 @@ var tt = class {
 			e.destroy(() => t()), setTimeout(t, 5e3);
 		});
 	}
-}, N = {
+}, M = {
 	Movie: "Movie",
 	TvSeries: "TvSeries",
 	Anime: "Anime",
@@ -1740,35 +1740,35 @@ var tt = class {
 	NSFW: "NSFW",
 	AsianDrama: "AsianDrama",
 	Torrent: "Torrent"
-}, P = "Catalogue";
-function F(e) {
+}, N = "Catalogue";
+function P(e) {
 	return e ? e.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/&#039;|&apos;/g, "'").replace(/&nbsp;/g, " ").trim() : "";
 }
-function I(e, t) {
+function F(e, t) {
 	return `cs3meta://${e}/${t}`;
 }
-function nt(e) {
+function rt(e) {
 	let t = e.match(/^cs3meta:\/\/(tvmaze|anilist)\/(.+)$/);
 	return t ? {
 		source: t[1],
 		id: t[2]
 	} : null;
 }
-function rt(e) {
-	return (e.genres ?? []).includes("Anime") ? N.Anime : e.type === "Documentary" ? N.Documentary : N.TvSeries;
+function it(e) {
+	return (e.genres ?? []).includes("Anime") ? M.Anime : e.type === "Documentary" ? M.Documentary : M.TvSeries;
 }
-var it = class {
+var at = class {
 	async search(e, t) {
 		let [n, r] = await Promise.allSettled([this.searchTvMaze(e, t), this.searchAniList(e, t)]), i = [];
 		return n.status === "fulfilled" && i.push(...n.value), r.status === "fulfilled" && i.push(...r.value), i;
 	}
 	async searchTvMaze(e, t) {
-		let n = await _(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(e)}`, { signal: t });
+		let n = await g(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(e)}`, { signal: t });
 		return Array.isArray(n) ? n.map(({ show: e }) => e).filter((e) => !!(e?.id && e.name)).map((e) => ({
 			name: e.name,
-			url: I("tvmaze", e.id),
-			apiName: P,
-			type: rt(e),
+			url: F("tvmaze", e.id),
+			apiName: N,
+			type: it(e),
 			posterUrl: e.image?.original || e.image?.medium,
 			year: e.premiered ? parseInt(e.premiered.slice(0, 4), 10) : void 0,
 			id: e.id
@@ -1790,38 +1790,38 @@ var it = class {
 		if (!r.ok) throw Error(`AniList HTTP ${r.status}`);
 		return ((await r.json()).data?.Page?.media ?? []).filter((e) => !!e?.id).map((t) => ({
 			name: t.title?.english || t.title?.romaji || e,
-			url: I("anilist", t.id),
-			apiName: P,
-			type: t.format === "MOVIE" ? N.AnimeMovie : N.Anime,
+			url: F("anilist", t.id),
+			apiName: N,
+			type: t.format === "MOVIE" ? M.AnimeMovie : M.Anime,
 			posterUrl: t.coverImage?.extraLarge || t.coverImage?.large,
 			year: t.startDate?.year,
 			id: t.id
 		}));
 	}
 	async load(e, t) {
-		let n = nt(e);
+		let n = rt(e);
 		return n ? n.source === "tvmaze" ? this.loadTvMaze(n.id, t) : this.loadAniList(n.id, t) : null;
 	}
 	async loadTvMaze(e, t) {
-		let n = await _(`https://api.tvmaze.com/shows/${encodeURIComponent(e)}?embed=episodes`, { signal: t });
+		let n = await g(`https://api.tvmaze.com/shows/${encodeURIComponent(e)}?embed=episodes`, { signal: t });
 		if (!n?.name) return null;
 		let r = (n._embedded?.episodes ?? []).filter((e) => e.number !== void 0 && e.number !== null).map((t) => ({
 			name: t.name ? `S${t.season}E${t.number} · ${t.name}` : `Episode ${t.number}`,
-			url: `${I("tvmaze", e)}?s=${t.season ?? 1}&e=${t.number}`,
+			url: `${F("tvmaze", e)}?s=${t.season ?? 1}&e=${t.number}`,
 			episode: t.number ?? void 0,
 			season: t.season ?? void 0,
 			posterUrl: t.image?.original || t.image?.medium,
-			description: F(t.summary),
+			description: P(t.summary),
 			date: t.airdate
 		}));
 		return {
 			name: n.name,
-			url: I("tvmaze", e),
-			apiName: P,
-			type: rt(n),
+			url: F("tvmaze", e),
+			apiName: N,
+			type: it(n),
 			posterUrl: n.image?.original || n.image?.medium,
 			year: n.premiered ? parseInt(n.premiered.slice(0, 4), 10) : void 0,
-			plot: F(n.summary),
+			plot: P(n.summary),
 			rating: n.rating?.average ?? void 0,
 			tags: n.genres ?? [],
 			duration: n.averageRuntime ? `${n.averageRuntime} min` : void 0,
@@ -1849,18 +1849,18 @@ var it = class {
 		if (!i?.id) return null;
 		let a = i.title?.english || i.title?.romaji || "Unknown", o = i.format === "MOVIE", s = i.episodes ?? 0, c = o ? [] : Array.from({ length: s }, (e, t) => ({
 			name: `Episode ${t + 1}`,
-			url: `${I("anilist", i.id)}?e=${t + 1}`,
+			url: `${F("anilist", i.id)}?e=${t + 1}`,
 			episode: t + 1,
 			season: 1
 		}));
 		return {
 			name: a,
-			url: I("anilist", i.id),
-			apiName: P,
-			type: o ? N.AnimeMovie : N.Anime,
+			url: F("anilist", i.id),
+			apiName: N,
+			type: o ? M.AnimeMovie : M.Anime,
 			posterUrl: i.coverImage?.extraLarge || i.coverImage?.large,
 			year: i.startDate?.year,
-			plot: F(i.description),
+			plot: P(i.description),
 			rating: i.averageScore ? i.averageScore / 10 : void 0,
 			tags: i.genres ?? [],
 			duration: i.duration ? `${i.duration} min` : void 0,
@@ -1871,7 +1871,7 @@ var it = class {
 	}
 	async resolveImdbId(e, t) {
 		try {
-			let n = await v(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(e)}&embed=nextepisode`, {
+			let n = await _(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(e)}&embed=nextepisode`, {
 				timeoutMs: 8e3,
 				retries: 0
 			}), r = JSON.parse(n), i = r.externals?.imdb;
@@ -1885,33 +1885,33 @@ var it = class {
 			return;
 		}
 	}
-}, L = "https://v3-cinemeta.strem.io";
-function at(e, t) {
+}, I = "https://v3-cinemeta.strem.io";
+function ot(e, t) {
 	return `cs3meta://cinemeta/${e}/${t}`;
 }
-function ot(e) {
+function st(e) {
 	let t = e.match(/^cs3meta:\/\/cinemeta\/(movie|series)\/(tt\d+)/);
 	return t ? {
 		type: t[1],
 		imdbId: t[2]
 	} : null;
 }
-function st(e) {
+function ct(e) {
 	let t = e?.match(/(\d{4})/);
 	return t ? parseInt(t[1], 10) : void 0;
 }
-function ct(e) {
+function lt(e) {
 	if (!e) return;
 	let t = e.match(/(\d+)\s*h/i), n = e.match(/(\d+)\s*min/i);
 	if (!(!t && !n)) return (t ? parseInt(t[1], 10) * 60 : 0) + (n ? parseInt(n[1], 10) : 0);
 }
-function lt(e, t) {
-	let n = (t ?? []).some((e) => /animation|anime/i.test(e));
-	return e === "series" ? n ? N.Anime : N.TvSeries : n ? N.AnimeMovie : N.Movie;
-}
 function ut(e, t) {
-	let n = E(t), r = e.map((e) => {
-		let r = E(e.name), i = Ue(t, e.name) * 100;
+	let n = (t ?? []).some((e) => /animation|anime/i.test(e));
+	return e === "series" ? n ? M.Anime : M.TvSeries : n ? M.AnimeMovie : M.Movie;
+}
+function dt(e, t) {
+	let n = T(t), r = e.map((e) => {
+		let r = T(e.name), i = We(t, e.name) * 100;
 		r === n ? i += 60 : r.startsWith(n) && (i += 25);
 		let a = r.split(" ").length - n.split(" ").length;
 		return a > 0 && (i -= Math.min(20, a * 5)), {
@@ -1921,12 +1921,12 @@ function ut(e, t) {
 	});
 	return r.sort((e, t) => t.score - e.score), r.map((e) => e.result);
 }
-var dt = class {
+var ft = class {
 	async search(e, t) {
-		let n = encodeURIComponent(e), [r, i] = await Promise.allSettled([_(`${L}/catalog/movie/top/search=${n}.json`, {
+		let n = encodeURIComponent(e), [r, i] = await Promise.allSettled([g(`${I}/catalog/movie/top/search=${n}.json`, {
 			signal: t,
 			timeoutMs: 15e3
-		}), _(`${L}/catalog/series/top/search=${n}.json`, {
+		}), g(`${I}/catalog/series/top/search=${n}.json`, {
 			signal: t,
 			timeoutMs: 15e3
 		})]), a = [], o = (e, t) => {
@@ -1934,18 +1934,18 @@ var dt = class {
 				let e = n.imdb_id || n.id;
 				!e?.startsWith("tt") || !n.name || a.push({
 					name: n.name,
-					url: at(t, e),
+					url: ot(t, e),
 					apiName: "Catalogue",
-					type: lt(t, n.genres),
+					type: ut(t, n.genres),
 					posterUrl: n.poster,
-					year: st(n.releaseInfo)
+					year: ct(n.releaseInfo)
 				});
 			}
 		};
-		return o(r, "movie"), o(i, "series"), ut(a, e);
+		return o(r, "movie"), o(i, "series"), dt(a, e);
 	}
 	async load(e, t, n) {
-		let r = (await _(`${L}/meta/${e}/${t}.json`, {
+		let r = (await g(`${I}/meta/${e}/${t}.json`, {
 			signal: n,
 			timeoutMs: 15e3
 		})).meta;
@@ -1954,7 +1954,7 @@ var dt = class {
 			let r = n.season ?? 1, i = n.episode ?? n.number ?? 0;
 			return {
 				name: n.name || n.title ? `S${r}E${i} · ${n.name ?? n.title}` : `Episode ${i}`,
-				url: `${at(e, t)}?s=${r}&e=${i}`,
+				url: `${ot(e, t)}?s=${r}&e=${i}`,
 				episode: i,
 				season: r,
 				posterUrl: n.thumbnail,
@@ -1966,23 +1966,23 @@ var dt = class {
 		return {
 			name: r.name,
 			imdbId: t,
-			type: lt(e, r.genres),
+			type: ut(e, r.genres),
 			posterUrl: r.poster,
 			backgroundUrl: r.background,
-			year: st(r.releaseInfo),
+			year: ct(r.releaseInfo),
 			plot: r.description,
 			rating: r.imdbRating ? parseFloat(r.imdbRating) : void 0,
 			tags: r.genres,
 			actors: r.cast,
 			duration: r.runtime,
-			runtimeMinutes: ct(r.runtime),
+			runtimeMinutes: lt(r.runtime),
 			episodes: i
 		};
 	}
 };
 //#endregion
 //#region electron/torrent/indexers/builtins.ts
-async function R(e, t) {
+async function L(e, t) {
 	let n = /* @__PURE__ */ Error("No mirrors configured");
 	for (let r of e) try {
 		return await t(r);
@@ -1991,16 +1991,16 @@ async function R(e, t) {
 	}
 	throw n;
 }
-var ft = new re({
+var pt = new ie({
 	ignoreAttributes: !1,
 	attributeNamePrefix: "@_",
 	parseTagValue: !1,
 	trimValues: !0
 });
-function pt(e) {
+function mt(e) {
 	return e == null ? [] : Array.isArray(e) ? e : [e];
 }
-var mt = class e {
+var ht = class e {
 	id = "yts";
 	name = "YTS";
 	specialises = "movie";
@@ -2015,8 +2015,8 @@ var mt = class e {
 	}
 	async search(t, n) {
 		let r = Math.min(t.limit ?? 30, 50);
-		return R(e.MIRRORS, async (e) => {
-			let i = (await _(`${e}/api/v2/list_movies.json?query_term=${encodeURIComponent(t.query)}&limit=${r}&sort_by=seeds&order_by=desc`, { signal: n })).data?.movies ?? [], a = [];
+		return L(e.MIRRORS, async (e) => {
+			let i = (await g(`${e}/api/v2/list_movies.json?query_term=${encodeURIComponent(t.query)}&limit=${r}&sort_by=seeds&order_by=desc`, { signal: n })).data?.movies ?? [], a = [];
 			for (let e of i) {
 				let t = e.title_long || e.title;
 				if (t) for (let n of e.torrents ?? []) {
@@ -2031,7 +2031,7 @@ var mt = class e {
 					a.push({
 						title: e,
 						infoHash: n.hash.toLowerCase(),
-						magnet: O(n.hash, e),
+						magnet: D(n.hash, e),
 						sizeBytes: n.size_bytes ?? 0,
 						seeders: n.seeds ?? 0,
 						leechers: n.peers ?? 0,
@@ -2043,7 +2043,7 @@ var mt = class e {
 			return a;
 		});
 	}
-}, ht = class e {
+}, gt = class e {
 	id = "eztv";
 	name = "EZTV";
 	specialises = "tv";
@@ -2060,19 +2060,19 @@ var mt = class e {
 		let r = (t.imdbId ?? "").replace(/^tt/i, "");
 		if (!r) return [];
 		let i = Math.min(t.limit ?? 50, 100);
-		return R(e.MIRRORS, async (e) => ((await _(`${e}/api/get-torrents?imdb_id=${encodeURIComponent(r)}&limit=${i}`, { signal: n })).torrents ?? []).filter((e) => e.title && (e.hash || e.magnet_url)).map((e) => ({
+		return L(e.MIRRORS, async (e) => ((await g(`${e}/api/get-torrents?imdb_id=${encodeURIComponent(r)}&limit=${i}`, { signal: n })).torrents ?? []).filter((e) => e.title && (e.hash || e.magnet_url)).map((e) => ({
 			title: e.title,
 			infoHash: e.hash?.toLowerCase(),
 			magnet: e.magnet_url,
 			torrentUrl: e.torrent_url,
-			sizeBytes: k(e.size_bytes),
-			seeders: A(e.seeds),
-			leechers: A(e.peers),
+			sizeBytes: O(e.size_bytes),
+			seeders: k(e.seeds),
+			leechers: k(e.peers),
 			publishedAt: e.date_released_unix ? e.date_released_unix * 1e3 : void 0,
 			category: "TV"
 		})));
 	}
-}, gt = class e {
+}, _t = class e {
 	id = "nyaa";
 	name = "Nyaa";
 	specialises = "anime";
@@ -2084,20 +2084,20 @@ var mt = class e {
 		let r = [t.query];
 		t.episode !== void 0 && r.push(String(t.episode).padStart(2, "0"));
 		let i = encodeURIComponent(r.join(" "));
-		return R(e.MIRRORS, async (e) => {
-			let t = await v(`${e}/?page=rss&q=${i}&c=1_2&f=0`, { signal: n });
-			return pt(ft.parse(t)?.rss?.channel?.item).map((e) => {
+		return L(e.MIRRORS, async (e) => {
+			let t = await _(`${e}/?page=rss&q=${i}&c=1_2&f=0`, { signal: n });
+			return mt(pt.parse(t)?.rss?.channel?.item).map((e) => {
 				let t = String(e.title ?? "").trim(), n = String(e["nyaa:infoHash"] ?? "").toLowerCase();
 				if (!t || !/^[a-f0-9]{40}$/.test(n)) return null;
 				let r = String(e.pubDate ?? ""), i = r ? Date.parse(r) : NaN;
 				return {
 					title: t,
 					infoHash: n,
-					magnet: O(n, t),
+					magnet: D(n, t),
 					torrentUrl: typeof e.link == "string" ? e.link : void 0,
-					sizeBytes: k(String(e["nyaa:size"] ?? "")),
-					seeders: A(e["nyaa:seeders"]),
-					leechers: A(e["nyaa:leechers"]),
+					sizeBytes: O(String(e["nyaa:size"] ?? "")),
+					seeders: k(e["nyaa:seeders"]),
+					leechers: k(e["nyaa:leechers"]),
 					publishedAt: Number.isNaN(i) ? void 0 : i,
 					category: String(e["nyaa:category"] ?? "Anime")
 				};
@@ -2107,8 +2107,8 @@ var mt = class e {
 };
 //#endregion
 //#region electron/torrent/indexers/aggregators.ts
-function _t(e) {
-	let t = e.split("\n").map((e) => e.trim()).filter(Boolean), n = t.find((e) => /👤|💾|⚙️/.test(e)) ?? "", r = t.filter((e) => e !== n), i = A(n.match(/👤\s*([\d,]+)/)?.[1]?.replace(/,/g, "")), a = k(n.match(/💾\s*([\d.,]+\s*[KMGT]i?B)/i)?.[1]), o = n.match(/⚙️\s*(.+?)\s*$/)?.[1];
+function vt(e) {
+	let t = e.split("\n").map((e) => e.trim()).filter(Boolean), n = t.find((e) => /👤|💾|⚙️/.test(e)) ?? "", r = t.filter((e) => e !== n), i = k(n.match(/👤\s*([\d,]+)/)?.[1]?.replace(/,/g, "")), a = O(n.match(/💾\s*([\d.,]+\s*[KMGT]i?B)/i)?.[1]), o = n.match(/⚙️\s*(.+?)\s*$/)?.[1];
 	return {
 		releaseName: r[0] ?? e,
 		fileName: r.length > 1 ? r[r.length - 1] : void 0,
@@ -2117,7 +2117,7 @@ function _t(e) {
 		source: o
 	};
 }
-var vt = class e {
+var yt = class e {
 	id = "torrentio";
 	name = "Torrentio";
 	specialises = "any";
@@ -2128,15 +2128,15 @@ var vt = class e {
 	async search(t, n) {
 		let r = t.imdbId?.startsWith("tt") ? t.imdbId : `tt${t.imdbId}`, i = t.season !== void 0 && t.episode !== void 0 ? `series/${r}:${t.season}:${t.episode}` : `movie/${r}`, a = /* @__PURE__ */ Error("No Torrentio mirror responded");
 		for (let t of e.MIRRORS) try {
-			return ((await _(`${t}/stream/${i}.json`, {
+			return ((await g(`${t}/stream/${i}.json`, {
 				signal: n,
 				timeoutMs: 25e3
 			})).streams ?? []).filter((e) => !!e?.infoHash).map((e) => {
-				let t = _t(e.title ?? e.name ?? ""), n = e.behaviorHints?.filename ?? t.fileName, r = e.infoHash.toLowerCase();
+				let t = vt(e.title ?? e.name ?? ""), n = e.behaviorHints?.filename ?? t.fileName, r = e.infoHash.toLowerCase();
 				return {
 					title: t.releaseName,
 					infoHash: r,
-					magnet: O(r, t.releaseName),
+					magnet: D(r, t.releaseName),
 					sizeBytes: t.sizeBytes,
 					seeders: t.seeders,
 					leechers: 0,
@@ -2150,7 +2150,7 @@ var vt = class e {
 		}
 		throw a;
 	}
-}, yt = class e {
+}, bt = class e {
 	id = "apibay";
 	name = "The Pirate Bay";
 	specialises = "any";
@@ -2163,7 +2163,7 @@ var vt = class e {
 		t.season !== void 0 && t.episode !== void 0 ? r.push(`S${String(t.season).padStart(2, "0")}E${String(t.episode).padStart(2, "0")}`) : t.season !== void 0 && r.push(`S${String(t.season).padStart(2, "0")}`);
 		let i = /* @__PURE__ */ Error("No apibay mirror responded");
 		for (let t of e.MIRRORS) try {
-			let e = await _(`${t}/q.php?q=${encodeURIComponent(r.join(" "))}`, {
+			let e = await g(`${t}/q.php?q=${encodeURIComponent(r.join(" "))}`, {
 				signal: n,
 				timeoutMs: 2e4
 			});
@@ -2172,11 +2172,11 @@ var vt = class e {
 				return {
 					title: n,
 					infoHash: t,
-					magnet: O(t, n),
-					sizeBytes: k(e.size),
-					seeders: A(e.seeders),
-					leechers: A(e.leechers),
-					publishedAt: e.added ? A(e.added) * 1e3 : void 0,
+					magnet: D(t, n),
+					sizeBytes: O(e.size),
+					seeders: k(e.seeders),
+					leechers: k(e.leechers),
+					publishedAt: e.added ? k(e.added) * 1e3 : void 0,
 					category: e.category
 				};
 			}) : [];
@@ -2185,14 +2185,14 @@ var vt = class e {
 		}
 		throw i;
 	}
-}, bt = new re({
+}, xt = new ie({
 	ignoreAttributes: !1,
 	attributeNamePrefix: "@_",
 	parseTagValue: !1,
 	trimValues: !0,
 	isArray: (e) => e === "item" || e === "torznab:attr"
 });
-function xt(e) {
+function St(e) {
 	let t = {};
 	for (let n of e["torznab:attr"] ?? []) {
 		let e = n["@_name"], r = n["@_value"];
@@ -2200,7 +2200,7 @@ function xt(e) {
 	}
 	return t;
 }
-var St = class {
+var Ct = class {
 	id;
 	name;
 	specialises = "any";
@@ -2227,7 +2227,7 @@ var St = class {
 	async search(e, t) {
 		let n = this.buildQuery(e), r = /* @__PURE__ */ Error("No Torznab endpoint responded");
 		for (let e of this.candidateEndpoints()) try {
-			let r = await v(`${e}?${n}`, {
+			let r = await _(`${e}?${n}`, {
 				signal: t,
 				timeoutMs: 2e4
 			});
@@ -2242,20 +2242,20 @@ var St = class {
 		throw r;
 	}
 	parseResponse(e) {
-		return (bt.parse(e)?.rss?.channel?.item ?? []).map((e) => {
+		return (xt.parse(e)?.rss?.channel?.item ?? []).map((e) => {
 			let t = String(e.title ?? "").trim();
 			if (!t) return null;
-			let n = xt(e), r = n.magneturl || (e.link?.startsWith("magnet:") ? e.link : void 0), i = e.enclosure?.["@_url"], a = n.downloadurl || (i && !i.startsWith("magnet:") ? i : void 0) || (e.link && !e.link.startsWith("magnet:") ? e.link : void 0), o = n.infohash?.toLowerCase();
+			let n = St(e), r = n.magneturl || (e.link?.startsWith("magnet:") ? e.link : void 0), i = e.enclosure?.["@_url"], a = n.downloadurl || (i && !i.startsWith("magnet:") ? i : void 0) || (e.link && !e.link.startsWith("magnet:") ? e.link : void 0), o = n.infohash?.toLowerCase();
 			if (!r && !o && !a) return null;
-			let s = k(e.size) || k(n.size) || k(e.enclosure?.["@_length"]), c = e.pubDate ? Date.parse(e.pubDate) : NaN;
+			let s = O(e.size) || O(n.size) || O(e.enclosure?.["@_length"]), c = e.pubDate ? Date.parse(e.pubDate) : NaN;
 			return {
 				title: t,
 				infoHash: o && /^[a-f0-9]{40}$/.test(o) ? o : void 0,
 				magnet: r,
 				torrentUrl: a,
 				sizeBytes: s,
-				seeders: A(n.seeders),
-				leechers: Math.max(0, A(n.peers) - A(n.seeders)),
+				seeders: k(n.seeders),
+				leechers: Math.max(0, k(n.peers) - k(n.seeders)),
 				publishedAt: Number.isNaN(c) ? void 0 : c,
 				category: Array.isArray(e.category) ? e.category[0] : e.category
 			};
@@ -2269,7 +2269,7 @@ var St = class {
 		let t = new URLSearchParams({ t: "caps" });
 		this.apiKey && t.set("apikey", this.apiKey);
 		for (let n of this.candidateEndpoints()) try {
-			let r = await v(`${n}?${t}`, {
+			let r = await _(`${n}?${t}`, {
 				signal: e,
 				timeoutMs: 1e4,
 				retries: 0
@@ -2288,61 +2288,61 @@ var St = class {
 			message: "No Torznab endpoint responded. Check URL and API key."
 		};
 	}
-}, Ct = {
-	[b.Remux]: 100,
-	[b.BluRay]: 90,
-	[b.WebDL]: 85,
-	[b.WebRip]: 70,
-	[b.HDTV]: 55,
-	[b.DVDRip]: 40,
-	[b.SCR]: 10,
-	[b.TS]: 5,
-	[b.CAM]: 0,
-	[b.Unknown]: 50
-}, wt = [
-	b.CAM,
-	b.TS,
-	b.SCR
-], Tt = {
-	[y.UHD_4K]: {
+}, wt = {
+	[y.Remux]: 100,
+	[y.BluRay]: 90,
+	[y.WebDL]: 85,
+	[y.WebRip]: 70,
+	[y.HDTV]: 55,
+	[y.DVDRip]: 40,
+	[y.SCR]: 10,
+	[y.TS]: 5,
+	[y.CAM]: 0,
+	[y.Unknown]: 50
+}, Tt = [
+	y.CAM,
+	y.TS,
+	y.SCR
+], Et = {
+	[v.UHD_4K]: {
 		min: 6e7,
 		ideal: 35e7
 	},
-	[y.QHD]: {
+	[v.QHD]: {
 		min: 35e6,
 		ideal: 18e7
 	},
-	[y.FHD]: {
+	[v.FHD]: {
 		min: 18e6,
 		ideal: 9e7
 	},
-	[y.HD]: {
+	[v.HD]: {
 		min: 8e6,
 		ideal: 45e6
 	},
-	[y.SD]: {
+	[v.SD]: {
 		min: 3e6,
 		ideal: 2e7
 	},
-	[y.LD]: {
+	[v.LD]: {
 		min: 1e6,
 		ideal: 1e7
 	},
-	[y.Unknown]: {
+	[v.Unknown]: {
 		min: 0,
 		ideal: 0
 	}
 };
-function Et(e) {
+function Dt(e) {
 	let t = Math.min(300, Math.round(Math.log2(e.seeders + 1) * 42));
 	return {
 		points: t,
 		reason: `${e.seeders} seeders (+${t})`
 	};
 }
-function Dt(e, t) {
+function Ot(e, t) {
 	let n = e.parsed.resolution;
-	if (n === y.Unknown) return {
+	if (n === v.Unknown) return {
 		points: -10,
 		reason: "Unknown resolution (-10)"
 	};
@@ -2350,43 +2350,43 @@ function Dt(e, t) {
 		points: 120,
 		reason: `Preferred resolution ${n}p (+120)`
 	};
-	let r = Object.values(y).filter((e) => e > 0).sort((e, t) => t - e), i = r.indexOf(t.preferredResolution), a = r.indexOf(n), o = Math.abs(i - a), s = a < i ? o * 20 : o * 40, c = Math.max(-120, 120 - s);
+	let r = Object.values(v).filter((e) => e > 0).sort((e, t) => t - e), i = r.indexOf(t.preferredResolution), a = r.indexOf(n), o = Math.abs(i - a), s = a < i ? o * 20 : o * 40, c = Math.max(-120, 120 - s);
 	return {
 		points: c,
 		reason: `${n}p vs preferred ${t.preferredResolution}p (${c >= 0 ? "+" : ""}${c})`
 	};
 }
-function Ot(e) {
-	let t = Ct[e.parsed.source] ?? 50;
+function kt(e) {
+	let t = wt[e.parsed.source] ?? 50;
 	return {
 		points: t,
 		reason: `Source ${e.parsed.source} (+${t})`
 	};
 }
-function kt(e, t) {
+function At(e, t) {
 	let n = e.parsed.videoCodec;
-	return t.preferH264 ? n === x.H264 ? {
+	return t.preferH264 ? n === b.H264 ? {
 		points: 60,
 		reason: "H.264 — broadest compatibility (+60)"
-	} : n === x.H265 ? {
+	} : n === b.H265 ? {
 		points: -70,
 		reason: "HEVC — may not decode (-70)"
-	} : n === x.AV1 ? {
+	} : n === b.AV1 ? {
 		points: -50,
 		reason: "AV1 — may not decode (-50)"
 	} : {
 		points: 0,
 		reason: ""
-	} : n === x.H265 ? {
+	} : n === b.H265 ? {
 		points: 25,
 		reason: "HEVC — efficient (+25)"
-	} : n === x.AV1 ? {
+	} : n === b.AV1 ? {
 		points: 15,
 		reason: "AV1 — efficient (+15)"
-	} : n === x.H264 ? {
+	} : n === b.H264 ? {
 		points: 20,
 		reason: "H.264 — compatible (+20)"
-	} : n === x.XviD ? {
+	} : n === b.XviD ? {
 		points: -40,
 		reason: "XviD — legacy (-40)"
 	} : {
@@ -2394,8 +2394,8 @@ function kt(e, t) {
 		reason: ""
 	};
 }
-function At(e, t) {
-	let n = Tt[e.parsed.resolution];
+function jt(e, t) {
+	let n = Et[e.parsed.resolution];
 	if (!n || n.ideal === 0 || e.sizeBytes === 0 || t <= 0) return {
 		points: 0,
 		reason: ""
@@ -2415,7 +2415,7 @@ function At(e, t) {
 		reason: ""
 	};
 }
-function jt(e, t) {
+function Mt(e, t) {
 	if (t.preferredLanguages.length === 0) return {
 		points: 0,
 		reason: ""
@@ -2440,7 +2440,7 @@ function jt(e, t) {
 		reason: `Only ${n.join(", ")} (-35)`
 	};
 }
-function Mt(e, t) {
+function Nt(e, t) {
 	let n = [], r = e.parsed;
 	(r.isRepack || r.isProper) && n.push({
 		points: 25,
@@ -2473,21 +2473,21 @@ function Mt(e, t) {
 		reason: "Season pack (+10)"
 	}), n;
 }
-function Nt(e, t) {
+function Pt(e, t) {
 	let n = t.preferences, r = e.parsed;
 	if (e.seeders < n.minSeeders) return `Below minimum seeders (${e.seeders} < ${n.minSeeders})`;
-	if (n.excludeLowQualitySources && wt.includes(r.source)) return `Low-quality source (${r.source})`;
+	if (n.excludeLowQualitySources && Tt.includes(r.source)) return `Low-quality source (${r.source})`;
 	if (n.minResolution > 0 && r.resolution > 0 && r.resolution < n.minResolution) return `Below minimum resolution (${r.resolution}p < ${n.minResolution}p)`;
 	if (n.maxSizeBytes && e.sizeBytes > n.maxSizeBytes) return "Exceeds maximum size";
 	let i = e.title.toLowerCase(), a = n.blockedKeywords.find((e) => e && i.includes(e.toLowerCase()));
 	if (a) return `Blocked keyword "${a}"`;
 	let o = r.releaseGroup?.toLowerCase();
-	return o && n.blockedGroups.some((e) => e.toLowerCase() === o) ? `Blocked group ${r.releaseGroup}` : We(r, t.season, t.episode) ? t.expectedTitle && Ue(t.expectedTitle, r.cleanTitle || e.title) < .45 ? "Title does not match the selected item" : null : "Does not match the requested season/episode";
+	return o && n.blockedGroups.some((e) => e.toLowerCase() === o) ? `Blocked group ${r.releaseGroup}` : Ge(r, t.season, t.episode) ? t.expectedTitle && We(t.expectedTitle, r.cleanTitle || e.title) < .45 ? "Title does not match the selected item" : null : "Does not match the requested season/episode";
 }
-function Pt(e, t) {
+function Ft(e, t) {
 	let n = [], r = [], i = t.runtimeMinutes ?? (t.episode === void 0 ? 110 : 45);
 	for (let a of e) {
-		let e = Nt(a, t);
+		let e = Pt(a, t);
 		if (e) {
 			r.push({
 				result: a,
@@ -2496,13 +2496,13 @@ function Pt(e, t) {
 			continue;
 		}
 		let o = [
-			Et(a),
-			Dt(a, t.preferences),
-			Ot(a),
-			kt(a, t.preferences),
-			At(a, i),
-			jt(a, t.preferences),
-			...Mt(a, t.preferences)
+			Dt(a),
+			Ot(a, t.preferences),
+			kt(a),
+			At(a, t.preferences),
+			jt(a, i),
+			Mt(a, t.preferences),
+			...Nt(a, t.preferences)
 		];
 		t.expectedYear && a.parsed.year && o.push(a.parsed.year === t.expectedYear ? {
 			points: 40,
@@ -2517,7 +2517,7 @@ function Pt(e, t) {
 		rejected: r
 	};
 }
-function Ft(e) {
+function It(e) {
 	let t = /* @__PURE__ */ new Map(), n = [];
 	for (let r of e) {
 		if (!r.infoHash) {
@@ -2535,61 +2535,61 @@ function Ft(e) {
 }
 //#endregion
 //#region electron/torrent/indexerRegistry.ts
-var It = 3, Lt = 3e5, Rt = 2e4, z = "torrent_indexer_configs", zt = "torrent_indexer_configs_version", Bt = "torrent_source_preferences", Vt = [
+var Lt = 3, Rt = 3e5, zt = 2e4, R = "torrent_indexer_configs", Bt = "torrent_indexer_configs_version", Vt = "torrent_source_preferences", Ht = [
 	{
 		id: "torrentio",
 		name: "Torrentio",
-		kind: S.Builtin,
+		kind: x.Builtin,
 		enabled: !0
 	},
 	{
 		id: "apibay",
 		name: "The Pirate Bay",
-		kind: S.Builtin,
+		kind: x.Builtin,
 		enabled: !0
 	},
 	{
 		id: "yts",
 		name: "YTS",
-		kind: S.Builtin,
+		kind: x.Builtin,
 		enabled: !1,
-		supportedTypes: [N.Movie]
+		supportedTypes: [M.Movie]
 	},
 	{
 		id: "eztv",
 		name: "EZTV",
-		kind: S.Builtin,
+		kind: x.Builtin,
 		enabled: !1,
-		supportedTypes: [N.TvSeries]
+		supportedTypes: [M.TvSeries]
 	},
 	{
 		id: "nyaa",
 		name: "Nyaa",
-		kind: S.Builtin,
+		kind: x.Builtin,
 		enabled: !1,
 		supportedTypes: [
-			N.Anime,
-			N.AnimeMovie,
-			N.OVA
+			M.Anime,
+			M.AnimeMovie,
+			M.OVA
 		]
 	}
-], Ht = 2, Ut = class {
+], Ut = 2, Wt = class {
 	configs = [];
 	circuits = /* @__PURE__ */ new Map();
 	datastore;
 	constructor(e) {
 		this.datastore = e;
-		let t = this.datastore.getInt(zt, 0), n = this.datastore.getObject(z, null);
-		if (t < Ht || !Array.isArray(n) || n.length === 0) {
-			let e = Array.isArray(n) ? n.filter((e) => e.kind === S.Torznab) : [];
-			this.configs = [...Vt, ...e], this.datastore.setObject(z, this.configs), this.datastore.setInt(zt, Ht);
+		let t = this.datastore.getInt(Bt, 0), n = this.datastore.getObject(R, null);
+		if (t < Ut || !Array.isArray(n) || n.length === 0) {
+			let e = Array.isArray(n) ? n.filter((e) => e.kind === x.Torznab) : [];
+			this.configs = [...Ht, ...e], this.datastore.setObject(R, this.configs), this.datastore.setInt(Bt, Ut);
 		} else this.configs = n;
 	}
 	getConfigs() {
 		return [...this.configs];
 	}
 	saveConfigs(e) {
-		this.configs = e, this.datastore.setObject(z, e);
+		this.configs = e, this.datastore.setObject(R, e);
 		for (let t of e) this.circuits.delete(t.id);
 	}
 	upsertConfig(e) {
@@ -2600,9 +2600,9 @@ var It = 3, Lt = 3e5, Rt = 2e4, z = "torrent_indexer_configs", zt = "torrent_ind
 		this.saveConfigs(this.configs.filter((t) => t.id !== e));
 	}
 	getPreferences() {
-		let e = this.datastore.getObject(Bt, {});
+		let e = this.datastore.getObject(Vt, {});
 		return {
-			...Oe,
+			...ke,
 			...e ?? {}
 		};
 	}
@@ -2611,16 +2611,16 @@ var It = 3, Lt = 3e5, Rt = 2e4, z = "torrent_indexer_configs", zt = "torrent_ind
 			...this.getPreferences(),
 			...e
 		};
-		return this.datastore.setObject(Bt, t), t;
+		return this.datastore.setObject(Vt, t), t;
 	}
 	buildAdapter(e) {
-		if (e.kind === S.Torznab) return new St(e);
+		if (e.kind === x.Torznab) return new Ct(e);
 		switch (e.id) {
-			case "torrentio": return new vt();
-			case "apibay": return new yt();
-			case "yts": return new mt();
-			case "eztv": return new ht();
-			case "nyaa": return new gt();
+			case "torrentio": return new yt();
+			case "apibay": return new bt();
+			case "yts": return new ht();
+			case "eztv": return new gt();
+			case "nyaa": return new _t();
 			default: return null;
 		}
 	}
@@ -2630,7 +2630,7 @@ var It = 3, Lt = 3e5, Rt = 2e4, z = "torrent_indexer_configs", zt = "torrent_ind
 			ok: !1,
 			message: `Unknown indexer "${e.id}"`
 		};
-		if (t instanceof St) return t.testConnection();
+		if (t instanceof Ct) return t.testConnection();
 		let n = Date.now();
 		try {
 			return {
@@ -2638,12 +2638,12 @@ var It = 3, Lt = 3e5, Rt = 2e4, z = "torrent_indexer_configs", zt = "torrent_ind
 				message: `OK — ${(await t.search({
 					query: "the",
 					limit: 5
-				}, AbortSignal.timeout(Rt))).length} results in ${Date.now() - n} ms`
+				}, AbortSignal.timeout(zt))).length} results in ${Date.now() - n} ms`
 			};
 		} catch (e) {
 			return {
 				ok: !1,
-				message: B(e)
+				message: z(e)
 			};
 		}
 	}
@@ -2653,7 +2653,7 @@ var It = 3, Lt = 3e5, Rt = 2e4, z = "torrent_indexer_configs", zt = "torrent_ind
 	}
 	isCircuitOpen(e) {
 		let t = this.circuitFor(e);
-		return t.consecutiveFailures < It || !t.openedAt ? !1 : Date.now() - t.openedAt > Lt ? (t.consecutiveFailures = 2, t.openedAt = void 0, !1) : !0;
+		return t.consecutiveFailures < Lt || !t.openedAt ? !1 : Date.now() - t.openedAt > Rt ? (t.consecutiveFailures = 2, t.openedAt = void 0, !1) : !0;
 	}
 	recordSuccess(e, t, n) {
 		let r = this.circuitFor(e);
@@ -2661,7 +2661,7 @@ var It = 3, Lt = 3e5, Rt = 2e4, z = "torrent_indexer_configs", zt = "torrent_ind
 	}
 	recordFailure(e, t, n) {
 		let r = this.circuitFor(e);
-		r.consecutiveFailures += 1, r.lastError = B(t), r.lastLatencyMs = n, r.consecutiveFailures >= It && !r.openedAt && (r.openedAt = Date.now());
+		r.consecutiveFailures += 1, r.lastError = z(t), r.lastLatencyMs = n, r.consecutiveFailures >= Lt && !r.openedAt && (r.openedAt = Date.now());
 	}
 	getHealth() {
 		return this.configs.map((e) => {
@@ -2680,7 +2680,7 @@ var It = 3, Lt = 3e5, Rt = 2e4, z = "torrent_indexer_configs", zt = "torrent_ind
 		});
 	}
 	isRelevant(e, t) {
-		return !t.type || e.kind === S.Torznab || !e.supportedTypes || e.supportedTypes.length === 0 || e.supportedTypes.includes(t.type);
+		return !t.type || e.kind === x.Torznab || !e.supportedTypes || e.supportedTypes.length === 0 || e.supportedTypes.includes(t.type);
 	}
 	async search(e, t) {
 		let n = t?.preferences ?? this.getPreferences(), r = [], i = this.configs.map(async (t) => {
@@ -2719,7 +2719,7 @@ var It = 3, Lt = 3e5, Rt = 2e4, z = "torrent_indexer_configs", zt = "torrent_ind
 			}), [];
 			let i = Date.now();
 			try {
-				let a = await n.search(e, AbortSignal.timeout(Rt)), o = Date.now() - i, s = a.map((e) => Ye(e, t)).filter((e) => e !== null);
+				let a = await n.search(e, AbortSignal.timeout(zt)), o = Date.now() - i, s = a.map((e) => Xe(e, t)).filter((e) => e !== null);
 				return this.recordSuccess(t.id, o, s.length), r.push({
 					id: t.id,
 					name: t.name,
@@ -2735,10 +2735,10 @@ var It = 3, Lt = 3e5, Rt = 2e4, z = "torrent_indexer_configs", zt = "torrent_ind
 					ok: !1,
 					count: 0,
 					latencyMs: n,
-					error: B(e)
+					error: z(e)
 				}), [];
 			}
-		}), { accepted: a, rejected: o } = Pt(Ft((await Promise.allSettled(i)).flatMap((e) => e.status === "fulfilled" ? e.value : [])), {
+		}), { accepted: a, rejected: o } = Ft(It((await Promise.allSettled(i)).flatMap((e) => e.status === "fulfilled" ? e.value : [])), {
 			expectedTitle: t?.expectedTitle,
 			expectedYear: t?.expectedYear,
 			season: t?.season ?? e.season,
@@ -2753,7 +2753,7 @@ var It = 3, Lt = 3e5, Rt = 2e4, z = "torrent_indexer_configs", zt = "torrent_ind
 		};
 	}
 };
-function B(e) {
+function z(e) {
 	if (e instanceof Error) {
 		if (e.name === "TimeoutError" || e.name === "AbortError") return "Timed out";
 		let t = e.cause;
@@ -2763,7 +2763,7 @@ function B(e) {
 }
 //#endregion
 //#region electron/contentService.ts
-function Wt(e) {
+function Gt(e) {
 	let t = e.includes("?") ? e.slice(e.indexOf("?") + 1) : "";
 	if (!t) return {};
 	let n = new URLSearchParams(t), r = n.get("s"), i = n.get("e");
@@ -2772,19 +2772,19 @@ function Wt(e) {
 		episode: i ? parseInt(i, 10) : void 0
 	};
 }
-function V(e) {
+function Kt(e) {
 	let t = e.indexOf("?");
 	return t >= 0 ? e.slice(0, t) : e;
 }
-var Gt = class {
-	cinemeta = new dt();
-	metadata = new it();
+var qt = class {
+	cinemeta = new ft();
+	metadata = new at();
 	registry;
 	engine;
 	plugins;
 	detailCache = /* @__PURE__ */ new Map();
 	constructor(e, t, n) {
-		this.registry = new Ut(e), this.plugins = t, this.engine = n;
+		this.registry = new Wt(e), this.plugins = t, this.engine = n;
 	}
 	getRegistry() {
 		return this.registry;
@@ -2796,12 +2796,12 @@ var Gt = class {
 		let t = e.trim();
 		if (!t) return [];
 		if (t.startsWith("magnet:")) {
-			let e = D(t);
+			let e = E(t);
 			return [{
 				name: decodeURIComponent(t.match(/dn=([^&]+)/)?.[1] ?? "Magnet link"),
 				url: t,
 				apiName: "Magnet",
-				type: N.Torrent,
+				type: M.Torrent,
 				quality: e ? e.slice(0, 8) : void 0
 			}];
 		}
@@ -2819,9 +2819,9 @@ var Gt = class {
 		return n;
 	}
 	async load(e) {
-		let t = V(e), n = this.detailCache.get(t);
+		let t = Kt(e), n = this.detailCache.get(t);
 		if (n) return n;
-		let r = ot(t);
+		let r = st(t);
 		if (r) {
 			let e = await this.cinemeta.load(r.type, r.imdbId);
 			if (!e) return null;
@@ -2843,16 +2843,16 @@ var Gt = class {
 			};
 			return this.detailCache.set(t, n), n;
 		}
-		if (nt(t)) {
+		if (rt(t)) {
 			let e = await this.metadata.load(t);
 			return e && (e.imdbId ||= await this.metadata.resolveImdbId(e.name, e.year), this.detailCache.set(t, e)), e;
 		}
 		return this.plugins.loadMedia(t);
 	}
 	async getSources(e) {
-		let t = Wt(e.mediaUrl), n = e.season ?? t.season, r = e.episode ?? t.episode, i = V(e.mediaUrl);
+		let t = Gt(e.mediaUrl), n = e.season ?? t.season, r = e.episode ?? t.episode, i = Kt(e.mediaUrl);
 		if (i.startsWith("magnet:")) {
-			let e = D(i) ?? "", t = decodeURIComponent(i.match(/dn=([^&]+)/)?.[1] ?? "Magnet link");
+			let e = E(i) ?? "", t = decodeURIComponent(i.match(/dn=([^&]+)/)?.[1] ?? "Magnet link");
 			return {
 				sources: [{
 					infoHash: e,
@@ -2863,7 +2863,7 @@ var Gt = class {
 					leechers: 0,
 					indexerId: "magnet",
 					indexerName: "Direct magnet",
-					parsed: T(t),
+					parsed: w(t),
 					score: 0,
 					scoreReasons: ["Supplied directly by the user"]
 				}],
@@ -2888,7 +2888,7 @@ var Gt = class {
 				episode: r
 			}
 		};
-		let s = a?.type === N.Anime || a?.type === N.AnimeMovie, c = {
+		let s = a?.type === M.Anime || a?.type === M.AnimeMovie, c = {
 			query: a?.year && r === void 0 ? `${o} ${a.year}` : o,
 			type: a?.type,
 			season: n,
@@ -2945,7 +2945,7 @@ var Gt = class {
 	savePreferences(e) {
 		return this.registry.savePreferences(e);
 	}
-}, Kt = "extension_update_settings", H = "extension_available_updates", qt = 864e5, U = 3e4, Jt = class {
+}, Jt = "extension_update_settings", B = "extension_available_updates", Yt = 864e5, V = 3e4, Xt = class {
 	datastore;
 	plugins;
 	timer = null;
@@ -2963,7 +2963,7 @@ var Gt = class {
 		} catch {}
 	}
 	getSettings() {
-		let e = this.datastore.getObject(Kt, {});
+		let e = this.datastore.getObject(Jt, {});
 		return {
 			policy: e?.policy ?? "daily",
 			autoInstall: e?.autoInstall ?? !1,
@@ -2976,10 +2976,10 @@ var Gt = class {
 			...this.getSettings(),
 			...e
 		};
-		return this.datastore.setObject(Kt, t), this.schedule(), t;
+		return this.datastore.setObject(Jt, t), this.schedule(), t;
 	}
 	getCachedUpdates() {
-		let e = this.datastore.getObject(H, []);
+		let e = this.datastore.getObject(B, []);
 		return Array.isArray(e) ? e : [];
 	}
 	schedule() {
@@ -2987,10 +2987,10 @@ var Gt = class {
 		let e = this.getSettings();
 		if (e.policy === "manual") return;
 		if (e.policy === "startup") {
-			this.timer = setTimeout(() => this.runScheduledCheck(), U), this.timer.unref?.();
+			this.timer = setTimeout(() => this.runScheduledCheck(), V), this.timer.unref?.();
 			return;
 		}
-		let t = Date.now() - e.lastCheckedAt, n = t >= qt ? U : Math.max(U, qt - t);
+		let t = Date.now() - e.lastCheckedAt, n = t >= Yt ? V : Math.max(V, Yt - t);
 		this.timer = setTimeout(() => this.runScheduledCheck(), n), this.timer.unref?.();
 	}
 	stop() {
@@ -3050,7 +3050,7 @@ var Gt = class {
 			warnings: n,
 			repositoriesChecked: e.length
 		};
-		return this.datastore.setObject(H, i), this.saveSettings({ lastCheckedAt: a.checkedAt }), this.emit("extension:updateCheckFinished", a), a;
+		return this.datastore.setObject(B, i), this.saveSettings({ lastCheckedAt: a.checkedAt }), this.emit("extension:updateCheckFinished", a), a;
 	}
 	async updatePlugin(e) {
 		let t = this.getCachedUpdates().find((t) => t.internalName === e);
@@ -3103,9 +3103,9 @@ var Gt = class {
 		} }), n;
 	}
 	dropCachedUpdate(e) {
-		this.datastore.setObject(H, this.getCachedUpdates().filter((t) => t.internalName !== e));
+		this.datastore.setObject(B, this.getCachedUpdates().filter((t) => t.internalName !== e));
 	}
-}, Yt = 600, Xt = class {
+}, Zt = 600, Qt = class {
 	content;
 	downloads;
 	notify = null;
@@ -3142,7 +3142,7 @@ var Gt = class {
 				n.cancelled = !0;
 				break;
 			}
-			let a = Qt(i);
+			let a = en(i);
 			n.currentEpisode = a;
 			let o = `${e.parentUrl}|${i.season ?? 0}|${i.episode ?? 0}`;
 			if (e.skipExisting !== !1 && r.has(o)) {
@@ -3155,8 +3155,8 @@ var Gt = class {
 					season: i.season,
 					episode: i.episode,
 					titleOverride: e.title
-				}), o = $t(r.sources, e.maxResolution);
-				o ? (await this.downloads.enqueue(en(e, i, o, t)), n.queued++) : (n.failed++, n.failures.push({
+				}), o = tn(r.sources, e.maxResolution);
+				o ? (await this.downloads.enqueue(nn(e, i, o, t)), n.queued++) : (n.failed++, n.failures.push({
 					episode: a,
 					reason: r.emptyReason ?? "No source matched the requested quality."
 				}));
@@ -3166,7 +3166,7 @@ var Gt = class {
 					reason: e instanceof Error ? e.message : String(e)
 				});
 			}
-			n.resolved++, this.emit(n), n.resolved < n.total && await Zt(Yt);
+			n.resolved++, this.emit(n), n.resolved < n.total && await $t(Zt);
 		}
 		return n.finished = !0, n.currentEpisode = void 0, this.emit(n), this.cancelled.delete(t), this.active.delete(t), n;
 	}
@@ -3179,16 +3179,16 @@ var Gt = class {
 		} catch {}
 	}
 };
-function Zt(e) {
+function $t(e) {
 	return new Promise((t) => setTimeout(t, e));
 }
-function Qt(e) {
+function en(e) {
 	return `${e.season == null ? "" : `S${String(e.season).padStart(2, "0")}`}${e.episode == null ? "" : `E${String(e.episode).padStart(2, "0")}`}${e.name ? ` ${e.name}` : ""}`.trim() || e.url;
 }
-function $t(e, t) {
+function tn(e, t) {
 	return !e || e.length === 0 ? null : t ? e.filter((e) => (e.parsed.resolution ?? 0) <= t)[0] ?? e[0] : e[0];
 }
-function en(e, t, n, r) {
+function nn(e, t, n, r) {
 	return {
 		id: `${n.infoHash}-s${t.season ?? 0}e${t.episode ?? 0}`,
 		parentId: e.parentUrl,
@@ -3209,16 +3209,219 @@ function en(e, t, n, r) {
 		totalBytes: n.sizeBytes,
 		downloadSpeed: 0,
 		etaSeconds: 0,
-		state: m.Queued,
+		state: p.Queued,
 		providerName: `${n.indexerName} (${r})`,
 		createdTime: Date.now()
 	};
 }
 //#endregion
+//#region electron/cs3/libraryStore.ts
+var H = {
+	Watching: "Watching",
+	Completed: "Completed",
+	OnHold: "OnHold",
+	PlanToWatch: "PlanToWatch",
+	Dropped: "Dropped"
+}, rn = "library_entries", an = "watch_progress", on = "source_memory", sn = .92, cn = 30, ln = 500;
+function un(e, t) {
+	let n = e.toLowerCase().replace(/\(\d{4}\)/g, "").replace(/\b(19|20)\d{2}\b/g, "").replace(/\b(1080p|720p|2160p|4k|hdr|web-?dl|bluray|x264|x265|hevc)\b/g, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/^(the|a|an)\s+/, "").replace(/\s+/g, "-");
+	return t ? `${n}:${t}` : n;
+}
+var dn = class {
+	datastore;
+	entries = /* @__PURE__ */ new Map();
+	progress = /* @__PURE__ */ new Map();
+	sources = /* @__PURE__ */ new Map();
+	constructor(e) {
+		this.datastore = e, this.restore();
+	}
+	restore() {
+		let e = this.datastore.getObject(rn, []);
+		if (Array.isArray(e)) for (let t of e) t?.key && this.entries.set(t.key, t);
+		let t = this.datastore.getObject(an, []);
+		if (Array.isArray(t)) for (let e of t) this.progress.set(U(e), e);
+		let n = this.datastore.getObject(on, []);
+		if (Array.isArray(n)) for (let e of n) this.sources.set(U(e), e);
+	}
+	persistEntries() {
+		this.datastore.setObject(rn, [...this.entries.values()]);
+	}
+	persistProgress() {
+		let e = [...this.progress.values()].sort((e, t) => t.updatedAt - e.updatedAt);
+		if (e.length > ln) {
+			let t = e.slice(0, ln);
+			this.progress = new Map(t.map((e) => [U(e), e])), this.datastore.setObject(an, t);
+			return;
+		}
+		this.datastore.setObject(an, e);
+	}
+	persistSources() {
+		this.datastore.setObject(on, [...this.sources.values()]);
+	}
+	upsertEntry(e) {
+		let t = un(e.title, e.year), n = Date.now(), r = this.entries.get(t), i = r ? {
+			...r,
+			posterUrl: e.posterUrl ?? r.posterUrl,
+			type: e.type ?? r.type,
+			urls: r.urls.includes(e.mediaUrl) ? r.urls : [...r.urls, e.mediaUrl],
+			status: e.status ?? r.status,
+			updatedAt: n
+		} : {
+			key: t,
+			title: e.title,
+			year: e.year,
+			type: e.type,
+			posterUrl: e.posterUrl,
+			urls: [e.mediaUrl],
+			status: e.status ?? H.Watching,
+			addedAt: n,
+			updatedAt: n
+		};
+		return this.entries.set(t, i), this.persistEntries(), i;
+	}
+	setStatus(e, t) {
+		let n = this.entries.get(e);
+		return n ? (n.status = t, n.updatedAt = Date.now(), this.persistEntries(), n) : null;
+	}
+	setUserRating(e, t) {
+		let n = this.entries.get(e);
+		return n ? (n.userRating = t, n.updatedAt = Date.now(), this.persistEntries(), n) : null;
+	}
+	removeEntry(e) {
+		let t = this.entries.delete(e);
+		if (t) {
+			for (let [t, n] of this.progress) n.key === e && this.progress.delete(t);
+			this.persistEntries(), this.persistProgress();
+		}
+		return t;
+	}
+	getEntries(e) {
+		let t = [...this.entries.values()];
+		return (e ? t.filter((t) => t.status === e) : t).sort((e, t) => t.updatedAt - e.updatedAt);
+	}
+	getEntryForUrl(e) {
+		for (let t of this.entries.values()) if (t.urls.includes(e)) return t;
+		return null;
+	}
+	recordProgress(e) {
+		if (!Number.isFinite(e.positionSeconds) || !Number.isFinite(e.durationSeconds) || e.durationSeconds <= 0) return null;
+		let t = un(e.title, e.year), n = U({
+			key: t,
+			season: e.season,
+			episode: e.episode
+		}), r = this.progress.get(n);
+		if (r && e.positionSeconds < cn && r.positionSeconds > cn) return r;
+		let i = e.positionSeconds / e.durationSeconds >= sn, a = {
+			key: t,
+			season: e.season,
+			episode: e.episode,
+			positionSeconds: e.positionSeconds,
+			durationSeconds: e.durationSeconds,
+			updatedAt: Date.now(),
+			completed: i,
+			title: e.title,
+			episodeTitle: e.episodeTitle,
+			posterUrl: e.posterUrl,
+			mediaUrl: e.mediaUrl
+		};
+		this.progress.set(n, a), this.persistProgress();
+		let o = this.entries.get(t);
+		return o ? o.status === H.PlanToWatch && (o.status = H.Watching, o.updatedAt = Date.now(), this.persistEntries()) : this.upsertEntry({
+			title: e.title,
+			year: e.year,
+			type: e.type,
+			posterUrl: e.posterUrl,
+			mediaUrl: e.mediaUrl,
+			status: H.Watching
+		}), a;
+	}
+	getProgress(e, t, n) {
+		return this.progress.get(U({
+			key: e,
+			season: t,
+			episode: n
+		})) ?? null;
+	}
+	getProgressForKey(e) {
+		return [...this.progress.values()].filter((t) => t.key === e);
+	}
+	getContinueWatching(e = 20) {
+		let t = /* @__PURE__ */ new Map();
+		for (let e of this.progress.values()) {
+			if (e.completed || e.positionSeconds < cn) continue;
+			let n = t.get(e.key);
+			(!n || e.updatedAt > n.updatedAt) && t.set(e.key, e);
+		}
+		return [...t.values()].sort((e, t) => t.updatedAt - e.updatedAt).slice(0, e);
+	}
+	clearProgress(e, t, n) {
+		if (t === void 0 && n === void 0) {
+			let t = !1;
+			for (let [n, r] of this.progress) r.key === e && (this.progress.delete(n), t = !0);
+			return t && this.persistProgress(), t;
+		}
+		let r = this.progress.delete(U({
+			key: e,
+			season: t,
+			episode: n
+		}));
+		return r && this.persistProgress(), r;
+	}
+	rememberSource(e) {
+		this.sources.set(U(e), {
+			...e,
+			chosenAt: Date.now()
+		}), this.persistSources();
+	}
+	recallSource(e, t, n) {
+		return this.sources.get(U({
+			key: e,
+			season: t,
+			episode: n
+		})) ?? null;
+	}
+	exportAll() {
+		return {
+			entries: [...this.entries.values()],
+			progress: [...this.progress.values()],
+			sources: [...this.sources.values()]
+		};
+	}
+	importAll(e) {
+		let t = 0, n = 0, r = 0;
+		for (let n of e.entries ?? []) {
+			if (!n?.key) continue;
+			let e = this.entries.get(n.key);
+			(!e || n.updatedAt > e.updatedAt) && (this.entries.set(n.key, {
+				...n,
+				urls: [.../* @__PURE__ */ new Set([...e?.urls ?? [], ...n.urls ?? []])]
+			}), t++);
+		}
+		for (let t of e.progress ?? []) {
+			if (!t?.key) continue;
+			let e = U(t), r = this.progress.get(e);
+			(!r || t.updatedAt > r.updatedAt) && (this.progress.set(e, t), n++);
+		}
+		for (let t of e.sources ?? []) {
+			if (!t?.key) continue;
+			let e = U(t), n = this.sources.get(e);
+			(!n || t.chosenAt > n.chosenAt) && (this.sources.set(e, t), r++);
+		}
+		return this.persistEntries(), this.persistProgress(), this.persistSources(), {
+			entries: t,
+			progress: n,
+			sources: r
+		};
+	}
+};
+function U(e) {
+	return `${e.key}|${e.season ?? ""}|${e.episode ?? ""}`;
+}
+//#endregion
 //#region electron/main.ts
-var tn = c(import.meta.url), nn = s.dirname(tn), W = null, G = new ae(), rn = new oe(), K = new ce(G, rn), q = new Te(G), J = new Ee(), Y = new tt(G.getString("torrent_cache_path", "", !0) || void 0), X = new Gt(G, q, Y), Z = new Jt(G, q), Q = new Xt(X, K);
-K.setTorrentEngine(Y);
-function an() {
+var fn = c(import.meta.url), pn = s.dirname(fn), W = null, G = new oe(), mn = new se(), K = new le(G, mn), q = new Ee(G), hn = new De(), J = new nt(G.getString("torrent_cache_path", "", !0) || void 0), Y = new qt(G, q, J), X = new Xt(G, q), Z = new Qt(Y, K), Q = new dn(G);
+K.setTorrentEngine(J);
+function gn() {
 	W = new t({
 		width: 1360,
 		height: 860,
@@ -3228,12 +3431,12 @@ function an() {
 		backgroundColor: "#0c0f17",
 		show: !1,
 		webPreferences: {
-			preload: s.join(nn, "preload.js"),
+			preload: s.join(pn, "preload.js"),
 			contextIsolation: !0,
 			nodeIntegration: !1,
 			sandbox: !1
 		}
-	}), n.setApplicationMenu(null), W.once("ready-to-show", () => W?.show()), W.webContents.setWindowOpenHandler(({ url: e }) => (/^https?:\/\//.test(e) && o.openExternal(e), { action: "deny" })), process.env.VITE_DEV_SERVER_URL ? W.loadURL(process.env.VITE_DEV_SERVER_URL) : W.loadFile(s.join(nn, "../dist/index.html")), W.on("closed", () => {
+	}), n.setApplicationMenu(null), W.once("ready-to-show", () => W?.show()), W.webContents.setWindowOpenHandler(({ url: e }) => (/^https?:\/\//.test(e) && o.openExternal(e), { action: "deny" })), process.env.VITE_DEV_SERVER_URL ? W.loadURL(process.env.VITE_DEV_SERVER_URL) : W.loadFile(s.join(pn, "../dist/index.html")), W.on("closed", () => {
 		W = null;
 	});
 }
@@ -3245,20 +3448,20 @@ r.whenReady().then(async () => {
 	}
 	K.setProgressCallback((e) => {
 		W && !W.isDestroyed() && W.webContents.send("download:progress", e);
-	}), an(), Z.setNotifier((e, t) => {
+	}), gn(), X.setNotifier((e, t) => {
 		W && !W.isDestroyed() && W.webContents.send("extension:updateEvent", e, t);
-	}), Z.schedule(), Q.setNotifier((e) => {
+	}), X.schedule(), Z.setNotifier((e) => {
 		W && !W.isDestroyed() && W.webContents.send("download:batchProgress", e);
 	}), r.on("activate", () => {
-		t.getAllWindows().length === 0 && an();
+		t.getAllWindows().length === 0 && gn();
 	});
 }), r.on("window-all-closed", () => {
-	K.stop(), Z.stop(), q.shutdown(), process.platform !== "darwin" && r.quit();
+	K.stop(), X.stop(), q.shutdown(), process.platform !== "darwin" && r.quit();
 }), r.on("before-quit", async (e) => {
-	if (Y) {
+	if (J) {
 		e.preventDefault();
 		try {
-			await Y.destroy();
+			await J.destroy();
 		} catch {}
 		r.exit(0);
 	}
@@ -3273,7 +3476,7 @@ a.handle("api:searchAll", async (e, t) => {
 	try {
 		return {
 			ok: !0,
-			results: await X.search(t)
+			results: await Y.search(t)
 		};
 	} catch (e) {
 		return {
@@ -3285,7 +3488,7 @@ a.handle("api:searchAll", async (e, t) => {
 	try {
 		return {
 			ok: !0,
-			detail: await X.load(t)
+			detail: await Y.load(t)
 		};
 	} catch (e) {
 		return {
@@ -3297,7 +3500,7 @@ a.handle("api:searchAll", async (e, t) => {
 	try {
 		return {
 			ok: !0,
-			...await X.getSources(t)
+			...await Y.getSources(t)
 		};
 	} catch (e) {
 		return {
@@ -3312,7 +3515,7 @@ a.handle("api:searchAll", async (e, t) => {
 	try {
 		return {
 			ok: !0,
-			handle: await X.startStream(t, n, r)
+			handle: await Y.startStream(t, n, r)
 		};
 	} catch (e) {
 		return {
@@ -3320,13 +3523,13 @@ a.handle("api:searchAll", async (e, t) => {
 			handle: null
 		};
 	}
-}), a.handle("torrent:getStats", async (e, t) => Y.getStats(t)), a.handle("torrent:selectFile", async (e, t, n) => Y.selectFile(t, n)), a.handle("torrent:stopStream", async (e, t, n) => {
-	await Y.stopStream(t, n ?? !1);
-}), a.handle("torrent:getActiveStreams", async () => Y.getActiveStreams()), a.handle("torrent:clearCache", async () => {
+}), a.handle("torrent:getStats", async (e, t) => J.getStats(t)), a.handle("torrent:selectFile", async (e, t, n) => J.selectFile(t, n)), a.handle("torrent:stopStream", async (e, t, n) => {
+	await J.stopStream(t, n ?? !1);
+}), a.handle("torrent:getActiveStreams", async () => J.getActiveStreams()), a.handle("torrent:clearCache", async () => {
 	try {
 		return {
 			ok: !0,
-			removed: await Y.clearCache()
+			removed: await J.clearCache()
 		};
 	} catch (e) {
 		return {
@@ -3334,11 +3537,11 @@ a.handle("api:searchAll", async (e, t) => {
 			removed: 0
 		};
 	}
-}), a.handle("torrent:getCachePath", async () => Y.getCachePath()), a.handle("indexer:getConfigs", async () => X.getRegistry().getConfigs()), a.handle("indexer:saveConfig", async (e, t) => (X.getRegistry().upsertConfig(t), X.getRegistry().getConfigs())), a.handle("indexer:removeConfig", async (e, t) => (X.getRegistry().removeConfig(t), X.getRegistry().getConfigs())), a.handle("indexer:test", async (e, t) => X.getRegistry().testIndexer(t)), a.handle("indexer:getHealth", async () => X.getRegistry().getHealth()), a.handle("sources:getPreferences", async () => X.getPreferences()), a.handle("sources:savePreferences", async (e, t) => X.savePreferences(t)), a.handle("download:enqueue", async (e, t) => K.enqueue(t)), a.handle("download:pause", async (e, t) => K.pause(t)), a.handle("download:resume", async (e, t) => K.resume(t)), a.handle("download:remove", async (e, t) => K.remove(t)), a.handle("download:getQueue", async () => K.getTasks()), a.handle("download:startBatch", async (e, t) => {
+}), a.handle("torrent:getCachePath", async () => J.getCachePath()), a.handle("indexer:getConfigs", async () => Y.getRegistry().getConfigs()), a.handle("indexer:saveConfig", async (e, t) => (Y.getRegistry().upsertConfig(t), Y.getRegistry().getConfigs())), a.handle("indexer:removeConfig", async (e, t) => (Y.getRegistry().removeConfig(t), Y.getRegistry().getConfigs())), a.handle("indexer:test", async (e, t) => Y.getRegistry().testIndexer(t)), a.handle("indexer:getHealth", async () => Y.getRegistry().getHealth()), a.handle("sources:getPreferences", async () => Y.getPreferences()), a.handle("sources:savePreferences", async (e, t) => Y.savePreferences(t)), a.handle("download:enqueue", async (e, t) => K.enqueue(t)), a.handle("download:pause", async (e, t) => K.pause(t)), a.handle("download:resume", async (e, t) => K.resume(t)), a.handle("download:remove", async (e, t) => K.remove(t)), a.handle("download:getQueue", async () => K.getTasks()), a.handle("download:startBatch", async (e, t) => {
 	try {
 		return {
 			ok: !0,
-			progress: await Q.start(t)
+			progress: await Z.start(t)
 		};
 	} catch (e) {
 		return {
@@ -3346,12 +3549,12 @@ a.handle("api:searchAll", async (e, t) => {
 			progress: null
 		};
 	}
-}), a.handle("download:cancelBatch", async (e, t) => Q.cancel(t)), a.handle("download:getActiveBatches", async () => Q.getActive()), a.handle("download:revealInFolder", async (e, t) => {
+}), a.handle("download:cancelBatch", async (e, t) => Z.cancel(t)), a.handle("download:getActiveBatches", async () => Z.getActive()), a.handle("download:revealInFolder", async (e, t) => {
 	o.showItemInFolder(t);
-}), a.handle("binary:check", async () => J.checkBinaries()), a.handle("binary:setup", async () => {
+}), a.handle("binary:check", async () => hn.checkBinaries()), a.handle("binary:setup", async () => {
 	try {
-		let e = await J.setupAria2(), t = await J.setupYtDlp();
-		return e && await rn.start(), {
+		let e = await hn.setupAria2(), t = await hn.setupYtDlp();
+		return e && await mn.start(), {
 			success: e || t,
 			message: e ? "aria2c and yt-dlp downloaded and configured." : t ? "yt-dlp configured; aria2c setup failed." : "Binary setup failed."
 		};
@@ -3361,7 +3564,7 @@ a.handle("api:searchAll", async (e, t) => {
 			message: e?.message || "Failed to set up binaries"
 		};
 	}
-}), a.handle("extension:getOfficialRepositories", async () => De), a.handle("extension:fetchRepository", async (e, t) => {
+}), a.handle("extension:getOfficialRepositories", async () => Oe), a.handle("extension:fetchRepository", async (e, t) => {
 	try {
 		return {
 			ok: !0,
@@ -3377,7 +3580,7 @@ a.handle("api:searchAll", async (e, t) => {
 	try {
 		return {
 			ok: !0,
-			result: await Z.checkForUpdates()
+			result: await X.checkForUpdates()
 		};
 	} catch (e) {
 		return {
@@ -3385,7 +3588,9 @@ a.handle("api:searchAll", async (e, t) => {
 			result: null
 		};
 	}
-}), a.handle("extension:getCachedUpdates", async () => Z.getCachedUpdates()), a.handle("extension:update", async (e, t) => Z.updatePlugin(t)), a.handle("extension:updateAll", async (e, t) => Z.updateAll(t)), a.handle("extension:getUpdateSettings", async () => Z.getSettings()), a.handle("extension:saveUpdateSettings", async (e, t) => Z.saveSettings(t)), a.handle("datastore:getSetting", async (e, t, n) => G.getString(t, n, !0)), a.handle("datastore:setSetting", async (e, t, n) => {
+}), a.handle("extension:getCachedUpdates", async () => X.getCachedUpdates()), a.handle("extension:update", async (e, t) => X.updatePlugin(t)), a.handle("extension:updateAll", async (e, t) => X.updateAll(t)), a.handle("extension:getUpdateSettings", async () => X.getSettings()), a.handle("extension:saveUpdateSettings", async (e, t) => X.saveSettings(t)), a.handle("library:getEntries", async (e, t) => Q.getEntries(t)), a.handle("library:upsertEntry", async (e, t) => Q.upsertEntry(t)), a.handle("library:setStatus", async (e, t, n) => Q.setStatus(t, n)), a.handle("library:setUserRating", async (e, t, n) => Q.setUserRating(t, n)), a.handle("library:removeEntry", async (e, t) => Q.removeEntry(t)), a.handle("library:getEntryForUrl", async (e, t) => Q.getEntryForUrl(t)), a.handle("library:recordProgress", async (e, t) => Q.recordProgress(t)), a.handle("library:getProgressForKey", async (e, t) => Q.getProgressForKey(t)), a.handle("library:getContinueWatching", async (e, t) => Q.getContinueWatching(t)), a.handle("library:clearProgress", async (e, t, n, r) => Q.clearProgress(t, n, r)), a.handle("library:rememberSource", async (e, t) => {
+	Q.rememberSource(t);
+}), a.handle("library:recallSource", async (e, t, n, r) => Q.recallSource(t, n, r)), a.handle("library:export", async () => Q.exportAll()), a.handle("library:import", async (e, t) => Q.importAll(t)), a.handle("datastore:getSetting", async (e, t, n) => G.getString(t, n, !0)), a.handle("datastore:setSetting", async (e, t, n) => {
 	G.setString(t, String(n), !0);
 }), a.handle("datastore:getObject", async (e, t, n) => G.getObject(t, n)), a.handle("datastore:setObject", async (e, t, n) => {
 	G.setObject(t, n);
