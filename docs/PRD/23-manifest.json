@@ -248,6 +248,16 @@
       "id": "32",
       "file": "32-cs3-desktop-feature-additions.md",
       "title": "CS3 desktop feature additions and architecture"
+    },
+    {
+      "id": "33",
+      "file": "33-cs3-desktop-current-architecture-and-implementation.md",
+      "title": "CS3 desktop current built architecture and implementation status"
+    },
+    {
+      "id": "34",
+      "file": "34-torrent-search-streaming-and-download-architecture.md",
+      "title": "BitTorrent search, sequential streaming and download engine"
     }
   ],
   "headlineFindings": [

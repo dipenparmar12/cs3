@@ -133,6 +133,8 @@ Content identity is `url.replace(mainUrl,"").replace("/","").hashCode()` (`app/.
 | 30 | [30-migration-test-cases.md](30-migration-test-cases.md) | Concrete migration test corpus |
 | 31 | [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md) | **The drop-in contract** — how unmodified `.cs3` plugins run on Windows, and what that does not cover |
 | 32 | [32-cs3-desktop-feature-additions.md](32-cs3-desktop-feature-additions.md) | **Desktop feature additions & architecture** — 3-tier plugin strategy, 26-repo catalog, two-layer provider filters, 1-click downloader, live streaming engine, and 6-bucket datastore migration |
+| 33 | [33-cs3-desktop-current-architecture-and-implementation.md](33-cs3-desktop-current-architecture-and-implementation.md) | **Current built architecture & implementation status** — complete technical reference of built services, IPC handlers, plugin loaders, scrapers, and player UX as of today |
+| 34 | [34-torrent-search-streaming-and-download-architecture.md](34-torrent-search-streaming-and-download-architecture.md) | **BitTorrent search, sequential streaming & download engine** — 7 public indexers + Torznab, release parser, quality ranker, 127.0.0.1 HTTP streaming server, and P2P download manager |
 
 ---
 
