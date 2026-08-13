@@ -12,6 +12,7 @@ import { ContentService, type SourceQuery } from './contentService';
 import { PlaybackSessionManager } from './playbackSession';
 import { SearchSuggestionService } from './searchSuggestions';
 import { SearchHistoryStore } from './searchHistory';
+import { SubtitleService } from './subtitleService';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
@@ -39,6 +40,7 @@ const libraryStore = new LibraryStore(datastore);
 const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
+const subtitles = new SubtitleService();
 
 downloadService.setTorrentEngine(torrentEngine);
 
@@ -193,6 +195,32 @@ ipcMain.handle('api:suggest', async (_, query: string) => {
     return { ok: true, suggestions: await searchSuggestions.suggest(query) };
   } catch (error) {
     return { ...fail(error), suggestions: [] };
+  }
+});
+
+ipcMain.handle(
+  'subtitles:search',
+  async (_, imdbId: string, season?: number, episode?: number) => {
+    try {
+      return { ok: true, results: await subtitles.search(imdbId, season, episode) };
+    } catch (error) {
+      return { ...fail(error), results: [] };
+    }
+  }
+);
+
+/**
+ * Fetches one subtitle as WebVTT text.
+ *
+ * The renderer cannot fetch these directly — third-party origin, and the files
+ * are SubRip, which `<track>` rejects. Conversion happens here and the renderer
+ * turns the returned text into a blob URL.
+ */
+ipcMain.handle('subtitles:fetch', async (_, url: string) => {
+  try {
+    return { ok: true, vtt: await subtitles.fetchAsVtt(url) };
+  } catch (error) {
+    return { ...fail(error), vtt: '' };
   }
 });
 

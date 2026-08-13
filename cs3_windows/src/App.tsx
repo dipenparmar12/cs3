@@ -312,6 +312,19 @@ export const App: React.FC = () => {
               progress={session.context.progress}
               switchingTo={switchingTo}
               switchError={switchError}
+              subtitleContext={session.context.subtitleContext}
+              onDownloadCurrent={
+                // Downloads the release that is actually playing, which is not
+                // necessarily the top-ranked one after failover.
+                session.context.onDownloadSource && session.snapshot.activeInfoHash
+                  ? () => {
+                      const active = session.snapshot.sources.find(
+                        (s) => s.infoHash === session.snapshot.activeInfoHash
+                      );
+                      if (active) session.context.onDownloadSource?.(active);
+                    }
+                  : undefined
+              }
               onSelectEpisode={
                 session.context.onRequestEpisode
                   ? (episode) => handleSwitchEpisode(episode)

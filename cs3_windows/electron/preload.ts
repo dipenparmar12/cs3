@@ -33,6 +33,7 @@ import type {
 } from './cs3/libraryStore';
 import type { StreamHandle } from './torrent/torrentEngine';
 import type { PlaybackSnapshot } from './playbackSession';
+import type { SubtitleSearchResult } from './subtitleService';
 
 /**
  * Typed, allow-listed IPC surface (ARCH-2 / SEC-9).
@@ -68,6 +69,15 @@ export interface CloudStreamElectronAPI {
   suggestTitles: (
     query: string
   ) => Promise<Envelope & { suggestions: SearchSuggestion[] }>;
+  /** Online subtitle search, keyed by IMDb id (plus season/episode for series). */
+  searchSubtitles: (
+    imdbId: string,
+    season?: number,
+    episode?: number
+  ) => Promise<Envelope & { results: SubtitleSearchResult[] }>;
+  /** Downloads one subtitle, already converted from SubRip to WebVTT. */
+  fetchSubtitle: (url: string) => Promise<Envelope & { vtt: string }>;
+
   getSearchHistory: () => Promise<SearchHistoryEntry[]>;
   removeSearchHistory: (query: string) => Promise<SearchHistoryEntry[]>;
   clearSearchHistory: () => Promise<SearchHistoryEntry[]>;
@@ -251,6 +261,10 @@ const api: CloudStreamElectronAPI = {
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),
 
   suggestTitles: (query) => ipcRenderer.invoke('api:suggest', query),
+  searchSubtitles: (imdbId, season, episode) =>
+    ipcRenderer.invoke('subtitles:search', imdbId, season, episode),
+  fetchSubtitle: (url) => ipcRenderer.invoke('subtitles:fetch', url),
+
   getSearchHistory: () => ipcRenderer.invoke('api:getSearchHistory'),
   removeSearchHistory: (query) => ipcRenderer.invoke('api:removeSearchHistory', query),
   clearSearchHistory: () => ipcRenderer.invoke('api:clearSearchHistory'),

@@ -78,6 +78,8 @@ export interface PlaybackSessionRequest {
   onStarted?: (source: TorrentResult) => void;
   /** Enqueues a download for a source picked from inside the player. */
   onDownloadSource?: (source: TorrentResult) => void;
+  /** Identity for online subtitle search, which is keyed on the IMDb id. */
+  subtitleContext?: { imdbId?: string; season?: number; episode?: number };
 }
 
 interface DetailViewProps {
@@ -383,6 +385,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
         onRequestEpisode: (next) => playEpisodeDirectlyRef.current(next),
         onStarted: (source) => rememberChoice(source, episode),
         onDownloadSource: (source) => downloadSource(source, episode),
+        subtitleContext: {
+          imdbId: detail.imdbId,
+          season: episode?.season,
+          episode: episode?.episode,
+        },
         progress: {
           mediaUrl: episode?.url ?? detail.url,
           year: detail.year,

@@ -3,7 +3,7 @@ import Hls from 'hls.js';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
-  SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
+  SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio, Download,
 } from 'lucide-react';
 import type { TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
@@ -13,6 +13,7 @@ import { HoverMenu } from './player/HoverMenu';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
+import { SubtitlePanel } from './player/SubtitlePanel';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
@@ -56,6 +57,10 @@ interface VideoPlayerProps {
    * progress, offers "play now" on partial results, and keeps the source list
    * available for switching once playback has started.
    */
+  /** Identity for online subtitle search; without an IMDb id it is unavailable. */
+  subtitleContext?: { imdbId?: string; season?: number; episode?: number };
+  /** Downloads whatever is currently playing, without leaving the player. */
+  onDownloadCurrent?: () => void;
   sourceSession?: {
     phase: PlaybackPhase;
     sources: TorrentResult[];
@@ -114,6 +119,7 @@ export interface AudioTrackInfo {
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamUrl, mimeType, title, episodeTitle, infoHash, subtitles, onBack,
   series, onSelectEpisode, switchingTo, switchError, progress, sourceSession,
+  subtitleContext, onDownloadCurrent,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -136,6 +142,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [activeSubtitle, setActiveSubtitle] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
+  const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false);
+  /** Subtitles fetched from the online search, as blob-backed WebVTT tracks. */
+  const [fetchedSubtitles, setFetchedSubtitles] = useState<
+    Array<{ name: string; url: string }>
+  >([]);
   /** Source the viewer just picked, so the row shows a spinner while it starts. */
   const [pendingSourceHash, setPendingSourceHash] = useState<string | null>(null);
 
@@ -652,10 +663,53 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const progressPercent = duration ? (currentTime / duration) * 100 : 0;
 
+  /** Subtitles shipped with the stream, plus any fetched from online search. */
+  const allSubtitles = useMemo(
+    () => [...subtitles, ...fetchedSubtitles],
+    [subtitles, fetchedSubtitles]
+  );
+
+  /**
+   * Applies the selected subtitle by driving `TextTrack.mode` directly.
+   *
+   * Setting the `default` attribute on a `<track>` only has an effect before
+   * the element loads; changing it afterwards, which is what a React re-render
+   * does, switches nothing. That made subtitle selection silently inert. The
+   * mode property is the runtime control and has to be set on every track,
+   * including the ones being turned off.
+   */
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const apply = () => {
+      const tracks = video.textTracks;
+      for (let i = 0; i < tracks.length; i++) {
+        const track = tracks[i];
+        const source = allSubtitles[i];
+        track.mode = source && source.url === activeSubtitle ? 'showing' : 'disabled';
+      }
+    };
+
+    apply();
+    // A track added in the same render is not in `video.textTracks` yet.
+    video.textTracks.addEventListener?.('addtrack', apply);
+    return () => video.textTracks.removeEventListener?.('addtrack', apply);
+  }, [activeSubtitle, allSubtitles]);
+
+  // Blob URLs from the subtitle search are owned by this component; leaking
+  // them would pin every subtitle a viewer auditioned for the session's life.
+  useEffect(
+    () => () => {
+      for (const sub of fetchedSubtitles) URL.revokeObjectURL(sub.url);
+    },
+    [fetchedSubtitles]
+  );
+
   // Close any open side-panel when the user clicks outside it on the player.
   const handlePlayerPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!panelOpen && !sourcePanelOpen) return;
+      if (!panelOpen && !sourcePanelOpen && !subtitlePanelOpen) return;
       const target = e.target as HTMLElement;
       // If the click is inside a .player-panel element, leave it open.
       if (target.closest('.player-panel')) return;
@@ -663,8 +717,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (target.closest('[data-panel-toggle]')) return;
       setPanelOpen(false);
       setSourcePanelOpen(false);
+      setSubtitlePanelOpen(false);
     },
-    [panelOpen, sourcePanelOpen]
+    [panelOpen, sourcePanelOpen, subtitlePanelOpen]
   );
 
   return (
@@ -681,14 +736,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onClick={togglePlay}
         crossOrigin="anonymous"
       >
-        {subtitles.map((sub) => (
-          <track
-            key={sub.url}
-            kind="subtitles"
-            label={sub.name}
-            src={sub.url}
-            default={activeSubtitle === sub.url}
-          />
+        {/* Selection is driven by TextTrack.mode in the effect above, not by
+            `default` — see there for why. */}
+        {allSubtitles.map((sub) => (
+          <track key={sub.url} kind="subtitles" label={sub.name} src={sub.url} />
         ))}
       </video>
 
@@ -855,6 +906,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         />
       )}
 
+      <SubtitlePanel
+        open={subtitlePanelOpen}
+        imdbId={subtitleContext?.imdbId}
+        season={subtitleContext?.season}
+        episode={subtitleContext?.episode}
+        embedded={subtitles}
+        activeUrl={activeSubtitle}
+        onClose={() => setSubtitlePanelOpen(false)}
+        onSelect={(url, label) => {
+          if (url && !allSubtitles.some((s) => s.url === url)) {
+            setFetchedSubtitles((prev) => [...prev, { name: label, url }]);
+          }
+          setActiveSubtitle(url);
+        }}
+      />
+
       <footer className={`player__controls${controlsVisible ? '' : ' hidden'}`}>
         <div
           ref={seekBarRef}
@@ -1005,6 +1072,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </button>
           )}
 
+          {/* Subtitle search sits next to the track picker rather than inside
+              it: finding a subtitle and choosing one are different actions, and
+              a hover menu is the wrong shape for a search result list. */}
+          <button
+            className="icon-button"
+            data-panel-toggle
+            onClick={() => setSubtitlePanelOpen((v) => !v)}
+            aria-label="Search subtitles"
+            title="Search subtitles online"
+          >
+            <Subtitles size={18} />
+          </button>
+
+          {onDownloadCurrent && (
+            <button
+              className="icon-button"
+              onClick={onDownloadCurrent}
+              aria-label="Download"
+              title="Download what is playing"
+            >
+              <Download size={18} />
+            </button>
+          )}
+
           {qualities.length > 1 && (
             <HoverMenu
               icon={<Settings2 size={16} />}
@@ -1018,7 +1109,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             />
           )}
 
-          {subtitles.length > 0 && (
+          {allSubtitles.length > 0 && (
             <HoverMenu
               icon={<Subtitles size={16} />}
               label="Subtitles"
@@ -1026,12 +1117,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               onChange={(next) => setActiveSubtitle(next === '' ? null : String(next))}
               triggerText={
                 activeSubtitle
-                  ? (subtitles.find((s) => s.url === activeSubtitle)?.name ?? 'On')
+                  ? (allSubtitles.find((s) => s.url === activeSubtitle)?.name ?? 'On')
                   : 'Off'
               }
               options={[
                 { value: '', label: 'Off' },
-                ...subtitles.map((sub) => ({ value: sub.url, label: sub.name })),
+                ...allSubtitles.map((sub) => ({ value: sub.url, label: sub.name })),
               ]}
             />
           )}
