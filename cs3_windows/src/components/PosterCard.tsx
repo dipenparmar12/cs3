@@ -90,6 +90,10 @@ export const PosterCard: React.FC<PosterCardProps> = ({
           )}
         </div>
 
+        {/* Where the viewer left off. Supplied by the library and continue-watching
+            rows, which is the only place a resume point is meaningful. */}
+        {watchedText && <p className="poster-watched">{watchedText}</p>}
+
         {showBucketButton && item?.url && (
           <div style={{ marginTop: '0.4rem' }}>
             <LibraryBucketSelector item={item} size="sm" showLabel={false} />
