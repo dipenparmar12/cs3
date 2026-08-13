@@ -47,10 +47,45 @@ export interface PlaybackRequest {
   onRequestEpisode?: (episode: Episode) => Promise<void>;
 }
 
+/**
+ * Everything the shell needs to render a player for a session it has not
+ * resolved yet.
+ *
+ * Distinct from {@link PlaybackRequest}, which describes a stream that already
+ * exists. This is the instant-play path: the player opens on this, and the
+ * stream details arrive later through session snapshots.
+ */
+export interface PlaybackSessionRequest {
+  request: {
+    mediaUrl: string;
+    season?: number;
+    episode?: number;
+    titleOverride?: string;
+  };
+  title: string;
+  episodeTitle?: string;
+  series?: SeriesContext;
+  progress?: {
+    mediaUrl: string;
+    year?: number;
+    posterUrl?: string;
+    season?: number;
+    episode?: number;
+    resumeAt?: number;
+  };
+  onRequestEpisode?: (episode: Episode) => Promise<void>;
+  /** Fired once a source actually starts, so the choice can be remembered. */
+  onStarted?: (source: TorrentResult) => void;
+  /** Enqueues a download for a source picked from inside the player. */
+  onDownloadSource?: (source: TorrentResult) => void;
+}
+
 interface DetailViewProps {
   mediaItem: SearchResponse;
   onBack: () => void;
   onPlay: (request: PlaybackRequest) => void;
+  /** Opens the player immediately and resolves a source into it. */
+  onStartSession: (context: PlaybackSessionRequest) => void;
   onEnqueueDownload: (task: DownloadTask) => void;
 }
 
@@ -123,6 +158,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
   mediaItem,
   onBack,
   onPlay,
+  onStartSession,
   onEnqueueDownload,
 }) => {
   const [detail, setDetail] = useState<DetailData | null>(null);
@@ -138,8 +174,6 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [pickerError, setPickerError] = useState<string | undefined>();
   const [pendingEpisode, setPendingEpisode] = useState<Episode | null>(null);
   const [startingStream, setStartingStream] = useState(false);
-  /** URL of the episode currently being auto-resolved, or 'movie' for a film. */
-  const [autoPlaying, setAutoPlaying] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [seasonDownloadOpen, setSeasonDownloadOpen] = useState(false);
 
@@ -220,6 +254,47 @@ export const DetailView: React.FC<DetailViewProps> = ({
     [detail]
   );
 
+  const flash = useCallback((message: string) => {
+    setToast(message);
+    setTimeout(() => setToast(null), 5000);
+  }, []);
+
+  /** Queues one release for download, from either the picker or the player. */
+  const downloadSource = useCallback(
+    (source: TorrentResult, episode: Episode | null) => {
+      if (!detail) return;
+
+      const task: DownloadTask = {
+        id: `${source.infoHash}-${episode?.episode ?? 'movie'}`,
+        parentId: detail.url,
+        title: detail.name,
+        episodeNumber: episode?.episode,
+        seasonNumber: episode?.season,
+        posterUrl: detail.posterUrl,
+        targetFilePath: '',
+        link: {
+          source: source.indexerName,
+          name: source.title,
+          url: source.magnet || source.torrentUrl || source.infoHash,
+          referer: '',
+          quality: source.parsed.resolution || 720,
+        },
+        headers: {},
+        bytesDownloaded: 0,
+        totalBytes: source.sizeBytes,
+        downloadSpeed: 0,
+        etaSeconds: 0,
+        state: DownloadState.Queued,
+        providerName: source.indexerName,
+        createdTime: Date.now(),
+      };
+
+      onEnqueueDownload(task);
+      flash(`Added “${detail.name}” to downloads.`);
+    },
+    [detail, onEnqueueDownload, flash]
+  );
+
   /** Series context handed to the player, so it can browse without coming back. */
   const seriesContextFor = useCallback(
     (
@@ -277,21 +352,13 @@ export const DetailView: React.FC<DetailViewProps> = ({
    * which is better placed to decide what to show over a running video.
    */
   const playEpisodeDirectly = useCallback(
-    async (episode: Episode) => {
+    async (episode: Episode | null) => {
       if (!window.cloudstream || !detail) return;
 
-      setSelectedEpisode(episode);
+      if (episode) setSelectedEpisode(episode);
 
-      const response = await window.cloudstream.autoPlay({
-        mediaUrl: episode.url,
-        season: episode.season,
-        episode: episode.episode,
-      });
-
-      if (!response.ok || !response.handle || !response.source) {
-        throw new Error(response.error ?? 'No working source was found for this episode.');
-      }
-
+      // Fire-and-forget: recording the title in the library must not stand
+      // between the click and the player appearing.
       window.cloudstream.upsertLibraryEntry({
         title: detail.name,
         year: detail.year,
@@ -299,30 +366,34 @@ export const DetailView: React.FC<DetailViewProps> = ({
         posterUrl: detail.posterUrl,
         mediaUrl: detail.url,
       });
-      rememberChoice(response.source, episode);
 
+      // One local datastore read, needed before the player mounts so the
+      // episode list and resume point are right from the first frame.
       const watchState = await loadWatchState(detail.url);
 
-      onPlay({
-        streamUrl: response.handle.streamUrl,
-        mimeType: response.handle.mimeType,
+      onStartSession({
+        request: {
+          mediaUrl: episode?.url ?? detail.url,
+          season: episode?.season,
+          episode: episode?.episode,
+        },
         title: detail.name,
-        episodeTitle: episode.name,
-        infoHash: response.handle.infoHash,
-        subtitles: response.handle.subtitleUrls,
+        episodeTitle: episode?.name,
         series: seriesContextFor(episode, watchState),
         onRequestEpisode: (next) => playEpisodeDirectlyRef.current(next),
+        onStarted: (source) => rememberChoice(source, episode),
+        onDownloadSource: (source) => downloadSource(source, episode),
         progress: {
-          mediaUrl: episode.url,
+          mediaUrl: episode?.url ?? detail.url,
           year: detail.year,
           posterUrl: detail.posterUrl,
-          season: episode.season,
-          episode: episode.episode,
+          season: episode?.season,
+          episode: episode?.episode,
           resumeAt: resumePositionFrom(watchState, episode),
         },
       });
     },
-    [detail, onPlay, rememberChoice, seriesContextFor]
+    [detail, onStartSession, rememberChoice, seriesContextFor, downloadSource]
   );
 
   // The handler is embedded in the request it produces, so it needs a stable
@@ -332,67 +403,15 @@ export const DetailView: React.FC<DetailViewProps> = ({
     playEpisodeDirectlyRef.current = playEpisodeDirectly;
   }, [playEpisodeDirectly]);
 
-  const flash = useCallback((message: string) => {
-    setToast(message);
-    setTimeout(() => setToast(null), 5000);
-  }, []);
-
   /**
    * One-click play from the detail page.
    *
-   * Choosing a source by hand is a power-user action, not the common path, and
-   * requiring it for every episode is the main reason watching something took
-   * four clicks. When automatic resolution fails the picker opens with the real
-   * reason, so the escape hatch is still one click away.
+   * The session opens the player immediately and resolves a source into it, so
+   * there is nothing to wait for here and no failure to catch: a search that
+   * finds nothing surfaces inside the player, next to the source list and the
+   * retry, rather than as a toast on a page the viewer has already left.
    */
-  const playNow = useCallback(
-    async (episode: Episode | null) => {
-      if (!window.cloudstream || !detail) return;
-
-      setAutoPlaying(episode?.url ?? 'movie');
-      try {
-        if (episode) {
-          await playEpisodeDirectly(episode);
-          return;
-        }
-
-        const response = await window.cloudstream.autoPlay({ mediaUrl: detail.url });
-        if (!response.ok || !response.handle || !response.source) {
-          throw new Error(response.error ?? 'No working source was found.');
-        }
-
-        window.cloudstream.upsertLibraryEntry({
-          title: detail.name,
-          year: detail.year,
-          type: detail.type,
-          posterUrl: detail.posterUrl,
-          mediaUrl: detail.url,
-        });
-        rememberChoice(response.source, null);
-
-        const watchState = await loadWatchState(detail.url);
-        onPlay({
-          streamUrl: response.handle.streamUrl,
-          mimeType: response.handle.mimeType,
-          title: detail.name,
-          infoHash: response.handle.infoHash,
-          subtitles: response.handle.subtitleUrls,
-          progress: {
-            mediaUrl: detail.url,
-            year: detail.year,
-            posterUrl: detail.posterUrl,
-            resumeAt: resumePositionFrom(watchState, null),
-          },
-        });
-      } catch (error) {
-        flash(error instanceof Error ? error.message : 'Could not start playback.');
-        openSources(episode);
-      } finally {
-        setAutoPlaying(null);
-      }
-    },
-    [detail, onPlay, playEpisodeDirectly, rememberChoice, openSources, flash]
-  );
+  const playNow = playEpisodeDirectly;
 
   const handlePlaySource = useCallback(
     async (source: TorrentResult) => {
@@ -452,39 +471,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
   const handleDownloadSource = useCallback(
     (source: TorrentResult) => {
-      if (!detail) return;
-
-      const task: DownloadTask = {
-        id: `${source.infoHash}-${pendingEpisode?.episode ?? 'movie'}`,
-        parentId: detail.url,
-        title: detail.name,
-        episodeNumber: pendingEpisode?.episode,
-        seasonNumber: pendingEpisode?.season,
-        posterUrl: detail.posterUrl,
-        targetFilePath: '',
-        link: {
-          source: source.indexerName,
-          name: source.title,
-          url: source.magnet || source.torrentUrl || source.infoHash,
-          referer: '',
-          quality: source.parsed.resolution || 720,
-        },
-        headers: {},
-        bytesDownloaded: 0,
-        totalBytes: source.sizeBytes,
-        downloadSpeed: 0,
-        etaSeconds: 0,
-        state: DownloadState.Queued,
-        providerName: source.indexerName,
-        createdTime: Date.now(),
-      };
-
-      onEnqueueDownload(task);
+      downloadSource(source, pendingEpisode);
       setPickerOpen(false);
-      setToast(`Added “${detail.name}” to downloads.`);
-      setTimeout(() => setToast(null), 4000);
     },
-    [detail, pendingEpisode, onEnqueueDownload]
+    [downloadSource, pendingEpisode]
   );
 
   // --- render --------------------------------------------------------------
@@ -550,16 +540,17 @@ export const DetailView: React.FC<DetailViewProps> = ({
             <button
               className="btn btn-primary"
               onClick={() => playNow(isSeries ? episodesInSeason[0] ?? null : null)}
-              disabled={startingStream || autoPlaying !== null}
+              disabled={startingStream}
             >
-              {autoPlaying !== null ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
-              {autoPlaying !== null
-                ? 'Finding a source…'
-                : isSeries
-                  ? 'Play first episode'
-                  : 'Play'}
+              <Play size={16} />
+              {isSeries ? 'Play first episode' : 'Play'}
             </button>
-            <LibraryBucketSelector item={detail} size="md" />
+            {/* The selector keys off a search result; `detail` carries everything
+                except the provider name, which the originating item still has. */}
+            <LibraryBucketSelector
+              item={{ ...detail, apiName: mediaItem.apiName }}
+              size="md"
+            />
             <button
               className="btn"
               onClick={() => openSources(isSeries ? episodesInSeason[0] ?? null : null)}
@@ -619,13 +610,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
                   <button
                     className="btn btn-primary btn-sm"
                     onClick={() => playNow(episode)}
-                    disabled={autoPlaying !== null}
                   >
-                    {autoPlaying === episode.url ? (
-                      <Loader2 className="spin" size={14} />
-                    ) : (
-                      <Play size={14} />
-                    )}
+                    <Play size={14} />
                     Play
                   </button>
                   <button
