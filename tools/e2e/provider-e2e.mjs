@@ -264,13 +264,25 @@ class Sidecar {
     });
   }
 
-  stop() {
+  /**
+   * Shuts the JVM down and waits for it to actually exit.
+   *
+   * Waiting is not politeness. The plugin class loaders hold the `.cs3`
+   * archives open, and on Windows deleting the work directory while the process
+   * is still alive fails with `EBUSY` — which surfaced as the whole run exiting
+   * non-zero after it had already passed.
+   */
+  async stop() {
+    if (!this.proc || this.proc.exitCode !== null) return;
+    const exited = new Promise((resolve) => this.proc.once('exit', resolve));
     try {
-      this.proc?.stdin.end();
+      this.proc.stdin.end();
     } catch {
-      // Already gone.
+      // Already gone; the kill below is the backstop.
     }
-    setTimeout(() => this.proc?.kill(), 1500).unref();
+    const killer = setTimeout(() => this.proc?.kill(), 3000);
+    await Promise.race([exited, new Promise((r) => setTimeout(r, 8000))]);
+    clearTimeout(killer);
   }
 }
 
@@ -713,16 +725,23 @@ async function main() {
       dim(`sidecar stderr (last 15 of ${sidecar.stderr.length}):`);
       for (const line of sidecar.stderr.slice(-15)) dim(`  ${line}`);
     }
-    sidecar.stop();
+    await sidecar.stop();
     report.finishedAt = new Date().toISOString();
     if (args.json) {
       fs.writeFileSync(args.json, JSON.stringify(report, null, 2));
       dim(`report written to ${args.json}`);
     }
-    if (!args.keep) {
-      fs.rmSync(workDir, { recursive: true, force: true });
-    } else {
+    if (args.keep) {
       dim(`work directory kept at ${workDir}`);
+    } else {
+      try {
+        // `maxRetries` covers the moment between the JVM exiting and Windows
+        // releasing its file handles. A leftover temp directory is not worth
+        // failing a run that otherwise passed, so this never throws.
+        fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+      } catch (error) {
+        dim(`could not remove ${workDir}: ${error.message}`);
+      }
     }
   }
 }
