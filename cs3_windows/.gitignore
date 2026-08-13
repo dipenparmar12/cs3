@@ -21,5 +21,4 @@ dist-ssr
 *.ntvs*
 *.njsproj
 *.sln
-*.sw?
-*.cs3_windows\dist-electron
+dist-electron/
