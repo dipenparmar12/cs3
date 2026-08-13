@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { SearchResponse } from '../types/api';
+import { matchesTab, tabsFor } from '../utils/contentTypes';
 import { Play, Sparkles, Film, Tv, History, Loader2 } from 'lucide-react';
 import type { WatchProgress } from '../../electron/cs3/libraryStore';
 import { TvType } from '../types/api';
@@ -20,6 +21,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia, onPlayDirectl
 
   const [availableProviders, setAvailableProviders] = useState<Array<{ name: string; pluginName: string }>>([]);
   const [selectedProvider, setSelectedProvider] = useState<string>('all');
+  const [typeTab, setTypeTab] = useState<string>('all');
 
   useEffect(() => {
     window.cloudstream?.getExtensionProviders().then((res) => {
@@ -108,6 +110,19 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia, onPlayDirectl
       </div>
     );
   }
+
+  /**
+   * Tabs across every row on screen, not per row.
+   *
+   * The rows are already type-shaped (films, anime, series), so a per-row tab
+   * bar would be three bars each with one option. One bar over the lot lets
+   * "Anime" mean "hide everything that is not anime", which is what the tag is
+   * for on Android.
+   */
+  const allItems = [...trendingMovies, ...trendingAnime, ...popularSeries];
+  const typeTabs = tabsFor(allItems);
+  const activeTab = typeTabs.some((tab) => tab.id === typeTab) ? typeTab : 'all';
+  const byTab = (items: SearchResponse[]) => items.filter((item) => matchesTab(item, activeTab));
 
   const renderSection = (title: string, icon: React.ReactNode, items: SearchResponse[]) => (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -285,10 +300,35 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia, onPlayDirectl
         </div>
       )}
 
+      {/* Content tags, the same set the search screen offers. */}
+      {typeTabs.length > 1 && (
+        <div className="type-tabs" role="tablist" aria-label="Filter by content type">
+          <button
+            role="tab"
+            aria-selected={activeTab === 'all'}
+            className={`type-tabs__tab${activeTab === 'all' ? ' type-tabs__tab--on' : ''}`}
+            onClick={() => setTypeTab('all')}
+          >
+            All <span>{allItems.length}</span>
+          </button>
+          {typeTabs.map((tab) => (
+            <button
+              key={tab.id}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={`type-tabs__tab${activeTab === tab.id ? ' type-tabs__tab--on' : ''}`}
+              onClick={() => setTypeTab(tab.id)}
+            >
+              {tab.label} <span>{tab.count}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Media Sections */}
-      {trendingMovies.length > 0 && renderSection('Trending Movies', <Film size={18} style={{ color: 'var(--accent-light)' }} />, trendingMovies)}
-      {trendingAnime.length > 0 && renderSection('Popular Anime Series', <Sparkles size={18} style={{ color: 'var(--accent-light)' }} />, trendingAnime)}
-      {popularSeries.length > 0 && renderSection('Top TV Series', <Tv size={18} style={{ color: 'var(--accent-light)' }} />, popularSeries)}
+      {byTab(trendingMovies).length > 0 && renderSection('Trending Movies', <Film size={18} style={{ color: 'var(--accent-light)' }} />, byTab(trendingMovies))}
+      {byTab(trendingAnime).length > 0 && renderSection('Popular Anime Series', <Sparkles size={18} style={{ color: 'var(--accent-light)' }} />, byTab(trendingAnime))}
+      {byTab(popularSeries).length > 0 && renderSection('Top TV Series', <Tv size={18} style={{ color: 'var(--accent-light)' }} />, byTab(popularSeries))}
     </div>
   );
 };

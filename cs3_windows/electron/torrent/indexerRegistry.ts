@@ -336,6 +336,49 @@ export class IndexerRegistry {
     }
   }
 
+  /**
+   * One reachable URL per configured indexer, for the connection test.
+   *
+   * The test used to probe five hardcoded hosts, which meant it answered a
+   * question nobody asked: whether *those* five were reachable, rather than
+   * whether the indexers this user actually has enabled are. Someone running
+   * Jackett behind a blocked ISP resolver got a clean bill of health from five
+   * sites they do not use.
+   *
+   * Built-in adapters keep their mirror lists private, so one representative
+   * host each is named here. Kept beside the id list it mirrors, and a missing
+   * entry simply means that indexer is not probed rather than a crash.
+   */
+  public probeTargets(): Array<{ id: string; name: string; url: string; enabled: boolean }> {
+    const BUILTIN_HOSTS: Record<string, string> = {
+      torrentio: 'https://torrentio.strem.fun/manifest.json',
+      mediafusion: 'https://mediafusion.elfhosted.com/manifest.json',
+      knaben: 'https://knaben.eu/',
+      apibay: 'https://apibay.org/precompiled/data_top100_recent.json',
+      torrentscsv: 'https://torrents-csv.com/service/search?q=test',
+      animetosho: 'https://feed.animetosho.org/',
+      yts: 'https://yts.mx/',
+      eztv: 'https://eztvx.to/',
+      nyaa: 'https://nyaa.si/',
+      x1337: 'https://1337x.to/',
+      bitsearch: 'https://bitsearch.to/',
+      therarbg: 'https://therarbg.com/',
+    };
+
+    const out: Array<{ id: string; name: string; url: string; enabled: boolean }> = [];
+    for (const config of this.configs) {
+      // A user-configured endpoint is the only URL worth probing for these —
+      // the whole point of a Torznab or Stremio entry is that it is theirs.
+      const url =
+        config.kind === IndexerKind.Torznab || config.kind === IndexerKind.Stremio
+          ? config.baseUrl
+          : BUILTIN_HOSTS[config.id];
+      if (!url) continue;
+      out.push({ id: config.id, name: config.name, url, enabled: config.enabled });
+    }
+    return out;
+  }
+
   public getHealth(): IndexerHealth[] {
     return this.configs.map((config) => {
       const state = this.circuitFor(config.id);

@@ -660,6 +660,17 @@ ipcMain.handle('extension:getOfficialRepositories', async () => bootstrap.visibl
 
 ipcMain.handle('extension:getBootstrapProgress', async () => bootstrap.getProgress());
 
+/** How many extension providers a search asks at once. */
+ipcMain.handle('search:getConcurrency', async () => ({
+  value: pluginManager.searchConcurrency(),
+  ...pluginManager.searchConcurrencyBounds(),
+}));
+
+ipcMain.handle('search:setConcurrency', async (_, value: number) => ({
+  value: pluginManager.setSearchConcurrency(value),
+  ...pluginManager.searchConcurrencyBounds(),
+}));
+
 ipcMain.handle('extension:getAdultAllowed', async () => bootstrap.isAdultAllowed());
 
 /**
@@ -804,32 +815,51 @@ ipcMain.handle('network:reset', async () => network.reset());
  * this setting exists for. Reporting per-host is what makes the difference
  * between "no internet" and "your ISP blocks these" visible.
  */
+/**
+ * Can this machine actually reach the sources it is configured to use?
+ *
+ * Probes the catalogues plus **every configured indexer**, through `net.fetch`
+ * so the DNS setting is the one being tested. The list is derived rather than
+ * hardcoded: a fixed five told a Jackett user their connection was fine while
+ * the indexer they actually search was unreachable.
+ *
+ * Disabled indexers are still probed and reported as such. The question being
+ * answered is "what can this network reach", and knowing a site is reachable is
+ * exactly what tells someone it is worth enabling.
+ */
 ipcMain.handle('network:test', async () => {
-  const hosts = [
-    { name: 'Torrentio', url: 'https://torrentio.strem.fun/manifest.json' },
-    { name: 'Cinemeta', url: 'https://v3-cinemeta.strem.io/manifest.json' },
-    { name: 'Knaben', url: 'https://knaben.eu/' },
-    { name: 'The Pirate Bay API', url: 'https://apibay.org/precompiled/data_top100_recent.json' },
-    { name: '1337x', url: 'https://1337x.to/' },
+  const targets = [
+    { id: 'cinemeta', name: 'Cinemeta (catalogue)', url: 'https://v3-cinemeta.strem.io/manifest.json', enabled: true, kind: 'catalogue' as const },
+    { id: 'tvmaze', name: 'TVmaze (catalogue)', url: 'https://api.tvmaze.com/shows/1', enabled: true, kind: 'catalogue' as const },
+    ...contentService
+      .getRegistry()
+      .probeTargets()
+      .map((target) => ({ ...target, kind: 'indexer' as const })),
   ];
 
   const results = await Promise.all(
-    hosts.map(async (host) => {
+    targets.map(async (target) => {
       const started = Date.now();
       try {
-        const response = await net.fetch(host.url, {
+        const response = await net.fetch(target.url, {
           method: 'GET',
           signal: AbortSignal.timeout(8_000),
         });
         return {
-          name: host.name,
+          name: target.name,
+          kind: target.kind,
+          enabled: target.enabled,
+          // A 4xx still proves the host resolved and answered, which is what
+          // this test is about; only a transport failure is a "no".
           ok: true,
           status: response.status,
           latencyMs: Date.now() - started,
         };
       } catch (error) {
         return {
-          name: host.name,
+          name: target.name,
+          kind: target.kind,
+          enabled: target.enabled,
           ok: false,
           latencyMs: Date.now() - started,
           error: error instanceof Error ? error.message : String(error),

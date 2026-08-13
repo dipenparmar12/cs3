@@ -1616,6 +1616,195 @@
 }
 .first-run__close:hover { color: #fff; }
 
+/* --- Settings ------------------------------------------------------------ */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  max-width: 780px;
+}
+.settings__head h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #fff;
+}
+.settings__head p {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.settings__tabs {
+  display: flex;
+  gap: 0.3rem;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 0.4rem;
+}
+.settings__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 0 0 auto;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.settings__tab:hover { color: #fff; }
+.settings__tab--on {
+  background: rgba(59, 130, 246, 0.16);
+  border-color: var(--accent-primary);
+  color: #fff;
+}
+
+.settings__flash {
+  padding: 0.6rem 0.9rem;
+  border-radius: var(--radius-md);
+  background: rgba(59, 130, 246, 0.14);
+  border: 1px solid var(--accent-primary);
+  color: #fff;
+  font-size: 0.82rem;
+}
+
+.setting-group {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 0.9rem 1.1rem 1rem;
+}
+.setting-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+.setting-group__body {
+  display: flex;
+  flex-direction: column;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 0;
+}
+.setting-row + .setting-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.setting-row--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+.setting-row__label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.setting-row__label > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #fff;
+}
+.setting-row__note {
+  font-size: 0.74rem;
+  color: var(--text-subtle);
+  overflow-wrap: anywhere;
+}
+.setting-row__control {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.setting-row--stacked .setting-row__control {
+  justify-content: flex-start;
+}
+
+.settings__slider {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.settings__slider input { width: 160px; accent-color: var(--accent-primary); }
+.settings__slider span {
+  min-width: 1.5rem;
+  text-align: right;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings__switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #fff;
+}
+.settings__switch input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+/* The explanation, only when asked for. */
+.hint {
+  position: relative;
+  display: inline-flex;
+}
+.hint__button {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-subtle);
+  cursor: help;
+}
+.hint__button:hover, .hint__button:focus-visible { color: var(--accent-light); }
+.hint__bubble {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: -0.5rem;
+  z-index: 30;
+  width: max-content;
+  max-width: 330px;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.6);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--text-main);
+  white-space: normal;
+}
+
 /* --- Adult content opt-in ------------------------------------------------ */
 
 .adult-setting {
@@ -2611,6 +2800,17 @@
 }
 
 .netset__reset { width: fit-content; font-size: 0.76rem; }
+
+.netset__off {
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-subtle);
+}
 
 /* --- Source filter strip ------------------------------------------------
    One row. It wraps rather than stacking, so the player sidebar spends two

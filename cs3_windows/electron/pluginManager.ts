@@ -341,8 +341,20 @@ export interface ProviderSearchOutcome {
   error?: string;
 }
 
-/** How many provider searches are in flight at once. See `searchEach`. */
-const PROVIDER_SEARCH_CONCURRENCY = 8;
+/**
+ * How many provider searches are in flight at once. See `searchEach`.
+ *
+ * The default is a compromise, which is why it is adjustable. The sidecar
+ * dispatches each RPC onto a bounded pool sized to the core count, so raising
+ * this past that only moves the queue from here to there — but on a many-core
+ * machine with thirty providers installed, the extra parallelism is real.
+ * Lowering it helps a slow connection, where thirty simultaneous scrapes
+ * contend for bandwidth and every one of them gets slower.
+ */
+const DEFAULT_PROVIDER_SEARCH_CONCURRENCY = 8;
+const MIN_PROVIDER_SEARCH_CONCURRENCY = 1;
+const MAX_PROVIDER_SEARCH_CONCURRENCY = 32;
+const SETTINGS_KEY_SEARCH_CONCURRENCY = 'cs3_provider_search_concurrency';
 
 /**
  * Turns one provider's raw reply into search rows.
@@ -1119,9 +1131,40 @@ export class PluginManager {
       }
     };
 
-    await Promise.all(
-      Array.from({ length: Math.min(PROVIDER_SEARCH_CONCURRENCY, targets.length) }, worker)
+    // Read per search, not cached: changing it in settings takes effect on the
+    // next search rather than the next launch.
+    const lanes = Math.min(this.searchConcurrency(), targets.length);
+    await Promise.all(Array.from({ length: lanes }, worker));
+  }
+
+  /** How many provider searches this app runs at once. */
+  public searchConcurrency(): number {
+    const stored = this.datastore.getInt(
+      SETTINGS_KEY_SEARCH_CONCURRENCY,
+      DEFAULT_PROVIDER_SEARCH_CONCURRENCY
     );
+    if (!Number.isFinite(stored) || stored <= 0) return DEFAULT_PROVIDER_SEARCH_CONCURRENCY;
+    return Math.min(
+      MAX_PROVIDER_SEARCH_CONCURRENCY,
+      Math.max(MIN_PROVIDER_SEARCH_CONCURRENCY, Math.floor(stored))
+    );
+  }
+
+  public setSearchConcurrency(value: number): number {
+    const clamped = Math.min(
+      MAX_PROVIDER_SEARCH_CONCURRENCY,
+      Math.max(MIN_PROVIDER_SEARCH_CONCURRENCY, Math.floor(value) || DEFAULT_PROVIDER_SEARCH_CONCURRENCY)
+    );
+    this.datastore.setInt(SETTINGS_KEY_SEARCH_CONCURRENCY, clamped);
+    return clamped;
+  }
+
+  public searchConcurrencyBounds(): { min: number; max: number; def: number } {
+    return {
+      min: MIN_PROVIDER_SEARCH_CONCURRENCY,
+      max: MAX_PROVIDER_SEARCH_CONCURRENCY,
+      def: DEFAULT_PROVIDER_SEARCH_CONCURRENCY,
+    };
   }
 
   /** One provider's answer, as an outcome rather than a throw. */

@@ -172,6 +172,18 @@ export interface CloudStreamElectronAPI {
 
   /** Resolved-source cache: how much is stored, and a way to drop it. */
   /** Providers registered by installed extensions, plus which are switched off. */
+  /**
+   * How many extension providers a search asks at once.
+   *
+   * Raising it past the machine's core count mostly moves the queue into the
+   * sidecar; lowering it helps a slow connection, where every simultaneous
+   * scrape contends for the same bandwidth.
+   */
+  getSearchConcurrency: () => Promise<{ value: number; min: number; max: number; def: number }>;
+  setSearchConcurrency: (
+    value: number
+  ) => Promise<{ value: number; min: number; max: number; def: number }>;
+
   /** First-run install of the bundled repositories. Returns an unsubscribe fn. */
   getBootstrapProgress: () => Promise<BootstrapProgress>;
   onBootstrapProgress: (callback: (progress: BootstrapProgress) => void) => () => void;
@@ -196,11 +208,16 @@ export interface CloudStreamElectronAPI {
   getNetworkSettings: () => Promise<{ settings: NetworkSettings; presets: DnsPreset[] }>;
   setNetworkSettings: (settings: Partial<NetworkSettings>) => Promise<NetworkSettings>;
   resetNetworkSettings: () => Promise<NetworkSettings>;
+  /** Probes the catalogues and every configured indexer through the DNS setting. */
   testNetwork: () => Promise<{
     ok: boolean;
     dnsMode: NetworkSettings['dnsMode'];
     results: Array<{
       name: string;
+      /** `indexer` rows follow the user's own configuration; `catalogue` are fixed. */
+      kind: 'catalogue' | 'indexer';
+      /** False for an indexer switched off in Settings → Sources. */
+      enabled: boolean;
       ok: boolean;
       status?: number;
       latencyMs: number;
@@ -408,6 +425,9 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.on('playback:update', listener);
     return () => ipcRenderer.removeListener('playback:update', listener);
   },
+
+  getSearchConcurrency: () => ipcRenderer.invoke('search:getConcurrency'),
+  setSearchConcurrency: (value) => ipcRenderer.invoke('search:setConcurrency', value),
 
   getBootstrapProgress: () => ipcRenderer.invoke('extension:getBootstrapProgress'),
   onBootstrapProgress: (callback) => {

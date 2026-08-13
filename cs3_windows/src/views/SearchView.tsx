@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { TvType, type SearchResponse } from '../types/api';
+import type { SearchResponse } from '../types/api';
+import { TYPE_TABS, matchesTab, tabsFor } from '../utils/contentTypes';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, Search, Target, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
@@ -32,35 +33,6 @@ function sourcesOf(item: SearchResponse): string[] {
     if (alternate?.apiName) names.add(alternate.apiName);
   }
   return names.size > 0 ? [...names] : ['Unknown source'];
-}
-
-/**
- * Content-type tabs, as CloudStream has on Android.
- *
- * Grouped rather than one-per-`TvType`: a viewer looking for a series does not
- * distinguish `TvSeries` from `AsianDrama`, and anime is split across three
- * types upstream (`Anime`, `AnimeMovie`, `OVA`) that all mean "anime" to the
- * person reading the screen.
- *
- * `NSFW` is deliberately absent. Adult providers are withdrawn before results
- * are ever built (`PluginManager.enabledProviderNames`), so a tab for it would
- * be empty for everyone who has not opted in, and a category label nobody asked
- * for on the screen of everyone who has not.
- */
-const TYPE_TABS: Array<{ id: string; label: string; types: TvType[] }> = [
-  { id: 'movie', label: 'Movies', types: [TvType.Movie] },
-  { id: 'series', label: 'Series & Shows', types: [TvType.TvSeries, TvType.AsianDrama] },
-  { id: 'anime', label: 'Anime', types: [TvType.Anime, TvType.AnimeMovie, TvType.OVA] },
-  { id: 'documentary', label: 'Documentaries', types: [TvType.Documentary] },
-  { id: 'live', label: 'Live', types: [TvType.Live] },
-  { id: 'torrent', label: 'Torrents', types: [TvType.Torrent] },
-];
-
-/** Every type a row can be filed under, counting its alternates too. */
-function typesOf(item: SearchResponse): TvType[] {
-  const types = new Set<TvType>();
-  if (item.type) types.add(item.type);
-  return [...types];
 }
 
 /** "MegaRepo > Extension A" style scope line, kept to one line. */
@@ -135,21 +107,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
    * nothing but films does not need a row of tabs to say so, and offering tabs
    * that lead to an empty grid is worse than offering none.
    */
-  const typeTabs = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const item of results) {
-      const types = typesOf(item);
-      for (const tab of TYPE_TABS) {
-        if (types.some((type) => tab.types.includes(type))) {
-          counts.set(tab.id, (counts.get(tab.id) ?? 0) + 1);
-        }
-      }
-    }
-    return TYPE_TABS.filter((tab) => (counts.get(tab.id) ?? 0) > 0).map((tab) => ({
-      ...tab,
-      count: counts.get(tab.id) ?? 0,
-    }));
-  }, [results]);
+  const typeTabs = useMemo(() => tabsFor(results), [results]);
 
   // A tab that stops matching as results stream in must not strand the grid.
   const activeTab = typeTabs.some((tab) => tab.id === typeTab) ? typeTab : 'all';
@@ -170,14 +128,14 @@ export const SearchView: React.FC<SearchViewProps> = ({
       .map(([value, count]) => ({ value, label: value, count }));
   }, [results]);
 
-  const filtered = useMemo(() => {
-    const tab = TYPE_TABS.find((entry) => entry.id === activeTab);
-    return results.filter((item) => {
-      if (sourceFilter !== 'all' && !sourcesOf(item).includes(sourceFilter)) return false;
-      if (tab && !typesOf(item).some((type) => tab.types.includes(type))) return false;
-      return true;
-    });
-  }, [results, sourceFilter, activeTab]);
+  const filtered = useMemo(
+    () =>
+      results.filter((item) => {
+        if (sourceFilter !== 'all' && !sourcesOf(item).includes(sourceFilter)) return false;
+        return matchesTab(item, activeTab);
+      }),
+    [results, sourceFilter, activeTab]
+  );
 
   const running = Boolean(search && !search.done);
   const scopeLabel = describeScope(search);

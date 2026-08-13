@@ -247,14 +247,13 @@
     "id": "cs_kraptor",
     "name": "Kraptor Repo",
     "internalName": "cs-kraptor",
-    "description": "Kraptor media extractors.",
+    "description": "Large Turkish provider collection. Not bundled: as of 2026-08-13 its plugin list is published but every .cs3 archive it references returns 404, so installing it produces only failures. Re-verify with tools/e2e/provider-e2e.mjs before marking bundled again.",
     "url": "https://github.com/Kraptor123/cs-kraptor",
-    "rawRepoUrl": "https://raw.githubusercontent.com/Kraptor123/cs-kraptor/master/repo.json",
+    "rawRepoUrl": "https://raw.githubusercontent.com/Kraptor123/cs-kraptor/builds/plugins.json",
     "category": "Community",
     "language": "English",
-    "verified": true,
-    "documentKind": "repository",
-    "bundled": true
+    "verified": false,
+    "documentKind": "pluginList"
   },
   {
     "id": "dogiors",

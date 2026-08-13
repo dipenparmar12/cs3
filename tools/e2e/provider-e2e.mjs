@@ -43,7 +43,7 @@ const TOOLCHAIN = path.join(REPO_ROOT, 'tools', 'toolchain');
 
 /** The repositories under test. Named so `--repo` can pick one. */
 const REPOSITORIES = [
-  { name: 'cs-kraptor', url: 'https://github.com/Kraptor123/cs-kraptor' },
+  { name: 'cs-kraptor', url: 'https://raw.githubusercontent.com/Kraptor123/cs-kraptor/builds/plugins.json' },
   {
     name: 'GermanProviders',
     url: 'https://raw.githubusercontent.com/Bnyro/GermanProviders/master/repo.json',
