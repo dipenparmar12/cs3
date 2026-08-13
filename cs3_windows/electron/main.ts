@@ -13,6 +13,7 @@ import { PlaybackSessionManager } from './playbackSession';
 import { SearchSuggestionService } from './searchSuggestions';
 import { SearchHistoryStore } from './searchHistory';
 import { SubtitleService } from './subtitleService';
+import { AudioTranscoder } from './audioTranscoder';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
@@ -41,6 +42,7 @@ const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
 const subtitles = new SubtitleService();
+const audioTranscoder = new AudioTranscoder(binaryDownloader);
 
 downloadService.setTorrentEngine(torrentEngine);
 
@@ -160,6 +162,9 @@ app.on('before-quit', async (event) => {
   if (!torrentEngine) return;
   event.preventDefault();
   try {
+    // Owns child processes and a socket, so it has to be torn down explicitly
+    // or a killed app leaves orphaned ffmpeg processes behind.
+    audioTranscoder.shutdown();
     await torrentEngine.destroy();
   } catch {
     // Shutdown is best-effort; never block quit on it.
@@ -343,6 +348,49 @@ ipcMain.handle('playback:stop', async (_, sessionId: string, keepFiles?: boolean
   } catch (error) {
     return fail(error);
   }
+});
+
+// --- audio compatibility ---------------------------------------------------
+
+/**
+ * Inspects a stream's audio tracks and reports which the player can decode.
+ *
+ * Called before playback so the UI can name the tracks — including ones
+ * Chromium cannot decode, which a `<video>` element does not expose at all.
+ */
+ipcMain.handle('audio:probe', async (_, url: string) => {
+  try {
+    if (!audioTranscoder.isAvailable()) {
+      return {
+        ok: false,
+        probe: null,
+        error:
+          'Media components are not installed, so audio tracks cannot be inspected. ' +
+          'Install them from Settings to enable audio for all formats.',
+        needsComponents: true,
+      };
+    }
+    return { ok: true, probe: await audioTranscoder.probe(url), needsComponents: false };
+  } catch (error) {
+    return { ...fail(error), probe: null, needsComponents: false };
+  }
+});
+
+ipcMain.handle('audio:openTranscode', async (_, url: string, audioIndex: number) => {
+  try {
+    const streamUrl = await audioTranscoder.createSession(url, audioIndex);
+    if (!streamUrl) {
+      return { ok: false, url: null, error: 'Media components are not installed.' };
+    }
+    return { ok: true, url: streamUrl };
+  } catch (error) {
+    return { ...fail(error), url: null };
+  }
+});
+
+ipcMain.handle('audio:closeTranscode', async (_, token: string) => {
+  audioTranscoder.closeSession(token);
+  return { ok: true };
 });
 
 ipcMain.handle('sources:getCacheStats', async () => contentService.getCache().stats());

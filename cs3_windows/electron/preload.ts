@@ -34,6 +34,7 @@ import type {
 import type { StreamHandle } from './torrent/torrentEngine';
 import type { PlaybackSnapshot } from './playbackSession';
 import type { SubtitleSearchResult } from './subtitleService';
+import type { MediaProbe } from './audioTranscoder';
 
 /**
  * Typed, allow-listed IPC surface (ARCH-2 / SEC-9).
@@ -141,6 +142,22 @@ export interface CloudStreamElectronAPI {
   >;
   setProviderEnabled: (name: string, enabled: boolean) => Promise<string[]>;
   setProvidersEnabled: (names: string[], enabled: boolean) => Promise<string[]>;
+
+  /**
+   * Inspects a stream's audio tracks. Reports tracks Chromium cannot decode,
+   * which a `<video>` element does not expose at all.
+   */
+  probeAudio: (
+    url: string
+  ) => Promise<
+    Envelope & { probe: MediaProbe | null; needsComponents: boolean }
+  >;
+  /** Opens a remuxing session and returns a loopback URL with playable audio. */
+  openAudioTranscode: (
+    url: string,
+    audioIndex: number
+  ) => Promise<Envelope & { url: string | null }>;
+  closeAudioTranscode: (token: string) => Promise<Envelope>;
 
   getSourceCacheStats: () => Promise<{ entries: number; sources: number }>;
   clearSourceCache: () => Promise<Envelope>;
@@ -315,6 +332,11 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('extension:setProviderEnabled', name, enabled),
   setProvidersEnabled: (names, enabled) =>
     ipcRenderer.invoke('extension:setProvidersEnabled', names, enabled),
+
+  probeAudio: (url) => ipcRenderer.invoke('audio:probe', url),
+  openAudioTranscode: (url, audioIndex) =>
+    ipcRenderer.invoke('audio:openTranscode', url, audioIndex),
+  closeAudioTranscode: (token) => ipcRenderer.invoke('audio:closeTranscode', token),
 
   getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
   clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),

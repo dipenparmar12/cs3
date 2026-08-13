@@ -1405,3 +1405,24 @@
   cursor: pointer;
 }
 .provider-tree__child:hover { background: rgba(255, 255, 255, 0.06); }
+
+/* --- Player: audio compatibility notice --------------------------------- */
+
+.player__audio-notice {
+  position: absolute;
+  top: 4.2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: min(560px, 88vw);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-md);
+  background: rgba(20, 14, 4, 0.94);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  color: var(--status-warning, #fbbf24);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
