@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, net, shell } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { DatastoreManager } from './datastore';
@@ -6,6 +6,12 @@ import { Aria2Engine } from './aria2Engine';
 import { DownloadService } from './downloadService';
 import { PluginManager } from './pluginManager';
 import type { SearchScope } from './searchScope';
+import {
+  DNS_PRESETS,
+  NetworkSettingsStore,
+  type NetworkSettings,
+} from './networkSettings';
+import { setHttpFetch } from './torrent/http';
 import { BinaryDownloader } from './binaryDownloader';
 import { OFFICIAL_REPOSITORIES } from './officialRepositories';
 import { TorrentEngine } from './torrent/torrentEngine';
@@ -45,6 +51,7 @@ const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
 const subtitles = new SubtitleService();
 const audioTranscoder = new AudioTranscoder(binaryDownloader);
+const network = new NetworkSettingsStore(datastore);
 
 downloadService.setTorrentEngine(torrentEngine);
 
@@ -108,6 +115,17 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  /**
+   * Main-process scraping moves onto Chromium's network stack.
+   *
+   * Two things depend on this. `app.configureHostResolver` — and therefore the
+   * whole DNS setting — reaches Chromium and not Node, so requests issued with
+   * Node's `fetch` would ignore it entirely. And the system proxy comes for
+   * free, which Node's `fetch` also does not honour.
+   */
+  setHttpFetch((input, init) => net.fetch(input, init));
+  network.apply();
+
   try {
     await downloadService.start();
   } catch (e) {
@@ -630,6 +648,65 @@ ipcMain.handle('search:getScopeOptions', async () => {
 ipcMain.handle('search:setScope', async (_, scope: Partial<SearchScope>) =>
   contentService.getScope().set(scope)
 );
+
+// --- network / DNS --------------------------------------------------------
+
+ipcMain.handle('network:get', async () => ({
+  settings: network.get(),
+  presets: DNS_PRESETS,
+}));
+
+ipcMain.handle('network:set', async (_, settings: Partial<NetworkSettings>) =>
+  network.set(settings)
+);
+
+ipcMain.handle('network:reset', async () => network.reset());
+
+/**
+ * Answers "can this machine actually reach the sites the app needs".
+ *
+ * Deliberately tests the real indexer hosts rather than a generic connectivity
+ * endpoint: the failure being diagnosed is selective, and a machine that can
+ * reach example.com while every torrent site is blocked is exactly the case
+ * this setting exists for. Reporting per-host is what makes the difference
+ * between "no internet" and "your ISP blocks these" visible.
+ */
+ipcMain.handle('network:test', async () => {
+  const hosts = [
+    { name: 'Torrentio', url: 'https://torrentio.strem.fun/manifest.json' },
+    { name: 'Cinemeta', url: 'https://v3-cinemeta.strem.io/manifest.json' },
+    { name: 'Knaben', url: 'https://knaben.eu/' },
+    { name: 'The Pirate Bay API', url: 'https://apibay.org/precompiled/data_top100_recent.json' },
+    { name: '1337x', url: 'https://1337x.to/' },
+  ];
+
+  const results = await Promise.all(
+    hosts.map(async (host) => {
+      const started = Date.now();
+      try {
+        const response = await net.fetch(host.url, {
+          method: 'GET',
+          signal: AbortSignal.timeout(8_000),
+        });
+        return {
+          name: host.name,
+          ok: true,
+          status: response.status,
+          latencyMs: Date.now() - started,
+        };
+      } catch (error) {
+        return {
+          name: host.name,
+          ok: false,
+          latencyMs: Date.now() - started,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    })
+  );
+
+  return { ok: true, results, dnsMode: network.get().dnsMode };
+});
 
 // --- extension updates (over-the-air) ------------------------------------
 

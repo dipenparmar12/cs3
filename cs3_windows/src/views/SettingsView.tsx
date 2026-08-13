@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Download, HardDrive, RefreshCw, Zap, Code, Tv, CheckCircle2 } from 'lucide-react';
 import { MediaComponentsCard } from '../components/MediaComponentsCard';
 import { SourceSettings } from '../components/SourceSettings';
+import { NetworkSettings } from '../components/NetworkSettings';
 
 interface SettingsViewProps {
   hasBinaries?: boolean;
@@ -63,6 +64,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       </div>
 
       <MediaComponentsCard />
+
+      {/* Connection above sources: when an ISP blocks lookups every indexer
+          fails at once, so tuning source preferences is wasted effort until
+          this is ruled out. */}
+      <NetworkSettings />
 
       {/* Sources first: it is the only section that determines whether the app
           can find anything at all, so it should not be buried below downloads. */}

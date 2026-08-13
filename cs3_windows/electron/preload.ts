@@ -24,6 +24,7 @@ import type {
   RepositoryFetchResult,
 } from './pluginManager';
 import type { SearchScope } from './searchScope';
+import type { DnsPreset, NetworkSettings } from './networkSettings';
 import type {
   AvailableUpdate,
   UpdateCheckResult,
@@ -153,6 +154,22 @@ export interface CloudStreamElectronAPI {
   setProvidersEnabled: (names: string[], enabled: boolean) => Promise<string[]>;
 
   /** The repository → extension → provider tree, plus the current narrowing. */
+  /** DNS configuration, and a reachability check against real indexer hosts. */
+  getNetworkSettings: () => Promise<{ settings: NetworkSettings; presets: DnsPreset[] }>;
+  setNetworkSettings: (settings: Partial<NetworkSettings>) => Promise<NetworkSettings>;
+  resetNetworkSettings: () => Promise<NetworkSettings>;
+  testNetwork: () => Promise<{
+    ok: boolean;
+    dnsMode: NetworkSettings['dnsMode'];
+    results: Array<{
+      name: string;
+      ok: boolean;
+      status?: number;
+      latencyMs: number;
+      error?: string;
+    }>;
+  }>;
+
   getSearchScopeOptions: () => Promise<
     Envelope & {
       repositories: ProviderTreeRepository[];
@@ -352,6 +369,10 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('extension:setProviderEnabled', name, enabled),
   setProvidersEnabled: (names, enabled) =>
     ipcRenderer.invoke('extension:setProvidersEnabled', names, enabled),
+  getNetworkSettings: () => ipcRenderer.invoke('network:get'),
+  setNetworkSettings: (settings) => ipcRenderer.invoke('network:set', settings),
+  resetNetworkSettings: () => ipcRenderer.invoke('network:reset'),
+  testNetwork: () => ipcRenderer.invoke('network:test'),
   getSearchScopeOptions: () => ipcRenderer.invoke('search:getScopeOptions'),
   setSearchScope: (scope) => ipcRenderer.invoke('search:setScope', scope),
 
