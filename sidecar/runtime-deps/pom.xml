@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Resolver for the plugin runtime classpath (PRD 36 steps 1-2).
+
+  This project builds nothing. Its only job is to resolve upstream's provider
+  API and everything that API needs at runtime, and drop the resulting jars into
+  `sidecar/runtime/`, the directory SidecarSupervisor passes to the JVM as its
+  runtime-classpath argument.
+
+  Why it is separate from `sidecar/pom.xml`:
+
+  - These jars are the classpath that *plugin* code links against. The sidecar's
+    own dependencies (dex2jar, ASM) must never be visible to a plugin, so the
+    two dependency sets cannot share a POM.
+  - JitPack builds from source on first request and can take minutes or fail
+    transiently. Keeping it out of the sidecar build means a contributor running
+    `mvn package` does not pay that cost on every build.
+
+  Run with:
+    mvn -f sidecar/runtime-deps/pom.xml package
+
+  Version pinning: `library-jvm` is pinned to a release tag, never `-SNAPSHOT`.
+  DROP-10 requires binary compatibility between the shim and upstream's API, and
+  that is unverifiable against a moving target. 4.8.0 is what JitPack reports as
+  the latest successful build, and matches the `cloudstream_ref_android`
+  submodule this repository documents.
+
+  Third-party versions are deliberately NOT restated here. Upstream's own POM
+  declares them (kotlin-stdlib 2.3.21, jsoup 1.22.1, NiceHttp 0.4.18,
+  jackson-module-kotlin 2.13.1, ksoup 0.2.6, ktor-http 3.5.0, rhino 1.8.1,
+  fuzzywuzzy 1.4.0, coroutines 1.11.0 …), so transitive resolution reproduces
+  exactly the set the providers were compiled against. Restating them by hand is
+  how a NoSuchMethodError at provider runtime gets introduced.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.cloudstream.desktop</groupId>
+  <artifactId>cs3-runtime-deps</artifactId>
+  <version>0.1.0</version>
+  <packaging>pom</packaging>
+  <name>CloudStream Desktop Plugin Runtime Classpath</name>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- Pinned release tag. See DROP-10 note above before changing. -->
+    <cloudstream.library.version>4.8.0</cloudstream.library.version>
+    <runtime.output.dir>${project.basedir}/../runtime</runtime.output.dir>
+  </properties>
+
+  <repositories>
+    <repository>
+      <id>central</id>
+      <url>https://repo1.maven.org/maven2</url>
+    </repository>
+    <!-- Upstream publishes the provider API only here, never to Central. -->
+    <repository>
+      <id>jitpack.io</id>
+      <url>https://jitpack.io</url>
+    </repository>
+    <!--
+      library-jvm depends on androidx.annotation:annotation-jvm, which is
+      published only to Google's Maven repository. It is a pure-JVM annotations
+      artifact despite the androidx coordinates — nothing Android-specific is
+      pulled in by it, and resolution fails outright without this repository.
+    -->
+    <repository>
+      <id>google</id>
+      <url>https://maven.google.com</url>
+    </repository>
+  </repositories>
+
+  <dependencies>
+    <!--
+      The provider API itself: MainAPI, ExtractorApi, SearchResponse,
+      LoadResponse, ExtractorLink, SubtitleFile. Every `.cs3` plugin is compiled
+      against this and against nothing else of ours.
+    -->
+    <dependency>
+      <groupId>com.github.recloudstream.cloudstream</groupId>
+      <artifactId>library-jvm</artifactId>
+      <version>${cloudstream.library.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.8.1</version>
+        <executions>
+          <execution>
+            <id>collect-runtime-classpath</id>
+            <phase>package</phase>
+            <goals>
+              <goal>copy-dependencies</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${runtime.output.dir}</outputDirectory>
+              <includeScope>runtime</includeScope>
+              <!-- Flat directory: the supervisor globs `runtime/*.jar`. -->
+              <useSubDirectoryPerArtifact>false</useSubDirectoryPerArtifact>
+              <overWriteReleases>false</overWriteReleases>
+              <overWriteSnapshots>true</overWriteSnapshots>
+              <!-- Sources/javadoc would double the shipped size for no gain. -->
+              <excludeTransitive>false</excludeTransitive>
+              <excludeClassifiers>sources,javadoc</excludeClassifiers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

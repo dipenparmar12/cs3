@@ -12,6 +12,10 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Loads translated CloudStream plugins, reproducing Android's load sequence.
@@ -45,8 +49,29 @@ public final class PluginHost {
     private final Map<String, PluginClassLoader> loaders = new LinkedHashMap<>();
     private final Map<String, Object> instances = new LinkedHashMap<>();
 
+    /**
+     * Registered provider instances, keyed by the provider's own name.
+     *
+     * Providers are the addressable unit, not plugins: one `.cs3` commonly
+     * registers several, and the user enables or disables them individually.
+     */
+    private final Map<String, Object> providersByName = new LinkedHashMap<>();
+    /** Which plugin registered which providers, so unload can withdraw them. */
+    private final Map<String, List<String>> providerNamesByPlugin = new LinkedHashMap<>();
+
+    /**
+     * Providers are queried concurrently: a search across a dozen of them is as
+     * slow as the slowest one otherwise, and each is an independent network call.
+     */
+    private final ExecutorService providerPool = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "cs3-provider-call");
+        t.setDaemon(true);
+        return t;
+    });
+
     private ClassLoader shared;
     private String classpathProblem;
+    private Class<?> bridgeClass;
 
     public PluginHost(DexTranslator translator, Path runtimeClasspathDir) {
         this.translator = translator;
@@ -199,7 +224,7 @@ public final class PluginHost {
         Object before = snapshotProviders(loader);
         invokeLoad(instance, loader);
 
-        List<Map<String, Object>> providers = diffProviders(loader, before);
+        List<Map<String, Object>> providers = diffProviders(loader, before, pluginId);
 
         loaders.put(pluginId, loader);
         instances.put(pluginId, instance);
@@ -210,8 +235,112 @@ public final class PluginHost {
         return new Loaded(pluginId, entry, name, version, providers, report);
     }
 
+    // --- calling providers ---------------------------------------------------
+
+    /**
+     * Resolves the Kotlin bridge, which lives on the shared runtime classpath.
+     *
+     * It cannot be a direct dependency of this class. Provider instances are
+     * created by the plugin loader, whose ancestry runs through {@link #shared()}
+     * — the loader that owns {@code library-jvm.jar}. Only code loaded by that
+     * same loader resolves the identical {@code MainAPI} class, so the bridge
+     * ships in {@code runtime/} and is reached from here reflectively.
+     */
+    private synchronized Class<?> bridge() {
+        if (bridgeClass != null) return bridgeClass;
+        try {
+            bridgeClass = Class.forName(
+                    "com.cloudstream.desktop.bridge.ProviderBridge", true, shared());
+        } catch (ClassNotFoundException e) {
+            throw new IllegalStateException(
+                    "cs3-provider-bridge.jar is missing from " + runtimeClasspathDir
+                            + ". Build it with \"mvn -f sidecar/bridge/pom.xml package\"."
+                            + " Without it, providers can be loaded but not called.", e);
+        }
+        return bridgeClass;
+    }
+
+    /** One reflective hop, carrying only primitives and a JSON string back. */
+    private String callBridge(String method, Object provider, Object arg, long timeoutMs)
+            throws Exception {
+        Class<?> argType = arg instanceof Integer ? int.class : String.class;
+        Method m = bridge().getMethod(method, Object.class, argType, long.class);
+        return String.valueOf(m.invoke(null, provider, arg, timeoutMs));
+    }
+
+    public Set<String> providerNames() {
+        return new LinkedHashSet<>(providersByName.keySet());
+    }
+
+    private Object requireProvider(String name) {
+        Object provider = providersByName.get(name);
+        if (provider == null) {
+            throw new IllegalArgumentException(
+                    "No loaded provider is named \"" + name + "\". Loaded: " + providersByName.keySet());
+        }
+        return provider;
+    }
+
+    /**
+     * Searches several providers at once.
+     *
+     * One entry per provider, each carrying that provider's raw JSON reply, so a
+     * provider that fails or times out is reported as itself rather than
+     * collapsing the whole search. That distinction is what lets the UI say
+     * "3 of 5 providers answered" instead of showing an empty result set.
+     */
+    public Map<String, String> searchProviders(
+            Collection<String> names, String query, long timeoutMs) {
+        Collection<String> targets =
+                (names == null || names.isEmpty()) ? providersByName.keySet() : names;
+
+        Map<String, Future<String>> futures = new LinkedHashMap<>();
+        for (String name : new ArrayList<>(targets)) {
+            Object provider = providersByName.get(name);
+            if (provider == null) continue;
+            futures.put(name, providerPool.submit(
+                    () -> callBridge("search", provider, query, timeoutMs)));
+        }
+
+        Map<String, String> out = new LinkedHashMap<>();
+        for (Map.Entry<String, Future<String>> e : futures.entrySet()) {
+            try {
+                // The bridge enforces its own deadline; a little slack here
+                // covers the reflective hop without masking a hung provider.
+                out.put(e.getKey(), e.getValue().get(timeoutMs + 5_000, TimeUnit.MILLISECONDS));
+            } catch (Exception ex) {
+                e.getValue().cancel(true);
+                Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+                out.put(e.getKey(), Json.write(Map.of(
+                        "ok", false,
+                        "error", cause.getClass().getSimpleName() + ": "
+                                + String.valueOf(cause.getMessage()))));
+            }
+        }
+        return out;
+    }
+
+    public String loadFromProvider(String providerName, String url, long timeoutMs) throws Exception {
+        return callBridge("load", requireProvider(providerName), url, timeoutMs);
+    }
+
+    public String loadLinksFromProvider(String providerName, String data, long timeoutMs)
+            throws Exception {
+        return callBridge("loadLinks", requireProvider(providerName), data, timeoutMs);
+    }
+
+    public String describeProviderJson(String providerName) throws Exception {
+        Method m = bridge().getMethod("describe", Object.class);
+        return String.valueOf(m.invoke(null, requireProvider(providerName)));
+    }
+
     /** Calls {@code beforeUnload()} then drops the loader (DROP-14). */
     public boolean unload(String pluginId) {
+        // Withdraw its providers first: leaving them addressable after the
+        // loader closes turns the next search into a NoClassDefFoundError.
+        List<String> registered = providerNamesByPlugin.remove(pluginId);
+        if (registered != null) registered.forEach(providersByName::remove);
+
         Object instance = instances.remove(pluginId);
         if (instance != null) {
             try {
@@ -271,14 +400,30 @@ public final class PluginHost {
         return all == null ? null : new ArrayList<>(all);
     }
 
-    private List<Map<String, Object>> diffProviders(ClassLoader loader, Object before) {
+    private List<Map<String, Object>> diffProviders(ClassLoader loader, Object before, String pluginId) {
         List<?> all = apiHolderProviders(loader);
         if (all == null) return List.of();
         int start = before instanceof List<?> l ? l.size() : 0;
         List<Map<String, Object>> out = new ArrayList<>();
+        List<String> registered = new ArrayList<>();
+
         for (int i = start; i < all.size(); i++) {
-            out.add(describeProvider(all.get(i)));
+            Object provider = all.get(i);
+            Map<String, Object> described = describeProvider(provider);
+            out.add(described);
+
+            // Retaining the instance is what makes the provider callable later.
+            // Describing it and dropping it — which is all this did before —
+            // produced a UI that listed providers nothing could ever query.
+            Object name = described.get("name");
+            if (name != null) {
+                String key = String.valueOf(name);
+                providersByName.put(key, provider);
+                registered.add(key);
+            }
         }
+
+        if (!registered.isEmpty()) providerNamesByPlugin.put(pluginId, registered);
         return out;
     }
 
