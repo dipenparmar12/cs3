@@ -185,6 +185,28 @@ ipcMain.handle(
   }
 );
 
+// Automatic start: tries the ranked sources in order until one actually
+// delivers bytes. This is what "next episode" and "play" use, so a dead swarm
+// costs a few seconds rather than dead-ending the viewer on a black screen.
+ipcMain.handle(
+  'torrent:startBestStream',
+  async (_, sources: TorrentResult[], season?: number, episode?: number) => {
+    try {
+      return { ok: true, ...(await contentService.startBestStream(sources, season, episode)) };
+    } catch (error) {
+      return { ...fail(error), handle: null, source: null, attempts: [] };
+    }
+  }
+);
+
+ipcMain.handle('torrent:autoPlay', async (_, request: SourceQuery) => {
+  try {
+    return { ok: true, ...(await contentService.autoPlay(request)) };
+  } catch (error) {
+    return { ...fail(error), handle: null, source: null, attempts: [], query: null };
+  }
+});
+
 ipcMain.handle('torrent:getStats', async (_, infoHash: string) =>
   torrentEngine.getStats(infoHash)
 );

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import type { ActiveTab } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
@@ -25,6 +25,8 @@ export const App: React.FC = () => {
 
   const [selectedMedia, setSelectedMedia] = useState<SearchResponse | null>(null);
   const [playback, setPlayback] = useState<PlaybackRequest | null>(null);
+  const [switchingTo, setSwitchingTo] = useState<Episode | null>(null);
+  const [switchError, setSwitchError] = useState<string | null>(null);
 
   const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>([]);
   const [providersList, setProvidersList] = useState<string[]>([]);
@@ -81,29 +83,54 @@ export const App: React.FC = () => {
   };
 
   /**
+   * Tears down the stream that was playing before the current one.
+   *
+   * Streaming torrents keep sockets and disk cache alive, so moving through a
+   * season would otherwise leave one live swarm per episode watched. Doing it
+   * here — reactively, once the *next* stream exists — rather than before
+   * resolving the next episode is what keeps a failed switch recoverable: the
+   * old stream stays playable until a replacement is actually ready.
+   */
+  const previousInfoHash = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const previous = previousInfoHash.current;
+    previousInfoHash.current = playback?.infoHash;
+
+    if (previous && previous !== playback?.infoHash) {
+      // Files are kept: the user may have promoted this stream to a download.
+      window.cloudstream?.stopStream(previous, true);
+    }
+  }, [playback?.infoHash]);
+
+  /**
    * Switches episode from inside the player.
    *
-   * The outgoing torrent stream is stopped first. Without this, moving through
-   * a season would leave one live swarm per episode watched, each still holding
-   * sockets and seeding in the background.
+   * Resolution runs through the detail view (which owns source lookup) and can
+   * take tens of seconds once failover is involved, so the player is told what
+   * is being loaded and told again if it fails.
    */
   const handleSwitchEpisode = async (episode: Episode) => {
     const request = playback;
     if (!request?.onRequestEpisode) return;
 
-    if (request.infoHash && window.cloudstream) {
-      await window.cloudstream.stopStream(request.infoHash, true);
+    setSwitchError(null);
+    setSwitchingTo(episode);
+    try {
+      await request.onRequestEpisode(episode);
+    } catch (error) {
+      setSwitchError(
+        error instanceof Error ? error.message : 'Could not start that episode.'
+      );
+    } finally {
+      setSwitchingTo(null);
     }
-    request.onRequestEpisode(episode);
   };
 
-  const handleClosePlayer = async () => {
-    // Streaming torrents keep sockets and disk cache alive; tearing the stream
-    // down on exit is what stops a session leaking peers in the background.
-    if (playback?.infoHash && window.cloudstream) {
-      await window.cloudstream.stopStream(playback.infoHash, true);
-    }
+  const handleClosePlayer = () => {
+    // The teardown effect above stops the stream once `playback` clears.
     setPlayback(null);
+    setSwitchingTo(null);
+    setSwitchError(null);
   };
 
   const handleEnqueueDownload = async (task: DownloadTask) => {
@@ -165,6 +192,8 @@ export const App: React.FC = () => {
               onBack={handleClosePlayer}
               series={playback.series}
               progress={playback.progress}
+              switchingTo={switchingTo}
+              switchError={switchError}
               onSelectEpisode={
                 playback.onRequestEpisode
                   ? (episode) => handleSwitchEpisode(episode)
@@ -201,6 +230,7 @@ export const App: React.FC = () => {
                   onPause={handlePauseDownload}
                   onResume={handleResumeDownload}
                   onRemove={handleRemoveDownload}
+                  onReveal={(filePath) => window.cloudstream?.revealInFolder(filePath)}
                   onOpenBinarySetup={() => setIsBinaryModalOpen(true)}
                 />
               )}

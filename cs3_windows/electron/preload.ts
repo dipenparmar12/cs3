@@ -12,7 +12,7 @@ import type {
 } from '../src/types/torrent';
 import type { OfficialRepository } from './officialRepositories';
 import type { MetadataDetail } from './metadataProvider';
-import type { SourceResponse } from './contentService';
+import type { SourceResponse, StreamAttempt } from './contentService';
 import type { RepositoryFetchResult } from './pluginManager';
 import type {
   AvailableUpdate,
@@ -64,6 +64,31 @@ export interface CloudStreamElectronAPI {
     season?: number,
     episode?: number
   ) => Promise<Envelope & { handle: StreamHandle | null }>;
+  /** Tries ranked sources in order until one produces playable data. */
+  startBestStream: (
+    sources: TorrentResult[],
+    season?: number,
+    episode?: number
+  ) => Promise<
+    Envelope & {
+      handle: StreamHandle | null;
+      source: TorrentResult | null;
+      attempts: StreamAttempt[];
+    }
+  >;
+  /** Finds sources and starts the first that works, in one round trip. */
+  autoPlay: (request: {
+    mediaUrl: string;
+    season?: number;
+    episode?: number;
+    titleOverride?: string;
+  }) => Promise<
+    Envelope & {
+      handle: StreamHandle | null;
+      source: TorrentResult | null;
+      attempts: StreamAttempt[];
+    }
+  >;
   getStreamStats: (infoHash: string) => Promise<TorrentStreamStats | null>;
   selectStreamFile: (infoHash: string, fileIndex: number) => Promise<StreamHandle | null>;
   stopStream: (infoHash: string, keepFiles?: boolean) => Promise<void>;
@@ -190,6 +215,9 @@ const api: CloudStreamElectronAPI = {
 
   startStream: (source, season, episode) =>
     ipcRenderer.invoke('torrent:startStream', source, season, episode),
+  startBestStream: (sources, season, episode) =>
+    ipcRenderer.invoke('torrent:startBestStream', sources, season, episode),
+  autoPlay: (request) => ipcRenderer.invoke('torrent:autoPlay', request),
   getStreamStats: (infoHash) => ipcRenderer.invoke('torrent:getStats', infoHash),
   selectStreamFile: (infoHash, fileIndex) =>
     ipcRenderer.invoke('torrent:selectFile', infoHash, fileIndex),

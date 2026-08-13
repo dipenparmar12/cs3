@@ -9,7 +9,9 @@ import type { TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
 import { AspectRatioMode } from '../types/player';
 import { HoverMenu } from './player/HoverMenu';
-import { EpisodePanel, type SeriesContext } from './player/EpisodePanel';
+import { EpisodePanel } from './player/EpisodePanel';
+import type { SeriesContext } from './player/seriesContext';
+import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
 
 interface VideoPlayerProps {
@@ -25,6 +27,14 @@ interface VideoPlayerProps {
   series?: SeriesContext;
   /** Asked to play another episode; the host resolves a source and restarts. */
   onSelectEpisode?: (episode: Episode) => void;
+  /**
+   * Set while the host is resolving a source for a requested episode. Source
+   * resolution can take half a minute once failover is involved, and a player
+   * that shows nothing during it reads as broken.
+   */
+  switchingTo?: Episode | null;
+  /** Reported when resolving the requested episode failed, so the viewer is not stranded. */
+  switchError?: string | null;
   /** Identity for recording watch progress, and where to resume from. */
   progress?: {
     mediaUrl: string;
@@ -63,9 +73,12 @@ function formatSpeed(bytesPerSecond: number): string {
   return mb >= 1 ? `${mb.toFixed(1)} MB/s` : `${(bytesPerSecond / 1e3).toFixed(0)} KB/s`;
 }
 
+/** How long before the end the up-next card appears, and how long it counts down. */
+const UP_NEXT_LEAD_SECONDS = 40;
+
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamUrl, mimeType, title, episodeTitle, infoHash, subtitles, onBack,
-  series, onSelectEpisode, progress,
+  series, onSelectEpisode, switchingTo, switchError, progress,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -114,6 +127,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     currentIndex >= 0 && currentIndex < orderedEpisodes.length - 1
       ? orderedEpisodes[currentIndex + 1]
       : null;
+
+  const currentEpisode = currentIndex >= 0 ? orderedEpisodes[currentIndex] : null;
+
+  // --- up next -------------------------------------------------------------
+
+  const [upNextDismissed, setUpNextDismissed] = useState(false);
+
+  // A new episode is a new decision; a dismissal must not carry over to it.
+  useEffect(() => {
+    setUpNextDismissed(false);
+  }, [streamUrl]);
+
+  const secondsLeft = duration > 0 ? Math.ceil(duration - currentTime) : Infinity;
+  const showUpNext = Boolean(
+    nextEpisode &&
+      onSelectEpisode &&
+      !upNextDismissed &&
+      !error &&
+      duration > 0 &&
+      secondsLeft <= UP_NEXT_LEAD_SECONDS
+  );
 
   // --- source attachment ---------------------------------------------------
 
@@ -238,14 +272,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, []);
 
   // Rolling on to the next episode is the expected behaviour for a series, and
-  // it is the one thing a viewer should never have to reach for.
+  // it is the one thing a viewer should never have to reach for. Dismissing the
+  // up-next card is read as "not this time" and suppresses the roll-on, so
+  // someone sitting through the credits is not yanked out of them.
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !nextEpisode || !onSelectEpisode) return;
+    if (!video || !nextEpisode || !onSelectEpisode || upNextDismissed) return;
     const onEnded = () => onSelectEpisode(nextEpisode);
     video.addEventListener('ended', onEnded);
     return () => video.removeEventListener('ended', onEnded);
-  }, [nextEpisode, onSelectEpisode]);
+  }, [nextEpisode, onSelectEpisode, upNextDismissed]);
 
   // --- watch progress ------------------------------------------------------
 
@@ -429,7 +465,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         ))}
       </video>
 
-      {(isBuffering || error) && (
+      {/* Resolving a source for another episode happens over the live player, so
+          it needs its own overlay — the buffering one belongs to the stream that
+          is still playing underneath. */}
+      {switchingTo && (
+        <div className="player__overlay">
+          <Loader2 className="spin" size={36} />
+          <p>
+            Loading {switchingTo.season != null && switchingTo.episode != null
+              ? `S${switchingTo.season} E${switchingTo.episode} — `
+              : ''}
+            {switchingTo.name}
+          </p>
+          <span className="muted">Searching sources and starting the best one…</span>
+        </div>
+      )}
+
+      {switchError && !switchingTo && (
+        <div className="player__overlay">
+          <AlertTriangle size={36} />
+          <p>{switchError}</p>
+          <div className="player__overlay-actions">
+            {series && (
+              <button className="btn btn-primary" onClick={() => setPanelOpen(true)}>
+                <List size={16} /> Pick another episode
+              </button>
+            )}
+            <button className="btn" onClick={onBack}>Back</button>
+          </div>
+        </div>
+      )}
+
+      {(isBuffering || error) && !switchingTo && !switchError && (
         <div className="player__overlay">
           {error ? (
             <>
@@ -447,7 +514,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   {stats.peers === 1 ? '' : 's'} · {(stats.progress * 100).toFixed(1)}%
                 </span>
               )}
-              {stats && stats.peers === 0 && (
+              {stats?.isStalled && (
+                <>
+                  <span className="muted">
+                    Nothing has arrived for {Math.round(stats.stalledMs / 1000)}s
+                    {stats.peers === 0 ? ' and no peers have connected' : ''}. This swarm
+                    is probably dead.
+                  </span>
+                  <button className="btn" onClick={onBack}>Choose another source</button>
+                </>
+              )}
+              {stats && !stats.isStalled && stats.peers === 0 && (
                 <span className="muted">
                   No peers yet. If this persists the swarm may be dead — try a source with more seeders.
                 </span>
@@ -463,7 +540,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </button>
         <div className="player__titles">
           <h2>{title}</h2>
-          {episodeTitle && <p>{episodeTitle}</p>}
+          {(episodeTitle || currentEpisode) && (
+            <p>
+              {/* Where you are in the series belongs on screen, not one click
+                  away in a panel — it is the first thing a viewer checks. */}
+              {currentEpisode?.season != null && currentEpisode?.episode != null && (
+                <span className="player__episode-badge">
+                  S{currentEpisode.season} · E{currentEpisode.episode}
+                </span>
+              )}
+              {episodeTitle ?? currentEpisode?.name}
+              {series && orderedEpisodes.length > 0 && currentIndex >= 0 && (
+                <span className="player__episode-count">
+                  {currentIndex + 1} of {orderedEpisodes.length}
+                </span>
+              )}
+            </p>
+          )}
         </div>
         {stats && (
           <div className="player__stats">
@@ -472,6 +565,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
         )}
       </header>
+
+      {showUpNext && nextEpisode && (
+        <UpNextCard
+          episode={nextEpisode}
+          secondsRemaining={secondsLeft}
+          countdownFrom={UP_NEXT_LEAD_SECONDS}
+          isLoading={Boolean(switchingTo)}
+          onPlayNow={() => onSelectEpisode?.(nextEpisode)}
+          onDismiss={() => setUpNextDismissed(true)}
+        />
+      )}
 
       {series && (
         <EpisodePanel

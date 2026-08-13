@@ -1,24 +1,56 @@
 import fs from 'fs';
 import path from 'path';
-import http from 'http';
-import https from 'https';
 import type { DownloadTask } from '../src/types/download';
 import { DownloadState } from '../src/types/download';
 import type { DatastoreManager } from './datastore';
 import type { Aria2Engine } from './aria2Engine';
 import { MediaDownloadResolver } from './mediaDownloadResolver';
+import { YtDlpEngine } from './ytdlpEngine';
+import { startHttpDownload } from './httpDownloader';
 import type { TorrentEngine } from './torrent/torrentEngine';
+
+/**
+ * The download queue, across every kind of source the app can play.
+ *
+ * There are four transport shapes and each needs a different engine, which is
+ * the whole reason this class exists:
+ *
+ *  | Source                | Engine            | Why                            |
+ *  |-----------------------|-------------------|--------------------------------|
+ *  | magnet / infohash     | `TorrentEngine`   | reuses pieces already streamed |
+ *  | HLS (`.m3u8`) / DASH  | `yt-dlp`          | segments must be concatenated  |
+ *  | progressive HTTP      | `aria2c`          | multi-connection, fast         |
+ *  | progressive HTTP      | built-in fallback | aria2c is optional             |
+ *
+ * Previously only the first and third worked: HLS failed with a message, and
+ * the built-in fallback lost the file on pause. Every row now completes, resumes
+ * and reports progress the same way.
+ */
+
+/**
+ * Transfers running at once. A season batch queues dozens of episodes; starting
+ * them all would open dozens of swarms and split the bandwidth so finely that
+ * nothing finishes.
+ */
+const MAX_CONCURRENT_DOWNLOADS = 3;
+
+/** Anything a running transfer needs to be able to stop. */
+interface ActiveHandle {
+  cancel(): void;
+}
 
 export class DownloadService {
   private datastore: DatastoreManager;
   private aria2: Aria2Engine;
+  private ytdlp = new YtDlpEngine();
   private resolver: MediaDownloadResolver;
   private torrentEngine: TorrentEngine | null = null;
   private queue: Map<string, DownloadTask> = new Map();
   private gidToTaskId: Map<string, string> = new Map();
   /** taskId → infoHash, for downloads served by the torrent engine. */
   private torrentTasks: Map<string, string> = new Map();
-  private activeFallbackStreams: Map<string, { req: any; fileStream: fs.WriteStream }> = new Map();
+  /** taskId → canceller, for the built-in HTTP downloader and yt-dlp. */
+  private handles: Map<string, ActiveHandle> = new Map();
   private pollInterval: NodeJS.Timeout | null = null;
   private onProgressCallback?: (tasks: DownloadTask[]) => void;
 
@@ -44,15 +76,29 @@ export class DownloadService {
     return url.startsWith('magnet:') || /^[a-f0-9]{40}$/i.test(url);
   }
 
+  private static isSegmented(task: DownloadTask): boolean {
+    return (
+      Boolean(task.link.isM3u8) ||
+      Boolean(task.link.isDash) ||
+      /\.(m3u8|mpd)(\?|$)/i.test(task.link.url)
+    );
+  }
+
   private loadQueueFromStorage(): void {
     const saved = this.datastore.getObject<DownloadTask[]>('download_queue_list', []);
-    if (saved && Array.isArray(saved)) {
-      for (const task of saved) {
-        if (task.state === DownloadState.Downloading) {
-          task.state = DownloadState.Queued;
-        }
-        this.queue.set(task.id, task);
+    if (!saved || !Array.isArray(saved)) return;
+
+    for (const task of saved) {
+      // Nothing is running after a restart. Marking these Paused rather than
+      // Queued is deliberate: a partial file is on disk and resuming continues
+      // from it, but silently restarting a dozen transfers on launch is not
+      // something the user asked for.
+      if (task.state === DownloadState.Downloading || task.state === DownloadState.Queued) {
+        task.state = DownloadState.Paused;
+        task.downloadSpeed = 0;
+        task.etaSeconds = 0;
       }
+      this.queue.set(task.id, task);
     }
   }
 
@@ -82,36 +128,50 @@ export class DownloadService {
 
   private async pollStatus(): Promise<void> {
     await this.pollTorrentTasks();
+    await this.pollAria2Tasks();
+    // Slots free up as transfers finish; pumping here is what turns a queue of
+    // 40 episodes into 3 running and 37 waiting rather than 40 stalled.
+    this.pump();
+  }
+
+  private async pollAria2Tasks(): Promise<void> {
     if (!this.aria2.isRunning()) return;
 
     for (const [gid, taskId] of this.gidToTaskId.entries()) {
       try {
         const status = await this.aria2.getStatus(gid);
         const task = this.queue.get(taskId);
-        if (task) {
-          task.bytesDownloaded = status.completedLength;
-          task.totalBytes = status.totalLength;
-          task.downloadSpeed = status.downloadSpeed;
-
-          if (status.downloadSpeed > 0 && status.totalLength > status.completedLength) {
-            task.etaSeconds = Math.ceil((status.totalLength - status.completedLength) / status.downloadSpeed);
-          } else {
-            task.etaSeconds = 0;
-          }
-
-          if (status.status === 'completed') {
-            task.state = DownloadState.Completed;
-            this.gidToTaskId.delete(gid);
-          } else if (status.status === 'error') {
-            task.state = DownloadState.Failed;
-            task.errorMessage = status.errorMessage || 'aria2 transfer error';
-            this.gidToTaskId.delete(gid);
-          }
-
-          this.saveQueueToStorage();
+        if (!task) {
+          this.gidToTaskId.delete(gid);
+          continue;
         }
-      } catch (e) {
-        // Silently handle status polling
+
+        task.bytesDownloaded = status.completedLength;
+        task.totalBytes = status.totalLength;
+        task.downloadSpeed = status.downloadSpeed;
+
+        if (status.downloadSpeed > 0 && status.totalLength > status.completedLength) {
+          task.etaSeconds = Math.ceil(
+            (status.totalLength - status.completedLength) / status.downloadSpeed
+          );
+        } else {
+          task.etaSeconds = 0;
+        }
+
+        if (status.status === 'completed') {
+          task.state = DownloadState.Completed;
+          task.downloadSpeed = 0;
+          task.etaSeconds = 0;
+          this.gidToTaskId.delete(gid);
+        } else if (status.status === 'error') {
+          task.state = DownloadState.Failed;
+          task.errorMessage = status.errorMessage || 'aria2 transfer error';
+          this.gidToTaskId.delete(gid);
+        }
+
+        this.saveQueueToStorage();
+      } catch {
+        // A single failed status poll is not worth surfacing; the next tick retries.
       }
     }
   }
@@ -144,7 +204,12 @@ export class DownloadService {
         task.downloadSpeed = 0;
         task.etaSeconds = 0;
         this.torrentTasks.delete(taskId);
+      } else if (stats.isStalled && !stats.isPaused) {
+        // Say so rather than showing 0 B/s forever with no explanation.
+        task.errorMessage = `No data for ${Math.round(stats.stalledMs / 1000)}s — the swarm may be dead.`;
+        task.state = DownloadState.Downloading;
       } else {
+        task.errorMessage = undefined;
         task.state = stats.isPaused ? DownloadState.Paused : DownloadState.Downloading;
       }
       changed = true;
@@ -153,186 +218,243 @@ export class DownloadService {
     if (changed) this.saveQueueToStorage();
   }
 
+  // --- queueing ------------------------------------------------------------
+
+  private activeCount(): number {
+    let count = 0;
+    for (const task of this.queue.values()) {
+      if (task.state === DownloadState.Downloading) count++;
+    }
+    return count;
+  }
+
+  /** Promotes queued tasks into running ones while there is capacity. */
+  private pump(): void {
+    let free = MAX_CONCURRENT_DOWNLOADS - this.activeCount();
+    if (free <= 0) return;
+
+    for (const task of this.queue.values()) {
+      if (free <= 0) break;
+      if (task.state !== DownloadState.Queued) continue;
+
+      free--;
+      void this.startTask(task);
+    }
+  }
+
   public async enqueue(task: DownloadTask): Promise<string> {
-    task.state = DownloadState.Downloading;
-    task.createdTime = Date.now();
+    task.state = DownloadState.Queued;
+    task.createdTime = task.createdTime || Date.now();
+    task.errorMessage = undefined;
 
     if (!task.targetFilePath) {
       task.targetFilePath = this.resolver.generateTargetFilePath(task);
     }
 
+    this.queue.set(task.id, task);
+    this.saveQueueToStorage();
+    this.pump();
+    return task.id;
+  }
+
+  /** Dispatches one task to whichever engine can actually fetch its URL. */
+  private async startTask(task: DownloadTask): Promise<void> {
+    task.state = DownloadState.Downloading;
+    task.errorMessage = undefined;
+    this.saveQueueToStorage();
+
     const outputDir = path.dirname(task.targetFilePath);
-    if (!fs.existsSync(outputDir)) {
+    try {
       fs.mkdirSync(outputDir, { recursive: true });
+    } catch (error) {
+      this.markFailed(task, `Could not create the download folder: ${describe(error)}`);
+      return;
     }
 
-    // Torrent sources go to the streaming engine, which already holds any
-    // pieces fetched while the user was watching.
     if (DownloadService.isMagnet(task.link.url) && this.torrentEngine) {
-      try {
-        this.torrentEngine.setDownloadPath(outputDir);
-        const handle = await this.torrentEngine.startStream({
-          torrentId: task.link.url,
-          season: task.seasonNumber,
-          episode: task.episodeNumber,
-        });
-        this.torrentTasks.set(task.id, handle.infoHash);
-        task.totalBytes = handle.fileSize;
-        task.targetFilePath = path.join(outputDir, handle.fileName);
-        this.queue.set(task.id, task);
-        this.saveQueueToStorage();
-        return task.id;
-      } catch (error) {
-        task.state = DownloadState.Failed;
-        task.errorMessage = error instanceof Error ? error.message : String(error);
-        this.queue.set(task.id, task);
-        this.saveQueueToStorage();
-        return task.id;
-      }
+      await this.startTorrentTask(task, outputDir);
+      return;
     }
 
-    // HLS playlists cannot be fetched as a single file: aria2 would save the
-    // .m3u8 text itself. Fail loudly rather than writing a 2 KB "video".
-    if (/\.m3u8(\?|$)/i.test(task.link.url) || task.link.isM3u8) {
-      task.state = DownloadState.Failed;
-      task.errorMessage =
-        'HLS streams need segment muxing, which this build cannot do yet. Install yt-dlp from Settings and download via the source URL instead.';
-      this.queue.set(task.id, task);
-      this.saveQueueToStorage();
-      return task.id;
+    if (DownloadService.isSegmented(task)) {
+      this.startSegmentedTask(task);
+      return;
     }
 
-    // Attempt high-speed aria2 dispatch if binary is running
     if (this.aria2.isRunning()) {
       try {
         const gid = await this.resolver.dispatchDownload(task);
         this.gidToTaskId.set(gid, task.id);
-        this.queue.set(task.id, task);
         this.saveQueueToStorage();
-        return task.id;
-      } catch (e) {
-        console.warn('aria2 dispatch failed, falling back to Native HTTP Downloader');
+        return;
+      } catch {
+        console.warn('[downloads] aria2 dispatch failed; using the built-in downloader');
       }
     }
 
-    // Built-in Native HTTP Stream Fallback
-    this.startNativeHttpDownload(task);
-    this.queue.set(task.id, task);
-    this.saveQueueToStorage();
-    return task.id;
+    this.startHttpTask(task);
   }
 
-  private startNativeHttpDownload(task: DownloadTask): void {
-    const url = task.link.url;
-    const requestClient = url.startsWith('https') ? https : http;
-    const fileStream = fs.createWriteStream(task.targetFilePath);
+  private async startTorrentTask(task: DownloadTask, outputDir: string): Promise<void> {
+    if (!this.torrentEngine) return;
 
-    let startTime = Date.now();
-    let lastBytes = 0;
-
-    const req = requestClient.get(
-      url,
-      { headers: task.headers || { 'User-Agent': 'CloudStreamDesktop/1.0', Referer: task.link.referer || '' } },
-      (res) => {
-        if (res.statusCode === 301 || res.statusCode === 302) {
-          if (res.headers.location) {
-            task.link.url = res.headers.location;
-            fileStream.close();
-            this.startNativeHttpDownload(task);
-            return;
-          }
-        }
-
-        task.totalBytes = parseInt(res.headers['content-length'] || '0', 10) || 50 * 1024 * 1024;
-        let downloaded = 0;
-
-        res.on('data', (chunk) => {
-          downloaded += chunk.length;
-          fileStream.write(chunk);
-          task.bytesDownloaded = downloaded;
-
-          const now = Date.now();
-          const elapsedSec = (now - startTime) / 1000;
-          if (elapsedSec >= 1) {
-            task.downloadSpeed = Math.floor((downloaded - lastBytes) / elapsedSec);
-            lastBytes = downloaded;
-            startTime = now;
-            if (task.totalBytes > downloaded && task.downloadSpeed > 0) {
-              task.etaSeconds = Math.ceil((task.totalBytes - downloaded) / task.downloadSpeed);
-            }
-            this.saveQueueToStorage();
-          }
-        });
-
-        res.on('end', () => {
-          fileStream.end();
-          task.state = DownloadState.Completed;
-          task.bytesDownloaded = task.totalBytes || downloaded;
-          task.downloadSpeed = 0;
-          task.etaSeconds = 0;
-          this.activeFallbackStreams.delete(task.id);
-          this.saveQueueToStorage();
-        });
-      }
-    );
-
-    req.on('error', (err) => {
-      fileStream.close();
-      task.state = DownloadState.Failed;
-      task.errorMessage = err.message || 'Stream download error';
-      this.activeFallbackStreams.delete(task.id);
+    try {
+      const handle = await this.torrentEngine.startStream({
+        torrentId: task.link.url,
+        season: task.seasonNumber,
+        episode: task.episodeNumber,
+        // Per-request rather than mutating the engine-wide path, which used to
+        // redirect every *later* torrent — including live streams — into this
+        // task's folder.
+        downloadPath: outputDir,
+      });
+      this.torrentTasks.set(task.id, handle.infoHash);
+      task.totalBytes = handle.fileSize;
+      // Multi-file releases nest the episode inside the torrent's own folder,
+      // so the real path comes from the engine rather than being guessed.
+      task.targetFilePath = handle.diskPath;
       this.saveQueueToStorage();
-    });
-
-    this.activeFallbackStreams.set(task.id, { req, fileStream });
+    } catch (error) {
+      this.markFailed(task, describe(error));
+    }
   }
+
+  private startSegmentedTask(task: DownloadTask): void {
+    const handle = this.ytdlp.download({
+      url: task.link.url,
+      targetPath: task.targetFilePath,
+      headers: task.headers,
+      referer: task.link.referer,
+      onProgress: (downloaded, total, speed) => this.applyProgress(task, downloaded, total, speed),
+      onComplete: (total) => this.markCompleted(task, total),
+      onError: (message) => this.markFailed(task, message),
+    });
+    this.handles.set(task.id, handle);
+  }
+
+  private startHttpTask(task: DownloadTask): void {
+    const handle = startHttpDownload({
+      url: task.link.url,
+      targetPath: task.targetFilePath,
+      headers: task.headers,
+      referer: task.link.referer,
+      onProgress: (downloaded, total, speed) => this.applyProgress(task, downloaded, total, speed),
+      onComplete: (total) => this.markCompleted(task, total),
+      onError: (message) => this.markFailed(task, message),
+    });
+    this.handles.set(task.id, handle);
+  }
+
+  // --- task state transitions ---------------------------------------------
+
+  private applyProgress(
+    task: DownloadTask,
+    downloaded: number,
+    total: number,
+    speed: number
+  ): void {
+    // A cancelled transfer can emit one last progress event; it must not drag
+    // the task back out of Paused.
+    if (task.state !== DownloadState.Downloading) return;
+
+    task.bytesDownloaded = downloaded;
+    if (total > 0) task.totalBytes = total;
+    task.downloadSpeed = speed;
+    task.etaSeconds =
+      speed > 0 && task.totalBytes > downloaded
+        ? Math.ceil((task.totalBytes - downloaded) / speed)
+        : 0;
+    this.saveQueueToStorage();
+  }
+
+  private markCompleted(task: DownloadTask, totalBytes: number): void {
+    this.handles.delete(task.id);
+    task.state = DownloadState.Completed;
+    task.totalBytes = totalBytes || task.totalBytes;
+    task.bytesDownloaded = task.totalBytes;
+    task.downloadSpeed = 0;
+    task.etaSeconds = 0;
+    task.errorMessage = undefined;
+    this.saveQueueToStorage();
+    this.pump();
+  }
+
+  private markFailed(task: DownloadTask, message: string): void {
+    this.handles.delete(task.id);
+    task.state = DownloadState.Failed;
+    task.errorMessage = message;
+    task.downloadSpeed = 0;
+    task.etaSeconds = 0;
+    this.saveQueueToStorage();
+    this.pump();
+  }
+
+  // --- controls ------------------------------------------------------------
 
   public async pause(id: string): Promise<void> {
     const task = this.queue.get(id);
     if (!task) return;
+    if (task.state === DownloadState.Completed || task.state === DownloadState.Failed) return;
 
     task.state = DownloadState.Paused;
+    task.downloadSpeed = 0;
+    task.etaSeconds = 0;
 
     const infoHash = this.torrentTasks.get(id);
     if (infoHash && this.torrentEngine) {
       await this.torrentEngine.pause(infoHash);
       this.saveQueueToStorage();
+      this.pump();
       return;
     }
 
-    for (const [gid, tId] of this.gidToTaskId.entries()) {
-      if (tId === id) {
-        await this.aria2.pause(gid);
-      }
+    for (const [gid, taskId] of this.gidToTaskId.entries()) {
+      if (taskId === id) await this.aria2.pause(gid);
     }
 
-    const fallback = this.activeFallbackStreams.get(id);
-    if (fallback) {
-      fallback.req.destroy();
-      fallback.fileStream.close();
-      this.activeFallbackStreams.delete(id);
-    }
+    // The `.part` file stays on disk; resuming continues from it.
+    this.handles.get(id)?.cancel();
+    this.handles.delete(id);
 
     this.saveQueueToStorage();
+    this.pump();
   }
 
   public async resume(id: string): Promise<void> {
     const task = this.queue.get(id);
     if (!task) return;
-
-    if (task.state !== DownloadState.Paused) return;
+    if (task.state !== DownloadState.Paused && task.state !== DownloadState.Failed) return;
 
     const infoHash = this.torrentTasks.get(id);
     if (infoHash && this.torrentEngine) {
       task.state = DownloadState.Downloading;
+      task.errorMessage = undefined;
       await this.torrentEngine.resume(infoHash);
       this.saveQueueToStorage();
       return;
     }
 
-    task.state = DownloadState.Downloading;
-    await this.enqueue(task);
+    // aria2 keeps the transfer in its own queue; unpausing continues it. The old
+    // code re-dispatched the URI here, which started a second transfer from zero.
+    for (const [gid, taskId] of this.gidToTaskId.entries()) {
+      if (taskId === id) {
+        try {
+          await this.aria2.unpause(gid);
+          task.state = DownloadState.Downloading;
+          task.errorMessage = undefined;
+          this.saveQueueToStorage();
+          return;
+        } catch {
+          // aria2 forgot the gid (it was restarted); fall through to a fresh start.
+          this.gidToTaskId.delete(gid);
+        }
+      }
+    }
+
+    task.state = DownloadState.Queued;
+    task.errorMessage = undefined;
     this.saveQueueToStorage();
+    this.pump();
   }
 
   public async remove(id: string): Promise<void> {
@@ -346,22 +468,28 @@ export class DownloadService {
       this.torrentTasks.delete(id);
     }
 
-    for (const [gid, tId] of this.gidToTaskId.entries()) {
-      if (tId === id) {
+    for (const [gid, taskId] of this.gidToTaskId.entries()) {
+      if (taskId === id) {
         await this.aria2.remove(gid);
         this.gidToTaskId.delete(gid);
       }
     }
 
-    const fallback = this.activeFallbackStreams.get(id);
-    if (fallback) {
-      fallback.req.destroy();
-      fallback.fileStream.close();
-      this.activeFallbackStreams.delete(id);
+    this.handles.get(id)?.cancel();
+    this.handles.delete(id);
+
+    // An abandoned partial file is pure waste; a completed one is the deliverable.
+    if (task.state !== DownloadState.Completed) {
+      try {
+        fs.rmSync(`${task.targetFilePath}.part`, { force: true });
+      } catch {
+        // A locked file just stays.
+      }
     }
 
     this.queue.delete(id);
     this.saveQueueToStorage();
+    this.pump();
   }
 
   public getTasks(): DownloadTask[] {
@@ -370,10 +498,12 @@ export class DownloadService {
 
   public stop(): void {
     if (this.pollInterval) clearInterval(this.pollInterval);
-    for (const [, stream] of this.activeFallbackStreams) {
-      stream.req.destroy();
-      stream.fileStream.close();
-    }
+    for (const handle of this.handles.values()) handle.cancel();
+    this.handles.clear();
     this.aria2.stop();
   }
+}
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

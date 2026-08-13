@@ -6,6 +6,8 @@ e.exposeInMainWorld("cloudstream", {
 	getSources: (e) => t.invoke("api:getSources", e),
 	getPluginRuntimeStatus: () => t.invoke("api:getPluginRuntimeStatus"),
 	startStream: (e, n, r) => t.invoke("torrent:startStream", e, n, r),
+	startBestStream: (e, n, r) => t.invoke("torrent:startBestStream", e, n, r),
+	autoPlay: (e) => t.invoke("torrent:autoPlay", e),
 	getStreamStats: (e) => t.invoke("torrent:getStats", e),
 	selectStreamFile: (e, n) => t.invoke("torrent:selectFile", e, n),
 	stopStream: (e, n) => t.invoke("torrent:stopStream", e, n),

@@ -18,6 +18,8 @@ export interface HttpOptions {
   headers?: Record<string, string>;
   /** Caller-owned signal; composed with the internal timeout signal. */
   signal?: AbortSignal;
+  /** JSON body; when present the request is sent as POST. */
+  body?: unknown;
 }
 
 export class HttpError extends Error {
@@ -53,13 +55,18 @@ async function requestOnce(url: string, options: HttpOptions): Promise<Response>
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const signal = composeSignals([AbortSignal.timeout(timeoutMs), options.signal]);
 
+  const hasBody = options.body !== undefined;
+
   const response = await fetch(url, {
     signal,
     redirect: 'follow',
+    method: hasBody ? 'POST' : 'GET',
+    body: hasBody ? JSON.stringify(options.body) : undefined,
     headers: {
       'User-Agent': USER_AGENT,
       Accept: '*/*',
       'Accept-Language': 'en-US,en;q=0.9',
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
       ...options.headers,
     },
   });
@@ -101,6 +108,20 @@ async function withRetry(url: string, options: HttpOptions): Promise<Response> {
 export async function fetchJson<T>(url: string, options: HttpOptions = {}): Promise<T> {
   const response = await withRetry(url, {
     ...options,
+    headers: { Accept: 'application/json', ...options.headers },
+  });
+  return (await response.json()) as T;
+}
+
+/** POSTs a JSON body and parses a JSON reply. Used by search APIs that take filters. */
+export async function postJson<T>(
+  url: string,
+  body: unknown,
+  options: HttpOptions = {}
+): Promise<T> {
+  const response = await withRetry(url, {
+    ...options,
+    body,
     headers: { Accept: 'application/json', ...options.headers },
   });
   return (await response.json()) as T;

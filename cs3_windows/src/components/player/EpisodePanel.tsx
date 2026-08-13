@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { X, Play, Star, Calendar, Clock } from 'lucide-react';
+import { X, Play, Star, Calendar, Clock, Check } from 'lucide-react';
 import type { Episode } from '../../types/api';
+import { episodeKey, type SeriesContext } from './seriesContext';
 
 /**
  * In-player series browser.
@@ -12,19 +13,6 @@ import type { Episode } from '../../types/api';
  * The panel slides over the video rather than resizing it, so opening it never
  * reflows the picture mid-scene.
  */
-
-export interface SeriesContext {
-  title: string;
-  posterUrl?: string;
-  plot?: string;
-  year?: number;
-  rating?: number;
-  tags?: string[];
-  duration?: string;
-  episodes: Episode[];
-  /** URL of the episode currently playing, used to highlight and to seed next/prev. */
-  currentEpisodeUrl?: string;
-}
 
 interface EpisodePanelProps {
   series: SeriesContext;
@@ -147,13 +135,19 @@ export const EpisodePanel: React.FC<EpisodePanelProps> = ({
       <ul className="player-panel__episodes">
         {episodes.map((episode) => {
           const isCurrent = episode.url === series.currentEpisodeUrl;
+          const watched = series.watchState?.[episodeKey(episode.season, episode.episode)];
+          const watchedFraction =
+            watched && watched.durationSeconds > 0
+              ? Math.min(1, watched.positionSeconds / watched.durationSeconds)
+              : 0;
+
           return (
             <li key={episode.url}>
               <button
                 ref={isCurrent ? activeRef : undefined}
                 className={`player-panel__episode${
                   isCurrent ? ' player-panel__episode--current' : ''
-                }`}
+                }${watched?.completed ? ' player-panel__episode--watched' : ''}`}
                 onClick={() => onSelectEpisode(episode)}
                 aria-current={isCurrent || undefined}
               >
@@ -171,11 +165,23 @@ export const EpisodePanel: React.FC<EpisodePanelProps> = ({
                   </strong>
                   {episode.description && <span>{episode.description}</span>}
                   {episode.date && <em>{episode.date}</em>}
+
+                  {/* Partial progress is the useful signal: it says "you left off
+                      here", which is what makes picking up a series painless. */}
+                  {watchedFraction > 0 && !watched?.completed && (
+                    <div className="player-panel__episode-progress">
+                      <div style={{ width: `${watchedFraction * 100}%` }} />
+                    </div>
+                  )}
                 </div>
+
+                {watched?.completed && !isCurrent && (
+                  <Check size={15} className="player-panel__episode-watched" aria-label="Watched" />
+                )}
                 {isCurrent ? (
                   <span className="player-panel__now">Now playing</span>
                 ) : (
-                  <Play size={15} className="player-panel__episode-play" />
+                  !watched?.completed && <Play size={15} className="player-panel__episode-play" />
                 )}
               </button>
             </li>

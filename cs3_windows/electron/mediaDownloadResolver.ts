@@ -24,11 +24,36 @@ export class MediaDownloadResolver {
       .trim();
   }
 
+  /**
+   * Picks the container extension from the source URL.
+   *
+   * Hard-coding `.mp4` mislabels every MKV the app downloads, which then fails
+   * to open in players that trust the extension. Segmented sources are the one
+   * genuine exception: yt-dlp remuxes them, and the result really is an MP4.
+   */
+  private extensionFor(task: Partial<DownloadTask>): string {
+    const url = task.link?.url ?? '';
+    if (task.link?.isM3u8 || task.link?.isDash || /\.(m3u8|mpd)(\?|$)/i.test(url)) {
+      return '.mp4';
+    }
+
+    // A torrent's real filename is only known once metadata arrives; the engine
+    // overwrites this path at that point.
+    if (url.startsWith('magnet:') || /^[a-f0-9]{40}$/i.test(url)) return '.mp4';
+
+    const match = url
+      .split('?')[0]
+      .match(/\.(mp4|mkv|avi|mov|m4v|webm|ts|m2ts|flv|wmv|mpg|mpeg)$/i);
+    return match ? `.${match[1].toLowerCase()}` : '.mp4';
+  }
+
   public generateTargetFilePath(task: Partial<DownloadTask>, customBaseDir?: string): string {
     const base = customBaseDir || this.defaultDownloadDir;
-    const category = task.title ? 'Shows' : 'Downloads';
+    // Episodes belong in a series folder; a film is a single file, not a show.
+    const isEpisode = task.episodeNumber !== undefined || task.seasonNumber !== undefined;
+    const category = isEpisode ? 'Shows' : 'Movies';
     const folderName = this.sanitizeFilename(task.title || 'Media');
-    
+
     let fileName = `${folderName}`;
     if (task.seasonNumber !== undefined && task.episodeNumber !== undefined) {
       const s = String(task.seasonNumber).padStart(2, '0');
@@ -38,8 +63,8 @@ export class MediaDownloadResolver {
       const e = String(task.episodeNumber).padStart(2, '0');
       fileName += `_E${e}`;
     }
-    
-    fileName += '.mp4';
+
+    fileName += this.extensionFor(task);
     return path.join(base, category, folderName, fileName);
   }
 

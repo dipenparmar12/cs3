@@ -15,13 +15,20 @@ import { DEFAULT_TRACKERS } from './indexers/base';
  * whole file. The player never sees a magnet — it just gets an `http://127.0.0.1`
  * URL and treats it as an ordinary progressive source.
  *
- * Two behaviours matter most for perceived quality:
+ * Four behaviours matter most for perceived reliability:
  *  - **File selection inside season packs.** A pack contains every episode; we
  *    deselect all files and select only the requested one, otherwise the swarm
  *    bandwidth is spread across 10 files and nothing becomes playable.
- *  - **Leading-bytes readiness.** Playback needs contiguous data from the start
- *    of the file (the container header/index lives there), so readiness is
- *    measured as contiguous leading pieces, not overall percentage.
+ *  - **Head and tail priority.** Playback needs contiguous data from the start
+ *    of the file (the container header lives there) *and* usually the last few
+ *    megabytes: MP4s muxed for disk keep the `moov` atom at the end, and MKV
+ *    cues live in the tail too. Fetching only the head leaves those containers
+ *    stuck at "loading metadata" forever.
+ *  - **Single-flight startup.** Two concurrent `startStream` calls used to each
+ *    construct a client and an HTTP server, leaking the loser's port.
+ *  - **Honest stall reporting.** A swarm that never produces a byte is a
+ *    different problem from a slow one, and only the former should trigger a
+ *    failover to another source.
  */
 
 const VIDEO_EXTENSIONS = new Set([
@@ -34,8 +41,17 @@ const SUBTITLE_EXTENSIONS = new Set(['.srt', '.ass', '.ssa', '.vtt', '.sub', '.i
 /** Bytes of contiguous leading data required before playback is offered. */
 const PLAYABLE_THRESHOLD_BYTES = 8 * 1024 * 1024;
 
+/** Leading bytes fetched at top priority — enough for a container header plus a GOP. */
+const HEAD_PRIORITY_BYTES = 16 * 1024 * 1024;
+
+/** Trailing bytes fetched at top priority, for containers that index at the end. */
+const TAIL_PRIORITY_BYTES = 4 * 1024 * 1024;
+
 /** Give up waiting for metadata; usually means a dead swarm. */
 const METADATA_TIMEOUT_MS = 45_000;
+
+/** No new bytes for this long, with the file incomplete, counts as stalled. */
+const STALL_THRESHOLD_MS = 45_000;
 
 export interface StreamRequest {
   /** Magnet URI, `.torrent` URL, or bare infohash. */
@@ -47,6 +63,8 @@ export interface StreamRequest {
   fileIndex?: number;
   /** Filename the indexer expects; matched by name if the index is stale. */
   expectedFileName?: string;
+  /** Overrides the engine-wide cache directory for this torrent only. */
+  downloadPath?: string;
 }
 
 export interface StreamHandle {
@@ -54,10 +72,19 @@ export interface StreamHandle {
   streamUrl: string;
   fileName: string;
   fileSize: number;
+  /** Absolute on-disk location of the selected file, for downloads. */
+  diskPath: string;
   files: TorrentFileEntry[];
   /** Subtitle files found inside the torrent, served from the same loopback origin. */
   subtitleUrls: Array<{ name: string; url: string }>;
   mimeType: string;
+}
+
+/** Per-torrent liveness sample, used to tell "slow" apart from "dead". */
+interface StreamWatch {
+  startedAt: number;
+  lastBytes: number;
+  lastProgressAt: number;
 }
 
 function extensionOf(name: string): string {
@@ -66,6 +93,11 @@ function extensionOf(name: string): string {
 
 function isVideoFile(file: { name: string }): boolean {
   return VIDEO_EXTENSIONS.has(extensionOf(file.name));
+}
+
+/** Sample/extra files inside a release; never the feature the user asked for. */
+function isJunkFile(file: { path: string; length: number }): boolean {
+  return /(^|[/\\])(sample|extras?|featurettes?|trailers?)([/\\]|[-_. ])/i.test(file.path);
 }
 
 function mimeForExtension(ext: string): string {
@@ -89,10 +121,13 @@ export class TorrentEngine {
   private client: WebTorrent | null = null;
   private server: NodeServer | null = null;
   private serverPort = 0;
+  /** In-flight startup, so concurrent callers share one client and one server. */
+  private starting: Promise<{ client: WebTorrent; port: number }> | null = null;
   private downloadPath: string;
   /** infoHash → the file index currently selected for streaming. */
   private selectedFile = new Map<string, number>();
   private lastError = new Map<string, string>();
+  private watches = new Map<string, StreamWatch>();
 
   constructor(downloadPath?: string) {
     this.downloadPath =
@@ -105,46 +140,72 @@ export class TorrentEngine {
 
   // --- lifecycle -----------------------------------------------------------
 
-  private async ensureStarted(): Promise<{ client: WebTorrent; port: number }> {
+  /**
+   * Starts the client and loopback server, at most once.
+   *
+   * The single-flight promise is the point: `startStream` is called from IPC and
+   * from the download service, and two overlapping calls previously each built a
+   * client and bound a server, orphaning one of them along with its port.
+   */
+  private ensureStarted(): Promise<{ client: WebTorrent; port: number }> {
     if (this.client && !this.client.destroyed && this.server && this.serverPort > 0) {
-      return { client: this.client, port: this.serverPort };
+      return Promise.resolve({ client: this.client, port: this.serverPort });
     }
+    if (this.starting) return this.starting;
 
+    this.starting = this.startOnce().finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
+
+  private async startOnce(): Promise<{ client: WebTorrent; port: number }> {
     fs.mkdirSync(this.downloadPath, { recursive: true });
 
-    this.client = new WebTorrent({
+    const client = new WebTorrent({
       maxConns: 100,
       dht: true,
       lsd: true,
       webSeeds: true,
     });
 
-    this.client.on('error', (err) => {
+    client.on('error', (err) => {
       // Client-level errors are usually per-torrent and non-fatal; a throw here
       // would take down the main process.
       console.error('[torrent] client error:', err instanceof Error ? err.message : err);
     });
 
-    this.server = this.client.createServer({ pathname: '/webtorrent' }, 'node');
+    const server = client.createServer({ pathname: '/webtorrent' }, 'node');
 
-    this.serverPort = await new Promise<number>((resolve, reject) => {
-      const wrapper = this.server;
-      if (!wrapper) return reject(new Error('Failed to create torrent server'));
+    try {
+      const port = await new Promise<number>((resolve, reject) => {
+        // Error events live on the wrapped http.Server, not the wrapper.
+        server.server.once('error', reject);
 
-      // Error events live on the wrapped http.Server, not the wrapper.
-      wrapper.server.once('error', reject);
-
-      // Port 0 = let the OS assign, matching Android's ephemeral-port approach.
-      // Bind to loopback only: this server exposes file contents and must never
-      // be reachable from the network.
-      wrapper.listen(0, '127.0.0.1', () => {
-        const address = wrapper.address();
-        if (address && typeof address === 'object') resolve(address.port);
-        else reject(new Error('Torrent server did not report a port'));
+        // Port 0 = let the OS assign, matching Android's ephemeral-port approach.
+        // Bind to loopback only: this server exposes file contents and must never
+        // be reachable from the network.
+        server.listen(0, '127.0.0.1', () => {
+          const address = server.address();
+          if (address && typeof address === 'object') resolve(address.port);
+          else reject(new Error('Torrent server did not report a port'));
+        });
       });
-    });
 
-    return { client: this.client, port: this.serverPort };
+      this.client = client;
+      this.server = server;
+      this.serverPort = port;
+      return { client, port };
+    } catch (error) {
+      // A half-built client holds sockets; drop it rather than leaving it live.
+      try {
+        server.close();
+      } catch {
+        // Already closed.
+      }
+      client.destroy();
+      throw error;
+    }
   }
 
   // --- file selection ------------------------------------------------------
@@ -157,9 +218,15 @@ export class TorrentEngine {
    * assuming largest is exactly how a user asking for E03 ends up watching E07.
    */
   private pickFile(torrent: Torrent, request: StreamRequest): TorrentFile | null {
-    const videos = torrent.files.filter(isVideoFile);
-    if (videos.length === 0) return null;
-    if (videos.length === 1) return videos[0];
+    const allVideos = torrent.files.filter(isVideoFile);
+    if (allVideos.length === 0) return null;
+    if (allVideos.length === 1) return allVideos[0];
+
+    // Samples and extras are video files too, and a 40 MB sample is exactly what
+    // "pick the first video" lands on. Only fall back to them if there is
+    // nothing else at all.
+    const nonJunk = allVideos.filter((file) => !isJunkFile(file));
+    const videos = nonJunk.length > 0 ? nonJunk : allVideos;
 
     // 1. Filename the indexer named. Most reliable: it survives the index
     //    drifting, which happens when a torrent is re-created with extra files.
@@ -190,16 +257,38 @@ export class TorrentEngine {
         // Among equally-matching files prefer the largest (higher bitrate copy).
         return matches.reduce((a, b) => (b.length > a.length ? b : a));
       }
+
+      // An episode was requested and no file matched. Returning the largest file
+      // here is how "play S01E03" silently plays S01E07, so refuse instead — the
+      // caller can fail over to another source.
+      if (videos.length > 1) return null;
     }
 
-    // No episode requested, or nothing matched: the largest video file is the
-    // feature rather than a sample/extra.
+    // No episode requested: the largest video file is the feature.
     return videos.reduce((a, b) => (b.length > a.length ? b : a));
   }
 
+  /** Byte offset of a file inside the torrent's concatenated piece space. */
+  private offsetOf(torrent: Torrent, target: TorrentFile): number {
+    if (typeof target.offset === 'number') return target.offset;
+
+    let offset = 0;
+    for (const file of torrent.files) {
+      if (file === target) break;
+      offset += file.length;
+    }
+    return offset;
+  }
+
   /**
-   * Restricts download to the chosen file. Without this the client spreads
-   * bandwidth across every file in a pack and nothing becomes playable quickly.
+   * Restricts download to the chosen file and front-loads the pieces playback
+   * actually blocks on.
+   *
+   * Without the deselect, the client spreads bandwidth across every file in a
+   * pack and nothing becomes playable quickly. Without the explicit head/tail
+   * selection, a sequential strategy still walks the file from byte 0, which
+   * never reaches the trailing `moov` atom that MP4s muxed for disk need before
+   * the first frame can be decoded.
    */
   private focusOn(torrent: Torrent, target: TorrentFile): void {
     for (const file of torrent.files) {
@@ -212,6 +301,31 @@ export class TorrentEngine {
       }
     }
     target.select(1);
+
+    const pieceLength = torrent.pieceLength;
+    if (!pieceLength || pieceLength <= 0) return;
+
+    const offset = this.offsetOf(torrent, target);
+    const firstPiece = Math.floor(offset / pieceLength);
+    const lastPiece = Math.floor((offset + target.length - 1) / pieceLength);
+
+    const headEnd = Math.min(
+      lastPiece,
+      firstPiece + Math.ceil(HEAD_PRIORITY_BYTES / pieceLength)
+    );
+    const tailStart = Math.max(
+      headEnd + 1,
+      lastPiece - Math.ceil(TAIL_PRIORITY_BYTES / pieceLength)
+    );
+
+    try {
+      // Priority 10 outranks the plain `select(1)` above, so these windows are
+      // requested before the sequential walk reaches them.
+      torrent.select(firstPiece, headEnd, 10);
+      if (tailStart <= lastPiece) torrent.select(tailStart, lastPiece, 9);
+    } catch {
+      // Piece-range selection is best-effort; the file-level select still holds.
+    }
   }
 
   private fileUrl(port: number, infoHash: string, file: TorrentFile): string {
@@ -225,49 +339,176 @@ export class TorrentEngine {
   public async startStream(request: StreamRequest): Promise<StreamHandle> {
     const { client, port } = await this.ensureStarted();
 
-    const torrent = await this.addTorrent(client, request.torrentId);
+    const torrent = await this.addTorrent(client, request);
     const file = this.pickFile(torrent, request);
 
     if (!file) {
-      throw new Error('This torrent contains no playable video file.');
+      // Nothing here is playable, and failover will move on to another source —
+      // so this torrent must not be left in the client holding sockets. It is
+      // only dropped when no other stream is using it.
+      if (!this.selectedFile.has(torrent.infoHash)) {
+        await this.stopStream(torrent.infoHash, false);
+      }
+
+      const wanted =
+        request.episode !== undefined
+          ? `episode ${request.season !== undefined ? `S${request.season}` : ''}E${request.episode}`
+          : 'a playable video file';
+      throw new Error(`This torrent does not contain ${wanted}.`);
     }
 
     this.focusOn(torrent, file);
     this.selectedFile.set(torrent.infoHash, torrent.files.indexOf(file));
+    this.lastError.delete(torrent.infoHash);
+    this.watches.set(torrent.infoHash, {
+      startedAt: Date.now(),
+      lastBytes: file.downloaded,
+      lastProgressAt: Date.now(),
+    });
 
-    const subtitleUrls = torrent.files
-      .filter((f) => SUBTITLE_EXTENSIONS.has(extensionOf(f.name)))
-      .map((f) => ({ name: f.name, url: this.fileUrl(port, torrent.infoHash, f) }));
+    return this.describeHandle(torrent, file, port);
+  }
 
+  private describeHandle(torrent: Torrent, file: TorrentFile, port: number): StreamHandle {
     return {
       infoHash: torrent.infoHash,
       streamUrl: this.fileUrl(port, torrent.infoHash, file),
       fileName: file.name,
       fileSize: file.length,
+      // `file.path` is relative to the torrent root, which itself sits under the
+      // torrent's download directory — joining both is the only way to get a
+      // path that exists for multi-file releases.
+      diskPath: path.join(torrent.path, file.path),
       files: this.describeFiles(torrent),
-      subtitleUrls,
+      subtitleUrls: torrent.files
+        .filter((f) => SUBTITLE_EXTENSIONS.has(extensionOf(f.name)))
+        .map((f) => ({ name: f.name, url: this.fileUrl(port, torrent.infoHash, f) })),
       mimeType: mimeForExtension(extensionOf(file.name)),
     };
   }
 
   /**
+   * Blocks until enough leading data exists to start playback, or the swarm
+   * proves itself dead.
+   *
+   * This is what makes automatic failover possible: a caller can commit to a
+   * source only once it has produced real bytes, instead of handing the player a
+   * URL that will spin forever.
+   */
+  public async waitUntilPlayable(
+    infoHash: string,
+    timeoutMs: number
+  ): Promise<{ playable: boolean; reason?: string }> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const stats = await this.getStats(infoHash);
+      if (!stats) return { playable: false, reason: 'The stream was closed before it started.' };
+      if (stats.error) return { playable: false, reason: stats.error };
+      if (stats.isPlayable) return { playable: true };
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    const stats = await this.getStats(infoHash);
+    return {
+      playable: false,
+      reason:
+        stats && stats.peers === 0
+          ? 'No peers responded — the swarm looks dead.'
+          : 'Timed out waiting for enough data to start playback.',
+    };
+  }
+
+  /**
+   * Normalises whatever the indexer gave us into something WebTorrent accepts.
+   * A bare infohash carries no trackers, so a DHT-less network sees no peers at
+   * all until one is attached.
+   */
+  private normaliseTorrentId(torrentId: string): string {
+    const trimmed = torrentId.trim();
+    if (/^[a-f0-9]{40}$/i.test(trimmed)) {
+      const trackers = DEFAULT_TRACKERS.map((t) => `tr=${encodeURIComponent(t)}`).join('&');
+      return `magnet:?xt=urn:btih:${trimmed.toLowerCase()}&${trackers}`;
+    }
+    return trimmed;
+  }
+
+  /**
    * Adds a torrent and resolves once metadata is available.
+   *
    * Reuses an existing torrent when the same infohash is already active, which
    * makes re-entering a title instant instead of re-bootstrapping the swarm.
+   * A torrent that exists but is *not yet ready* is waited on rather than added
+   * again — adding a duplicate makes WebTorrent throw and used to surface as a
+   * spurious "could not start the stream".
    */
-  private async addTorrent(client: WebTorrent, torrentId: string): Promise<Torrent> {
-    const existingHash = this.extractInfoHash(torrentId);
-    if (existingHash) {
-      const existing = await Promise.resolve(client.get(existingHash));
-      if (existing && existing.ready) return existing;
+  private async addTorrent(client: WebTorrent, request: StreamRequest): Promise<Torrent> {
+    const torrentId = this.normaliseTorrentId(request.torrentId);
+    const knownHash = this.extractInfoHash(torrentId);
+
+    if (knownHash) {
+      const existing = await Promise.resolve(client.get(knownHash));
+      if (existing) {
+        if (existing.ready) return existing;
+        return this.awaitReady(existing, client);
+      }
     }
+
+    let torrent: Torrent;
+    try {
+      torrent = client.add(torrentId, {
+        path: request.downloadPath ?? this.downloadPath,
+        strategy: 'sequential',
+        announce: [...DEFAULT_TRACKERS],
+        // Nothing is downloaded until `focusOn` picks a file. Without this the
+        // client starts pulling every file in a season pack the moment metadata
+        // lands, and the episode the user asked for gets a fraction of the swarm.
+        deselect: true,
+      });
+    } catch (error) {
+      // WebTorrent throws synchronously on a duplicate; recover by adopting the
+      // torrent that is already there.
+      const message = error instanceof Error ? error.message : String(error);
+      if (knownHash && /duplicate/i.test(message)) {
+        const existing = await Promise.resolve(client.get(knownHash));
+        if (existing) return existing.ready ? existing : this.awaitReady(existing, client);
+      }
+      throw error instanceof Error ? error : new Error(message);
+    }
+
+    return this.awaitReady(torrent, client);
+  }
+
+  /**
+   * Waits for a torrent's metadata, cleaning up on failure.
+   *
+   * The cleanup is the important half: a timed-out torrent that stays in the
+   * client blocks every later attempt at the same infohash as a duplicate, so
+   * retrying a flaky source used to fail permanently until restart.
+   */
+  private awaitReady(torrent: Torrent, client: WebTorrent): Promise<Torrent> {
+    if (torrent.ready) return Promise.resolve(torrent);
 
     return new Promise<Torrent>((resolve, reject) => {
       let settled = false;
 
+      const cleanup = () => {
+        clearTimeout(timer);
+        torrent.removeAllListeners('ready');
+        torrent.removeAllListeners('error');
+      };
+
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
+        cleanup();
+        // Drop the dead torrent so the same magnet can be tried again.
+        try {
+          client.remove(torrent, { destroyStore: false }, () => undefined);
+        } catch {
+          // Already gone.
+        }
         reject(
           new Error(
             'Timed out fetching torrent metadata. The swarm may be dead or unreachable — try a source with more seeders.'
@@ -275,36 +516,28 @@ export class TorrentEngine {
         );
       }, METADATA_TIMEOUT_MS);
 
-      const finish = (error: Error | null, torrent?: Torrent) => {
+      torrent.on('ready', () => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
-        if (error) reject(error);
-        else if (torrent) resolve(torrent);
-      };
-
-      let torrent: Torrent;
-      try {
-        torrent = client.add(
-          torrentId,
-          {
-            path: this.downloadPath,
-            strategy: 'sequential',
-            announce: [...DEFAULT_TRACKERS],
-          },
-          (added) => finish(null, added)
-        );
-      } catch (error) {
-        return finish(error instanceof Error ? error : new Error(String(error)));
-      }
-
-      torrent.on('error', (err) => {
-        const message = err instanceof Error ? err.message : String(err);
-        this.lastError.set(torrent.infoHash, message);
-        finish(new Error(message));
+        cleanup();
+        resolve(torrent);
       });
 
-      if (torrent.ready) finish(null, torrent);
+      torrent.on('error', (err) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        const message = err instanceof Error ? err.message : String(err);
+        this.lastError.set(torrent.infoHash, message);
+        reject(new Error(message));
+      });
+
+      // `ready` may already have fired between the guard above and the listener.
+      if (torrent.ready && !settled) {
+        settled = true;
+        cleanup();
+        resolve(torrent);
+      }
     });
   }
 
@@ -339,14 +572,7 @@ export class TorrentEngine {
       return Math.round(file.progress * file.length);
     }
 
-    // `file.offset` is not in our type surface; derive the start offset from the
-    // preceding files, which is how webtorrent lays them out.
-    let offset = 0;
-    for (const candidate of torrent.files) {
-      if (candidate === file) break;
-      offset += candidate.length;
-    }
-
+    const offset = this.offsetOf(torrent, file);
     const firstPiece = Math.floor(offset / pieceLength);
     const lastPiece = Math.floor((offset + file.length - 1) / pieceLength);
 
@@ -371,6 +597,7 @@ export class TorrentEngine {
     if (!file) return null;
 
     const readyBytes = this.computeReadyBytes(torrent, file);
+    const stalledMs = this.updateWatch(infoHash, file);
 
     return {
       infoHash,
@@ -389,8 +616,35 @@ export class TorrentEngine {
       isPlayable: readyBytes >= Math.min(PLAYABLE_THRESHOLD_BYTES, file.length * 0.02),
       timeRemainingMs: Number.isFinite(torrent.timeRemaining) ? torrent.timeRemaining : 0,
       isPaused: torrent.paused,
+      stalledMs,
+      isStalled: stalledMs >= STALL_THRESHOLD_MS && file.progress < 1,
       error: this.lastError.get(infoHash),
     };
+  }
+
+  /**
+   * Tracks how long a torrent has gone without producing a byte.
+   *
+   * Speed alone is a poor signal — it dips to zero constantly between pieces.
+   * Time since the last increase in downloaded bytes is what distinguishes a
+   * slow swarm from one that is never going to deliver.
+   */
+  private updateWatch(infoHash: string, file: TorrentFile): number {
+    const now = Date.now();
+    const watch = this.watches.get(infoHash);
+
+    if (!watch) {
+      this.watches.set(infoHash, { startedAt: now, lastBytes: file.downloaded, lastProgressAt: now });
+      return 0;
+    }
+
+    if (file.downloaded > watch.lastBytes) {
+      watch.lastBytes = file.downloaded;
+      watch.lastProgressAt = now;
+      return 0;
+    }
+
+    return now - watch.lastProgressAt;
   }
 
   public async selectFile(infoHash: string, fileIndex: number): Promise<StreamHandle | null> {
@@ -404,18 +658,14 @@ export class TorrentEngine {
 
     this.focusOn(torrent, file);
     this.selectedFile.set(infoHash, fileIndex);
+    // Switching files restarts the liveness clock; the new file has no bytes yet.
+    this.watches.set(infoHash, {
+      startedAt: Date.now(),
+      lastBytes: file.downloaded,
+      lastProgressAt: Date.now(),
+    });
 
-    return {
-      infoHash,
-      streamUrl: this.fileUrl(this.serverPort, infoHash, file),
-      fileName: file.name,
-      fileSize: file.length,
-      files: this.describeFiles(torrent),
-      subtitleUrls: torrent.files
-        .filter((f) => SUBTITLE_EXTENSIONS.has(extensionOf(f.name)))
-        .map((f) => ({ name: f.name, url: this.fileUrl(this.serverPort, infoHash, f) })),
-      mimeType: mimeForExtension(extensionOf(file.name)),
-    };
+    return this.describeHandle(torrent, file, this.serverPort);
   }
 
   public async pause(infoHash: string): Promise<void> {
@@ -425,7 +675,12 @@ export class TorrentEngine {
 
   public async resume(infoHash: string): Promise<void> {
     const torrent = this.client ? await Promise.resolve(this.client.get(infoHash)) : null;
-    torrent?.resume();
+    if (!torrent) return;
+    torrent.resume();
+    // A paused torrent makes no progress by definition; do not count the pause
+    // against the stall clock when it comes back.
+    const watch = this.watches.get(infoHash);
+    if (watch) watch.lastProgressAt = Date.now();
   }
 
   /**
@@ -440,6 +695,7 @@ export class TorrentEngine {
 
     this.selectedFile.delete(infoHash);
     this.lastError.delete(infoHash);
+    this.watches.delete(infoHash);
 
     await new Promise<void>((resolve) => {
       this.client?.remove(torrent, { destroyStore: !keepFiles }, () => resolve());
@@ -486,6 +742,7 @@ export class TorrentEngine {
     this.server = null;
     this.serverPort = 0;
     this.selectedFile.clear();
+    this.watches.clear();
 
     await new Promise<void>((resolve) => {
       if (!server) return resolve();
