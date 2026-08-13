@@ -124,6 +124,13 @@ export interface IndexerQuery {
 export const IndexerKind = {
   Builtin: 'builtin',
   Torznab: 'torznab',
+  /**
+   * Any Stremio stream addon (Torrentio, MediaFusion, Jackettio, Comet…). One
+   * documented GET protocol covers the whole ecosystem, so a user with a working
+   * addon URL — including a self-hosted or debrid-configured one — can add it
+   * without waiting for a bespoke adapter.
+   */
+  Stremio: 'stremio',
 } as const;
 export type IndexerKind = (typeof IndexerKind)[keyof typeof IndexerKind];
 
@@ -132,7 +139,7 @@ export interface IndexerConfig {
   name: string;
   kind: IndexerKind;
   enabled: boolean;
-  /** Torznab base URL, e.g. `http://127.0.0.1:9117` for Jackett. */
+  /** Torznab base URL (`http://127.0.0.1:9117`) or Stremio addon base URL. */
   baseUrl?: string;
   apiKey?: string;
   /** Torznab indexer slug; `all` aggregates every configured indexer. */
@@ -207,6 +214,13 @@ export interface TorrentStreamStats {
   isPlayable: boolean;
   timeRemainingMs: number;
   isPaused: boolean;
+  /** Milliseconds since the selected file last gained a byte. */
+  stalledMs: number;
+  /**
+   * True when nothing has arrived for long enough that the swarm is more likely
+   * dead than slow. Drives the player's failover prompt.
+   */
+  isStalled: boolean;
   error?: string;
 }
 

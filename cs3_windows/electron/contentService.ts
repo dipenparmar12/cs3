@@ -30,6 +30,26 @@ import type { PluginManager } from './pluginManager';
  * caller gets an empty list and a reason, never a placeholder video.
  */
 
+/** How many ranked sources an automatic start will try before giving up. */
+const DEFAULT_FAILOVER_ATTEMPTS = 4;
+
+/** Time each candidate gets to prove its swarm is alive. */
+const DEFAULT_SOURCE_BUDGET_MS = 25_000;
+
+/** One rejected candidate, kept so the UI can say what was tried and why it failed. */
+export interface StreamAttempt {
+  title: string;
+  indexerName: string;
+  error: string;
+}
+
+export interface AutoStreamResult {
+  handle: StreamHandle;
+  /** The source that actually started, which may not be the top-ranked one. */
+  source: TorrentResult;
+  attempts: StreamAttempt[];
+}
+
 export interface SourceQuery {
   /** A `cs3meta://` URL, a magnet, or a direct http(s) media URL. */
   mediaUrl: string;
@@ -330,6 +350,92 @@ export class ContentService {
       fileIndex: source.fileIndex,
       expectedFileName: source.expectedFileName,
     });
+  }
+
+  /**
+   * Starts the best source that actually works, falling through the ranked list.
+   *
+   * The ranker orders by how good a release *looks*; whether its swarm is alive
+   * can only be learned by trying. A top-ranked release with 400 stale seeders
+   * reported by an indexer that last scraped a week ago is indistinguishable
+   * from a healthy one until bytes either arrive or don't — so each candidate is
+   * given a budget to produce playable data, and the first that does wins.
+   *
+   * Every discarded attempt is torn down, including its partial cache, so a
+   * failover does not leave three dead swarms holding sockets.
+   */
+  public async startBestStream(
+    candidates: TorrentResult[],
+    season?: number,
+    episode?: number,
+    options: { maxAttempts?: number; perSourceMs?: number } = {}
+  ): Promise<AutoStreamResult> {
+    const maxAttempts = options.maxAttempts ?? DEFAULT_FAILOVER_ATTEMPTS;
+    const perSourceMs = options.perSourceMs ?? DEFAULT_SOURCE_BUDGET_MS;
+    const attempts: StreamAttempt[] = [];
+
+    const usable = candidates.filter((c) => c.magnet || c.torrentUrl || c.infoHash);
+    if (usable.length === 0) {
+      throw new Error('None of the sources found carry a usable magnet or torrent link.');
+    }
+
+    for (const source of usable.slice(0, maxAttempts)) {
+      let handle: StreamHandle | null = null;
+      try {
+        handle = await this.startStream(source, season, episode);
+      } catch (error) {
+        attempts.push({
+          title: source.title,
+          indexerName: source.indexerName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+
+      const verdict = await this.engine.waitUntilPlayable(handle.infoHash, perSourceMs);
+      if (verdict.playable) {
+        return { handle, source, attempts };
+      }
+
+      // Not playable inside the budget. A source that is merely slow — bytes are
+      // arriving, peers are connected — is still the best answer we have, so it
+      // is only discarded when nothing at all came through.
+      const stats = await this.engine.getStats(handle.infoHash);
+      const makingProgress = Boolean(stats && stats.downloaded > 0 && stats.peers > 0);
+      if (makingProgress) {
+        return { handle, source, attempts };
+      }
+
+      attempts.push({
+        title: source.title,
+        indexerName: source.indexerName,
+        error: verdict.reason ?? 'No data arrived within the time budget.',
+      });
+      // Discard the cache too: a swarm that produced nothing has nothing worth keeping.
+      await this.engine.stopStream(handle.infoHash, false);
+    }
+
+    const detail = attempts.map((a) => `${a.title} (${a.indexerName}): ${a.error}`).join('; ');
+    throw new Error(
+      `Tried ${attempts.length} source${attempts.length === 1 ? '' : 's'} and none started. ${detail}`
+    );
+  }
+
+  /**
+   * Convenience path for "just play this": finds sources and streams the first
+   * that works, in one call. Used by in-player episode switching, where bouncing
+   * the user back to a source list would defeat the point.
+   */
+  public async autoPlay(request: SourceQuery): Promise<AutoStreamResult & { query: SourceResponse['query'] }> {
+    const found = await this.getSources(request);
+    if (found.sources.length === 0) {
+      throw new Error(found.emptyReason ?? 'No sources found for this episode.');
+    }
+    // `getSources` also derives season/episode from `?s=&e=` on episode URLs, so
+    // its resolved query is authoritative — passing the raw request here would
+    // lose the episode for callers that only had a URL.
+    const result = await this.startBestStream(found.sources, found.query.season, found.query.episode);
+    return { ...result, query: found.query };
   }
 
   public getPreferences(): SourcePreferences {

@@ -41,6 +41,9 @@ export const SourceSettings: React.FC = () => {
   const [newUrl, setNewUrl] = useState('http://127.0.0.1:9117');
   const [newKey, setNewKey] = useState('');
 
+  const [addonName, setAddonName] = useState('');
+  const [addonUrl, setAddonUrl] = useState('');
+
   const refresh = useCallback(async () => {
     if (!window.cloudstream) return;
     const [c, h, p] = await Promise.all([
@@ -107,6 +110,27 @@ export const SourceSettings: React.FC = () => {
     testIndexer(config);
   };
 
+  const addStremioAddon = async () => {
+    if (!window.cloudstream || !addonUrl.trim()) return;
+    const config: IndexerConfig = {
+      id: `stremio-${Date.now()}`,
+      name: addonName.trim() || 'Stremio addon',
+      kind: IndexerKind.Stremio,
+      enabled: true,
+      // A manifest URL is what addon sites hand out; the adapter trims it.
+      baseUrl: addonUrl.trim(),
+    };
+    setConfigs(await window.cloudstream.saveIndexerConfig(config));
+    setAddonName('');
+    setAddonUrl('');
+    flash('Addon added. Test it to confirm it responds.');
+    testIndexer(config);
+  };
+
+  /** Built-ins cannot be removed, only disabled; user-added entries can be deleted. */
+  const isUserAdded = (config: IndexerConfig) =>
+    config.kind === IndexerKind.Torznab || config.kind === IndexerKind.Stremio;
+
   const updatePrefs = async (patch: Partial<SourcePreferences>) => {
     if (!window.cloudstream || !prefs) return;
     const next = { ...prefs, ...patch };
@@ -122,10 +146,12 @@ export const SourceSettings: React.FC = () => {
         <Radio size={17} /> Sources
       </h3>
       <p className="settings-section__hint">
-        Indexers are searched in parallel. Torrentio and The Pirate Bay answer on stable
-        hosts and work on most networks; per-site indexers rotate domains and are blocked
-        by many ISPs, so they ship disabled. For full control, run{' '}
-        <strong>Jackett</strong> or <strong>Prowlarr</strong> locally and add it below.
+        Indexers are searched in parallel and their results are merged and deduplicated.
+        The ones enabled by default answer on stable hosts and work on most networks;
+        per-site indexers (1337x, BitSearch, TheRARBG, YTS, EZTV, Nyaa) rotate domains and
+        are blocked by many ISPs, so they ship disabled — enable them if your connection is
+        unfiltered. For full control, run <strong>Jackett</strong> or{' '}
+        <strong>Prowlarr</strong> locally and add it below.
       </p>
 
       <ul className="indexer-list">
@@ -144,6 +170,9 @@ export const SourceSettings: React.FC = () => {
                   <strong>{config.name}</strong>
                   {config.kind === IndexerKind.Torznab && (
                     <span className="badge badge--muted">Torznab</span>
+                  )}
+                  {config.kind === IndexerKind.Stremio && (
+                    <span className="badge badge--muted">Stremio addon</span>
                   )}
                 </span>
               </label>
@@ -177,7 +206,7 @@ export const SourceSettings: React.FC = () => {
                 <button className="btn btn-sm" onClick={() => testIndexer(config)}>
                   Test
                 </button>
-                {config.kind === IndexerKind.Torznab && (
+                {isUserAdded(config) && (
                   <button
                     className="icon-button"
                     onClick={() => removeIndexer(config.id)}
@@ -215,6 +244,31 @@ export const SourceSettings: React.FC = () => {
             onChange={(e) => setNewKey(e.target.value)}
           />
           <button className="btn btn-primary" onClick={addTorznab}>
+            <Plus size={15} /> Add
+          </button>
+        </div>
+      </div>
+
+      <div className="indexer-add">
+        <h4>Add a Stremio addon</h4>
+        <p className="muted">
+          Any Stremio stream addon works — Torrentio with your own tracker selection,
+          Jackettio, Comet, a self-hosted MediaFusion, or one configured with a debrid
+          account. Paste the addon URL (the manifest URL is fine). Addons are looked up by
+          IMDb id, so they only answer for titles with catalogue metadata.
+        </p>
+        <div className="indexer-add__fields">
+          <input
+            placeholder="Name (optional)"
+            value={addonName}
+            onChange={(e) => setAddonName(e.target.value)}
+          />
+          <input
+            placeholder="https://torrentio.strem.fun/providers=yts,eztv"
+            value={addonUrl}
+            onChange={(e) => setAddonUrl(e.target.value)}
+          />
+          <button className="btn btn-primary" onClick={addStremioAddon}>
             <Plus size={15} /> Add
           </button>
         </div>

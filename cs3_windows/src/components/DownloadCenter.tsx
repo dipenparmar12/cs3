@@ -1,7 +1,7 @@
 import React from 'react';
 import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
-import { Play, Pause, Trash2, ArrowDown, Folder, Zap } from 'lucide-react';
+import { Play, Pause, Trash2, ArrowDown, Folder, FolderOpen, RotateCw, Zap } from 'lucide-react';
 
 interface DownloadCenterProps {
   tasks: DownloadTask[];
@@ -9,6 +9,7 @@ interface DownloadCenterProps {
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onRemove: (id: string) => void;
+  onReveal?: (filePath: string) => void;
   onOpenBinarySetup?: () => void;
 }
 
@@ -18,6 +19,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   onPause,
   onResume,
   onRemove,
+  onReveal,
   onOpenBinarySetup
 }) => {
   const formatSpeed = (bytesPerSec: number): string => {
@@ -76,6 +78,10 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
               : 0;
 
             const isDownloading = task.state === DownloadState.Downloading;
+            const isComplete = task.state === DownloadState.Completed;
+            // Queued items are waiting on a concurrency slot, not on the user.
+            const isResumable =
+              task.state === DownloadState.Paused || task.state === DownloadState.Failed;
 
             return (
               <div
@@ -145,17 +151,39 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                     <span>{formatSize(task.bytesDownloaded)} / {formatSize(task.totalBytes)} ({percent}%)</span>
                     <span>{task.etaSeconds > 0 ? `ETA: ${task.etaSeconds}s` : ''}</span>
                   </div>
+
+                  {/* A failed or stalled transfer is useless without its reason —
+                      "Failed" alone gives the user nothing to act on. */}
+                  {task.errorMessage && (
+                    <p style={{
+                      fontSize: '0.72rem',
+                      color: task.state === DownloadState.Failed ? 'var(--status-error)' : 'var(--text-muted)',
+                      margin: 0,
+                    }}>
+                      {task.errorMessage}
+                    </p>
+                  )}
                 </div>
 
                 {/* Control Action Buttons */}
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  {isDownloading ? (
+                  {isDownloading && (
                     <button onClick={() => onPause(task.id)} className="btn btn-secondary btn-icon" title="Pause Download">
                       <Pause size={16} />
                     </button>
-                  ) : (
-                    <button onClick={() => onResume(task.id)} className="btn btn-secondary btn-icon" title="Resume Download">
-                      <Play size={16} />
+                  )}
+                  {isResumable && (
+                    <button
+                      onClick={() => onResume(task.id)}
+                      className="btn btn-secondary btn-icon"
+                      title={task.state === DownloadState.Failed ? 'Retry Download' : 'Resume Download'}
+                    >
+                      {task.state === DownloadState.Failed ? <RotateCw size={16} /> : <Play size={16} />}
+                    </button>
+                  )}
+                  {isComplete && onReveal && (
+                    <button onClick={() => onReveal(task.targetFilePath)} className="btn btn-secondary btn-icon" title="Show in Folder">
+                      <FolderOpen size={16} />
                     </button>
                   )}
                   <button onClick={() => onRemove(task.id)} className="btn btn-secondary btn-icon" title="Cancel & Remove">

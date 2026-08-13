@@ -8,8 +8,16 @@ import type {
 import { DEFAULT_SOURCE_PREFERENCES, IndexerKind } from '../../src/types/torrent';
 import { TvType } from '../../src/types/api';
 import { finaliseResult, type TorrentIndexer } from './indexers/base';
-import { EztvIndexer, NyaaIndexer, YtsIndexer } from './indexers/builtins';
-import { ApiBayIndexer, TorrentioIndexer } from './indexers/aggregators';
+import { AnimeToshoIndexer, EztvIndexer, NyaaIndexer, YtsIndexer } from './indexers/builtins';
+import {
+  ApiBayIndexer,
+  KnabenIndexer,
+  MediaFusionIndexer,
+  StremioAddonIndexer,
+  TorrentioIndexer,
+  TorrentsCsvIndexer,
+} from './indexers/aggregators';
+import { BitSearchIndexer, TheRarbgIndexer, X1337Indexer } from './indexers/scrapers';
 import { TorznabIndexer } from './indexers/torznab';
 import { dedupeByInfoHash, rankResults, type RankContext } from './ranker';
 import type { DatastoreManager } from '../datastore';
@@ -36,29 +44,47 @@ const SETTINGS_KEY_INDEXERS = 'torrent_indexer_configs';
 const SETTINGS_KEY_INDEXER_VERSION = 'torrent_indexer_configs_version';
 const SETTINGS_KEY_PREFERENCES = 'torrent_source_preferences';
 
+const ANIME_TYPES = [TvType.Anime, TvType.AnimeMovie, TvType.OVA];
+
 /**
  * Defaults are ordered by how reliably they work in practice.
  *
- * Torrentio and apibay are enabled because they answer on single, stable,
- * Cloudflare-fronted hosts that survive the ISP DNS blocking which takes out
- * per-site indexers. YTS/EZTV/Nyaa are shipped but **disabled by default**:
- * their domains rotate constantly and are blocked on many networks, so leaving
- * them on mostly buys timeouts and empty results. Users on unfiltered
- * connections can enable them in Settings → Sources.
+ * **Enabled by default** are the sources that answer on a single stable host and
+ * survive the ISP DNS blocking which takes out per-site indexers:
+ *  - Torrentio aggregates dozens of trackers server-side and is keyed by IMDb
+ *    id, so it covers anything with catalogue metadata.
+ *  - Knaben, apibay and Torrents-CSV take free text, so they cover the titles
+ *    for which no IMDb id could be resolved — the case that used to return
+ *    nothing at all.
+ *  - AnimeTosho covers anime, where absolute episode numbering means the
+ *    IMDb-keyed addons frequently miss.
+ *
+ * **Disabled by default** are the per-site scrapers (YTS, EZTV, Nyaa, 1337x,
+ * BitSearch, TheRARBG). Their domains rotate constantly and are blocked on many
+ * networks, so leaving them on mostly buys timeouts and empty results. Users on
+ * unfiltered connections can enable them in Settings → Sources, and users behind
+ * a block are better served by a Torznab (Jackett/Prowlarr) entry.
  */
 export const DEFAULT_INDEXER_CONFIGS: IndexerConfig[] = [
+  { id: 'torrentio', name: 'Torrentio', kind: IndexerKind.Builtin, enabled: true },
+  // Disabled by default: the public MediaFusion instance expects a per-user
+  // configured URL (tracker selection, optional debrid), so the bare host is
+  // unlikely to answer usefully. Users who have one should paste it as a
+  // Stremio addon instead, which is what this entry is a shortcut for.
+  { id: 'mediafusion', name: 'MediaFusion', kind: IndexerKind.Builtin, enabled: false },
+  { id: 'knaben', name: 'Knaben', kind: IndexerKind.Builtin, enabled: true },
+  { id: 'apibay', name: 'The Pirate Bay', kind: IndexerKind.Builtin, enabled: true },
+  { id: 'torrentscsv', name: 'Torrents-CSV', kind: IndexerKind.Builtin, enabled: true },
   {
-    id: 'torrentio',
-    name: 'Torrentio',
+    id: 'animetosho',
+    name: 'AnimeTosho',
     kind: IndexerKind.Builtin,
     enabled: true,
+    supportedTypes: ANIME_TYPES,
   },
-  {
-    id: 'apibay',
-    name: 'The Pirate Bay',
-    kind: IndexerKind.Builtin,
-    enabled: true,
-  },
+  { id: '1337x', name: '1337x', kind: IndexerKind.Builtin, enabled: false },
+  { id: 'bitsearch', name: 'BitSearch', kind: IndexerKind.Builtin, enabled: false },
+  { id: 'therarbg', name: 'TheRARBG', kind: IndexerKind.Builtin, enabled: false },
   {
     id: 'yts',
     name: 'YTS',
@@ -78,12 +104,12 @@ export const DEFAULT_INDEXER_CONFIGS: IndexerConfig[] = [
     name: 'Nyaa',
     kind: IndexerKind.Builtin,
     enabled: false,
-    supportedTypes: [TvType.Anime, TvType.AnimeMovie, TvType.OVA],
+    supportedTypes: ANIME_TYPES,
   },
 ];
 
 /** Schema version for the stored indexer list, so defaults can be re-seeded. */
-const INDEXER_CONFIG_VERSION = 2;
+const INDEXER_CONFIG_VERSION = 3;
 
 interface CircuitState {
   consecutiveFailures: number;
@@ -122,11 +148,22 @@ export class IndexerRegistry {
 
     if (storedVersion < INDEXER_CONFIG_VERSION || !Array.isArray(stored) || stored.length === 0) {
       // Re-seed on upgrade so existing installs pick up newly added indexers.
-      // User-added Torznab entries are preserved — only the built-ins are reset.
-      const userAdded = Array.isArray(stored)
-        ? stored.filter((c) => c.kind === IndexerKind.Torznab)
-        : [];
-      this.configs = [...DEFAULT_INDEXER_CONFIGS, ...userAdded];
+      const previous = Array.isArray(stored) ? stored : [];
+
+      // Everything the user added themselves is theirs; only built-ins are reset.
+      const userAdded = previous.filter(
+        (c) => c.kind === IndexerKind.Torznab || c.kind === IndexerKind.Stremio
+      );
+
+      // A built-in the user had already turned on or off keeps that choice —
+      // re-seeding should add the new indexers, not undo the user's settings.
+      const priorState = new Map(previous.map((c) => [c.id, c.enabled]));
+      const builtins = DEFAULT_INDEXER_CONFIGS.map((config) => ({
+        ...config,
+        enabled: priorState.get(config.id) ?? config.enabled,
+      }));
+
+      this.configs = [...builtins, ...userAdded];
       this.datastore.setObject(SETTINGS_KEY_INDEXERS, this.configs);
       this.datastore.setInt(SETTINGS_KEY_INDEXER_VERSION, INDEXER_CONFIG_VERSION);
     } else {
@@ -176,12 +213,27 @@ export class IndexerRegistry {
 
   private buildAdapter(config: IndexerConfig): TorrentIndexer | null {
     if (config.kind === IndexerKind.Torznab) return new TorznabIndexer(config);
+    if (config.kind === IndexerKind.Stremio) return StremioAddonIndexer.fromConfig(config);
 
     switch (config.id) {
       case 'torrentio':
         return new TorrentioIndexer();
+      case 'mediafusion':
+        return new MediaFusionIndexer();
+      case 'knaben':
+        return new KnabenIndexer();
       case 'apibay':
         return new ApiBayIndexer();
+      case 'torrentscsv':
+        return new TorrentsCsvIndexer();
+      case 'animetosho':
+        return new AnimeToshoIndexer();
+      case '1337x':
+        return new X1337Indexer();
+      case 'bitsearch':
+        return new BitSearchIndexer();
+      case 'therarbg':
+        return new TheRarbgIndexer();
       case 'yts':
         return new YtsIndexer();
       case 'eztv':
@@ -200,12 +252,16 @@ export class IndexerRegistry {
     if (adapter instanceof TorznabIndexer) return adapter.testConnection();
 
     // Built-ins have no capabilities endpoint; a cheap real search is the probe.
+    // Stremio addons only answer to an IMDb id, so probe them with a well-known
+    // one — a free-text probe would fail for reasons unrelated to the addon.
+    const probe: IndexerQuery =
+      adapter instanceof StremioAddonIndexer
+        ? { query: 'The Shawshank Redemption', imdbId: 'tt0111161', limit: 5 }
+        : { query: 'the', limit: 5 };
+
     const started = Date.now();
     try {
-      const results = await adapter.search(
-        { query: 'the', limit: 5 },
-        AbortSignal.timeout(PER_INDEXER_TIMEOUT_MS)
-      );
+      const results = await adapter.search(probe, AbortSignal.timeout(PER_INDEXER_TIMEOUT_MS));
       return {
         ok: true,
         message: `OK — ${results.length} results in ${Date.now() - started} ms`,

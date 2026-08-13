@@ -1,12 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Play, Download, Star, ArrowLeft, Loader2, AlertTriangle, Calendar, Layers } from 'lucide-react';
+import {
+  Play, Download, Star, ArrowLeft, Loader2, AlertTriangle, Calendar, Layers, ListVideo,
+} from 'lucide-react';
 import type { SearchResponse, Episode } from '../types/api';
 import { TvType } from '../types/api';
 import { DownloadState } from '../types/download';
 import type { DownloadTask } from '../types/download';
 import type { TorrentResult } from '../types/torrent';
 import { SourcePicker, type SourcePickerData } from '../components/SourcePicker';
-import type { SeriesContext } from '../components/player/EpisodePanel';
+import {
+  episodeKey,
+  type EpisodeWatchState,
+  type SeriesContext,
+} from '../components/player/seriesContext';
 import { SeasonDownloadDialog } from '../components/SeasonDownloadDialog';
 
 export interface PlaybackRequest {
@@ -33,8 +39,11 @@ export interface PlaybackRequest {
    * Supplied by this view because it owns source resolution. The player asks
    * for an episode; resolving a source for it and restarting the stream stays
    * here rather than being duplicated in the player.
+   *
+   * Rejects when no source could be started, so the shell can tell the viewer
+   * instead of leaving the player on a frozen frame.
    */
-  onRequestEpisode?: (episode: Episode) => void;
+  onRequestEpisode?: (episode: Episode) => Promise<void>;
 }
 
 interface DetailViewProps {
@@ -59,23 +68,37 @@ interface DetailData {
 }
 
 /**
- * Finds a saved playback position for this title, if there is one.
+ * Reads this title's whole watch history in one lookup.
  *
  * Looked up through the library entry rather than by URL, so a title the user
- * previously watched through a different provider still resumes.
+ * previously watched through a different provider still resumes. One call backs
+ * both the resume position and the per-episode markers, which otherwise meant
+ * two round trips for the same rows.
  */
-async function resumePositionFor(
-  detail: { name: string; url: string },
-  episode: Episode | null
-): Promise<number | undefined> {
-  if (!window.cloudstream) return undefined;
-  const entry = await window.cloudstream.getLibraryEntryForUrl(detail.url);
-  if (!entry) return undefined;
+async function loadWatchState(mediaUrl: string): Promise<Record<string, EpisodeWatchState>> {
+  if (!window.cloudstream) return {};
+
+  const entry = await window.cloudstream.getLibraryEntryForUrl(mediaUrl);
+  if (!entry) return {};
 
   const rows = await window.cloudstream.getProgressForKey(entry.key);
-  const match = rows.find(
-    (r) => r.season === episode?.season && r.episode === episode?.episode
-  );
+  const state: Record<string, EpisodeWatchState> = {};
+  for (const row of rows) {
+    state[episodeKey(row.season, row.episode)] = {
+      positionSeconds: row.positionSeconds,
+      durationSeconds: row.durationSeconds,
+      completed: row.completed,
+    };
+  }
+  return state;
+}
+
+/** Where to resume an episode from, or undefined if it was finished or never started. */
+function resumePositionFrom(
+  watchState: Record<string, EpisodeWatchState>,
+  episode: Episode | null
+): number | undefined {
+  const match = watchState[episodeKey(episode?.season, episode?.episode)];
   if (!match || match.completed) return undefined;
   return match.positionSeconds;
 }
@@ -114,6 +137,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [pickerError, setPickerError] = useState<string | undefined>();
   const [pendingEpisode, setPendingEpisode] = useState<Episode | null>(null);
   const [startingStream, setStartingStream] = useState(false);
+  /** URL of the episode currently being auto-resolved, or 'movie' for a film. */
+  const [autoPlaying, setAutoPlaying] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [seasonDownloadOpen, setSeasonDownloadOpen] = useState(false);
 
@@ -196,7 +221,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
   /** Series context handed to the player, so it can browse without coming back. */
   const seriesContextFor = useCallback(
-    (episode: Episode | null): SeriesContext | undefined => {
+    (
+      episode: Episode | null,
+      watchState: Record<string, EpisodeWatchState>
+    ): SeriesContext | undefined => {
       if (!detail || !isSeries) return undefined;
       return {
         title: detail.name,
@@ -208,43 +236,59 @@ export const DetailView: React.FC<DetailViewProps> = ({
         duration: detail.duration,
         episodes: detail.episodes ?? [],
         currentEpisodeUrl: episode?.url,
+        watchState,
       };
     },
     [detail, isSeries]
+  );
+
+  /** Records which release was played, so a later session can prefer it again. */
+  const rememberChoice = useCallback(
+    async (source: TorrentResult, episode: Episode | null) => {
+      if (!window.cloudstream || !detail) return;
+      const entry = await window.cloudstream.getLibraryEntryForUrl(detail.url);
+      if (!entry) return;
+
+      await window.cloudstream.rememberSource({
+        key: entry.key,
+        season: episode?.season,
+        episode: episode?.episode,
+        infoHash: source.infoHash,
+        sourceTitle: source.title,
+        indexerName: source.indexerName,
+        resolution: source.parsed.resolution,
+        magnet: source.magnet,
+      });
+    },
+    [detail]
   );
 
   /**
    * Plays an episode straight from the player, picking a source automatically.
    *
    * Pressing "next episode" should behave like pressing next episode, not like
-   * being returned to a source list. `getSources` already ranks its results, so
-   * the first entry is the one the picker would recommend anyway; falling back
-   * to the picker only when nothing ranks avoids guessing when there is nothing
-   * to guess from.
+   * being returned to a source list. `autoPlay` searches, ranks, and then walks
+   * the ranked list until one source actually delivers bytes — the top-ranked
+   * release is frequently a stale index entry with no live swarm, and stopping
+   * at it is what made "next episode" feel unreliable.
+   *
+   * It throws rather than silently opening the picker: the caller is the player,
+   * which is better placed to decide what to show over a running video.
    */
   const playEpisodeDirectly = useCallback(
     async (episode: Episode) => {
       if (!window.cloudstream || !detail) return;
 
       setSelectedEpisode(episode);
-      const response = await window.cloudstream.getSources({
+
+      const response = await window.cloudstream.autoPlay({
         mediaUrl: episode.url,
         season: episode.season,
         episode: episode.episode,
       });
 
-      const best = response.sources?.[0];
-      if (!response.ok || !best) {
-        // No automatic choice available — fall back to the picker so the user
-        // can see why, rather than silently doing nothing.
-        openSources(episode);
-        return;
-      }
-
-      const stream = await window.cloudstream.startStream(best, episode.season, episode.episode);
-      if (!stream.ok || !stream.handle) {
-        openSources(episode);
-        return;
+      if (!response.ok || !response.handle || !response.source) {
+        throw new Error(response.error ?? 'No working source was found for this episode.');
       }
 
       window.cloudstream.upsertLibraryEntry({
@@ -254,15 +298,18 @@ export const DetailView: React.FC<DetailViewProps> = ({
         posterUrl: detail.posterUrl,
         mediaUrl: detail.url,
       });
+      rememberChoice(response.source, episode);
+
+      const watchState = await loadWatchState(detail.url);
 
       onPlay({
-        streamUrl: stream.handle.streamUrl,
-        mimeType: stream.handle.mimeType,
+        streamUrl: response.handle.streamUrl,
+        mimeType: response.handle.mimeType,
         title: detail.name,
         episodeTitle: episode.name,
-        infoHash: stream.handle.infoHash,
-        subtitles: stream.handle.subtitleUrls,
-        series: seriesContextFor(episode),
+        infoHash: response.handle.infoHash,
+        subtitles: response.handle.subtitleUrls,
+        series: seriesContextFor(episode, watchState),
         onRequestEpisode: (next) => playEpisodeDirectlyRef.current(next),
         progress: {
           mediaUrl: episode.url,
@@ -270,11 +317,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
           posterUrl: detail.posterUrl,
           season: episode.season,
           episode: episode.episode,
-          resumeAt: await resumePositionFor(detail, episode),
+          resumeAt: resumePositionFrom(watchState, episode),
         },
       });
     },
-    [detail, onPlay, openSources, seriesContextFor]
+    [detail, onPlay, rememberChoice, seriesContextFor]
   );
 
   // The handler is embedded in the request it produces, so it needs a stable
@@ -283,6 +330,68 @@ export const DetailView: React.FC<DetailViewProps> = ({
   useEffect(() => {
     playEpisodeDirectlyRef.current = playEpisodeDirectly;
   }, [playEpisodeDirectly]);
+
+  const flash = useCallback((message: string) => {
+    setToast(message);
+    setTimeout(() => setToast(null), 5000);
+  }, []);
+
+  /**
+   * One-click play from the detail page.
+   *
+   * Choosing a source by hand is a power-user action, not the common path, and
+   * requiring it for every episode is the main reason watching something took
+   * four clicks. When automatic resolution fails the picker opens with the real
+   * reason, so the escape hatch is still one click away.
+   */
+  const playNow = useCallback(
+    async (episode: Episode | null) => {
+      if (!window.cloudstream || !detail) return;
+
+      setAutoPlaying(episode?.url ?? 'movie');
+      try {
+        if (episode) {
+          await playEpisodeDirectly(episode);
+          return;
+        }
+
+        const response = await window.cloudstream.autoPlay({ mediaUrl: detail.url });
+        if (!response.ok || !response.handle || !response.source) {
+          throw new Error(response.error ?? 'No working source was found.');
+        }
+
+        window.cloudstream.upsertLibraryEntry({
+          title: detail.name,
+          year: detail.year,
+          type: detail.type,
+          posterUrl: detail.posterUrl,
+          mediaUrl: detail.url,
+        });
+        rememberChoice(response.source, null);
+
+        const watchState = await loadWatchState(detail.url);
+        onPlay({
+          streamUrl: response.handle.streamUrl,
+          mimeType: response.handle.mimeType,
+          title: detail.name,
+          infoHash: response.handle.infoHash,
+          subtitles: response.handle.subtitleUrls,
+          progress: {
+            mediaUrl: detail.url,
+            year: detail.year,
+            posterUrl: detail.posterUrl,
+            resumeAt: resumePositionFrom(watchState, null),
+          },
+        });
+      } catch (error) {
+        flash(error instanceof Error ? error.message : 'Could not start playback.');
+        openSources(episode);
+      } finally {
+        setAutoPlaying(null);
+      }
+    },
+    [detail, onPlay, playEpisodeDirectly, rememberChoice, openSources, flash]
+  );
 
   const handlePlaySource = useCallback(
     async (source: TorrentResult) => {
@@ -297,7 +406,12 @@ export const DetailView: React.FC<DetailViewProps> = ({
       setStartingStream(false);
 
       if (!response.ok || !response.handle) {
-        setPickerError(response.error ?? 'Could not start the stream.');
+        // The user picked this source deliberately, so it is not silently
+        // swapped for another — but the picker is still open behind this
+        // message, with the next-best entries one click away.
+        setPickerError(
+          `${response.error ?? 'Could not start the stream.'} Try another source from the list.`
+        );
         return;
       }
 
@@ -309,6 +423,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
         posterUrl: detail.posterUrl,
         mediaUrl: detail.url,
       });
+      rememberChoice(source, pendingEpisode);
+
+      const watchState = await loadWatchState(detail.url);
+
       onPlay({
         streamUrl: response.handle.streamUrl,
         mimeType: response.handle.mimeType,
@@ -316,7 +434,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         episodeTitle: pendingEpisode?.name,
         infoHash: response.handle.infoHash,
         subtitles: response.handle.subtitleUrls,
-        series: seriesContextFor(pendingEpisode),
+        series: seriesContextFor(pendingEpisode, watchState),
         onRequestEpisode: (episode) => playEpisodeDirectlyRef.current(episode),
         progress: {
           mediaUrl: pendingEpisode?.url ?? detail.url,
@@ -324,11 +442,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
           posterUrl: detail.posterUrl,
           season: pendingEpisode?.season,
           episode: pendingEpisode?.episode,
-          resumeAt: await resumePositionFor(detail, pendingEpisode),
+          resumeAt: resumePositionFrom(watchState, pendingEpisode),
         },
       });
     },
-    [detail, pendingEpisode, onPlay, seriesContextFor]
+    [detail, pendingEpisode, onPlay, rememberChoice, seriesContextFor]
   );
 
   const handleDownloadSource = useCallback(
@@ -430,10 +548,21 @@ export const DetailView: React.FC<DetailViewProps> = ({
           <div className="detail-hero__actions">
             <button
               className="btn btn-primary"
-              onClick={() => openSources(isSeries ? episodesInSeason[0] ?? null : null)}
-              disabled={startingStream}
+              onClick={() => playNow(isSeries ? episodesInSeason[0] ?? null : null)}
+              disabled={startingStream || autoPlaying !== null}
             >
-              <Play size={16} /> {isSeries ? 'Play first episode' : 'Find sources'}
+              {autoPlaying !== null ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
+              {autoPlaying !== null
+                ? 'Finding a source…'
+                : isSeries
+                  ? 'Play first episode'
+                  : 'Play'}
+            </button>
+            <button
+              className="btn"
+              onClick={() => openSources(isSeries ? episodesInSeason[0] ?? null : null)}
+            >
+              <ListVideo size={16} /> Choose source
             </button>
             <button
               className="btn"
@@ -484,15 +613,30 @@ export const DetailView: React.FC<DetailViewProps> = ({
                     <p className="episode-row__desc">{episode.description}</p>
                   )}
                 </div>
-                <button
-                  className="btn btn-primary btn-sm"
-                  onClick={() => {
-                    setSelectedEpisode(episode);
-                    openSources(episode);
-                  }}
-                >
-                  <Play size={14} /> Play
-                </button>
+                <div className="episode-row__actions">
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => playNow(episode)}
+                    disabled={autoPlaying !== null}
+                  >
+                    {autoPlaying === episode.url ? (
+                      <Loader2 className="spin" size={14} />
+                    ) : (
+                      <Play size={14} />
+                    )}
+                    Play
+                  </button>
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => {
+                      setSelectedEpisode(episode);
+                      openSources(episode);
+                    }}
+                    title="Pick a source by hand"
+                  >
+                    <ListVideo size={14} />
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

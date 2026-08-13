@@ -208,6 +208,76 @@ export class EztvIndexer implements TorrentIndexer {
 // Nyaa — anime, RSS only
 // ---------------------------------------------------------------------------
 
+/**
+ * AnimeTosho — anime, JSON API mirroring Nyaa/AniDex with richer metadata.
+ *
+ * Worth having alongside Nyaa for two reasons: it answers on a single stable
+ * host rather than a rotating one, and it exposes `num_files`, which lets the
+ * ranker tell a batch release apart from a single episode without guessing from
+ * the title.
+ */
+interface AnimeToshoItem {
+  id?: number;
+  title?: string;
+  torrent_name?: string;
+  info_hash?: string;
+  magnet_uri?: string;
+  torrent_url?: string;
+  seeders?: number;
+  leechers?: number;
+  total_size?: number;
+  timestamp?: number;
+  num_files?: number;
+}
+
+export class AnimeToshoIndexer implements TorrentIndexer {
+  readonly id = 'animetosho';
+  readonly name = 'AnimeTosho';
+  readonly specialises = 'anime' as const;
+
+  private static readonly MIRRORS = ['https://feed.animetosho.org'] as const;
+
+  canHandle(query: IndexerQuery): boolean {
+    return Boolean(query.query);
+  }
+
+  async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
+    // Anime is numbered absolutely far more often than by season, so the plain
+    // zero-padded episode number matches more releases than S01E05 would.
+    const terms = [query.query];
+    if (query.episode !== undefined) terms.push(String(query.episode).padStart(2, '0'));
+
+    return tryMirrors(AnimeToshoIndexer.MIRRORS, async (base) => {
+      const url =
+        `${base}/json?q=${encodeURIComponent(terms.join(' '))}` +
+        `&only_tor=1&limit=${Math.min(query.limit ?? 50, 100)}`;
+      const items = await fetchJson<AnimeToshoItem[]>(url, { signal, timeoutMs: 20_000 });
+      if (!Array.isArray(items)) return [];
+
+      return items
+        .map((item): RawTorrent | null => {
+          const title = String(item.torrent_name ?? item.title ?? '').trim();
+          const infoHash = item.info_hash?.toLowerCase();
+          if (!title) return null;
+          if (!item.magnet_uri && !(infoHash && /^[a-f0-9]{40}$/.test(infoHash))) return null;
+
+          return {
+            title,
+            infoHash: infoHash && /^[a-f0-9]{40}$/.test(infoHash) ? infoHash : undefined,
+            magnet: item.magnet_uri,
+            torrentUrl: item.torrent_url,
+            sizeBytes: parseSize(item.total_size),
+            seeders: parseIntSafe(item.seeders),
+            leechers: parseIntSafe(item.leechers),
+            publishedAt: item.timestamp ? item.timestamp * 1000 : undefined,
+            category: 'Anime',
+          };
+        })
+        .filter((r): r is RawTorrent => r !== null);
+    });
+  }
+}
+
 export class NyaaIndexer implements TorrentIndexer {
   readonly id = 'nyaa';
   readonly name = 'Nyaa';

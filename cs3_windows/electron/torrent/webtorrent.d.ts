@@ -14,6 +14,8 @@ declare module 'webtorrent' {
     length: number;
     downloaded: number;
     progress: number;
+    /** Byte offset of this file within the torrent's concatenated piece space. */
+    offset?: number;
     select(priority?: number): void;
     deselect(): void;
     createReadStream(opts?: { start?: number; end?: number }): Readable;
