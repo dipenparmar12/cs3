@@ -92,15 +92,28 @@ object ProviderBridge {
     /**
      * Full search.
      *
-     * The single-argument overload is called deliberately. The paginated
-     * `search(query, page)` delegates to it by default, so a provider that only
-     * overrode the simple one would throw `NotImplementedError` from the base
-     * class if the paginated form were called instead.
+     * Both overloads are attempted, paginated first, because which one a
+     * provider implements is not knowable in advance and the base class throws
+     * `NotImplementedError` for the other.
+     *
+     * The order is not arbitrary and it is the opposite of what doc 36 assumed.
+     * Measured against library 4.8.0 with the real InternetArchiveProvider:
+     * calling `search(query)` alone returns "unsupported", because 4.8.0
+     * introduced `search(query, page): SearchResponseList` as the primary form
+     * and providers now override that. Older providers still only implement the
+     * single-argument version, so the fallback has to stay.
      */
     @JvmStatic
     fun search(provider: Any, query: String, timeoutMs: Long): String = guarded(timeoutMs) {
         val api = provider as MainAPI
-        val results = api.search(query).orEmpty()
+
+        val results: List<SearchResponse> = try {
+            api.search(query, 1)?.items.orEmpty()
+        } catch (t: Throwable) {
+            if (!notImplemented(t)) throw t
+            api.search(query).orEmpty()
+        }
+
         json {
             field("ok", true)
             rawArray("results", results.map { encodeSearchResponse(it, api) })
