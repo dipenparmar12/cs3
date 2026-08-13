@@ -345,6 +345,13 @@ ipcMain.handle('playback:stop', async (_, sessionId: string, keepFiles?: boolean
   }
 });
 
+ipcMain.handle('sources:getCacheStats', async () => contentService.getCache().stats());
+
+ipcMain.handle('sources:clearCache', async () => {
+  contentService.getCache().clear();
+  return { ok: true };
+});
+
 ipcMain.handle('torrent:getStats', async (_, infoHash: string) =>
   torrentEngine.getStats(infoHash)
 );

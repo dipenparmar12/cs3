@@ -152,7 +152,7 @@ export class PlaybackSessionManager {
    */
   private async discover(
     session: Session,
-    options: { autoStartWhenDone: boolean }
+    options: { autoStartWhenDone: boolean; bypassCache?: boolean }
   ): Promise<void> {
     session.searchDone = false;
     session.searched = 0;
@@ -160,14 +160,18 @@ export class PlaybackSessionManager {
     this.emit(session);
 
     try {
-      const response = await this.content.getSources(session.request, (progress) => {
-        if (session.disposed) return;
-        session.sources = progress.results;
-        session.searched = progress.settled;
-        session.totalIndexers = progress.totalRelevant;
-        session.lastIndexerName = progress.lastIndexerName || session.lastIndexerName;
-        this.emit(session);
-      });
+      const response = await this.content.getSources(
+        session.request,
+        (progress) => {
+          if (session.disposed) return;
+          session.sources = progress.results;
+          session.searched = progress.settled;
+          session.totalIndexers = progress.totalRelevant;
+          session.lastIndexerName = progress.lastIndexerName || session.lastIndexerName;
+          this.emit(session);
+        },
+        { bypassCache: options.bypassCache }
+      );
 
       if (session.disposed) return;
       session.sources = response.sources;
@@ -231,18 +235,24 @@ export class PlaybackSessionManager {
     return this.snapshot(session);
   }
 
-  /** Re-runs discovery for the same query, keeping the current stream playing. */
+  /**
+   * Re-runs discovery for the same query, keeping the current stream playing.
+   *
+   * Bypasses the cache, necessarily: a viewer pressing "refresh" is telling us
+   * the cached answer is wrong, and serving it back would make the button
+   * appear broken.
+   */
   public async refresh(sessionId: string): Promise<PlaybackSnapshot | null> {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
-    await this.discover(session, { autoStartWhenDone: false });
+    await this.discover(session, { autoStartWhenDone: false, bypassCache: true });
     return this.snapshot(session);
   }
 
   private async beginStream(
     session: Session,
     candidates: TorrentResult[],
-    options: { failover?: boolean } = {}
+    options: { failover?: boolean; isRecovery?: boolean } = {}
   ): Promise<void> {
     const generation = ++session.generation;
     const previousInfoHash = session.activeInfoHash;
@@ -281,6 +291,30 @@ export class PlaybackSessionManager {
       }
     } catch (error) {
       if (session.disposed || generation !== session.generation) return;
+
+      /**
+       * A provider link that will not start is usually an expired one, and the
+       * fix is mechanical: the query that produced it is still held, so the
+       * link can be regenerated without the viewer navigating anywhere. This
+       * runs once — a second failure is a real failure, not a stale URL, and
+       * retrying forever would just hide it.
+       */
+      const wasDirect = candidates.some((c) => c.directUrl);
+      if (wasDirect && !options.isRecovery) {
+        session.error = undefined;
+        this.content
+          .getCache()
+          .invalidate(session.request.mediaUrl, session.request.season, session.request.episode);
+
+        await this.discover(session, { autoStartWhenDone: false, bypassCache: true });
+        if (session.disposed || generation !== session.generation) return;
+
+        if (session.sources.length > 0) {
+          await this.beginStream(session, session.sources, { ...options, isRecovery: true });
+          return;
+        }
+      }
+
       session.phase = 'error';
       session.error = error instanceof Error ? error.message : String(error);
       // A failed switch leaves the previous stream alone, so the viewer is

@@ -18,6 +18,7 @@ import { infoHashFromMagnet } from './torrent/indexers/base';
 import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
 import type { PluginManager } from './pluginManager';
+import { SourceCache } from './sourceCache';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -98,12 +99,18 @@ export class ContentService {
   private registry: IndexerRegistry;
   private engine: TorrentEngine;
   private plugins: PluginManager;
+  private cache: SourceCache;
   private detailCache = new Map<string, MetadataDetail>();
 
   constructor(datastore: DatastoreManager, plugins: PluginManager, engine: TorrentEngine) {
     this.registry = new IndexerRegistry(datastore);
     this.plugins = plugins;
     this.engine = engine;
+    this.cache = new SourceCache(datastore);
+  }
+
+  public getCache(): SourceCache {
+    return this.cache;
   }
 
   public getRegistry(): IndexerRegistry {
@@ -229,12 +236,40 @@ export class ContentService {
   public async getSources(
     request: SourceQuery,
     /** Fires as each indexer answers, so a caller can act on partial results. */
-    onProgress?: (progress: SearchProgress) => void
+    onProgress?: (progress: SearchProgress) => void,
+    /** Set by an explicit refresh, which must not be answered from cache. */
+    options: { bypassCache?: boolean } = {}
   ): Promise<SourceResponse> {
     const fromUrl = parseEpisodeParams(request.mediaUrl);
     const season = request.season ?? fromUrl.season;
     const episode = request.episode ?? fromUrl.episode;
     const base = stripQuery(request.mediaUrl);
+
+    /**
+     * A cache hit answers instantly, which is the whole difference between
+     * re-opening something you watched yesterday and waiting through discovery
+     * again. Only the still-valid half is served: magnets never expire, so they
+     * survive indefinitely, while provider links past their deadline are
+     * dropped here and re-resolved below.
+     */
+    if (!options.bypassCache) {
+      const cached = this.cache.read(base, season, episode);
+      if (cached.hit && cached.fresh.length > 0) {
+        onProgress?.({
+          results: cached.fresh,
+          settled: 1,
+          totalRelevant: 1,
+          lastIndexerName: 'Cached sources',
+          done: true,
+        });
+        return {
+          sources: cached.fresh,
+          filtered: [],
+          indexerOutcomes: [],
+          query: { title: request.titleOverride ?? '', season, episode },
+        };
+      }
+    }
 
     // A magnet needs no search at all — it *is* the source.
     if (base.startsWith('magnet:')) {
@@ -284,6 +319,7 @@ export class ContentService {
         lastIndexerName: 'Extension provider',
         done: true,
       });
+      if (sources.length > 0) this.cache.write(base, sources, season, episode);
       return {
         sources,
         filtered: [],
@@ -355,6 +391,8 @@ export class ContentService {
 
     if (outcome.results.length === 0) {
       response.emptyReason = this.explainEmptyResult(outcome);
+    } else {
+      this.cache.write(base, outcome.results, season, episode);
     }
     return response;
   }

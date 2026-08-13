@@ -134,6 +134,10 @@ export interface CloudStreamElectronAPI {
   stopPlayback: (sessionId: string, keepFiles?: boolean) => Promise<Envelope>;
   onPlaybackUpdate: (callback: (snapshot: PlaybackSnapshot) => void) => () => void;
 
+  /** Resolved-source cache: how much is stored, and a way to drop it. */
+  getSourceCacheStats: () => Promise<{ entries: number; sources: number }>;
+  clearSourceCache: () => Promise<Envelope>;
+
   getStreamStats: (infoHash: string) => Promise<TorrentStreamStats | null>;
   selectStreamFile: (infoHash: string, fileIndex: number) => Promise<StreamHandle | null>;
   stopStream: (infoHash: string, keepFiles?: boolean) => Promise<void>;
@@ -288,6 +292,9 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.on('playback:update', listener);
     return () => ipcRenderer.removeListener('playback:update', listener);
   },
+
+  getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
+  clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),
 
   getStreamStats: (infoHash) => ipcRenderer.invoke('torrent:getStats', infoHash),
   selectStreamFile: (infoHash, fileIndex) =>
