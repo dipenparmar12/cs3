@@ -375,7 +375,13 @@ export class IndexerRegistry {
      * the playback session uses it to offer "play now" before every indexer has
      * answered.
      */
-    onProgress?: (progress: SearchProgress) => void
+    onProgress?: (progress: SearchProgress) => void,
+    /**
+     * Narrows the search to the indexers the user has scoped it to. Applied on
+     * top of `enabled`, never instead of it, and reported as a skip reason so
+     * "0 sources" never looks like an outage when it was a filter.
+     */
+    inScope?: (indexerId: string) => boolean
   ): Promise<AggregateSearchResult> {
     const preferences = rankContext?.preferences ?? this.getPreferences();
     const outcomes: AggregateSearchResult['indexerOutcomes'] = [];
@@ -421,6 +427,17 @@ export class IndexerRegistry {
     for (const config of this.configs) {
       if (!config.enabled) {
         outcomes.push({ id: config.id, name: config.name, ok: false, count: 0, latencyMs: 0, skipped: 'Disabled' });
+        continue;
+      }
+      if (inScope && !inScope(config.id)) {
+        outcomes.push({
+          id: config.id,
+          name: config.name,
+          ok: true,
+          count: 0,
+          latencyMs: 0,
+          skipped: 'Not in the current search scope',
+        });
         continue;
       }
       if (this.isCircuitOpen(config.id)) {

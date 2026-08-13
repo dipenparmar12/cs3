@@ -22,6 +22,26 @@ export interface HttpOptions {
   body?: unknown;
 }
 
+type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Node's `fetch`, until the main process replaces it with Electron's.
+ *
+ * This exists so DNS settings can work at all. `app.configureHostResolver`
+ * configures Chromium's resolver, and Node's `fetch` does not use it — so an
+ * app whose scraping runs on Node's stack would offer a DNS-over-HTTPS setting
+ * that changes nothing. Electron's `net.fetch` goes through Chromium and
+ * therefore honours it, along with the system proxy.
+ *
+ * Injected rather than imported so this module stays usable outside Electron,
+ * where `import('electron')` throws.
+ */
+let activeFetch: FetchLike = (input, init) => fetch(input, init);
+
+export function setHttpFetch(implementation: FetchLike): void {
+  activeFetch = implementation;
+}
+
 export class HttpError extends Error {
   // Declared as fields rather than constructor parameter properties, which
   // `erasableSyntaxOnly` forbids.
@@ -57,7 +77,7 @@ async function requestOnce(url: string, options: HttpOptions): Promise<Response>
 
   const hasBody = options.body !== undefined;
 
-  const response = await fetch(url, {
+  const response = await activeFetch(url, {
     signal,
     redirect: 'follow',
     method: hasBody ? 'POST' : 'GET',

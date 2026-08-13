@@ -3,7 +3,7 @@ import Hls from 'hls.js';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
-  SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
+  SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio, Download,
 } from 'lucide-react';
 import type { TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
@@ -13,6 +13,8 @@ import { HoverMenu } from './player/HoverMenu';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
+import { SubtitlePanel } from './player/SubtitlePanel';
+import type { MediaProbe } from '../../electron/audioTranscoder';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
@@ -56,6 +58,10 @@ interface VideoPlayerProps {
    * progress, offers "play now" on partial results, and keeps the source list
    * available for switching once playback has started.
    */
+  /** Identity for online subtitle search; without an IMDb id it is unavailable. */
+  subtitleContext?: { imdbId?: string; season?: number; episode?: number };
+  /** Downloads whatever is currently playing, without leaving the player. */
+  onDownloadCurrent?: () => void;
   sourceSession?: {
     phase: PlaybackPhase;
     sources: TorrentResult[];
@@ -114,6 +120,7 @@ export interface AudioTrackInfo {
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamUrl, mimeType, title, episodeTitle, infoHash, subtitles, onBack,
   series, onSelectEpisode, switchingTo, switchError, progress, sourceSession,
+  subtitleContext, onDownloadCurrent,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -131,11 +138,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [aspect, setAspect] = useState<AspectRatioMode>(AspectRatioMode.Fit);
   const [controlsVisible, setControlsVisible] = useState(true);
+  const [isHoveringControls, setIsHoveringControls] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<TorrentStreamStats | null>(null);
   const [activeSubtitle, setActiveSubtitle] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
+  const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false);
+  /** Subtitles fetched from the online search, as blob-backed WebVTT tracks. */
+  const [fetchedSubtitles, setFetchedSubtitles] = useState<
+    Array<{ name: string; url: string }>
+  >([]);
   /** Source the viewer just picked, so the row shows a spinner while it starts. */
   const [pendingSourceHash, setPendingSourceHash] = useState<string | null>(null);
 
@@ -144,6 +157,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const [audioTracks, setAudioTracks] = useState<AudioTrackInfo[]>([]);
   const [activeAudioTrack, setActiveAudioTrack] = useState<string | number>('default');
+
+  /**
+   * Audio compatibility state.
+   *
+   * Chromium ships no AC-3, E-AC-3 or DTS decoder, and the failure is silent —
+   * the container opens, video decodes, and the audio track is dropped with no
+   * error. Measured on this build: an H.264 + AC-3 file decodes 65 KB of video
+   * and exactly 0 bytes of audio. So the stream is probed up front and remuxed
+   * through ffmpeg when its audio cannot be played.
+   */
+  const [audioProbe, setAudioProbe] = useState<MediaProbe | null>(null);
+  const [transcode, setTranscode] = useState<{ url: string; token: string } | null>(null);
+  const [transcodeOffset, setTranscodeOffset] = useState(0);
+  const [audioNeedsComponents, setAudioNeedsComponents] = useState(false);
+  const [selectedAudioIndex, setSelectedAudioIndex] = useState(0);
 
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState(0);
@@ -225,7 +253,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (data.fatal) setError(`Playback error: ${data.details}`);
       });
     } else {
-      video.src = streamUrl;
+      // When the audio needed remuxing, the loopback URL is what plays; the
+      // original is left untouched and is still what everything else refers to.
+      video.src = transcode?.url ?? streamUrl;
     }
 
     video.volume = volume;
@@ -261,7 +291,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.removeAttribute('src');
       video.load();
     };
-  }, [streamUrl, mimeType, volume, isMuted]);
+  }, [streamUrl, mimeType, volume, isMuted, transcode?.url]);
 
   useEffect(() => {
     const hls = hlsRef.current;
@@ -430,17 +460,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // --- video element events ------------------------------------------------
 
+  // Read inside listeners registered once, so they must not close over state.
+  const offsetRef = useRef(0);
+  const probedDurationRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    offsetRef.current = transcode ? transcodeOffset : 0;
+  }, [transcode, transcodeOffset]);
+  useEffect(() => {
+    probedDurationRef.current = transcode ? audioProbe?.durationSeconds : undefined;
+  }, [transcode, audioProbe]);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     const onTime = () => {
-      setCurrentTime(video.currentTime);
+      // A remuxed stream always starts at zero regardless of where the viewer
+      // seeked to, so the offset is what makes the scrubber tell the truth.
+      setCurrentTime(offsetRef.current + video.currentTime);
       if (video.buffered.length > 0) {
-        setBuffered(video.buffered.end(video.buffered.length - 1));
+        setBuffered(offsetRef.current + video.buffered.end(video.buffered.length - 1));
       }
     };
-    const onMeta = () => setDuration(video.duration);
+    const onMeta = () => {
+      // ffmpeg reports the remaining duration from the seek point, not the
+      // whole file; the probe knows the real length.
+      const probed = probedDurationRef.current;
+      setDuration(probed && probed > 0 ? probed : video.duration);
+    };
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
     const onError = () =>
@@ -534,15 +581,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     else video.pause();
   }, []);
 
-  const seekBy = useCallback((delta: number) => {
-    const video = videoRef.current;
-    if (video) video.currentTime = Math.max(0, video.currentTime + delta);
-  }, []);
+  /**
+   * Seeks, accounting for a remuxed stream having no seekable range.
+   *
+   * A fragmented MP4 produced live by ffmpeg carries no index, so setting
+   * `currentTime` on it does nothing. Seeking is performed by restarting the
+   * remux at the target time and remembering the offset, which is what keeps
+   * the scrubber honest — the element always believes it is at zero.
+   */
+  const seekTo = useCallback(
+    (time: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      const target = Math.max(0, time);
 
-  const seekTo = useCallback((time: number) => {
-    const video = videoRef.current;
-    if (video) video.currentTime = Math.max(0, time);
-  }, []);
+      if (transcode) {
+        setTranscodeOffset(target);
+        const wasPlaying = !video.paused;
+        video.src = `${transcode.url}?t=${Math.floor(target)}`;
+        video.load();
+        if (wasPlaying) void video.play().catch(() => undefined);
+        return;
+      }
+      video.currentTime = target;
+    },
+    [transcode]
+  );
+
+  const seekBy = useCallback(
+    (delta: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      seekTo((transcode ? transcodeOffset : 0) + video.currentTime + delta);
+    },
+    [seekTo, transcode, transcodeOffset]
+  );
 
   const toggleFullscreen = useCallback(async () => {
     const container = containerRef.current;
@@ -585,11 +658,99 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video.playbackRate = speed;
   }, [volume, isMuted, speed]);
 
-  const revealControls = useCallback(() => {
-    setControlsVisible(true);
-    if (hideControlsTimer.current) window.clearTimeout(hideControlsTimer.current);
-    hideControlsTimer.current = window.setTimeout(() => setControlsVisible(false), 3000);
+  /**
+   * Shows the controls and schedules their hide.
+   *
+   * Two guards, both fixing observed flicker:
+   *
+   * 1. **Zero-movement `mousemove` is ignored.** Chromium synthesises one
+   *    whenever the element under a stationary cursor changes, and hiding the
+   *    controls changes exactly that. The result was a loop — hide fires,
+   *    layout under the cursor changes, a synthetic move reveals them again,
+   *    three seconds later it repeats — which reads as the controls flashing
+   *    on and off while the mouse is barely moving. `cursor: none` toggling
+   *    produces the same synthetic event.
+   * 2. **Nothing auto-hides while it would take the UI with it.** A viewer
+   *    reading the source list or a paused frame is not idle, and hiding the
+   *    chrome under their pointer is never what they meant.
+   */
+  const lastPointer = useRef<{ x: number; y: number } | null>(null);
+
+  /**
+   * Conditions under which the controls must stay put. Held in a ref because
+   * the hide timer is scheduled once and must read the value at fire time, not
+   * the value captured when it was created.
+   */
+  const keepControls =
+    panelOpen ||
+    sourcePanelOpen ||
+    subtitlePanelOpen ||
+    !isPlaying ||
+    Boolean(error) ||
+    isHoveringControls;
+  const keepControlsRef = useRef(keepControls);
+  useEffect(() => {
+    keepControlsRef.current = keepControls;
+    // Becoming pinned mid-countdown must cancel the pending hide, not wait for
+    // it to fire and be ignored.
+    if (keepControls) setControlsVisible(true);
+  }, [keepControls]);
+
+  const lastHideTimeRef = useRef<number>(0);
+
+  const hideControls = useCallback(() => {
+    if (keepControlsRef.current) return;
+    lastHideTimeRef.current = Date.now();
+    setControlsVisible(false);
   }, []);
+
+  const revealControls = useCallback(
+    (event?: React.MouseEvent | MouseEvent) => {
+      if (event) {
+        const native = (event as React.MouseEvent).nativeEvent || (event as MouseEvent);
+        const timeSinceHide = Date.now() - lastHideTimeRef.current;
+
+        // Ignore synthetic mousemove events generated by Chromium when controls hide
+        if (
+          timeSinceHide < 400 &&
+          typeof native.movementX === 'number' &&
+          native.movementX === 0 &&
+          native.movementY === 0
+        ) {
+          return;
+        }
+
+        const last = lastPointer.current;
+        const moved =
+          !last ||
+          Math.abs(event.clientX - last.x) > 2 ||
+          Math.abs(event.clientY - last.y) > 2 ||
+          (typeof native.movementX === 'number' &&
+            (Math.abs(native.movementX) > 0 || Math.abs(native.movementY) > 0));
+
+        lastPointer.current = { x: event.clientX, y: event.clientY };
+        if (!moved && !controlsVisible) return;
+      }
+
+      setControlsVisible(true);
+      if (hideControlsTimer.current) window.clearTimeout(hideControlsTimer.current);
+      hideControlsTimer.current = window.setTimeout(() => {
+        if (keepControlsRef.current) return;
+        hideControls();
+      }, 3000);
+    },
+    [controlsVisible, hideControls]
+  );
+
+  useEffect(() => {
+    const handleWindowMouseMove = (e: MouseEvent) => {
+      revealControls(e);
+    };
+    window.addEventListener('mousemove', handleWindowMouseMove);
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMouseMove);
+    };
+  }, [revealControls]);
 
   // --- seek bar interaction ------------------------------------------------
 
@@ -652,10 +813,154 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const progressPercent = duration ? (currentTime / duration) * 100 : 0;
 
+  /**
+   * Probes the stream's audio and remuxes it when Chromium cannot decode it.
+   *
+   * Runs on every new stream. HLS is excluded: hls.js handles its own
+   * demuxing and its segments are already in a browser-friendly codec set.
+   */
+  useEffect(() => {
+    if (!streamUrl) return;
+    const isHls = /\.m3u8(\?|$)/i.test(streamUrl) || mimeType === 'application/x-mpegURL';
+    if (isHls) return;
+
+    let cancelled = false;
+    let openedToken: string | null = null;
+
+    (async () => {
+      const response = await window.cloudstream?.probeAudio(streamUrl);
+      if (cancelled || !response) return;
+
+      setAudioNeedsComponents(Boolean(response.needsComponents));
+      if (!response.ok || !response.probe) return;
+
+      setAudioProbe(response.probe);
+      const preferred = response.probe.audio.find((a) => a.isDefault) ?? response.probe.audio[0];
+      if (preferred) setSelectedAudioIndex(preferred.index);
+
+      if (!response.probe.needsTranscode) return;
+
+      const session = await window.cloudstream?.openAudioTranscode(
+        streamUrl,
+        preferred?.index ?? 0
+      );
+      if (cancelled || !session?.ok || !session.url) return;
+
+      openedToken = session.url.split('/').pop() ?? null;
+      setTranscodeOffset(0);
+      setTranscode({ url: session.url, token: openedToken ?? '' });
+    })();
+
+    return () => {
+      cancelled = true;
+      // The ffmpeg process outlives the component otherwise.
+      if (openedToken) void window.cloudstream?.closeAudioTranscode(openedToken);
+    };
+  }, [streamUrl, mimeType]);
+
+  // A new stream invalidates everything learned about the previous one.
+  useEffect(() => {
+    setAudioProbe(null);
+    setTranscode(null);
+    setTranscodeOffset(0);
+    setAudioNeedsComponents(false);
+  }, [streamUrl]);
+
+  /**
+   * Switches audio track. On a remuxed stream this restarts ffmpeg mapping the
+   * chosen track, because the element only ever receives the one stereo track
+   * that was selected for it.
+   */
+  const selectProbedAudio = useCallback(
+    async (index: number) => {
+      setSelectedAudioIndex(index);
+      if (!transcode) return;
+
+      const video = videoRef.current;
+      const at = transcodeOffset + (video?.currentTime ?? 0);
+      const session = await window.cloudstream?.openAudioTranscode(streamUrl, index);
+      if (!session?.ok || !session.url) return;
+
+      if (transcode.token) void window.cloudstream?.closeAudioTranscode(transcode.token);
+      setTranscodeOffset(at);
+      setTranscode({ url: session.url, token: session.url.split('/').pop() ?? '' });
+    },
+    [transcode, transcodeOffset, streamUrl]
+  );
+
+  /** Audio tracks as ffprobe reported them, labelled for the picker. */
+  const probedAudioTracks = useMemo(
+    () =>
+      (audioProbe?.audio ?? []).map((track) => {
+        const language = track.language && track.language !== 'und'
+          ? track.language.toUpperCase()
+          : null;
+        const name = track.title || language || `Track ${track.index + 1}`;
+        const facts = [
+          track.codec.toUpperCase(),
+          track.channels === 6 ? '5.1' : track.channels === 2 ? 'Stereo' : undefined,
+          // Worth saying: it is why this track sounds different from the file.
+          track.playable ? undefined : 'converted',
+        ].filter(Boolean);
+        return { index: track.index, label: name, detail: facts.join(' · ') };
+      }),
+    [audioProbe]
+  );
+
+  /** Subtitles shipped with the stream, plus any fetched from online search. */
+  const allSubtitles = useMemo(() => {
+    const combined = [...subtitles, ...fetchedSubtitles];
+    const englishFirst = combined.sort((a, b) => {
+      const aIsEnglish = /english|eng/i.test(a.name);
+      const bIsEnglish = /english|eng/i.test(b.name);
+      if (aIsEnglish && !bIsEnglish) return -1;
+      if (!aIsEnglish && bIsEnglish) return 1;
+      return 0;
+    });
+    return englishFirst;
+  }, [subtitles, fetchedSubtitles]);
+
+  /**
+   * Applies the selected subtitle by driving `TextTrack.mode` directly.
+   *
+   * Setting the `default` attribute on a `<track>` only has an effect before
+   * the element loads; changing it afterwards, which is what a React re-render
+   * does, switches nothing. That made subtitle selection silently inert. The
+   * mode property is the runtime control and has to be set on every track,
+   * including the ones being turned off.
+   */
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const apply = () => {
+      const tracks = video.textTracks;
+      for (let i = 0; i < tracks.length; i++) {
+        const track = tracks[i];
+        const source = allSubtitles[i];
+        track.mode = source && source.url === activeSubtitle ? 'showing' : 'disabled';
+      }
+    };
+
+    apply();
+    // A track added in the same render is not in `video.textTracks` yet.
+    video.textTracks.addEventListener?.('addtrack', apply);
+    return () => video.textTracks.removeEventListener?.('addtrack', apply);
+  }, [activeSubtitle, allSubtitles]);
+
+  // Blob URLs from the subtitle search are owned by this component; leaking
+  // them would pin every subtitle a viewer auditioned for the session's life.
+  useEffect(
+    () => () => {
+      for (const sub of fetchedSubtitles) URL.revokeObjectURL(sub.url);
+    },
+    [fetchedSubtitles]
+  );
+
   // Close any open side-panel when the user clicks outside it on the player.
   const handlePlayerPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!panelOpen && !sourcePanelOpen) return;
+      if (!panelOpen && !sourcePanelOpen && !subtitlePanelOpen) return;
       const target = e.target as HTMLElement;
       // If the click is inside a .player-panel element, leave it open.
       if (target.closest('.player-panel')) return;
@@ -663,14 +968,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (target.closest('[data-panel-toggle]')) return;
       setPanelOpen(false);
       setSourcePanelOpen(false);
+      setSubtitlePanelOpen(false);
     },
-    [panelOpen, sourcePanelOpen]
+    [panelOpen, sourcePanelOpen, subtitlePanelOpen]
   );
 
   return (
     <div
       ref={containerRef}
-      className={`player${controlsVisible ? '' : ' player--idle'}`}
+      className={`player${controlsVisible || keepControls ? '' : ' player--idle'}`}
       onMouseMove={revealControls}
       onPointerDown={handlePlayerPointerDown}
     >
@@ -679,16 +985,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         className={`player__video player__video--${aspect}`}
         playsInline
         onClick={togglePlay}
+        onDoubleClick={toggleFullscreen}
         crossOrigin="anonymous"
       >
-        {subtitles.map((sub) => (
-          <track
-            key={sub.url}
-            kind="subtitles"
-            label={sub.name}
-            src={sub.url}
-            default={activeSubtitle === sub.url}
-          />
+        {/* Selection is driven by TextTrack.mode in the effect above, not by
+            `default` — see there for why. */}
+        {allSubtitles.map((sub) => (
+          <track key={sub.url} kind="subtitles" label={sub.name} src={sub.url} />
         ))}
       </video>
 
@@ -780,7 +1083,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      <header className={`player__top${controlsVisible ? '' : ' hidden'}`}>
+      {/* Silence with no error is the worst possible failure mode: the volume
+          control works, the video plays, and nothing says why. If the audio
+          cannot be decoded and the components that would fix it are missing,
+          say so on screen. */}
+      {audioNeedsComponents && audioProbe?.needsTranscode && (
+        <div className="player__audio-notice">
+          <AlertTriangle size={14} />
+          <span>
+            This file&rsquo;s audio uses a format Windows cannot play here. Install
+            the media components in Settings to enable it.
+          </span>
+        </div>
+      )}
+
+      <header
+        className={`player__top${controlsVisible || keepControls ? '' : ' hidden'}`}
+        onMouseEnter={() => setIsHoveringControls(true)}
+        onMouseLeave={() => setIsHoveringControls(false)}
+      >
         <button className="icon-button" onClick={onBack} aria-label="Back">
           <ArrowLeft size={22} />
         </button>
@@ -849,13 +1170,37 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onSelect={(source) => {
             setPendingSourceHash(source.infoHash);
             sourceSession.onSelectSource(source);
+            // Close on choose: the panel covers the video, and leaving it up
+            // over the stream the viewer just asked for is what made picking a
+            // source feel like nothing had happened.
+            setSourcePanelOpen(false);
           }}
           onRefresh={sourceSession.onRefresh}
           onDownload={sourceSession.onDownloadSource}
         />
       )}
 
-      <footer className={`player__controls${controlsVisible ? '' : ' hidden'}`}>
+      <SubtitlePanel
+        open={subtitlePanelOpen}
+        imdbId={subtitleContext?.imdbId}
+        season={subtitleContext?.season}
+        episode={subtitleContext?.episode}
+        embedded={subtitles}
+        activeUrl={activeSubtitle}
+        onClose={() => setSubtitlePanelOpen(false)}
+        onSelect={(url, label) => {
+          if (url && !allSubtitles.some((s) => s.url === url)) {
+            setFetchedSubtitles((prev) => [...prev, { name: label, url }]);
+          }
+          setActiveSubtitle(url);
+        }}
+      />
+
+      <footer
+        className={`player__controls${controlsVisible || keepControls ? '' : ' hidden'}`}
+        onMouseEnter={() => setIsHoveringControls(true)}
+        onMouseLeave={() => setIsHoveringControls(false)}
+      >
         <div
           ref={seekBarRef}
           className="player__seek"
@@ -1005,6 +1350,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </button>
           )}
 
+          {/* Subtitle search sits next to the track picker rather than inside
+              it: finding a subtitle and choosing one are different actions, and
+              a hover menu is the wrong shape for a search result list. */}
+          <button
+            className="icon-button"
+            data-panel-toggle
+            onClick={() => setSubtitlePanelOpen((v) => !v)}
+            aria-label="Search subtitles"
+            title="Search subtitles online"
+          >
+            <Subtitles size={18} />
+          </button>
+
+          {onDownloadCurrent && (
+            <button
+              className="icon-button"
+              onClick={onDownloadCurrent}
+              aria-label="Download"
+              title="Download what is playing"
+            >
+              <Download size={18} />
+            </button>
+          )}
+
           {qualities.length > 1 && (
             <HoverMenu
               icon={<Settings2 size={16} />}
@@ -1018,7 +1387,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             />
           )}
 
-          {subtitles.length > 0 && (
+          {allSubtitles.length > 0 && (
             <HoverMenu
               icon={<Subtitles size={16} />}
               label="Subtitles"
@@ -1026,31 +1395,51 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               onChange={(next) => setActiveSubtitle(next === '' ? null : String(next))}
               triggerText={
                 activeSubtitle
-                  ? (subtitles.find((s) => s.url === activeSubtitle)?.name ?? 'On')
+                  ? (allSubtitles.find((s) => s.url === activeSubtitle)?.name ?? 'On')
                   : 'Off'
               }
               options={[
                 { value: '', label: 'Off' },
-                ...subtitles.map((sub) => ({ value: sub.url, label: sub.name })),
+                ...allSubtitles.map((sub) => ({ value: sub.url, label: sub.name })),
               ]}
             />
           )}
 
-          {audioTracks.length > 1 && (
+          {/* Probed tracks take precedence over the element's own list: a
+              `<video>` does not expose tracks it cannot decode at all, so the
+              AC-3 Japanese dub simply would not appear without the probe. */}
+          {probedAudioTracks.length > 1 ? (
             <HoverMenu
               icon={<Volume2 size={16} />}
               label="Audio"
-              value={activeAudioTrack}
-              onChange={(val) => selectAudioTrack(val)}
+              value={selectedAudioIndex}
+              onChange={(val) => void selectProbedAudio(Number(val))}
               triggerText={
-                audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
+                probedAudioTracks.find((t) => t.index === selectedAudioIndex)?.label ?? 'Audio'
               }
-              options={audioTracks.map((track) => ({
-                value: track.id,
+              options={probedAudioTracks.map((track) => ({
+                value: track.index,
                 label: track.label,
-                detail: track.language ? track.language.toUpperCase() : undefined,
+                detail: track.detail,
               }))}
             />
+          ) : (
+            audioTracks.length > 1 && (
+              <HoverMenu
+                icon={<Volume2 size={16} />}
+                label="Audio"
+                value={activeAudioTrack}
+                onChange={(val) => selectAudioTrack(val)}
+                triggerText={
+                  audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
+                }
+                options={audioTracks.map((track) => ({
+                  value: track.id,
+                  label: track.label,
+                  detail: track.language ? track.language.toUpperCase() : undefined,
+                }))}
+              />
+            )
           )}
 
           <HoverMenu

@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The provider bridge (PRD 36 step 4).
+
+  Written in Kotlin, and it has to be. The provider API is Kotlin `suspend`
+  functions taking a hidden `Continuation`, and `loadLinks` delivers its results
+  through `Function1` callbacks rather than a return value. Calling that from
+  Java means hand-constructing continuations and reimplementing what the Kotlin
+  compiler emits for free; in Kotlin it is ordinary code, and `withTimeout` gives
+  correct cancellation of a provider blocked on a socket read, which thread
+  interruption does not.
+
+  Why a separate module, and why the jar lands in `sidecar/runtime/`:
+
+  The bridge calls provider instances as `MainAPI`. Those instances are created
+  by the plugin class loader, whose parent is the shared runtime loader that owns
+  `library-jvm.jar`. For a cast to `MainAPI` to succeed, the bridge must resolve
+  the *same* Class object, which means the bridge has to be loaded by that shared
+  loader too. Shipping it in `runtime/` achieves that; putting it on the
+  sidecar's own classpath would resolve a different `MainAPI` and fail every call
+  with a ClassCastException that looks like a plugin bug.
+
+  The sidecar therefore reaches the bridge reflectively, but only across a
+  deliberately trivial surface: primitives and JSON strings in, JSON strings out.
+
+  Build with:
+    mvn -f sidecar/runtime-deps/pom.xml package   (first: puts library-jvm in place)
+    mvn -f sidecar/bridge/pom.xml package
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.cloudstream.desktop</groupId>
+  <artifactId>cs3-provider-bridge</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+  <name>CloudStream Desktop Provider Bridge</name>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>21</maven.compiler.release>
+    <!--
+      Must match the kotlin-stdlib that library-jvm 4.8.0 resolves, or the
+      bridge links against a different stdlib than the providers do.
+    -->
+    <kotlin.version>2.3.21</kotlin.version>
+    <cloudstream.library.version>4.8.0</cloudstream.library.version>
+    <runtime.output.dir>${project.basedir}/../runtime</runtime.output.dir>
+  </properties>
+
+  <repositories>
+    <repository>
+      <id>central</id>
+      <url>https://repo1.maven.org/maven2</url>
+    </repository>
+    <repository>
+      <id>jitpack.io</id>
+      <url>https://jitpack.io</url>
+    </repository>
+    <repository>
+      <id>google</id>
+      <url>https://maven.google.com</url>
+    </repository>
+  </repositories>
+
+  <dependencies>
+    <!--
+      All `provided`: every one of these is already in `sidecar/runtime/`,
+      placed there by runtime-deps. Bundling them again would put a second copy
+      of kotlin-stdlib on the same class loader.
+    -->
+    <dependency>
+      <groupId>com.github.recloudstream.cloudstream</groupId>
+      <artifactId>library-jvm</artifactId>
+      <version>${cloudstream.library.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.jetbrains.kotlin</groupId>
+      <artifactId>kotlin-stdlib</artifactId>
+      <version>${kotlin.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.jetbrains.kotlinx</groupId>
+      <artifactId>kotlinx-coroutines-core-jvm</artifactId>
+      <version>1.11.0</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!--
+      The android.* stubs, needed to compile the `Plugin` class this module
+      supplies: its `load` takes an `android.content.Context` and it holds an
+      `android.content.res.Resources`. Read straight from the sidecar's build
+      output rather than through the local repository, so the two modules do not
+      have to be installed in a particular order to build.
+    -->
+    <dependency>
+      <groupId>com.cloudstream.desktop</groupId>
+      <artifactId>cs3-sidecar</artifactId>
+      <version>0.1.0</version>
+      <classifier>android-shim</classifier>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/../target/cs3-sidecar-android-shim.jar</systemPath>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>cs3-provider-bridge</finalName>
+    <sourceDirectory>${project.basedir}/src/main/kotlin</sourceDirectory>
+    <plugins>
+      <plugin>
+        <groupId>org.jetbrains.kotlin</groupId>
+        <artifactId>kotlin-maven-plugin</artifactId>
+        <version>${kotlin.version}</version>
+        <executions>
+          <execution>
+            <id>compile</id>
+            <phase>compile</phase>
+            <goals><goal>compile</goal></goals>
+          </execution>
+        </executions>
+        <configuration>
+          <jvmTarget>21</jvmTarget>
+        </configuration>
+      </plugin>
+
+      <!-- Deliver straight onto the shared runtime classpath. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-antrun-plugin</artifactId>
+        <version>3.1.0</version>
+        <executions>
+          <execution>
+            <id>install-to-runtime</id>
+            <phase>package</phase>
+            <goals><goal>run</goal></goals>
+            <configuration>
+              <target>
+                <copy file="${project.build.directory}/cs3-provider-bridge.jar"
+                      todir="${runtime.output.dir}"
+                      overwrite="true"/>
+              </target>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

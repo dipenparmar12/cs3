@@ -1,42 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertTriangle, Clock } from 'lucide-react';
+import { RefreshCw, ArrowUpCircle, CheckCircle2, ChevronDown, ChevronUp } from 'lucide-react';
 import type {
   AvailableUpdate,
   UpdateOutcome,
-  UpdatePolicy,
   UpdateSettings,
 } from '../../electron/cs3/extensionUpdater';
-
-/**
- * Over-the-air extension updates.
- *
- * Extensions come from their original Android maintainers and change on their
- * schedule. This panel keeps that flow independent of the app's own release
- * cycle: a provider fix published upstream is one click away, and nobody
- * reinstalls the desktop app to get it.
- */
-
-const POLICY_LABELS: Record<UpdatePolicy, { title: string; detail: string }> = {
-  manual: {
-    title: 'Manual only',
-    detail: 'Nothing is checked automatically. Use the button above.',
-  },
-  startup: {
-    title: 'On every launch',
-    detail: 'Checks shortly after the app starts, so it never delays startup.',
-  },
-  daily: {
-    title: 'Daily',
-    detail: 'Checks at most once every 24 hours, catching up if the app was closed.',
-  },
-};
-
-const getPolicyDetail = (policy?: string): string => {
-  if (policy && policy in POLICY_LABELS) {
-    return POLICY_LABELS[policy as UpdatePolicy].detail;
-  }
-  return '';
-};
 
 export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdated }) => {
   const [updates, setUpdates] = useState<AvailableUpdate[]>([]);
@@ -44,8 +12,8 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
   const [checking, setChecking] = useState(false);
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
-  const [warnings, setWarnings] = useState<string[]>([]);
   const [message, setMessage] = useState<string | null>(null);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const api = window.cloudstream;
 
@@ -62,9 +30,6 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
       .catch(() => {});
   }, [api]);
 
-  // Background checks and auto-installs happen in the main process, so the panel
-  // subscribes rather than polling; otherwise an auto-update would silently
-  // disagree with what is on screen.
   useEffect(() => {
     if (!api) return;
     return api.onExtensionUpdateEvent((event, payload) => {
@@ -74,9 +39,10 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
           break;
         case 'extension:updateCheckFinished': {
           const result = payload as { updates?: AvailableUpdate[]; warnings?: string[] };
-          setUpdates(Array.isArray(result?.updates) ? result.updates : []);
-          setWarnings(Array.isArray(result?.warnings) ? result.warnings : []);
+          const safeUpdates = Array.isArray(result?.updates) ? result.updates : [];
+          setUpdates(safeUpdates);
           setChecking(false);
+          if (safeUpdates.length > 0) setIsExpanded(true);
           break;
         }
         case 'extension:updateProgress':
@@ -86,7 +52,7 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
           const { outcomes } = payload as { outcomes?: UpdateOutcome[] };
           const safeOutcomes = Array.isArray(outcomes) ? outcomes : [];
           const ok = safeOutcomes.filter((o) => o?.ok).length;
-          setMessage(`Automatically updated ${ok} of ${safeOutcomes.length} extensions.`);
+          setMessage(`Auto-updated ${ok} of ${safeOutcomes.length} extensions.`);
           api
             .getCachedExtensionUpdates()
             .then((res) => setUpdates(Array.isArray(res) ? res : []))
@@ -109,23 +75,20 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
       setChecking(false);
 
       if (!response.ok || !response.result) {
-        setMessage(`Could not check for updates: ${response.error ?? 'unknown error'}`);
+        setMessage(`Check failed: ${response.error ?? 'unknown error'}`);
         return;
       }
       const safeUpdates = Array.isArray(response.result.updates) ? response.result.updates : [];
-      const safeWarnings = Array.isArray(response.result.warnings) ? response.result.warnings : [];
       setUpdates(safeUpdates);
-      setWarnings(safeWarnings);
-      const newSettings = await api.getUpdateSettings().catch(() => null);
-      if (newSettings) setSettings(newSettings);
+      if (safeUpdates.length > 0) setIsExpanded(true);
       setMessage(
         safeUpdates.length === 0
-          ? `All extensions are up to date (${response.result.repositoriesChecked ?? 0} repositories checked).`
+          ? `All extensions up to date (${response.result.repositoriesChecked ?? 0} repos checked).`
           : null
       );
     } catch (err) {
       setChecking(false);
-      setMessage(`Update check failed: ${err instanceof Error ? err.message : String(err)}`);
+      setMessage(`Check failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [api]);
 
@@ -159,14 +122,7 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
       const outcomes = await api.updateAllExtensions();
       const safeOutcomes = Array.isArray(outcomes) ? outcomes : [];
       const ok = safeOutcomes.filter((o) => o?.ok).length;
-      const failed = safeOutcomes.filter((o) => o && !o.ok);
-      setMessage(
-        failed.length === 0
-          ? `Updated all ${ok} extensions.`
-          : `Updated ${ok} of ${safeOutcomes.length}. Failed: ${failed
-              .map((f) => f.internalName)
-              .join(', ')}.`
-      );
+      setMessage(`Updated all ${ok} extension(s).`);
       const cached = await api.getCachedExtensionUpdates().catch(() => []);
       setUpdates(Array.isArray(cached) ? cached : []);
       onUpdated?.();
@@ -177,231 +133,117 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
     }
   }, [api, updates.length, onUpdated]);
 
-  const savePolicy = useCallback(
-    async (patch: Partial<UpdateSettings>) => {
-      if (!api) return;
-      try {
-        const updated = await api.saveUpdateSettings(patch);
-        if (updated) setSettings(updated);
-      } catch (err) {
-        console.error('Failed to save update settings:', err);
-      }
-    },
-    [api]
-  );
-
-  const lastChecked = settings?.lastCheckedAt
-    ? new Date(settings.lastCheckedAt).toLocaleString()
-    : 'never';
-
   const safeUpdates = Array.isArray(updates) ? updates : [];
-  const safeWarnings = Array.isArray(warnings) ? warnings : [];
+  const lastCheckedStr = settings?.lastCheckedAt
+    ? ` (Last checked: ${new Date(settings.lastCheckedAt).toLocaleTimeString()})`
+    : '';
 
   return (
-    <section style={{ marginBottom: '2rem' }}>
-      <header
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '1rem',
-          marginBottom: '0.85rem',
-          flexWrap: 'wrap',
-        }}
-      >
-        <div>
-          <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
-            <ArrowUpCircle size={18} />
-            Extension updates
-          </h3>
-          <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: '0.3rem 0 0' }}>
-            Updates come straight from the original maintainers. The app itself does not need
-            reinstalling. Last checked: {lastChecked}.
-          </p>
+    <div style={{
+      background: 'var(--bg-card)',
+      border: '1px solid',
+      borderColor: safeUpdates.length > 0 ? 'var(--accent-primary)' : 'var(--border-color)',
+      borderRadius: 'var(--radius-md)',
+      padding: '0.6rem 1rem',
+      transition: 'all 0.2s ease'
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <div
+          onClick={() => setIsExpanded(!isExpanded)}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', flex: 1 }}
+        >
+          <ArrowUpCircle size={16} style={{ color: safeUpdates.length > 0 ? 'var(--accent-light)' : 'var(--text-subtle)' }} />
+          <span style={{ fontSize: '0.83rem', fontWeight: 600, color: '#fff' }}>
+            Extension Updates{lastCheckedStr}
+          </span>
+          {safeUpdates.length > 0 ? (
+            <span className="poster-badge" style={{ position: 'static', backgroundColor: 'var(--accent-primary)', color: '#fff', fontSize: '0.68rem' }}>
+              {safeUpdates.length} update(s) available
+            </span>
+          ) : (
+            <span style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>Up to date</span>
+          )}
+          {isExpanded ? <ChevronUp size={14} style={{ color: 'var(--text-subtle)' }} /> : <ChevronDown size={14} style={{ color: 'var(--text-subtle)' }} />}
         </div>
 
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button className="btn btn-secondary" onClick={check} disabled={checking}>
-            <RefreshCw size={15} className={checking ? 'spin' : undefined} />
-            <span>{checking ? 'Checking…' : 'Check for updates'}</span>
-          </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
           <button
-            className="btn btn-primary"
-            onClick={updateEverything}
-            disabled={safeUpdates.length === 0 || progress !== null}
+            className="btn btn-secondary"
+            onClick={check}
+            disabled={checking}
+            style={{ fontSize: '0.73rem', padding: '0.25rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
           >
-            <ArrowUpCircle size={15} />
-            <span>
-              {progress
-                ? `Updating ${progress.current}/${progress.total}…`
-                : `Update all${safeUpdates.length ? ` (${safeUpdates.length})` : ''}`}
-            </span>
+            <RefreshCw size={12} className={checking ? 'spin' : undefined} />
+            <span>{checking ? 'Checking…' : 'Check Updates'}</span>
           </button>
+
+          {safeUpdates.length > 0 && (
+            <button
+              className="btn btn-primary"
+              onClick={updateEverything}
+              disabled={progress !== null}
+              style={{ fontSize: '0.73rem', padding: '0.25rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+            >
+              <ArrowUpCircle size={12} />
+              <span>
+                {progress ? `Updating ${progress.current}/${progress.total}…` : `Update All (${safeUpdates.length})`}
+              </span>
+            </button>
+          )}
         </div>
-      </header>
+      </div>
 
       {message && (
-        <div
-          style={{
-            padding: '0.6rem 0.8rem',
-            borderRadius: 8,
-            background: 'var(--surface-2, rgba(255,255,255,0.04))',
-            fontSize: '0.8rem',
-            marginBottom: '0.75rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-          }}
-        >
-          <CheckCircle2 size={15} style={{ color: 'var(--status-success)' }} />
-          {message}
+        <div style={{
+          marginTop: '0.5rem',
+          padding: '0.4rem 0.65rem',
+          borderRadius: 'var(--radius-sm)',
+          background: 'rgba(16, 185, 129, 0.12)',
+          color: '#fff',
+          fontSize: '0.75rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.4rem'
+        }}>
+          <CheckCircle2 size={13} style={{ color: 'var(--status-success)' }} />
+          <span>{message}</span>
         </div>
       )}
 
-      {safeUpdates.length > 0 && (
-        <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 1rem' }}>
+      {isExpanded && safeUpdates.length > 0 && (
+        <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.6rem' }}>
           {safeUpdates.map((u) => (
-            <li
+            <div
               key={u.internalName}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                gap: '1rem',
-                padding: '0.7rem 0.85rem',
-                borderRadius: 8,
-                background: 'var(--surface-2, rgba(255,255,255,0.04))',
-                marginBottom: '0.4rem',
+                padding: '0.4rem 0.65rem',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--bg-input)',
+                gap: '0.75rem'
               }}
             >
-              <div style={{ minWidth: 0 }}>
-                <strong style={{ fontSize: '0.87rem' }}>{u.name}</strong>
-                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                  v{u.installedVersion} → <strong>v{u.availableVersion}</strong>
-                  {u.fileSize ? ` · ${(u.fileSize / 1024).toFixed(0)} KB` : ''}
-                </div>
-                {u.description && (
-                  <div
-                    style={{
-                      fontSize: '0.72rem',
-                      color: 'var(--text-subtle)',
-                      marginTop: '0.2rem',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      maxWidth: '46ch',
-                    }}
-                    title={u.description}
-                  >
-                    {u.description}
-                  </div>
-                )}
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff' }}>{u.name}</span>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)', marginLeft: '0.5rem' }}>
+                  v{u.installedVersion} ➔ <strong>v{u.availableVersion}</strong>
+                  {u.fileSize ? ` (${(u.fileSize / 1024).toFixed(0)} KB)` : ''}
+                </span>
               </div>
               <button
                 className="btn btn-secondary"
                 onClick={() => updateOne(u.internalName)}
                 disabled={busy.has(u.internalName)}
-                style={{ flexShrink: 0 }}
+                style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }}
               >
                 {busy.has(u.internalName) ? 'Updating…' : 'Update'}
               </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {safeWarnings.length > 0 && (
-        <details style={{ marginBottom: '1rem', fontSize: '0.75rem' }}>
-          <summary
-            style={{
-              cursor: 'pointer',
-              color: 'var(--status-warning, #d19a2f)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.4rem',
-            }}
-          >
-            <AlertTriangle size={14} />
-            {safeWarnings.length} repository warning{safeWarnings.length === 1 ? '' : 's'}
-          </summary>
-          <ul style={{ color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-            {safeWarnings.map((w, i) => (
-              <li key={i}>{w}</li>
-            ))}
-          </ul>
-        </details>
-      )}
-
-      <div
-        style={{
-          padding: '0.85rem',
-          borderRadius: 8,
-          border: '1px solid var(--border, rgba(255,255,255,0.08))',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontSize: '0.8rem',
-            marginBottom: '0.6rem',
-          }}
-        >
-          <Clock size={15} />
-          <strong>Automatic checks</strong>
-        </div>
-
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
-          {(Object.keys(POLICY_LABELS) as UpdatePolicy[]).map((policy) => (
-            <button
-              key={policy}
-              className={`btn ${settings?.policy === policy ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => savePolicy({ policy })}
-              title={POLICY_LABELS[policy].detail}
-              style={{ fontSize: '0.76rem' }}
-            >
-              {POLICY_LABELS[policy].title}
-            </button>
+            </div>
           ))}
         </div>
-
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: '0.5rem',
-            fontSize: '0.78rem',
-            cursor: 'pointer',
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={settings?.autoInstall ?? false}
-            onChange={(e) => savePolicy({ autoInstall: e.target.checked })}
-            style={{ marginTop: '0.15rem' }}
-          />
-          <span>
-            Install updates automatically
-            <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.72rem' }}>
-              Off by default. Extensions run code you chose to trust at a particular version, so
-              replacing it is left as your call. With this on, new versions install silently on
-              the schedule above.
-            </span>
-          </span>
-        </label>
-
-        <p
-          style={{
-            fontSize: '0.72rem',
-            color: 'var(--text-subtle)',
-            margin: '0.6rem 0 0',
-          }}
-        >
-          {getPolicyDetail(settings?.policy)}
-        </p>
-      </div>
-    </section>
+      )}
+    </div>
   );
 };
-

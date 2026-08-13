@@ -1,8 +1,14 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  X, Play, RefreshCw, Loader2, Users, HardDrive, Radio, Check, AlertTriangle,
+  X, Play, RefreshCw, Loader2, Users, HardDrive, Radio, Check, AlertTriangle, Download, Filter,
 } from 'lucide-react';
 import type { TorrentResult } from '../../types/torrent';
+import { SourceFilterBar } from '../SourceFilterBar';
+import {
+  DEFAULT_FILTER_STATE,
+  filterAndSortSources,
+  type SourceFilterState,
+} from '../../utils/sourceFilter';
 
 /**
  * In-player source switcher.
@@ -72,6 +78,14 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
   onRefresh,
   onDownload,
 }) => {
+  const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);
+  const [showFilterBar, setShowFilterBar] = useState(true);
+
+  const displayedSources = useMemo(
+    () => filterAndSortSources(sources, filterState),
+    [sources, filterState]
+  );
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -88,17 +102,25 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
 
   return (
     <aside className="player-panel player-panel--sources" aria-label="Stream sources">
-      <header className="player-panel__head">
+      <header className="player-panel__head player-panel__head--sticky">
         <div>
           <h3>Sources</h3>
           <div className="player-panel__facts">
             <span>
-              {sources.length} found
+              {displayedSources.length} showing (of {sources.length} total)
               {searching && totalIndexers > 0 && ` · searching ${searched}/${totalIndexers}`}
             </span>
           </div>
         </div>
         <div className="player-panel__head-actions">
+          <button
+            className={`icon-button${showFilterBar ? ' active' : ''}`}
+            onClick={() => setShowFilterBar((v) => !v)}
+            title="Filter and sort sources"
+            aria-label="Filter sources"
+          >
+            <Filter size={18} />
+          </button>
           <button
             className="icon-button"
             onClick={onRefresh}
@@ -114,52 +136,81 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
         </div>
       </header>
 
+      {showFilterBar && (
+        <SourceFilterBar
+          filterState={filterState}
+          onChange={setFilterState}
+          totalCount={sources.length}
+          filteredCount={displayedSources.length}
+          compact
+        />
+      )}
+
       {error && (
         <p className="player-panel__error">
           <AlertTriangle size={14} /> {error}
         </p>
       )}
 
+      {/*
+        Play and download are separate, non-overlapping targets.
+
+        Download used to be absolutely positioned over the bottom-right of the
+        row — exactly where the play affordance sat — so aiming at play
+        regularly started a download instead. Play is now a distinct button at
+        the head of the row and download is a distinct button at its tail, with
+        the text block between them.
+      */}
       <ul className="player-panel__sources">
-        {sources.map((source) => {
+        {displayedSources.map((source) => {
           const isActive = source.infoHash === activeInfoHash;
           const isSwitching = switchingTo === source.infoHash;
 
           return (
-            <li key={source.infoHash}>
+            <li
+              key={source.infoHash}
+              className={`player-panel__source-row${
+                isActive ? ' player-panel__source-row--current' : ''
+              }`}
+            >
               <button
-                className={`player-panel__source${
-                  isActive ? ' player-panel__source--current' : ''
-                }`}
-                onClick={() => !isActive && onSelect(source)}
+                className="player-panel__source-play"
+                onClick={() => onSelect(source)}
+                disabled={isSwitching}
                 aria-current={isActive || undefined}
+                title={isActive ? 'Playing — restart this source' : 'Play this source'}
+                aria-label={`Play ${source.title}`}
+              >
+                {isSwitching ? (
+                  <Loader2 className="spin" size={16} />
+                ) : isActive ? (
+                  <Check size={16} />
+                ) : (
+                  <Play size={16} fill="currentColor" />
+                )}
+              </button>
+
+              {/* The body selects too, so the whole row remains a play target —
+                  just not one that overlaps download. */}
+              <button
+                className="player-panel__source-body"
+                onClick={() => onSelect(source)}
                 disabled={isSwitching}
               >
-                <div className="player-panel__source-text">
-                  <strong>{source.title}</strong>
-                  <span>{describe(source)}</span>
-                  <div className="player-panel__source-facts">
-                    <span title="Seeders">
-                      <Users size={12} /> {source.seeders}
-                    </span>
-                    <span title="Size">
-                      <HardDrive size={12} /> {formatSize(source.sizeBytes)}
-                    </span>
-                    <span title="Indexer">
-                      <Radio size={12} /> {source.indexerName}
-                    </span>
-                  </div>
-                </div>
-
-                {isSwitching ? (
-                  <Loader2 className="spin" size={15} />
-                ) : isActive ? (
-                  <span className="player-panel__now">
-                    <Check size={13} /> Playing
+                <strong>{source.title}</strong>
+                <span>{describe(source)}</span>
+                <div className="player-panel__source-facts">
+                  <span title="Seeders">
+                    <Users size={12} /> {source.seeders}
                   </span>
-                ) : (
-                  <Play size={15} className="player-panel__episode-play" />
-                )}
+                  <span title="Size">
+                    <HardDrive size={12} /> {formatSize(source.sizeBytes)}
+                  </span>
+                  <span title="Indexer">
+                    <Radio size={12} /> {source.indexerName}
+                  </span>
+                  {isActive && <span className="player-panel__now">Playing</span>}
+                </div>
               </button>
 
               {onDownload && (
@@ -169,7 +220,7 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
                   title="Download this release"
                   aria-label={`Download ${source.title}`}
                 >
-                  Download
+                  <Download size={15} />
                 </button>
               )}
             </li>

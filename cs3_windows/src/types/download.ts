@@ -6,6 +6,8 @@ export const DownloadState = {
   Paused: 'Paused',
   Completed: 'Completed',
   Failed: 'Failed',
+  Retrying: 'Retrying',
+  RefreshingSource: 'RefreshingSource',
 } as const;
 export type DownloadState = (typeof DownloadState)[keyof typeof DownloadState];
 
@@ -28,6 +30,11 @@ export interface DownloadTask {
   errorMessage?: string;
   providerName: string;
   createdTime: number;
+  /** Media URL / query metadata used to re-resolve expired links. */
+  mediaUrl?: string;
+  resolution?: number;
+  quality?: string;
+  retryCount?: number;
 }
 
 export interface DownloadStatus {

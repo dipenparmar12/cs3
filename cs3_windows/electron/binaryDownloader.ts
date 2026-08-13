@@ -19,17 +19,104 @@ export class BinaryDownloader {
     return this.binDir;
   }
 
-  public checkBinaries(): { aria2: boolean; ytdlp: boolean } {
-    const aria2Path = path.join(this.binDir, process.platform === 'win32' ? 'aria2c.exe' : 'aria2c');
-    const ytdlpPath = path.join(this.binDir, process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
+  /** Resolves a tool by name in the app's bin dir, then the dev-checkout one. */
+  public resolveBinary(name: string): string | null {
+    const exe = process.platform === 'win32' ? `${name}.exe` : name;
+    for (const dir of [this.binDir, path.join(process.cwd(), 'bin')]) {
+      const candidate = path.join(dir, exe);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return null;
+  }
 
-    const cwdAria2 = path.join(process.cwd(), 'bin', process.platform === 'win32' ? 'aria2c.exe' : 'aria2c');
-    const cwdYtdlp = path.join(process.cwd(), 'bin', process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
-
+  public checkBinaries(): { aria2: boolean; ytdlp: boolean; ffmpeg: boolean; ffprobe: boolean } {
     return {
-      aria2: fs.existsSync(aria2Path) || fs.existsSync(cwdAria2),
-      ytdlp: fs.existsSync(ytdlpPath) || fs.existsSync(cwdYtdlp)
+      aria2: this.resolveBinary('aria2c') !== null,
+      ytdlp: this.resolveBinary('yt-dlp') !== null,
+      ffmpeg: this.resolveBinary('ffmpeg') !== null,
+      ffprobe: this.resolveBinary('ffprobe') !== null,
     };
+  }
+
+  /**
+   * Installs FFmpeg and FFprobe with no user configuration.
+   *
+   * BtbN's build is chosen for two reasons: it is **GPL**, which matches this
+   * project's licence, and it ships `ffprobe` alongside `ffmpeg`. The probe is
+   * not optional here — it is what identifies the audio codec in a stream, and
+   * therefore what makes it possible to tell "this file has no audio" apart
+   * from "Chromium cannot decode this file's audio", which are the same silence
+   * to a user.
+   *
+   * Nothing about PATH, codecs or environment variables is exposed. The user
+   * presses one button.
+   */
+  public async setupFfmpeg(onStatus?: (status: string, percent: number) => void): Promise<boolean> {
+    if (this.resolveBinary('ffmpeg') && this.resolveBinary('ffprobe')) return true;
+    if (process.platform !== 'win32') {
+      // Other platforms ship ffmpeg through a package manager; downloading a
+      // Windows build there would be worse than saying so.
+      if (onStatus) onStatus('Install ffmpeg with your system package manager.', 100);
+      return false;
+    }
+
+    const url =
+      'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip';
+    const zipPath = path.join(this.binDir, 'ffmpeg.zip');
+
+    if (onStatus) onStatus('Downloading media components…', 5);
+    const ok = await this.downloadFile(url, zipPath, (p) => {
+      if (onStatus) onStatus(`Downloading media components… ${p}%`, Math.floor(5 + p * 0.75));
+    });
+
+    if (!ok || !fs.existsSync(zipPath)) {
+      if (onStatus) onStatus('Download failed. Check your connection and try again.', 0);
+      return false;
+    }
+
+    if (onStatus) onStatus('Extracting…', 85);
+    const extractDir = path.join(this.binDir, 'ffmpeg-tmp');
+    try {
+      child_process.execSync(
+        `powershell -NoProfile -Command "Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${extractDir}' -Force"`,
+        { windowsHide: true }
+      );
+
+      // The archive nests everything under a versioned directory, so the two
+      // executables are located by search rather than by an assumed path.
+      for (const tool of ['ffmpeg.exe', 'ffprobe.exe']) {
+        const found = this.findFile(extractDir, tool);
+        if (found) fs.copyFileSync(found, path.join(this.binDir, tool));
+      }
+    } catch (error) {
+      console.warn('ffmpeg extraction failed:', error);
+      if (onStatus) onStatus('Could not extract the media components.', 0);
+      return false;
+    } finally {
+      try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch { /* best effort */ }
+      try { fs.unlinkSync(zipPath); } catch { /* best effort */ }
+    }
+
+    const installed = Boolean(this.resolveBinary('ffmpeg') && this.resolveBinary('ffprobe'));
+    if (onStatus) {
+      onStatus(installed ? 'Media components installed.' : 'Installation incomplete.', 100);
+    }
+    return installed;
+  }
+
+  /** Depth-first search for a file name, for archives with nested layouts. */
+  private findFile(root: string, fileName: string): string | null {
+    if (!fs.existsSync(root)) return null;
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      const full = path.join(root, entry.name);
+      if (entry.isDirectory()) {
+        const nested = this.findFile(full, fileName);
+        if (nested) return nested;
+      } else if (entry.name.toLowerCase() === fileName.toLowerCase()) {
+        return full;
+      }
+    }
+    return null;
   }
 
   public async downloadFile(url: string, targetPath: string, onProgress?: (percent: number) => void): Promise<boolean> {

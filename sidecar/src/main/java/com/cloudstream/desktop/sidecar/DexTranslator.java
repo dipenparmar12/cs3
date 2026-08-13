@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -54,8 +55,20 @@ public final class DexTranslator {
 
     private final Path cacheRoot;
 
+    /**
+     * Repairs Kotlin's hyphenated method names, which dex2jar rewrites to
+     * underscores. Built once and reused: it indexes every runtime jar, which
+     * is not work worth repeating per plugin. Null when no classpath was given.
+     */
+    private final KotlinNameRepair nameRepair;
+
     public DexTranslator(Path cacheRoot) throws IOException {
+        this(cacheRoot, null);
+    }
+
+    public DexTranslator(Path cacheRoot, Path runtimeClasspathDir) throws IOException {
         this.cacheRoot = cacheRoot;
+        this.nameRepair = runtimeClasspathDir == null ? null : new KotlinNameRepair(runtimeClasspathDir);
         Files.createDirectories(cacheRoot);
     }
 
@@ -106,7 +119,16 @@ public final class DexTranslator {
 
         // Translate to a temp file and move into place, so an interrupted run can
         // never leave a partial jar that a later load would treat as cached.
-        Path tmp = cacheRoot.resolve(sha + ".jar.tmp");
+        //
+        // The temp name carries a nonce as well as the hash. Keying it on the
+        // hash alone made two concurrent translations of the *same* archive
+        // collide — which is not hypothetical: installing a plugin inspects it
+        // and loading it translates it again, and those calls run on separate
+        // workers. One would win the create and the other would fail with
+        // NoSuchFileException or FileAlreadyExistsException, surfacing as a
+        // bogus TRANSLATION_FAILED. The final move stays atomic, so a race now
+        // costs one duplicated translation instead of a spurious failure.
+        Path tmp = cacheRoot.resolve(sha + "." + UUID.randomUUID() + ".jar.tmp");
         try {
             BaseDexFileReader reader = MultiDexFileReader.open(packForReader(dexes));
             Dex2jar.from(reader)
@@ -114,6 +136,13 @@ public final class DexTranslator {
                     .topoLogicalSort()
                     .noCode(false)
                     .to(tmp);
+
+            // Before the jar becomes a cache entry, not after: the cache is
+            // keyed by the archive's hash and a repaired jar must be what a
+            // later cache hit serves, or the fix would apply only on the very
+            // first load of each plugin.
+            if (nameRepair != null) nameRepair.repair(tmp);
+
             Files.move(tmp, out, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (Throwable t) {
             // dex2jar throws Errors as well as Exceptions on malformed input.

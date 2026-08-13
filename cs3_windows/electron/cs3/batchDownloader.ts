@@ -214,6 +214,7 @@ function buildTask(
   source: TorrentResult,
   batchId: string
 ): DownloadTask {
+  const url = source.directUrl || source.magnet || source.torrentUrl || source.infoHash;
   return {
     id: `${source.infoHash}-s${episode.season ?? 0}e${episode.episode ?? 0}`,
     parentId: request.parentUrl,
@@ -225,11 +226,11 @@ function buildTask(
     link: {
       source: source.indexerName,
       name: source.title,
-      url: source.magnet || source.torrentUrl || source.infoHash,
-      referer: '',
+      url,
+      referer: source.directHeaders?.Referer || source.directHeaders?.referer || '',
       quality: source.parsed.resolution || 720,
     },
-    headers: {},
+    headers: source.directHeaders || {},
     bytesDownloaded: 0,
     totalBytes: source.sizeBytes,
     downloadSpeed: 0,
@@ -237,5 +238,7 @@ function buildTask(
     state: DownloadState.Queued,
     providerName: `${source.indexerName} (${batchId})`,
     createdTime: Date.now(),
+    mediaUrl: episode.url,
+    resolution: source.parsed.resolution,
   };
 }

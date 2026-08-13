@@ -75,7 +75,9 @@ public final class Main {
         System.setOut(new PrintStream(new java.io.FileOutputStream(java.io.FileDescriptor.err),
                 true, StandardCharsets.UTF_8));
 
-        DexTranslator translator = new DexTranslator(dataDir.resolve("translated"));
+        // The classpath is handed to the translator as well as the host: it is
+        // what tells the Kotlin name repair which mangled names actually exist.
+        DexTranslator translator = new DexTranslator(dataDir.resolve("translated"), classpathDir);
         PluginHost host = new PluginHost(translator, classpathDir);
         new Main(host, stdout).run();
     }
@@ -203,10 +205,48 @@ public final class Main {
 
             case "unload" -> Map.of("unloaded", host.unload(str(params, "pluginId")));
 
+            /*
+             * Provider execution (PRD 36 step 4).
+             *
+             * Replies carry the bridge's JSON verbatim under `json` rather than
+             * being re-parsed into a Map here. The bridge already produced a
+             * document shaped for the renderer, and round-tripping it through a
+             * minimal Java parser would only add a place to lose fields.
+             */
+            case "providerSearch" -> {
+                @SuppressWarnings("unchecked")
+                List<String> names = params.get("providers") instanceof List<?> l
+                        ? (List<String>) l : null;
+                yield Map.of("byProvider", host.searchProviders(
+                        names, str(params, "query"), timeoutFor(params)));
+            }
+
+            case "providerLoad" -> Map.of("json", host.loadFromProvider(
+                    str(params, "provider"), str(params, "url"), timeoutFor(params)));
+
+            case "providerLoadLinks" -> Map.of("json", host.loadLinksFromProvider(
+                    str(params, "provider"), str(params, "data"), timeoutFor(params)));
+
+            case "providers" -> Map.of("names", host.providerNames());
+
             case "clearTranslationCache" -> Map.of("removed", host.clearTranslationCache());
 
             default -> throw new UnsupportedOperationException("Unknown method: " + method);
         };
+    }
+
+    /**
+     * The deadline handed to a provider call.
+     *
+     * Shorter than the RPC's own timeout on purpose: the bridge's `withTimeout`
+     * names the provider that hung, whereas the outer timeout can only say the
+     * whole call was abandoned. Leaving the inner one room to win makes the
+     * difference between an actionable message and a shrug.
+     */
+    private static long timeoutFor(Map<String, Object> params) {
+        long outer = params.get("timeoutMs") instanceof Number n
+                ? n.longValue() : DEFAULT_TIMEOUT_MS;
+        return Math.max(5_000, outer - 10_000);
     }
 
     private static String str(Map<String, Object> params, String key) {

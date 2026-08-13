@@ -117,8 +117,8 @@
     "rawRepoUrl": "https://git.disroot.org/ayza/FStream/raw/branch/main/repo.json",
     "category": "Regional",
     "language": "French (FR)",
-    "verified": false,
-    "documentKind": "unknown"
+    "verified": true,
+    "documentKind": "repository"
   },
   {
     "id": "indostream",
@@ -297,8 +297,8 @@
     "rawRepoUrl": "https://raw.githubusercontent.com/saimuelbr/saimuelrepo/refs/heads/main/builds/repo.json",
     "category": "Community",
     "language": "English",
-    "verified": false,
-    "documentKind": "unknown"
+    "verified": true,
+    "documentKind": "repository"
   },
   {
     "id": "italian_provider",

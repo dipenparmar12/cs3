@@ -1,11 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
   SearchHistoryEntry,
+  SearchOptions,
   SearchResponse,
   SearchSuggestion,
 } from '../src/types/api';
 import type { DownloadTask } from '../src/types/download';
-import type { SitePlugin, PluginCompatibilityReport } from '../src/types/plugin';
+import type { SitePlugin, PluginCompatibilityReport, ProviderTreeRepository } from '../src/types/plugin';
 import type {
   IndexerConfig,
   IndexerHealth,
@@ -17,7 +18,12 @@ import type {
 import type { OfficialRepository } from './officialRepositories';
 import type { MetadataDetail } from './metadataProvider';
 import type { SourceResponse, StreamAttempt } from './contentService';
-import type { RepositoryFetchResult } from './pluginManager';
+import type {
+  ExtensionProvider,
+  RepositoryFetchResult,
+} from './pluginManager';
+import type { SearchScope } from './searchScope';
+import type { DnsPreset, NetworkSettings } from './networkSettings';
 import type {
   AvailableUpdate,
   UpdateCheckResult,
@@ -33,6 +39,8 @@ import type {
 } from './cs3/libraryStore';
 import type { StreamHandle } from './torrent/torrentEngine';
 import type { PlaybackSnapshot } from './playbackSession';
+import type { SubtitleSearchResult } from './subtitleService';
+import type { MediaProbe } from './audioTranscoder';
 
 /**
  * Typed, allow-listed IPC surface (ARCH-2 / SEC-9).
@@ -49,7 +57,10 @@ export interface Envelope {
 
 export interface CloudStreamElectronAPI {
   // Content
-  searchAll: (query: string) => Promise<Envelope & { results: SearchResponse[] }>;
+  searchAll: (
+    query: string,
+    options?: SearchOptions
+  ) => Promise<Envelope & { results: SearchResponse[] }>;
   loadMedia: (url: string) => Promise<Envelope & { detail: MetadataDetail | null }>;
   getSources: (request: {
     mediaUrl: string;
@@ -68,6 +79,15 @@ export interface CloudStreamElectronAPI {
   suggestTitles: (
     query: string
   ) => Promise<Envelope & { suggestions: SearchSuggestion[] }>;
+  /** Online subtitle search, keyed by IMDb id (plus season/episode for series). */
+  searchSubtitles: (
+    imdbId: string,
+    season?: number,
+    episode?: number
+  ) => Promise<Envelope & { results: SubtitleSearchResult[] }>;
+  /** Downloads one subtitle, already converted from SubRip to WebVTT. */
+  fetchSubtitle: (url: string) => Promise<Envelope & { vtt: string }>;
+
   getSearchHistory: () => Promise<SearchHistoryEntry[]>;
   removeSearchHistory: (query: string) => Promise<SearchHistoryEntry[]>;
   clearSearchHistory: () => Promise<SearchHistoryEntry[]>;
@@ -124,6 +144,61 @@ export interface CloudStreamElectronAPI {
   stopPlayback: (sessionId: string, keepFiles?: boolean) => Promise<Envelope>;
   onPlaybackUpdate: (callback: (snapshot: PlaybackSnapshot) => void) => () => void;
 
+  /** Resolved-source cache: how much is stored, and a way to drop it. */
+  /** Providers registered by installed extensions, plus which are switched off. */
+  getExtensionProviders: () => Promise<
+    Envelope & { providers: ExtensionProvider[]; disabled: string[] }
+  >;
+  setProviderEnabled: (name: string, enabled: boolean) => Promise<string[]>;
+  setProvidersEnabled: (names: string[], enabled: boolean) => Promise<string[]>;
+  getProviderTree: () => Promise<Envelope & { tree: ProviderTreeRepository[] }>;
+
+  /** The repository → extension → provider tree, plus the current narrowing. */
+  /** DNS configuration, and a reachability check against real indexer hosts. */
+  getNetworkSettings: () => Promise<{ settings: NetworkSettings; presets: DnsPreset[] }>;
+  setNetworkSettings: (settings: Partial<NetworkSettings>) => Promise<NetworkSettings>;
+  resetNetworkSettings: () => Promise<NetworkSettings>;
+  testNetwork: () => Promise<{
+    ok: boolean;
+    dnsMode: NetworkSettings['dnsMode'];
+    results: Array<{
+      name: string;
+      ok: boolean;
+      status?: number;
+      latencyMs: number;
+      error?: string;
+    }>;
+  }>;
+
+  getSearchScopeOptions: () => Promise<
+    Envelope & {
+      repositories: ProviderTreeRepository[];
+      disabledProviders: string[];
+      indexers: Array<{ id: string; name: string }>;
+      scope: SearchScope;
+    }
+  >;
+  setSearchScope: (scope: Partial<SearchScope>) => Promise<SearchScope>;
+
+  /**
+   * Inspects a stream's audio tracks. Reports tracks Chromium cannot decode,
+   * which a `<video>` element does not expose at all.
+   */
+  probeAudio: (
+    url: string
+  ) => Promise<
+    Envelope & { probe: MediaProbe | null; needsComponents: boolean }
+  >;
+  /** Opens a remuxing session and returns a loopback URL with playable audio. */
+  openAudioTranscode: (
+    url: string,
+    audioIndex: number
+  ) => Promise<Envelope & { url: string | null }>;
+  closeAudioTranscode: (token: string) => Promise<Envelope>;
+
+  getSourceCacheStats: () => Promise<{ entries: number; sources: number }>;
+  clearSourceCache: () => Promise<Envelope>;
+
   getStreamStats: (infoHash: string) => Promise<TorrentStreamStats | null>;
   selectStreamFile: (infoHash: string, fileIndex: number) => Promise<StreamHandle | null>;
   stopStream: (infoHash: string, keepFiles?: boolean) => Promise<void>;
@@ -146,7 +221,7 @@ export interface CloudStreamElectronAPI {
   resumeDownload: (id: string) => Promise<void>;
   removeDownload: (id: string) => Promise<void>;
   getDownloadQueue: () => Promise<DownloadTask[]>;
-  revealInFolder: (filePath: string) => Promise<void>;
+  revealInFolder: (filePath?: string) => Promise<void>;
   onDownloadProgress: (callback: (tasks: DownloadTask[]) => void) => () => void;
 
   // Season / series batch downloads
@@ -158,7 +233,17 @@ export interface CloudStreamElectronAPI {
   onBatchProgress: (callback: (progress: BatchProgress) => void) => () => void;
 
   // Binaries
-  checkBinaries: () => Promise<{ aria2: boolean; ytdlp: boolean }>;
+  checkBinaries: () => Promise<{
+    aria2: boolean;
+    ytdlp: boolean;
+    ffmpeg: boolean;
+    ffprobe: boolean;
+  }>;
+  /** Installs FFmpeg + FFprobe. No PATH or codec configuration is exposed. */
+  setupFfmpeg: () => Promise<Envelope & { message: string }>;
+  onBinarySetupProgress: (
+    callback: (progress: { status: string; percent: number }) => void
+  ) => () => void;
   setupBinaries: () => Promise<{ success: boolean; message: string }>;
 
   // Extensions
@@ -245,12 +330,16 @@ export interface CloudStreamElectronAPI {
 export type { TorrentFileEntry };
 
 const api: CloudStreamElectronAPI = {
-  searchAll: (query) => ipcRenderer.invoke('api:searchAll', query),
+  searchAll: (query, options) => ipcRenderer.invoke('api:searchAll', query, options),
   loadMedia: (url) => ipcRenderer.invoke('api:loadMedia', url),
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),
 
   suggestTitles: (query) => ipcRenderer.invoke('api:suggest', query),
+  searchSubtitles: (imdbId, season, episode) =>
+    ipcRenderer.invoke('subtitles:search', imdbId, season, episode),
+  fetchSubtitle: (url) => ipcRenderer.invoke('subtitles:fetch', url),
+
   getSearchHistory: () => ipcRenderer.invoke('api:getSearchHistory'),
   removeSearchHistory: (query) => ipcRenderer.invoke('api:removeSearchHistory', query),
   clearSearchHistory: () => ipcRenderer.invoke('api:clearSearchHistory'),
@@ -274,6 +363,27 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.on('playback:update', listener);
     return () => ipcRenderer.removeListener('playback:update', listener);
   },
+
+  getExtensionProviders: () => ipcRenderer.invoke('extension:getProviders'),
+  setProviderEnabled: (name, enabled) =>
+    ipcRenderer.invoke('extension:setProviderEnabled', name, enabled),
+  setProvidersEnabled: (names: string[], enabled: boolean) =>
+    ipcRenderer.invoke('extension:setProvidersEnabled', names, enabled),
+  getProviderTree: () => ipcRenderer.invoke('extension:getProviderTree'),
+  getNetworkSettings: () => ipcRenderer.invoke('network:get'),
+  setNetworkSettings: (settings) => ipcRenderer.invoke('network:set', settings),
+  resetNetworkSettings: () => ipcRenderer.invoke('network:reset'),
+  testNetwork: () => ipcRenderer.invoke('network:test'),
+  getSearchScopeOptions: () => ipcRenderer.invoke('search:getScopeOptions'),
+  setSearchScope: (scope) => ipcRenderer.invoke('search:setScope', scope),
+
+  probeAudio: (url) => ipcRenderer.invoke('audio:probe', url),
+  openAudioTranscode: (url, audioIndex) =>
+    ipcRenderer.invoke('audio:openTranscode', url, audioIndex),
+  closeAudioTranscode: (token) => ipcRenderer.invoke('audio:closeTranscode', token),
+
+  getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
+  clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),
 
   getStreamStats: (infoHash) => ipcRenderer.invoke('torrent:getStats', infoHash),
   selectStreamFile: (infoHash, fileIndex) =>
@@ -316,6 +426,13 @@ const api: CloudStreamElectronAPI = {
   },
 
   checkBinaries: () => ipcRenderer.invoke('binary:check'),
+  setupFfmpeg: () => ipcRenderer.invoke('binary:setupFfmpeg'),
+  onBinarySetupProgress: (callback) => {
+    const listener = (_: unknown, progress: { status: string; percent: number }) =>
+      callback(progress);
+    ipcRenderer.on('binary:setupProgress', listener);
+    return () => ipcRenderer.removeListener('binary:setupProgress', listener);
+  },
   setupBinaries: () => ipcRenderer.invoke('binary:setup'),
 
   getOfficialRepositories: () => ipcRenderer.invoke('extension:getOfficialRepositories'),
