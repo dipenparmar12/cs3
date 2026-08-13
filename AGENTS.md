@@ -129,6 +129,9 @@ immediately and everything after arrives as `playback:update` snapshots on a
 `webContents.send` channel. That inversion is the point — the player renders from snapshots
 from the moment it opens, before any stream exists.
 
+Also namespaced: `subtitles:*` (online search, SubRip→WebVTT), `audio:*` (ffprobe
+inspection and remux sessions), `sources:getCacheStats` / `sources:clearCache`.
+
 Fallible handlers return an **envelope**, `{ ok: boolean; error?: string; …payload }`,
 instead of rejecting. `main.ts` has a `fail()` helper for this. A transport failure must
 surface as UI text the user can act on, never an unhandled rejection in the renderer.
@@ -154,6 +157,9 @@ not a layering mistake.
 | `playbackSession.ts` | Owns one "user pressed play" interaction. Opens the player *before* a stream exists and streams discovery progress into it, so the viewer can start the best source found so far instead of waiting for the slowest indexer. Also owns in-player source switching and refresh. Retains the `SourceQuery`, which is what makes refresh possible without navigating back. |
 | `searchSuggestions.ts` | Title autocomplete merged across Cinemeta + TVmaze + AniList, deduped on normalised title+year, misspelling-tolerant. Their blind spots do not overlap — see the file header for what was measured about each. |
 | `searchHistory.ts` | Past search *queries* (not results — a cached result set goes stale silently), stored via the datastore so backups carry it. |
+| `sourceCache.ts` | Resolved sources, with expiry tracked **per source**: magnets never expire, provider links carry a deadline read from the URL (`Expires`/`exp`/JWT claim, case-insensitively) or a short TTL. A cache hit can be partially stale — good magnets beside dead links — and `read()` reports that split. |
+| `subtitleService.ts` | Online subtitle search via the keyless OpenSubtitles v3 Stremio addon, keyed by IMDb id. Converts SubRip to WebVTT, which is **not optional**: `<track>` rejects `.srt` silently. |
+| `audioTranscoder.ts` | ffprobe/ffmpeg audio compatibility. See the audio section below — this is the fix for the "no sound" bug. |
 | `metadataProvider.ts` | TVmaze + AniList. **Catalogue metadata only, never streams.** Its key output is the IMDb id, which indexers match on far better than free text. |
 | `cinemeta.ts` | Stremio Cinemeta metadata provider, prioritised in search. |
 | `pluginManager.ts` | `.cs3` repository discovery, plugin-list parsing (mirrors upstream `RepositoryManager.kt`), download + SHA-256 verification, Android-style install paths, then hands archives to the sidecar. |
@@ -166,6 +172,41 @@ not a layering mistake.
 | `torrent/indexerRegistry.ts`, `indexers/*` | 7 built-in public indexers, Torznab (Jackett/Prowlarr), and aggregators (Torrentio, apibay). |
 | `torrent/ranker.ts`, `releaseParser.ts` | Release-name parsing (quality/codec/group/season/episode) and result ranking. |
 | `downloadService.ts`, `aria2Engine.ts`, `ytdlpEngine.ts`, `binaryDownloader.ts` | Downloads via aria2c RPC with an HTTP fallback; portable `aria2c`/`yt-dlp` binaries are fetched on first use. |
+
+### Audio: Chromium cannot decode AC-3, E-AC-3 or DTS
+
+Measured on this Electron build with `canPlayType`, not assumed. AAC, MP3, FLAC
+and Opus are fine; **AC-3, E-AC-3 and DTS all return `""`** in both MP4 and MKV.
+
+The failure mode is the nastiest possible one: bare `video/x-matroska` still
+reports `"maybe"`, so the container opens, the video decodes normally, and the
+audio track is silently dropped. Playing an H.264 + AC-3 file and reading the
+decode counters gives **65,397 bytes of video and 0 bytes of audio**, correct
+duration, and no `error` event. The volume slider works perfectly on a stream
+that has no sound in it.
+
+This is why the bug looked provider-specific and why it hit **series** hardest:
+TV releases are overwhelmingly HDTV/WEB-DL carrying broadcast AC-3/E-AC-3, while
+film web-rips usually carry AAC. The provider was never the variable.
+
+`audioTranscoder.ts` probes with ffprobe and, when the selected track is
+undecodable, remuxes through ffmpeg to a loopback URL — `-c:v copy`, audio to
+AAC, downmixed to stereo. The same file then decodes 89,173 bytes of audio.
+
+Things that will bite if you change it:
+
+- **Stereo downmix is deliberate.** 5.1 AC-3 re-encoded as 5.1 AAC decodes but
+  routes to the wrong outputs on most desktop setups, which sounds like missing
+  dialogue — a different bug that looks like the same one.
+- **`-user_agent` is an HTTP demuxer option.** Passing it for a local path makes
+  ffmpeg fail outright with "Option user_agent not found". It is applied only to
+  `http(s)` inputs; omitting it for network input gets providers 403ing instead.
+- **Seeking restarts ffmpeg** at the target time, because a live fragmented MP4
+  has no index and `currentTime` does nothing. Accuracy is bounded by the
+  source's keyframe interval, since `-c:v copy` can only cut at a keyframe.
+- **The probe is also what makes multi-audio selection work.** A `<video>`
+  element does not expose tracks it cannot decode, so without ffprobe the app
+  cannot even tell the user a Japanese AC-3 dub exists.
 
 Two behaviours in `torrentEngine.ts` are load-bearing and easy to break:
 **file selection inside season packs** (deselect all, select one, or swarm bandwidth is
