@@ -10,6 +10,8 @@ import { OFFICIAL_REPOSITORIES } from './officialRepositories';
 import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
 import { PlaybackSessionManager } from './playbackSession';
+import { SearchSuggestionService } from './searchSuggestions';
+import { SearchHistoryStore } from './searchHistory';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
@@ -35,6 +37,8 @@ const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
 const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
 const playbackSessions = new PlaybackSessionManager(contentService);
+const searchSuggestions = new SearchSuggestionService();
+const searchHistory = new SearchHistoryStore(datastore);
 
 downloadService.setTorrentEngine(torrentEngine);
 
@@ -170,11 +174,35 @@ function fail(error: unknown): { ok: false; error: string } {
 
 ipcMain.handle('api:searchAll', async (_, query: string) => {
   try {
-    return { ok: true, results: await contentService.search(query) };
+    const results = await contentService.search(query);
+    // Recorded on success only: a query that failed transport is not something
+    // the user asked to remember.
+    searchHistory.record(query, results.length);
+    return { ok: true, results };
   } catch (error) {
     return { ...fail(error), results: [] };
   }
 });
+
+/**
+ * Title autocomplete. Called on every debounced keystroke, so it never rejects
+ * and never blocks — an empty list is an acceptable answer for a search box.
+ */
+ipcMain.handle('api:suggest', async (_, query: string) => {
+  try {
+    return { ok: true, suggestions: await searchSuggestions.suggest(query) };
+  } catch (error) {
+    return { ...fail(error), suggestions: [] };
+  }
+});
+
+ipcMain.handle('api:getSearchHistory', async () => searchHistory.list());
+
+ipcMain.handle('api:removeSearchHistory', async (_, query: string) =>
+  searchHistory.remove(query)
+);
+
+ipcMain.handle('api:clearSearchHistory', async () => searchHistory.clear());
 
 ipcMain.handle('api:loadMedia', async (_, url: string) => {
   try {

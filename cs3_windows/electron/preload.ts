@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { SearchResponse } from '../src/types/api';
+import type {
+  SearchHistoryEntry,
+  SearchResponse,
+  SearchSuggestion,
+} from '../src/types/api';
 import type { DownloadTask } from '../src/types/download';
 import type { SitePlugin, PluginCompatibilityReport } from '../src/types/plugin';
 import type {
@@ -58,6 +62,15 @@ export interface CloudStreamElectronAPI {
     installedCount: number;
     reason: string;
   }>;
+
+  // Search assistance: what the user probably meant, and what they asked before.
+  /** Title autocomplete merged across catalogues; tolerant of misspellings. */
+  suggestTitles: (
+    query: string
+  ) => Promise<Envelope & { suggestions: SearchSuggestion[] }>;
+  getSearchHistory: () => Promise<SearchHistoryEntry[]>;
+  removeSearchHistory: (query: string) => Promise<SearchHistoryEntry[]>;
+  clearSearchHistory: () => Promise<SearchHistoryEntry[]>;
 
   // Torrent streaming
   startStream: (
@@ -236,6 +249,11 @@ const api: CloudStreamElectronAPI = {
   loadMedia: (url) => ipcRenderer.invoke('api:loadMedia', url),
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),
+
+  suggestTitles: (query) => ipcRenderer.invoke('api:suggest', query),
+  getSearchHistory: () => ipcRenderer.invoke('api:getSearchHistory'),
+  removeSearchHistory: (query) => ipcRenderer.invoke('api:removeSearchHistory', query),
+  clearSearchHistory: () => ipcRenderer.invoke('api:clearSearchHistory'),
 
   startStream: (source, season, episode) =>
     ipcRenderer.invoke('torrent:startStream', source, season, episode),

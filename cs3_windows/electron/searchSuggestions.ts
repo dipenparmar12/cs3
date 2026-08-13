@@ -1,7 +1,7 @@
 import { fetchJson, postJson } from './torrent/http';
 import { TvType, type SearchSuggestion } from '../src/types/api';
 import { normaliseTitleForMatch, titleSimilarity } from './torrent/releaseParser';
-import { buildCinemetaUrl } from './cinemeta';
+import { buildCinemetaUrl, parseCinemetaUrl } from './cinemeta';
 import { buildMetadataUrl } from './metadataProvider';
 
 /**
@@ -15,11 +15,20 @@ import { buildMetadataUrl } from './metadataProvider';
  * runs is what turns a dead end into a result.
  *
  * Three catalogues are consulted rather than one, because their blind spots do
- * not overlap: Cinemeta is IMDb-backed and strong on films but literal about
- * spelling; TVmaze is television-only with genuinely fuzzy matching; AniList
- * resolves romaji/English anime titles neither of the others index well. A
- * title returned by more than one is very unlikely to be a fuzzy near-miss, so
- * agreement is scored as confidence.
+ * not overlap. Measured against live endpoints:
+ *
+ * - **Cinemeta** is IMDb-backed, covers films, and forgives typos (`spidrman`
+ *   returns the Spider-Man films). Its *search* response carries no genres and
+ *   no description, so those are filled in by {@link SearchSuggestionService.enrich}.
+ * - **TVmaze** is television-only but the most typo-tolerant of the three, and
+ *   returns genres and a summary inline (`brakin bad` → Breaking Bad).
+ * - **AniList** resolves romaji/English anime titles the others index poorly,
+ *   but its `SEARCH_MATCH` is *not* typo-tolerant — `atack on titn` returns
+ *   nothing. TVmaze covers that case, which is precisely why three sources are
+ *   queried instead of trusting any one of them.
+ *
+ * A title returned by more than one catalogue is very unlikely to be a fuzzy
+ * near-miss, so agreement is scored as confidence.
  *
  * Results are merged on normalised title + year, per the rule that two rows
  * naming the same title and year are the same work no matter which catalogue
@@ -36,6 +45,10 @@ const MAX_SUGGESTIONS = 10;
 /** Backspacing through a word must not re-issue requests already answered. */
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 60;
+
+/** How many visible rows get a second lookup for genre and plot. */
+const ENRICH_LIMIT = 6;
+const ENRICH_TIMEOUT_MS = 2_500;
 
 interface Candidate {
   title: string;
@@ -71,8 +84,27 @@ interface TvMazeSuggestShow {
   summary?: string;
   genres?: string[];
   type?: string;
+  language?: string;
   image?: { medium?: string; original?: string };
   externals?: { imdb?: string | null };
+}
+
+/**
+ * Anime, or merely animated?
+ *
+ * TVmaze types every cartoon as `Animation`, so keying off that alone labelled
+ * *Spider-Man (1994)* as anime. The distinction matters downstream: anime is
+ * routed to anime-only indexers and exempted from the ranker's year check, so
+ * a mislabelled Western cartoon searches the wrong places. Language is the
+ * reliable discriminator, with an explicit `Anime` genre as the override.
+ */
+function tvMazeType(show: TvMazeSuggestShow): TvType {
+  const genres = show.genres ?? [];
+  if (genres.some((g) => /^anime$/i.test(g))) return TvType.Anime;
+  if (/animation/i.test(show.type ?? '') && /japanese/i.test(show.language ?? '')) {
+    return TvType.Anime;
+  }
+  return TvType.TvSeries;
 }
 
 interface AniListSuggestMedia {
@@ -137,6 +169,10 @@ function bigramSimilarity(a: string, b: string): number {
   return (2 * shared) / total;
 }
 
+function isAnimeType(type: TvType | undefined): boolean {
+  return type === TvType.Anime || type === TvType.AnimeMovie || type === TvType.OVA;
+}
+
 function cinemetaType(type: 'movie' | 'series', genres: string[] | undefined): TvType {
   const isAnime = (genres ?? []).some((g) => /animation|anime/i.test(g));
   if (type === 'series') return isAnime ? TvType.Anime : TvType.TvSeries;
@@ -169,9 +205,56 @@ export class SearchSuggestionService {
 
     const candidates = settled.flatMap((s) => (s.status === 'fulfilled' ? s.value : []));
     const suggestions = this.merge(candidates, trimmed);
+    await this.enrich(suggestions);
 
     this.remember(cacheKey, suggestions);
     return suggestions;
+  }
+
+  /**
+   * Fills in genre and plot for rows that only Cinemeta produced.
+   *
+   * Measured, not assumed: Cinemeta's *catalogue search* response carries only
+   * `id`, `imdb_id`, `name`, `poster`, `releaseInfo`, `type` and artwork — no
+   * genres and no description. Its `/meta/` endpoint has both and answers in
+   * about half a second. Films are the case that needs this, since TVmaze is
+   * television-only and AniList is anime-only, so a film would otherwise show
+   * as a bare title with no way to tell two same-named works apart.
+   *
+   * Bounded on purpose: only the rows the user can actually see, only the ones
+   * still missing data, and failures are ignored rather than delaying the list.
+   */
+  private async enrich(suggestions: SearchSuggestion[]): Promise<void> {
+    const targets = suggestions
+      .slice(0, ENRICH_LIMIT)
+      .filter((s) => s.imdbId && (s.genres.length === 0 || !s.plot));
+
+    if (targets.length === 0) return;
+
+    await Promise.allSettled(
+      targets.map(async (suggestion) => {
+        const ref = parseCinemetaUrl(suggestion.url);
+        const kind = ref?.type ?? (suggestion.type === TvType.Movie ? 'movie' : 'series');
+
+        const response = await fetchJson<{ meta?: CinemetaSuggestMeta }>(
+          `https://v3-cinemeta.strem.io/meta/${kind}/${suggestion.imdbId}.json`,
+          { timeoutMs: ENRICH_TIMEOUT_MS }
+        );
+
+        const meta = response.meta;
+        if (!meta) return;
+
+        suggestion.plot ??= stripHtml(meta.description);
+        for (const genre of meta.genres ?? []) {
+          if (!suggestion.genres.includes(genre)) suggestion.genres.push(genre);
+        }
+        // Anime is only detectable once genres exist, so the type is revisited
+        // here rather than being fixed at search time on absent data.
+        if (meta.genres?.length) {
+          suggestion.type = cinemetaType(kind, meta.genres);
+        }
+      })
+    );
   }
 
   private remember(key: string, suggestions: SearchSuggestion[]): void {
@@ -242,7 +325,7 @@ export class SearchSuggestionService {
       .map<Candidate>((show) => ({
         title: show.name as string,
         year: show.premiered ? parseInt(show.premiered.slice(0, 4), 10) : undefined,
-        type: /animation/i.test(show.type ?? '') ? TvType.Anime : TvType.TvSeries,
+        type: tvMazeType(show),
         posterUrl: show.image?.original || show.image?.medium,
         plot: stripHtml(show.summary),
         genres: show.genres ?? [],
@@ -368,7 +451,17 @@ export class SearchSuggestionService {
     target.posterUrl ??= extra.posterUrl;
     target.plot ??= extra.plot;
     target.year ??= extra.year;
-    target.type ??= extra.type;
+
+    // Anime wins any disagreement. AniList indexes nothing else, so its
+    // agreement is proof; the other two routinely call a series "TvSeries"
+    // because they do not model anime at all. The distinction is not cosmetic —
+    // it selects anime-only indexers and relaxes the ranker's year check, so
+    // "Naruto" classified as TvSeries searches the wrong places.
+    if (isAnimeType(extra.type) || isAnimeType(target.type)) {
+      target.type = isAnimeType(target.type) ? target.type : extra.type;
+    } else {
+      target.type ??= extra.type;
+    }
     // An IMDb id is the most valuable field a merge can contribute: it is what
     // the strongest indexer is addressed by, so it is taken from whichever
     // catalogue had one.
