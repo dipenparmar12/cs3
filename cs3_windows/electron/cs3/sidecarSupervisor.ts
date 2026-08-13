@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
@@ -49,6 +49,9 @@ export interface SidecarStatus {
 const CALL_TIMEOUT_MS = 60_000;
 /** Beyond this many restarts in a session the sidecar is treated as unusable. */
 const MAX_RESTARTS = 3;
+
+/** The sidecar is compiled to class file 65, which is Java 21. */
+const REQUIRED_JAVA_VERSION = 21;
 
 export class SidecarSupervisor {
   private proc: ChildProcessWithoutNullStreams | null = null;
@@ -110,14 +113,16 @@ export class SidecarSupervisor {
 
     const java = this.resolveJava();
     if (!java) {
-      this.startFailure =
-        'No Java runtime was found. The app ships a bundled JRE; if this build was ' +
-        'assembled without it, install a Java 21 runtime or reinstall the app.';
+      // `resolveJava` sets a specific reason when it found a JVM and rejected
+      // it for being too old; that is far more useful than this general one.
+      this.startFailure ||=
+        `No Java runtime was found. The app ships a bundled JRE; if this build was ` +
+        `assembled without it, install a Java ${REQUIRED_JAVA_VERSION} runtime or reinstall the app.`;
       return false;
     }
 
     const classpath = [jarPath, path.join(libDir, '*')].join(path.delimiter);
-    const runtimeClasspath = path.join(this.resourceDir, 'runtime');
+    const runtimeClasspath = this.resolveRuntimeDir();
 
     try {
       this.proc = spawn(
@@ -177,20 +182,111 @@ export class SidecarSupervisor {
     return true;
   }
 
+  /**
+   * Locates the provider API jars every plugin is linked against.
+   *
+   * A packaged build ships them beside the sidecar jar. A dev checkout does
+   * not: `sidecar/pom.xml` builds into `sidecar/target`, while the separate
+   * `sidecar/runtime-deps/pom.xml` resolves `library-jvm` and its 55
+   * transitives into `sidecar/runtime` — a sibling, not a child. Deriving the
+   * path from the jar's own directory therefore pointed at a folder that has
+   * never existed, and every plugin in a dev run was reported `T4_BLOCKED` with
+   * "library-jvm.jar is not present" no matter how correctly it had been built.
+   *
+   * Both layouts are checked, and the packaged one first so a shipped build
+   * cannot be diverted by a stray directory next to it.
+   */
+  private resolveRuntimeDir(): string {
+    const candidates = [
+      path.join(this.resourceDir, 'runtime'),
+      path.join(this.resourceDir, '..', 'runtime'),
+    ];
+    for (const candidate of candidates) {
+      try {
+        // Matched by prefix: Maven resolves it under its version
+        // (`library-jvm-4.8.0.jar`), and pinning the exact name here would
+        // break on the next upgrade.
+        const found = fs
+          .readdirSync(candidate)
+          .some((entry) => entry.startsWith('library-jvm') && entry.endsWith('.jar'));
+        if (found) return candidate;
+      } catch {
+        // Missing directory; try the next candidate.
+      }
+    }
+    // Nothing found: hand back the packaged location so the sidecar's own
+    // "library-jvm.jar is not present in X" message names the expected place.
+    return candidates[0];
+  }
+
+  /**
+   * Reads a JVM's feature version, or null if it will not answer.
+   *
+   * `-version` prints to stderr, and has done since Java 1.0 — reading stdout
+   * finds nothing. Both are captured for that reason.
+   */
+  private static probeJavaVersion(exe: string): number | null {
+    try {
+      const probe = spawnSync(exe, ['-version'], {
+        encoding: 'utf8',
+        timeout: 8_000,
+        windowsHide: true,
+      });
+      const output = `${probe.stderr ?? ''}${probe.stdout ?? ''}`;
+      // `"21.0.12"`, `"17.0.9"`, and the legacy `"1.8.0_402"`.
+      const match = output.match(/version "(\d+)(?:\.(\d+))?/);
+      if (!match) return null;
+      const major = parseInt(match[1], 10);
+      return major === 1 ? parseInt(match[2] ?? '0', 10) : major;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Finds a JVM new enough to load the sidecar.
+   *
+   * Version checking is not defensive tidiness — an older JVM starts, gets as
+   * far as the main class, and dies with `UnsupportedClassVersionError: class
+   * file version 65.0 ... recognizes up to 61.0`, which the supervisor could
+   * only report as "the runtime crashed". Java 8, 11 and 17 are all common
+   * installs, and `JAVA_HOME` pointing at one of them was enough to make every
+   * extension permanently unavailable with no usable explanation. Observed on
+   * this machine: `JAVA_HOME` was a JDK 17 while a JDK 21 sat on `PATH`.
+   *
+   * Candidates are therefore tried in order of preference and the first one
+   * that is actually new enough wins, rather than the first one that exists.
+   */
   private resolveJava(): string | null {
     const exe = process.platform === 'win32' ? 'java.exe' : 'java';
-    const bundled = path.join(this.resourceDir, 'jre', 'bin', exe);
-    if (fs.existsSync(bundled)) return bundled;
 
-    const javaHome = process.env.JAVA_HOME;
-    if (javaHome) {
-      const fromHome = path.join(javaHome, 'bin', exe);
-      if (fs.existsSync(fromHome)) return fromHome;
+    const candidates: string[] = [path.join(this.resourceDir, 'jre', 'bin', exe)];
+    if (process.env.JAVA_HOME) {
+      candidates.push(path.join(process.env.JAVA_HOME, 'bin', exe));
     }
     // Falling back to PATH keeps a dev checkout working without a bundled JRE.
     // DROP-31 requires shipped builds to carry their own, so this is a
     // development convenience, not the supported configuration.
-    return app?.isPackaged ? null : exe;
+    if (!app?.isPackaged) candidates.push(exe);
+
+    const rejected: string[] = [];
+    for (const candidate of candidates) {
+      const isPath = candidate === exe;
+      if (!isPath && !fs.existsSync(candidate)) continue;
+
+      const version = SidecarSupervisor.probeJavaVersion(candidate);
+      if (version === null) continue;
+      if (version >= REQUIRED_JAVA_VERSION) return candidate;
+
+      rejected.push(`${isPath ? 'the Java on PATH' : candidate} is Java ${version}`);
+    }
+
+    if (rejected.length > 0) {
+      this.startFailure =
+        `Extensions need Java ${REQUIRED_JAVA_VERSION} or newer, but ${rejected.join(', ')}. ` +
+        `Install a Java ${REQUIRED_JAVA_VERSION} runtime, or point JAVA_HOME at one.`;
+    }
+    return null;
   }
 
   private onExit(code: number | null, signal: string | null): void {
