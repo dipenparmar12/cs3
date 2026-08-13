@@ -322,6 +322,12 @@ export const ExtensionManagerUI: React.FC = () => {
     return { totalRepos, activeRepos, totalExts, installedExts, totalProviders, enabledProviders, disabledProvidersCount };
   }, [safeOfficialRepos, installedRepoUrls, safePlugins, installedPluginNames, providerTree, disabledProviders]);
 
+  /** Categories the catalogue actually offers, in a stable order. */
+  const availableCategories = useMemo(
+    () => [...new Set(safeOfficialRepos.map((r) => r.category).filter(Boolean))].sort(),
+    [safeOfficialRepos]
+  );
+
   // Filtered Repository Data
   const filteredOfficialRepos = useMemo(() => {
     return safeOfficialRepos.filter((r) => {
@@ -1259,12 +1265,16 @@ export const ExtensionManagerUI: React.FC = () => {
           onChange={(e) => setCategoryFilter(e.target.value)}
           style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: '#fff', padding: '0.25rem 0.5rem', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', outline: 'none' }}
         >
+          {/* Derived from what is actually listed rather than hardcoded: the
+              catalogue gains categories over time, and the adult one appears
+              only once the user has opted in, so a fixed list would either
+              omit it or advertise a category with nothing behind it. */}
           <option value="all">Category: All</option>
-          <option value="Official">Official</option>
-          <option value="Regional">Regional</option>
-          <option value="Anime">Anime</option>
-          <option value="Movies & Shows">Movies & Shows</option>
-          <option value="Community">Community</option>
+          {availableCategories.map((category) => (
+            <option key={category} value={category}>
+              {category}
+            </option>
+          ))}
         </select>
 
         {(statusFilter !== 'all' || languageFilter !== 'all' || typeFilter !== 'all' || categoryFilter !== 'all' || rawSearchQuery) && (

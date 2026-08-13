@@ -372,6 +372,50 @@ everything downstream of it, so they only surface one at a time.
 5. **`resolveJava` accepted any JVM that existed.** A `JAVA_HOME` on Java 17 produced
    `UnsupportedClassVersionError`, reported only as "the extension runtime crashed".
 
+### Community extensions: the second round (2026-08-13)
+
+Found by pointing `tools/e2e/provider-e2e.mjs` at `Kraptor123/cs-kraptor`, whose **65
+plugins all failed at `load`** with `InvocationTargetException: null`. Each fix revealed the
+next, so they only surface one at a time — and the first one is why nobody could see any of
+them.
+
+1. **`InvocationTargetException` was reported verbatim, and its message is always null.**
+   Reflection wrappers carry no message of their own, so every plugin failure that came
+   through `Method.invoke` rendered as `InvocationTargetException: null` — naming the
+   reflection layer and saying nothing. `Main.describe` now walks to the first cause that
+   actually says something, and failures print their stack to stderr. `errorKind` had been
+   walking the chain correctly the whole time, so the *classification* was right while the
+   message was useless.
+2. **`SharedPreferences` was a class; Android's is an interface.** The single highest-impact
+   fix here: **112 of 392** surveyed plugins reference it. Extensions emit `invokeinterface`,
+   which against a class throws `IncompatibleClassChangeError: Found class …, but interface
+   was expected` — at first *use*, not at load, so a provider would register, answer a
+   search, and die on its first settings read. Now an interface (with `Editor` and the
+   listener nested as interfaces), implemented by `JsonSharedPreferences`.
+3. **`PluginData`, `PluginManager`, `RepositoryManager`, `RepositoryData` are `:app` types.**
+   Same category as `Plugin` (finding 1 above) and supplied the same way, from
+   `sidecar/bridge/`. Extensions use them to enumerate and *delete* the host's installed
+   plugins and repositories. **Every inventory returns empty and every mutation is a no-op,
+   deliberately** — that state belongs to the main process, which owns install paths, the
+   hash-keyed translation cache and the datastore records. Empty inventories mean the
+   cleanup loops iterate nothing and the destructive calls are never reached.
+4. **`android.content.pm.PackageManager` did not exist, and `Context.getPackageManager`
+   returned `Object`.** Both fatal, in that order: verification resolves every type a method
+   body names, so merely mentioning the type killed the load; and once it existed, an
+   `Object` return is a different descriptor from Android's
+   `()Landroid/content/pm/PackageManager;` and would have failed at the call site instead.
+   The manager is returned and every operation on it throws, which preserves DROP-12 while
+   letting the class link. `getPackagesForUid` returns `null` — Android's own answer for an
+   unknown uid, and truthful. Do **not** forge `com.lagradost.cloudstream3` here; lying to
+   plugin code about its platform makes every downstream bug undiagnosable.
+5. **`android.os.Process` did not exist.** Identity reads answer honestly; `killProcess` is
+   refused, because a plugin calling it would take down the sidecar and every other
+   extension sharing it.
+
+After these, AnimeciX loads and registers its provider plus a dozen `ExtractorApi`s at
+`T3_DEGRADED` (it still touches `android.content.pm.Signature`/`SigningInfo` on non-critical
+paths, which is exactly what that tier is for).
+
 After all five: Filmpalast, EinschaltenIn and Serienstream load, register 3 `MainAPI`
 providers and 10 `ExtractorApi`s, and answer searches — 8 results for "Matrix", 33 for
 "Breaking Bad", 21 for "Dune", with posters, plot and year on detail load.
