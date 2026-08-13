@@ -15,7 +15,6 @@ import {
 } from './networkSettings';
 import { setHttpFetch } from './torrent/http';
 import { BinaryDownloader } from './binaryDownloader';
-import { OFFICIAL_REPOSITORIES } from './officialRepositories';
 import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
 import { PlaybackSessionManager } from './playbackSession';
@@ -25,6 +24,7 @@ import { SubtitleService } from './subtitleService';
 import { AudioTranscoder } from './audioTranscoder';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
+import { BootstrapService } from './cs3/bootstrap';
 import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
 import type { DownloadTask } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
@@ -48,6 +48,7 @@ const contentService = new ContentService(datastore, pluginManager, torrentEngin
 const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
 const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
+const bootstrap = new BootstrapService(datastore, pluginManager);
 const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
@@ -166,6 +167,20 @@ app.whenReady().then(async () => {
     }
   });
 
+  /**
+   * First launch installs the verified repositories in the background.
+   *
+   * After the window exists, never before it: this downloads and DEX-translates
+   * dozens of archives, and none of that may sit in front of the first frame the
+   * user sees. It is a no-op on every launch after the first.
+   */
+  bootstrap.setNotifier((progress) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('extension:bootstrapProgress', progress);
+    }
+  });
+  bootstrap.start();
+
   // Search results stream in the same way: one snapshot per source that answers.
   contentService.getSearches().setNotifier((snapshot) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -262,11 +277,39 @@ ipcMain.handle('api:suggest', async (_, query: string) => {
   }
 });
 
+/**
+ * Subtitles for the thing being played, from both places they come from.
+ *
+ * OpenSubtitles is keyed by IMDb id, which extension-sourced content routinely
+ * does not have — a provider scraped a site, and the site never printed one. But
+ * the provider itself frequently *did* offer subtitles: `loadLinks` yields them
+ * alongside the links, upstream collects them, and this app was throwing them
+ * away. `PluginManager.loadSubtitles` existed and nothing called it, so a film
+ * played from an extension had no subtitles available at all even when the
+ * provider had handed them over in the same response as the video.
+ *
+ * Provider subtitles lead: they belong to the exact release being played, where
+ * an OpenSubtitles match is for the work in general and may be out of sync.
+ */
 ipcMain.handle(
   'subtitles:search',
-  async (_, imdbId: string, season?: number, episode?: number) => {
+  async (_, imdbId: string, season?: number, episode?: number, mediaUrl?: string) => {
     try {
-      return { ok: true, results: await subtitles.search(imdbId, season, episode) };
+      const [fromProvider, fromCatalogue] = await Promise.all([
+        mediaUrl?.startsWith('cs3ext://')
+          ? pluginManager.loadSubtitles(mediaUrl).catch(() => [])
+          : Promise.resolve([]),
+        imdbId ? subtitles.search(imdbId, season, episode).catch(() => []) : Promise.resolve([]),
+      ]);
+
+      const providerResults = fromProvider.map((entry) => ({
+        id: `provider:${entry.url}`,
+        lang: entry.lang,
+        langName: `${entry.lang} (from this provider)`,
+        url: entry.url,
+      }));
+
+      return { ok: true, results: [...providerResults, ...fromCatalogue] };
     } catch (error) {
       return { ...fail(error), results: [] };
     }
@@ -612,7 +655,21 @@ ipcMain.handle('binary:setup', async () => {
 
 // --- extensions ----------------------------------------------------------
 
-ipcMain.handle('extension:getOfficialRepositories', async () => OFFICIAL_REPOSITORIES);
+/** Adult repositories are absent from this list until the user opts in. */
+ipcMain.handle('extension:getOfficialRepositories', async () => bootstrap.visibleRepositories());
+
+ipcMain.handle('extension:getBootstrapProgress', async () => bootstrap.getProgress());
+
+ipcMain.handle('extension:getAdultAllowed', async () => bootstrap.isAdultAllowed());
+
+/**
+ * Turning adult content off must take effect at once, not at next launch: the
+ * provider registry is re-read so anything already loaded stops being offered.
+ */
+ipcMain.handle('extension:setAdultAllowed', async (_, enabled: boolean) => {
+  const value = bootstrap.setAdultAllowed(Boolean(enabled));
+  return { ok: true, enabled: value, providers: await pluginManager.listEnabledProviders() };
+});
 
 ipcMain.handle('extension:fetchRepository', async (_, repoUrl: string) => {
   try {

@@ -105,3 +105,6 @@
 [submodule "repositories/ReflexRepo"]
 	path = repositories/ReflexRepo
 	url = git@github.com:Reflex755/ReflexRepo.git
+[submodule "repositories/cloudstream-18plus-Extensions"]
+	path = repositories/cloudstream-18plus-Extensions
+	url = git@github.com:punpunsx/cloudstream-18plus-Extensions.git

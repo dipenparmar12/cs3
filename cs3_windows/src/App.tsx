@@ -18,6 +18,7 @@ import { LibraryView } from './views/LibraryView';
 import { SettingsView } from './views/SettingsView';
 
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { FirstRunBanner } from './components/FirstRunBanner';
 
 import type { Episode, SearchOptions, SearchResponse } from './types/api';
 import type { DownloadTask } from './types/download';
@@ -392,6 +393,10 @@ export const App: React.FC = () => {
           onScopeChange={handleScopeChange}
           onOpenInspector={() => setIsInspectorOpen(true)}
         />
+
+        {/* First launch only, and never blocking: the app works while the
+            bundled repositories install behind it. */}
+        <FirstRunBanner />
 
         <main className="view-viewport">
           {/* Active Fullscreen Video Player Overlay.

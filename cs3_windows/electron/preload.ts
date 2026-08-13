@@ -32,6 +32,7 @@ import type {
   UpdateSettings,
 } from './cs3/extensionUpdater';
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
+import type { BootstrapProgress } from './cs3/bootstrap';
 import type {
   LibraryEntry,
   SourceMemory,
@@ -96,11 +97,19 @@ export interface CloudStreamElectronAPI {
   suggestTitles: (
     query: string
   ) => Promise<Envelope & { suggestions: SearchSuggestion[] }>;
-  /** Online subtitle search, keyed by IMDb id (plus season/episode for series). */
+  /**
+   * Subtitles for what is playing, from both sources that have them.
+   *
+   * `imdbId` drives the OpenSubtitles lookup. `mediaUrl` is what unlocks the
+   * other half: a `cs3ext://` URL lets the provider be asked for the subtitles
+   * it published with the stream, which is often the only set that exists for
+   * content the catalogues have never heard of.
+   */
   searchSubtitles: (
     imdbId: string,
     season?: number,
-    episode?: number
+    episode?: number,
+    mediaUrl?: string
   ) => Promise<Envelope & { results: SubtitleSearchResult[] }>;
   /** Downloads one subtitle, already converted from SubRip to WebVTT. */
   fetchSubtitle: (url: string) => Promise<Envelope & { vtt: string }>;
@@ -163,6 +172,18 @@ export interface CloudStreamElectronAPI {
 
   /** Resolved-source cache: how much is stored, and a way to drop it. */
   /** Providers registered by installed extensions, plus which are switched off. */
+  /** First-run install of the bundled repositories. Returns an unsubscribe fn. */
+  getBootstrapProgress: () => Promise<BootstrapProgress>;
+  onBootstrapProgress: (callback: (progress: BootstrapProgress) => void) => () => void;
+  /**
+   * Adult content, off by default. Turning it off hides adult repositories from
+   * the catalogue and withdraws every NSFW provider from search immediately.
+   */
+  getAdultAllowed: () => Promise<boolean>;
+  setAdultAllowed: (
+    enabled: boolean
+  ) => Promise<Envelope & { enabled: boolean; providers: string[] }>;
+
   getExtensionProviders: () => Promise<
     Envelope & { providers: ExtensionProvider[]; disabled: string[] }
   >;
@@ -360,8 +381,8 @@ const api: CloudStreamElectronAPI = {
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),
 
   suggestTitles: (query) => ipcRenderer.invoke('api:suggest', query),
-  searchSubtitles: (imdbId, season, episode) =>
-    ipcRenderer.invoke('subtitles:search', imdbId, season, episode),
+  searchSubtitles: (imdbId, season, episode, mediaUrl) =>
+    ipcRenderer.invoke('subtitles:search', imdbId, season, episode, mediaUrl),
   fetchSubtitle: (url) => ipcRenderer.invoke('subtitles:fetch', url),
 
   getSearchHistory: () => ipcRenderer.invoke('api:getSearchHistory'),
@@ -387,6 +408,15 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.on('playback:update', listener);
     return () => ipcRenderer.removeListener('playback:update', listener);
   },
+
+  getBootstrapProgress: () => ipcRenderer.invoke('extension:getBootstrapProgress'),
+  onBootstrapProgress: (callback) => {
+    const listener = (_: unknown, progress: BootstrapProgress) => callback(progress);
+    ipcRenderer.on('extension:bootstrapProgress', listener);
+    return () => ipcRenderer.removeListener('extension:bootstrapProgress', listener);
+  },
+  getAdultAllowed: () => ipcRenderer.invoke('extension:getAdultAllowed'),
+  setAdultAllowed: (enabled) => ipcRenderer.invoke('extension:setAdultAllowed', enabled),
 
   getExtensionProviders: () => ipcRenderer.invoke('extension:getProviders'),
   setProviderEnabled: (name, enabled) =>

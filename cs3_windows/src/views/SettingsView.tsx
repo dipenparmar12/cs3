@@ -3,6 +3,7 @@ import { Download, HardDrive, RefreshCw, Zap, Code, Tv, CheckCircle2 } from 'luc
 import { MediaComponentsCard } from '../components/MediaComponentsCard';
 import { SourceSettings } from '../components/SourceSettings';
 import { NetworkSettings } from '../components/NetworkSettings';
+import { AdultContentSetting } from '../components/AdultContentSetting';
 
 interface SettingsViewProps {
   hasBinaries?: boolean;
@@ -73,6 +74,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* Sources first: it is the only section that determines whether the app
           can find anything at all, so it should not be buried below downloads. */}
       <SourceSettings />
+
+      <AdultContentSetting />
 
       {statusMessage && (
         <div style={{

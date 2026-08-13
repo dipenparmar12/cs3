@@ -145,6 +145,19 @@ function repositoryLabel(url: string): string {
 }
 
 const SETTINGS_KEY_DISABLED_PROVIDERS = 'cs3_disabled_providers';
+/** Shared with `BootstrapService`; both read the one user decision. */
+const SETTINGS_KEY_ADULT_ENABLED = 'cs3_adult_content_enabled';
+
+/**
+ * Whether a provider serves adult content.
+ *
+ * `NSFW` is upstream's own `TvType`, which providers declare themselves, so
+ * this catches an adult provider bundled inside an otherwise ordinary
+ * repository — which a repository-level flag never would.
+ */
+function isAdultProvider(provider: ExtensionProvider): boolean {
+  return provider.supportedTypes.some((type) => type.toUpperCase() === 'NSFW');
+}
 
 /**
  * Provider calls are network-bound scrapes of third-party sites, routinely
@@ -997,11 +1010,30 @@ export class PluginManager {
     return this.enabledProviderNames();
   }
 
+  /**
+   * Adult content is opt-in, and the gate lives here on purpose.
+   *
+   * Every path that reaches a provider — search, the scope picker, source
+   * discovery, playback, downloads — funnels through `enabledProviderNames`.
+   * Filtering at each of those call sites would mean five places to forget;
+   * filtering here means an adult provider is invisible to the app until the
+   * user has turned adult content on, whatever repository it arrived in and
+   * whether or not that repository was flagged.
+   */
+  private adultAllowed(): boolean {
+    return this.datastore.getBool(SETTINGS_KEY_ADULT_ENABLED, false);
+  }
+
   private enabledProviderNames(): string[] {
     const disabled = new Set(
       this.datastore.getObject<string[]>(SETTINGS_KEY_DISABLED_PROVIDERS, []) ?? []
     );
-    return [...this.providers.keys()].filter((name) => !disabled.has(name));
+    const allowAdult = this.adultAllowed();
+
+    return [...this.providers.values()]
+      .filter((provider) => !disabled.has(provider.name))
+      .filter((provider) => allowAdult || !isAdultProvider(provider))
+      .map((provider) => provider.name);
   }
 
   public getDisabledProviders(): string[] {

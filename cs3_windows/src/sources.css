@@ -307,35 +307,49 @@
   cursor: pointer;
   user-select: none;
 }
-/* Stacked bars: the torrent's downloaded fraction bounds what can be seeked to
-   at all, the browser buffer is what is decoded and ready right now, and the
-   played bar is the playhead itself. */
+/* Four stacked layers, each answering a different question the viewer has:
+   the track is how long the film is, the torrent bar is how much of it exists
+   on disk and therefore bounds where you can seek at all, the buffer is what is
+   decoded and ready right now, and the played bar is where you are.
+
+   The track is new. Without it the bar simply stopped at the buffered edge, so
+   a film buffered 10% in looked like a film that was 10% long — there was
+   nothing on screen representing the part not yet downloaded. */
+.player__seek-track,
 .player__seek-torrent, .player__seek-buffer, .player__seek-played {
   position: absolute;
+  left: 0;
   height: 4px;
   border-radius: 2px;
   pointer-events: none;
   transition: height 0.12s ease;
 }
-.player__seek-torrent { background: rgba(255, 255, 255, 0.22); }
-.player__seek-buffer { background: rgba(255, 255, 255, 0.42); }
+.player__seek-track { width: 100%; background: rgba(255, 255, 255, 0.16); }
+.player__seek-torrent { background: rgba(255, 255, 255, 0.3); }
+.player__seek-buffer { background: rgba(255, 255, 255, 0.55); }
 .player__seek-played { background: var(--accent-primary); }
+.player__seek:hover .player__seek-track,
 .player__seek:hover .player__seek-torrent,
 .player__seek:hover .player__seek-buffer,
 .player__seek:hover .player__seek-played { height: 6px; }
 
+/* Always visible, not hover-only.
+   It used to be `scale(0)` until the bar was hovered, which meant the one thing
+   the viewer most wants at a glance — where am I — required moving the mouse to
+   find out. The dark ring is what keeps it readable over a bright frame. */
 .player__seek-handle {
   position: absolute;
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: var(--accent-primary);
-  transform: translateX(-50%) scale(0);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.55);
+  transform: translateX(-50%) scale(1);
   transition: transform 0.12s ease;
   pointer-events: none;
   z-index: 2;
 }
-.player__seek:hover .player__seek-handle { transform: translateX(-50%) scale(1); }
+.player__seek:hover .player__seek-handle { transform: translateX(-50%) scale(1.35); }
 
 /* Visually hidden, still focusable: the bar above is pointer-driven, but seeking
    must remain reachable without a mouse. */
@@ -1523,6 +1537,144 @@
   color: #fff;
   border-color: var(--accent-primary);
   background: rgba(255, 255, 255, 0.1);
+}
+
+/* --- First-run setup strip ----------------------------------------------- */
+
+.first-run {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 1.5rem 0.5rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  border-radius: var(--radius-md);
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--text-main);
+  font-size: 0.8rem;
+}
+.first-run--done {
+  border-color: rgba(16, 185, 129, 0.42);
+  background: rgba(16, 185, 129, 0.1);
+}
+.first-run__icon {
+  display: flex;
+  color: var(--accent-light);
+}
+.first-run--done .first-run__icon { color: #34d399; }
+
+.first-run__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.first-run__body strong {
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.first-run__detail {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.first-run__bar {
+  height: 3px;
+  margin-top: 0.2rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.first-run__fill {
+  height: 100%;
+  background: var(--accent-primary);
+  border-radius: 999px;
+  transition: width 250ms ease-out;
+}
+.first-run__note {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  color: var(--text-subtle);
+  white-space: nowrap;
+}
+.first-run__close {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--text-subtle);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+.first-run__close:hover { color: #fff; }
+
+/* --- Adult content opt-in ------------------------------------------------ */
+
+.adult-setting {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.adult-setting header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #fff;
+}
+.adult-setting h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+.adult-setting__state {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  color: var(--text-subtle);
+}
+.adult-setting__state--on {
+  border-color: #f59e0b;
+  color: #fcd34d;
+}
+.adult-setting p {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  max-width: 68ch;
+}
+.adult-setting code {
+  font-size: 0.75rem;
+  padding: 0 0.25rem;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+}
+.adult-setting button {
+  width: fit-content;
+  font-size: 0.78rem;
+}
+.adult-setting__confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--text-main);
 }
 
 /* --- Facet menu ----------------------------------------------------------
