@@ -147,17 +147,45 @@ export function parseExtensionUrl(
  * SaurabhKaperwan/CSX serves `builds/plugins.json` as a bare plugin array.
  * Guessing one shape would have covered a third of them.
  */
-const REPO_BRANCHES = ['master', 'main', 'builds'];
-const REPO_FILENAMES = ['repo.json', 'plugins.json', 'repos.json'];
+const REPO_BRANCHES = ['master', 'main', 'builds', 'refs/heads/main', 'refs/heads/master'];
+const REPO_FILENAMES = ['repo.json', 'plugins.json', 'repos.json', 'repo', 'CS.json', 'builds/repo.json', 'builds/plugins.json'];
 
 /**
- * Turns a project page into the raw document URLs it might publish.
+ * Known mapping of legacy or incorrect owner/repo pairs to their canonical repository location.
+ * Legacy Android configurations and community links commonly assumed every repository lived
+ * under `recloudstream` on a `builds` branch; this mapping resolves them to their true owner.
+ */
+const KNOWN_OWNER_MAP = new Map<string, { owner: string; repo: string }>([
+  ['recloudstream/megarepo', { owner: 'self-similarity', repo: 'MegaRepo' }],
+  ['recloudstream/aniyomicompatextension', { owner: 'CranberrySoup', repo: 'AniyomiCompatExtension' }],
+  ['recloudstream/germanproviders', { owner: 'Bnyro', repo: 'GermanProviders' }],
+  ['recloudstream/italialnstreaming', { owner: 'DieGon7771', repo: 'ItaliaInStreaming' }],
+  ['recloudstream/italiainstreaming', { owner: 'DieGon7771', repo: 'ItaliaInStreaming' }],
+  ['recloudstream/re-3arabi', { owner: 'Abodabodd', repo: 're-3arabi' }],
+  ['recloudstream/storm-ext', { owner: 'redblacker8', repo: 'storm-ext' }],
+  ['recloudstream/csx', { owner: 'SaurabhKaperwan', repo: 'CSX' }],
+  ['recloudstream/cuxplug', { owner: 'ycngmn', repo: 'CuxPlug' }],
+  ['recloudstream/indostream', { owner: 'TeKuma25', repo: 'IndoStream' }],
+  ['recloudstream/luna712-cloudstream-extensions', { owner: 'Luna712', repo: 'Luna712-CloudStream-Extensions' }],
+  ['recloudstream/cartoonyrepo', { owner: 'med1245', repo: 'cartoonyrepo' }],
+  ['recloudstream/cinephile', { owner: 'rockhero1234', repo: 'cinephile' }],
+  ['recloudstream/redowan-cloudstream', { owner: 'redowan99', repo: 'Redowan-CloudStream' }],
+  ['recloudstream/cloudstream-extensions-uk', { owner: 'CakesTwix', repo: 'cloudstream-extensions-uk' }],
+  ['recloudstream/reflexrepo', { owner: 'Reflex755', repo: 'ReflexRepo' }],
+  ['recloudstream/pitipitii', { owner: 'sarapcanagii', repo: 'Pitipitii' }],
+  ['recloudstream/cs-karma', { owner: 'Kraptor123', repo: 'cs-Karma' }],
+  ['recloudstream/cs-kraptor', { owner: 'Kraptor123', repo: 'cs-kraptor' }],
+  ['recloudstream/dogiorshadenough', { owner: 'doGior', repo: 'doGiorsHadEnough' }],
+  ['recloudstream/cloudstream-extensions-phisher', { owner: 'phisher98', repo: 'cloudstream-extensions-phisher' }],
+  ['recloudstream/skillshare-repo', { owner: 'techtanic', repo: 'SkillShare-Repo' }],
+  ['recloudstream/italianprovider', { owner: 'Gian-Fr', repo: 'ItalianProvider' }],
+]);
+
+/**
+ * Turns a project page or raw document URL into candidate raw URLs it might publish.
  *
- * Users paste — and this app's own curated list stores — the address they can
- * open in a browser: `https://github.com/owner/repo`. That returns HTML, so
- * every one of those entries failed with "not a CloudStream repository". Android
- * resolves the shorthand for exactly this reason; matching it is what makes the
- * bundled list installable at all.
+ * Handles raw.githubusercontent.com as well as github.com, gitlab.com, and Gitea/Forgejo.
+ * Maps legacy recloudstream repository links to their true owner and probes alternate branches and files.
  */
 function rawDocumentCandidates(url: string): string[] {
   let parsed: URL;
@@ -169,10 +197,18 @@ function rawDocumentCandidates(url: string): string[] {
 
   const segments = parsed.pathname.split('/').filter(Boolean);
   if (segments.length < 2) return [];
-  const [owner, repo] = [segments[0], segments[1].replace(/\.git$/, '')];
+  let owner = segments[0];
+  let repo = segments[1].replace(/\.git$/, '');
+
+  const mapKey = `${owner}/${repo}`.toLowerCase();
+  const mapped = KNOWN_OWNER_MAP.get(mapKey);
+  if (mapped) {
+    owner = mapped.owner;
+    repo = mapped.repo;
+  }
 
   const build = (branch: string, file: string): string | null => {
-    if (parsed.hostname === 'github.com') {
+    if (parsed.hostname === 'github.com' || parsed.hostname === 'raw.githubusercontent.com') {
       return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${file}`;
     }
     if (parsed.hostname === 'gitlab.com') {
@@ -186,7 +222,9 @@ function rawDocumentCandidates(url: string): string[] {
   for (const branch of REPO_BRANCHES) {
     for (const file of REPO_FILENAMES) {
       const candidate = build(branch, file);
-      if (candidate) candidates.push(candidate);
+      if (candidate && candidate !== url && !candidates.includes(candidate)) {
+        candidates.push(candidate);
+      }
     }
   }
   return candidates;
@@ -344,8 +382,12 @@ export class PluginManager {
     const warnings: string[] = [];
     const resolved = await resolveRepositoryDocument(repoUrl);
     const repo = resolved.document;
-    if (resolved.url !== repoUrl) {
-      warnings.push(`Resolved to ${resolved.url}.`);
+    const finalUrl = resolved.url;
+    if (finalUrl !== repoUrl) {
+      warnings.push(`Resolved to ${finalUrl}.`);
+      if (this.installedRepoUrls.has(repoUrl)) {
+        this.installedRepoUrls.delete(repoUrl);
+      }
     }
 
     // Some repositories publish the plugin array directly instead of wrapping it
@@ -357,10 +399,10 @@ export class PluginManager {
       if (plugins.length !== repo.length) {
         warnings.push(`${repo.length - plugins.length} entries lacked an internalName or url.`);
       }
-      this.installedRepoUrls.add(repoUrl);
+      this.installedRepoUrls.add(finalUrl);
       this.persist();
       return {
-        repositoryUrl: repoUrl,
+        repositoryUrl: finalUrl,
         name: 'Plugin list',
         description: 'This URL is a plugin list rather than a repository document.',
         plugins,
@@ -399,11 +441,11 @@ export class PluginManager {
       }
     });
 
-    this.installedRepoUrls.add(repoUrl);
+    this.installedRepoUrls.add(finalUrl);
     this.persist();
 
     return {
-      repositoryUrl: repoUrl,
+      repositoryUrl: finalUrl,
       name: repo.name || 'Unnamed repository',
       description: repo.description,
       iconUrl: repo.iconUrl,
