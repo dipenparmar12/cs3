@@ -82,7 +82,21 @@ export const PosterCard: React.FC<PosterCardProps> = ({
         ) : (
           <div className="poster-image--empty">{titleText.slice(0, 1)}</div>
         )}
-        <span className="poster-badge">{item?.type || 'Movie'}</span>
+        {item?.isExactMatch ? (
+          <span
+            className="poster-badge"
+            style={{
+              background: 'var(--accent-primary)',
+              color: '#fff',
+              fontWeight: 700,
+              boxShadow: '0 2px 8px rgba(59, 130, 246, 0.4)',
+            }}
+          >
+            🎯 Selected
+          </span>
+        ) : (
+          <span className="poster-badge">{item?.type || 'Movie'}</span>
+        )}
 
         {/* Two intents on one card: the poster opens details, this opens the
             player. Without it, watching something meant four clicks through

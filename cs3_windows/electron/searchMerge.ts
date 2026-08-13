@@ -122,21 +122,31 @@ export function restrictToExact(
   results: SearchResponse[],
   exact: ExactMedia
 ): SearchResponse[] {
-  const kept = results.filter((result) => matchesExact(result, exact));
-  if (kept.length > 0) return kept;
-  if (!exact.url) return [];
+  const exactMatches: SearchResponse[] = [];
+  const otherMatches: SearchResponse[] = [];
 
-  return [
-    {
+  for (const item of results) {
+    if (matchesExact(item, exact)) {
+      exactMatches.push({ ...item, isExactMatch: true });
+    } else {
+      otherMatches.push(item);
+    }
+  }
+
+  if (exactMatches.length === 0 && exact.url) {
+    exactMatches.push({
       name: exact.title,
       url: exact.url,
       apiName: 'Catalogue',
       type: exact.type,
       year: exact.year,
       posterUrl: exact.posterUrl,
+      isExactMatch: true,
       ...(exact.imdbId ? { imdbId: exact.imdbId } : {}),
-    },
-  ];
+    });
+  }
+
+  return [...exactMatches, ...otherMatches];
 }
 
 export function mergeSearchResults(results: SearchResponse[]): SearchResponse[] {

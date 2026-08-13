@@ -460,6 +460,9 @@ export class PluginManager {
 
   public removeRepository(repoUrl: string): void {
     this.installedRepoUrls.delete(repoUrl);
+    for (const candidate of rawDocumentCandidates(repoUrl)) {
+      this.installedRepoUrls.delete(candidate);
+    }
     this.persist();
   }
 

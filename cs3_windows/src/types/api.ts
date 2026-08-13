@@ -67,6 +67,8 @@ export interface SearchResponse {
   id?: number;
   /** Present when the identity is known; the strongest merge key there is. */
   imdbId?: string;
+  /** Present when the item is the exact selection chosen from search suggestions. */
+  isExactMatch?: boolean;
   /** The other providers that returned this same title. */
   alternates?: SearchAlternate[];
 }
