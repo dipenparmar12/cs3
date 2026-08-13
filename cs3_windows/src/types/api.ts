@@ -42,6 +42,19 @@ export const BUCKET_LABELS: Record<WatchStatus, string> = {
   Dropped: 'Dropped',
 };
 
+/**
+ * One provider's route to a title, kept alongside the merged row that won.
+ *
+ * Two providers naming the same work produce one row, but the losing row's URL
+ * is not noise — it is a second way to reach the same content, and the source
+ * layer asks all of them. Discarding it would mean a title found by both the
+ * catalogue and an extension could only ever be played through one of them.
+ */
+export interface SearchAlternate {
+  apiName: string;
+  url: string;
+}
+
 export interface SearchResponse {
   name: string;
   url: string;
@@ -52,6 +65,10 @@ export interface SearchResponse {
   year?: number;
   quality?: string;
   id?: number;
+  /** Present when the identity is known; the strongest merge key there is. */
+  imdbId?: string;
+  /** The other providers that returned this same title. */
+  alternates?: SearchAlternate[];
 }
 
 /**

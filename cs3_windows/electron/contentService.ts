@@ -19,6 +19,7 @@ import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
 import type { PluginManager } from './pluginManager';
 import { SourceCache } from './sourceCache';
+import { mergeSearchResults } from './searchMerge';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -159,20 +160,7 @@ export class ContentService {
     ]);
 
     if (cinemeta.status === 'fulfilled') results.push(...cinemeta.value);
-
-    if (legacy.status === 'fulfilled') {
-      // Suppress fallback rows that duplicate a Cinemeta hit by title+year.
-      const seen = new Set(
-        results.map((r) => `${r.name.toLowerCase()}|${r.year ?? ''}`)
-      );
-      for (const item of legacy.value) {
-        const key = `${item.name.toLowerCase()}|${item.year ?? ''}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          results.push(item);
-        }
-      }
-    }
+    if (legacy.status === 'fulfilled') results.push(...legacy.value);
 
     if (results.length === 0 && cinemeta.status === 'rejected' && legacy.status === 'rejected') {
       throw cinemeta.reason instanceof Error
@@ -180,7 +168,16 @@ export class ContentService {
         : new Error(String(cinemeta.reason));
     }
 
-    return results;
+    /**
+     * One row per work, not one row per catalogue that happened to know it.
+     *
+     * The previous pass compared lowercased titles exactly and only checked the
+     * fallback catalogues against Cinemeta, so extension providers were never
+     * deduplicated at all and "Spider-Man" vs "Spider Man" stayed two rows.
+     * Merging on identity also collects the losing URLs as alternates, which is
+     * what lets one title draw sources from both ecosystems.
+     */
+    return mergeSearchResults(results);
   }
 
   public async load(url: string): Promise<MetadataDetail | null> {
