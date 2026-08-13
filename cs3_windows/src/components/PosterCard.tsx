@@ -81,7 +81,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
               else onSelectMedia(item);
             }}
           >
-            <Play size={20} fill="#fff" />
+            <Play size={17} fill="#fff" />
           </button>
         </div>
 
