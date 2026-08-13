@@ -57,3 +57,14 @@ export interface PluginData {
   tier: PluginRuntimeTier;
   isEnabled: boolean;
 }
+
+export interface ProviderTreeRepository {
+  url: string;
+  name: string;
+  extensions: Array<{
+    internalName: string;
+    name: string;
+    language?: string;
+    providers: Array<{ name: string; lang?: string; supportedTypes: string[] }>;
+  }>;
+}

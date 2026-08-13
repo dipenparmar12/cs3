@@ -642,6 +642,15 @@ ipcMain.handle(
   async (_, names: string[], enabled: boolean) => pluginManager.setProvidersEnabled(names, enabled)
 );
 
+ipcMain.handle('extension:getProviderTree', async () => {
+  try {
+    await pluginManager.loadProviders();
+    return { ok: true, tree: pluginManager.getProviderTree() };
+  } catch (error) {
+    return { ...fail(error), tree: [] };
+  }
+});
+
 // --- search scope ---------------------------------------------------------
 
 /**

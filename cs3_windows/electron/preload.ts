@@ -6,7 +6,7 @@ import type {
   SearchSuggestion,
 } from '../src/types/api';
 import type { DownloadTask } from '../src/types/download';
-import type { SitePlugin, PluginCompatibilityReport } from '../src/types/plugin';
+import type { SitePlugin, PluginCompatibilityReport, ProviderTreeRepository } from '../src/types/plugin';
 import type {
   IndexerConfig,
   IndexerHealth,
@@ -20,7 +20,6 @@ import type { MetadataDetail } from './metadataProvider';
 import type { SourceResponse, StreamAttempt } from './contentService';
 import type {
   ExtensionProvider,
-  ProviderTreeRepository,
   RepositoryFetchResult,
 } from './pluginManager';
 import type { SearchScope } from './searchScope';
@@ -152,6 +151,7 @@ export interface CloudStreamElectronAPI {
   >;
   setProviderEnabled: (name: string, enabled: boolean) => Promise<string[]>;
   setProvidersEnabled: (names: string[], enabled: boolean) => Promise<string[]>;
+  getProviderTree: () => Promise<Envelope & { tree: ProviderTreeRepository[] }>;
 
   /** The repository → extension → provider tree, plus the current narrowing. */
   /** DNS configuration, and a reachability check against real indexer hosts. */
@@ -367,8 +367,9 @@ const api: CloudStreamElectronAPI = {
   getExtensionProviders: () => ipcRenderer.invoke('extension:getProviders'),
   setProviderEnabled: (name, enabled) =>
     ipcRenderer.invoke('extension:setProviderEnabled', name, enabled),
-  setProvidersEnabled: (names, enabled) =>
+  setProvidersEnabled: (names: string[], enabled: boolean) =>
     ipcRenderer.invoke('extension:setProvidersEnabled', names, enabled),
+  getProviderTree: () => ipcRenderer.invoke('extension:getProviderTree'),
   getNetworkSettings: () => ipcRenderer.invoke('network:get'),
   setNetworkSettings: (settings) => ipcRenderer.invoke('network:set', settings),
   resetNetworkSettings: () => ipcRenderer.invoke('network:reset'),
