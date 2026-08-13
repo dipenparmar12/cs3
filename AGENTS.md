@@ -266,8 +266,7 @@ Where they disagree, trust the code and fix the doc.
   do not start on `docs/PRD/36` step 4 because you read about it here.
 - **Do not vendor or commit** `.cs3` archives, `library-jvm.jar`, `node_modules/`,
   `target/`, `dist/`, `dist-electron/`, or downloaded `aria2c`/`yt-dlp` binaries.
-  (`.gitignore` at root covers `target/`; `cs3_windows/.gitignore` covers the rest.
-  `dist-electron/` is currently tracked — leave that alone unless asked.)
+  (`.gitignore` at root covers `target/`; `cs3_windows/.gitignore` covers `dist-electron/`, `dist/`, etc.)
 - **Report honestly.** "Typechecks with `bun run build`" is a true claim. "Tested" is not,
   unless you ran `mvn test` or actually exercised the path. Legal/ecosystem context here
   (GPL-3.0, third-party indexers, community plugin code) makes overclaiming expensive.
