@@ -4,7 +4,8 @@ import type { OfficialRepository } from '../../electron/officialRepositories';
 import {
   Puzzle, Plus, Download, ShieldCheck, Globe, CheckCircle2, Layers,
   Loader2, RefreshCw, RotateCcw, Trash2, Square, CheckSquare, Bookmark, Sparkles,
-  Search, ChevronDown, ChevronRight, ToggleLeft, ToggleRight, Eye, Film, User, Minus, SlidersHorizontal
+  Search, ChevronDown, ChevronRight, ToggleLeft, ToggleRight, Eye, Film, User, Minus, SlidersHorizontal,
+  AlertTriangle
 } from 'lucide-react';
 import { ExtensionUpdates } from './ExtensionUpdates';
 
@@ -1765,10 +1766,23 @@ export const ExtensionManagerUI: React.FC = () => {
                                       )}
                                     </div>
                                   ) : ext.providers.length === 0 ? (
+                                    /*
+                                      An extension with no providers is loading, blocked, or lost
+                                      its name to another extension, and the main process is the
+                                      only place that knows which. This used to be a hardcoded
+                                      "initializing…" spinner that never stopped spinning — it
+                                      showed the same thing for a runtime that could not start at
+                                      all as for one that was genuinely mid-load.
+                                    */
                                     <div style={{ padding: '0.5rem 0.75rem', background: 'rgba(245, 158, 11, 0.1)', border: '1px dashed rgba(245, 158, 11, 0.3)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                      <Loader2 size={14} className="spin" style={{ color: '#f59e0b' }} />
+                                      {ext.unavailableReason ? (
+                                        <AlertTriangle size={14} style={{ color: '#f59e0b', flexShrink: 0 }} />
+                                      ) : (
+                                        <Loader2 size={14} className="spin" style={{ color: '#f59e0b' }} />
+                                      )}
                                       <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                                        JVM sidecar is initializing providers for <strong>{ext.name}</strong>...
+                                        <strong>{ext.name}</strong>:{' '}
+                                        {ext.unavailableReason ?? 'loading providers from the extension runtime…'}
                                       </span>
                                     </div>
                                   ) : (

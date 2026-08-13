@@ -12,6 +12,8 @@ import { SearchSuggestions } from './SearchSuggestions';
 interface NavbarProps {
   onSearch: (query: string, options?: SearchOptions) => void;
   isSearching?: boolean;
+  /** Fired when the scope picker closes having changed the scope. */
+  onScopeChange?: () => void;
   onOpenInspector: () => void;
 }
 
@@ -21,6 +23,7 @@ const SUGGEST_DEBOUNCE_MS = 250;
 export const Navbar: React.FC<NavbarProps> = ({
   onSearch,
   isSearching = false,
+  onScopeChange,
   onOpenInspector,
 }) => {
   const [query, setQuery] = useState('');
@@ -209,7 +212,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', position: 'relative' }}>
-        <SearchScopePicker />
+        <SearchScopePicker onScopeChange={onScopeChange} />
 
         {/* F12 Provider Inspector Button */}
         <button

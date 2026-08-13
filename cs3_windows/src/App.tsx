@@ -23,6 +23,7 @@ import type { Episode, SearchOptions, SearchResponse } from './types/api';
 import type { DownloadTask } from './types/download';
 import type { TorrentResult } from './types/torrent';
 import type { PlaybackSnapshot } from '../electron/playbackSession';
+import type { SearchSnapshot } from '../electron/searchSession';
 
 /** One live playback session: its id, what asked for it, and its latest state. */
 interface ActiveSession {
@@ -34,9 +35,17 @@ interface ActiveSession {
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('home');
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<SearchResponse[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+  /**
+   * The live search, or null before the first one.
+   *
+   * Results, per-source progress and the resolved scope all live in here and
+   * arrive as snapshots, so the grid fills in while the slow providers are still
+   * scraping instead of after they finish.
+   */
+  const [search, setSearch] = useState<SearchSnapshot | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
+  /** The last query and options, so a scope change can re-run them. */
+  const lastQuery = useRef<{ query: string; options?: SearchOptions } | null>(null);
 
   const [selectedMedia, setSelectedMedia] = useState<SearchResponse | null>(null);
   const [playback, setPlayback] = useState<PlaybackRequest | null>(null);
@@ -89,6 +98,13 @@ export const App: React.FC = () => {
       );
     });
 
+    // Same shape for search. Snapshots from an abandoned search are dropped by
+    // id: a cancelled provider can still answer after the user has moved on, and
+    // its results belong to a query that is no longer on screen.
+    const disposeSearch = window.cloudstream?.onSearchUpdate((snapshot) => {
+      setSearch((current) => (current && current.id === snapshot.id ? snapshot : current));
+    });
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'F12') {
         e.preventDefault();
@@ -101,28 +117,55 @@ export const App: React.FC = () => {
       window.removeEventListener('keydown', handleKeyDown);
       disposeProgress?.();
       disposePlayback?.();
+      disposeSearch?.();
     };
   }, []);
 
-  const handleSearch = async (query: string, options?: SearchOptions) => {
+  /**
+   * Opens a search. Returns as soon as it has started, not when it has finished.
+   *
+   * The awaited call only carries the opening snapshot — which sources are being
+   * asked and under what scope. Everything after that arrives through
+   * `onSearchUpdate`, which is what puts the first provider's results on screen
+   * seconds before the slowest one has answered.
+   */
+  const handleSearch = useCallback(async (query: string, options?: SearchOptions) => {
+    lastQuery.current = { query, options };
     setSearchQuery(query);
     setSelectedMedia(null); // Instantly dismiss open DetailView overlay
-    setSearchResults([]);   // Instantly clear old search results
+    setSearch(null); // Instantly clear old search results
     setActiveTab('search');
-    setIsSearching(true);
     setSearchError(null);
 
-    if (window.cloudstream) {
-      try {
-        const response = await window.cloudstream.searchAll(query, options);
-        setSearchResults(Array.isArray(response?.results) ? response.results : []);
-        if (!response.ok && response.error) setSearchError(response.error);
-      } catch (err) {
-        setSearchError(err instanceof Error ? err.message : String(err));
-      }
+    if (!window.cloudstream) return;
+    try {
+      const response = await window.cloudstream.startSearch(query, options);
+      if (response.snapshot) setSearch(response.snapshot);
+      if (!response.ok && response.error) setSearchError(response.error);
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : String(err));
     }
-    setIsSearching(false);
-  };
+  }, []);
+
+  /**
+   * Abandons the running search, keeping whatever it has already found.
+   *
+   * The point of a cancel here is not to undo anything — it is to stop paying
+   * for answers the viewer no longer needs once they have spotted the row they
+   * came for.
+   */
+  const handleCancelSearch = useCallback(async () => {
+    const id = search?.id;
+    if (!id) return;
+    const response = await window.cloudstream?.cancelSearch(id);
+    if (response?.snapshot) setSearch(response.snapshot);
+  }, [search?.id]);
+
+  /** Re-runs the current query under a scope the user just changed. */
+  const handleScopeChange = useCallback(() => {
+    const previous = lastQuery.current;
+    if (previous?.query) void handleSearch(previous.query, previous.options);
+  }, [handleSearch]);
 
   const handleSelectMedia = (item: SearchResponse) => {
     setSelectedMedia(item);
@@ -345,7 +388,8 @@ export const App: React.FC = () => {
       <div className="main-content">
         <Navbar
           onSearch={handleSearch}
-          isSearching={isSearching}
+          isSearching={Boolean(search && !search.done)}
+          onScopeChange={handleScopeChange}
           onOpenInspector={() => setIsInspectorOpen(true)}
         />
 
@@ -463,10 +507,10 @@ export const App: React.FC = () => {
                 <ErrorBoundary>
                   <SearchView
                     query={searchQuery}
-                    results={searchResults}
+                    search={search}
                     onSelectMedia={handleSelectMedia}
                     onPlayDirectly={handleQuickPlay}
-                    isLoading={isSearching}
+                    onCancel={handleCancelSearch}
                     error={searchError}
                   />
                 </ErrorBoundary>

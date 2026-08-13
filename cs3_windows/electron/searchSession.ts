@@ -144,6 +144,10 @@ export class SearchSession {
 
   private async run(): Promise<void> {
     try {
+      // Nothing to ask. Providers answer an empty query with either everything
+      // or an error, and neither is what an empty search box meant.
+      if (!this.query) return;
+
       // A pasted magnet is directly playable — surface it as its own result
       // rather than sending it to a catalogue search that cannot understand it.
       if (this.query.startsWith('magnet:')) {
@@ -277,17 +281,21 @@ export class SearchSession {
         apiName: result.indexerName,
         type: TvType.Torrent,
         year: result.parsed?.year,
-        quality: result.parsed?.resolution ? String(result.parsed.resolution) : undefined,
+        quality: result.parsed?.resolution ? `${result.parsed.resolution}p` : undefined,
       });
       byIndexer.set(result.indexerId, rows);
     }
 
-    const latencyMs = Date.now() - started;
+    const elapsed = Date.now() - started;
     for (const id of ids) {
       const report = outcome.indexerOutcomes.find((entry) => entry.id === id);
+      // `skipped` is the interesting case for a title search: the IMDb-keyed
+      // aggregators cannot answer free text at all, and reporting that as a
+      // clean zero would make an unanswerable question look like a real "no".
+      const problem = report?.skipped ?? (report && !report.ok ? report.error : undefined);
       this.record(id, report?.name ?? id, 'indexer', byIndexer.get(id) ?? [], {
-        error: report && !report.ok ? (report.error ?? 'This indexer did not answer.') : undefined,
-        latencyMs,
+        error: problem,
+        latencyMs: report?.latencyMs || elapsed,
       });
     }
   }

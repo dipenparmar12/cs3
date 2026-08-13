@@ -885,7 +885,34 @@ export class PluginManager {
 
     this.providersLoading = (async () => {
       const started = await this.sidecar.ensureStarted();
-      if (!started) return;
+      if (!started) {
+        /**
+         * The runtime is unavailable, and that has to be said out loud.
+         *
+         * This used to return silently. Every installed extension then reported
+         * zero providers with no reason attached, which the extensions screen
+         * rendered as a permanent "JVM sidecar is initializing providers…"
+         * spinner — a message that is not merely unhelpful but wrong: nothing
+         * was initializing and nothing ever would. The actual cause on the
+         * machine where this was found was a `JAVA_HOME` pointing at Java 17,
+         * one sentence that would have ended the investigation immediately.
+         */
+        const status = await this.sidecar.status();
+        const reason =
+          status.reason ?? 'The extension runtime is not available, so providers cannot be loaded.';
+        for (const record of this.installedPlugins.values()) {
+          this.runtimeReports.set(record.internalName, {
+            tier: 'T4_BLOCKED',
+            reason,
+            translated: false,
+            failureKind: 'SIDECAR_UNAVAILABLE',
+          });
+        }
+        // Marked loaded so the tree stops claiming the load has not happened
+        // yet; a retry still comes from any path that resets the flag.
+        this.providersLoaded = true;
+        return;
+      }
 
       // Recomputed from scratch each pass: an uninstall can resolve a clash,
       // and a stale entry would keep blaming an extension that is now fine.

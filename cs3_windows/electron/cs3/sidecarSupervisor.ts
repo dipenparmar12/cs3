@@ -220,6 +220,32 @@ export class SidecarSupervisor {
   }
 
   /**
+   * JDKs checked into `tools/toolchain/`, newest-looking first.
+   *
+   * Matched by prefix rather than pinned: the directory carries its full
+   * version (`jdk-21.0.12+8`), and naming it exactly here would break on the
+   * next patch bump. Sorted descending so a newer JDK wins if several are
+   * unpacked side by side.
+   */
+  private toolchainJavas(exe: string): string[] {
+    // `resourceDir` in a dev run is `<repo>/sidecar/target`, so the toolchain
+    // is two levels up. Derived from it rather than from `process.cwd()`, which
+    // depends on how the app was launched.
+    const root = path.join(this.resourceDir, '..', '..', 'tools', 'toolchain');
+    try {
+      return fs
+        .readdirSync(root)
+        .filter((entry) => entry.toLowerCase().startsWith('jdk'))
+        .sort()
+        .reverse()
+        .map((entry) => path.join(root, entry, 'bin', exe))
+        .filter((candidate) => fs.existsSync(candidate));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Reads a JVM's feature version, or null if it will not answer.
    *
    * `-version` prints to stderr, and has done since Java 1.0 — reading stdout
@@ -264,6 +290,13 @@ export class SidecarSupervisor {
     if (process.env.JAVA_HOME) {
       candidates.push(path.join(process.env.JAVA_HOME, 'bin', exe));
     }
+    // The repo carries a portable JDK for exactly this case, and it was never
+    // being looked at. A developer machine with `JAVA_HOME` on 17 and a 17 on
+    // PATH — a completely ordinary setup, since most tooling still targets it —
+    // left the sidecar unable to start with a JDK 21 sitting checked in beside
+    // it. Preferred over PATH, because a rejected `JAVA_HOME` is usually a sign
+    // the system JVM is the wrong one rather than that a right one is nearby.
+    if (!app?.isPackaged) candidates.push(...this.toolchainJavas(exe));
     // Falling back to PATH keeps a dev checkout working without a bundled JRE.
     // DROP-31 requires shipped builds to carry their own, so this is a
     // development convenience, not the supported configuration.

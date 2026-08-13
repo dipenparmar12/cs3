@@ -138,9 +138,9 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
 
       {showFilterBar && (
         <SourceFilterBar
+          sources={sources}
           filterState={filterState}
           onChange={setFilterState}
-          totalCount={sources.length}
           filteredCount={displayedSources.length}
           compact
         />

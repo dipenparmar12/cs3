@@ -167,9 +167,9 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
             </div>
 
             <SourceFilterBar
+              sources={data.sources}
               filterState={filterState}
               onChange={setFilterState}
-              totalCount={data.sources.length}
               filteredCount={displayedSources.length}
             />
 

@@ -1,0 +1,735 @@
+#!/usr/bin/env node
+/**
+ * End-to-end proof that community `.cs3` extensions actually work on desktop.
+ *
+ * The pipeline this exercises has five links and every one of them has failed
+ * silently at some point, in a way that looked exactly like the one after it:
+ *
+ *   repository JSON → .cs3 download → DEX→JVM translation → provider `load()`
+ *   → `search()` → `load()` → `loadLinks()` → bytes off the wire
+ *
+ * The point is bytes. A provider that answers a search has proved translation
+ * and HTTP work; it has not proved the link it returns plays, and "plays" is the
+ * only claim worth making. So the run ends by range-GETting a couple of MB from
+ * a resolved link and reporting the number.
+ *
+ * Deliberately standalone: it talks to the JVM sidecar over the same
+ * line-delimited JSON-RPC the Electron main process uses, without Electron in
+ * the way. When this passes and the app does not, the bug is in the app; when
+ * this fails, it is in the runtime or the extension. That split is most of the
+ * debugging value.
+ *
+ * Usage:
+ *   node tools/e2e/provider-e2e.mjs
+ *   node tools/e2e/provider-e2e.mjs --repo MegaRepo --plugins 3 --queries "one piece,dune"
+ *   node tools/e2e/provider-e2e.mjs --list
+ *   node tools/e2e/provider-e2e.mjs --json report.json
+ *
+ * Exit code is 0 only if at least one provider searched *and* at least one
+ * stream delivered bytes.
+ */
+
+import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(HERE, '..', '..');
+const SIDECAR_TARGET = path.join(REPO_ROOT, 'sidecar', 'target');
+const TOOLCHAIN = path.join(REPO_ROOT, 'tools', 'toolchain');
+
+/** The repositories under test. Named so `--repo` can pick one. */
+const REPOSITORIES = [
+  { name: 'cs-kraptor', url: 'https://github.com/Kraptor123/cs-kraptor' },
+  {
+    name: 'GermanProviders',
+    url: 'https://raw.githubusercontent.com/Bnyro/GermanProviders/master/repo.json',
+  },
+  { name: 'phisher', url: 'https://github.com/phisher98/cloudstream-extensions-phisher' },
+  { name: 'cinephile', url: 'https://github.com/rockhero1234/cinephile' },
+  {
+    name: 'MegaRepo',
+    url: 'https://raw.githubusercontent.com/self-similarity/MegaRepo/builds/repo.json',
+  },
+];
+
+/**
+ * Queries chosen to have an answer almost everywhere.
+ *
+ * Deliberately spread across regions and eras: a German-only provider returns
+ * nothing for an Indian film and vice versa, and a single query would make a
+ * perfectly working provider look broken.
+ */
+const DEFAULT_QUERIES = ['one piece', 'dune', 'matrix'];
+
+/** Same branch/filename practice the app probes. There is no convention here. */
+const REPO_BRANCHES = ['master', 'main', 'builds', 'refs/heads/main', 'refs/heads/master'];
+const REPO_FILENAMES = [
+  'repo.json',
+  'plugins.json',
+  'repos.json',
+  'CS.json',
+  'builds/repo.json',
+  'builds/plugins.json',
+];
+
+const RPC_TIMEOUT_MS = 90_000;
+const STREAM_BYTES_WANTED = 2 * 1024 * 1024;
+
+// --- arguments --------------------------------------------------------------
+
+function parseArgs(argv) {
+  const args = {
+    repo: null,
+    plugins: 2,
+    queries: DEFAULT_QUERIES,
+    list: false,
+    json: null,
+    keep: false,
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--list') args.list = true;
+    else if (arg === '--keep') args.keep = true;
+    else if (arg === '--repo') args.repo = argv[++i];
+    else if (arg === '--plugins') args.plugins = Math.max(1, parseInt(argv[++i], 10) || 2);
+    else if (arg === '--json') args.json = argv[++i];
+    else if (arg === '--queries') {
+      args.queries = argv[++i]
+        .split(',')
+        .map((q) => q.trim())
+        .filter(Boolean);
+    }
+  }
+  return args;
+}
+
+// --- output -----------------------------------------------------------------
+
+const C = {
+  reset: '\x1b[0m',
+  dim: '\x1b[2m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  cyan: '\x1b[36m',
+  bold: '\x1b[1m',
+};
+const log = (...a) => console.log(...a);
+const step = (msg) => log(`${C.cyan}▸${C.reset} ${msg}`);
+const ok = (msg) => log(`  ${C.green}✓${C.reset} ${msg}`);
+const bad = (msg) => log(`  ${C.red}✗${C.reset} ${msg}`);
+const warn = (msg) => log(`  ${C.yellow}!${C.reset} ${msg}`);
+const dim = (msg) => log(`  ${C.dim}${msg}${C.reset}`);
+
+// --- java -------------------------------------------------------------------
+
+/**
+ * Finds a JVM new enough to load the sidecar, which is class file 65.
+ *
+ * Mirrors `SidecarSupervisor.resolveJava`, including the toolchain fallback —
+ * the machine this was written on had `JAVA_HOME` on Java 17 with a perfectly
+ * good JDK 21 checked into `tools/toolchain`, and every extension reported
+ * itself permanently "initializing" as a result.
+ */
+function resolveJava() {
+  const exe = process.platform === 'win32' ? 'java.exe' : 'java';
+  const candidates = [];
+
+  if (process.env.JAVA_HOME) candidates.push(path.join(process.env.JAVA_HOME, 'bin', exe));
+  try {
+    for (const entry of fs.readdirSync(TOOLCHAIN).sort().reverse()) {
+      if (entry.toLowerCase().startsWith('jdk')) {
+        candidates.push(path.join(TOOLCHAIN, entry, 'bin', exe));
+      }
+    }
+  } catch {
+    // No toolchain directory; the other candidates still apply.
+  }
+  candidates.push(exe);
+
+  const rejected = [];
+  for (const candidate of candidates) {
+    const isBare = candidate === exe;
+    if (!isBare && !fs.existsSync(candidate)) continue;
+    const probe = spawnSync(candidate, ['-version'], { encoding: 'utf8', timeout: 8000 });
+    const output = `${probe.stderr ?? ''}${probe.stdout ?? ''}`;
+    const match = output.match(/version "(\d+)(?:\.(\d+))?/);
+    if (!match) continue;
+    const major = match[1] === '1' ? parseInt(match[2] ?? '0', 10) : parseInt(match[1], 10);
+    if (major >= 21) return { path: candidate, major };
+    rejected.push(`${isBare ? 'java on PATH' : candidate} is Java ${major}`);
+  }
+  throw new Error(
+    `No Java 21+ found. Rejected: ${rejected.join(', ') || 'nothing was probed'}. ` +
+      `Unpack a JDK 21 into tools/toolchain/ or point JAVA_HOME at one.`
+  );
+}
+
+// --- sidecar rpc ------------------------------------------------------------
+
+/** Line-delimited JSON-RPC over the sidecar's stdio, multiplexed by id. */
+class Sidecar {
+  constructor(javaPath, dataDir) {
+    this.javaPath = javaPath;
+    this.dataDir = dataDir;
+    this.pending = new Map();
+    this.nextId = 1;
+    this.buffer = '';
+    this.stderr = [];
+  }
+
+  start() {
+    const jar = path.join(SIDECAR_TARGET, 'cs3-sidecar.jar');
+    if (!fs.existsSync(jar)) {
+      throw new Error(`${jar} is missing. Build it with: mvn -f sidecar/pom.xml package`);
+    }
+    const runtime = path.join(REPO_ROOT, 'sidecar', 'runtime');
+    if (!fs.existsSync(path.join(runtime, 'cs3-provider-bridge.jar'))) {
+      throw new Error(
+        `${runtime}/cs3-provider-bridge.jar is missing. Build it with: ` +
+          `mvn -f sidecar/runtime-deps/pom.xml package && mvn -f sidecar/bridge/pom.xml package`
+      );
+    }
+
+    fs.mkdirSync(this.dataDir, { recursive: true });
+    const classpath = [jar, path.join(SIDECAR_TARGET, 'lib', '*')].join(path.delimiter);
+
+    this.proc = spawn(
+      this.javaPath,
+      [
+        '-Xmx512m',
+        '-Djava.library.path=',
+        '-Dfile.encoding=UTF-8',
+        '-cp',
+        classpath,
+        'com.cloudstream.desktop.sidecar.Main',
+        `--data-dir=${this.dataDir}`,
+        `--runtime-classpath=${runtime}`,
+      ],
+      { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }
+    );
+
+    this.proc.stdout.setEncoding('utf8');
+    this.proc.stdout.on('data', (chunk) => this.onStdout(chunk));
+    this.proc.stderr.setEncoding('utf8');
+    this.proc.stderr.on('data', (chunk) => {
+      for (const line of chunk.split('\n')) if (line.trim()) this.stderr.push(line.trim());
+    });
+    this.proc.on('exit', (code) => {
+      for (const [, entry] of this.pending) {
+        entry.resolve({ ok: false, error: `sidecar exited with code ${code}` });
+      }
+      this.pending.clear();
+    });
+  }
+
+  onStdout(chunk) {
+    this.buffer += chunk;
+    let index = this.buffer.indexOf('\n');
+    while (index >= 0) {
+      const line = this.buffer.slice(0, index).trim();
+      this.buffer = this.buffer.slice(index + 1);
+      if (line) {
+        try {
+          const frame = JSON.parse(line);
+          const entry = this.pending.get(String(frame.id));
+          if (entry) {
+            this.pending.delete(String(frame.id));
+            clearTimeout(entry.timer);
+            entry.resolve(frame);
+          }
+        } catch {
+          // Plugin noise on stdout would desynchronise the channel; the sidecar
+          // forces it to stderr, so anything unparsable here is worth showing.
+          console.warn(`  unparsable frame: ${line.slice(0, 160)}`);
+        }
+      }
+      index = this.buffer.indexOf('\n');
+    }
+  }
+
+  call(method, params = {}, timeoutMs = RPC_TIMEOUT_MS) {
+    const id = String(this.nextId++);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        resolve({ ok: false, error: `${method} timed out after ${timeoutMs}ms` });
+      }, timeoutMs + 2000);
+      this.pending.set(id, { resolve, timer });
+      this.proc.stdin.write(`${JSON.stringify({ id, method, params: { ...params, timeoutMs } })}\n`);
+    });
+  }
+
+  stop() {
+    try {
+      this.proc?.stdin.end();
+    } catch {
+      // Already gone.
+    }
+    setTimeout(() => this.proc?.kill(), 1500).unref();
+  }
+}
+
+// --- repository resolution --------------------------------------------------
+
+async function fetchJson(url, timeoutMs = 15_000) {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(timeoutMs),
+    headers: { 'User-Agent': 'CloudStream3-Desktop-E2E' },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
+  return response.json();
+}
+
+function looksLikeRepository(value) {
+  if (Array.isArray(value)) {
+    return value.some((entry) => entry && typeof entry === 'object' && 'internalName' in entry);
+  }
+  return Boolean(value && typeof value === 'object' && Array.isArray(value.pluginLists));
+}
+
+function rawCandidates(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return [];
+  }
+  const segments = parsed.pathname.split('/').filter(Boolean);
+  if (segments.length < 2) return [];
+  const owner = segments[0];
+  const repo = segments[1].replace(/\.git$/, '');
+
+  const out = [];
+  for (const branch of REPO_BRANCHES) {
+    for (const file of REPO_FILENAMES) {
+      const candidate =
+        parsed.hostname === 'gitlab.com'
+          ? `https://gitlab.com/${owner}/${repo}/-/raw/${branch}/${file}`
+          : `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${file}`;
+      if (candidate !== url && !out.includes(candidate)) out.push(candidate);
+    }
+  }
+  return out;
+}
+
+/** Project pages return HTML, so the raw document has to be probed for. */
+async function resolveRepository(url) {
+  try {
+    const document = await fetchJson(url);
+    if (looksLikeRepository(document)) return { url, document };
+  } catch {
+    // Expected for a github.com project page.
+  }
+  for (const candidate of rawCandidates(url)) {
+    try {
+      const document = await fetchJson(candidate, 8000);
+      if (looksLikeRepository(document)) return { url: candidate, document };
+    } catch {
+      // Most candidates are 404s by design.
+    }
+  }
+  throw new Error('Could not resolve a CloudStream repository document');
+}
+
+async function listPlugins(document) {
+  if (Array.isArray(document)) return document;
+  const plugins = [];
+  for (const listUrl of document.pluginLists ?? []) {
+    try {
+      const list = await fetchJson(listUrl);
+      if (Array.isArray(list)) plugins.push(...list);
+    } catch (error) {
+      warn(`plugin list ${listUrl}: ${error.message}`);
+    }
+  }
+  return plugins;
+}
+
+async function downloadPlugin(plugin, dir) {
+  const response = await fetch(plugin.url, {
+    signal: AbortSignal.timeout(60_000),
+    headers: { 'User-Agent': 'CloudStream3-Desktop-E2E' },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const buffer = Buffer.from(await response.arrayBuffer());
+
+  // Matches `PluginManager.installPlugin`, prefix strip included: repositories
+  // publish the digest as `sha256-<hex>`, and comparing the raw string fails
+  // against a perfectly good download.
+  if (plugin.fileHash) {
+    const digest = createHash('sha256').update(buffer).digest('hex');
+    const expected = String(plugin.fileHash).replace(/^sha256-/i, '').toLowerCase();
+    if (expected !== digest) {
+      throw new Error(`SHA-256 mismatch (published ${expected.slice(0, 12)}…, got ${digest.slice(0, 12)}…)`);
+    }
+  }
+
+  const file = path.join(dir, `${plugin.internalName}.cs3`);
+  fs.writeFileSync(file, buffer);
+  return { file, bytes: buffer.length };
+}
+
+// --- streaming proof --------------------------------------------------------
+
+/**
+ * Pulls real bytes from a resolved link.
+ *
+ * A `Range` request is used so the check costs a couple of MB rather than a
+ * whole film, and because a server that honours ranges is also one the player's
+ * seek will work against. `206` and a plain `200` are both accepted — some
+ * providers front their files with servers that ignore the header.
+ */
+async function pullBytes(link) {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    Range: `bytes=0-${STREAM_BYTES_WANTED - 1}`,
+    ...(link.headers ?? {}),
+  };
+  if (link.referer) headers.Referer = link.referer;
+
+  const response = await fetch(link.url, {
+    headers,
+    signal: AbortSignal.timeout(45_000),
+    redirect: 'follow',
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+
+  let received = 0;
+  for await (const chunk of response.body) {
+    received += chunk.length;
+    if (received >= STREAM_BYTES_WANTED) break;
+  }
+
+  return {
+    bytes: received,
+    status: response.status,
+    contentType: response.headers.get('content-type') ?? undefined,
+    acceptsRanges: response.status === 206 || response.headers.get('accept-ranges') === 'bytes',
+  };
+}
+
+/** An HLS playlist is text, so "bytes arrived" is not enough — it must parse. */
+function looksLikeHls(url, contentType) {
+  return url.includes('.m3u8') || (contentType ?? '').includes('mpegurl');
+}
+
+// --- main -------------------------------------------------------------------
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+
+  if (args.list) {
+    for (const repo of REPOSITORIES) log(`${repo.name.padEnd(18)} ${repo.url}`);
+    return 0;
+  }
+
+  const targets = args.repo
+    ? REPOSITORIES.filter((r) => r.name.toLowerCase().includes(args.repo.toLowerCase()))
+    : REPOSITORIES;
+  if (targets.length === 0) {
+    bad(`No repository matches "${args.repo}". Try --list.`);
+    return 2;
+  }
+
+  const java = resolveJava();
+  step(`Java ${java.major} at ${java.path}`);
+
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cs3-e2e-'));
+  const sidecar = new Sidecar(java.path, path.join(workDir, 'runtime'));
+  const report = { startedAt: new Date().toISOString(), java: java.major, repositories: [] };
+
+  try {
+    sidecar.start();
+
+    const status = await sidecar.call('status', {}, 20_000);
+    if (!status.ok) throw new Error(`sidecar status failed: ${status.error}`);
+    if (!status.result?.canExecute) {
+      throw new Error(
+        `sidecar cannot execute providers: ${status.result?.reason ?? 'no reason given'}`
+      );
+    }
+    ok(`sidecar up, providers executable`);
+    if (Array.isArray(status.result.sandboxGaps) && status.result.sandboxGaps.length > 0) {
+      dim(`sandbox gaps: ${status.result.sandboxGaps.join(', ')}`);
+    }
+
+    const archives = path.join(workDir, 'plugins');
+    fs.mkdirSync(archives, { recursive: true });
+
+    // --- install ----------------------------------------------------------
+    const loaded = [];
+    for (const target of targets) {
+      step(`${C.bold}${target.name}${C.reset}`);
+      const entry = { name: target.name, url: target.url, plugins: [] };
+      report.repositories.push(entry);
+
+      let resolved;
+      try {
+        resolved = await resolveRepository(target.url);
+        ok(`repository document: ${resolved.url}`);
+      } catch (error) {
+        bad(`repository: ${error.message}`);
+        entry.error = error.message;
+        continue;
+      }
+
+      const plugins = (await listPlugins(resolved.document))
+        .filter((p) => p?.url && p?.internalName)
+        // Plugins the repository itself marks as down are not a fair test.
+        .filter((p) => p.status === undefined || p.status !== 0);
+      ok(`${plugins.length} plugin(s) published`);
+
+      for (const plugin of plugins.slice(0, args.plugins)) {
+        const record = { internalName: plugin.internalName, name: plugin.name };
+        entry.plugins.push(record);
+        try {
+          const { file, bytes } = await downloadPlugin(plugin, archives);
+          record.bytes = bytes;
+
+          const result = await sidecar.call('load', {
+            pluginId: plugin.internalName,
+            path: file,
+          });
+          if (!result.ok) {
+            bad(`${plugin.internalName}: ${result.error}`);
+            record.error = result.error;
+            continue;
+          }
+          const providers = result.result?.providers ?? [];
+          record.tier = result.result?.tier;
+          record.providers = providers.map((p) => p.name ?? String(p));
+          ok(
+            `${plugin.internalName}: ${record.tier}, ${providers.length} provider(s)` +
+              (providers.length > 0 ? ` — ${record.providers.join(', ')}` : '')
+          );
+          for (const provider of providers) {
+            if (provider?.name) loaded.push({ ...provider, repo: target.name });
+          }
+        } catch (error) {
+          bad(`${plugin.internalName}: ${error.message}`);
+          record.error = error.message;
+        }
+      }
+    }
+
+    if (loaded.length === 0) {
+      bad('No providers loaded — nothing to search.');
+      report.verdict = 'no-providers';
+      return 1;
+    }
+
+    // --- search -----------------------------------------------------------
+    step(`Searching ${loaded.length} provider(s) × ${args.queries.length} quer(y|ies)`);
+    const searchReport = [];
+    report.search = searchReport;
+    /** Providers that answered, with one result kept for the link stage. */
+    const answered = [];
+
+    for (const provider of loaded) {
+      const record = { provider: provider.name, repo: provider.repo, queries: [] };
+      searchReport.push(record);
+      let best = null;
+
+      for (const query of args.queries) {
+        const started = Date.now();
+        const response = await sidecar.call('providerSearch', {
+          providers: [provider.name],
+          query,
+        });
+        const elapsed = Date.now() - started;
+
+        let count = 0;
+        let error;
+        if (!response.ok) {
+          error = response.error;
+        } else {
+          const raw = response.result?.byProvider?.[provider.name];
+          try {
+            const parsed = JSON.parse(raw ?? '{}');
+            if (parsed.ok && Array.isArray(parsed.results)) {
+              count = parsed.results.length;
+              if (!best && count > 0) best = { query, item: parsed.results[0] };
+            } else {
+              error = parsed.error ?? 'provider reported failure';
+            }
+          } catch {
+            error = 'unparsable provider reply';
+          }
+        }
+
+        record.queries.push({ query, count, ms: elapsed, error });
+        const line = `${provider.name} "${query}": ${count} result(s) in ${elapsed}ms`;
+        if (error) bad(`${line} — ${error}`);
+        else if (count > 0) ok(line);
+        else warn(line);
+      }
+
+      if (best) answered.push({ provider: provider.name, ...best });
+    }
+
+    if (answered.length === 0) {
+      bad('No provider returned a single result.');
+      report.verdict = 'no-results';
+      return 1;
+    }
+    ok(`${answered.length} of ${loaded.length} provider(s) returned results`);
+
+    // --- resolve and stream ------------------------------------------------
+    step('Resolving playable links');
+    const streams = [];
+    report.streams = streams;
+
+    for (const candidate of answered) {
+      const record = { provider: candidate.provider, title: candidate.item?.name };
+      streams.push(record);
+
+      const detail = await sidecar.call('providerLoad', {
+        provider: candidate.provider,
+        url: candidate.item.url,
+      });
+      if (!detail.ok) {
+        bad(`${candidate.provider}: load failed — ${detail.error}`);
+        record.error = detail.error;
+        continue;
+      }
+
+      let parsedDetail;
+      try {
+        parsedDetail = JSON.parse(detail.result?.json ?? '{}');
+      } catch {
+        record.error = 'unparsable detail reply';
+        bad(`${candidate.provider}: unparsable detail reply`);
+        continue;
+      }
+      if (!parsedDetail.ok) {
+        record.error = parsedDetail.error ?? 'detail load failed';
+        bad(`${candidate.provider}: ${record.error}`);
+        continue;
+      }
+
+      // A film's playable handle is its `dataUrl`; an episode carries its own.
+      const handle =
+        parsedDetail.dataUrl ??
+        parsedDetail.episodes?.[0]?.data ??
+        parsedDetail.episodes?.[0]?.url ??
+        candidate.item.url;
+
+      const links = await sidecar.call('providerLoadLinks', {
+        provider: candidate.provider,
+        data: handle,
+      });
+      if (!links.ok) {
+        record.error = links.error;
+        bad(`${candidate.provider}: loadLinks failed — ${links.error}`);
+        continue;
+      }
+
+      let parsedLinks;
+      try {
+        parsedLinks = JSON.parse(links.result?.json ?? '{}');
+      } catch {
+        record.error = 'unparsable links reply';
+        bad(`${candidate.provider}: unparsable links reply`);
+        continue;
+      }
+
+      const list = Array.isArray(parsedLinks.links) ? parsedLinks.links.filter((l) => l?.url) : [];
+      record.linkCount = list.length;
+      if (list.length === 0) {
+        record.error = parsedLinks.error ?? 'no playable links';
+        warn(`${candidate.provider}: 0 links (${record.error})`);
+        continue;
+      }
+      ok(`${candidate.provider}: ${list.length} link(s) for "${record.title}"`);
+
+      // Only the first few are pulled: the goal is proof that the chain works,
+      // not a survey of every mirror a provider knows about.
+      for (const link of list.slice(0, 3)) {
+        if (!/^https?:/i.test(link.url)) continue;
+        try {
+          const pulled = await pullBytes(link);
+          record.stream = {
+            source: link.source ?? link.name,
+            status: pulled.status,
+            bytes: pulled.bytes,
+            contentType: pulled.contentType,
+            acceptsRanges: pulled.acceptsRanges,
+            hls: looksLikeHls(link.url, pulled.contentType),
+          };
+          const size = (pulled.bytes / 1024 / 1024).toFixed(2);
+          ok(
+            `${candidate.provider} ← ${size} MB from ${link.source ?? 'link'} ` +
+              `(HTTP ${pulled.status}, ${pulled.contentType ?? 'no content-type'}` +
+              `${pulled.acceptsRanges ? ', ranges ok' : ''})`
+          );
+          break;
+        } catch (error) {
+          record.streamError = error.message;
+          warn(`${candidate.provider} ← ${link.source ?? 'link'}: ${error.message}`);
+        }
+      }
+    }
+
+    // --- verdict ------------------------------------------------------------
+    const withBytes = streams.filter((s) => s.stream?.bytes > 0);
+    const searched = searchReport.filter((r) => r.queries.some((q) => q.count > 0));
+
+    log('');
+    step(`${C.bold}Result${C.reset}`);
+    log(`  providers loaded    ${loaded.length}`);
+    log(`  providers answering ${searched.length}`);
+    log(`  links resolved      ${streams.filter((s) => s.linkCount > 0).length}`);
+    log(`  streams with bytes  ${withBytes.length}`);
+
+    report.verdict = withBytes.length > 0 ? 'pass' : searched.length > 0 ? 'partial' : 'fail';
+    report.summary = {
+      providersLoaded: loaded.length,
+      providersAnswering: searched.length,
+      linksResolved: streams.filter((s) => s.linkCount > 0).length,
+      streamsWithBytes: withBytes.length,
+    };
+
+    if (report.verdict === 'pass') {
+      ok(`${C.bold}PASS${C.reset} — extensions load, scrape and stream`);
+      return 0;
+    }
+    if (report.verdict === 'partial') {
+      warn(
+        `${C.bold}PARTIAL${C.reset} — providers scrape, but no link delivered bytes. ` +
+          `Bot-protected file hosts are the usual cause (doc 36 step 7, the WebView bridge).`
+      );
+      return 1;
+    }
+    bad(`${C.bold}FAIL${C.reset} — nothing scraped`);
+    return 1;
+  } finally {
+    if (sidecar.stderr.length > 0) {
+      log('');
+      dim(`sidecar stderr (last 15 of ${sidecar.stderr.length}):`);
+      for (const line of sidecar.stderr.slice(-15)) dim(`  ${line}`);
+    }
+    sidecar.stop();
+    report.finishedAt = new Date().toISOString();
+    if (args.json) {
+      fs.writeFileSync(args.json, JSON.stringify(report, null, 2));
+      dim(`report written to ${args.json}`);
+    }
+    if (!args.keep) {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    } else {
+      dim(`work directory kept at ${workDir}`);
+    }
+  }
+}
+
+main()
+  .then((code) => process.exit(code))
+  .catch((error) => {
+    bad(error.stack ?? error.message);
+    process.exit(2);
+  });
