@@ -294,7 +294,9 @@ export const SourceSettings: React.FC = () => {
                 }
               >
                 {RESOLUTION_OPTIONS.filter((o) => o.value > 0).map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
+                  <option key={o.value} value={o.value} style={{ backgroundColor: '#161b26', color: '#f3f4f6' }}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </label>
@@ -308,7 +310,9 @@ export const SourceSettings: React.FC = () => {
                 }
               >
                 {RESOLUTION_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
+                  <option key={o.value} value={o.value} style={{ backgroundColor: '#161b26', color: '#f3f4f6' }}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </label>

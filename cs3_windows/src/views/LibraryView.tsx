@@ -185,9 +185,18 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia }) => {
                       value={entry.status}
                       onChange={(e) => changeStatus(entry, e.target.value as WatchStatus)}
                       aria-label={`Status for ${entry.title}`}
+                      style={{
+                        backgroundColor: 'var(--bg-input, #1b2130)',
+                        color: '#f3f4f6',
+                        border: '1px solid var(--border-color, rgba(255, 255, 255, 0.12))',
+                        borderRadius: '6px',
+                        padding: '0.25rem 0.4rem',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                      }}
                     >
                       {BUCKETS.map(({ status, label }) => (
-                        <option key={status} value={status}>
+                        <option key={status} value={status} style={{ backgroundColor: '#161b26', color: '#f3f4f6' }}>
                           {label}
                         </option>
                       ))}

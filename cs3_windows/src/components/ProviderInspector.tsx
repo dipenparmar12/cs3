@@ -80,16 +80,20 @@ export const ProviderInspector: React.FC<ProviderInspectorProps> = ({
             value={selectedProvider}
             onChange={(e) => setSelectedProvider(e.target.value)}
             style={{
-              backgroundColor: 'var(--bg-input)',
-              border: '1px solid var(--border-color)',
-              color: '#fff',
+              backgroundColor: 'var(--bg-input, #1b2130)',
+              border: '1px solid var(--border-color, #262d3d)',
+              color: '#f3f4f6',
               padding: '0.35rem 0.75rem',
               borderRadius: 'var(--radius-sm)',
-              fontSize: '0.8rem'
+              fontSize: '0.8rem',
+              cursor: 'pointer',
+              outline: 'none',
             }}
           >
             {providers.map((p) => (
-              <option key={p} value={p}>{p}</option>
+              <option key={p} value={p} style={{ backgroundColor: '#161b26', color: '#f3f4f6' }}>
+                {p}
+              </option>
             ))}
           </select>
 
