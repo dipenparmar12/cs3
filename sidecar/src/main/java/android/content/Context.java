@@ -123,8 +123,18 @@ public class Context {
         throw new UnsupportedAndroidApiException("android.content.Context.getContentResolver");
     }
 
-    public Object getPackageManager() {
-        throw new UnsupportedAndroidApiException("android.content.Context.getPackageManager");
+    /**
+     * Returns the real shim type, not `Object`.
+     *
+     * The descriptor is the whole point. An extension compiled against Android
+     * calls `getPackageManager()Landroid/content/pm/PackageManager;`, and a
+     * method returning `Object` is a *different* method as far as the JVM is
+     * concerned — it links against nothing and fails with `NoSuchMethodError` at
+     * the call site. Returning the declared type is what makes the call resolve;
+     * the object it hands back still throws on every operation.
+     */
+    public android.content.pm.PackageManager getPackageManager() {
+        return new android.content.pm.PackageManager();
     }
 
     public void startActivity(Object intent) {

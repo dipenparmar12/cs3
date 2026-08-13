@@ -148,7 +148,26 @@ class SidecarTest {
         // DROP-12: no ambient authority beyond the plugin's own directory.
         assertThrows(android.content.UnsupportedAndroidApiException.class,
                 () -> a.getSystemService("window"));
-        assertThrows(android.content.UnsupportedAndroidApiException.class, a::getPackageManager);
+
+        /*
+         * `getPackageManager` hands back a manager rather than throwing, and
+         * every operation on it throws instead.
+         *
+         * The guarantee is unchanged — a plugin still learns nothing about the
+         * host — but the throw had to move. An extension merely *mentioning*
+         * `PackageManager` failed to load at all, because verification resolves
+         * every type a method body names; Kraptor123/cs-kraptor lost all 65 of
+         * its plugins that way. Returning `Object` was equally fatal one step
+         * later: Android declares
+         * `getPackageManager()Landroid/content/pm/PackageManager;`, and a
+         * different return type is a different method to the JVM.
+         */
+        android.content.pm.PackageManager packages = a.getPackageManager();
+        assertNotNull(packages);
+        assertThrows(android.content.UnsupportedAndroidApiException.class,
+                () -> packages.getPackageInfo("com.example", 0));
+        assertThrows(android.content.UnsupportedAndroidApiException.class,
+                () -> packages.getApplicationInfo("com.example", 0));
     }
 
     @Test
