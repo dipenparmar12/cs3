@@ -126,8 +126,17 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                       </span>
                     </div>
 
-                    <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--accent-light)' }}>
-                      {isDownloading ? formatSpeed(task.downloadSpeed) : task.state}
+                    <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--accent-light)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                      {(task.state === DownloadState.RefreshingSource || task.state === DownloadState.Retrying) && (
+                        <RotateCw size={13} className="spin" style={{ color: 'var(--accent-light)' }} />
+                      )}
+                      {isDownloading
+                        ? formatSpeed(task.downloadSpeed)
+                        : task.state === DownloadState.RefreshingSource
+                          ? 'Refreshing Expired Link...'
+                          : task.state === DownloadState.Retrying
+                            ? 'Retrying...'
+                            : task.state}
                     </div>
                   </div>
 

@@ -266,6 +266,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
     (source: TorrentResult, episode: Episode | null) => {
       if (!detail) return;
 
+      const url = source.directUrl || source.magnet || source.torrentUrl || source.infoHash;
       const task: DownloadTask = {
         id: `${source.infoHash}-${episode?.episode ?? 'movie'}`,
         parentId: detail.url,
@@ -277,11 +278,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
         link: {
           source: source.indexerName,
           name: source.title,
-          url: source.magnet || source.torrentUrl || source.infoHash,
-          referer: '',
+          url,
+          referer: source.directHeaders?.Referer || source.directHeaders?.referer || '',
           quality: source.parsed.resolution || 720,
         },
-        headers: {},
+        headers: source.directHeaders || {},
         bytesDownloaded: 0,
         totalBytes: source.sizeBytes,
         downloadSpeed: 0,
@@ -289,6 +290,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
         state: DownloadState.Queued,
         providerName: source.indexerName,
         createdTime: Date.now(),
+        mediaUrl: episode?.url || detail.url,
+        resolution: source.parsed.resolution,
       };
 
       onEnqueueDownload(task);

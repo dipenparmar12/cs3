@@ -26,8 +26,17 @@ export const SearchView: React.FC<SearchViewProps> = ({
 
   const providerCounts = (results || []).reduce<Record<string, number>>((acc, item) => {
     if (!item) return acc;
-    const key = item.apiName || 'Unknown Provider';
-    acc[key] = (acc[key] || 0) + 1;
+    const itemProviders = new Set<string>();
+    if (item.apiName) itemProviders.add(item.apiName);
+    if (Array.isArray(item.alternates)) {
+      for (const alt of item.alternates) {
+        if (alt?.apiName) itemProviders.add(alt.apiName);
+      }
+    }
+    if (itemProviders.size === 0) itemProviders.add('Unknown Provider');
+    for (const prov of itemProviders) {
+      acc[prov] = (acc[prov] || 0) + 1;
+    }
     return acc;
   }, {});
 
@@ -35,7 +44,11 @@ export const SearchView: React.FC<SearchViewProps> = ({
 
   const filteredResults = activeProviderFilter === 'All'
     ? results
-    : (results || []).filter((item) => item?.apiName === activeProviderFilter);
+    : (results || []).filter((item) => {
+        if (!item) return false;
+        if (item.apiName === activeProviderFilter) return true;
+        return Array.isArray(item.alternates) && item.alternates.some((alt) => alt?.apiName === activeProviderFilter);
+      });
 
   if (isLoading) {
     return (

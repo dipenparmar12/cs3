@@ -494,6 +494,14 @@ export class PluginManager {
       // be known before the user is told whether it works.
       const runtime = await this.inspect(plugin.internalName, target);
 
+      // Invalidate cached provider state and load the new extension into JVM sidecar immediately
+      this.providersLoaded = false;
+      try {
+        await this.loadProviders();
+      } catch (err) {
+        console.warn(`[pluginManager] Could not auto-load providers for ${plugin.internalName}:`, err);
+      }
+
       return {
         ok: true,
         report,
@@ -525,6 +533,15 @@ export class PluginManager {
     }
     this.installedPlugins.delete(internalName);
     this.persist();
+
+    // Clean up provider registrations for uninstalled extension
+    this.providersLoaded = false;
+    for (const [pName, provider] of [...this.providers.entries()]) {
+      if (provider.pluginInternalName === internalName) {
+        this.providers.delete(pName);
+      }
+    }
+    void this.sidecar.call('unload', { pluginId: internalName });
     return true;
   }
 
@@ -829,6 +846,7 @@ export class PluginManager {
           posterUrl: item.posterUrl ? String(item.posterUrl) : undefined,
           posterHeaders: item.posterHeaders as Record<string, string> | undefined,
           quality: item.quality ? String(item.quality) : undefined,
+          year: typeof item.year === 'number' ? item.year : undefined,
         });
       }
     }

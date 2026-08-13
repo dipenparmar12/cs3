@@ -54,6 +54,7 @@ const audioTranscoder = new AudioTranscoder(binaryDownloader);
 const network = new NetworkSettingsStore(datastore);
 
 downloadService.setTorrentEngine(torrentEngine);
+downloadService.setContentService(contentService);
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 

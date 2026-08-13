@@ -8,6 +8,7 @@ import { MediaDownloadResolver } from './mediaDownloadResolver';
 import { YtDlpEngine } from './ytdlpEngine';
 import { startHttpDownload } from './httpDownloader';
 import type { TorrentEngine } from './torrent/torrentEngine';
+import type { ContentService } from './contentService';
 
 /**
  * The download queue, across every kind of source the app can play.
@@ -45,6 +46,7 @@ export class DownloadService {
   private ytdlp = new YtDlpEngine();
   private resolver: MediaDownloadResolver;
   private torrentEngine: TorrentEngine | null = null;
+  private contentService: ContentService | null = null;
   private queue: Map<string, DownloadTask> = new Map();
   private gidToTaskId: Map<string, string> = new Map();
   /** taskId → infoHash, for downloads served by the torrent engine. */
@@ -59,6 +61,10 @@ export class DownloadService {
     this.aria2 = aria2;
     this.resolver = new MediaDownloadResolver(aria2);
     this.loadQueueFromStorage();
+  }
+
+  public setContentService(contentService: ContentService): void {
+    this.contentService = contentService;
   }
 
   /**
@@ -379,8 +385,56 @@ export class DownloadService {
     this.pump();
   }
 
-  private markFailed(task: DownloadTask, message: string): void {
+  private async markFailed(task: DownloadTask, message: string): Promise<void> {
     this.handles.delete(task.id);
+
+    const isDirectLink = task.link && task.link.url && !DownloadService.isMagnet(task.link.url);
+    const isExpiredOrHttpError =
+      /403|410|401|expired|forbidden|unauthorized|invalid|stale|timeout/i.test(message);
+    const canRecover =
+      Boolean(task.mediaUrl) &&
+      this.contentService !== null &&
+      (task.retryCount || 0) < 3 &&
+      isDirectLink &&
+      isExpiredOrHttpError;
+
+    if (canRecover && this.contentService && task.mediaUrl) {
+      task.state = DownloadState.RefreshingSource;
+      task.errorMessage = 'Link expired — refreshing source from provider...';
+      task.retryCount = (task.retryCount || 0) + 1;
+      this.saveQueueToStorage();
+
+      try {
+        const response = await this.contentService.getSources(
+          {
+            mediaUrl: task.mediaUrl,
+            season: task.seasonNumber,
+            episode: task.episodeNumber,
+          },
+          undefined,
+          { bypassCache: true }
+        );
+
+        const freshSource = response.sources.find((s) => Boolean(s.directUrl));
+        if (freshSource && freshSource.directUrl) {
+          task.link.url = freshSource.directUrl;
+          if (freshSource.directHeaders) {
+            task.headers = { ...task.headers, ...freshSource.directHeaders };
+          }
+          task.state = DownloadState.Retrying;
+          task.errorMessage = `Retrying download with fresh link (attempt ${task.retryCount}/3)...`;
+          this.saveQueueToStorage();
+
+          setTimeout(() => {
+            void this.startTask(task);
+          }, 1000);
+          return;
+        }
+      } catch (err) {
+        console.warn('[download] Source refresh for expired download link failed:', err);
+      }
+    }
+
     task.state = DownloadState.Failed;
     task.errorMessage = message;
     task.downloadSpeed = 0;
