@@ -534,6 +534,17 @@ export const App: React.FC = () => {
                   onRemove={handleRemoveDownload}
                   onReveal={(filePath) => window.cloudstream?.revealInFolder(filePath)}
                   onOpenBinarySetup={() => setIsBinaryModalOpen(true)}
+                  /* The download carries where it came from; this is the way back
+                     to episodes, other sources and playback for that title. */
+                  onOpenTitle={(task) => {
+                    if (!task.mediaUrl) return;
+                    handleSelectMedia({
+                      name: task.title,
+                      url: task.mediaUrl,
+                      apiName: task.providerName ?? 'Downloads',
+                      posterUrl: task.posterUrl,
+                    });
+                  }}
                 />
               )}
               {activeTab === 'extensions' && (

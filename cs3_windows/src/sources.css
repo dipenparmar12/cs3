@@ -1881,6 +1881,21 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* A title in the download list is a link back to the title, not just a label. */
+.download-title {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.download-title:hover {
+  color: var(--accent-light);
+  text-decoration: underline;
+}
+
 .detail-view__tried {
   font-size: 0.78rem;
   color: var(--text-subtle);

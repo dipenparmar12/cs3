@@ -49,6 +49,7 @@ interface SingleTaskRowProps {
   onResume: (id: string) => void;
   onRemove: (id: string) => void;
   onReveal?: (filePath: string) => void;
+  onOpenTitle?: (task: DownloadTask) => void;
   formatSpeed: (bytesPerSec: number) => string;
   formatSize: (bytes: number) => string;
   isEpisode?: boolean;
@@ -60,6 +61,7 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
   onResume,
   onRemove,
   onReveal,
+  onOpenTitle,
   formatSpeed,
   formatSize,
   isEpisode = false,
@@ -274,6 +276,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   onRemove,
   onReveal,
   onOpenBinarySetup,
+  onOpenTitle,
 }) => {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
@@ -615,6 +618,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                           onResume={onResume}
                           onRemove={onRemove}
                           onReveal={onReveal}
+                          onOpenTitle={onOpenTitle}
                           formatSpeed={formatSpeed}
                           formatSize={formatSize}
                           isEpisode
@@ -635,6 +639,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                 onResume={onResume}
                 onRemove={onRemove}
                 onReveal={onReveal}
+                          onOpenTitle={onOpenTitle}
                 formatSpeed={formatSpeed}
                 formatSize={formatSize}
               />
