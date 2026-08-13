@@ -76,6 +76,13 @@ function formatSpeed(bytesPerSecond: number): string {
 /** How long before the end the up-next card appears, and how long it counts down. */
 const UP_NEXT_LEAD_SECONDS = 40;
 
+export interface AudioTrackInfo {
+  id: string | number;
+  label: string;
+  language?: string;
+  active: boolean;
+}
+
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamUrl, mimeType, title, episodeTitle, infoHash, subtitles, onBack,
   series, onSelectEpisode, switchingTo, switchError, progress,
@@ -103,6 +110,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const [qualities, setQualities] = useState<Array<{ level: number; label: string; detail?: string }>>([]);
   const [quality, setQuality] = useState<number>(AUTO_QUALITY);
+
+  const [audioTracks, setAudioTracks] = useState<AudioTrackInfo[]>([]);
+  const [activeAudioTrack, setActiveAudioTrack] = useState<string | number>('default');
 
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState(0);
@@ -187,10 +197,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.src = streamUrl;
     }
 
-    video.play().catch(() => {
-      // Autoplay can be refused; the user can press play. Not an error state.
-      setIsPlaying(false);
-    });
+    video.volume = volume;
+    video.muted = isMuted;
+
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtx) {
+        if (!(window as any).__audioContext) (window as any).__audioContext = new AudioCtx();
+        if ((window as any).__audioContext?.state === 'suspended') {
+          (window as any).__audioContext.resume();
+        }
+      }
+    } catch {
+      // Best effort AudioContext resume
+    }
+
+    video
+      .play()
+      .then(() => {
+        video.volume = volume;
+        video.muted = isMuted;
+        setIsPlaying(true);
+      })
+      .catch(() => {
+        // Autoplay can be refused; the user can press play. Not an error state.
+        setIsPlaying(false);
+      });
 
     return () => {
       hls?.destroy();
@@ -198,12 +230,143 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.removeAttribute('src');
       video.load();
     };
-  }, [streamUrl, mimeType]);
+  }, [streamUrl, mimeType, volume, isMuted]);
 
   useEffect(() => {
     const hls = hlsRef.current;
     if (hls) hls.currentLevel = quality;
   }, [quality]);
+
+  // --- audio tracks (multi-audio & audio volume sync) ---------------------
+
+  const detectAudioTracks = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const tracks: AudioTrackInfo[] = [];
+
+    // 1. HLS audio tracks
+    const hls = hlsRef.current;
+    if (hls && Array.isArray(hls.audioTracks) && hls.audioTracks.length > 0) {
+      hls.audioTracks.forEach((t, idx) => {
+        const lang = t.lang ? t.lang.toUpperCase() : '';
+        tracks.push({
+          id: idx,
+          label: t.name || (lang ? `Audio (${lang})` : `Track ${idx + 1}`),
+          language: t.lang,
+          active: hls.audioTrack === idx,
+        });
+      });
+      if (tracks.length > 0) {
+        setAudioTracks(tracks);
+        const current = hls.audioTrack;
+        if (current >= 0 && tracks[current]) {
+          setActiveAudioTrack(tracks[current].id);
+        } else if (tracks[0]) {
+          setActiveAudioTrack(tracks[0].id);
+        }
+        return;
+      }
+    }
+
+    // 2. Native HTML5 audioTracks (Chromium / Electron)
+    const nativeList = (video as any).audioTracks;
+    if (nativeList && nativeList.length > 0) {
+      let activeId: string | number = 0;
+      for (let i = 0; i < nativeList.length; i++) {
+        const t = nativeList[i];
+        const trackId = t.id !== undefined && t.id !== '' ? t.id : i;
+        const lang = t.language ? t.language.toUpperCase() : '';
+        const label = t.label || (lang ? `Audio (${lang})` : `Audio Track ${i + 1}`);
+        const isEnabled = Boolean(t.enabled);
+        if (isEnabled) activeId = trackId;
+        tracks.push({
+          id: trackId,
+          label,
+          language: t.language,
+          active: isEnabled,
+        });
+      }
+      setAudioTracks(tracks);
+      setActiveAudioTrack(activeId);
+      return;
+    }
+
+    setAudioTracks([]);
+  }, []);
+
+  const selectAudioTrack = useCallback((trackId: string | number) => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    // 1. Native HTML5 audioTracks
+    const nativeList = (video as any).audioTracks;
+    if (nativeList && nativeList.length > 0) {
+      for (let i = 0; i < nativeList.length; i++) {
+        const t = nativeList[i];
+        const currentId = t.id !== undefined && t.id !== '' ? t.id : i;
+        const match = String(currentId) === String(trackId);
+        t.enabled = match;
+      }
+    }
+
+    // 2. HLS.js audioTrack
+    const hls = hlsRef.current;
+    if (hls && typeof trackId === 'number') {
+      hls.audioTrack = trackId;
+    }
+
+    setActiveAudioTrack(trackId);
+    setAudioTracks((prev) =>
+      prev.map((t) => ({ ...t, active: String(t.id) === String(trackId) }))
+    );
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const onMediaReady = () => {
+      // Re-assert volume & mute settings on video load to prevent muted autoplay
+      video.volume = volume;
+      video.muted = isMuted;
+      detectAudioTracks();
+    };
+
+    video.addEventListener('loadedmetadata', onMediaReady);
+    video.addEventListener('canplay', onMediaReady);
+    video.addEventListener('play', onMediaReady);
+
+    const nativeList = (video as any).audioTracks;
+    if (nativeList) {
+      try {
+        nativeList.addEventListener?.('change', detectAudioTracks);
+        nativeList.addEventListener?.('addtrack', detectAudioTracks);
+        nativeList.addEventListener?.('removetrack', detectAudioTracks);
+      } catch {
+        // Ignored if EventTarget methods aren't available on non-standard object
+      }
+    }
+
+    const hls = hlsRef.current;
+    if (hls) {
+      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, detectAudioTracks);
+      hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, detectAudioTracks);
+    }
+
+    return () => {
+      video.removeEventListener('loadedmetadata', onMediaReady);
+      video.removeEventListener('canplay', onMediaReady);
+      video.removeEventListener('play', onMediaReady);
+      if (nativeList) {
+        try {
+          nativeList.removeEventListener?.('change', detectAudioTracks);
+          nativeList.removeEventListener?.('addtrack', detectAudioTracks);
+          nativeList.removeEventListener?.('removetrack', detectAudioTracks);
+        } catch {}
+      }
+    };
+  }, [streamUrl, volume, isMuted, detectAudioTracks]);
 
   // --- torrent stats -------------------------------------------------------
 
@@ -751,6 +914,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 { value: '', label: 'Off' },
                 ...subtitles.map((sub) => ({ value: sub.url, label: sub.name })),
               ]}
+            />
+          )}
+
+          {audioTracks.length > 1 && (
+            <HoverMenu
+              icon={<Volume2 size={16} />}
+              label="Audio"
+              value={activeAudioTrack}
+              onChange={(val) => selectAudioTrack(val)}
+              triggerText={
+                audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
+              }
+              options={audioTracks.map((track) => ({
+                value: track.id,
+                label: track.label,
+                detail: track.language ? track.language.toUpperCase() : undefined,
+              }))}
             />
           )}
 

@@ -723,10 +723,11 @@
 .poster-progress div { height: 100%; background: var(--accent-primary); }
 
 .poster-image--empty {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  aspect-ratio: 2 / 3;
   font-size: 2rem;
   font-weight: 700;
   color: var(--text-subtle);

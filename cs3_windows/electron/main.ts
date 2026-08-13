@@ -36,6 +36,8 @@ const libraryStore = new LibraryStore(datastore);
 
 downloadService.setTorrentEngine(torrentEngine);
 
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -50,6 +52,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      autoplayPolicy: 'no-user-gesture-required',
     },
   });
 

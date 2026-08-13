@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Trash2, Star, Clock, Library as LibraryIcon } from 'lucide-react';
+import { Trash2, Star, Clock, Play, Library as LibraryIcon } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
 import { TvType } from '../types/api';
 import type { LibraryEntry, WatchProgress, WatchStatus } from '../../electron/cs3/libraryStore';
@@ -142,14 +142,19 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia }) => {
                 : 0;
 
             return (
-              <div key={entry.key} className="poster-card library-card">
-                <div className="poster-image-container" onClick={() => openEntry(entry)}>
+              <div key={entry.key} className="poster-card">
+                <div className="poster-container" onClick={() => openEntry(entry)}>
                   {entry.posterUrl ? (
-                    <img src={entry.posterUrl} alt="" className="poster-image" loading="lazy" />
+                    <img src={entry.posterUrl} alt={entry.title} loading="lazy" />
                   ) : (
-                    <div className="poster-image poster-image--empty">{entry.title.slice(0, 1)}</div>
+                    <div className="poster-image--empty">{entry.title.slice(0, 1)}</div>
                   )}
                   {entry.type && <span className="poster-badge">{entry.type}</span>}
+                  <div className="poster-overlay">
+                    <button className="play-button-overlay">
+                      <Play size={20} fill="#fff" />
+                    </button>
+                  </div>
                   {percent > 0 && (
                     <div className="poster-progress">
                       <div style={{ width: `${Math.min(100, percent)}%` }} />
@@ -158,7 +163,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia }) => {
                 </div>
 
                 <div className="poster-info">
-                  <h4 className="poster-title" title={entry.title}>
+                  <h4 className="poster-title" title={entry.title} onClick={() => openEntry(entry)}>
                     {entry.title}
                   </h4>
                   <div className="poster-meta">
