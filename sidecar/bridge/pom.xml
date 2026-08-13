@@ -89,6 +89,22 @@
       <version>1.11.0</version>
       <scope>provided</scope>
     </dependency>
+
+    <!--
+      The android.* stubs, needed to compile the `Plugin` class this module
+      supplies: its `load` takes an `android.content.Context` and it holds an
+      `android.content.res.Resources`. Read straight from the sidecar's build
+      output rather than through the local repository, so the two modules do not
+      have to be installed in a particular order to build.
+    -->
+    <dependency>
+      <groupId>com.cloudstream.desktop</groupId>
+      <artifactId>cs3-sidecar</artifactId>
+      <version>0.1.0</version>
+      <classifier>android-shim</classifier>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/../target/cs3-sidecar-android-shim.jar</systemPath>
+    </dependency>
   </dependencies>
 
   <build>
