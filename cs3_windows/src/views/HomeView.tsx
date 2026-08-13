@@ -168,15 +168,17 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia, onPlayDirectl
                 <div
                   key={`${row.key}-${row.season ?? ''}-${row.episode ?? ''}`}
                   className="poster-card"
-                  onClick={() =>
+                  onClick={(e) => {
+                    (e.currentTarget as HTMLElement)?.blur();
+                    (document.activeElement as HTMLElement)?.blur();
                     onSelectMedia({
                       name: row.title,
                       url: row.mediaUrl,
                       apiName: 'Continue watching',
                       type: TvType.Movie,
                       posterUrl: row.posterUrl,
-                    })
-                  }
+                    });
+                  }}
                 >
                   <div className="poster-container">
                     {row.posterUrl ? (

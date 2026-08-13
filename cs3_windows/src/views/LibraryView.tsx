@@ -63,7 +63,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia }) => {
     refresh();
   }, [refresh]);
 
-  const openEntry = (entry: LibraryEntry) => {
+  const openEntry = (entry: LibraryEntry, e?: React.MouseEvent) => {
+    if (e) (e.currentTarget as HTMLElement)?.blur();
+    (document.activeElement as HTMLElement)?.blur();
     // Entries collapse every provider URL seen for a title. The first is the one
     // it was originally added from, which is the most likely to still resolve.
     const url = entry.urls[0];
@@ -143,7 +145,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia }) => {
 
             return (
               <div key={entry.key} className="poster-card">
-                <div className="poster-container" onClick={() => openEntry(entry)}>
+                <div className="poster-container" onClick={(e) => openEntry(entry, e)}>
                   {entry.posterUrl ? (
                     <img src={entry.posterUrl} alt={entry.title} loading="lazy" />
                   ) : (
@@ -163,7 +165,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia }) => {
                 </div>
 
                 <div className="poster-info">
-                  <h4 className="poster-title" title={entry.title} onClick={() => openEntry(entry)}>
+                  <h4 className="poster-title" title={entry.title} onClick={(e) => openEntry(entry, e)}>
                     {entry.title}
                   </h4>
                   <div className="poster-meta">

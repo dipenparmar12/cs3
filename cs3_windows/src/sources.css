@@ -242,7 +242,7 @@
   position: fixed;
   inset: 0;
   background: #000;
-  z-index: 800;
+  z-index: 10000;
   display: flex;
   flex-direction: column;
 }
@@ -1283,7 +1283,7 @@
    when its centre was tapped instead of opening details. Gate on hover. */
 .poster-overlay { pointer-events: none; }
 .poster-card:hover .poster-overlay,
-.poster-card:focus-within .poster-overlay { pointer-events: auto; }
+.poster-card:focus-visible .poster-overlay { pointer-events: auto; }
 .play-button-overlay:focus-visible {
   outline: 2px solid #fff;
   outline-offset: 2px;

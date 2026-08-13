@@ -49,6 +49,24 @@ export const PosterCard: React.FC<PosterCardProps> = ({
     setHoverCardOpen(false);
   };
 
+  const releaseCardFocus = (e: React.MouseEvent) => {
+    handleMouseLeave();
+    (e.currentTarget as HTMLElement)?.blur();
+    (document.activeElement as HTMLElement)?.blur();
+  };
+
+  const handleCardClick = (e: React.MouseEvent) => {
+    releaseCardFocus(e);
+    onSelectMedia(item);
+  };
+
+  const handlePlayClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    releaseCardFocus(e);
+    if (onPlayDirectly) onPlayDirectly(item);
+    else onSelectMedia(item);
+  };
+
   const titleText = item?.name || 'Untitled';
 
   return (
@@ -58,7 +76,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      <div className="poster-container" onClick={() => onSelectMedia(item)}>
+      <div className="poster-container" onClick={handleCardClick}>
         {item?.posterUrl ? (
           <img src={item.posterUrl} alt={titleText} loading="lazy" />
         ) : (
@@ -75,11 +93,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
             className="play-button-overlay"
             aria-label={`Play ${titleText}`}
             title="Play now"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (onPlayDirectly) onPlayDirectly(item);
-              else onSelectMedia(item);
-            }}
+            onClick={handlePlayClick}
           >
             <Play size={17} fill="#fff" />
           </button>
@@ -93,7 +107,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
       </div>
 
       <div className="poster-info">
-        <h4 className="poster-title" title={titleText} onClick={() => onSelectMedia(item)}>
+        <h4 className="poster-title" title={titleText} onClick={handleCardClick}>
           {titleText}
         </h4>
         <div className="poster-meta">

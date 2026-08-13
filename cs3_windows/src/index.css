@@ -167,9 +167,9 @@ body {
 }
 
 .poster-card:hover,
-.poster-card:focus-within,
+.poster-card:focus-visible,
 .poster-card--active-hover {
-  z-index: 9999 !important;
+  z-index: 10;
   transform: translateY(-4px);
   border-color: rgba(59, 130, 246, 0.5);
   box-shadow: 0 16px 32px -8px rgba(0, 0, 0, 0.7);
@@ -193,7 +193,8 @@ body {
   transition: transform 0.3s ease;
 }
 
-.poster-card:hover .poster-container img {
+.poster-card:hover .poster-container img,
+.poster-card:focus-visible .poster-container img {
   transform: scale(1.05);
 }
 
@@ -219,7 +220,7 @@ body {
 }
 
 .poster-card:hover .poster-overlay,
-.poster-card:focus-within .poster-overlay {
+.poster-card:focus-visible .poster-overlay {
   opacity: 1;
 }
 
