@@ -1,4 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, net, shell } from 'electron';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { DatastoreManager } from './datastore';
@@ -495,8 +497,36 @@ ipcMain.handle('download:cancelBatch', async (_, batchId: string) =>
 
 ipcMain.handle('download:getActiveBatches', async () => batchDownloader.getActive());
 
-ipcMain.handle('download:revealInFolder', async (_, filePath: string) => {
-  shell.showItemInFolder(filePath);
+ipcMain.handle('download:revealInFolder', async (_, targetPath?: string) => {
+  const defaultDir = path.join(os.homedir(), 'Downloads', 'CloudStream');
+  const target = targetPath || defaultDir;
+  try {
+    const normalized = path.normalize(target);
+    if (fs.existsSync(normalized)) {
+      const stat = fs.statSync(normalized);
+      if (stat.isDirectory()) {
+        await shell.openPath(normalized);
+      } else {
+        shell.showItemInFolder(normalized);
+      }
+    } else {
+      const parentDir = path.dirname(normalized);
+      if (fs.existsSync(parentDir)) {
+        await shell.openPath(parentDir);
+      } else {
+        fs.mkdirSync(defaultDir, { recursive: true });
+        await shell.openPath(defaultDir);
+      }
+    }
+  } catch (error) {
+    console.warn('[main] revealInFolder failed:', error);
+    try {
+      fs.mkdirSync(defaultDir, { recursive: true });
+      await shell.openPath(defaultDir);
+    } catch {
+      // Best effort fallback
+    }
+  }
 });
 
 // --- binaries ------------------------------------------------------------

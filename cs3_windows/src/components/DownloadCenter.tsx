@@ -21,7 +21,7 @@ interface DownloadCenterProps {
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onRemove: (id: string) => void;
-  onReveal?: (filePath: string) => void;
+  onReveal?: (filePath?: string) => void;
   onOpenBinarySetup?: () => void;
 }
 
@@ -61,7 +61,6 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
       : 0;
 
   const isDownloading = task.state === DownloadState.Downloading;
-  const isComplete = task.state === DownloadState.Completed;
   const isResumable =
     task.state === DownloadState.Paused || task.state === DownloadState.Failed;
 
@@ -225,7 +224,7 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
             {task.state === DownloadState.Failed ? <RotateCw size={15} /> : <Play size={15} />}
           </button>
         )}
-        {isComplete && onReveal && (
+        {onReveal && (
           <button
             onClick={() => onReveal(task.targetFilePath)}
             className="btn btn-secondary btn-icon"
@@ -323,16 +322,30 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
           </p>
         </div>
 
-        {!hasBinaries && onOpenBinarySetup && (
-          <button
-            onClick={onOpenBinarySetup}
-            className="btn btn-secondary"
-            style={{ borderColor: 'var(--accent-primary)' }}
-          >
-            <Zap size={16} style={{ color: 'var(--accent-light)' }} />
-            <span>⚡ 1-Click Engine Setup</span>
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+          {onReveal && (
+            <button
+              onClick={() => onReveal()}
+              className="btn btn-secondary"
+              style={{ fontSize: '0.78rem' }}
+              title="Open default downloads folder in Windows File Explorer"
+            >
+              <FolderOpen size={16} style={{ color: 'var(--accent-light)' }} />
+              <span>Open Downloads Folder</span>
+            </button>
+          )}
+
+          {!hasBinaries && onOpenBinarySetup && (
+            <button
+              onClick={onOpenBinarySetup}
+              className="btn btn-secondary"
+              style={{ borderColor: 'var(--accent-primary)' }}
+            >
+              <Zap size={16} style={{ color: 'var(--accent-light)' }} />
+              <span>⚡ 1-Click Engine Setup</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Downloads List */}

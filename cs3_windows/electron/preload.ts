@@ -221,7 +221,7 @@ export interface CloudStreamElectronAPI {
   resumeDownload: (id: string) => Promise<void>;
   removeDownload: (id: string) => Promise<void>;
   getDownloadQueue: () => Promise<DownloadTask[]>;
-  revealInFolder: (filePath: string) => Promise<void>;
+  revealInFolder: (filePath?: string) => Promise<void>;
   onDownloadProgress: (callback: (tasks: DownloadTask[]) => void) => () => void;
 
   // Season / series batch downloads
