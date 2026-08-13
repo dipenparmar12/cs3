@@ -316,5 +316,18 @@
     "language": "Italian (IT)",
     "verified": true,
     "documentKind": "repository"
+  },
+  {
+    "id": "cloudstream_18plus",
+    "name": "18+ Extensions",
+    "internalName": "cloudstream-18plus-Extensions",
+    "description": "Adult providers. Hidden unless adult content is enabled in Settings, never installed automatically, and its providers are withdrawn from search the moment the setting is turned back off.",
+    "url": "https://github.com/punpunsx/cloudstream-18plus-Extensions",
+    "rawRepoUrl": "https://raw.githubusercontent.com/punpunsx/cloudstream-18plus-Extensions/builds/repo.json",
+    "category": "Adult",
+    "language": "Multilingual",
+    "verified": true,
+    "documentKind": "repository",
+    "adult": true
   }
 ]
