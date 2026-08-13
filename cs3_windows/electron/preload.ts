@@ -17,7 +17,7 @@ import type {
 import type { OfficialRepository } from './officialRepositories';
 import type { MetadataDetail } from './metadataProvider';
 import type { SourceResponse, StreamAttempt } from './contentService';
-import type { RepositoryFetchResult } from './pluginManager';
+import type { ExtensionProvider, RepositoryFetchResult } from './pluginManager';
 import type {
   AvailableUpdate,
   UpdateCheckResult,
@@ -135,6 +135,13 @@ export interface CloudStreamElectronAPI {
   onPlaybackUpdate: (callback: (snapshot: PlaybackSnapshot) => void) => () => void;
 
   /** Resolved-source cache: how much is stored, and a way to drop it. */
+  /** Providers registered by installed extensions, plus which are switched off. */
+  getExtensionProviders: () => Promise<
+    Envelope & { providers: ExtensionProvider[]; disabled: string[] }
+  >;
+  setProviderEnabled: (name: string, enabled: boolean) => Promise<string[]>;
+  setProvidersEnabled: (names: string[], enabled: boolean) => Promise<string[]>;
+
   getSourceCacheStats: () => Promise<{ entries: number; sources: number }>;
   clearSourceCache: () => Promise<Envelope>;
 
@@ -292,6 +299,12 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.on('playback:update', listener);
     return () => ipcRenderer.removeListener('playback:update', listener);
   },
+
+  getExtensionProviders: () => ipcRenderer.invoke('extension:getProviders'),
+  setProviderEnabled: (name, enabled) =>
+    ipcRenderer.invoke('extension:setProviderEnabled', name, enabled),
+  setProvidersEnabled: (names, enabled) =>
+    ipcRenderer.invoke('extension:setProvidersEnabled', names, enabled),
 
   getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
   clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),

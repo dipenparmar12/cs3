@@ -488,6 +488,39 @@ ipcMain.handle('extension:removeRepository', async (_, repoUrl: string) => {
 
 ipcMain.handle('extension:getInstalledPlugins', async () => pluginManager.getInstalledPlugins());
 
+// --- provider selection ---------------------------------------------------
+
+/**
+ * Loads plugins if needed so the provider list is real rather than empty.
+ *
+ * One `.cs3` commonly registers several providers, and which ones it registers
+ * is only knowable by running its `load()`. There is no manifest to read them
+ * from — so the list cannot be built without loading.
+ */
+ipcMain.handle('extension:getProviders', async () => {
+  try {
+    await pluginManager.loadProviders();
+    return {
+      ok: true,
+      providers: pluginManager.getProviders(),
+      disabled: pluginManager.getDisabledProviders(),
+    };
+  } catch (error) {
+    return { ...fail(error), providers: [], disabled: [] };
+  }
+});
+
+ipcMain.handle(
+  'extension:setProviderEnabled',
+  async (_, name: string, enabled: boolean) => pluginManager.setProviderEnabled(name, enabled)
+);
+
+/** Bulk toggle, so "enable this whole repository" is one call not twenty. */
+ipcMain.handle(
+  'extension:setProvidersEnabled',
+  async (_, names: string[], enabled: boolean) => pluginManager.setProvidersEnabled(names, enabled)
+);
+
 // --- extension updates (over-the-air) ------------------------------------
 
 ipcMain.handle('extension:checkUpdates', async () => {

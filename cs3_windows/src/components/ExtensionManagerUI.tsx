@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import type { SitePlugin, PluginCompatibilityReport } from '../types/plugin';
 import type { OfficialRepository } from '../../electron/officialRepositories';
 import { Puzzle, Plus, Download, ShieldCheck, Globe, CheckCircle2, Layers } from 'lucide-react';
+import { ProviderSelector } from './ProviderSelector';
 import { ExtensionUpdates } from './ExtensionUpdates';
 
 export const ExtensionManagerUI: React.FC = () => {
@@ -136,6 +137,11 @@ export const ExtensionManagerUI: React.FC = () => {
           Browse {safeOfficialRepos.length} community repositories or add a custom repository URL
         </p>
       </div>
+
+      {/* Which providers actually participate in a search is a separate
+          decision from which extensions are installed — one archive registers
+          several providers, so the granularity has to be per provider. */}
+      <ProviderSelector />
 
       <ExtensionUpdates
         onUpdated={() => {

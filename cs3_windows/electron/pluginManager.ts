@@ -574,12 +574,24 @@ export class PluginManager {
   }
 
   public setProviderEnabled(name: string, enabled: boolean): string[] {
+    return this.setProvidersEnabled([name], enabled);
+  }
+
+  /** Bulk toggle, so enabling a whole repository is one write not twenty. */
+  public setProvidersEnabled(names: string[], enabled: boolean): string[] {
     const disabled = new Set(this.getDisabledProviders());
-    if (enabled) disabled.delete(name);
-    else disabled.add(name);
+    for (const name of names) {
+      if (enabled) disabled.delete(name);
+      else disabled.add(name);
+    }
     const next = [...disabled];
     this.datastore.setObject(SETTINGS_KEY_DISABLED_PROVIDERS, next);
     return next;
+  }
+
+  /** Public entry point for loading providers, used by the extension manager. */
+  public async loadProviders(): Promise<void> {
+    await this.ensureProvidersLoaded();
   }
 
   /**
