@@ -54,6 +54,40 @@ export interface SearchResponse {
   id?: number;
 }
 
+/**
+ * One autocomplete row under the search box.
+ *
+ * Distinct from {@link SearchResponse}: this describes a *title* the user might
+ * mean, merged across every catalogue that knows about it, and carries the
+ * extra context that makes a guess resolvable at a glance — the official
+ * spelling, the year, and a line of plot. `sources` records which catalogues
+ * agreed, which is the strongest available signal that a row is the real thing
+ * rather than one catalogue's fuzzy near-miss.
+ */
+export interface SearchSuggestion {
+  /** The catalogue's official title, which is what should be searched. */
+  title: string;
+  year?: number;
+  type?: TvType;
+  posterUrl?: string;
+  plot?: string;
+  genres: string[];
+  /** Catalogue URL, so a suggestion can open the title directly. */
+  url: string;
+  imdbId?: string;
+  /** Catalogues that independently returned this title. */
+  sources: string[];
+}
+
+/** One past search, newest first. */
+export interface SearchHistoryEntry {
+  query: string;
+  /** Epoch millis of the most recent time this query was run. */
+  at: number;
+  /** How many results it produced, so a fruitless query looks different. */
+  resultCount?: number;
+}
+
 export interface Episode {
   name: string;
   url: string;
