@@ -61,7 +61,7 @@ public class Context {
     public SharedPreferences getSharedPreferences(String name, int mode) {
         String key = sanitize(name);
         return prefs.computeIfAbsent(key,
-                k -> new SharedPreferences(scopedDir.resolve("prefs").resolve(k + ".json")));
+                k -> new JsonSharedPreferences(scopedDir.resolve("prefs").resolve(k + ".json")));
     }
 
     public File getFilesDir() {
