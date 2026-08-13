@@ -23,6 +23,15 @@ interface DownloadCenterProps {
   onRemove: (id: string) => void;
   onReveal?: (filePath?: string) => void;
   onOpenBinarySetup?: () => void;
+  /**
+   * Opens the title this download came from.
+   *
+   * The download list is often where someone re-encounters a title days later,
+   * and from here the only things they could do were pause it or reveal a file.
+   * `mediaUrl` was already recorded on the task and simply unused, so the way
+   * back to episodes, other sources and playback existed and was not reachable.
+   */
+  onOpenTitle?: (task: DownloadTask) => void;
 }
 
 interface TaskGroup {
@@ -117,11 +126,23 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h4 style={{ fontSize: isEpisode ? '0.86rem' : '0.92rem', fontWeight: 600, color: '#fff', margin: 0 }}>
-              {isEpisode
-                ? task.episodeNumber
-                  ? `Episode ${task.episodeNumber}`
-                  : task.title
-                : `${task.title} ${task.episodeNumber ? `• Ep ${task.episodeNumber}` : ''}`}
+              {onOpenTitle && task.mediaUrl ? (
+                <button
+                  className="download-title"
+                  onClick={() => onOpenTitle(task)}
+                  title="Open this title"
+                >
+                  {isEpisode
+                    ? task.episodeNumber
+                      ? `Episode ${task.episodeNumber}`
+                      : task.title
+                    : `${task.title} ${task.episodeNumber ? `• Ep ${task.episodeNumber}` : ''}`}
+                </button>
+              ) : isEpisode ? (
+                task.episodeNumber ? `Episode ${task.episodeNumber}` : task.title
+              ) : (
+                `${task.title} ${task.episodeNumber ? `• Ep ${task.episodeNumber}` : ''}`
+              )}
             </h4>
             <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
               Provider: {task.providerName || 'aria2c'}
