@@ -31,12 +31,26 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // Ref for the provider dropdown wrapper — used to detect outside clicks.
+  const dropdownWrapperRef = useRef<HTMLDivElement | null>(null);
 
   const refreshHistory = useCallback(() => {
     window.cloudstream?.getSearchHistory().then(setHistory);
   }, []);
 
   useEffect(() => refreshHistory(), [refreshHistory]);
+
+  // Close the provider dropdown whenever the user clicks outside it.
+  useEffect(() => {
+    if (!isDropdownOpen) return;
+    const handleOutside = (e: PointerEvent) => {
+      if (dropdownWrapperRef.current && !dropdownWrapperRef.current.contains(e.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handleOutside, true);
+    return () => document.removeEventListener('pointerdown', handleOutside, true);
+  }, [isDropdownOpen]);
 
   /**
    * Fetches suggestions for the current query, debounced.
@@ -222,7 +236,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       {/* Right Controls: Layer 1 Multi-Select Provider Dropdown & Inspector */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', position: 'relative' }}>
         {/* Multi-Select Provider Selector Trigger Pill */}
-        <div style={{ position: 'relative' }}>
+        <div style={{ position: 'relative' }} ref={dropdownWrapperRef}>
           <button
             onClick={() => setIsDropdownOpen((prev) => !prev)}
             className="btn btn-secondary"

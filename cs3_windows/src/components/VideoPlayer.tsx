@@ -652,11 +652,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const progressPercent = duration ? (currentTime / duration) * 100 : 0;
 
+  // Close any open side-panel when the user clicks outside it on the player.
+  const handlePlayerPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!panelOpen && !sourcePanelOpen) return;
+      const target = e.target as HTMLElement;
+      // If the click is inside a .player-panel element, leave it open.
+      if (target.closest('.player-panel')) return;
+      // Also ignore clicks on the toolbar buttons that toggle the panels.
+      if (target.closest('[data-panel-toggle]')) return;
+      setPanelOpen(false);
+      setSourcePanelOpen(false);
+    },
+    [panelOpen, sourcePanelOpen]
+  );
+
   return (
     <div
       ref={containerRef}
       className={`player${controlsVisible ? '' : ' player--idle'}`}
       onMouseMove={revealControls}
+      onPointerDown={handlePlayerPointerDown}
     >
       <video
         ref={videoRef}
@@ -965,6 +981,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {series && (
             <button
               className="icon-button"
+              data-panel-toggle
               onClick={() => setPanelOpen((v) => !v)}
               aria-label="Episodes"
               title="Episodes (E)"
@@ -976,6 +993,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {sourceSession && (
             <button
               className="icon-button"
+              data-panel-toggle
               onClick={() => setSourcePanelOpen((v) => !v)}
               aria-label="Sources"
               title="Change source"
