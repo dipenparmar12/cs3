@@ -158,51 +158,47 @@ export class ContentService {
     }
 
     const results: SearchResponse[] = [];
+    const currentScope = this.scope.get();
+    const hasScopedProviders = currentScope.providers.length > 0;
+    const hasScopedIndexers = currentScope.indexers.length > 0;
+    const isScoped = hasScopedProviders || hasScopedIndexers;
 
-    // Runnable extension providers get first refusal, matching Android's ordering.
-    const pluginResults = await this.plugins.searchAll(
-      trimmed,
-      this.scope.applyToProviders(await this.plugins.listEnabledProviders())
-    );
-    results.push(...pluginResults);
-
-    // Cinemeta is primary: it is the only source that yields an IMDb id for
-    // movies, and the strongest indexer (Torrentio) is addressed solely by IMDb id.
-    const [cinemeta, legacy] = await Promise.allSettled([
-      this.cinemeta.search(trimmed),
-      // TVmaze/AniList stay as a fallback so a Cinemeta outage is not fatal,
-      // and because AniList resolves anime titles Cinemeta indexes poorly.
-      this.metadata.search(trimmed),
-    ]);
-
-    if (cinemeta.status === 'fulfilled') results.push(...cinemeta.value);
-    if (legacy.status === 'fulfilled') results.push(...legacy.value);
-
-    if (results.length === 0 && cinemeta.status === 'rejected' && legacy.status === 'rejected') {
-      throw cinemeta.reason instanceof Error
-        ? cinemeta.reason
-        : new Error(String(cinemeta.reason));
+    // 1. Scoped or Global Extension Provider Search
+    if (hasScopedProviders) {
+      const enabledProvs = await this.plugins.listEnabledProviders();
+      const scopedProviders = this.scope.applyToProviders(enabledProvs);
+      const pluginResults = await this.plugins.searchAll(trimmed, scopedProviders);
+      results.push(...pluginResults);
+    } else if (!isScoped) {
+      const pluginResults = await this.plugins.searchAll(
+        trimmed,
+        await this.plugins.listEnabledProviders()
+      );
+      results.push(...pluginResults);
     }
 
-    /**
-     * One row per work, not one row per catalogue that happened to know it.
-     *
-     * The previous pass compared lowercased titles exactly and only checked the
-     * fallback catalogues against Cinemeta, so extension providers were never
-     * deduplicated at all and "Spider-Man" vs "Spider Man" stayed two rows.
-     * Merging on identity also collects the losing URLs as alternates, which is
-     * what lets one title draw sources from both ecosystems.
-     */
-    const merged = mergeSearchResults(results);
+    // 2. Metadata Catalogues (Cinemeta / TVmaze / AniList) are queried ONLY when search scope is default (global)
+    if (!isScoped) {
+      const [cinemeta, legacy] = await Promise.allSettled([
+        this.cinemeta.search(trimmed),
+        this.metadata.search(trimmed),
+      ]);
 
-    /**
-     * A picked suggestion names one work, so the results show that work.
-     *
-     * Filtering after the fan-out rather than before it is forced by the
-     * providers: an extension takes text and nothing else, so it cannot be
-     * asked for an IMDb id. It answers with everything its site matched, and
-     * this is where that becomes the specific answer requested.
-     */
+      if (cinemeta.status === 'fulfilled') results.push(...cinemeta.value);
+
+      if (legacy.status === 'fulfilled') {
+        const seen = new Set(results.map((r) => `${r.name.toLowerCase()}|${r.year ?? ''}`));
+        for (const item of legacy.value) {
+          const key = `${item.name.toLowerCase()}|${item.year ?? ''}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            results.push(item);
+          }
+        }
+      }
+    }
+
+    const merged = mergeSearchResults(results);
     const scoped = options.exact ? restrictToExact(merged, options.exact) : merged;
     this.rememberRoutes(scoped);
     return scoped;
