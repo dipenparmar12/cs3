@@ -75,7 +75,9 @@ public final class Main {
         System.setOut(new PrintStream(new java.io.FileOutputStream(java.io.FileDescriptor.err),
                 true, StandardCharsets.UTF_8));
 
-        DexTranslator translator = new DexTranslator(dataDir.resolve("translated"));
+        // The classpath is handed to the translator as well as the host: it is
+        // what tells the Kotlin name repair which mangled names actually exist.
+        DexTranslator translator = new DexTranslator(dataDir.resolve("translated"), classpathDir);
         PluginHost host = new PluginHost(translator, classpathDir);
         new Main(host, stdout).run();
     }

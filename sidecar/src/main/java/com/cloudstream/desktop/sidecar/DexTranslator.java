@@ -55,8 +55,20 @@ public final class DexTranslator {
 
     private final Path cacheRoot;
 
+    /**
+     * Repairs Kotlin's hyphenated method names, which dex2jar rewrites to
+     * underscores. Built once and reused: it indexes every runtime jar, which
+     * is not work worth repeating per plugin. Null when no classpath was given.
+     */
+    private final KotlinNameRepair nameRepair;
+
     public DexTranslator(Path cacheRoot) throws IOException {
+        this(cacheRoot, null);
+    }
+
+    public DexTranslator(Path cacheRoot, Path runtimeClasspathDir) throws IOException {
         this.cacheRoot = cacheRoot;
+        this.nameRepair = runtimeClasspathDir == null ? null : new KotlinNameRepair(runtimeClasspathDir);
         Files.createDirectories(cacheRoot);
     }
 
@@ -124,6 +136,13 @@ public final class DexTranslator {
                     .topoLogicalSort()
                     .noCode(false)
                     .to(tmp);
+
+            // Before the jar becomes a cache entry, not after: the cache is
+            // keyed by the archive's hash and a repaired jar must be what a
+            // later cache hit serves, or the fix would apply only on the very
+            // first load of each plugin.
+            if (nameRepair != null) nameRepair.repair(tmp);
+
             Files.move(tmp, out, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (Throwable t) {
             // dex2jar throws Errors as well as Exceptions on malformed input.
