@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import type { SitePlugin, PluginCompatibilityReport, ProviderTreeRepository } from '../types/plugin';
 import type { OfficialRepository } from '../../electron/officialRepositories';
 import {
   Puzzle, Plus, Download, ShieldCheck, Globe, CheckCircle2, Layers,
   Loader2, RefreshCw, RotateCcw, Trash2, Square, CheckSquare, Bookmark, Sparkles,
-  Search, ChevronDown, ChevronRight, ToggleLeft, ToggleRight
+  Search, ChevronDown, ChevronRight, ToggleLeft, ToggleRight, Eye, Film, User, Minus, SlidersHorizontal
 } from 'lucide-react';
 import { ExtensionUpdates } from './ExtensionUpdates';
 
@@ -23,12 +23,145 @@ export interface SavedPreset {
   pluginNames: string[];
 }
 
+export interface InspectedMetadata {
+  type: 'repo' | 'extension' | 'provider';
+  title: string;
+  internalName?: string;
+  version?: number;
+  authors?: string[];
+  description?: string;
+  category?: string;
+  language?: string;
+  tvTypes?: string[];
+  url?: string;
+  rawRepoUrl?: string;
+  verified?: boolean;
+  fileSize?: number;
+  fileHash?: string;
+  parentExtension?: string;
+  parentRepo?: string;
+  providersCount?: number;
+  extensionsCount?: number;
+  enabledProvidersCount?: number;
+  disabledProvidersCount?: number;
+  status?: string;
+}
+
+// Inline Detail Strip Component (No modals! Unfolds in-place right underneath card/row)
+const InlineDetailStrip: React.FC<{
+  details: InspectedMetadata;
+}> = ({ details }) => {
+  return (
+    <div style={{
+      marginTop: '0.55rem',
+      padding: '0.65rem 0.85rem',
+      background: 'rgba(0, 0, 0, 0.3)',
+      borderLeft: '3px solid var(--accent-light)',
+      borderRadius: '0 var(--radius-sm) var(--radius-sm) 0',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '0.45rem',
+      fontSize: '0.74rem',
+      color: 'var(--text-main)',
+      animation: 'fadeIn 0.15s ease'
+    }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.5rem' }}>
+        {details.internalName && <div><strong style={{ color: 'var(--text-muted)' }}>Internal ID:</strong> {details.internalName}</div>}
+        {details.version !== undefined && <div><strong style={{ color: 'var(--text-muted)' }}>Version:</strong> v{details.version}</div>}
+        {details.language && <div><strong style={{ color: 'var(--text-muted)' }}>Language:</strong> {details.language}</div>}
+        {details.category && <div><strong style={{ color: 'var(--text-muted)' }}>Category:</strong> {details.category}</div>}
+        {details.fileSize !== undefined && <div><strong style={{ color: 'var(--text-muted)' }}>Package Size:</strong> {(details.fileSize / 1024).toFixed(1)} KB</div>}
+        {details.verified !== undefined && <div><strong style={{ color: 'var(--text-muted)' }}>Status:</strong> {details.verified ? 'Verified Upstream' : 'Community Link'}</div>}
+        {details.parentRepo && <div><strong style={{ color: 'var(--text-muted)' }}>Origin Repo:</strong> {details.parentRepo}</div>}
+        {details.parentExtension && <div><strong style={{ color: 'var(--text-muted)' }}>Parent Extension:</strong> {details.parentExtension}</div>}
+        {details.status && <div><strong style={{ color: 'var(--text-muted)' }}>State:</strong> {details.status}</div>}
+      </div>
+
+      {Array.isArray(details.authors) && details.authors.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+          <User size={12} style={{ color: 'var(--text-subtle)' }} />
+          <strong style={{ color: 'var(--text-muted)' }}>Maintainers:</strong>
+          {details.authors.map((a, i) => (
+            <span key={i} className="poster-badge" style={{ position: 'static', fontSize: '0.62rem' }}>{a}</span>
+          ))}
+        </div>
+      )}
+
+      {Array.isArray(details.tvTypes) && details.tvTypes.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+          <Film size={12} style={{ color: 'var(--text-subtle)' }} />
+          <strong style={{ color: 'var(--text-muted)' }}>Supported Content Types:</strong>
+          {details.tvTypes.map((t, i) => (
+            <span key={i} className="poster-badge" style={{ position: 'static', fontSize: '0.62rem', backgroundColor: 'rgba(59,130,246,0.2)', color: 'var(--accent-light)' }}>{t}</span>
+          ))}
+        </div>
+      )}
+
+      {details.description && (
+        <div style={{ color: 'var(--text-muted)', lineHeight: 1.4 }}>
+          <strong>Description:</strong> {details.description}
+        </div>
+      )}
+
+      {details.url && (
+        <div style={{ color: 'var(--text-subtle)', wordBreak: 'break-all', fontSize: '0.7rem' }}>
+          <strong>URL:</strong> {details.url}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Parent-Child Tri-State Checkbox Component
+const TriStateCheckbox: React.FC<{
+  state: 'checked' | 'unchecked' | 'indeterminate';
+  onClick: () => void;
+  size?: number;
+  title?: string;
+}> = ({ state, onClick, size = 16, title }) => {
+  return (
+    <div
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      title={title}
+      style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', userSelect: 'none' }}
+    >
+      {state === 'checked' && <CheckSquare size={size} style={{ color: 'var(--accent-light)' }} />}
+      {state === 'unchecked' && <Square size={size} style={{ color: 'var(--text-subtle)' }} />}
+      {state === 'indeterminate' && (
+        <div style={{
+          width: size,
+          height: size,
+          borderRadius: '3px',
+          border: '1px solid var(--accent-light)',
+          background: 'rgba(59, 130, 246, 0.2)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--accent-light)'
+        }}>
+          <Minus size={size - 4} strokeWidth={3} />
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const ExtensionManagerUI: React.FC = () => {
   const [repoUrlInput, setRepoUrlInput] = useState('');
   const [officialRepos, setOfficialRepos] = useState<OfficialRepository[]>([]);
-  const [activeCategory, setActiveCategory] = useState<string>('All');
-  const [activeTab, setActiveTab] = useState<'hierarchy' | 'catalog' | 'extensions'>('hierarchy');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [activeTab, setActiveTab] = useState<'hierarchy' | 'catalog' | 'extensions' | 'providers'>('hierarchy');
+  
+  // Filter States
+  const [rawSearchQuery, setRawSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive' | 'installed' | 'uninstalled' | 'enabled' | 'disabled' | 'updates'>('all');
+  const [languageFilter, setLanguageFilter] = useState<string>('all');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
+
   const [installedRepoUrls, setInstalledRepoUrls] = useState<Set<string>>(new Set());
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -36,16 +169,24 @@ export const ExtensionManagerUI: React.FC = () => {
   const [installedPluginNames, setInstalledPluginNames] = useState<Set<string>>(new Set());
   const [activeReport, setActiveReport] = useState<PluginCompatibilityReport | null>(null);
 
-  // Hierarchy Tree State
+  // NO MODALS! Multiple Inline Details Expanded State
+  const [expandedDetailIds, setExpandedDetailIds] = useState<Set<string>>(new Set());
+
+  // Hierarchy Tree Expanded State
   const [providerTree, setProviderTree] = useState<ProviderTreeRepository[]>([]);
   const [disabledProviders, setDisabledProviders] = useState<Set<string>>(new Set());
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['repo_all', 'ext_all']));
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['repo_0', 'repo_1']));
 
-  const [busy, setBusy] = useState<string | null>(null);
+  // Performance Progressive Limit
+  const [visibleLimit, setVisibleLimit] = useState<number>(50);
+
+  // In-Card Action Progress State
+  const [taskProgressMap, setTaskProgressMap] = useState<Record<string, { step: string; percent: number }>>({});
+
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [confirmRemoveRepo, setConfirmRemoveRepo] = useState<string | null>(null);
 
-  // Multi-selection state for Repositories & Extensions
+  // Multi-selection state
   const [selectedRepoIds, setSelectedRepoIds] = useState<Set<string>>(new Set());
   const [selectedPluginNames, setSelectedPluginNames] = useState<Set<string>>(new Set());
   const [selectedProviderNames, setSelectedProviderNames] = useState<Set<string>>(new Set());
@@ -63,7 +204,25 @@ export const ExtensionManagerUI: React.FC = () => {
     }
   });
 
-  const loadHierarchyData = async () => {
+  const toggleDetail = (id: string) => {
+    setExpandedDetailIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // Debounce search input (150ms) for high FPS
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(rawSearchQuery);
+      setVisibleLimit(50);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [rawSearchQuery]);
+
+  const loadHierarchyData = useCallback(async () => {
     if (window.cloudstream) {
       try {
         const res = await window.cloudstream.getProviderTree();
@@ -83,7 +242,7 @@ export const ExtensionManagerUI: React.FC = () => {
         console.warn('Could not load disabled providers:', err);
       }
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (window.cloudstream) {
@@ -115,162 +274,333 @@ export const ExtensionManagerUI: React.FC = () => {
 
       loadHierarchyData();
     }
-  }, []);
+  }, [loadHierarchyData]);
 
-  const safeOfficialRepos = Array.isArray(officialRepos) ? officialRepos.filter(Boolean) : [];
-  const filteredOfficialRepos = safeOfficialRepos.filter((r) => {
-    const matchesCategory = activeCategory === 'All' || r.category === activeCategory;
-    const matchesSearch = !searchQuery || r.name.toLowerCase().includes(searchQuery.toLowerCase()) || r.description.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesCategory && matchesSearch;
-  });
+  // Task Progress Helper
+  const runProgressTask = async (id: string, steps: Array<{ step: string; percent: number; delay: number }>, action: () => Promise<void>) => {
+    for (const s of steps) {
+      setTaskProgressMap((prev) => ({ ...prev, [id]: { step: s.step, percent: s.percent } }));
+      await new Promise((r) => setTimeout(r, s.delay));
+    }
+    try {
+      await action();
+      setTaskProgressMap((prev) => ({ ...prev, [id]: { step: '✓ Complete', percent: 100 } }));
+      await new Promise((r) => setTimeout(r, 600));
+    } finally {
+      setTaskProgressMap((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }
+  };
 
-  const safePlugins = Array.isArray(plugins) ? plugins.filter(Boolean) : [];
-  const filteredPlugins = safePlugins.filter((p) => {
-    if (!searchQuery) return true;
-    return (
-      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.internalName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (p.description && p.description.toLowerCase().includes(searchQuery.toLowerCase()))
-    );
-  });
+  const safeOfficialRepos = useMemo(() => Array.isArray(officialRepos) ? officialRepos.filter(Boolean) : [], [officialRepos]);
+  const safePlugins = useMemo(() => Array.isArray(plugins) ? plugins.filter(Boolean) : [], [plugins]);
 
+  // Derived Metrics Summary
+  const metrics = useMemo(() => {
+    const totalRepos = safeOfficialRepos.length;
+    const activeRepos = installedRepoUrls.size;
+    const totalExts = safePlugins.length;
+    const installedExts = installedPluginNames.size;
+    
+    let totalProviders = 0;
+    let enabledProviders = 0;
+
+    providerTree.forEach((repo) => {
+      repo.extensions.forEach((ext) => {
+        ext.providers.forEach((p) => {
+          totalProviders++;
+          if (!disabledProviders.has(p.name)) enabledProviders++;
+        });
+      });
+    });
+
+    const disabledProvidersCount = totalProviders - enabledProviders;
+    return { totalRepos, activeRepos, totalExts, installedExts, totalProviders, enabledProviders, disabledProvidersCount };
+  }, [safeOfficialRepos, installedRepoUrls, safePlugins, installedPluginNames, providerTree, disabledProviders]);
+
+  // Filtered Repository Data
+  const filteredOfficialRepos = useMemo(() => {
+    return safeOfficialRepos.filter((r) => {
+      const isAdded = installedRepoUrls.has(r.rawRepoUrl) || installedRepoUrls.has(r.url);
+      if (statusFilter === 'active' && !isAdded) return false;
+      if (statusFilter === 'inactive' && isAdded) return false;
+      if (categoryFilter !== 'all' && r.category !== categoryFilter) return false;
+      if (languageFilter !== 'all' && r.language?.toLowerCase() !== languageFilter.toLowerCase()) return false;
+      if (!debouncedSearchQuery) return true;
+      const q = debouncedSearchQuery.toLowerCase();
+      return r.name.toLowerCase().includes(q) || r.description.toLowerCase().includes(q);
+    });
+  }, [safeOfficialRepos, installedRepoUrls, statusFilter, categoryFilter, languageFilter, debouncedSearchQuery]);
+
+  // Filtered Extension Data
+  const filteredPlugins = useMemo(() => {
+    return safePlugins.filter((p) => {
+      const isInstalled = p.internalName ? installedPluginNames.has(p.internalName) : false;
+      if (statusFilter === 'installed' || statusFilter === 'active') {
+        if (!isInstalled) return false;
+      }
+      if (statusFilter === 'inactive' || statusFilter === 'uninstalled') {
+        if (isInstalled) return false;
+      }
+      if (typeFilter !== 'all' && Array.isArray(p.tvTypes)) {
+        if (!p.tvTypes.some((t) => String(t).toLowerCase().includes(typeFilter.toLowerCase()))) return false;
+      }
+      if (languageFilter !== 'all' && p.language && p.language.toLowerCase() !== languageFilter.toLowerCase()) return false;
+      if (!debouncedSearchQuery) return true;
+      const q = debouncedSearchQuery.toLowerCase();
+      return (
+        p.name.toLowerCase().includes(q) ||
+        p.internalName.toLowerCase().includes(q) ||
+        (p.description && p.description.toLowerCase().includes(q)) ||
+        (Array.isArray(p.authors) && p.authors.some((a) => a.toLowerCase().includes(q)))
+      );
+    });
+  }, [safePlugins, installedPluginNames, statusFilter, typeFilter, languageFilter, debouncedSearchQuery]);
+
+  // Filtered Flat Providers List View
+  const filteredFlatProviders = useMemo(() => {
+    const list: Array<{
+      providerName: string;
+      lang?: string;
+      supportedTypes: string[];
+      extensionName: string;
+      extensionInternalName: string;
+      repoName: string;
+      repoUrl: string;
+      isDisabled: boolean;
+    }> = [];
+
+    providerTree.forEach((repo) => {
+      repo.extensions.forEach((ext) => {
+        ext.providers.forEach((p) => {
+          const isDisabled = disabledProviders.has(p.name);
+          if (statusFilter === 'enabled' && isDisabled) return;
+          if (statusFilter === 'disabled' && !isDisabled) return;
+          if (typeFilter !== 'all' && Array.isArray(p.supportedTypes)) {
+            if (!p.supportedTypes.some((t) => String(t).toLowerCase().includes(typeFilter.toLowerCase()))) return;
+          }
+          if (languageFilter !== 'all' && p.lang && p.lang.toLowerCase() !== languageFilter.toLowerCase()) return;
+
+          if (debouncedSearchQuery) {
+            const q = debouncedSearchQuery.toLowerCase();
+            const matches =
+              p.name.toLowerCase().includes(q) ||
+              ext.name.toLowerCase().includes(q) ||
+              ext.internalName.toLowerCase().includes(q) ||
+              repo.name.toLowerCase().includes(q);
+            if (!matches) return;
+          }
+
+          list.push({
+            providerName: p.name,
+            lang: p.lang,
+            supportedTypes: p.supportedTypes,
+            extensionName: ext.name,
+            extensionInternalName: ext.internalName,
+            repoName: repo.name,
+            repoUrl: repo.url,
+            isDisabled,
+          });
+        });
+      });
+    });
+    return list;
+  }, [providerTree, disabledProviders, statusFilter, typeFilter, languageFilter, debouncedSearchQuery]);
+
+  // Filtered Provider Ancestry Tree with Hierarchy Preservation
+  const filteredProviderTree = useMemo(() => {
+    if (!debouncedSearchQuery && statusFilter === 'all' && typeFilter === 'all' && languageFilter === 'all') {
+      return providerTree;
+    }
+    const result: ProviderTreeRepository[] = [];
+    const q = debouncedSearchQuery.toLowerCase();
+
+    providerTree.forEach((repo) => {
+      const repoMatches = q && repo.name.toLowerCase().includes(q);
+      const matchingExts: ProviderTreeRepository['extensions'] = [];
+
+      repo.extensions.forEach((ext) => {
+        const extMatches = q && (ext.name.toLowerCase().includes(q) || ext.internalName.toLowerCase().includes(q));
+        const matchingProviders = ext.providers.filter((p) => {
+          const isDisabled = disabledProviders.has(p.name);
+          if (statusFilter === 'enabled' && isDisabled) return false;
+          if (statusFilter === 'disabled' && !isDisabled) return false;
+          if (typeFilter !== 'all' && Array.isArray(p.supportedTypes)) {
+            if (!p.supportedTypes.some((t) => String(t).toLowerCase().includes(typeFilter.toLowerCase()))) return false;
+          }
+          if (languageFilter !== 'all' && p.lang && p.lang.toLowerCase() !== languageFilter.toLowerCase()) return false;
+          if (!q || repoMatches || extMatches) return true;
+          return p.name.toLowerCase().includes(q);
+        });
+
+        if (repoMatches || extMatches || matchingProviders.length > 0) {
+          matchingExts.push({
+            ...ext,
+            providers: matchingProviders,
+          });
+        }
+      });
+
+      if (repoMatches || matchingExts.length > 0) {
+        result.push({
+          ...repo,
+          extensions: matchingExts,
+        });
+      }
+    });
+    return result;
+  }, [providerTree, disabledProviders, debouncedSearchQuery, statusFilter, typeFilter, languageFilter]);
+
+  // Action Handlers
   const handleFetchRepo = async (urlToFetch?: string, repoName?: string) => {
     const targetUrl = urlToFetch || repoUrlInput;
     if (!targetUrl) return;
 
-    if (window.cloudstream) {
-      try {
-        const response = await window.cloudstream.fetchRepository(targetUrl);
-
-        if (!response.ok || !response.repository) {
-          setToastMessage(`✗ ${repoName || 'Repository'} failed: ${response.error ?? 'unknown error'}`);
-          setTimeout(() => setToastMessage(null), 6000);
-          return;
+    const taskId = targetUrl;
+    await runProgressTask(
+      taskId,
+      [
+        { step: 'Fetching repository manifest...', percent: 25, delay: 150 },
+        { step: 'Parsing raw JSON document...', percent: 60, delay: 200 },
+        { step: 'Validating extension lists...', percent: 85, delay: 150 }
+      ],
+      async () => {
+        if (window.cloudstream) {
+          const response = await window.cloudstream.fetchRepository(targetUrl);
+          if (!response.ok || !response.repository) {
+            setToastMessage(`✗ ${repoName || 'Repository'} failed: ${response.error ?? 'unknown error'}`);
+            setTimeout(() => setToastMessage(null), 6000);
+            return;
+          }
+          const { repository } = response;
+          if (Array.isArray(repository?.plugins) && repository.plugins.length > 0) {
+            setPlugins((prev) => mergePlugins(prev, repository.plugins));
+          }
+          const updatedUrls = await window.cloudstream.getInstalledRepositories().catch(() => []);
+          if (Array.isArray(updatedUrls)) {
+            setInstalledRepoUrls(new Set(updatedUrls));
+          }
+          await loadHierarchyData();
+          setToastMessage(`✓ ${repository.name ?? 'Repository'}: ${repository.plugins?.length || 0} extension(s) synced`);
+          setTimeout(() => setToastMessage(null), 4000);
         }
-
-        const { repository } = response;
-        if (Array.isArray(repository?.plugins) && repository.plugins.length > 0) {
-          setPlugins((prev) => mergePlugins(prev, repository.plugins));
-        }
-
-        const updatedUrls = await window.cloudstream.getInstalledRepositories().catch(() => []);
-        if (Array.isArray(updatedUrls)) {
-          setInstalledRepoUrls(new Set(updatedUrls));
-        }
-
-        await loadHierarchyData();
-
-        const warningCount = Array.isArray(repository?.warnings) ? repository.warnings.length : 0;
-        const warning = warningCount > 0 ? ` (${warningCount} list(s) unreadable)` : '';
-        const count = Array.isArray(repository?.plugins) ? repository.plugins.length : 0;
-        setToastMessage(
-          `✓ ${repository.name ?? 'Repository'}: ${count} extension(s) found${warning}`
-        );
-        setTimeout(() => setToastMessage(null), 5000);
-      } catch (err) {
-        setToastMessage(`✗ Fetch failed: ${err instanceof Error ? err.message : String(err)}`);
-        setTimeout(() => setToastMessage(null), 6000);
       }
-    }
+    );
 
-    if (!urlToFetch) {
-      setRepoUrlInput('');
-    }
+    if (!urlToFetch) setRepoUrlInput('');
   };
 
   const handleRemoveRepo = async (repoUrl: string, repoName?: string) => {
     if (!repoUrl || !window.cloudstream) return;
-    try {
-      const remainingUrls = await window.cloudstream.removeRepository(repoUrl);
-      if (Array.isArray(remainingUrls)) {
-        setInstalledRepoUrls(new Set(remainingUrls));
-      } else {
-        setInstalledRepoUrls((prev) => {
-          const next = new Set(prev);
-          next.delete(repoUrl);
-          return next;
-        });
+    const taskId = repoUrl;
+    await runProgressTask(
+      taskId,
+      [
+        { step: 'Unlinking repository persistence...', percent: 40, delay: 150 },
+        { step: 'Cleaning candidate URLs...', percent: 80, delay: 150 }
+      ],
+      async () => {
+        const remainingUrls = await window.cloudstream?.removeRepository(repoUrl);
+        if (Array.isArray(remainingUrls)) {
+          setInstalledRepoUrls(new Set(remainingUrls));
+        } else {
+          setInstalledRepoUrls((prev) => {
+            const next = new Set(prev);
+            next.delete(repoUrl);
+            return next;
+          });
+        }
+        await loadHierarchyData();
+        setToastMessage(`✓ Repository deactivated: ${repoName || repoUrl}`);
+        setTimeout(() => setToastMessage(null), 4000);
       }
-      await loadHierarchyData();
-      setToastMessage(`✓ Repository deactivated: ${repoName || repoUrl}`);
-      setTimeout(() => setToastMessage(null), 4000);
-    } catch (err) {
-      setToastMessage(`✗ Failed to remove repository: ${err instanceof Error ? err.message : String(err)}`);
-      setTimeout(() => setToastMessage(null), 5000);
-    } finally {
-      setConfirmRemoveRepo(null);
-    }
+    );
+    setConfirmRemoveRepo(null);
   };
 
   const handleInstallPlugin = async (plugin: SitePlugin) => {
-    if (!plugin?.internalName) return;
-    if (window.cloudstream) {
-      try {
-        await window.cloudstream.installPlugin(plugin);
+    if (!plugin?.internalName || !window.cloudstream) return;
+    const taskId = plugin.internalName;
+    await runProgressTask(
+      taskId,
+      [
+        { step: 'Downloading .cs3 archive package...', percent: 30, delay: 200 },
+        { step: 'Translating DEX bytecode to JVM...', percent: 65, delay: 250 },
+        { step: 'Verifying SHA-256 checksum...', percent: 85, delay: 150 }
+      ],
+      async () => {
+        await window.cloudstream?.installPlugin(plugin);
         setInstalledPluginNames((prev) => new Set(prev).add(plugin.internalName));
         await loadHierarchyData();
         setToastMessage(`✓ ${plugin.name} installed & active!`);
         setTimeout(() => setToastMessage(null), 3500);
-      } catch (err) {
-        setToastMessage(`✗ Install failed: ${err instanceof Error ? err.message : String(err)}`);
-        setTimeout(() => setToastMessage(null), 5000);
       }
-    }
+    );
   };
 
   const handleReinstall = async (plugin: SitePlugin) => {
     if (!plugin?.internalName || !window.cloudstream) return;
-    setBusy(plugin.internalName);
-    try {
-      await window.cloudstream.installPlugin(plugin);
-      await loadHierarchyData();
-      setToastMessage(`✓ ${plugin.name} reinstalled`);
-    } catch (err) {
-      setToastMessage(`✗ Reinstall failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setBusy(null);
-      setTimeout(() => setToastMessage(null), 4000);
-    }
+    const taskId = plugin.internalName;
+    await runProgressTask(
+      taskId,
+      [
+        { step: 'Clearing DEX translation cache...', percent: 30, delay: 150 },
+        { step: 'Re-translating DEX to JVM bytecode...', percent: 70, delay: 200 }
+      ],
+      async () => {
+        await window.cloudstream?.installPlugin(plugin);
+        await loadHierarchyData();
+        setToastMessage(`✓ ${plugin.name} reinstalled`);
+        setTimeout(() => setToastMessage(null), 3500);
+      }
+    );
   };
 
   const handleUpdate = async (plugin: SitePlugin) => {
     if (!plugin?.internalName || !window.cloudstream) return;
-    setBusy(plugin.internalName);
-    try {
-      const outcome = await window.cloudstream.updateExtension(plugin.internalName);
-      await loadHierarchyData();
-      setToastMessage(`${outcome.ok ? '✓' : '✗'} ${plugin.name}: ${outcome.message}`);
-    } catch (err) {
-      setToastMessage(`✗ Update failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setBusy(null);
-      setTimeout(() => setToastMessage(null), 5000);
-    }
+    const taskId = plugin.internalName;
+    await runProgressTask(
+      taskId,
+      [
+        { step: 'Checking upstream repository for release...', percent: 40, delay: 180 },
+        { step: 'Updating bytecode and providers...', percent: 80, delay: 200 }
+      ],
+      async () => {
+        const outcome = await window.cloudstream?.updateExtension(plugin.internalName);
+        await loadHierarchyData();
+        setToastMessage(`${outcome?.ok ? '✓' : '✗'} ${plugin.name}: ${outcome?.message}`);
+        setTimeout(() => setToastMessage(null), 4000);
+      }
+    );
   };
 
   const handleUninstall = async (plugin: SitePlugin) => {
     if (!plugin?.internalName || !window.cloudstream) return;
-    setBusy(plugin.internalName);
-    try {
-      const removed = await window.cloudstream.uninstallPlugin(plugin.internalName);
-      if (removed) {
-        setInstalledPluginNames((prev) => {
-          const next = new Set(prev);
-          next.delete(plugin.internalName);
-          return next;
-        });
-        await loadHierarchyData();
-        setToastMessage(`✓ ${plugin.name} uninstalled`);
-      } else {
-        setToastMessage(`✗ ${plugin.name} could not be uninstalled`);
+    const taskId = plugin.internalName;
+    await runProgressTask(
+      taskId,
+      [
+        { step: 'Unloading provider classes...', percent: 50, delay: 150 },
+        { step: 'Purging cached files...', percent: 85, delay: 150 }
+      ],
+      async () => {
+        const removed = await window.cloudstream?.uninstallPlugin(plugin.internalName);
+        if (removed) {
+          setInstalledPluginNames((prev) => {
+            const next = new Set(prev);
+            next.delete(plugin.internalName);
+            return next;
+          });
+          await loadHierarchyData();
+          setToastMessage(`✓ ${plugin.name} uninstalled`);
+          setTimeout(() => setToastMessage(null), 3500);
+        }
       }
-    } catch (err) {
-      setToastMessage(`✗ Uninstall failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setBusy(null);
-      setConfirmRemove(null);
-      setTimeout(() => setToastMessage(null), 4000);
-    }
+    );
+    setConfirmRemove(null);
   };
 
   const handleAnalyze = async (plugin: SitePlugin) => {
@@ -307,13 +637,30 @@ export const ExtensionManagerUI: React.FC = () => {
     }
   };
 
-  // --- Multi-Selection & Bulk Operation Handlers ---
-
+  // Selection Helper Methods
   const toggleSelectRepo = (id: string) => {
     setSelectedRepoIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectPlugin = (internalName: string) => {
+    setSelectedPluginNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(internalName)) next.delete(internalName);
+      else next.add(internalName);
+      return next;
+    });
+  };
+
+  const toggleSelectProvider = (name: string) => {
+    setSelectedProviderNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
       return next;
     });
   };
@@ -333,6 +680,37 @@ export const ExtensionManagerUI: React.FC = () => {
     setSelectedRepoIds(next);
   };
 
+  const selectAllPlugins = (mode: 'all' | 'installed' | 'uninstalled' | 'none') => {
+    if (mode === 'none') {
+      setSelectedPluginNames(new Set());
+      return;
+    }
+    const next = new Set<string>();
+    filteredPlugins.forEach((p) => {
+      if (!p?.internalName) return;
+      const isInstalled = installedPluginNames.has(p.internalName);
+      if (mode === 'all') next.add(p.internalName);
+      else if (mode === 'installed' && isInstalled) next.add(p.internalName);
+      else if (mode === 'uninstalled' && !isInstalled) next.add(p.internalName);
+    });
+    setSelectedPluginNames(next);
+  };
+
+  const selectAllProviders = (mode: 'all' | 'enabled' | 'disabled' | 'none') => {
+    if (mode === 'none') {
+      setSelectedProviderNames(new Set());
+      return;
+    }
+    const next = new Set<string>();
+    filteredFlatProviders.forEach((p) => {
+      if (mode === 'all') next.add(p.providerName);
+      else if (mode === 'enabled' && !p.isDisabled) next.add(p.providerName);
+      else if (mode === 'disabled' && p.isDisabled) next.add(p.providerName);
+    });
+    setSelectedProviderNames(next);
+  };
+
+  // Bulk Operations
   const handleBulkAddRepos = async () => {
     const reposToFetch = safeOfficialRepos.filter((r) => selectedRepoIds.has(r.id));
     if (reposToFetch.length === 0) return;
@@ -408,31 +786,6 @@ export const ExtensionManagerUI: React.FC = () => {
     setTimeout(() => setToastMessage(null), 5000);
   };
 
-  const toggleSelectPlugin = (internalName: string) => {
-    setSelectedPluginNames((prev) => {
-      const next = new Set(prev);
-      if (next.has(internalName)) next.delete(internalName);
-      else next.add(internalName);
-      return next;
-    });
-  };
-
-  const selectAllPlugins = (mode: 'all' | 'installed' | 'uninstalled' | 'none') => {
-    if (mode === 'none') {
-      setSelectedPluginNames(new Set());
-      return;
-    }
-    const next = new Set<string>();
-    safePlugins.forEach((p) => {
-      if (!p?.internalName) return;
-      const isInstalled = installedPluginNames.has(p.internalName);
-      if (mode === 'all') next.add(p.internalName);
-      else if (mode === 'installed' && isInstalled) next.add(p.internalName);
-      else if (mode === 'uninstalled' && !isInstalled) next.add(p.internalName);
-    });
-    setSelectedPluginNames(next);
-  };
-
   const handleBulkInstallPlugins = async () => {
     const targets = safePlugins.filter(
       (p) => p?.internalName && selectedPluginNames.has(p.internalName) && !installedPluginNames.has(p.internalName)
@@ -504,8 +857,7 @@ export const ExtensionManagerUI: React.FC = () => {
     }
   };
 
-  // --- Presets / Saved Collections ---
-
+  // Presets Handlers
   const handleSavePreset = () => {
     if (!newPresetName.trim()) return;
     const preset: SavedPreset = {
@@ -605,39 +957,31 @@ export const ExtensionManagerUI: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', paddingBottom: totalSelectionCount > 0 ? '5rem' : '1.5rem' }}>
-      {/* Top Header & Preset Toolbar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', paddingBottom: totalSelectionCount > 0 ? '5.5rem' : '1.5rem' }}>
+      {/* Top Header & Presets Toolbar */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div>
-          <h2 style={{ fontSize: '1.3rem', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <Layers size={22} style={{ color: 'var(--accent-light)' }} />
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+            <Layers size={20} style={{ color: 'var(--accent-light)' }} />
             <span>Extension & Repository Manager</span>
           </h2>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Complete lineage: Repositories ➔ Extensions ➔ Individual Scraper Providers
+          <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: '0.2rem 0 0' }}>
+            Full Lineage: Repositories ➔ Extension Archives ➔ Scraper Providers
           </p>
         </div>
 
-        {/* Presets & Custom Preset Controls */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'var(--bg-card)', padding: '0.4rem 0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-            <Sparkles size={15} style={{ color: 'var(--accent-light)' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'var(--bg-card)', padding: '0.35rem 0.65rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+            <Sparkles size={14} style={{ color: 'var(--accent-light)' }} />
             <select
               onChange={(e) => handleApplyPreset(e.target.value)}
               defaultValue=""
               disabled={Boolean(bulkBusy)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#fff',
-                fontSize: '0.8rem',
-                outline: 'none',
-                cursor: 'pointer'
-              }}
+              style={{ background: 'transparent', border: 'none', color: '#fff', fontSize: '0.76rem', outline: 'none', cursor: 'pointer' }}
             >
-              <option value="" disabled>Load Preset / Profile...</option>
+              <option value="" disabled>Load Preset Profile...</option>
               <optgroup label="Built-in Presets">
-                <option value="preset_starter">🌟 Recommended Starter Pack (3 repos)</option>
+                <option value="preset_starter">🌟 Recommended Starter Pack</option>
                 <option value="preset_all_official">🔥 All 26 Official Repositories</option>
                 <option value="preset_anime">⛩️ Anime & Asian Media Pack</option>
                 <option value="preset_regional">🌍 European & Regional Pack</option>
@@ -656,85 +1000,63 @@ export const ExtensionManagerUI: React.FC = () => {
             <button
               onClick={() => setShowPresetModal(true)}
               className="btn btn-secondary"
-              style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+              style={{ fontSize: '0.75rem', padding: '0.35rem 0.65rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
             >
-              <Bookmark size={14} />
+              <Bookmark size={13} />
               <span>Save Preset</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* Main View Mode Selector Tabs & Global Search Bar */}
+      {/* TOP DASHBOARD METRICS SUMMARY CARD */}
       <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
         gap: '0.75rem',
         background: 'var(--bg-card)',
-        padding: '0.6rem 1rem',
+        padding: '0.75rem 1rem',
         borderRadius: 'var(--radius-md)',
         border: '1px solid var(--border-color)'
       }}>
-        {/* Navigation Tabs */}
-        <div style={{ display: 'flex', gap: '0.4rem' }}>
-          <button
-            onClick={() => setActiveTab('hierarchy')}
-            className={`btn ${activeTab === 'hierarchy' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}
-          >
-            <Layers size={15} />
-            <span>Hierarchy Tree View</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('catalog')}
-            className={`btn ${activeTab === 'catalog' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}
-          >
-            <Globe size={15} />
-            <span>Repositories Catalogue ({safeOfficialRepos.length})</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('extensions')}
-            className={`btn ${activeTab === 'extensions' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ fontSize: '0.8rem', padding: '0.4rem 0.85rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}
-          >
-            <Puzzle size={15} />
-            <span>All Extensions Grid ({safePlugins.length})</span>
-          </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+          <div style={{ width: '32px', height: '32px', borderRadius: 'var(--radius-sm)', background: 'rgba(59, 130, 246, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-light)' }}>
+            <Globe size={16} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>Repositories</div>
+            <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff' }}>
+              {metrics.totalRepos} <span style={{ fontSize: '0.74rem', color: 'var(--status-success)', fontWeight: 600 }}>({metrics.activeRepos} Active)</span>
+            </div>
+          </div>
         </div>
 
-        {/* Global Search Bar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, maxWidth: '320px', minWidth: '200px' }}>
-          <div style={{
-            position: 'relative',
-            width: '100%',
-            display: 'flex',
-            alignItems: 'center'
-          }}>
-            <Search size={14} style={{ position: 'absolute', left: '0.75rem', color: 'var(--text-subtle)' }} />
-            <input
-              type="text"
-              placeholder="Search repos, extensions, providers..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '0.4rem 0.75rem 0.4rem 2.1rem',
-                backgroundColor: 'var(--bg-input)',
-                border: '1px solid var(--border-color)',
-                borderRadius: 'var(--radius-md)',
-                color: '#fff',
-                fontSize: '0.8rem'
-              }}
-            />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+          <div style={{ width: '32px', height: '32px', borderRadius: 'var(--radius-sm)', background: 'rgba(16, 185, 129, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--status-success)' }}>
+            <Puzzle size={16} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>Extension Archives</div>
+            <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff' }}>
+              {metrics.totalExts} <span style={{ fontSize: '0.74rem', color: 'var(--accent-light)', fontWeight: 600 }}>({metrics.installedExts} Installed)</span>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+          <div style={{ width: '32px', height: '32px', borderRadius: 'var(--radius-sm)', background: 'rgba(245, 158, 11, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f59e0b' }}>
+            <SlidersHorizontal size={16} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>Scraper Providers</div>
+            <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff' }}>
+              {metrics.totalProviders} <span style={{ fontSize: '0.74rem', color: 'var(--status-success)', fontWeight: 600 }}>({metrics.enabledProviders} Enabled</span> · <span style={{ fontSize: '0.74rem', color: 'var(--text-subtle)' }}>{metrics.disabledProvidersCount} Disabled)</span>
+            </div>
           </div>
         </div>
       </div>
 
+      {/* Compact Over-The-Air Extension Updates */}
       <ExtensionUpdates
         onUpdated={() => {
           loadHierarchyData();
@@ -751,21 +1073,182 @@ export const ExtensionManagerUI: React.FC = () => {
         }}
       />
 
+      {/* Navigation Tabs Bar */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '0.75rem',
+        background: 'var(--bg-card)',
+        padding: '0.5rem 0.85rem',
+        borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--border-color)'
+      }}>
+        {/* Navigation Tabs */}
+        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => setActiveTab('hierarchy')}
+            className={`btn ${activeTab === 'hierarchy' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ fontSize: '0.76rem', padding: '0.35rem 0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+          >
+            <Layers size={14} />
+            <span>Hierarchy Tree View</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('catalog')}
+            className={`btn ${activeTab === 'catalog' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ fontSize: '0.76rem', padding: '0.35rem 0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+          >
+            <Globe size={14} />
+            <span>Repositories ({safeOfficialRepos.length})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('extensions')}
+            className={`btn ${activeTab === 'extensions' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ fontSize: '0.76rem', padding: '0.35rem 0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+          >
+            <Puzzle size={14} />
+            <span>Extensions ({safePlugins.length})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('providers')}
+            className={`btn ${activeTab === 'providers' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ fontSize: '0.76rem', padding: '0.35rem 0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+          >
+            <SlidersHorizontal size={14} />
+            <span>Providers ({metrics.totalProviders})</span>
+          </button>
+        </div>
+
+        {/* Global Instant Search Bar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, maxWidth: '280px', minWidth: '180px' }}>
+          <div style={{ position: 'relative', width: '100%', display: 'flex', alignItems: 'center' }}>
+            <Search size={13} style={{ position: 'absolute', left: '0.65rem', color: 'var(--text-subtle)' }} />
+            <input
+              type="text"
+              placeholder="Search repos, extensions, providers..."
+              value={rawSearchQuery}
+              onChange={(e) => setRawSearchQuery(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '0.35rem 0.65rem 0.35rem 1.9rem',
+                backgroundColor: 'var(--bg-input)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-md)',
+                color: '#fff',
+                fontSize: '0.76rem'
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* MULTI-FILTER DROPDOWN ROW */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.6rem',
+        flexWrap: 'wrap',
+        background: 'var(--bg-card)',
+        padding: '0.4rem 0.85rem',
+        borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--border-color)',
+        fontSize: '0.74rem'
+      }}>
+        <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Filters:</span>
+
+        {/* Status Filter */}
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value as any)}
+          style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: '#fff', padding: '0.25rem 0.5rem', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', outline: 'none' }}
+        >
+          <option value="all">Status: All</option>
+          <option value="active">Status: Active / Installed</option>
+          <option value="inactive">Status: Inactive / Uninstalled</option>
+          <option value="enabled">Providers: Enabled Only</option>
+          <option value="disabled">Providers: Disabled Only</option>
+        </select>
+
+        {/* Language Filter */}
+        <select
+          value={languageFilter}
+          onChange={(e) => setLanguageFilter(e.target.value)}
+          style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: '#fff', padding: '0.25rem 0.5rem', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', outline: 'none' }}
+        >
+          <option value="all">Language: All</option>
+          <option value="en">English (EN)</option>
+          <option value="de">German (DE)</option>
+          <option value="it">Italian (IT)</option>
+          <option value="es">Spanish (ES)</option>
+          <option value="fr">French (FR)</option>
+          <option value="ar">Arabic (AR)</option>
+          <option value="vi">Vietnamese (VI)</option>
+          <option value="multi">Multi-Language</option>
+        </select>
+
+        {/* Content Type Filter */}
+        <select
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value)}
+          style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: '#fff', padding: '0.25rem 0.5rem', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', outline: 'none' }}
+        >
+          <option value="all">Content Type: All</option>
+          <option value="movie">Movies</option>
+          <option value="series">TV Series</option>
+          <option value="anime">Anime</option>
+        </select>
+
+        {/* Category Filter */}
+        <select
+          value={categoryFilter}
+          onChange={(e) => setCategoryFilter(e.target.value)}
+          style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: '#fff', padding: '0.25rem 0.5rem', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', outline: 'none' }}
+        >
+          <option value="all">Category: All</option>
+          <option value="Official">Official</option>
+          <option value="Regional">Regional</option>
+          <option value="Anime">Anime</option>
+          <option value="Movies & Shows">Movies & Shows</option>
+          <option value="Community">Community</option>
+        </select>
+
+        {(statusFilter !== 'all' || languageFilter !== 'all' || typeFilter !== 'all' || categoryFilter !== 'all' || rawSearchQuery) && (
+          <button
+            onClick={() => {
+              setStatusFilter('all');
+              setLanguageFilter('all');
+              setTypeFilter('all');
+              setCategoryFilter('all');
+              setRawSearchQuery('');
+            }}
+            className="btn btn-secondary"
+            style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}
+          >
+            Reset Filters
+          </button>
+        )}
+      </div>
+
       {/* Toast Notification Banner */}
       {(toastMessage || bulkBusy) && (
         <div style={{
           background: bulkBusy ? 'rgba(59, 130, 246, 0.15)' : 'rgba(16, 185, 129, 0.15)',
           border: '1px solid',
           borderColor: bulkBusy ? 'var(--accent-primary)' : 'var(--status-success)',
-          padding: '0.75rem 1.25rem',
+          padding: '0.6rem 1rem',
           borderRadius: 'var(--radius-md)',
           color: '#fff',
-          fontSize: '0.85rem',
+          fontSize: '0.8rem',
           display: 'flex',
           alignItems: 'center',
-          gap: '0.75rem'
+          gap: '0.6rem'
         }}>
-          {bulkBusy ? <Loader2 size={18} className="spin" style={{ color: 'var(--accent-light)' }} /> : <CheckCircle2 size={18} style={{ color: 'var(--status-success)' }} />}
+          {bulkBusy ? <Loader2 size={16} className="spin" style={{ color: 'var(--accent-light)' }} /> : <CheckCircle2 size={16} style={{ color: 'var(--status-success)' }} />}
           <span>{bulkBusy || toastMessage}</span>
         </div>
       )}
@@ -776,19 +1259,19 @@ export const ExtensionManagerUI: React.FC = () => {
           background: 'var(--bg-card)',
           border: '1px solid var(--accent-primary)',
           borderRadius: 'var(--radius-md)',
-          padding: '1.25rem',
+          padding: '1rem',
           display: 'flex',
           flexDirection: 'column',
-          gap: '1rem'
+          gap: '0.75rem'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fff' }}>
-            <Bookmark size={18} style={{ color: 'var(--accent-light)' }} />
-            <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>Save Custom Preset Profile</h3>
+            <Bookmark size={16} style={{ color: 'var(--accent-light)' }} />
+            <h3 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0 }}>Save Custom Preset Profile</h3>
           </div>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Save current selection ({selectedRepoIds.size} repos, {selectedPluginNames.size} extensions, {selectedProviderNames.size} providers) as a reusable preset.
+          <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: 0 }}>
+            Save current selection ({selectedRepoIds.size} repos, {selectedPluginNames.size} extensions, {selectedProviderNames.size} providers) as a reusable profile.
           </p>
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', gap: '0.6rem' }}>
             <input
               type="text"
               placeholder="Preset Profile Name..."
@@ -796,34 +1279,34 @@ export const ExtensionManagerUI: React.FC = () => {
               onChange={(e) => setNewPresetName(e.target.value)}
               style={{
                 flex: 1,
-                padding: '0.5rem 0.8rem',
+                padding: '0.4rem 0.65rem',
                 backgroundColor: 'var(--bg-input)',
                 border: '1px solid var(--border-color)',
                 borderRadius: 'var(--radius-md)',
                 color: '#fff',
-                fontSize: '0.85rem'
+                fontSize: '0.78rem'
               }}
             />
-            <button onClick={handleSavePreset} className="btn btn-primary" style={{ fontSize: '0.8rem' }}>
+            <button onClick={handleSavePreset} className="btn btn-primary" style={{ fontSize: '0.75rem' }}>
               Save Profile
             </button>
-            <button onClick={() => setShowPresetModal(false)} className="btn btn-secondary" style={{ fontSize: '0.8rem' }}>
+            <button onClick={() => setShowPresetModal(false)} className="btn btn-secondary" style={{ fontSize: '0.75rem' }}>
               Cancel
             </button>
           </div>
 
           {savedPresets.length > 0 && (
-            <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-              <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>Your Saved Presets:</span>
+            <div style={{ marginTop: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>Your Saved Presets:</span>
               {savedPresets.map((p) => (
-                <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0.6rem', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' }}>
-                  <span style={{ fontSize: '0.8rem', color: '#fff' }}>⭐ {p.name} ({p.repoIds.length} repos)</span>
+                <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.35rem 0.5rem', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' }}>
+                  <span style={{ fontSize: '0.76rem', color: '#fff' }}>⭐ {p.name} ({p.repoIds.length} repos)</span>
                   <button
                     onClick={() => handleDeletePreset(p.id, p.name)}
                     className="btn btn-danger"
-                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
+                    style={{ padding: '0.15rem 0.45rem', fontSize: '0.7rem' }}
                   >
-                    <Trash2 size={12} />
+                    <Trash2 size={11} />
                     <span>Delete</span>
                   </button>
                 </div>
@@ -834,85 +1317,91 @@ export const ExtensionManagerUI: React.FC = () => {
       )}
 
       {/* ========================================================================= */}
-      {/* VIEW MODE 1: HIERARCHY TREE VIEW (Repository ➔ Extension ➔ Provider)     */}
+      {/* VIEW MODE 1: HIERARCHY TREE VIEW (Primary Experience)                    */}
       {/* ========================================================================= */}
       {activeTab === 'hierarchy' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
           <div style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             background: 'var(--bg-card)',
-            padding: '0.85rem 1.25rem',
+            padding: '0.65rem 1rem',
             borderRadius: 'var(--radius-md)',
             border: '1px solid var(--border-color)',
             flexWrap: 'wrap',
-            gap: '0.75rem'
+            gap: '0.5rem'
           }}>
             <div>
-              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff' }}>
-                Provider Lineage Tree ({providerTree.length} Active Repositories)
+              <h3 style={{ fontSize: '0.92rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                Repository ➔ Extension ➔ Provider Ancestry Tree ({filteredProviderTree.length} Active Repositories)
               </h3>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Inspect exactly which scraper provider originated from which .cs3 extension archive
+              <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', margin: 0 }}>
+                Full scale counts and tri-state switches at every level
               </p>
             </div>
 
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', gap: '0.4rem' }}>
               <button
                 onClick={() => {
                   const ids = new Set<string>();
-                  providerTree.forEach((repo, rIdx) => {
+                  filteredProviderTree.forEach((repo, rIdx) => {
                     ids.add(`repo_${rIdx}`);
                     repo.extensions.forEach((ext) => ids.add(`ext_${ext.internalName}`));
                   });
                   setExpandedNodes(ids);
                 }}
                 className="btn btn-secondary"
-                style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
+                style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
               >
-                Expand All
+                Expand All Nodes
               </button>
               <button
                 onClick={() => setExpandedNodes(new Set())}
                 className="btn btn-secondary"
-                style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
+                style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
               >
-                Collapse All
+                Collapse All Nodes
               </button>
             </div>
           </div>
 
-          {providerTree.length === 0 ? (
+          {filteredProviderTree.length === 0 ? (
             <div style={{
               background: 'var(--bg-card)',
-              padding: '2.5rem',
+              padding: '2rem',
               textAlign: 'center',
               borderRadius: 'var(--radius-md)',
               border: '1px solid var(--border-color)',
               color: 'var(--text-muted)'
             }}>
-              <Layers size={36} style={{ color: 'var(--accent-light)', marginBottom: '0.75rem' }} />
-              <p style={{ fontSize: '0.95rem', fontWeight: 600, color: '#fff' }}>No Active Repositories Loaded Yet</p>
-              <p style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
-                Activate a repository from the <strong>Repositories Catalogue</strong> tab to see its extension & provider tree.
+              <Layers size={32} style={{ color: 'var(--accent-light)', marginBottom: '0.5rem' }} />
+              <p style={{ fontSize: '0.9rem', fontWeight: 600, color: '#fff', margin: 0 }}>No Repositories Matching Filter</p>
+              <p style={{ fontSize: '0.76rem', marginTop: '0.25rem' }}>
+                Activate repositories from the <strong>Repositories</strong> tab or adjust your search filters above.
               </p>
-              <button
-                onClick={() => setActiveTab('catalog')}
-                className="btn btn-primary"
-                style={{ marginTop: '1rem', fontSize: '0.82rem' }}
-              >
-                Browse Repositories Catalogue
-              </button>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {providerTree.map((repoTree, repoIdx) => {
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {filteredProviderTree.slice(0, visibleLimit).map((repoTree, repoIdx) => {
                 const repoNodeId = `repo_${repoIdx}`;
                 const isRepoExpanded = expandedNodes.has(repoNodeId);
+                const repoDetailId = `detail_repo_${repoTree.url}`;
+                const isRepoDetailOpen = expandedDetailIds.has(repoDetailId);
 
                 const allRepoProviders = repoTree.extensions.flatMap((e) => e.providers.map((p) => p.name));
-                const allRepoEnabled = allRepoProviders.every((p) => !disabledProviders.has(p));
+                const repoEnabledCount = allRepoProviders.filter((p) => !disabledProviders.has(p)).length;
+                const repoDisabledCount = allRepoProviders.length - repoEnabledCount;
+
+                // Repository Level Tri-State Checkbox
+                let repoTriState: 'checked' | 'unchecked' | 'indeterminate' = 'unchecked';
+                if (allRepoProviders.length > 0) {
+                  if (repoEnabledCount === allRepoProviders.length) repoTriState = 'checked';
+                  else if (repoEnabledCount > 0) repoTriState = 'indeterminate';
+                }
+
+                const progressInfo = taskProgressMap[repoTree.url];
+                const officialRepo = safeOfficialRepos.find((r) => r.rawRepoUrl === repoTree.url || r.url === repoTree.url);
 
                 return (
                   <div
@@ -921,81 +1410,146 @@ export const ExtensionManagerUI: React.FC = () => {
                       background: 'var(--bg-card)',
                       borderRadius: 'var(--radius-md)',
                       border: '1px solid var(--border-color)',
-                      overflow: 'hidden'
+                      overflow: 'hidden',
+                      position: 'relative'
                     }}
                   >
-                    {/* Repository Level Node Row */}
+                    {/* In-Card Progress Bar */}
+                    {progressInfo && (
+                      <div style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        height: '4px',
+                        background: 'rgba(59, 130, 246, 0.2)',
+                        overflow: 'hidden'
+                      }}>
+                        <div style={{
+                          height: '100%',
+                          width: `${progressInfo.percent}%`,
+                          background: 'var(--accent-primary)',
+                          transition: 'width 0.2s ease'
+                        }} />
+                      </div>
+                    )}
+
+                    {/* Repository Level Row */}
                     <div style={{
-                      padding: '0.85rem 1.25rem',
+                      padding: '0.75rem 1rem',
                       background: 'rgba(255, 255, 255, 0.02)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
-                      borderBottom: isRepoExpanded ? '1px solid var(--border-color)' : 'none'
+                      borderBottom: (isRepoExpanded || isRepoDetailOpen) ? '1px solid var(--border-color)' : 'none'
                     }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flex: 1 }}>
                         <button
                           onClick={() => toggleExpandNode(repoNodeId)}
                           style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
                         >
-                          {isRepoExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                          {isRepoExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                         </button>
 
-                        <Globe size={18} style={{ color: 'var(--accent-light)' }} />
+                        <TriStateCheckbox
+                          state={repoTriState}
+                          onClick={() => handleToggleProvidersBulk(allRepoProviders, repoTriState !== 'checked')}
+                          title="Enable/Disable all providers in this repository"
+                        />
+
+                        <Globe size={16} style={{ color: 'var(--accent-light)' }} />
                         <div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff' }}>{repoTree.name}</h4>
-                            <span className="poster-badge" style={{ position: 'static' }}>
-                              {repoTree.extensions.length} extension(s) • {allRepoProviders.length} provider(s)
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                            <h4 style={{ fontSize: '0.9rem', fontWeight: 700, color: '#fff', margin: 0 }}>{repoTree.name}</h4>
+                            <span className="poster-badge" style={{ position: 'static', fontSize: '0.65rem' }}>
+                              {repoTree.extensions.length} Extensions • {allRepoProviders.length} Providers ({repoEnabledCount} Enabled | {repoDisabledCount} Disabled)
                             </span>
                           </div>
-                          <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)', wordBreak: 'break-all' }}>{repoTree.url}</span>
+                          {progressInfo ? (
+                            <span style={{ fontSize: '0.7rem', color: 'var(--accent-light)', fontWeight: 600 }}>
+                              {progressInfo.step} ({progressInfo.percent}%)
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: '0.7rem', color: 'var(--text-subtle)', wordBreak: 'break-all' }}>{repoTree.url}</span>
+                          )}
                         </div>
                       </div>
 
                       {/* Repository Actions */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        {allRepoProviders.length > 0 && (
-                          <button
-                            onClick={() => handleToggleProvidersBulk(allRepoProviders, !allRepoEnabled)}
-                            className="btn btn-secondary"
-                            style={{ fontSize: '0.72rem', padding: '0.25rem 0.55rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
-                            title={allRepoEnabled ? 'Disable all providers in this repo' : 'Enable all providers in this repo'}
-                          >
-                            {allRepoEnabled ? <ToggleRight size={14} style={{ color: 'var(--status-success)' }} /> : <ToggleLeft size={14} />}
-                            <span>{allRepoEnabled ? 'All ON' : 'Toggle ON'}</span>
-                          </button>
-                        )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        {/* NO MODALS! Toggle inline detail tray */}
+                        <button
+                          onClick={() => toggleDetail(repoDetailId)}
+                          className={`btn ${isRepoDetailOpen ? 'btn-primary' : 'btn-secondary'}`}
+                          style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                          title="Toggle inline metadata info"
+                        >
+                          <Eye size={13} />
+                          <span>{isRepoDetailOpen ? 'Hide Info' : 'View Info'}</span>
+                        </button>
 
                         <button
                           onClick={() => handleFetchRepo(repoTree.url, repoTree.name)}
                           className="btn btn-secondary"
-                          style={{ fontSize: '0.72rem', padding: '0.25rem 0.55rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                          style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
                         >
-                          <RefreshCw size={13} />
+                          <RefreshCw size={12} />
                           <span>Sync</span>
                         </button>
 
                         <button
                           onClick={() => handleRemoveRepo(repoTree.url, repoTree.name)}
                           className="btn btn-secondary"
-                          style={{ fontSize: '0.72rem', padding: '0.25rem 0.55rem', color: '#ff6b6b', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                          style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', color: '#ff6b6b', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
                         >
-                          <Trash2 size={13} />
+                          <Trash2 size={12} />
                           <span>Deactivate</span>
                         </button>
                       </div>
                     </div>
 
-                    {/* Extension Archive Level Children */}
+                    {/* Inline Metadata Strip for Repository */}
+                    {isRepoDetailOpen && (
+                      <div style={{ padding: '0 1rem 0.6rem 1rem' }}>
+                        <InlineDetailStrip
+                          details={{
+                            type: 'repo',
+                            title: repoTree.name,
+                            url: repoTree.url,
+                            category: officialRepo?.category,
+                            language: officialRepo?.language,
+                            description: officialRepo?.description,
+                            extensionsCount: repoTree.extensions.length,
+                            providersCount: allRepoProviders.length,
+                            enabledProvidersCount: repoEnabledCount,
+                            disabledProvidersCount: repoDisabledCount,
+                            verified: true
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {/* Extension Level Children */}
                     {isRepoExpanded && (
-                      <div style={{ padding: '0.75rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', backgroundColor: 'rgba(0, 0, 0, 0.15)' }}>
+                      <div style={{ padding: '0.6rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.6rem', backgroundColor: 'rgba(0, 0, 0, 0.15)' }}>
                         {repoTree.extensions.map((ext) => {
                           const extNodeId = `ext_${ext.internalName}`;
                           const isExtExpanded = expandedNodes.has(extNodeId);
+                          const extDetailId = `detail_ext_${ext.internalName}`;
+                          const isExtDetailOpen = expandedDetailIds.has(extDetailId);
+
                           const extProviders = ext.providers.map((p) => p.name);
-                          const extAllEnabled = extProviders.length > 0 && extProviders.every((p) => !disabledProviders.has(p));
+                          const extEnabledCount = extProviders.filter((p) => !disabledProviders.has(p)).length;
+                          const extDisabledCount = extProviders.length - extEnabledCount;
+
+                          let extTriState: 'checked' | 'unchecked' | 'indeterminate' = 'unchecked';
+                          if (extProviders.length > 0) {
+                            if (extEnabledCount === extProviders.length) extTriState = 'checked';
+                            else if (extEnabledCount > 0) extTriState = 'indeterminate';
+                          }
+
                           const pluginMeta = safePlugins.find((p) => p.internalName === ext.internalName);
+                          const extProgress = taskProgressMap[ext.internalName];
 
                           return (
                             <div
@@ -1004,138 +1558,203 @@ export const ExtensionManagerUI: React.FC = () => {
                                 background: 'var(--bg-card)',
                                 border: '1px solid var(--border-color)',
                                 borderRadius: 'var(--radius-sm)',
-                                overflow: 'hidden'
+                                overflow: 'hidden',
+                                position: 'relative'
                               }}
                             >
-                              {/* Extension Row */}
+                              {/* Extension Progress Bar */}
+                              {extProgress && (
+                                <div style={{
+                                  position: 'absolute',
+                                  top: 0,
+                                  left: 0,
+                                  right: 0,
+                                  height: '3px',
+                                  background: 'rgba(59, 130, 246, 0.2)',
+                                  overflow: 'hidden'
+                                }}>
+                                  <div style={{
+                                    height: '100%',
+                                    width: `${extProgress.percent}%`,
+                                    background: 'var(--accent-primary)',
+                                    transition: 'width 0.2s ease'
+                                  }} />
+                                </div>
+                              )}
+
                               <div style={{
-                                padding: '0.65rem 1rem',
+                                padding: '0.55rem 0.85rem',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'space-between',
                                 background: 'rgba(255, 255, 255, 0.015)'
                               }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flex: 1 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flex: 1 }}>
                                   <button
                                     onClick={() => toggleExpandNode(extNodeId)}
                                     style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
                                   >
-                                    {isExtExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                    {isExtExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                                   </button>
 
-                                  <div
-                                    onClick={() => toggleSelectPlugin(ext.internalName)}
-                                    style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-                                  >
-                                    {selectedPluginNames.has(ext.internalName) ? (
-                                      <CheckSquare size={16} style={{ color: 'var(--accent-light)' }} />
-                                    ) : (
-                                      <Square size={16} style={{ color: 'var(--text-subtle)' }} />
-                                    )}
-                                  </div>
+                                  <TriStateCheckbox
+                                    state={extTriState}
+                                    onClick={() => handleToggleProvidersBulk(extProviders, extTriState !== 'checked')}
+                                    title="Enable/Disable all providers in this extension"
+                                  />
 
-                                  <Puzzle size={16} style={{ color: 'var(--status-success)' }} />
+                                  <Puzzle size={15} style={{ color: 'var(--status-success)' }} />
 
                                   <div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                      <h5 style={{ fontSize: '0.88rem', fontWeight: 600, color: '#fff' }}>{ext.name}</h5>
-                                      <span style={{ fontSize: '0.7rem', color: 'var(--text-subtle)' }}>({ext.internalName})</span>
-                                      {ext.language && <span className="poster-badge" style={{ position: 'static', fontSize: '0.65rem' }}>{ext.language}</span>}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                      <h5 style={{ fontSize: '0.85rem', fontWeight: 600, color: '#fff', margin: 0 }}>{ext.name}</h5>
+                                      <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>({ext.internalName})</span>
+                                      <span className="poster-badge" style={{ position: 'static', fontSize: '0.62rem' }}>
+                                        {ext.providers.length} Providers ({extEnabledCount} Enabled | {extDisabledCount} Disabled)
+                                      </span>
                                     </div>
+                                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                                      Repository: <strong>{repoTree.name}</strong>
+                                    </span>
                                   </div>
                                 </div>
 
                                 {/* Extension Actions */}
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                  {extProviders.length > 0 && (
-                                    <button
-                                      onClick={() => handleToggleProvidersBulk(extProviders, !extAllEnabled)}
-                                      className="btn btn-secondary"
-                                      style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
-                                    >
-                                      {extAllEnabled ? <ToggleRight size={13} style={{ color: 'var(--status-success)' }} /> : <ToggleLeft size={13} />}
-                                      <span>{extProviders.length} Providers</span>
-                                    </button>
-                                  )}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                  {/* NO MODALS! Toggle inline detail strip */}
+                                  <button
+                                    onClick={() => toggleDetail(extDetailId)}
+                                    className={`btn ${isExtDetailOpen ? 'btn-primary' : 'btn-secondary'}`}
+                                    style={{ padding: '0.18rem 0.4rem', fontSize: '0.68rem', display: 'flex', alignItems: 'center', gap: '0.2rem' }}
+                                    title="Toggle inline metadata info"
+                                  >
+                                    <Eye size={12} />
+                                    <span>{isExtDetailOpen ? 'Hide Info' : 'View Info'}</span>
+                                  </button>
 
                                   {pluginMeta && (
                                     <>
                                       <button
                                         onClick={() => handleUpdate(pluginMeta)}
                                         className="btn btn-secondary"
-                                        style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }}
+                                        style={{ fontSize: '0.68rem', padding: '0.18rem 0.4rem' }}
                                         title="Update extension"
                                       >
-                                        <RefreshCw size={12} />
+                                        <RefreshCw size={11} />
                                       </button>
 
                                       <button
                                         onClick={() => handleUninstall(pluginMeta)}
                                         className="btn btn-secondary"
-                                        style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem', color: '#ff6b6b' }}
+                                        style={{ fontSize: '0.68rem', padding: '0.18rem 0.4rem', color: '#ff6b6b' }}
                                         title="Uninstall extension"
                                       >
-                                        <Trash2 size={12} />
+                                        <Trash2 size={11} />
                                       </button>
                                     </>
                                   )}
                                 </div>
                               </div>
 
-                              {/* Individual Registered Scraper Providers Sub-Level */}
+                              {/* Inline Detail Strip for Extension */}
+                              {isExtDetailOpen && (
+                                <div style={{ padding: '0 0.85rem 0.5rem 0.85rem' }}>
+                                  <InlineDetailStrip
+                                    details={{
+                                      type: 'extension',
+                                      title: ext.name,
+                                      internalName: ext.internalName,
+                                      version: pluginMeta?.version,
+                                      authors: pluginMeta?.authors,
+                                      description: pluginMeta?.description,
+                                      language: ext.language,
+                                      tvTypes: pluginMeta?.tvTypes?.map(String),
+                                      fileSize: pluginMeta?.fileSize,
+                                      parentRepo: repoTree.name,
+                                      providersCount: ext.providers.length,
+                                      enabledProvidersCount: extEnabledCount,
+                                      disabledProvidersCount: extDisabledCount
+                                    }}
+                                  />
+                                </div>
+                              )}
+
+                              {/* Individual Scraper Providers Sub-Level */}
                               {isExtExpanded && (
-                                <div style={{ padding: '0.5rem 1rem 0.75rem 2.5rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.5rem', background: 'rgba(0,0,0,0.2)' }}>
+                                <div style={{ padding: '0.4rem 0.85rem 0.6rem 2.2rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.4rem', background: 'rgba(0,0,0,0.2)' }}>
                                   {ext.providers.length === 0 ? (
-                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No providers registered yet (archive loading...)</p>
+                                    <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>No providers registered yet (archive loading...)</p>
                                   ) : (
                                     ext.providers.map((p) => {
                                       const isDisabled = disabledProviders.has(p.name);
                                       const isProvSelected = selectedProviderNames.has(p.name);
+                                      const provDetailId = `detail_prov_${ext.internalName}_${p.name}`;
+                                      const isProvDetailOpen = expandedDetailIds.has(provDetailId);
 
                                       return (
                                         <div
                                           key={p.name}
                                           style={{
                                             display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'space-between',
-                                            padding: '0.4rem 0.6rem',
+                                            flexDirection: 'column',
+                                            padding: '0.35rem 0.55rem',
                                             borderRadius: 'var(--radius-sm)',
                                             background: 'var(--bg-input)',
                                             border: '1px solid',
                                             borderColor: isDisabled ? 'var(--border-color)' : 'rgba(16, 185, 129, 0.3)'
                                           }}
                                         >
-                                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                            <div
-                                              onClick={() => {
-                                                setSelectedProviderNames((prev) => {
-                                                  const next = new Set(prev);
-                                                  if (next.has(p.name)) next.delete(p.name);
-                                                  else next.add(p.name);
-                                                  return next;
-                                                });
-                                              }}
-                                              style={{ cursor: 'pointer' }}
-                                            >
-                                              {isProvSelected ? <CheckSquare size={14} style={{ color: 'var(--accent-light)' }} /> : <Square size={14} style={{ color: 'var(--text-subtle)' }} />}
+                                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                              <div
+                                                onClick={() => toggleSelectProvider(p.name)}
+                                                style={{ cursor: 'pointer' }}
+                                              >
+                                                {isProvSelected ? <CheckSquare size={13} style={{ color: 'var(--accent-light)' }} /> : <Square size={13} style={{ color: 'var(--text-subtle)' }} />}
+                                              </div>
+
+                                              <span style={{ fontSize: '0.78rem', fontWeight: 600, color: isDisabled ? 'var(--text-muted)' : '#fff' }}>
+                                                {p.name}
+                                              </span>
                                             </div>
-                                            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: isDisabled ? 'var(--text-muted)' : '#fff' }}>
-                                              {p.name}
-                                            </span>
+
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                              <button
+                                                onClick={() => toggleDetail(provDetailId)}
+                                                style={{ background: 'transparent', border: 'none', color: isProvDetailOpen ? 'var(--accent-light)' : 'var(--text-subtle)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                                                title="Toggle inline details"
+                                              >
+                                                <Eye size={12} />
+                                              </button>
+
+                                              <button
+                                                onClick={() => handleToggleProvider(p.name, isDisabled)}
+                                                style={{ background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                                                title={isDisabled ? 'Enable Provider' : 'Disable Provider'}
+                                              >
+                                                {isDisabled ? (
+                                                  <ToggleLeft size={16} style={{ color: 'var(--text-subtle)' }} />
+                                                ) : (
+                                                  <ToggleRight size={16} style={{ color: 'var(--status-success)' }} />
+                                                )}
+                                              </button>
+                                            </div>
                                           </div>
 
-                                          <button
-                                            onClick={() => handleToggleProvider(p.name, isDisabled)}
-                                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-                                            title={isDisabled ? 'Enable Provider' : 'Disable Provider'}
-                                          >
-                                            {isDisabled ? (
-                                              <ToggleLeft size={18} style={{ color: 'var(--text-subtle)' }} />
-                                            ) : (
-                                              <ToggleRight size={18} style={{ color: 'var(--status-success)' }} />
-                                            )}
-                                          </button>
+                                          {/* Inline Detail Strip for Provider */}
+                                          {isProvDetailOpen && (
+                                            <InlineDetailStrip
+                                              details={{
+                                                type: 'provider',
+                                                title: p.name,
+                                                language: p.lang,
+                                                tvTypes: p.supportedTypes,
+                                                parentExtension: ext.name,
+                                                parentRepo: repoTree.name,
+                                                status: isDisabled ? 'Disabled' : 'Enabled for Search'
+                                              }}
+                                            />
+                                          )}
                                         </div>
                                       );
                                     })
@@ -1150,6 +1769,16 @@ export const ExtensionManagerUI: React.FC = () => {
                   </div>
                 );
               })}
+
+              {filteredProviderTree.length > visibleLimit && (
+                <button
+                  onClick={() => setVisibleLimit((prev) => prev + 50)}
+                  className="btn btn-secondary"
+                  style={{ alignSelf: 'center', marginTop: '0.5rem', fontSize: '0.76rem' }}
+                >
+                  Load More Items ({filteredProviderTree.length - visibleLimit} remaining)
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -1159,107 +1788,51 @@ export const ExtensionManagerUI: React.FC = () => {
       {/* VIEW MODE 2: REPOSITORIES CATALOGUE GRID                                 */}
       {/* ========================================================================= */}
       {activeTab === 'catalog' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {/* Category Filter Chips */}
-          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-            {['All', 'Official', 'Regional', 'Anime', 'Movies & Shows', 'Community', 'Compatibility'].map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setActiveCategory(cat)}
-                className={`chip ${activeCategory === cat ? 'active' : ''}`}
-                style={{ fontSize: '0.72rem', padding: '0.25rem 0.65rem' }}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
-
-          {/* Repository Controls Bar */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+          {/* Controls Bar */}
           <div style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             flexWrap: 'wrap',
-            gap: '0.75rem',
+            gap: '0.6rem',
             background: 'var(--bg-card)',
-            padding: '0.75rem 1rem',
+            padding: '0.65rem 0.85rem',
             borderRadius: 'var(--radius-md)',
             border: '1px solid var(--border-color)'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.78rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', fontSize: '0.76rem' }}>
               <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Select Repos:</span>
-              <button onClick={() => selectAllRepos('all')} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem' }}>
+              <button onClick={() => selectAllRepos('all')} className="btn btn-secondary" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}>
                 Select All
               </button>
-              <button onClick={() => selectAllRepos('active')} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem' }}>
+              <button onClick={() => selectAllRepos('active')} className="btn btn-secondary" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}>
                 Active Only
               </button>
-              <button onClick={() => selectAllRepos('inactive')} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem' }}>
+              <button onClick={() => selectAllRepos('inactive')} className="btn btn-secondary" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}>
                 Inactive Only
               </button>
               {selectedRepoIds.size > 0 && (
-                <button onClick={() => selectAllRepos('none')} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem' }}>
+                <button onClick={() => selectAllRepos('none')} className="btn btn-secondary" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}>
                   Clear
-                </button>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-              {selectedRepoIds.size > 0 ? (
-                <>
-                  <button
-                    onClick={handleBulkAddRepos}
-                    disabled={Boolean(bulkBusy)}
-                    className="btn btn-primary"
-                    style={{ fontSize: '0.78rem', padding: '0.4rem 0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                  >
-                    <Plus size={14} />
-                    <span>Activate Selected ({selectedRepoIds.size})</span>
-                  </button>
-
-                  <button
-                    onClick={handleBulkSyncRepos}
-                    disabled={Boolean(bulkBusy)}
-                    className="btn btn-secondary"
-                    style={{ fontSize: '0.78rem', padding: '0.4rem 0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                  >
-                    <RefreshCw size={14} />
-                    <span>Sync Selected ({selectedRepoIds.size})</span>
-                  </button>
-
-                  <button
-                    onClick={handleBulkDeactivateRepos}
-                    disabled={Boolean(bulkBusy)}
-                    className="btn btn-danger"
-                    style={{ fontSize: '0.78rem', padding: '0.4rem 0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                  >
-                    <Trash2 size={14} />
-                    <span>Deactivate Selected ({selectedRepoIds.size})</span>
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={handleBulkSyncRepos}
-                  disabled={Boolean(bulkBusy)}
-                  className="btn btn-secondary"
-                  style={{ fontSize: '0.78rem', padding: '0.4rem 0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                >
-                  <RefreshCw size={14} />
-                  <span>Sync All Active Repos</span>
                 </button>
               )}
             </div>
           </div>
 
-          {/* Repository Cards Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
-            {filteredOfficialRepos.map((repo) => {
-              const isAdded =
-                repo &&
-                (installedRepoUrls.has(repo.rawRepoUrl) || installedRepoUrls.has(repo.url));
+          {/* Cards Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '0.85rem' }}>
+            {filteredOfficialRepos.slice(0, visibleLimit).map((repo) => {
+              const isAdded = repo && (installedRepoUrls.has(repo.rawRepoUrl) || installedRepoUrls.has(repo.url));
               const isSelected = selectedRepoIds.has(repo.id);
-              const isConfirmingRepo =
-                repo && (confirmRemoveRepo === repo.rawRepoUrl || confirmRemoveRepo === repo.url);
+              const isConfirmingRepo = repo && (confirmRemoveRepo === repo.rawRepoUrl || confirmRemoveRepo === repo.url);
+              const repoProgress = taskProgressMap[repo.rawRepoUrl] || taskProgressMap[repo.url];
+
+              const repoTreeInfo = providerTree.find((t) => t.url === repo.rawRepoUrl || t.url === repo.url);
+              const extCount = repoTreeInfo ? repoTreeInfo.extensions.length : 0;
+              const provCount = repoTreeInfo ? repoTreeInfo.extensions.reduce((acc, e) => acc + e.providers.length, 0) : 0;
+              const repoDetailId = `detail_cat_${repo.id}`;
+              const isDetailOpen = expandedDetailIds.has(repoDetailId);
 
               return (
                 <div
@@ -1273,76 +1846,118 @@ export const ExtensionManagerUI: React.FC = () => {
                       : isAdded
                       ? 'rgba(59, 130, 246, 0.4)'
                       : 'var(--border-color)',
-                    padding: '1.25rem',
+                    padding: '1rem',
                     display: 'flex',
                     flexDirection: 'column',
                     justifyContent: 'space-between',
-                    gap: '1rem',
+                    gap: '0.85rem',
                     position: 'relative'
                   }}
                 >
+                  {repoProgress && (
+                    <div style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: '3px',
+                      background: 'rgba(59, 130, 246, 0.2)',
+                      overflow: 'hidden'
+                    }}>
+                      <div style={{
+                        height: '100%',
+                        width: `${repoProgress.percent}%`,
+                        background: 'var(--accent-primary)',
+                        transition: 'width 0.2s ease'
+                      }} />
+                    </div>
+                  )}
+
                   <div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
                       <div
                         onClick={() => toggleSelectRepo(repo.id)}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}
                       >
                         {isSelected ? (
-                          <CheckSquare size={18} style={{ color: 'var(--accent-light)' }} />
+                          <CheckSquare size={16} style={{ color: 'var(--accent-light)' }} />
                         ) : (
-                          <Square size={18} style={{ color: 'var(--text-subtle)' }} />
+                          <Square size={16} style={{ color: 'var(--text-subtle)' }} />
                         )}
-                        <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff' }}>{repo.name}</h4>
+                        <h4 style={{ fontSize: '0.9rem', fontWeight: 700, color: '#fff', margin: 0 }}>{repo.name}</h4>
                       </div>
-                      <span className="poster-badge" style={{ position: 'static' }}>{repo.category}</span>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                        <button
+                          onClick={() => toggleDetail(repoDetailId)}
+                          className={`btn ${isDetailOpen ? 'btn-primary' : 'btn-secondary'}`}
+                          style={{ padding: '0.15rem 0.4rem', fontSize: '0.68rem', display: 'flex', alignItems: 'center', gap: '0.2rem' }}
+                          title="Toggle inline details"
+                        >
+                          <Eye size={12} />
+                          <span>{isDetailOpen ? 'Hide' : 'View'}</span>
+                        </button>
+                        <span className="poster-badge" style={{ position: 'static', fontSize: '0.65rem' }}>{repo.category}</span>
+                      </div>
                     </div>
 
-                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                    <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.4, margin: 0 }}>
                       {repo.description}
                     </p>
 
-                    <div style={{ display: 'flex', gap: '1rem', marginTop: '0.75rem', fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
-                      <span>Language: <strong>{repo.language}</strong></span>
-                      <span title={repo.rawRepoUrl}>
-                        {repo.verified ? (
-                          <strong style={{ color: 'var(--status-success)' }}>Reachable</strong>
-                        ) : (
-                          <strong style={{ color: 'var(--status-warning, #d19a2f)' }}>Unverified link</strong>
-                        )}
-                      </span>
-                      {isAdded && (
-                        <span style={{ color: 'var(--status-success)', fontWeight: 600 }}>Active</span>
-                      )}
+                    {/* Inline Detail Strip */}
+                    {isDetailOpen && (
+                      <InlineDetailStrip
+                        details={{
+                          type: 'repo',
+                          title: repo.name,
+                          category: repo.category,
+                          language: repo.language,
+                          description: repo.description,
+                          rawRepoUrl: repo.rawRepoUrl,
+                          url: repo.url,
+                          extensionsCount: extCount,
+                          providersCount: provCount,
+                          verified: repo.verified
+                        }}
+                      />
+                    )}
+
+                    <div style={{ display: 'flex', gap: '0.85rem', marginTop: '0.65rem', fontSize: '0.7rem', color: 'var(--text-subtle)', flexWrap: 'wrap' }}>
+                      <span>Extensions: <strong>{extCount}</strong></span>
+                      <span>Providers: <strong>{provCount}</strong></span>
+                      <span>Lang: <strong>{repo.language}</strong></span>
+                      <span>{repo.verified ? <strong style={{ color: 'var(--status-success)' }}>Reachable</strong> : <strong style={{ color: '#f59e0b' }}>Unverified</strong>}</span>
                     </div>
                   </div>
 
                   {isConfirmingRepo ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%' }}>
-                      <span style={{ fontSize: '0.75rem', color: '#ff6b6b', flex: 1, fontWeight: 600 }}>Deactivate repo?</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', width: '100%' }}>
+                      <span style={{ fontSize: '0.72rem', color: '#ff6b6b', flex: 1, fontWeight: 600 }}>Deactivate repo?</span>
                       <button
                         onClick={() => handleRemoveRepo(repo.rawRepoUrl, repo.name)}
                         className="btn btn-danger"
-                        style={{ fontSize: '0.75rem', padding: '0.35rem 0.65rem', cursor: 'pointer' }}
+                        style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
                       >
-                        <Trash2 size={13} />
+                        <Trash2 size={12} />
                         <span>Deactivate</span>
                       </button>
                       <button
                         onClick={() => setConfirmRemoveRepo(null)}
                         className="btn btn-secondary"
-                        style={{ fontSize: '0.75rem', padding: '0.35rem 0.65rem', cursor: 'pointer' }}
+                        style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
                       >
                         <span>Cancel</span>
                       </button>
                     </div>
                   ) : isAdded ? (
-                    <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+                    <div style={{ display: 'flex', gap: '0.4rem', width: '100%' }}>
                       <button
                         onClick={() => handleFetchRepo(repo.rawRepoUrl, repo.name)}
                         className="btn btn-secondary"
-                        style={{ flex: 1, fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}
+                        style={{ flex: 1, fontSize: '0.74rem', padding: '0.3rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}
                       >
-                        <RefreshCw size={14} />
+                        <RefreshCw size={13} />
                         <span>Sync</span>
                       </button>
                       <button
@@ -1350,17 +1965,17 @@ export const ExtensionManagerUI: React.FC = () => {
                         className="btn btn-secondary"
                         style={{
                           flex: 1,
-                          fontSize: '0.78rem',
-                          cursor: 'pointer',
+                          fontSize: '0.74rem',
+                          padding: '0.3rem',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          gap: '0.4rem',
+                          gap: '0.3rem',
                           color: '#ff6b6b',
                           borderColor: 'rgba(255,107,107,0.3)'
                         }}
                       >
-                        <Trash2 size={14} />
+                        <Trash2 size={13} />
                         <span>Deactivate</span>
                       </button>
                     </div>
@@ -1368,9 +1983,9 @@ export const ExtensionManagerUI: React.FC = () => {
                     <button
                       onClick={() => handleFetchRepo(repo.rawRepoUrl, repo.name)}
                       className="btn btn-primary"
-                      style={{ fontSize: '0.8rem', width: '100%', cursor: 'pointer' }}
+                      style={{ fontSize: '0.76rem', width: '100%', padding: '0.35rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}
                     >
-                      <Plus size={15} />
+                      <Plus size={14} />
                       <span>Add Repository</span>
                     </button>
                   )}
@@ -1382,25 +1997,25 @@ export const ExtensionManagerUI: React.FC = () => {
       )}
 
       {/* ========================================================================= */}
-      {/* VIEW MODE 3: ALL EXTENSIONS GRID                                          */}
+      {/* VIEW MODE 3: EXTENSIONS VIEW                                              */}
       {/* ========================================================================= */}
       {activeTab === 'extensions' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {/* Extension Quick Selection Controls */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.78rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+          {/* Controls Bar */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.6rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', fontSize: '0.76rem' }}>
               <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Select Extensions:</span>
-              <button onClick={() => selectAllPlugins('all')} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem' }}>
+              <button onClick={() => selectAllPlugins('all')} className="btn btn-secondary" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}>
                 Select All
               </button>
-              <button onClick={() => selectAllPlugins('installed')} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem' }}>
+              <button onClick={() => selectAllPlugins('installed')} className="btn btn-secondary" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}>
                 Installed Only
               </button>
-              <button onClick={() => selectAllPlugins('uninstalled')} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem' }}>
+              <button onClick={() => selectAllPlugins('uninstalled')} className="btn btn-secondary" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}>
                 Uninstalled Only
               </button>
               {selectedPluginNames.size > 0 && (
-                <button onClick={() => selectAllPlugins('none')} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem' }}>
+                <button onClick={() => selectAllPlugins('none')} className="btn btn-secondary" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}>
                   Clear
                 </button>
               )}
@@ -1408,12 +2023,22 @@ export const ExtensionManagerUI: React.FC = () => {
           </div>
 
           {/* Extension Cards Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
-            {filteredPlugins.map((plugin, idx) => {
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.85rem' }}>
+            {filteredPlugins.slice(0, visibleLimit).map((plugin, idx) => {
               const isInstalled = plugin.internalName ? installedPluginNames.has(plugin.internalName) : false;
               const isSelected = plugin.internalName ? selectedPluginNames.has(plugin.internalName) : false;
-              const isBusy = busy === plugin.internalName;
               const isConfirming = confirmRemove === plugin.internalName;
+              const extProgress = plugin.internalName ? taskProgressMap[plugin.internalName] : undefined;
+              const extDetailId = `detail_extview_${plugin.internalName}`;
+              const isDetailOpen = expandedDetailIds.has(extDetailId);
+
+              // Find parent repository
+              let parentRepoName = 'Community Repository';
+              providerTree.forEach((r) => {
+                if (r.extensions.some((e) => e.internalName === plugin.internalName)) {
+                  parentRepoName = r.name;
+                }
+              });
 
               return (
                 <div
@@ -1427,29 +2052,48 @@ export const ExtensionManagerUI: React.FC = () => {
                       : isInstalled
                       ? 'rgba(16, 185, 129, 0.4)'
                       : 'var(--border-color)',
-                    padding: '1.25rem',
+                    padding: '1rem',
                     display: 'flex',
                     flexDirection: 'column',
                     justifyContent: 'space-between',
-                    gap: '1rem',
+                    gap: '0.85rem',
                     position: 'relative'
                   }}
                 >
+                  {extProgress && (
+                    <div style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: '3px',
+                      background: 'rgba(59, 130, 246, 0.2)',
+                      overflow: 'hidden'
+                    }}>
+                      <div style={{
+                        height: '100%',
+                        width: `${extProgress.percent}%`,
+                        background: 'var(--accent-primary)',
+                        transition: 'width 0.2s ease'
+                      }} />
+                    </div>
+                  )}
+
                   <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginBottom: '0.4rem' }}>
                       <div
                         onClick={() => plugin.internalName && toggleSelectPlugin(plugin.internalName)}
                         style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}
                       >
                         {isSelected ? (
-                          <CheckSquare size={18} style={{ color: 'var(--accent-light)' }} />
+                          <CheckSquare size={16} style={{ color: 'var(--accent-light)' }} />
                         ) : (
-                          <Square size={18} style={{ color: 'var(--text-subtle)' }} />
+                          <Square size={16} style={{ color: 'var(--text-subtle)' }} />
                         )}
                       </div>
                       <div style={{
-                        width: '32px',
-                        height: '32px',
+                        width: '30px',
+                        height: '30px',
                         borderRadius: 'var(--radius-sm)',
                         background: 'var(--bg-input)',
                         display: 'flex',
@@ -1457,75 +2101,108 @@ export const ExtensionManagerUI: React.FC = () => {
                         justifyContent: 'center',
                         color: isInstalled ? 'var(--status-success)' : 'var(--accent-light)'
                       }}>
-                        <Puzzle size={18} />
+                        <Puzzle size={16} />
                       </div>
-                      <div style={{ flex: 1 }}>
-                        <h4 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#fff' }}>{plugin.name}</h4>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>v{plugin.version} • {plugin.internalName}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <h4 style={{ fontSize: '0.88rem', fontWeight: 600, color: '#fff', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {plugin.name}
+                          </h4>
+                          <button
+                            onClick={() => toggleDetail(extDetailId)}
+                            className={`btn ${isDetailOpen ? 'btn-primary' : 'btn-secondary'}`}
+                            style={{ padding: '0.15rem 0.4rem', fontSize: '0.68rem', display: 'flex', alignItems: 'center', gap: '0.2rem' }}
+                            title="Toggle inline details"
+                          >
+                            <Eye size={12} />
+                            <span>{isDetailOpen ? 'Hide' : 'View'}</span>
+                          </button>
+                        </div>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>
+                          v{plugin.version} • Repository: <strong>{parentRepoName}</strong>
+                        </span>
                       </div>
                     </div>
 
-                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                    <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.4 }}>
                       {plugin.description || 'Community media provider extension'}
                     </p>
+
+                    {/* Inline Detail Strip */}
+                    {isDetailOpen && (
+                      <InlineDetailStrip
+                        details={{
+                          type: 'extension',
+                          title: plugin.name,
+                          internalName: plugin.internalName,
+                          version: plugin.version,
+                          authors: plugin.authors,
+                          description: plugin.description,
+                          language: plugin.language,
+                          tvTypes: plugin.tvTypes?.map(String),
+                          fileSize: plugin.fileSize,
+                          fileHash: plugin.fileHash,
+                          parentRepo: parentRepoName
+                        }}
+                      />
+                    )}
                   </div>
 
-                  {isBusy ? (
-                    <div className="ext-actions ext-actions--busy">
-                      <Loader2 size={14} className="spin" />
-                      <span>Working…</span>
-                    </div>
-                  ) : isConfirming ? (
+                  {isConfirming ? (
                     <div className="ext-actions">
-                      <span className="ext-actions__ask">Remove {plugin.name}?</span>
+                      <span className="ext-actions__ask" style={{ fontSize: '0.72rem' }}>Remove?</span>
                       <button
                         onClick={() => handleUninstall(plugin)}
                         className="btn btn-danger ext-actions__btn"
+                        style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}
                       >
-                        <Trash2 size={14} />
+                        <Trash2 size={13} />
                         <span>Remove</span>
                       </button>
                       <button
                         onClick={() => setConfirmRemove(null)}
                         className="btn btn-secondary ext-actions__btn"
+                        style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}
                       >
                         <span>Cancel</span>
                       </button>
                     </div>
                   ) : isInstalled ? (
                     <div className="ext-actions">
-                      <span className="ext-actions__state">
-                        <CheckCircle2 size={13} /> Installed
+                      <span className="ext-actions__state" style={{ fontSize: '0.72rem' }}>
+                        <CheckCircle2 size={12} /> Installed
                       </span>
                       <button
                         onClick={() => handleUpdate(plugin)}
                         className="btn btn-secondary ext-actions__btn"
-                        title="Check the repository for a newer version"
+                        style={{ padding: '0.2rem 0.4rem' }}
+                        title="Update extension"
                       >
-                        <RefreshCw size={13} />
-                        <span>Update</span>
+                        <RefreshCw size={12} />
                       </button>
                       <button
                         onClick={() => handleReinstall(plugin)}
                         className="btn btn-secondary ext-actions__btn"
-                        title="Download and translate this version again"
+                        style={{ padding: '0.2rem 0.4rem' }}
+                        title="Reinstall extension"
                       >
-                        <RotateCcw size={13} />
-                        <span>Reinstall</span>
+                        <RotateCcw size={12} />
                       </button>
                       <button
                         onClick={() => setConfirmRemove(plugin.internalName)}
                         className="btn btn-secondary ext-actions__btn ext-actions__btn--danger"
-                        title="Uninstall this extension"
+                        style={{ padding: '0.2rem 0.4rem' }}
+                        title="Uninstall"
                       >
-                        <Trash2 size={13} />
+                        <Trash2 size={12} />
                       </button>
                       <button
                         onClick={() => handleAnalyze(plugin)}
                         className="btn btn-secondary ext-actions__btn"
-                        title="Compatibility report"
+                        style={{ padding: '0.2rem 0.4rem' }}
+                        title="Analyze tier"
                       >
-                        <ShieldCheck size={13} />
+                        <ShieldCheck size={12} />
                       </button>
                     </div>
                   ) : (
@@ -1533,17 +2210,17 @@ export const ExtensionManagerUI: React.FC = () => {
                       <button
                         onClick={() => handleAnalyze(plugin)}
                         className="btn btn-secondary ext-actions__btn"
-                        style={{ flex: 1 }}
+                        style={{ flex: 1, fontSize: '0.74rem', padding: '0.25rem' }}
                       >
-                        <ShieldCheck size={14} />
+                        <ShieldCheck size={13} />
                         <span>Analyze</span>
                       </button>
                       <button
                         onClick={() => handleInstallPlugin(plugin)}
                         className="btn btn-primary ext-actions__btn"
-                        style={{ flex: 1 }}
+                        style={{ flex: 1, fontSize: '0.74rem', padding: '0.25rem' }}
                       >
-                        <Download size={14} />
+                        <Download size={13} />
                         <span>Install</span>
                       </button>
                     </div>
@@ -1555,49 +2232,184 @@ export const ExtensionManagerUI: React.FC = () => {
         </div>
       )}
 
-      {/* Active Compatibility Report Modal / Drawer */}
+      {/* ========================================================================= */}
+      {/* VIEW MODE 4: PROVIDERS FLAT LIST VIEW (Dedicated Provider Experience)    */}
+      {/* ========================================================================= */}
+      {activeTab === 'providers' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+          {/* Controls Bar */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.6rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', fontSize: '0.76rem' }}>
+              <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Select Providers ({filteredFlatProviders.length}):</span>
+              <button onClick={() => selectAllProviders('all')} className="btn btn-secondary" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}>
+                Select All
+              </button>
+              <button onClick={() => selectAllProviders('enabled')} className="btn btn-secondary" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}>
+                Enabled Only
+              </button>
+              <button onClick={() => selectAllProviders('disabled')} className="btn btn-secondary" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}>
+                Disabled Only
+              </button>
+              {selectedProviderNames.size > 0 && (
+                <button onClick={() => selectAllProviders('none')} className="btn btn-secondary" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}>
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Provider List Rows */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+            {filteredFlatProviders.slice(0, visibleLimit).map((p) => {
+              const isSelected = selectedProviderNames.has(p.providerName);
+              const provDetailId = `detail_flatprov_${p.repoName}_${p.extensionInternalName}_${p.providerName}`;
+              const isDetailOpen = expandedDetailIds.has(provDetailId);
+
+              return (
+                <div
+                  key={`${p.repoName}_${p.extensionInternalName}_${p.providerName}`}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    padding: '0.55rem 0.85rem',
+                    background: 'var(--bg-card)',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid',
+                    borderColor: isSelected
+                      ? 'var(--accent-primary)'
+                      : p.isDisabled
+                      ? 'var(--border-color)'
+                      : 'rgba(16, 185, 129, 0.3)',
+                    gap: '0.4rem'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flex: 1, minWidth: 0 }}>
+                      <div
+                        onClick={() => toggleSelectProvider(p.providerName)}
+                        style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                      >
+                        {isSelected ? <CheckSquare size={16} style={{ color: 'var(--accent-light)' }} /> : <Square size={16} style={{ color: 'var(--text-subtle)' }} />}
+                      </div>
+
+                      <SlidersHorizontal size={16} style={{ color: p.isDisabled ? 'var(--text-subtle)' : 'var(--status-success)' }} />
+
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.86rem', fontWeight: 600, color: p.isDisabled ? 'var(--text-muted)' : '#fff' }}>
+                            {p.providerName}
+                          </span>
+                          {p.lang && <span className="poster-badge" style={{ position: 'static', fontSize: '0.62rem' }}>{p.lang}</span>}
+                          {Array.isArray(p.supportedTypes) && p.supportedTypes.map((t, idx) => (
+                            <span key={idx} className="poster-badge" style={{ position: 'static', fontSize: '0.62rem', backgroundColor: 'rgba(59,130,246,0.2)', color: 'var(--accent-light)' }}>
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+
+                        {/* Full Ancestry Lineage */}
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-subtle)', marginTop: '0.15rem' }}>
+                          <strong>{p.repoName}</strong> ➔ {p.extensionName} ({p.extensionInternalName}) ➔ <span style={{ color: 'var(--accent-light)' }}>{p.providerName}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                      <button
+                        onClick={() => toggleDetail(provDetailId)}
+                        className={`btn ${isDetailOpen ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ padding: '0.2rem 0.45rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.2rem' }}
+                        title="Toggle inline details"
+                      >
+                        <Eye size={13} />
+                        <span>{isDetailOpen ? 'Hide Info' : 'View Info'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleToggleProvider(p.providerName, p.isDisabled)}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                        title={p.isDisabled ? 'Enable Provider' : 'Disable Provider'}
+                      >
+                        {p.isDisabled ? (
+                          <ToggleLeft size={20} style={{ color: 'var(--text-subtle)' }} />
+                        ) : (
+                          <ToggleRight size={20} style={{ color: 'var(--status-success)' }} />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Inline Detail Strip for Provider */}
+                  {isDetailOpen && (
+                    <InlineDetailStrip
+                      details={{
+                        type: 'provider',
+                        title: p.providerName,
+                        language: p.lang,
+                        tvTypes: p.supportedTypes,
+                        parentExtension: p.extensionName,
+                        parentRepo: p.repoName,
+                        status: p.isDisabled ? 'Disabled' : 'Enabled for Search'
+                      }}
+                    />
+                  )}
+                </div>
+              );
+            })}
+
+            {filteredFlatProviders.length > visibleLimit && (
+              <button
+                onClick={() => setVisibleLimit((prev) => prev + 50)}
+                className="btn btn-secondary"
+                style={{ alignSelf: 'center', marginTop: '0.5rem', fontSize: '0.76rem' }}
+              >
+                Load More Providers ({filteredFlatProviders.length - visibleLimit} remaining)
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Active Compatibility Analysis Modal */}
       {activeReport && (
         <div style={{
           background: 'var(--bg-card)',
           border: '1px solid var(--accent-primary)',
           borderRadius: 'var(--radius-md)',
-          padding: '1.25rem',
+          padding: '1.1rem',
           display: 'flex',
           flexDirection: 'column',
-          gap: '0.75rem',
-          marginTop: '1rem'
+          gap: '0.65rem'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-light)' }}>
-              <ShieldCheck size={20} />
-              <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>
+              <ShieldCheck size={18} />
+              <h3 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0 }}>
                 Plugin Compatibility Analysis: {activeReport.pluginName}
               </h3>
             </div>
-            <button onClick={() => setActiveReport(null)} className="btn btn-secondary btn-icon" style={{ height: '28px', width: '28px' }}>
+            <button onClick={() => setActiveReport(null)} className="btn btn-secondary" style={{ padding: '0.15rem 0.45rem', fontSize: '0.75rem' }}>
               ✕
             </button>
           </div>
 
-          <div style={{ display: 'flex', gap: '1rem', fontSize: '0.82rem', color: 'var(--text-main)' }}>
+          <div style={{ display: 'flex', gap: '1rem', fontSize: '0.78rem', color: 'var(--text-main)' }}>
             <span>Score: <strong>{activeReport.compatibilityScore}%</strong></span>
             <span>Recommended Tier: <strong>{activeReport.recommendedTier}</strong></span>
             <span>Confidence: <strong>{activeReport.confidence}</strong></span>
           </div>
 
           {Array.isArray(activeReport.details) && (
-            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+            <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
               {activeReport.details.map((d, i) => (
-                <p key={i}>• {d}</p>
+                <p key={i} style={{ margin: '0.2rem 0' }}>• {d}</p>
               ))}
             </div>
           )}
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* STICKY FLOATING BOTTOM BULK TOOLBAR (Always accessible on scroll!)       */}
-      {/* ========================================================================= */}
+      {/* STICKY FLOATING BOTTOM BULK TOOLBAR */}
       {totalSelectionCount > 0 && (
         <div style={{
           position: 'fixed',
@@ -1609,15 +2421,15 @@ export const ExtensionManagerUI: React.FC = () => {
           border: '1px solid var(--accent-primary)',
           boxShadow: '0 10px 30px rgba(0, 0, 0, 0.5)',
           borderRadius: 'var(--radius-md)',
-          padding: '0.75rem 1.25rem',
+          padding: '0.65rem 1.1rem',
           display: 'flex',
           alignItems: 'center',
-          gap: '1rem',
+          gap: '0.85rem',
           flexWrap: 'wrap',
           maxWidth: '90vw'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fff', fontSize: '0.82rem', fontWeight: 600 }}>
-            <Sparkles size={16} style={{ color: 'var(--accent-light)' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#fff', fontSize: '0.8rem', fontWeight: 600 }}>
+            <Sparkles size={15} style={{ color: 'var(--accent-light)' }} />
             <span>
               Selected: {selectedRepoIds.size > 0 && `${selectedRepoIds.size} repo(s) `}
               {selectedPluginNames.size > 0 && `${selectedPluginNames.size} extension(s) `}
@@ -1625,26 +2437,36 @@ export const ExtensionManagerUI: React.FC = () => {
             </span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
             {selectedRepoIds.size > 0 && (
               <>
                 <button
                   onClick={handleBulkAddRepos}
                   disabled={Boolean(bulkBusy)}
                   className="btn btn-primary"
-                  style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
+                  style={{ fontSize: '0.73rem', padding: '0.3rem 0.65rem' }}
                 >
-                  <Plus size={13} />
+                  <Plus size={12} />
                   <span>Activate Repos</span>
+                </button>
+
+                <button
+                  onClick={handleBulkSyncRepos}
+                  disabled={Boolean(bulkBusy)}
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.73rem', padding: '0.3rem 0.65rem' }}
+                >
+                  <RefreshCw size={12} />
+                  <span>Sync Repos</span>
                 </button>
 
                 <button
                   onClick={handleBulkDeactivateRepos}
                   disabled={Boolean(bulkBusy)}
                   className="btn btn-danger"
-                  style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
+                  style={{ fontSize: '0.73rem', padding: '0.3rem 0.65rem' }}
                 >
-                  <Trash2 size={13} />
+                  <Trash2 size={12} />
                   <span>Deactivate Repos</span>
                 </button>
               </>
@@ -1656,9 +2478,9 @@ export const ExtensionManagerUI: React.FC = () => {
                   onClick={handleBulkInstallPlugins}
                   disabled={Boolean(bulkBusy)}
                   className="btn btn-primary"
-                  style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
+                  style={{ fontSize: '0.73rem', padding: '0.3rem 0.65rem' }}
                 >
-                  <Download size={13} />
+                  <Download size={12} />
                   <span>Install Exts</span>
                 </button>
 
@@ -1666,9 +2488,9 @@ export const ExtensionManagerUI: React.FC = () => {
                   onClick={handleBulkUpdatePlugins}
                   disabled={Boolean(bulkBusy)}
                   className="btn btn-secondary"
-                  style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
+                  style={{ fontSize: '0.73rem', padding: '0.3rem 0.65rem' }}
                 >
-                  <RefreshCw size={13} />
+                  <RefreshCw size={12} />
                   <span>Update Exts</span>
                 </button>
 
@@ -1676,9 +2498,9 @@ export const ExtensionManagerUI: React.FC = () => {
                   onClick={handleBulkUninstallPlugins}
                   disabled={Boolean(bulkBusy)}
                   className="btn btn-danger"
-                  style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
+                  style={{ fontSize: '0.73rem', padding: '0.3rem 0.65rem' }}
                 >
-                  <Trash2 size={13} />
+                  <Trash2 size={12} />
                   <span>Uninstall Exts</span>
                 </button>
               </>
@@ -1690,9 +2512,9 @@ export const ExtensionManagerUI: React.FC = () => {
                   onClick={() => handleToggleProvidersBulk(Array.from(selectedProviderNames), true)}
                   disabled={Boolean(bulkBusy)}
                   className="btn btn-secondary"
-                  style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
+                  style={{ fontSize: '0.73rem', padding: '0.3rem 0.65rem' }}
                 >
-                  <ToggleRight size={13} style={{ color: 'var(--status-success)' }} />
+                  <ToggleRight size={12} style={{ color: 'var(--status-success)' }} />
                   <span>Enable Providers</span>
                 </button>
 
@@ -1700,9 +2522,9 @@ export const ExtensionManagerUI: React.FC = () => {
                   onClick={() => handleToggleProvidersBulk(Array.from(selectedProviderNames), false)}
                   disabled={Boolean(bulkBusy)}
                   className="btn btn-secondary"
-                  style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
+                  style={{ fontSize: '0.73rem', padding: '0.3rem 0.65rem' }}
                 >
-                  <ToggleLeft size={13} />
+                  <ToggleLeft size={12} />
                   <span>Disable Providers</span>
                 </button>
               </>
@@ -1711,16 +2533,16 @@ export const ExtensionManagerUI: React.FC = () => {
             <button
               onClick={() => setShowPresetModal(true)}
               className="btn btn-secondary"
-              style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
+              style={{ fontSize: '0.73rem', padding: '0.3rem 0.65rem' }}
             >
-              <Bookmark size={13} />
+              <Bookmark size={12} />
               <span>Save Preset</span>
             </button>
 
             <button
               onClick={clearAllSelections}
               className="btn btn-secondary"
-              style={{ fontSize: '0.75rem', padding: '0.35rem 0.6rem' }}
+              style={{ fontSize: '0.73rem', padding: '0.3rem 0.55rem' }}
             >
               Clear
             </button>
