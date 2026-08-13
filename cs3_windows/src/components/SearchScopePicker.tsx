@@ -123,10 +123,13 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({ refreshKey
       repositories.map((repo) => ({
         ...repo,
         extensions: repo.extensions
-          .map((ext) => ({
-            ...ext,
-            providers: ext.providers.filter((p) => !disabled.has(p.name)),
-          }))
+          .map((ext) => {
+            const activeProvs = ext.providers.filter((p) => !disabled.has(p.name));
+            return {
+              ...ext,
+              providers: activeProvs.length > 0 ? activeProvs : [{ name: ext.name, lang: ext.language }],
+            };
+          })
           .filter((ext) => ext.providers.length > 0),
       })),
     [repositories, disabled]

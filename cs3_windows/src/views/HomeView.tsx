@@ -18,38 +18,55 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia, onPlayDirectl
   const [isLoading, setIsLoading] = useState(true);
   const [continueWatching, setContinueWatching] = useState<WatchProgress[]>([]);
 
+  const [availableProviders, setAvailableProviders] = useState<Array<{ name: string; pluginName: string }>>([]);
+  const [selectedProvider, setSelectedProvider] = useState<string>('all');
+
+  useEffect(() => {
+    window.cloudstream?.getExtensionProviders().then((res) => {
+      if (res?.ok && Array.isArray(res.providers)) {
+        setAvailableProviders(res.providers.map((p) => ({ name: p.name, pluginName: p.pluginName })));
+      }
+    }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
 
     const fetchHomeContent = async () => {
       setIsLoading(true);
       if (window.cloudstream) {
-        // Fetch live search results for popular topics
         const [movies, anime, series] = await Promise.all([
           window.cloudstream.searchAll('Spider-Man'),
           window.cloudstream.searchAll('One Piece'),
           window.cloudstream.searchAll('Stranger Things')
         ]);
 
+        const filterByProv = (items: SearchResponse[]) => {
+          if (selectedProvider === 'all') return items;
+          return items.filter((item) =>
+            item && (
+              item.apiName === selectedProvider ||
+              (Array.isArray(item.alternates) && item.alternates.some((a) => a.apiName === selectedProvider))
+            )
+          );
+        };
+
         if (isMounted) {
-          if (movies.results.length > 0) setTrendingMovies(movies.results);
-          if (anime.results.length > 0) setTrendingAnime(anime.results);
-          if (series.results.length > 0) setPopularSeries(series.results);
+          setTrendingMovies(filterByProv(movies.results));
+          setTrendingAnime(filterByProv(anime.results));
+          setPopularSeries(filterByProv(series.results));
         }
       }
       setIsLoading(false);
     };
 
-    // Continue Watching is the row most likely to be used, and it comes from
-    // local state, so it is loaded independently of the network fetches above
-    // rather than waiting behind them.
     window.cloudstream?.getContinueWatching(12).then((rows) => {
       if (isMounted) setContinueWatching(rows);
     });
 
     fetchHomeContent();
     return () => { isMounted = false; };
-  }, []);
+  }, [selectedProvider]);
 
   if (isLoading) {
     return (
@@ -108,7 +125,57 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia, onPlayDirectl
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '2.5rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+      {/* Active Provider Catalogue Selector Bar */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        background: 'var(--bg-card)',
+        padding: '0.65rem 1.1rem',
+        borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--border-color)',
+        flexWrap: 'wrap',
+        gap: '0.75rem'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+          <Sparkles size={18} style={{ color: 'var(--accent-light)' }} />
+          <div>
+            <h3 style={{ fontSize: '0.92rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+              Live Extension Provider Catalogue
+            </h3>
+            <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', margin: 0 }}>
+              Select an active extension provider to browse its live media catalog
+            </p>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ fontSize: '0.76rem', color: 'var(--text-subtle)', fontWeight: 600 }}>Active Provider:</span>
+          <select
+            value={selectedProvider}
+            onChange={(e) => setSelectedProvider(e.target.value)}
+            style={{
+              background: 'var(--bg-input)',
+              border: '1px solid var(--border-color)',
+              color: '#fff',
+              padding: '0.35rem 0.75rem',
+              borderRadius: 'var(--radius-sm)',
+              fontSize: '0.78rem',
+              outline: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            <option value="all">🌟 All Active Extension Providers</option>
+            {availableProviders.map((p) => (
+              <option key={p.name} value={p.name}>
+                🔌 {p.name} ({p.pluginName})
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       {/* Featured Hero Banner */}
       {trendingMovies.length > 0 && (
         <div style={{

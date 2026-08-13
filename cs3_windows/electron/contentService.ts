@@ -412,11 +412,27 @@ export class ContentService {
     );
 
     const scopedProviders = this.scope.get().providers;
-    const routes = (this.alternateRoutes.get(base) ?? []).filter((route) => {
+    let routes = (this.alternateRoutes.get(base) ?? []).filter((route) => {
       if (scopedProviders.length === 0) return true;
       const ref = parseExtensionUrl(route);
       return ref ? scopedProviders.includes(ref.provider) : true;
     });
+
+    // Fallback: If no alternate route was cached from a previous search step,
+    // query enabled extension providers for `title` directly so catalogue items
+    // (opened from HomeView/Trending) draw on active extension providers too.
+    if (routes.length === 0 && title) {
+      try {
+        const matches = await this.plugins.searchAll(
+          title,
+          scopedProviders.length > 0 ? scopedProviders : undefined
+        );
+        routes = matches.map((m) => m.url).filter((url) => url.startsWith('cs3ext://'));
+      } catch (e) {
+        console.warn('Fallback extension provider search failed:', e);
+      }
+    }
+
     const fromExtensions: TorrentResult[] = [];
     let extensionsSettled = 0;
 
