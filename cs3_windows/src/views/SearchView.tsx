@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { SearchResponse } from '../types/api';
-import { Play, Filter } from 'lucide-react';
+import { Play, Filter, Loader2 } from 'lucide-react';
 
 interface SearchViewProps {
   query: string;
@@ -36,8 +36,41 @@ export const SearchView: React.FC<SearchViewProps> = ({
 
   if (isLoading) {
     return (
-      <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-        <p>Searching providers for "{query}"...</p>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '350px',
+          gap: '1.25rem',
+          color: 'var(--text-muted)',
+        }}
+      >
+        <div
+          style={{
+            width: '56px',
+            height: '56px',
+            borderRadius: '50%',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border-color)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--accent-light)',
+            boxShadow: '0 4px 16px rgba(59, 130, 246, 0.2)',
+          }}
+        >
+          <Loader2 size={28} className="spin" />
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#fff', marginBottom: '0.4rem' }}>
+            {query ? `Searching for "${query}"...` : 'Searching media providers...'}
+          </h3>
+          <p style={{ fontSize: '0.82rem', color: 'var(--text-subtle)', margin: 0 }}>
+            Querying active catalogs and indexing metadata sources
+          </p>
+        </div>
       </div>
     );
   }

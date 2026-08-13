@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { SearchResponse } from '../types/api';
-import { Play, Sparkles, Film, Tv, History } from 'lucide-react';
+import { Play, Sparkles, Film, Tv, History, Loader2 } from 'lucide-react';
 import type { WatchProgress } from '../../electron/cs3/libraryStore';
 import { TvType } from '../types/api';
 
@@ -50,8 +50,41 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia }) => {
 
   if (isLoading) {
     return (
-      <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-        <p>Fetching actual live media catalog...</p>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '350px',
+          gap: '1.25rem',
+          color: 'var(--text-muted)',
+        }}
+      >
+        <div
+          style={{
+            width: '56px',
+            height: '56px',
+            borderRadius: '50%',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border-color)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--accent-light)',
+            boxShadow: '0 4px 16px rgba(59, 130, 246, 0.2)',
+          }}
+        >
+          <Loader2 size={28} className="spin" />
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#fff', marginBottom: '0.4rem' }}>
+            Fetching live media catalog...
+          </h3>
+          <p style={{ fontSize: '0.82rem', color: 'var(--text-subtle)', margin: 0 }}>
+            Loading trending movies, anime, and TV series
+          </p>
+        </div>
       </div>
     );
   }

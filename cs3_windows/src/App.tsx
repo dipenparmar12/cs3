@@ -68,14 +68,20 @@ export const App: React.FC = () => {
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query);
+    setSelectedMedia(null); // Instantly dismiss open DetailView overlay
+    setSearchResults([]);   // Instantly clear old search results
     setActiveTab('search');
     setIsSearching(true);
     setSearchError(null);
 
     if (window.cloudstream) {
-      const response = await window.cloudstream.searchAll(query);
-      setSearchResults(response.results);
-      if (!response.ok && response.error) setSearchError(response.error);
+      try {
+        const response = await window.cloudstream.searchAll(query);
+        setSearchResults(Array.isArray(response?.results) ? response.results : []);
+        if (!response.ok && response.error) setSearchError(response.error);
+      } catch (err) {
+        setSearchError(err instanceof Error ? err.message : String(err));
+      }
     }
     setIsSearching(false);
   };
@@ -175,6 +181,7 @@ export const App: React.FC = () => {
       <div className="main-content">
         <Navbar
           onSearch={handleSearch}
+          isSearching={isSearching}
           onOpenInspector={() => setIsInspectorOpen(true)}
           providers={providersList}
           selectedProvider={selectedProvider}

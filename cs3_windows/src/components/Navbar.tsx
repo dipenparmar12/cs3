@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Search, Bug, Check, ChevronDown, Filter } from 'lucide-react';
+import { Search, Bug, Check, ChevronDown, Filter, Loader2 } from 'lucide-react';
 
 interface NavbarProps {
   onSearch: (query: string, selectedProviders?: string[]) => void;
+  isSearching?: boolean;
   onOpenInspector: () => void;
   providers: string[];
   selectedProvider: string;
@@ -11,6 +12,7 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({
   onSearch,
+  isSearching = false,
   onOpenInspector,
   providers,
 }) => {
@@ -58,7 +60,11 @@ export const Navbar: React.FC<NavbarProps> = ({
     <header className="navbar">
       {/* Search Input Bar */}
       <div className="search-bar">
-        <Search size={18} className="search-icon" />
+        {isSearching ? (
+          <Loader2 size={18} className="search-icon spin" style={{ color: 'var(--accent-light)' }} />
+        ) : (
+          <Search size={18} className="search-icon" />
+        )}
         <input
           type="text"
           className="search-input"
@@ -69,10 +75,12 @@ export const Navbar: React.FC<NavbarProps> = ({
         />
         <button
           onClick={() => query.trim() && onSearch(query.trim(), selectedProviders)}
+          disabled={isSearching}
           className="btn btn-primary"
-          style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem' }}
+          style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
         >
-          Search
+          {isSearching ? <Loader2 size={14} className="spin" /> : <Search size={14} />}
+          <span>{isSearching ? 'Searching…' : 'Search'}</span>
         </button>
       </div>
 
