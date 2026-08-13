@@ -734,6 +734,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         className={`player__video player__video--${aspect}`}
         playsInline
         onClick={togglePlay}
+        onDoubleClick={toggleFullscreen}
         crossOrigin="anonymous"
       >
         {/* Selection is driven by TextTrack.mode in the effect above, not by
