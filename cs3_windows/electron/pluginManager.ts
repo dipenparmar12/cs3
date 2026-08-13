@@ -137,6 +137,114 @@ export function parseExtensionUrl(
   };
 }
 
+/**
+ * Branch and filename combinations community repositories actually publish to.
+ *
+ * There is no convention here, only practice. Measured against the repositories
+ * this app ships in its own list: recloudstream/extensions and
+ * Bnyro/GermanProviders serve `master/repo.json`,
+ * phisher98/cloudstream-extensions-phisher serves `builds/repo.json`, and
+ * SaurabhKaperwan/CSX serves `builds/plugins.json` as a bare plugin array.
+ * Guessing one shape would have covered a third of them.
+ */
+const REPO_BRANCHES = ['master', 'main', 'builds'];
+const REPO_FILENAMES = ['repo.json', 'plugins.json', 'repos.json'];
+
+/**
+ * Turns a project page into the raw document URLs it might publish.
+ *
+ * Users paste — and this app's own curated list stores — the address they can
+ * open in a browser: `https://github.com/owner/repo`. That returns HTML, so
+ * every one of those entries failed with "not a CloudStream repository". Android
+ * resolves the shorthand for exactly this reason; matching it is what makes the
+ * bundled list installable at all.
+ */
+function rawDocumentCandidates(url: string): string[] {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return [];
+  }
+
+  const segments = parsed.pathname.split('/').filter(Boolean);
+  if (segments.length < 2) return [];
+  const [owner, repo] = [segments[0], segments[1].replace(/\.git$/, '')];
+
+  const build = (branch: string, file: string): string | null => {
+    if (parsed.hostname === 'github.com') {
+      return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${file}`;
+    }
+    if (parsed.hostname === 'gitlab.com') {
+      return `https://gitlab.com/${owner}/${repo}/-/raw/${branch}/${file}`;
+    }
+    // Gitea and Forgejo instances (git.disroot.org among them) use this form.
+    return `${parsed.origin}/${owner}/${repo}/raw/branch/${branch}/${file}`;
+  };
+
+  const candidates: string[] = [];
+  for (const branch of REPO_BRANCHES) {
+    for (const file of REPO_FILENAMES) {
+      const candidate = build(branch, file);
+      if (candidate) candidates.push(candidate);
+    }
+  }
+  return candidates;
+}
+
+/** A document is only a repository if it is a plugin array or has `pluginLists`. */
+function looksLikeRepository(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => entry && typeof entry === 'object' && 'internalName' in entry);
+  }
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      Array.isArray((value as RepositoryJson).pluginLists)
+  );
+}
+
+/**
+ * Fetches a repository document, resolving a project page to its raw JSON.
+ *
+ * The direct URL is tried first and unconditionally: a user who pasted an exact
+ * raw address must not have it second-guessed, and it is one request rather
+ * than nine. Candidates are only probed when that fails or returns something
+ * that is not a repository — which is precisely the HTML case.
+ */
+async function resolveRepositoryDocument(
+  repoUrl: string
+): Promise<{ url: string; document: RepositoryJson | SitePlugin[] }> {
+  let directError: unknown;
+  try {
+    const document = await fetchJson<RepositoryJson | SitePlugin[]>(repoUrl, {
+      timeoutMs: 15_000,
+    });
+    if (looksLikeRepository(document)) return { url: repoUrl, document };
+    directError = new Error(
+      'Not a CloudStream repository: the document is neither a plugin array nor an object with a "pluginLists" array.'
+    );
+  } catch (error) {
+    directError = error;
+  }
+
+  for (const candidate of rawDocumentCandidates(repoUrl)) {
+    try {
+      const document = await fetchJson<RepositoryJson | SitePlugin[]>(candidate, {
+        // Short, and no retry: most candidates are expected 404s and the point
+        // of the walk is to get past them quickly, not to insist on each one.
+        timeoutMs: 8_000,
+        retries: 0,
+      });
+      if (looksLikeRepository(document)) return { url: candidate, document };
+    } catch {
+      // A candidate that is not there is the normal case, not an error.
+    }
+  }
+
+  throw directError instanceof Error ? directError : new Error(String(directError));
+}
+
 /** The bridge's replies arrive as JSON strings; a malformed one is not fatal. */
 function safeParse(raw: string): Record<string, unknown> | null {
   try {
@@ -234,7 +342,11 @@ export class PluginManager {
    */
   public async fetchRepository(repoUrl: string): Promise<RepositoryFetchResult> {
     const warnings: string[] = [];
-    const repo = await fetchJson<RepositoryJson | SitePlugin[]>(repoUrl, { timeoutMs: 15_000 });
+    const resolved = await resolveRepositoryDocument(repoUrl);
+    const repo = resolved.document;
+    if (resolved.url !== repoUrl) {
+      warnings.push(`Resolved to ${resolved.url}.`);
+    }
 
     // Some repositories publish the plugin array directly instead of wrapping it
     // in a repo.json with `pluginLists` — CSX is one. Both are in the wild and
