@@ -434,6 +434,28 @@ ipcMain.handle('download:revealInFolder', async (_, filePath: string) => {
 
 ipcMain.handle('binary:check', async () => binaryDownloader.checkBinaries());
 
+/**
+ * One-click FFmpeg. Progress is pushed so a ~100 MB download can show its
+ * state rather than freezing a dialog.
+ */
+ipcMain.handle('binary:setupFfmpeg', async () => {
+  try {
+    const ok = await binaryDownloader.setupFfmpeg((status, percent) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('binary:setupProgress', { status, percent });
+      }
+    });
+    return {
+      ok,
+      message: ok
+        ? 'Media components are installed.'
+        : 'The media components could not be installed.',
+    };
+  } catch (error) {
+    return { ...fail(error), message: 'The media components could not be installed.' };
+  }
+});
+
 ipcMain.handle('binary:setup', async () => {
   try {
     const aria2Ok = await binaryDownloader.setupAria2();

@@ -179,7 +179,17 @@ export interface CloudStreamElectronAPI {
   onBatchProgress: (callback: (progress: BatchProgress) => void) => () => void;
 
   // Binaries
-  checkBinaries: () => Promise<{ aria2: boolean; ytdlp: boolean }>;
+  checkBinaries: () => Promise<{
+    aria2: boolean;
+    ytdlp: boolean;
+    ffmpeg: boolean;
+    ffprobe: boolean;
+  }>;
+  /** Installs FFmpeg + FFprobe. No PATH or codec configuration is exposed. */
+  setupFfmpeg: () => Promise<Envelope & { message: string }>;
+  onBinarySetupProgress: (
+    callback: (progress: { status: string; percent: number }) => void
+  ) => () => void;
   setupBinaries: () => Promise<{ success: boolean; message: string }>;
 
   // Extensions
@@ -350,6 +360,13 @@ const api: CloudStreamElectronAPI = {
   },
 
   checkBinaries: () => ipcRenderer.invoke('binary:check'),
+  setupFfmpeg: () => ipcRenderer.invoke('binary:setupFfmpeg'),
+  onBinarySetupProgress: (callback) => {
+    const listener = (_: unknown, progress: { status: string; percent: number }) =>
+      callback(progress);
+    ipcRenderer.on('binary:setupProgress', listener);
+    return () => ipcRenderer.removeListener('binary:setupProgress', listener);
+  },
   setupBinaries: () => ipcRenderer.invoke('binary:setup'),
 
   getOfficialRepositories: () => ipcRenderer.invoke('extension:getOfficialRepositories'),

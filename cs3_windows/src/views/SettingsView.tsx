@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Download, HardDrive, RefreshCw, Zap, Code, Tv, CheckCircle2 } from 'lucide-react';
+import { MediaComponentsCard } from '../components/MediaComponentsCard';
 import { SourceSettings } from '../components/SourceSettings';
 
 interface SettingsViewProps {
@@ -60,6 +61,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           Configure sources and ranking, download paths, downloader engines, and CS3 Android backup imports
         </p>
       </div>
+
+      <MediaComponentsCard />
 
       {/* Sources first: it is the only section that determines whether the app
           can find anything at all, so it should not be buried below downloads. */}

@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 dist-electron/
+
+# Portable tools fetched on first use: aria2c, yt-dlp, ffmpeg, ffprobe.
+# Downloaded at runtime into the app's private bin directory, never vendored —
+# ffmpeg and ffprobe alone are ~290 MB.
+bin/
