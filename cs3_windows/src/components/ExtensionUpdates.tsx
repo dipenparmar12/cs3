@@ -31,6 +31,13 @@ const POLICY_LABELS: Record<UpdatePolicy, { title: string; detail: string }> = {
   },
 };
 
+const getPolicyDetail = (policy?: string): string => {
+  if (policy && policy in POLICY_LABELS) {
+    return POLICY_LABELS[policy as UpdatePolicy].detail;
+  }
+  return '';
+};
+
 export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdated }) => {
   const [updates, setUpdates] = useState<AvailableUpdate[]>([]);
   const [settings, setSettings] = useState<UpdateSettings | null>(null);
@@ -44,8 +51,15 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
 
   useEffect(() => {
     if (!api) return;
-    api.getCachedExtensionUpdates().then(setUpdates);
-    api.getUpdateSettings().then(setSettings);
+    api
+      .getCachedExtensionUpdates()
+      .then((res) => setUpdates(Array.isArray(res) ? res : []))
+      .catch(() => setUpdates([]));
+
+    api
+      .getUpdateSettings()
+      .then((res) => setSettings(res ?? null))
+      .catch(() => {});
   }, [api]);
 
   // Background checks and auto-installs happen in the main process, so the panel
@@ -59,9 +73,9 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
           setChecking(true);
           break;
         case 'extension:updateCheckFinished': {
-          const result = payload as { updates: AvailableUpdate[]; warnings: string[] };
-          setUpdates(result.updates);
-          setWarnings(result.warnings ?? []);
+          const result = payload as { updates?: AvailableUpdate[]; warnings?: string[] };
+          setUpdates(Array.isArray(result?.updates) ? result.updates : []);
+          setWarnings(Array.isArray(result?.warnings) ? result.warnings : []);
           setChecking(false);
           break;
         }
@@ -69,10 +83,14 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
           setProgress(payload as { current: number; total: number });
           break;
         case 'extension:autoUpdateCompleted': {
-          const { outcomes } = payload as { outcomes: UpdateOutcome[] };
-          const ok = outcomes.filter((o) => o.ok).length;
-          setMessage(`Automatically updated ${ok} of ${outcomes.length} extensions.`);
-          api.getCachedExtensionUpdates().then(setUpdates);
+          const { outcomes } = payload as { outcomes?: UpdateOutcome[] };
+          const safeOutcomes = Array.isArray(outcomes) ? outcomes : [];
+          const ok = safeOutcomes.filter((o) => o?.ok).length;
+          setMessage(`Automatically updated ${ok} of ${safeOutcomes.length} extensions.`);
+          api
+            .getCachedExtensionUpdates()
+            .then((res) => setUpdates(Array.isArray(res) ? res : []))
+            .catch(() => {});
           onUpdated?.();
           break;
         }
@@ -86,36 +104,50 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
     if (!api) return;
     setChecking(true);
     setMessage(null);
-    const response = await api.checkExtensionUpdates();
-    setChecking(false);
+    try {
+      const response = await api.checkExtensionUpdates();
+      setChecking(false);
 
-    if (!response.ok || !response.result) {
-      setMessage(`Could not check for updates: ${response.error ?? 'unknown error'}`);
-      return;
+      if (!response.ok || !response.result) {
+        setMessage(`Could not check for updates: ${response.error ?? 'unknown error'}`);
+        return;
+      }
+      const safeUpdates = Array.isArray(response.result.updates) ? response.result.updates : [];
+      const safeWarnings = Array.isArray(response.result.warnings) ? response.result.warnings : [];
+      setUpdates(safeUpdates);
+      setWarnings(safeWarnings);
+      const newSettings = await api.getUpdateSettings().catch(() => null);
+      if (newSettings) setSettings(newSettings);
+      setMessage(
+        safeUpdates.length === 0
+          ? `All extensions are up to date (${response.result.repositoriesChecked ?? 0} repositories checked).`
+          : null
+      );
+    } catch (err) {
+      setChecking(false);
+      setMessage(`Update check failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-    setUpdates(response.result.updates);
-    setWarnings(response.result.warnings);
-    setSettings(await api.getUpdateSettings());
-    setMessage(
-      response.result.updates.length === 0
-        ? `All extensions are up to date (${response.result.repositoriesChecked} repositories checked).`
-        : null
-    );
   }, [api]);
 
   const updateOne = useCallback(
     async (internalName: string) => {
       if (!api) return;
       setBusy((prev) => new Set(prev).add(internalName));
-      const outcome = await api.updateExtension(internalName);
-      setBusy((prev) => {
-        const next = new Set(prev);
-        next.delete(internalName);
-        return next;
-      });
-      setMessage(outcome.message);
-      setUpdates(await api.getCachedExtensionUpdates());
-      if (outcome.ok) onUpdated?.();
+      try {
+        const outcome = await api.updateExtension(internalName);
+        setMessage(outcome.message);
+        const cached = await api.getCachedExtensionUpdates().catch(() => []);
+        setUpdates(Array.isArray(cached) ? cached : []);
+        if (outcome.ok) onUpdated?.();
+      } catch (err) {
+        setMessage(`Update failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setBusy((prev) => {
+          const next = new Set(prev);
+          next.delete(internalName);
+          return next;
+        });
+      }
     },
     [api, onUpdated]
   );
@@ -123,26 +155,37 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
   const updateEverything = useCallback(async () => {
     if (!api || updates.length === 0) return;
     setProgress({ current: 0, total: updates.length });
-    const outcomes = await api.updateAllExtensions();
-    setProgress(null);
-
-    const ok = outcomes.filter((o) => o.ok).length;
-    const failed = outcomes.filter((o) => !o.ok);
-    setMessage(
-      failed.length === 0
-        ? `Updated all ${ok} extensions.`
-        : `Updated ${ok} of ${outcomes.length}. Failed: ${failed
-            .map((f) => f.internalName)
-            .join(', ')}.`
-    );
-    setUpdates(await api.getCachedExtensionUpdates());
-    onUpdated?.();
+    try {
+      const outcomes = await api.updateAllExtensions();
+      const safeOutcomes = Array.isArray(outcomes) ? outcomes : [];
+      const ok = safeOutcomes.filter((o) => o?.ok).length;
+      const failed = safeOutcomes.filter((o) => o && !o.ok);
+      setMessage(
+        failed.length === 0
+          ? `Updated all ${ok} extensions.`
+          : `Updated ${ok} of ${safeOutcomes.length}. Failed: ${failed
+              .map((f) => f.internalName)
+              .join(', ')}.`
+      );
+      const cached = await api.getCachedExtensionUpdates().catch(() => []);
+      setUpdates(Array.isArray(cached) ? cached : []);
+      onUpdated?.();
+    } catch (err) {
+      setMessage(`Update all failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setProgress(null);
+    }
   }, [api, updates.length, onUpdated]);
 
   const savePolicy = useCallback(
     async (patch: Partial<UpdateSettings>) => {
       if (!api) return;
-      setSettings(await api.saveUpdateSettings(patch));
+      try {
+        const updated = await api.saveUpdateSettings(patch);
+        if (updated) setSettings(updated);
+      } catch (err) {
+        console.error('Failed to save update settings:', err);
+      }
     },
     [api]
   );
@@ -150,6 +193,9 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
   const lastChecked = settings?.lastCheckedAt
     ? new Date(settings.lastCheckedAt).toLocaleString()
     : 'never';
+
+  const safeUpdates = Array.isArray(updates) ? updates : [];
+  const safeWarnings = Array.isArray(warnings) ? warnings : [];
 
   return (
     <section style={{ marginBottom: '2rem' }}>
@@ -182,13 +228,13 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
           <button
             className="btn btn-primary"
             onClick={updateEverything}
-            disabled={updates.length === 0 || progress !== null}
+            disabled={safeUpdates.length === 0 || progress !== null}
           >
             <ArrowUpCircle size={15} />
             <span>
               {progress
                 ? `Updating ${progress.current}/${progress.total}…`
-                : `Update all${updates.length ? ` (${updates.length})` : ''}`}
+                : `Update all${safeUpdates.length ? ` (${safeUpdates.length})` : ''}`}
             </span>
           </button>
         </div>
@@ -212,9 +258,9 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
         </div>
       )}
 
-      {updates.length > 0 && (
+      {safeUpdates.length > 0 && (
         <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 1rem' }}>
-          {updates.map((u) => (
+          {safeUpdates.map((u) => (
             <li
               key={u.internalName}
               style={{
@@ -264,7 +310,7 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
         </ul>
       )}
 
-      {warnings.length > 0 && (
+      {safeWarnings.length > 0 && (
         <details style={{ marginBottom: '1rem', fontSize: '0.75rem' }}>
           <summary
             style={{
@@ -276,10 +322,10 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
             }}
           >
             <AlertTriangle size={14} />
-            {warnings.length} repository warning{warnings.length === 1 ? '' : 's'}
+            {safeWarnings.length} repository warning{safeWarnings.length === 1 ? '' : 's'}
           </summary>
           <ul style={{ color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-            {warnings.map((w, i) => (
+            {safeWarnings.map((w, i) => (
               <li key={i}>{w}</li>
             ))}
           </ul>
@@ -352,9 +398,10 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
             margin: '0.6rem 0 0',
           }}
         >
-          {settings ? POLICY_LABELS[settings.policy].detail : ''}
+          {getPolicyDetail(settings?.policy)}
         </p>
       </div>
     </section>
   );
 };
+

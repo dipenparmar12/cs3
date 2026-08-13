@@ -22,16 +22,31 @@ export const ExtensionManagerUI: React.FC = () => {
 
   useEffect(() => {
     if (window.cloudstream) {
-      window.cloudstream.getOfficialRepositories().then(setOfficialRepos);
-      window.cloudstream.getInstalledRepositories().then((urls) => {
-        setInstalledRepoUrls(new Set(urls));
-      });
-      window.cloudstream.getInstalledPlugins().then((list) => {
-        if (list && list.length > 0) {
-          setPlugins((prev) => [...prev, ...list]);
-          setInstalledPluginNames(new Set(list.map((p) => p.internalName)));
-        }
-      });
+      window.cloudstream
+        .getOfficialRepositories()
+        .then((repos) => {
+          if (Array.isArray(repos)) setOfficialRepos(repos);
+        })
+        .catch(() => {});
+
+      window.cloudstream
+        .getInstalledRepositories()
+        .then((urls) => {
+          if (Array.isArray(urls)) setInstalledRepoUrls(new Set(urls));
+        })
+        .catch(() => {});
+
+      window.cloudstream
+        .getInstalledPlugins()
+        .then((list) => {
+          if (Array.isArray(list) && list.length > 0) {
+            setPlugins((prev) => [...prev, ...list]);
+            setInstalledPluginNames(
+              new Set(list.filter((p) => p && p.internalName).map((p) => p.internalName))
+            );
+          }
+        })
+        .catch(() => {});
     }
   }, []);
 
@@ -40,28 +55,36 @@ export const ExtensionManagerUI: React.FC = () => {
     if (!targetUrl) return;
 
     if (window.cloudstream) {
-      const response = await window.cloudstream.fetchRepository(targetUrl);
+      try {
+        const response = await window.cloudstream.fetchRepository(targetUrl);
 
-      if (!response.ok || !response.repository) {
-        setToastMessage(`✗ ${repoName || 'Repository'} failed: ${response.error ?? 'unknown error'}`);
+        if (!response.ok || !response.repository) {
+          setToastMessage(`✗ ${repoName || 'Repository'} failed: ${response.error ?? 'unknown error'}`);
+          setTimeout(() => setToastMessage(null), 6000);
+          return;
+        }
+
+        const { repository } = response;
+        if (Array.isArray(repository?.plugins) && repository.plugins.length > 0) {
+          setPlugins((prev) => [...prev, ...repository.plugins]);
+        }
+
+        const updatedUrls = await window.cloudstream.getInstalledRepositories().catch(() => []);
+        if (Array.isArray(updatedUrls)) {
+          setInstalledRepoUrls(new Set(updatedUrls));
+        }
+
+        const warningCount = Array.isArray(repository?.warnings) ? repository.warnings.length : 0;
+        const warning = warningCount > 0 ? ` (${warningCount} list(s) unreadable)` : '';
+        const count = Array.isArray(repository?.plugins) ? repository.plugins.length : 0;
+        setToastMessage(
+          `✓ ${repository.name ?? 'Repository'}: ${count} extension(s) found${warning}`
+        );
+        setTimeout(() => setToastMessage(null), 5000);
+      } catch (err) {
+        setToastMessage(`✗ Fetch failed: ${err instanceof Error ? err.message : String(err)}`);
         setTimeout(() => setToastMessage(null), 6000);
-        return;
       }
-
-      const { repository } = response;
-      if (repository.plugins.length > 0) {
-        setPlugins((prev) => [...prev, ...repository.plugins]);
-      }
-
-      const updatedUrls = await window.cloudstream.getInstalledRepositories();
-      setInstalledRepoUrls(new Set(updatedUrls));
-
-      // Report the real plugin count, and any plugin-list URLs that failed.
-      const warning = repository.warnings.length > 0 ? ` (${repository.warnings.length} list(s) unreadable)` : '';
-      setToastMessage(
-        `✓ ${repository.name}: ${repository.plugins.length} extension(s) found${warning}`
-      );
-      setTimeout(() => setToastMessage(null), 5000);
     }
 
     if (!urlToFetch) {
@@ -70,25 +93,39 @@ export const ExtensionManagerUI: React.FC = () => {
   };
 
   const handleInstallPlugin = async (plugin: SitePlugin) => {
+    if (!plugin?.internalName) return;
     if (window.cloudstream) {
-      await window.cloudstream.installPlugin(plugin);
-      setInstalledPluginNames((prev) => new Set(prev).add(plugin.internalName));
-      setToastMessage(`✓ ${plugin.name} installed & active!`);
-      setTimeout(() => setToastMessage(null), 3500);
+      try {
+        await window.cloudstream.installPlugin(plugin);
+        setInstalledPluginNames((prev) => new Set(prev).add(plugin.internalName));
+        setToastMessage(`✓ ${plugin.name} installed & active!`);
+        setTimeout(() => setToastMessage(null), 3500);
+      } catch (err) {
+        setToastMessage(`✗ Install failed: ${err instanceof Error ? err.message : String(err)}`);
+        setTimeout(() => setToastMessage(null), 5000);
+      }
     }
   };
 
   const handleAnalyze = async (plugin: SitePlugin) => {
+    if (!plugin) return;
     if (window.cloudstream) {
-      const report = await window.cloudstream.analyzePlugin(plugin);
-      setActiveReport(report);
+      try {
+        const report = await window.cloudstream.analyzePlugin(plugin);
+        if (report) setActiveReport(report);
+      } catch (err) {
+        console.error('Failed to analyze plugin:', err);
+      }
     }
   };
 
-  const filteredOfficialRepos = officialRepos.filter((r) => {
+  const safeOfficialRepos = Array.isArray(officialRepos) ? officialRepos.filter(Boolean) : [];
+  const filteredOfficialRepos = safeOfficialRepos.filter((r) => {
     if (activeCategory === 'All') return true;
     return r.category === activeCategory;
   });
+
+  const safePlugins = Array.isArray(plugins) ? plugins.filter(Boolean) : [];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -96,15 +133,22 @@ export const ExtensionManagerUI: React.FC = () => {
       <div>
         <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>Official Extension Library & Repositories</h2>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-          Browse {officialRepos.length} community repositories or add a custom repository URL
+          Browse {safeOfficialRepos.length} community repositories or add a custom repository URL
         </p>
       </div>
 
       <ExtensionUpdates
         onUpdated={() => {
-          window.cloudstream?.getInstalledPlugins().then((list) => {
-            setInstalledPluginNames(new Set(list.map((p) => p.internalName)));
-          });
+          window.cloudstream
+            ?.getInstalledPlugins()
+            .then((list) => {
+              if (Array.isArray(list)) {
+                setInstalledPluginNames(
+                  new Set(list.filter((p) => p && p.internalName).map((p) => p.internalName))
+                );
+              }
+            })
+            .catch(() => {});
         }}
       />
 
@@ -182,7 +226,12 @@ export const ExtensionManagerUI: React.FC = () => {
         {/* Repository Cards Grid */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
           {filteredOfficialRepos.map((repo) => {
-            const isAdded = installedRepoUrls.has(repo.rawRepoUrl) || installedRepoUrls.has(repo.url) || repo.id === 'megarepo' || repo.id === 'extensions';
+            const isAdded =
+              repo &&
+              (installedRepoUrls.has(repo.rawRepoUrl) ||
+                installedRepoUrls.has(repo.url) ||
+                repo.id === 'megarepo' ||
+                repo.id === 'extensions');
 
             return (
               <div
@@ -280,23 +329,25 @@ export const ExtensionManagerUI: React.FC = () => {
             <span>Confidence: <strong>{activeReport.confidence}</strong></span>
           </div>
 
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-            {activeReport.details.map((d, i) => (
-              <p key={i}>• {d}</p>
-            ))}
-          </div>
+          {Array.isArray(activeReport.details) && (
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              {activeReport.details.map((d, i) => (
+                <p key={i}>• {d}</p>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {/* Plugin Cards List */}
       <div>
         <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff', marginBottom: '1rem' }}>
-          Available Extensions ({plugins.length})
+          Available Extensions ({safePlugins.length})
         </h3>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
-          {plugins.map((plugin, idx) => {
-            const isInstalled = installedPluginNames.has(plugin.internalName);
+          {safePlugins.map((plugin, idx) => {
+            const isInstalled = plugin.internalName ? installedPluginNames.has(plugin.internalName) : false;
 
             return (
               <div
@@ -360,3 +411,5 @@ export const ExtensionManagerUI: React.FC = () => {
     </div>
   );
 };
+
+

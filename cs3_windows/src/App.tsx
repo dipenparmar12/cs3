@@ -13,6 +13,8 @@ import { DetailView, type PlaybackRequest } from './views/DetailView';
 import { LibraryView } from './views/LibraryView';
 import { SettingsView } from './views/SettingsView';
 
+import { ErrorBoundary } from './components/ErrorBoundary';
+
 import type { Episode, SearchResponse } from './types/api';
 import type { DownloadTask } from './types/download';
 
@@ -234,7 +236,11 @@ export const App: React.FC = () => {
                   onOpenBinarySetup={() => setIsBinaryModalOpen(true)}
                 />
               )}
-              {activeTab === 'extensions' && <ExtensionManagerUI />}
+              {activeTab === 'extensions' && (
+                <ErrorBoundary fallbackTitle="Error loading Extensions Manager">
+                  <ExtensionManagerUI />
+                </ErrorBoundary>
+              )}
               {activeTab === 'settings' && (
                 <SettingsView
                   hasBinaries={hasBinaries}

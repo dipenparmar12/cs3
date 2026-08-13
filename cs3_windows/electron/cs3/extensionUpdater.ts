@@ -90,8 +90,13 @@ export class ExtensionUpdater {
 
   public getSettings(): UpdateSettings {
     const stored = this.datastore.getObject<Partial<UpdateSettings>>(SETTINGS_KEY, {});
+    const validPolicies: UpdatePolicy[] = ['manual', 'daily', 'startup'];
+    const policy: UpdatePolicy =
+      stored?.policy && validPolicies.includes(stored.policy as UpdatePolicy)
+        ? (stored.policy as UpdatePolicy)
+        : 'daily';
     return {
-      policy: stored?.policy ?? 'daily',
+      policy,
       // Defaults to notify-only. Installed extensions execute code the user
       // chose to trust at a specific version; silently swapping that for a new
       // version without asking is a decision the user should make, not a
