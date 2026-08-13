@@ -23,7 +23,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
 }) => {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [hoverCardOpen, setHoverCardOpen] = useState(false);
-  const [cardPos, setCardPos] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
+  const [alignRight, setAlignRight] = useState(false);
   const hoverTimer = useRef<number | null>(null);
 
   const handleMouseEnter = () => {
@@ -31,12 +31,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
     hoverTimer.current = window.setTimeout(() => {
       if (cardRef.current) {
         const rect = cardRef.current.getBoundingClientRect();
-        setCardPos({
-          top: rect.top,
-          left: rect.left,
-          width: rect.width,
-          height: rect.height,
-        });
+        setAlignRight(rect.right + 140 > window.innerWidth);
         setHoverCardOpen(true);
       }
     }, 600);
@@ -47,6 +42,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
       window.clearTimeout(hoverTimer.current);
       hoverTimer.current = null;
     }
+    setHoverCardOpen(false);
   };
 
   const titleText = item?.name || 'Untitled';
@@ -54,7 +50,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
   return (
     <div
       ref={cardRef}
-      className="poster-card"
+      className={`poster-card${hoverCardOpen ? ' poster-card--active-hover' : ''}`}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
@@ -97,10 +93,10 @@ export const PosterCard: React.FC<PosterCardProps> = ({
         )}
       </div>
 
-      {hoverCardOpen && cardPos && (
+      {hoverCardOpen && (
         <ContentHoverCard
           item={item}
-          position={cardPos}
+          alignRight={alignRight}
           onSelectMedia={onSelectMedia}
           onPlayDirectly={onPlayDirectly}
           onClose={() => setHoverCardOpen(false)}

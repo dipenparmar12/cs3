@@ -5,7 +5,7 @@ import { LibraryBucketSelector } from './LibraryBucketSelector';
 
 interface ContentHoverCardProps {
   item: SearchResponse;
-  position: { top: number; left: number; width: number; height: number };
+  alignRight?: boolean;
   onSelectMedia: (item: SearchResponse) => void;
   onPlayDirectly?: (item: SearchResponse) => void;
   onClose: () => void;
@@ -13,7 +13,7 @@ interface ContentHoverCardProps {
 
 export const ContentHoverCard: React.FC<ContentHoverCardProps> = ({
   item,
-  position,
+  alignRight = false,
   onSelectMedia,
   onPlayDirectly,
   onClose,
@@ -24,13 +24,13 @@ export const ContentHoverCard: React.FC<ContentHoverCardProps> = ({
   useEffect(() => {
     let active = true;
     const fetchDetails = async () => {
-      if (!window.cloudstream || !item.url) return;
+      if (!window.cloudstream || !item || !item.url) return;
       setLoading(true);
       try {
         const res = await window.cloudstream.loadMedia(item.url);
         if (active && res) setDetails(res);
       } catch {
-        // Best-effort fallback to basic SearchResponse props
+        // Best-effort fallback
       } finally {
         if (active) setLoading(false);
       }
@@ -39,40 +39,21 @@ export const ContentHoverCard: React.FC<ContentHoverCardProps> = ({
     return () => {
       active = false;
     };
-  }, [item.url]);
+  }, [item?.url]);
 
-  const popupWidth = 310;
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-
-  let left = position.left + position.width + 12;
-  if (left + popupWidth > viewportWidth - 20) {
-    left = position.left - popupWidth - 12;
-  }
-  if (left < 10) {
-    left = Math.max(10, position.left);
-  }
-
-  let top = position.top - 10;
-  if (top + 340 > viewportHeight - 20) {
-    top = Math.max(10, viewportHeight - 350);
-  }
-
-  const poster = details?.posterUrl || item.posterUrl;
-  const title = details?.name || item.name;
-  const year = details?.year || item.year;
+  const poster = details?.posterUrl || item?.posterUrl;
+  const title = details?.name || item?.name || 'Untitled';
+  const year = details?.year || item?.year;
   const rating = details?.rating;
   const plot = details?.plot;
   const tags = details?.tags || [];
-  const type = details?.type || item.type || 'Movie';
-  const quality = item.quality;
+  const type = details?.type || item?.type || 'Movie';
+  const quality = item?.quality;
 
   return (
     <div
-      className="hover-preview-popup"
-      style={{ top: `${top}px`, left: `${left}px` }}
-      onMouseEnter={(e) => e.stopPropagation()}
-      onMouseLeave={onClose}
+      className={`hover-preview-popup${alignRight ? ' hover-preview-popup--right' : ''}`}
+      onClick={(e) => e.stopPropagation()}
     >
       <div
         className="hover-preview-popup__banner"
@@ -98,7 +79,9 @@ export const ContentHoverCard: React.FC<ContentHoverCardProps> = ({
           )}
           {quality && <span className="badge badge--muted">{quality}</span>}
           <span className="badge badge--muted">{type}</span>
-          <span style={{ fontSize: '0.72rem', color: 'var(--accent-light)' }}>{item.apiName}</span>
+          {item?.apiName && (
+            <span style={{ fontSize: '0.72rem', color: 'var(--accent-light)' }}>{item.apiName}</span>
+          )}
         </div>
 
         {loading ? (

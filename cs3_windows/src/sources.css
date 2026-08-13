@@ -445,17 +445,23 @@
 
 /* --- Content Hover Preview Popup Card --- */
 .hover-preview-popup {
-  position: fixed;
-  z-index: 99990;
+  position: absolute;
+  top: -12px;
+  left: -12px;
+  z-index: 99999;
   width: 310px;
-  background: rgba(18, 22, 32, 0.97);
-  backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #141824;
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: var(--radius-lg, 12px);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.08);
   overflow: hidden;
-  animation: popupFadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: popupFadeIn 0.18s ease-out forwards;
   pointer-events: auto;
+}
+
+.hover-preview-popup--right {
+  left: auto;
+  right: -12px;
 }
 
 @keyframes popupFadeIn {
