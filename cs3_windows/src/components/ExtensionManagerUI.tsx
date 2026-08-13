@@ -410,15 +410,64 @@ export const ExtensionManagerUI: React.FC = () => {
     return list;
   }, [providerTree, disabledProviders, statusFilter, typeFilter, languageFilter, debouncedSearchQuery]);
 
+  // Unified Provider Ancestry Tree (Merges installed providers + available repo plugins)
+  const unifiedProviderTree = useMemo(() => {
+    const map = new Map<string, ProviderTreeRepository>();
+
+    // 1. Add existing repos from providerTree
+    providerTree.forEach((repo) => {
+      map.set(repo.url, {
+        ...repo,
+        extensions: repo.extensions.map((e) => ({ ...e, providers: [...e.providers] })),
+      });
+    });
+
+    // 2. Add active repositories from installedRepoUrls that might not be in providerTree
+    installedRepoUrls.forEach((repoUrl) => {
+      let repoNode = map.get(repoUrl);
+      const officialRepo = safeOfficialRepos.find((r) => r.rawRepoUrl === repoUrl || r.url === repoUrl);
+      const repoName = officialRepo?.name || repoUrl.replace('https://github.com/', '').replace('/raw/main/repo.json', '');
+
+      if (!repoNode) {
+        repoNode = { url: repoUrl, name: repoName, extensions: [] };
+        map.set(repoUrl, repoNode);
+      }
+
+      // Add extensions belonging to this repo from safePlugins
+      safePlugins.forEach((plugin) => {
+        if (!plugin?.internalName) return;
+        const pluginRepo = plugin.repositoryUrl || officialRepo?.rawRepoUrl || officialRepo?.url;
+        const belongsToRepo =
+          pluginRepo === repoUrl ||
+          officialRepo?.rawRepoUrl === repoUrl ||
+          officialRepo?.url === repoUrl;
+
+        if (belongsToRepo) {
+          const exists = repoNode.extensions.some((e) => e.internalName === plugin.internalName);
+          if (!exists) {
+            repoNode.extensions.push({
+              internalName: plugin.internalName,
+              name: plugin.name,
+              language: plugin.language,
+              providers: [],
+            });
+          }
+        }
+      });
+    });
+
+    return [...map.values()];
+  }, [providerTree, installedRepoUrls, safeOfficialRepos, safePlugins]);
+
   // Filtered Provider Ancestry Tree with Hierarchy Preservation
   const filteredProviderTree = useMemo(() => {
     if (!debouncedSearchQuery && statusFilter === 'all' && typeFilter === 'all' && languageFilter === 'all') {
-      return providerTree;
+      return unifiedProviderTree;
     }
     const result: ProviderTreeRepository[] = [];
     const q = debouncedSearchQuery.toLowerCase();
 
-    providerTree.forEach((repo) => {
+    unifiedProviderTree.forEach((repo) => {
       const repoMatches = q && repo.name.toLowerCase().includes(q);
       const matchingExts: ProviderTreeRepository['extensions'] = [];
 
@@ -452,7 +501,7 @@ export const ExtensionManagerUI: React.FC = () => {
       }
     });
     return result;
-  }, [providerTree, disabledProviders, debouncedSearchQuery, statusFilter, typeFilter, languageFilter]);
+  }, [unifiedProviderTree, disabledProviders, debouncedSearchQuery, statusFilter, typeFilter, languageFilter]);
 
   // Action Handlers
   const handleFetchRepo = async (urlToFetch?: string, repoName?: string) => {
@@ -1550,6 +1599,7 @@ export const ExtensionManagerUI: React.FC = () => {
 
                           const pluginMeta = safePlugins.find((p) => p.internalName === ext.internalName);
                           const extProgress = taskProgressMap[ext.internalName];
+                          const isExtInstalled = installedPluginNames.has(ext.internalName);
 
                           return (
                             <div
@@ -1603,14 +1653,16 @@ export const ExtensionManagerUI: React.FC = () => {
                                     title="Enable/Disable all providers in this extension"
                                   />
 
-                                  <Puzzle size={15} style={{ color: 'var(--status-success)' }} />
+                                  <Puzzle size={15} style={{ color: isExtInstalled ? 'var(--status-success)' : 'var(--accent-light)' }} />
 
                                   <div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                                       <h5 style={{ fontSize: '0.85rem', fontWeight: 600, color: '#fff', margin: 0 }}>{ext.name}</h5>
                                       <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>({ext.internalName})</span>
-                                      <span className="poster-badge" style={{ position: 'static', fontSize: '0.62rem' }}>
-                                        {ext.providers.length} Providers ({extEnabledCount} Enabled | {extDisabledCount} Disabled)
+                                      <span className="poster-badge" style={{ position: 'static', fontSize: '0.62rem', backgroundColor: isExtInstalled ? undefined : 'rgba(245, 158, 11, 0.2)', color: isExtInstalled ? undefined : '#f59e0b' }}>
+                                        {isExtInstalled
+                                          ? `${ext.providers.length} Providers (${extEnabledCount} Enabled | ${extDisabledCount} Disabled)`
+                                          : `Uninstalled Extension • (Install to activate providers)`}
                                       </span>
                                     </div>
                                     <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
@@ -1634,23 +1686,36 @@ export const ExtensionManagerUI: React.FC = () => {
 
                                   {pluginMeta && (
                                     <>
-                                      <button
-                                        onClick={() => handleUpdate(pluginMeta)}
-                                        className="btn btn-secondary"
-                                        style={{ fontSize: '0.68rem', padding: '0.18rem 0.4rem' }}
-                                        title="Update extension"
-                                      >
-                                        <RefreshCw size={11} />
-                                      </button>
+                                      {isExtInstalled ? (
+                                        <>
+                                          <button
+                                            onClick={() => handleUpdate(pluginMeta)}
+                                            className="btn btn-secondary"
+                                            style={{ fontSize: '0.68rem', padding: '0.18rem 0.4rem' }}
+                                            title="Update extension"
+                                          >
+                                            <RefreshCw size={11} />
+                                          </button>
 
-                                      <button
-                                        onClick={() => handleUninstall(pluginMeta)}
-                                        className="btn btn-secondary"
-                                        style={{ fontSize: '0.68rem', padding: '0.18rem 0.4rem', color: '#ff6b6b' }}
-                                        title="Uninstall extension"
-                                      >
-                                        <Trash2 size={11} />
-                                      </button>
+                                          <button
+                                            onClick={() => handleUninstall(pluginMeta)}
+                                            className="btn btn-secondary"
+                                            style={{ fontSize: '0.68rem', padding: '0.18rem 0.4rem', color: '#ff6b6b' }}
+                                            title="Uninstall extension"
+                                          >
+                                            <Trash2 size={11} />
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <button
+                                          onClick={() => handleInstallPlugin(pluginMeta)}
+                                          className="btn btn-primary"
+                                          style={{ fontSize: '0.68rem', padding: '0.18rem 0.5rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                                        >
+                                          <Download size={11} />
+                                          <span>Install</span>
+                                        </button>
+                                      )}
                                     </>
                                   )}
                                 </div>
@@ -1673,7 +1738,8 @@ export const ExtensionManagerUI: React.FC = () => {
                                       parentRepo: repoTree.name,
                                       providersCount: ext.providers.length,
                                       enabledProvidersCount: extEnabledCount,
-                                      disabledProvidersCount: extDisabledCount
+                                      disabledProvidersCount: extDisabledCount,
+                                      status: isExtInstalled ? 'Installed & Ready' : 'Available in Repository'
                                     }}
                                   />
                                 </div>
@@ -1681,9 +1747,30 @@ export const ExtensionManagerUI: React.FC = () => {
 
                               {/* Individual Scraper Providers Sub-Level */}
                               {isExtExpanded && (
-                                <div style={{ padding: '0.4rem 0.85rem 0.6rem 2.2rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.4rem', background: 'rgba(0,0,0,0.2)' }}>
-                                  {ext.providers.length === 0 ? (
-                                    <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>No providers registered yet (archive loading...)</p>
+                                <div style={{ padding: '0.4rem 0.85rem 0.6rem 2.2rem', display: 'grid', gridTemplateColumns: ext.providers.length > 0 ? 'repeat(auto-fill, minmax(220px, 1fr))' : '1fr', gap: '0.4rem', background: 'rgba(0,0,0,0.2)' }}>
+                                  {!isExtInstalled ? (
+                                    <div style={{ padding: '0.5rem 0.75rem', background: 'rgba(59, 130, 246, 0.1)', border: '1px dashed rgba(59, 130, 246, 0.3)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+                                      <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                        📦 Extension archive <strong>{ext.name}</strong> is available in <strong>{repoTree.name}</strong>. Install to activate its scraper providers.
+                                      </span>
+                                      {pluginMeta && (
+                                        <button
+                                          onClick={() => handleInstallPlugin(pluginMeta)}
+                                          className="btn btn-primary"
+                                          style={{ fontSize: '0.72rem', padding: '0.25rem 0.65rem', display: 'flex', alignItems: 'center', gap: '0.3rem', whiteSpace: 'nowrap' }}
+                                        >
+                                          <Download size={12} />
+                                          <span>Install Extension</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                  ) : ext.providers.length === 0 ? (
+                                    <div style={{ padding: '0.5rem 0.75rem', background: 'rgba(245, 158, 11, 0.1)', border: '1px dashed rgba(245, 158, 11, 0.3)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                      <Loader2 size={14} className="spin" style={{ color: '#f59e0b' }} />
+                                      <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                        JVM sidecar is initializing providers for <strong>{ext.name}</strong>...
+                                      </span>
+                                    </div>
                                   ) : (
                                     ext.providers.map((p) => {
                                       const isDisabled = disabledProviders.has(p.name);
