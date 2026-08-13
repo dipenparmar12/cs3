@@ -78,7 +78,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
             <button
               onClick={this.handleReset}
               className="btn btn-primary"
@@ -86,6 +86,20 @@ export class ErrorBoundary extends Component<Props, State> {
             >
               <RefreshCw size={16} />
               <span>Try Again</span>
+            </button>
+            <button
+              onClick={() => {
+                if (window.cloudstream?.reloadApp) {
+                  window.cloudstream.reloadApp();
+                } else {
+                  window.location.reload();
+                }
+              }}
+              className="btn btn-secondary"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              <RefreshCw size={16} />
+              <span>Reload App (F5)</span>
             </button>
           </div>
         </div>

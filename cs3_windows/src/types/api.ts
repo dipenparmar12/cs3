@@ -25,6 +25,23 @@ export const DubStatus = {
 } as const;
 export type DubStatus = (typeof DubStatus)[keyof typeof DubStatus];
 
+export const WatchStatus = {
+  Watching: 'Watching',
+  Completed: 'Completed',
+  OnHold: 'OnHold',
+  PlanToWatch: 'PlanToWatch',
+  Dropped: 'Dropped',
+} as const;
+export type WatchStatus = (typeof WatchStatus)[keyof typeof WatchStatus];
+
+export const BUCKET_LABELS: Record<WatchStatus, string> = {
+  Watching: 'Watching',
+  Completed: 'Completed',
+  OnHold: 'On hold',
+  PlanToWatch: 'Plan to watch',
+  Dropped: 'Dropped',
+};
+
 export interface SearchResponse {
   name: string;
   url: string;

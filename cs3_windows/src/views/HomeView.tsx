@@ -3,6 +3,7 @@ import type { SearchResponse } from '../types/api';
 import { Play, Sparkles, Film, Tv, History, Loader2 } from 'lucide-react';
 import type { WatchProgress } from '../../electron/cs3/libraryStore';
 import { TvType } from '../types/api';
+import { PosterCard } from '../components/PosterCard';
 
 interface HomeViewProps {
   onSelectMedia: (item: SearchResponse) => void;
@@ -98,26 +99,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia }) => {
 
       <div className="poster-grid">
         {items.map((item, idx) => (
-          <div key={idx} className="poster-card" onClick={() => onSelectMedia(item)}>
-            <div className="poster-container">
-              <img src={item.posterUrl} alt={item.name} loading="lazy" />
-              <span className="poster-badge">{item.type || 'Media'}</span>
-
-              <div className="poster-overlay">
-                <button className="play-button-overlay">
-                  <Play size={20} fill="#fff" />
-                </button>
-              </div>
-            </div>
-
-            <div className="poster-info">
-              <h4 className="poster-title">{item.name}</h4>
-              <div className="poster-meta">
-                <span>{item.year || 2024}</span>
-                <span style={{ color: 'var(--accent-light)', fontSize: '0.72rem' }}>{item.apiName}</span>
-              </div>
-            </div>
-          </div>
+          <PosterCard key={`${item.url}-${idx}`} item={item} onSelectMedia={onSelectMedia} />
         ))}
       </div>
     </div>

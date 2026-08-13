@@ -443,6 +443,95 @@
 .hover-menu__option--active { color: var(--accent-primary); font-weight: 600; }
 .hover-menu__detail { font-size: 0.7rem; color: var(--text-subtle); }
 
+/* --- Content Hover Preview Popup Card --- */
+.hover-preview-popup {
+  position: fixed;
+  z-index: 99990;
+  width: 310px;
+  background: rgba(18, 22, 32, 0.97);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+  animation: popupFadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  pointer-events: auto;
+}
+
+@keyframes popupFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.hover-preview-popup__banner {
+  position: relative;
+  width: 100%;
+  height: 130px;
+  background-size: cover;
+  background-position: center;
+  background-color: #121620;
+}
+
+.hover-preview-popup__banner-gradient {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(18,22,32,0.2) 0%, rgba(18,22,32,0.96) 100%);
+}
+
+.hover-preview-popup__content {
+  padding: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.hover-preview-popup__title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0;
+  line-height: 1.3;
+}
+
+.hover-preview-popup__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  font-size: 0.73rem;
+  color: var(--text-muted, #9ca3af);
+}
+
+.hover-preview-popup__plot {
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #d1d5db;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 0;
+}
+
+.hover-preview-popup__tags {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.hover-preview-popup__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
 /* Small numeral on the skip buttons, so ±10s reads at a glance. */
 .icon-button { position: relative; }
 .icon-button__badge {

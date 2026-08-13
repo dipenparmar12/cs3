@@ -203,6 +203,8 @@ export interface CloudStreamElectronAPI {
   importBackup: (filePath: string) => Promise<boolean>;
   exportBackup: () => Promise<string>;
   selectDirectory: () => Promise<string | null>;
+  reloadApp: () => Promise<void>;
+  relaunchApp: () => Promise<void>;
 }
 
 export type { TorrentFileEntry };
@@ -309,6 +311,8 @@ const api: CloudStreamElectronAPI = {
   importBackup: (filePath) => ipcRenderer.invoke('datastore:importBackup', filePath),
   exportBackup: () => ipcRenderer.invoke('datastore:exportBackup'),
   selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
+  reloadApp: () => ipcRenderer.invoke('app:reload'),
+  relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
 };
 
 contextBridge.exposeInMainWorld('cloudstream', api);

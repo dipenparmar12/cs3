@@ -221,17 +221,27 @@ export const App: React.FC = () => {
             />
           ) : (
             <>
-              {activeTab === 'home' && <HomeView onSelectMedia={handleSelectMedia} />}
-              {activeTab === 'search' && (
-                <SearchView
-                  query={searchQuery}
-                  results={searchResults}
-                  onSelectMedia={handleSelectMedia}
-                  isLoading={isSearching}
-                  error={searchError}
-                />
+              {activeTab === 'home' && (
+                <ErrorBoundary>
+                  <HomeView onSelectMedia={handleSelectMedia} />
+                </ErrorBoundary>
               )}
-              {activeTab === 'library' && <LibraryView onSelectMedia={handleSelectMedia} />}
+              {activeTab === 'search' && (
+                <ErrorBoundary>
+                  <SearchView
+                    query={searchQuery}
+                    results={searchResults}
+                    onSelectMedia={handleSelectMedia}
+                    isLoading={isSearching}
+                    error={searchError}
+                  />
+                </ErrorBoundary>
+              )}
+              {activeTab === 'library' && (
+                <ErrorBoundary>
+                  <LibraryView onSelectMedia={handleSelectMedia} />
+                </ErrorBoundary>
+              )}
               {activeTab === 'downloads' && (
                 <DownloadCenter
                   tasks={downloadQueue}
@@ -249,10 +259,12 @@ export const App: React.FC = () => {
                 </ErrorBoundary>
               )}
               {activeTab === 'settings' && (
-                <SettingsView
-                  hasBinaries={hasBinaries}
-                  onOpenBinarySetup={() => setIsBinaryModalOpen(true)}
-                />
+                <ErrorBoundary>
+                  <SettingsView
+                    hasBinaries={hasBinaries}
+                    onOpenBinarySetup={() => setIsBinaryModalOpen(true)}
+                  />
+                </ErrorBoundary>
               )}
             </>
           )}

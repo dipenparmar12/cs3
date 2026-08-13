@@ -14,6 +14,7 @@ import {
   type SeriesContext,
 } from '../components/player/seriesContext';
 import { SeasonDownloadDialog } from '../components/SeasonDownloadDialog';
+import { LibraryBucketSelector } from '../components/LibraryBucketSelector';
 
 export interface PlaybackRequest {
   streamUrl: string;
@@ -558,6 +559,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
                   ? 'Play first episode'
                   : 'Play'}
             </button>
+            <LibraryBucketSelector item={detail} size="md" />
             <button
               className="btn"
               onClick={() => openSources(isSeries ? episodesInSeason[0] ?? null : null)}

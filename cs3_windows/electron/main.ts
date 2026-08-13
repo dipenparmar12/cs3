@@ -57,6 +57,25 @@ function createWindow() {
   });
 
   Menu.setApplicationMenu(null);
+
+  // Register developer keyboard shortcuts (F5, Ctrl+R, F12, Ctrl+Shift+I) so reloads & DevTools always work
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    // F5 or Ctrl+R / Cmd+R -> Reload window
+    if ((input.key.toLowerCase() === 'r' && (input.control || input.meta)) || input.key === 'F5') {
+      if (input.shift) {
+        mainWindow?.webContents.reloadIgnoringCache();
+      } else {
+        mainWindow?.webContents.reload();
+      }
+      event.preventDefault();
+    }
+    // F12 or Ctrl+Shift+I / Cmd+Option+I -> Toggle Chromium DevTools
+    if (input.key === 'F12' || (input.key.toLowerCase() === 'i' && (input.control || input.meta) && input.shift)) {
+      mainWindow?.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+  });
+
   mainWindow.once('ready-to-show', () => mainWindow?.show());
 
   // External links open in the system browser, never in-app (SEC-7 / DSK-36).
@@ -456,4 +475,13 @@ ipcMain.handle('dialog:selectDirectory', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+});
+
+ipcMain.handle('app:reload', async () => {
+  mainWindow?.webContents.reload();
+});
+
+ipcMain.handle('app:relaunch', async () => {
+  app.relaunch();
+  app.exit(0);
 });
