@@ -13,6 +13,9 @@ interface PosterCardProps {
   showBucketButton?: boolean;
 }
 
+/** Feature flag to control hover preview popups on cards. Set to true to enable. */
+const ENABLE_HOVER_CARD_PREVIEW = false;
+
 export const PosterCard: React.FC<PosterCardProps> = ({
   item,
   onSelectMedia,
@@ -27,6 +30,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
   const hoverTimer = useRef<number | null>(null);
 
   const handleMouseEnter = () => {
+    if (!ENABLE_HOVER_CARD_PREVIEW) return;
     if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
     hoverTimer.current = window.setTimeout(() => {
       if (cardRef.current) {
@@ -50,7 +54,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
   return (
     <div
       ref={cardRef}
-      className={`poster-card${hoverCardOpen ? ' poster-card--active-hover' : ''}`}
+      className={`poster-card${ENABLE_HOVER_CARD_PREVIEW && hoverCardOpen ? ' poster-card--active-hover' : ''}`}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
@@ -93,7 +97,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
         )}
       </div>
 
-      {hoverCardOpen && (
+      {ENABLE_HOVER_CARD_PREVIEW && hoverCardOpen && (
         <ContentHoverCard
           item={item}
           alignRight={alignRight}
