@@ -277,6 +277,7 @@
   padding: 1rem 1.25rem;
   background: linear-gradient(to bottom, rgba(0, 0, 0, 0.75), transparent);
   transition: opacity 0.25s;
+  user-select: none;
 }
 .player__titles h2 { font-size: 1rem; font-weight: 700; color: #fff; }
 .player__titles p { font-size: 0.8rem; color: var(--text-muted); }
@@ -291,6 +292,7 @@
   padding: 0.8rem 1.25rem 1rem;
   background: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent);
   transition: opacity 0.25s;
+  user-select: none;
 }
 .player__top.hidden, .player__controls.hidden { opacity: 0; pointer-events: none; }
 
@@ -303,6 +305,7 @@
   display: flex;
   align-items: center;
   cursor: pointer;
+  user-select: none;
 }
 /* Stacked bars: the torrent's downloaded fraction bounds what can be seeked to
    at all, the browser buffer is what is decoded and ready right now, and the
@@ -651,7 +654,7 @@
 
 .player__buttons { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.4rem; }
 .player__time { font-size: 0.8rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.player__volume { width: 90px; accent-color: var(--accent-primary); }
+.player__volume { width: 90px; accent-color: var(--accent-primary); user-select: none; }
 .player__spacer { flex: 1; }
 .player__select {
   background: rgba(255, 255, 255, 0.08);
