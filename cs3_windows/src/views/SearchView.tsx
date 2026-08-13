@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import type { SearchResponse } from '../types/api';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
-import { AlertTriangle, CheckCircle2, Globe, Loader2, Search, Target, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, Search, Target, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
 import { FacetMenu, type FacetOption } from '../components/FacetMenu';
 
@@ -238,8 +238,10 @@ const ResultGrid: React.FC<{
 }> = ({ results, onSelectMedia, onPlayDirectly }) => {
   const exact = results.filter((item) => item?.isExactMatch);
   const others = results.filter((item) => !item?.isExactMatch);
+  const hasBoth = exact.length > 0 && others.length > 0;
+  const [showOthers, setShowOthers] = useState(false);
 
-  if (exact.length > 0 && others.length > 0) {
+  if (hasBoth) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
         <section style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -253,10 +255,35 @@ const ResultGrid: React.FC<{
 
         <section style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div className="search-section">
-            <Search size={16} style={{ color: 'var(--text-subtle)' }} />
-            <h3 className="search-section__muted">Other matches ({others.length})</h3>
+            <button
+              className="search-section__toggle"
+              onClick={() => setShowOthers(!showOthers)}
+              aria-expanded={showOthers}
+              aria-controls="other-matches-list"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                background: 'none',
+                border: 'none',
+                color: 'inherit',
+                cursor: 'pointer',
+                padding: 0,
+                font: 'inherit',
+              }}
+            >
+              {showOthers ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              <Search size={16} style={{ color: 'var(--text-subtle)' }} />
+              <h3 className="search-section__muted" style={{ margin: 0 }}>
+                Other matches ({others.length})
+              </h3>
+            </button>
           </div>
-          <Grid items={others} onSelectMedia={onSelectMedia} onPlayDirectly={onPlayDirectly} />
+          {showOthers && (
+            <div id="other-matches-list">
+              <Grid items={others} onSelectMedia={onSelectMedia} onPlayDirectly={onPlayDirectly} />
+            </div>
+          )}
         </section>
       </div>
     );
