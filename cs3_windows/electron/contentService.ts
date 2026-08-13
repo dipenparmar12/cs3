@@ -544,11 +544,32 @@ export class ContentService {
     candidates: TorrentResult[],
     season?: number,
     episode?: number,
-    options: { maxAttempts?: number; perSourceMs?: number } = {}
+    options: {
+      maxAttempts?: number;
+      perSourceMs?: number;
+      /**
+       * Abandons the walk. Anything already started is torn down, so a
+       * superseded attempt stops competing for bandwidth with the one the
+       * viewer is actually waiting on.
+       */
+      signal?: AbortSignal;
+      /**
+       * Returns as soon as the stream exists rather than waiting for it to
+       * become playable. Set for an explicit choice: the viewer picked this
+       * release, so they should be watching it buffer, not watching a spinner
+       * decide whether their choice was allowed.
+       */
+      returnImmediately?: boolean;
+    } = {}
   ): Promise<AutoStreamResult> {
     const maxAttempts = options.maxAttempts ?? DEFAULT_FAILOVER_ATTEMPTS;
     const perSourceMs = options.perSourceMs ?? DEFAULT_SOURCE_BUDGET_MS;
+    const signal = options.signal;
     const attempts: StreamAttempt[] = [];
+
+    const abortError = () => Object.assign(new Error('Superseded by a newer selection.'), {
+      name: 'AbortError',
+    });
 
     const usable = candidates.filter(
       (c) => c.directUrl || c.magnet || c.torrentUrl || c.infoHash
@@ -558,6 +579,8 @@ export class ContentService {
     }
 
     for (const source of usable.slice(0, maxAttempts)) {
+      if (signal?.aborted) throw abortError();
+
       let handle: StreamHandle | null = null;
       try {
         handle = await this.startStream(source, season, episode);
@@ -570,6 +593,13 @@ export class ContentService {
         continue;
       }
 
+      // Started while being superseded: tear it down rather than leave a swarm
+      // running for a source nobody is waiting for.
+      if (signal?.aborted) {
+        await this.engine.stopStream(handle.infoHash, false);
+        throw abortError();
+      }
+
       // A direct stream has no swarm to become playable; the URL either serves
       // bytes or the player reports the failure. Waiting on torrent readiness
       // here would block forever on a source that is already ready.
@@ -577,7 +607,23 @@ export class ContentService {
         return { handle, source, attempts };
       }
 
-      const verdict = await this.engine.waitUntilPlayable(handle.infoHash, perSourceMs);
+      // An explicit choice starts now. Readiness is the player's problem from
+      // here — it already renders buffer progress, peers and speed, which is
+      // strictly more informative than a blank wait.
+      if (options.returnImmediately) {
+        return { handle, source, attempts };
+      }
+
+      const verdict = await this.engine.waitUntilPlayable(
+        handle.infoHash,
+        perSourceMs,
+        signal
+      );
+
+      if (verdict.aborted) {
+        await this.engine.stopStream(handle.infoHash, false);
+        throw abortError();
+      }
       if (verdict.playable) {
         return { handle, source, attempts };
       }

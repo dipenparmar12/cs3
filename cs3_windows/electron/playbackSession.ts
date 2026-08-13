@@ -72,6 +72,8 @@ interface Session {
   generation: number;
   /** True once any stream start has been initiated, so auto-start fires once. */
   started: boolean;
+  /** Cancels the in-flight start when a newer one supersedes it. */
+  inFlight?: AbortController;
   disposed: boolean;
 }
 
@@ -228,10 +230,12 @@ export class PlaybackSessionManager {
       return this.snapshot(session);
     }
 
-    // Only this source is attempted. The viewer picked it deliberately, so
-    // silently failing over to a different release would be a worse answer than
-    // saying it did not work.
-    await this.beginStream(session, [chosen], { failover: false });
+    // Only this source is attempted, and it starts immediately. The viewer
+    // picked it deliberately: failing over to a different release would be a
+    // worse answer than saying it did not work, and making them wait out a
+    // readiness check before anything happens is what made choosing a source
+    // feel like it had been ignored.
+    await this.beginStream(session, [chosen], { failover: false, immediate: true });
     return this.snapshot(session);
   }
 
@@ -252,10 +256,24 @@ export class PlaybackSessionManager {
   private async beginStream(
     session: Session,
     candidates: TorrentResult[],
-    options: { failover?: boolean; isRecovery?: boolean } = {}
+    options: { failover?: boolean; isRecovery?: boolean; immediate?: boolean } = {}
   ): Promise<void> {
     const generation = ++session.generation;
     const previousInfoHash = session.activeInfoHash;
+
+    /**
+     * Cancel whatever was in flight, for real.
+     *
+     * Bumping the generation only stops a stale result from *overwriting*
+     * state; the work itself carried on. A failover walk can spend four
+     * candidates × a 25 s readiness budget, so after picking a different
+     * source the app could spend a minute and a half still downloading the
+     * release the viewer had just rejected — competing for the same bandwidth
+     * as their actual choice. That is the "it just keeps loading" report.
+     */
+    session.inFlight?.abort();
+    const controller = new AbortController();
+    session.inFlight = controller;
 
     session.started = true;
     session.phase = 'starting';
@@ -263,12 +281,24 @@ export class PlaybackSessionManager {
     session.attempts = [];
     this.emit(session);
 
+    // The superseded stream is dropped now rather than when its own walk
+    // eventually notices, so the chosen source gets the bandwidth immediately.
+    if (options.immediate && previousInfoHash) {
+      await this.content.getEngine().stopStream(previousInfoHash, true);
+      session.activeInfoHash = undefined;
+      session.handle = undefined;
+    }
+
     try {
       const result = await this.content.startBestStream(
         candidates,
         session.request.season,
         session.request.episode,
-        options.failover === false ? { maxAttempts: 1 } : {}
+        {
+          ...(options.failover === false ? { maxAttempts: 1 } : {}),
+          signal: controller.signal,
+          returnImmediately: options.immediate,
+        }
       );
 
       // A newer start superseded this one while it was negotiating; its stream
@@ -290,6 +320,9 @@ export class PlaybackSessionManager {
         await this.content.getEngine().stopStream(previousInfoHash, true);
       }
     } catch (error) {
+      // An abort is the expected outcome of the viewer changing their mind,
+      // not a failure to report at them.
+      if (error instanceof Error && error.name === 'AbortError') return;
       if (session.disposed || generation !== session.generation) return;
 
       /**
@@ -335,6 +368,9 @@ export class PlaybackSessionManager {
     if (!session) return;
 
     session.disposed = true;
+    // Closing the player must stop the search too, or a walk keeps running and
+    // starting swarms for a session nobody is watching.
+    session.inFlight?.abort();
     this.sessions.delete(sessionId);
 
     if (session.activeInfoHash) {

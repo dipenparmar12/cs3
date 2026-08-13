@@ -657,11 +657,58 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video.playbackRate = speed;
   }, [volume, isMuted, speed]);
 
-  const revealControls = useCallback(() => {
-    setControlsVisible(true);
-    if (hideControlsTimer.current) window.clearTimeout(hideControlsTimer.current);
-    hideControlsTimer.current = window.setTimeout(() => setControlsVisible(false), 3000);
-  }, []);
+  /**
+   * Shows the controls and schedules their hide.
+   *
+   * Two guards, both fixing observed flicker:
+   *
+   * 1. **Zero-movement `mousemove` is ignored.** Chromium synthesises one
+   *    whenever the element under a stationary cursor changes, and hiding the
+   *    controls changes exactly that. The result was a loop — hide fires,
+   *    layout under the cursor changes, a synthetic move reveals them again,
+   *    three seconds later it repeats — which reads as the controls flashing
+   *    on and off while the mouse is barely moving. `cursor: none` toggling
+   *    produces the same synthetic event.
+   * 2. **Nothing auto-hides while it would take the UI with it.** A viewer
+   *    reading the source list or a paused frame is not idle, and hiding the
+   *    chrome under their pointer is never what they meant.
+   */
+  const lastPointer = useRef<{ x: number; y: number } | null>(null);
+
+  /**
+   * Conditions under which the controls must stay put. Held in a ref because
+   * the hide timer is scheduled once and must read the value at fire time, not
+   * the value captured when it was created.
+   */
+  const keepControls =
+    panelOpen || sourcePanelOpen || subtitlePanelOpen || !isPlaying || Boolean(error);
+  const keepControlsRef = useRef(keepControls);
+  useEffect(() => {
+    keepControlsRef.current = keepControls;
+    // Becoming pinned mid-countdown must cancel the pending hide, not wait for
+    // it to fire and be ignored.
+    if (keepControls) setControlsVisible(true);
+  }, [keepControls]);
+
+  const revealControls = useCallback(
+    (event?: React.MouseEvent) => {
+      if (event) {
+        const last = lastPointer.current;
+        const moved =
+          !last || Math.abs(event.clientX - last.x) > 1 || Math.abs(event.clientY - last.y) > 1;
+        lastPointer.current = { x: event.clientX, y: event.clientY };
+        if (!moved) return;
+      }
+
+      setControlsVisible(true);
+      if (hideControlsTimer.current) window.clearTimeout(hideControlsTimer.current);
+      hideControlsTimer.current = window.setTimeout(() => {
+        if (keepControlsRef.current) return;
+        setControlsVisible(false);
+      }, 3000);
+    },
+    []
+  );
 
   // --- seek bar interaction ------------------------------------------------
 
@@ -887,7 +934,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   return (
     <div
       ref={containerRef}
-      className={`player${controlsVisible ? '' : ' player--idle'}`}
+      className={`player${controlsVisible || keepControls ? '' : ' player--idle'}`}
       onMouseMove={revealControls}
       onPointerDown={handlePlayerPointerDown}
     >
@@ -1077,6 +1124,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onSelect={(source) => {
             setPendingSourceHash(source.infoHash);
             sourceSession.onSelectSource(source);
+            // Close on choose: the panel covers the video, and leaving it up
+            // over the stream the viewer just asked for is what made picking a
+            // source feel like nothing had happened.
+            setSourcePanelOpen(false);
           }}
           onRefresh={sourceSession.onRefresh}
           onDownload={sourceSession.onDownloadSource}

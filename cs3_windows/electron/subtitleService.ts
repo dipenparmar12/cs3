@@ -62,7 +62,22 @@ const LANGUAGE_NAMES: Record<string, string> = {
   vie: 'Vietnamese', tha: 'Thai', ind: 'Indonesian', may: 'Malay', per: 'Persian',
   srp: 'Serbian', hrv: 'Croatian', slo: 'Slovak', slv: 'Slovenian', est: 'Estonian',
   lav: 'Latvian', lit: 'Lithuanian', alb: 'Albanian', mac: 'Macedonian',
+
+  // ISO 639-2 has two variants for a number of languages — bibliographic (/B)
+  // and terminological (/T) — and OpenSubtitles emits both. Without the /T
+  // spellings the picker showed raw codes like "ELL", "NLD" and "RON" instead
+  // of Greek, Dutch and Romanian.
+  ell: 'Greek', nld: 'Dutch', ron: 'Romanian', fra: 'French', deu: 'German',
+  ces: 'Czech', fas: 'Persian', zho: 'Chinese', slk: 'Slovak', sqi: 'Albanian',
+  mkd: 'Macedonian', msa: 'Malay', hye: 'Armenian', isl: 'Icelandic',
+  eus: 'Basque', cym: 'Welsh', mya: 'Burmese', bod: 'Tibetan',
 };
+
+/**
+ * Every code OpenSubtitles uses for English. `eng` is ISO 639-2, `en` is 639-1,
+ * and both appear depending on which upload the addon is proxying.
+ */
+const ENGLISH_CODES = new Set(['eng', 'en', 'en-us', 'en-gb']);
 
 export function languageName(code: string): string {
   return LANGUAGE_NAMES[code.toLowerCase()] ?? code.toUpperCase();
@@ -132,9 +147,20 @@ export class SubtitleService {
       perLanguage.set(item.lang, list);
     }
 
-    return [...perLanguage.values()]
-      .flat()
-      .sort((a, b) => a.langName.localeCompare(b.langName));
+    /**
+     * English first, then everything else alphabetically.
+     *
+     * Alphabetical alone buried English under Albanian, Arabic, Bulgarian,
+     * Croatian and Danish — a scroll past a dozen languages to reach the one
+     * most viewers want. Sorting purely by name treats the list as a reference
+     * table; it is a picker, and a picker should open on the likely answer.
+     */
+    return [...perLanguage.values()].flat().sort((a, b) => {
+      const aEnglish = ENGLISH_CODES.has(a.lang.toLowerCase());
+      const bEnglish = ENGLISH_CODES.has(b.lang.toLowerCase());
+      if (aEnglish !== bEnglish) return aEnglish ? -1 : 1;
+      return a.langName.localeCompare(b.langName);
+    });
   }
 
   /** Downloads one subtitle and returns it as WebVTT text. */
