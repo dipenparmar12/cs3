@@ -1,8 +1,14 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  X, Play, RefreshCw, Loader2, Users, HardDrive, Radio, Check, AlertTriangle, Download,
+  X, Play, RefreshCw, Loader2, Users, HardDrive, Radio, Check, AlertTriangle, Download, Filter,
 } from 'lucide-react';
 import type { TorrentResult } from '../../types/torrent';
+import { SourceFilterBar } from '../SourceFilterBar';
+import {
+  DEFAULT_FILTER_STATE,
+  filterAndSortSources,
+  type SourceFilterState,
+} from '../../utils/sourceFilter';
 
 /**
  * In-player source switcher.
@@ -72,6 +78,14 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
   onRefresh,
   onDownload,
 }) => {
+  const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);
+  const [showFilterBar, setShowFilterBar] = useState(true);
+
+  const displayedSources = useMemo(
+    () => filterAndSortSources(sources, filterState),
+    [sources, filterState]
+  );
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -93,12 +107,20 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
           <h3>Sources</h3>
           <div className="player-panel__facts">
             <span>
-              {sources.length} found
+              {displayedSources.length} showing (of {sources.length} total)
               {searching && totalIndexers > 0 && ` · searching ${searched}/${totalIndexers}`}
             </span>
           </div>
         </div>
         <div className="player-panel__head-actions">
+          <button
+            className={`icon-button${showFilterBar ? ' active' : ''}`}
+            onClick={() => setShowFilterBar((v) => !v)}
+            title="Filter and sort sources"
+            aria-label="Filter sources"
+          >
+            <Filter size={18} />
+          </button>
           <button
             className="icon-button"
             onClick={onRefresh}
@@ -113,6 +135,16 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
           </button>
         </div>
       </header>
+
+      {showFilterBar && (
+        <SourceFilterBar
+          filterState={filterState}
+          onChange={setFilterState}
+          totalCount={sources.length}
+          filteredCount={displayedSources.length}
+          compact
+        />
+      )}
 
       {error && (
         <p className="player-panel__error">
@@ -130,7 +162,7 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
         the text block between them.
       */}
       <ul className="player-panel__sources">
-        {sources.map((source) => {
+        {displayedSources.map((source) => {
           const isActive = source.infoHash === activeInfoHash;
           const isSwitching = switchingTo === source.infoHash;
 
