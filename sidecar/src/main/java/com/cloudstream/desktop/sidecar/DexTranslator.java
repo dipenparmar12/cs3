@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -106,7 +107,16 @@ public final class DexTranslator {
 
         // Translate to a temp file and move into place, so an interrupted run can
         // never leave a partial jar that a later load would treat as cached.
-        Path tmp = cacheRoot.resolve(sha + ".jar.tmp");
+        //
+        // The temp name carries a nonce as well as the hash. Keying it on the
+        // hash alone made two concurrent translations of the *same* archive
+        // collide — which is not hypothetical: installing a plugin inspects it
+        // and loading it translates it again, and those calls run on separate
+        // workers. One would win the create and the other would fail with
+        // NoSuchFileException or FileAlreadyExistsException, surfacing as a
+        // bogus TRANSLATION_FAILED. The final move stays atomic, so a race now
+        // costs one duplicated translation instead of a spurious failure.
+        Path tmp = cacheRoot.resolve(sha + "." + UUID.randomUUID() + ".jar.tmp");
         try {
             BaseDexFileReader reader = MultiDexFileReader.open(packForReader(dexes));
             Dex2jar.from(reader)

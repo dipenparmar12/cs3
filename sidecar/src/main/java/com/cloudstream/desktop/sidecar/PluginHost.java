@@ -195,9 +195,19 @@ public final class PluginHost {
             // Advisory on Android too; a failure here does not block the load.
         }
 
-        // Step 4 — the plugin's own loader over the translated archive.
+        // Step 4 — the plugin's own loader.
+        //
+        // Two entries, and both are needed. dex2jar converts `classes.dex` and
+        // nothing else, so the translated jar holds the code but none of the
+        // archive's other members — including `manifest.json`, which step 5 has
+        // to read through this very loader. On Android the `.cs3` *is* the
+        // classpath entry and its resources resolve naturally; adding the
+        // original archive alongside the translated classes reproduces that,
+        // and leaves the archive itself untouched (DROP-3).
         PluginClassLoader loader = new PluginClassLoader(
-                pluginId, new URL[]{t.translatedJar().toUri().toURL()}, shared());
+                pluginId,
+                new URL[]{ t.translatedJar().toUri().toURL(), cs3.toUri().toURL() },
+                shared());
 
         // Step 5 — read manifest.json *through* the loader, not from the zip.
         String manifestJson;
