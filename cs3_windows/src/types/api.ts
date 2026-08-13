@@ -96,6 +96,29 @@ export interface SearchSuggestion {
   sources: string[];
 }
 
+/**
+ * The exact work the viewer meant, when they picked it rather than typed it.
+ *
+ * Choosing "Spider-Man: No Way Home" from the dropdown is a much stronger
+ * statement than the text "spider-man": it names one work, out of a franchise
+ * of a dozen that all match that text. Carrying the identity through to the
+ * search is what lets the results honour the choice instead of re-deriving a
+ * guess from the title string.
+ */
+export interface ExactMedia {
+  title: string;
+  year?: number;
+  type?: TvType;
+  imdbId?: string;
+  /** The catalogue URL the suggestion came from, so the row always survives. */
+  url?: string;
+  posterUrl?: string;
+}
+
+export interface SearchOptions {
+  exact?: ExactMedia;
+}
+
 /** One past search, newest first. */
 export interface SearchHistoryEntry {
   query: string;

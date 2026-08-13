@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { TvType, type SearchResponse } from '../src/types/api';
+import { TvType, type SearchOptions, type SearchResponse } from '../src/types/api';
 import type {
   IndexerQuery,
   ParsedRelease,
@@ -19,7 +19,7 @@ import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
 import type { PluginManager } from './pluginManager';
 import { SourceCache } from './sourceCache';
-import { mergeSearchResults } from './searchMerge';
+import { mergeSearchResults, restrictToExact } from './searchMerge';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -127,7 +127,10 @@ export class ContentService {
 
   // --- search --------------------------------------------------------------
 
-  public async search(query: string): Promise<SearchResponse[]> {
+  public async search(
+    query: string,
+    options: SearchOptions = {}
+  ): Promise<SearchResponse[]> {
     const trimmed = query.trim();
     if (!trimmed) return [];
 
@@ -181,8 +184,18 @@ export class ContentService {
      * what lets one title draw sources from both ecosystems.
      */
     const merged = mergeSearchResults(results);
-    this.rememberRoutes(merged);
-    return merged;
+
+    /**
+     * A picked suggestion names one work, so the results show that work.
+     *
+     * Filtering after the fan-out rather than before it is forced by the
+     * providers: an extension takes text and nothing else, so it cannot be
+     * asked for an IMDb id. It answers with everything its site matched, and
+     * this is where that becomes the specific answer requested.
+     */
+    const scoped = options.exact ? restrictToExact(merged, options.exact) : merged;
+    this.rememberRoutes(scoped);
+    return scoped;
   }
 
   public async load(url: string): Promise<MetadataDetail | null> {

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
   SearchHistoryEntry,
+  SearchOptions,
   SearchResponse,
   SearchSuggestion,
 } from '../src/types/api';
@@ -51,7 +52,10 @@ export interface Envelope {
 
 export interface CloudStreamElectronAPI {
   // Content
-  searchAll: (query: string) => Promise<Envelope & { results: SearchResponse[] }>;
+  searchAll: (
+    query: string,
+    options?: SearchOptions
+  ) => Promise<Envelope & { results: SearchResponse[] }>;
   loadMedia: (url: string) => Promise<Envelope & { detail: MetadataDetail | null }>;
   getSources: (request: {
     mediaUrl: string;
@@ -293,7 +297,7 @@ export interface CloudStreamElectronAPI {
 export type { TorrentFileEntry };
 
 const api: CloudStreamElectronAPI = {
-  searchAll: (query) => ipcRenderer.invoke('api:searchAll', query),
+  searchAll: (query, options) => ipcRenderer.invoke('api:searchAll', query, options),
   loadMedia: (url) => ipcRenderer.invoke('api:loadMedia', url),
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),

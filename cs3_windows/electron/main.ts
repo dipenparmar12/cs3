@@ -20,6 +20,7 @@ import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
 import type { DownloadTask } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
 import type { IndexerConfig, SourcePreferences, TorrentResult } from '../src/types/torrent';
+import type { SearchOptions } from '../src/types/api';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -179,9 +180,9 @@ function fail(error: unknown): { ok: false; error: string } {
 
 // --- content -------------------------------------------------------------
 
-ipcMain.handle('api:searchAll', async (_, query: string) => {
+ipcMain.handle('api:searchAll', async (_, query: string, options?: SearchOptions) => {
   try {
-    const results = await contentService.search(query);
+    const results = await contentService.search(query, options ?? {});
     // Recorded on success only: a query that failed transport is not something
     // the user asked to remember.
     searchHistory.record(query, results.length);

@@ -19,7 +19,7 @@ import { SettingsView } from './views/SettingsView';
 
 import { ErrorBoundary } from './components/ErrorBoundary';
 
-import type { Episode, SearchResponse } from './types/api';
+import type { Episode, SearchOptions, SearchResponse } from './types/api';
 import type { DownloadTask } from './types/download';
 import type { TorrentResult } from './types/torrent';
 import type { PlaybackSnapshot } from '../electron/playbackSession';
@@ -104,7 +104,7 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  const handleSearch = async (query: string) => {
+  const handleSearch = async (query: string, options?: SearchOptions) => {
     setSearchQuery(query);
     setSelectedMedia(null); // Instantly dismiss open DetailView overlay
     setSearchResults([]);   // Instantly clear old search results
@@ -114,7 +114,7 @@ export const App: React.FC = () => {
 
     if (window.cloudstream) {
       try {
-        const response = await window.cloudstream.searchAll(query);
+        const response = await window.cloudstream.searchAll(query, options);
         setSearchResults(Array.isArray(response?.results) ? response.results : []);
         if (!response.ok && response.error) setSearchError(response.error);
       } catch (err) {

@@ -1,10 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Search, Bug, Check, ChevronDown, Filter, Loader2 } from 'lucide-react';
-import type { SearchHistoryEntry, SearchSuggestion } from '../types/api';
+import type {
+  ExactMedia,
+  SearchHistoryEntry,
+  SearchOptions,
+  SearchSuggestion,
+} from '../types/api';
 import { SearchSuggestions } from './SearchSuggestions';
 
 interface NavbarProps {
-  onSearch: (query: string, selectedProviders?: string[]) => void;
+  onSearch: (query: string, options?: SearchOptions) => void;
   isSearching?: boolean;
   onOpenInspector: () => void;
   providers: string[];
@@ -85,19 +90,41 @@ export const Navbar: React.FC<NavbarProps> = ({
   useEffect(() => setHighlightedIndex(-1), [query]);
 
   const runSearch = useCallback(
-    (text: string) => {
+    (text: string, exact?: ExactMedia) => {
       const trimmed = text.trim();
       if (!trimmed) return;
       setQuery(trimmed);
       setSuggestOpen(false);
       setHighlightedIndex(-1);
       inputRef.current?.blur();
-      onSearch(trimmed, selectedProviders);
+      onSearch(trimmed, exact ? { exact } : undefined);
       // The main process records history as part of the search, so re-reading
       // it afterwards is what keeps the list current without a second source.
       window.setTimeout(refreshHistory, 300);
     },
-    [onSearch, selectedProviders, refreshHistory]
+    [onSearch, refreshHistory]
+  );
+
+  /**
+   * Picking a row is a choice of *work*, not a shortcut for typing its name.
+   *
+   * Searching the suggestion's title text put the franchise straight back:
+   * choosing "Spider-Man: No Way Home" returned every Spider-Man film, so the
+   * pick achieved nothing beyond fixing a typo. The identity travels with the
+   * query instead, and the results honour it.
+   */
+  const pickSuggestion = useCallback(
+    (suggestion: SearchSuggestion) => {
+      runSearch(suggestion.title, {
+        title: suggestion.title,
+        year: suggestion.year,
+        type: suggestion.type,
+        imdbId: suggestion.imdbId,
+        url: suggestion.url,
+        posterUrl: suggestion.posterUrl,
+      });
+    },
+    [runSearch]
   );
 
   const historyFirst = query.trim().length < 2;
@@ -135,13 +162,10 @@ export const Navbar: React.FC<NavbarProps> = ({
     if (e.key === 'Enter') {
       const row = orderedRows[highlightedIndex];
       if (row) {
-        // Searching the catalogue's official spelling is the whole point: it is
-        // what indexers actually carry, and what the user probably mistyped.
-        runSearch(
-          row.kind === 'suggestion'
-            ? suggestions[row.index].title
-            : history[row.index].query
-        );
+        // Enter on a highlighted row is the same commitment as clicking it, so
+        // it carries the same identity rather than degrading to a text search.
+        if (row.kind === 'suggestion') pickSuggestion(suggestions[row.index]);
+        else runSearch(history[row.index].query);
         return;
       }
       runSearch(query);
@@ -222,7 +246,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           loading={suggestLoading}
           highlightedIndex={highlightedIndex}
           onHighlight={setHighlightedIndex}
-          onPickSuggestion={(suggestion) => runSearch(suggestion.title)}
+          onPickSuggestion={pickSuggestion}
           onPickHistory={(entry) => runSearch(entry.query)}
           onRemoveHistory={(value) => {
             window.cloudstream?.removeSearchHistory(value).then(setHistory);

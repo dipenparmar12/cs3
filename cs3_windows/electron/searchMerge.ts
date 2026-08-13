@@ -1,5 +1,10 @@
-import { TvType, type SearchAlternate, type SearchResponse } from '../src/types/api';
-import { normaliseTitleForMatch } from './torrent/releaseParser';
+import {
+  TvType,
+  type ExactMedia,
+  type SearchAlternate,
+  type SearchResponse,
+} from '../src/types/api';
+import { normaliseTitleForMatch, titleSimilarity } from './torrent/releaseParser';
 import { parseCinemetaUrl } from './cinemeta';
 
 /**
@@ -64,6 +69,74 @@ interface Group {
   /** Insertion order of the first member, so merging does not reshuffle results. */
   rank: number;
   members: SearchResponse[];
+}
+
+/**
+ * Catalogues disagree about a release year by a year all the time — theatrical
+ * versus festival, US versus original territory, air date versus production.
+ * Demanding exactness would throw away correct matches.
+ */
+const YEAR_TOLERANCE = 1;
+
+/**
+ * Title similarity above which two names are treated as the same work.
+ *
+ * Deliberately high. This gate exists to *reject* franchise siblings, and
+ * "Spider-Man" against "Spider-Man: No Way Home" already scores 0.5 on token
+ * overlap — anything permissive puts back exactly the noise the viewer
+ * eliminated by picking a row.
+ */
+const EXACT_TITLE_THRESHOLD = 0.95;
+
+/**
+ * Does this result name the work the viewer picked?
+ *
+ * An IMDb id settles it outright, in both directions: two different ids are a
+ * definite no, which is what separates the three different films simply called
+ * "The Killers".
+ */
+export function matchesExact(result: SearchResponse, exact: ExactMedia): boolean {
+  const resultImdb = imdbIdOf(result);
+  if (exact.imdbId && resultImdb) return exact.imdbId === resultImdb;
+
+  if (titleSimilarity(result.name, exact.title) < EXACT_TITLE_THRESHOLD) return false;
+
+  // A missing year cannot contradict one. Extension providers rarely publish a
+  // year, and rejecting them for it would undo the point of asking them.
+  if (result.year === undefined || exact.year === undefined) return true;
+  return Math.abs(result.year - exact.year) <= YEAR_TOLERANCE;
+}
+
+/**
+ * Narrows a result set to the one work the viewer selected from the dropdown.
+ *
+ * The search still runs wide, because extension providers only accept text and
+ * will answer with whatever their site matched. Filtering afterwards is what
+ * turns that back into the specific answer that was asked for.
+ *
+ * The selected row is guaranteed to survive even when nothing returned it —
+ * a suggestion the catalogues agreed on is real, and showing an empty page for
+ * something the user just saw and clicked would be the worst outcome here.
+ */
+export function restrictToExact(
+  results: SearchResponse[],
+  exact: ExactMedia
+): SearchResponse[] {
+  const kept = results.filter((result) => matchesExact(result, exact));
+  if (kept.length > 0) return kept;
+  if (!exact.url) return [];
+
+  return [
+    {
+      name: exact.title,
+      url: exact.url,
+      apiName: 'Catalogue',
+      type: exact.type,
+      year: exact.year,
+      posterUrl: exact.posterUrl,
+      ...(exact.imdbId ? { imdbId: exact.imdbId } : {}),
+    },
+  ];
 }
 
 export function mergeSearchResults(results: SearchResponse[]): SearchResponse[] {
