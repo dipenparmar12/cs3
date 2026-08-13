@@ -1,7 +1,19 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
-import { Play, Pause, Trash2, ArrowDown, Folder, FolderOpen, RotateCw, Zap } from 'lucide-react';
+import {
+  Play,
+  Pause,
+  Trash2,
+  ArrowDown,
+  Folder,
+  FolderOpen,
+  RotateCw,
+  Zap,
+  ChevronDown,
+  ChevronRight,
+  Layers,
+} from 'lucide-react';
 
 interface DownloadCenterProps {
   tasks: DownloadTask[];
@@ -13,6 +25,227 @@ interface DownloadCenterProps {
   onOpenBinarySetup?: () => void;
 }
 
+interface TaskGroup {
+  key: string;
+  title: string;
+  seasonNumber?: number;
+  posterUrl?: string;
+  tasks: DownloadTask[];
+  isBatch: boolean;
+}
+
+interface SingleTaskRowProps {
+  task: DownloadTask;
+  onPause: (id: string) => void;
+  onResume: (id: string) => void;
+  onRemove: (id: string) => void;
+  onReveal?: (filePath: string) => void;
+  formatSpeed: (bytesPerSec: number) => string;
+  formatSize: (bytes: number) => string;
+  isEpisode?: boolean;
+}
+
+const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
+  task,
+  onPause,
+  onResume,
+  onRemove,
+  onReveal,
+  formatSpeed,
+  formatSize,
+  isEpisode = false,
+}) => {
+  const percent =
+    task.totalBytes > 0
+      ? Math.min(100, Math.floor((task.bytesDownloaded / task.totalBytes) * 100))
+      : 0;
+
+  const isDownloading = task.state === DownloadState.Downloading;
+  const isComplete = task.state === DownloadState.Completed;
+  const isResumable =
+    task.state === DownloadState.Paused || task.state === DownloadState.Failed;
+
+  return (
+    <div
+      className={isEpisode ? 'download-item-card' : 'download-group-card'}
+      style={
+        !isEpisode
+          ? {
+              padding: '1.25rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '1.25rem',
+            }
+          : undefined
+      }
+    >
+      {/* Poster Thumbnail for standalone items */}
+      {!isEpisode && (
+        <div
+          style={{
+            width: '48px',
+            height: '68px',
+            borderRadius: 'var(--radius-sm)',
+            overflow: 'hidden',
+            flexShrink: 0,
+            backgroundColor: 'var(--bg-input)',
+          }}
+        >
+          {task.posterUrl ? (
+            <img
+              src={task.posterUrl}
+              alt={task.title}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            />
+          ) : (
+            <div
+              style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Folder size={20} style={{ color: 'var(--text-subtle)' }} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Details & Progress */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h4 style={{ fontSize: isEpisode ? '0.86rem' : '0.92rem', fontWeight: 600, color: '#fff', margin: 0 }}>
+              {isEpisode
+                ? task.episodeNumber
+                  ? `Episode ${task.episodeNumber}`
+                  : task.title
+                : `${task.title} ${task.episodeNumber ? `• Ep ${task.episodeNumber}` : ''}`}
+            </h4>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
+              Provider: {task.providerName || 'aria2c'}
+              {task.resolution ? ` • ${task.resolution}p` : ''}
+            </span>
+          </div>
+
+          <div
+            style={{
+              fontSize: '0.78rem',
+              fontWeight: 600,
+              color: 'var(--accent-light)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+            }}
+          >
+            {(task.state === DownloadState.RefreshingSource ||
+              task.state === DownloadState.Retrying) && (
+              <RotateCw size={13} className="spin" style={{ color: 'var(--accent-light)' }} />
+            )}
+            {isDownloading
+              ? formatSpeed(task.downloadSpeed)
+              : task.state === DownloadState.RefreshingSource
+              ? 'Refreshing Expired Link...'
+              : task.state === DownloadState.Retrying
+              ? 'Retrying...'
+              : task.state}
+          </div>
+        </div>
+
+        {/* Progress Bar */}
+        <div
+          style={{
+            height: '6px',
+            backgroundColor: 'var(--bg-input)',
+            borderRadius: '3px',
+            overflow: 'hidden',
+            width: '100%',
+          }}
+        >
+          <div
+            style={{
+              height: '100%',
+              width: `${percent}%`,
+              backgroundColor:
+                task.state === DownloadState.Completed
+                  ? 'var(--status-success)'
+                  : 'var(--accent-primary)',
+              transition: 'width 0.3s ease',
+            }}
+          />
+        </div>
+
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            fontSize: '0.72rem',
+            color: 'var(--text-muted)',
+          }}
+        >
+          <span>
+            {formatSize(task.bytesDownloaded)} / {formatSize(task.totalBytes)} ({percent}%)
+          </span>
+          <span>{task.etaSeconds > 0 ? `ETA: ${task.etaSeconds}s` : ''}</span>
+        </div>
+
+        {task.errorMessage && (
+          <p
+            style={{
+              fontSize: '0.72rem',
+              color:
+                task.state === DownloadState.Failed ? 'var(--status-error)' : 'var(--text-muted)',
+              margin: 0,
+            }}
+          >
+            {task.errorMessage}
+          </p>
+        )}
+      </div>
+
+      {/* Control Action Buttons */}
+      <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0 }}>
+        {isDownloading && (
+          <button
+            onClick={() => onPause(task.id)}
+            className="btn btn-secondary btn-icon"
+            title="Pause Download"
+          >
+            <Pause size={15} />
+          </button>
+        )}
+        {isResumable && (
+          <button
+            onClick={() => onResume(task.id)}
+            className="btn btn-secondary btn-icon"
+            title={task.state === DownloadState.Failed ? 'Retry Download' : 'Resume Download'}
+          >
+            {task.state === DownloadState.Failed ? <RotateCw size={15} /> : <Play size={15} />}
+          </button>
+        )}
+        {isComplete && onReveal && (
+          <button
+            onClick={() => onReveal(task.targetFilePath)}
+            className="btn btn-secondary btn-icon"
+            title="Show in Folder"
+          >
+            <FolderOpen size={15} />
+          </button>
+        )}
+        <button
+          onClick={() => onRemove(task.id)}
+          className="btn btn-secondary btn-icon"
+          title="Cancel & Remove"
+        >
+          <Trash2 size={15} style={{ color: 'var(--status-error)' }} />
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   tasks,
   hasBinaries = true,
@@ -20,8 +253,17 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   onResume,
   onRemove,
   onReveal,
-  onOpenBinarySetup
+  onOpenBinarySetup,
 }) => {
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+
+  const toggleGroupCollapse = (groupKey: string) => {
+    setCollapsedGroups((prev) => ({
+      ...prev,
+      [groupKey]: !prev[groupKey],
+    }));
+  };
+
   const formatSpeed = (bytesPerSec: number): string => {
     if (bytesPerSec <= 0) return '0 KB/s';
     const mb = bytesPerSec / (1024 * 1024);
@@ -36,6 +278,40 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
     return `${mb.toFixed(0)} MB`;
   };
 
+  // Group tasks by series session
+  const groups: TaskGroup[] = React.useMemo(() => {
+    const map = new Map<string, TaskGroup>();
+
+    for (const task of tasks) {
+      const isEpisode = task.episodeNumber !== undefined || task.seasonNumber !== undefined;
+      const groupKey = isEpisode
+        ? `${task.parentId || task.title}-s${task.seasonNumber ?? 0}`
+        : `single-${task.id}`;
+
+      let group = map.get(groupKey);
+      if (!group) {
+        group = {
+          key: groupKey,
+          title: task.title,
+          seasonNumber: task.seasonNumber,
+          posterUrl: task.posterUrl,
+          tasks: [],
+          isBatch: isEpisode,
+        };
+        map.set(groupKey, group);
+      }
+      group.tasks.push(task);
+    }
+
+    for (const g of map.values()) {
+      if (g.tasks.length > 1) {
+        g.isBatch = true;
+      }
+    }
+
+    return Array.from(map.values());
+  }, [tasks]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
       {/* Top Header */}
@@ -47,9 +323,12 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
           </p>
         </div>
 
-        {/* Hide banner/button if binaries are already configured */}
         {!hasBinaries && onOpenBinarySetup && (
-          <button onClick={onOpenBinarySetup} className="btn btn-secondary" style={{ borderColor: 'var(--accent-primary)' }}>
+          <button
+            onClick={onOpenBinarySetup}
+            className="btn btn-secondary"
+            style={{ borderColor: 'var(--accent-primary)' }}
+          >
             <Zap size={16} style={{ color: 'var(--accent-light)' }} />
             <span>⚡ 1-Click Engine Setup</span>
           </button>
@@ -58,148 +337,273 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
 
       {/* Downloads List */}
       {tasks.length === 0 ? (
-        <div style={{
-          padding: '4rem 2rem',
-          textAlign: 'center',
-          background: 'var(--bg-card)',
-          borderRadius: 'var(--radius-lg)',
-          border: '1px dashed var(--border-color)',
-          color: 'var(--text-muted)'
-        }}>
+        <div
+          style={{
+            padding: '4rem 2rem',
+            textAlign: 'center',
+            background: 'var(--bg-card)',
+            borderRadius: 'var(--radius-lg)',
+            border: '1px dashed var(--border-color)',
+            color: 'var(--text-muted)',
+          }}
+        >
           <ArrowDown size={40} style={{ margin: '0 auto 1rem', opacity: 0.5 }} />
-          <h3 style={{ fontSize: '1rem', color: '#fff', marginBottom: '0.5rem' }}>No Active Downloads</h3>
-          <p style={{ fontSize: '0.8rem' }}>Browse media titles and click "1-Click Download" to start high-speed stream downloads.</p>
+          <h3 style={{ fontSize: '1rem', color: '#fff', marginBottom: '0.5rem' }}>
+            No Active Downloads
+          </h3>
+          <p style={{ fontSize: '0.8rem' }}>
+            Browse media titles and click "1-Click Download" to start high-speed stream downloads.
+          </p>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          {tasks.map((task) => {
-            const percent = task.totalBytes > 0
-              ? Math.min(100, Math.floor((task.bytesDownloaded / task.totalBytes) * 100))
-              : 0;
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {groups.map((group) => {
+            // Render Series/Season Collapsible Container
+            if (group.isBatch && group.tasks.length > 1) {
+              const isCollapsed = Boolean(collapsedGroups[group.key]);
+              const completedCount = group.tasks.filter(
+                (t) => t.state === DownloadState.Completed
+              ).length;
+              const downloadingCount = group.tasks.filter(
+                (t) => t.state === DownloadState.Downloading
+              ).length;
+              const pausedCount = group.tasks.filter(
+                (t) => t.state === DownloadState.Paused
+              ).length;
+              const failedCount = group.tasks.filter(
+                (t) => t.state === DownloadState.Failed
+              ).length;
+              const retryingCount = group.tasks.filter(
+                (t) =>
+                  t.state === DownloadState.RefreshingSource ||
+                  t.state === DownloadState.Retrying
+              ).length;
 
-            const isDownloading = task.state === DownloadState.Downloading;
-            const isComplete = task.state === DownloadState.Completed;
-            // Queued items are waiting on a concurrency slot, not on the user.
-            const isResumable =
-              task.state === DownloadState.Paused || task.state === DownloadState.Failed;
+              const totalBytes = group.tasks.reduce((sum, t) => sum + (t.totalBytes || 0), 0);
+              const bytesDownloaded = group.tasks.reduce(
+                (sum, t) => sum + (t.bytesDownloaded || 0),
+                0
+              );
+              const totalSpeed = group.tasks.reduce((sum, t) => sum + (t.downloadSpeed || 0), 0);
+              const maxEta = Math.max(0, ...group.tasks.map((t) => t.etaSeconds || 0));
 
-            return (
-              <div
-                key={task.id}
-                style={{
-                  background: 'var(--bg-card)',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--border-color)',
-                  padding: '1.25rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '1.25rem'
-                }}
-              >
-                {/* Poster Thumbnail */}
-                <div style={{
-                  width: '48px',
-                  height: '68px',
-                  borderRadius: 'var(--radius-sm)',
-                  overflow: 'hidden',
-                  flexShrink: 0,
-                  backgroundColor: 'var(--bg-input)'
-                }}>
-                  {task.posterUrl ? (
-                    <img src={task.posterUrl} alt={task.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  ) : (
-                    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <Folder size={20} style={{ color: 'var(--text-subtle)' }} />
+              const overallPercent =
+                totalBytes > 0
+                  ? Math.min(100, Math.floor((bytesDownloaded / totalBytes) * 100))
+                  : Math.floor((completedCount / group.tasks.length) * 100);
+
+              const isAllComplete = completedCount === group.tasks.length;
+              const isAnyDownloading = downloadingCount > 0 || retryingCount > 0;
+              const isResumableGroup = pausedCount > 0 || failedCount > 0;
+
+              let statusText = `${completedCount} of ${group.tasks.length} Episodes Completed`;
+              if (isAllComplete) {
+                statusText = `All ${group.tasks.length} Episodes Completed`;
+              } else if (isAnyDownloading) {
+                statusText = `Downloading (${downloadingCount} active, ${completedCount}/${group.tasks.length} done)`;
+              } else if (pausedCount > 0) {
+                statusText = `Paused (${pausedCount} paused, ${completedCount}/${group.tasks.length} done)`;
+              }
+
+              return (
+                <div key={group.key} className="download-group-card">
+                  {/* Container Header Toggle */}
+                  <div
+                    className="download-group-header"
+                    onClick={() => toggleGroupCollapse(group.key)}
+                  >
+                    <div className="download-group-toggle">
+                      {isCollapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
                     </div>
-                  )}
-                </div>
 
-                {/* Task Details & Progress */}
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <h4 style={{ fontSize: '0.92rem', fontWeight: 600, color: '#fff' }}>
-                        {task.title} {task.episodeNumber ? `• Ep ${task.episodeNumber}` : ''}
-                      </h4>
-                      <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
-                        Provider: {task.providerName || 'aria2c'}
-                      </span>
-                    </div>
-
-                    <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--accent-light)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                      {(task.state === DownloadState.RefreshingSource || task.state === DownloadState.Retrying) && (
-                        <RotateCw size={13} className="spin" style={{ color: 'var(--accent-light)' }} />
-                      )}
-                      {isDownloading
-                        ? formatSpeed(task.downloadSpeed)
-                        : task.state === DownloadState.RefreshingSource
-                          ? 'Refreshing Expired Link...'
-                          : task.state === DownloadState.Retrying
-                            ? 'Retrying...'
-                            : task.state}
-                    </div>
-                  </div>
-
-                  {/* Progress Bar */}
-                  <div style={{
-                    height: '6px',
-                    backgroundColor: 'var(--bg-input)',
-                    borderRadius: '3px',
-                    overflow: 'hidden',
-                    width: '100%'
-                  }}>
-                    <div style={{
-                      height: '100%',
-                      width: `${percent}%`,
-                      backgroundColor: task.state === DownloadState.Completed ? 'var(--status-success)' : 'var(--accent-primary)',
-                      transition: 'width 0.3s ease'
-                    }} />
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                    <span>{formatSize(task.bytesDownloaded)} / {formatSize(task.totalBytes)} ({percent}%)</span>
-                    <span>{task.etaSeconds > 0 ? `ETA: ${task.etaSeconds}s` : ''}</span>
-                  </div>
-
-                  {/* A failed or stalled transfer is useless without its reason —
-                      "Failed" alone gives the user nothing to act on. */}
-                  {task.errorMessage && (
-                    <p style={{
-                      fontSize: '0.72rem',
-                      color: task.state === DownloadState.Failed ? 'var(--status-error)' : 'var(--text-muted)',
-                      margin: 0,
-                    }}>
-                      {task.errorMessage}
-                    </p>
-                  )}
-                </div>
-
-                {/* Control Action Buttons */}
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  {isDownloading && (
-                    <button onClick={() => onPause(task.id)} className="btn btn-secondary btn-icon" title="Pause Download">
-                      <Pause size={16} />
-                    </button>
-                  )}
-                  {isResumable && (
-                    <button
-                      onClick={() => onResume(task.id)}
-                      className="btn btn-secondary btn-icon"
-                      title={task.state === DownloadState.Failed ? 'Retry Download' : 'Resume Download'}
+                    {/* Poster Thumbnail */}
+                    <div
+                      style={{
+                        width: '48px',
+                        height: '68px',
+                        borderRadius: 'var(--radius-sm)',
+                        overflow: 'hidden',
+                        flexShrink: 0,
+                        backgroundColor: 'var(--bg-input)',
+                      }}
                     >
-                      {task.state === DownloadState.Failed ? <RotateCw size={16} /> : <Play size={16} />}
-                    </button>
+                      {group.posterUrl ? (
+                        <img
+                          src={group.posterUrl}
+                          alt={group.title}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <Layers size={22} style={{ color: 'var(--accent-light)' }} />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Details & Aggregated Progress */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                          <h4 style={{ fontSize: '0.98rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                            {group.title} {group.seasonNumber ? `• Season ${group.seasonNumber}` : ''}
+                          </h4>
+                          <span
+                            className="chip"
+                            style={{
+                              fontSize: '0.7rem',
+                              padding: '0.15rem 0.5rem',
+                              background: 'rgba(59, 130, 246, 0.15)',
+                              color: 'var(--accent-light)',
+                            }}
+                          >
+                            {group.tasks.length} Episodes
+                          </span>
+                        </div>
+
+                        <div
+                          style={{
+                            fontSize: '0.8rem',
+                            fontWeight: 600,
+                            color: isAllComplete
+                              ? 'var(--status-success)'
+                              : 'var(--accent-light)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.35rem',
+                          }}
+                        >
+                          {retryingCount > 0 && <RotateCw size={14} className="spin" />}
+                          {isAnyDownloading
+                            ? formatSpeed(totalSpeed)
+                            : isAllComplete
+                            ? 'Completed'
+                            : statusText}
+                        </div>
+                      </div>
+
+                      {/* Progress Bar */}
+                      <div
+                        style={{
+                          height: '7px',
+                          backgroundColor: 'var(--bg-input)',
+                          borderRadius: '4px',
+                          overflow: 'hidden',
+                          width: '100%',
+                        }}
+                      >
+                        <div
+                          style={{
+                            height: '100%',
+                            width: `${overallPercent}%`,
+                            backgroundColor: isAllComplete
+                              ? 'var(--status-success)'
+                              : 'var(--accent-primary)',
+                            transition: 'width 0.3s ease',
+                          }}
+                        />
+                      </div>
+
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: '0.74rem',
+                          color: 'var(--text-muted)',
+                        }}
+                      >
+                        <span>
+                          {formatSize(bytesDownloaded)} / {formatSize(totalBytes)} ({overallPercent}%) • {statusText}
+                        </span>
+                        <span>{maxEta > 0 && isAnyDownloading ? `ETA: ${maxEta}s` : ''}</span>
+                      </div>
+                    </div>
+
+                    {/* Group Action Buttons */}
+                    <div
+                      style={{ display: 'flex', gap: '0.4rem' }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {isAnyDownloading && (
+                        <button
+                          onClick={() =>
+                            group.tasks.forEach(
+                              (t) => t.state === DownloadState.Downloading && onPause(t.id)
+                            )
+                          }
+                          className="btn btn-secondary btn-icon"
+                          title="Pause All Episodes"
+                        >
+                          <Pause size={16} />
+                        </button>
+                      )}
+                      {isResumableGroup && (
+                        <button
+                          onClick={() =>
+                            group.tasks.forEach(
+                              (t) =>
+                                (t.state === DownloadState.Paused ||
+                                  t.state === DownloadState.Failed) &&
+                                onResume(t.id)
+                            )
+                          }
+                          className="btn btn-secondary btn-icon"
+                          title="Resume All Episodes"
+                        >
+                          <Play size={16} />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => group.tasks.forEach((t) => onRemove(t.id))}
+                        className="btn btn-secondary btn-icon"
+                        title="Cancel & Remove Batch"
+                      >
+                        <Trash2 size={16} style={{ color: 'var(--status-error)' }} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Expandable Individual Episode Items */}
+                  {!isCollapsed && (
+                    <div className="download-group-body">
+                      {group.tasks.map((task) => (
+                        <SingleTaskRow
+                          key={task.id}
+                          task={task}
+                          onPause={onPause}
+                          onResume={onResume}
+                          onRemove={onRemove}
+                          onReveal={onReveal}
+                          formatSpeed={formatSpeed}
+                          formatSize={formatSize}
+                          isEpisode
+                        />
+                      ))}
+                    </div>
                   )}
-                  {isComplete && onReveal && (
-                    <button onClick={() => onReveal(task.targetFilePath)} className="btn btn-secondary btn-icon" title="Show in Folder">
-                      <FolderOpen size={16} />
-                    </button>
-                  )}
-                  <button onClick={() => onRemove(task.id)} className="btn btn-secondary btn-icon" title="Cancel & Remove">
-                    <Trash2 size={16} style={{ color: 'var(--status-error)' }} />
-                  </button>
                 </div>
-              </div>
+              );
+            }
+
+            // Standalone single item card
+            return (
+              <SingleTaskRow
+                key={group.tasks[0].id}
+                task={group.tasks[0]}
+                onPause={onPause}
+                onResume={onResume}
+                onRemove={onRemove}
+                onReveal={onReveal}
+                formatSpeed={formatSpeed}
+                formatSize={formatSize}
+              />
             );
           })}
         </div>

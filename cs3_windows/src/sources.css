@@ -2046,3 +2046,72 @@
 .source-filter-bar__summary strong {
   color: #fff;
 }
+
+/* Batch / Series Download Group Containers */
+.download-group-card {
+  background: var(--bg-card, #161b26);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  border-radius: var(--radius-md, 10px);
+  overflow: hidden;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.download-group-card:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.download-group-header {
+  padding: 1.1rem 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  cursor: pointer;
+  user-select: none;
+  background: rgba(255, 255, 255, 0.02);
+  transition: background 0.15s ease;
+}
+
+.download-group-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.download-group-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted, #9ca3af);
+  transition: transform 0.2s ease, color 0.2s ease, background 0.2s ease;
+}
+
+.download-group-header:hover .download-group-toggle {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.download-group-body {
+  border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  background: rgba(10, 14, 23, 0.4);
+  padding: 0.85rem 1.25rem 1rem 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.download-item-card {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.85rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  transition: background 0.15s ease;
+}
+
+.download-item-card:hover {
+  background: rgba(255, 255, 255, 0.045);
+}
