@@ -61,6 +61,60 @@ export interface PluginRuntimeReport {
   failureKind?: string;
 }
 
+/** One provider an installed extension registered when it loaded. */
+export interface ExtensionProvider {
+  /** The provider's own name, and how it is addressed in every RPC. */
+  name: string;
+  /** Which `.cs3` registered it — one archive commonly registers several. */
+  pluginInternalName: string;
+  pluginName: string;
+  mainUrl?: string;
+  lang?: string;
+  hasMainPage: boolean;
+  hasQuickSearch: boolean;
+  supportedTypes: string[];
+}
+
+const SETTINGS_KEY_DISABLED_PROVIDERS = 'cs3_disabled_providers';
+
+/**
+ * Provider calls are network-bound scrapes of third-party sites, routinely
+ * slower than an API call and occasionally very slow. The sidecar applies its
+ * own shorter deadline inside this one so a hung provider is named rather than
+ * merely timing out.
+ */
+const PROVIDER_CALL_TIMEOUT_MS = 60_000;
+
+/** `cs3ext://<provider>/<opaque handle>` — see `searchAll` for why. */
+function buildExtensionUrl(provider: string, target: string): string {
+  return `cs3ext://${encodeURIComponent(provider)}/${encodeURIComponent(target)}`;
+}
+
+export function parseExtensionUrl(
+  url: string
+): { provider: string; target: string } | null {
+  if (!url.startsWith('cs3ext://')) return null;
+  const rest = url.slice('cs3ext://'.length);
+  const slash = rest.indexOf('/');
+  if (slash < 0) return null;
+  return {
+    provider: decodeURIComponent(rest.slice(0, slash)),
+    target: decodeURIComponent(rest.slice(slash + 1)),
+  };
+}
+
+/** The bridge's replies arrive as JSON strings; a malformed one is not fatal. */
+function safeParse(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export class PluginManager {
   private pluginsDir: string;
   private analyzer = new PluginCompatibilityAnalyzer();
@@ -70,6 +124,11 @@ export class PluginManager {
   private installedRepoUrls = new Set<string>();
   private installedPlugins = new Map<string, PluginData & { meta: SitePlugin }>();
   private runtimeReports = new Map<string, PluginRuntimeReport>();
+
+  /** Providers registered by loaded plugins, keyed by provider name. */
+  private providers = new Map<string, ExtensionProvider>();
+  private providersLoaded = false;
+  private providersLoading: Promise<void> | null = null;
 
   constructor(datastore: DatastoreManager, sidecar?: SidecarSupervisor) {
     this.datastore = datastore;
@@ -429,27 +488,243 @@ export class PluginManager {
   }
 
   public getProvidersList(): string[] {
-    return [];
+    return [...this.providers.keys()];
+  }
+
+  /** Everything known about the providers installed extensions registered. */
+  public getProviders(): ExtensionProvider[] {
+    return [...this.providers.values()];
+  }
+
+  // --- provider execution --------------------------------------------------
+
+  /**
+   * Loads every installed plugin into the sidecar, once per session.
+   *
+   * Deferred rather than done at startup: loading runs DEX translation and a
+   * plugin's own `load()`, which is far too much to put in the cold-start path
+   * (DSK-57). The first search pays for it, and everything after is warm.
+   */
+  private async ensureProvidersLoaded(): Promise<void> {
+    if (this.providersLoaded) return this.providersLoading ?? undefined;
+    if (this.providersLoading) return this.providersLoading;
+
+    this.providersLoading = (async () => {
+      const started = await this.sidecar.ensureStarted();
+      if (!started) return;
+
+      for (const record of this.installedPlugins.values()) {
+        if (!record.filePath || !fs.existsSync(record.filePath)) continue;
+
+        const response = await this.sidecar.call('load', {
+          pluginId: record.internalName,
+          path: record.filePath,
+        });
+
+        if (!response.ok) {
+          // A plugin that will not load is a per-plugin outcome, not a search
+          // failure: the other providers still work and the reason is kept for
+          // the extension manager to show.
+          this.runtimeReports.set(record.internalName, {
+            tier: 'T4_BLOCKED',
+            reason: response.error ?? 'The extension runtime could not load this plugin.',
+            translated: false,
+            failureKind: response.errorKind,
+          });
+          continue;
+        }
+
+        const result = response.result ?? {};
+        const registered = Array.isArray(result.providers) ? result.providers : [];
+        for (const raw of registered as Array<Record<string, unknown>>) {
+          const name = raw.name ? String(raw.name) : null;
+          if (!name) continue;
+          this.providers.set(name, {
+            name,
+            pluginInternalName: record.internalName,
+            pluginName: record.meta?.name ?? record.internalName,
+            mainUrl: raw.mainUrl ? String(raw.mainUrl) : undefined,
+            lang: raw.lang ? String(raw.lang) : undefined,
+            hasMainPage: Boolean(raw.hasMainPage),
+            hasQuickSearch: Boolean(raw.hasQuickSearch),
+            supportedTypes: Array.isArray(raw.supportedTypes)
+              ? (raw.supportedTypes as string[])
+              : [],
+          });
+        }
+      }
+      this.providersLoaded = true;
+    })().finally(() => {
+      this.providersLoading = null;
+    });
+
+    return this.providersLoading;
+  }
+
+  /** Providers the user has left switched on; all of them by default. */
+  private enabledProviderNames(): string[] {
+    const disabled = new Set(
+      this.datastore.getObject<string[]>(SETTINGS_KEY_DISABLED_PROVIDERS, []) ?? []
+    );
+    return [...this.providers.keys()].filter((name) => !disabled.has(name));
+  }
+
+  public getDisabledProviders(): string[] {
+    return this.datastore.getObject<string[]>(SETTINGS_KEY_DISABLED_PROVIDERS, []) ?? [];
+  }
+
+  public setProviderEnabled(name: string, enabled: boolean): string[] {
+    const disabled = new Set(this.getDisabledProviders());
+    if (enabled) disabled.delete(name);
+    else disabled.add(name);
+    const next = [...disabled];
+    this.datastore.setObject(SETTINGS_KEY_DISABLED_PROVIDERS, next);
+    return next;
   }
 
   /**
-   * Provider-backed search.
+   * Searches every enabled extension provider.
    *
-   * Still returns nothing: dispatching `search` into a loaded provider needs the
-   * provider API on the sidecar classpath, and the coroutine bridge that calls a
-   * Kotlin `suspend` function reflectively. Returning an empty list here is
-   * accurate — no provider is loaded — and `getRuntimeStatus` carries the reason
-   * so the UI never presents this as "no results found".
+   * Results are re-addressed as `cs3ext://` URLs. A provider's own URLs are
+   * plain site links with nothing in them identifying which provider produced
+   * them, so a later `load` would have no way to route back to the right one.
    */
-  public async searchAll(_query: string): Promise<SearchResponse[]> {
-    return [];
+  public async searchAll(query: string): Promise<SearchResponse[]> {
+    await this.ensureProvidersLoaded();
+
+    const names = this.enabledProviderNames();
+    if (names.length === 0) return [];
+
+    const response = await this.sidecar.call(
+      'providerSearch',
+      { query, providers: names },
+      PROVIDER_CALL_TIMEOUT_MS
+    );
+    if (!response.ok) return [];
+
+    const byProvider = (response.result?.byProvider ?? {}) as Record<string, string>;
+    const out: SearchResponse[] = [];
+
+    for (const [providerName, raw] of Object.entries(byProvider)) {
+      const parsed = safeParse(raw);
+      if (!parsed?.ok || !Array.isArray(parsed.results)) continue;
+
+      for (const item of parsed.results as Array<Record<string, unknown>>) {
+        if (!item.name || !item.url) continue;
+        out.push({
+          name: String(item.name),
+          url: buildExtensionUrl(providerName, String(item.url)),
+          apiName: item.apiName ? String(item.apiName) : providerName,
+          type: item.type as SearchResponse['type'],
+          posterUrl: item.posterUrl ? String(item.posterUrl) : undefined,
+          posterHeaders: item.posterHeaders as Record<string, string> | undefined,
+          quality: item.quality ? String(item.quality) : undefined,
+        });
+      }
+    }
+    return out;
   }
 
-  public async loadMedia(_url: string): Promise<LoadResponse | null> {
-    return null;
+  public async loadMedia(url: string): Promise<LoadResponse | null> {
+    const ref = parseExtensionUrl(url);
+    if (!ref) return null;
+    await this.ensureProvidersLoaded();
+
+    const response = await this.sidecar.call(
+      'providerLoad',
+      { provider: ref.provider, url: ref.target },
+      PROVIDER_CALL_TIMEOUT_MS
+    );
+    if (!response.ok) return null;
+
+    const parsed = safeParse(String(response.result?.json ?? ''));
+    if (!parsed?.ok || !parsed.found || !parsed.detail) return null;
+
+    const detail = parsed.detail as Record<string, unknown>;
+    const episodes = Array.isArray(detail.episodes)
+      ? (detail.episodes as Array<Record<string, unknown>>).map((episode) => ({
+          name: episode.name ? String(episode.name) : `Episode ${episode.episode ?? ''}`,
+          // The episode's `data` is the opaque handle loadLinks must be given
+          // back, so it is what the URL has to carry — not the page address.
+          url: buildExtensionUrl(ref.provider, String(episode.data ?? '')),
+          episode: typeof episode.episode === 'number' ? episode.episode : undefined,
+          season: typeof episode.season === 'number' ? episode.season : undefined,
+          posterUrl: episode.posterUrl ? String(episode.posterUrl) : undefined,
+          rating: typeof episode.rating === 'number' ? episode.rating : undefined,
+          description: episode.description ? String(episode.description) : undefined,
+          date: episode.date ? String(episode.date) : undefined,
+        }))
+      : undefined;
+
+    return {
+      name: String(detail.name ?? ''),
+      url,
+      apiName: detail.apiName ? String(detail.apiName) : ref.provider,
+      type: detail.type as LoadResponse['type'],
+      posterUrl: detail.posterUrl ? String(detail.posterUrl) : undefined,
+      year: typeof detail.year === 'number' ? detail.year : undefined,
+      plot: detail.plot ? String(detail.plot) : undefined,
+      rating: typeof detail.rating === 'number' ? detail.rating : undefined,
+      tags: Array.isArray(detail.tags) ? (detail.tags as string[]) : undefined,
+      duration:
+        typeof detail.duration === 'number' ? `${detail.duration} min` : undefined,
+      episodes,
+      actors: Array.isArray(detail.actors) ? (detail.actors as string[]) : undefined,
+      // A film has no episode list; its `dataUrl` is the playable handle and is
+      // re-addressed the same way an episode's is.
+      id: undefined,
+      ...(detail.dataUrl
+        ? { dataUrl: buildExtensionUrl(ref.provider, String(detail.dataUrl)) }
+        : {}),
+    } as LoadResponse & { dataUrl?: string };
   }
 
-  public async loadLinks(_url: string): Promise<ExtractorLink[]> {
-    return [];
+  /** Resolves playable links for one movie or episode handle. */
+  public async loadLinks(url: string): Promise<ExtractorLink[]> {
+    const ref = parseExtensionUrl(url);
+    if (!ref) return [];
+    await this.ensureProvidersLoaded();
+
+    const response = await this.sidecar.call(
+      'providerLoadLinks',
+      { provider: ref.provider, data: ref.target },
+      PROVIDER_CALL_TIMEOUT_MS
+    );
+    if (!response.ok) return [];
+
+    const parsed = safeParse(String(response.result?.json ?? ''));
+    if (!parsed?.ok || !Array.isArray(parsed.links)) return [];
+
+    return (parsed.links as Array<Record<string, unknown>>).map((link) => ({
+      source: link.source ? String(link.source) : ref.provider,
+      name: link.name ? String(link.name) : ref.provider,
+      url: String(link.url ?? ''),
+      referer: link.referer ? String(link.referer) : '',
+      quality: typeof link.quality === 'number' ? link.quality : 0,
+      isM3u8: Boolean(link.isM3u8) || link.type === 'M3U8',
+      isDash: link.type === 'DASH',
+      headers: (link.headers as Record<string, string> | undefined) ?? {},
+    }));
+  }
+
+  /** Subtitles a provider offered alongside its links, for the same handle. */
+  public async loadSubtitles(url: string): Promise<Array<{ lang: string; url: string }>> {
+    const ref = parseExtensionUrl(url);
+    if (!ref) return [];
+    await this.ensureProvidersLoaded();
+
+    const response = await this.sidecar.call(
+      'providerLoadLinks',
+      { provider: ref.provider, data: ref.target },
+      PROVIDER_CALL_TIMEOUT_MS
+    );
+    if (!response.ok) return [];
+
+    const parsed = safeParse(String(response.result?.json ?? ''));
+    if (!parsed?.ok || !Array.isArray(parsed.subtitles)) return [];
+
+    return (parsed.subtitles as Array<Record<string, unknown>>)
+      .filter((s) => s.url)
+      .map((s) => ({ lang: String(s.lang ?? 'Unknown'), url: String(s.url) }));
   }
 }

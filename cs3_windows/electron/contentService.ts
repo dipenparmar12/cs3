@@ -1,6 +1,8 @@
+import { createHash } from 'crypto';
 import { TvType, type SearchResponse } from '../src/types/api';
 import type {
   IndexerQuery,
+  ParsedRelease,
   SourcePreferences,
   TorrentResult,
 } from '../src/types/torrent';
@@ -270,6 +272,30 @@ export class ContentService {
       };
     }
 
+    // An extension provider already knows its own links; there is nothing to
+    // search for. Asking indexers for a title the provider serves directly
+    // would be slower and worse than what the provider just handed us.
+    if (base.startsWith('cs3ext://')) {
+      const sources = await this.extensionSources(base);
+      onProgress?.({
+        results: sources,
+        settled: 1,
+        totalRelevant: 1,
+        lastIndexerName: 'Extension provider',
+        done: true,
+      });
+      return {
+        sources,
+        filtered: [],
+        indexerOutcomes: [],
+        emptyReason:
+          sources.length === 0
+            ? 'The extension provider returned no playable links for this item.'
+            : undefined,
+        query: { title: request.titleOverride ?? '', season, episode },
+      };
+    }
+
     const detail = await this.load(base);
     const title = request.titleOverride ?? detail?.name;
 
@@ -334,6 +360,67 @@ export class ContentService {
   }
 
   /**
+   * Turns an extension provider's links into ranked playable sources.
+   *
+   * Ordered by the quality the provider declared, descending, which is the only
+   * signal available — there is no swarm health to weigh and no release name to
+   * parse, so the ranker's usual inputs do not exist here.
+   */
+  private async extensionSources(url: string): Promise<TorrentResult[]> {
+    let links = await this.plugins.loadLinks(url);
+
+    // An episode's URL already *is* the provider's playable handle, but a
+    // film's is its detail page — and those differ (Internet Archive answers
+    // with `https://archive.org/details/<id>` for the page and a bare `<id>`
+    // as the handle). When the page address yields nothing, resolving the
+    // detail and retrying with its `dataUrl` is what makes films playable.
+    if (links.length === 0) {
+      const detail = (await this.plugins.loadMedia(url)) as
+        | (MetadataDetail & { dataUrl?: string })
+        | null;
+      if (detail?.dataUrl && detail.dataUrl !== url) {
+        links = await this.plugins.loadLinks(detail.dataUrl);
+      }
+    }
+
+    return links
+      .filter((link) => link.url)
+      .map((link, index) => {
+        const parsed = parseReleaseName(link.name || link.source || 'Stream');
+        // The ranker and the dedupe key both need an identity; a provider link
+        // has no infohash, so one is synthesised from the URL.
+        const identity = `ext-${createHash('sha1').update(link.url).digest('hex').slice(0, 20)}`;
+        return {
+          infoHash: identity,
+          directUrl: link.url,
+          directHeaders: link.headers,
+          isM3u8: Boolean(link.isM3u8),
+          title: link.name || link.source || 'Provider stream',
+          magnet: '',
+          sizeBytes: 0,
+          // Seeders are meaningless for a direct stream. One keeps it above the
+          // `minSeeders` floor that would otherwise filter every provider link.
+          seeders: 1,
+          leechers: 0,
+          indexerId: 'extension',
+          indexerName: link.source || 'Extension provider',
+          parsed: {
+            ...parsed,
+            resolution: (link.quality || parsed.resolution) as ParsedRelease['resolution'],
+          },
+          score: link.quality || 0,
+          scoreReasons: [
+            `Supplied directly by ${link.source || 'the extension provider'}`,
+            link.isM3u8 ? 'HLS stream' : 'Progressive stream',
+          ],
+          // Preserve the provider's own ordering as the tiebreak.
+          fileIndex: index,
+        } satisfies TorrentResult;
+      })
+      .sort((a, b) => b.score - a.score);
+  }
+
+  /**
    * Turns "no results" into an actionable message. The distinction between
    * "every indexer is unreachable" and "the indexers worked and nothing matched"
    * is the difference between a network problem and a search problem, and the
@@ -361,11 +448,33 @@ export class ContentService {
   public async startStream(
     source: Pick<
       TorrentResult,
-      'magnet' | 'infoHash' | 'torrentUrl' | 'fileIndex' | 'expectedFileName'
+      | 'magnet'
+      | 'infoHash'
+      | 'torrentUrl'
+      | 'fileIndex'
+      | 'expectedFileName'
+      | 'directUrl'
+      | 'isM3u8'
+      | 'title'
     >,
     season?: number,
     episode?: number
   ): Promise<StreamHandle> {
+    // A provider stream is already an addressable URL. There is no swarm to
+    // join and nothing to download first, so it is handed to the player as-is.
+    if (source.directUrl) {
+      return {
+        infoHash: source.infoHash,
+        streamUrl: source.directUrl,
+        fileName: source.title ?? 'Stream',
+        fileSize: 0,
+        diskPath: '',
+        files: [],
+        subtitleUrls: [],
+        mimeType: source.isM3u8 ? 'application/x-mpegURL' : 'video/mp4',
+      };
+    }
+
     const torrentId = source.magnet || source.torrentUrl || source.infoHash;
     if (!torrentId) {
       throw new Error('This source has no magnet link, torrent file, or infohash.');
@@ -403,9 +512,11 @@ export class ContentService {
     const perSourceMs = options.perSourceMs ?? DEFAULT_SOURCE_BUDGET_MS;
     const attempts: StreamAttempt[] = [];
 
-    const usable = candidates.filter((c) => c.magnet || c.torrentUrl || c.infoHash);
+    const usable = candidates.filter(
+      (c) => c.directUrl || c.magnet || c.torrentUrl || c.infoHash
+    );
     if (usable.length === 0) {
-      throw new Error('None of the sources found carry a usable magnet or torrent link.');
+      throw new Error('None of the sources found carry a usable magnet, torrent or stream link.');
     }
 
     for (const source of usable.slice(0, maxAttempts)) {
@@ -419,6 +530,13 @@ export class ContentService {
           error: error instanceof Error ? error.message : String(error),
         });
         continue;
+      }
+
+      // A direct stream has no swarm to become playable; the URL either serves
+      // bytes or the player reports the failure. Waiting on torrent readiness
+      // here would block forever on a source that is already ready.
+      if (source.directUrl) {
+        return { handle, source, attempts };
       }
 
       const verdict = await this.engine.waitUntilPlayable(handle.infoHash, perSourceMs);

@@ -79,10 +79,29 @@ export interface ParsedRelease {
   releaseGroup?: string;
 }
 
-/** A search hit from an indexer, normalised across every adapter. */
+/**
+ * A playable candidate.
+ *
+ * Two kinds share this shape. Most are torrents, identified by `infoHash` and
+ * fetched through the swarm. Some come from an extension provider and are
+ * ordinary HTTP streams — those carry `directUrl` and no magnet, and skip the
+ * torrent engine entirely. Keeping one type means the ranker, the source
+ * picker, the in-player switcher and the download queue treat both alike, which
+ * is what lets a provider stream and a torrent sit in the same list.
+ */
 export interface TorrentResult {
-  /** Lowercase hex infohash — the canonical cross-indexer identity for dedupe. */
+  /** Lowercase hex infohash — the canonical cross-indexer identity for dedupe.
+   *  For a provider-supplied direct stream this is a synthetic stable id. */
   infoHash: string;
+  /**
+   * Direct HTTP(S) media URL from an extension provider. When set, this source
+   * plays straight from the URL and `magnet`/`torrentUrl` are empty.
+   */
+  directUrl?: string;
+  /** Headers the origin requires — typically a Referer that it 403s without. */
+  directHeaders?: Record<string, string>;
+  /** True when `directUrl` is an HLS playlist rather than a progressive file. */
+  isM3u8?: boolean;
   /** Raw, unmodified release name as the indexer reported it. */
   title: string;
   magnet: string;
