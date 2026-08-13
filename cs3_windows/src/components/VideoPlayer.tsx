@@ -3,13 +3,16 @@ import Hls from 'hls.js';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
-  SkipBack, SkipForward, List, Settings2, MonitorPlay,
+  SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
 } from 'lucide-react';
 import type { TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
 import { AspectRatioMode } from '../types/player';
+import type { TorrentResult } from '../types/torrent';
 import { HoverMenu } from './player/HoverMenu';
 import { EpisodePanel } from './player/EpisodePanel';
+import { SourcePanel } from './player/SourcePanel';
+import { SourceResolveOverlay } from './player/SourceResolveOverlay';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
@@ -45,7 +48,32 @@ interface VideoPlayerProps {
     /** Seconds to seek to on load, from a previous session. */
     resumeAt?: number;
   };
+  /**
+   * Live source-resolution state.
+   *
+   * Present when the host opened the player *before* a stream existed — the
+   * instant-play path. The player then owns the wait: it shows discovery
+   * progress, offers "play now" on partial results, and keeps the source list
+   * available for switching once playback has started.
+   */
+  sourceSession?: {
+    phase: PlaybackPhase;
+    sources: TorrentResult[];
+    activeInfoHash?: string;
+    searched: number;
+    totalIndexers: number;
+    lastIndexerName?: string;
+    searchDone: boolean;
+    error?: string;
+    attempts: Array<{ title: string; indexerName: string; error: string }>;
+    onPlayNow: () => void;
+    onSelectSource: (source: TorrentResult) => void;
+    onRefresh: () => void;
+    onDownloadSource?: (source: TorrentResult) => void;
+  };
 }
+
+export type PlaybackPhase = 'searching' | 'starting' | 'playing' | 'error';
 
 /** How often playback position is written. Frequent enough to be useful, rare
  *  enough not to write on every timeupdate tick (which fires ~4x/second). */
@@ -85,7 +113,7 @@ export interface AudioTrackInfo {
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamUrl, mimeType, title, episodeTitle, infoHash, subtitles, onBack,
-  series, onSelectEpisode, switchingTo, switchError, progress,
+  series, onSelectEpisode, switchingTo, switchError, progress, sourceSession,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -107,6 +135,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [stats, setStats] = useState<TorrentStreamStats | null>(null);
   const [activeSubtitle, setActiveSubtitle] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
+  /** Source the viewer just picked, so the row shows a spinner while it starts. */
+  const [pendingSourceHash, setPendingSourceHash] = useState<string | null>(null);
 
   const [qualities, setQualities] = useState<Array<{ level: number; label: string; detail?: string }>>([]);
   const [quality, setQuality] = useState<number>(AUTO_QUALITY);
@@ -602,6 +633,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // reason beats an indefinite spinner over a black frame.
   const isBuffering = Boolean(stats && !stats.isPlayable && !stats.error);
 
+  /**
+   * True while the session is still producing a stream.
+   *
+   * This overlay outranks the buffering one: with no picture behind it yet,
+   * "buffering from peers" would be describing a swarm that has not been chosen.
+   */
+  const isResolving = Boolean(sourceSession && sourceSession.phase !== 'playing');
+
+  // A switch that has landed clears the row spinner; comparing against the
+  // session's active hash avoids leaving it spinning when the start failed.
+  useEffect(() => {
+    if (!sourceSession) return;
+    if (sourceSession.phase === 'playing' || sourceSession.phase === 'error') {
+      setPendingSourceHash(null);
+    }
+  }, [sourceSession?.phase, sourceSession?.activeInfoHash]);
+
   const progressPercent = duration ? (currentTime / duration) * 100 : 0;
 
   return (
@@ -659,7 +707,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {(isBuffering || error) && !switchingTo && !switchError && (
+      {isResolving && sourceSession && !switchingTo && (
+        <SourceResolveOverlay
+          phase={sourceSession.phase === 'playing' ? 'starting' : sourceSession.phase}
+          sources={sourceSession.sources}
+          searched={sourceSession.searched}
+          totalIndexers={sourceSession.totalIndexers}
+          lastIndexerName={sourceSession.lastIndexerName}
+          searchDone={sourceSession.searchDone}
+          error={sourceSession.error}
+          title={title}
+          episodeTitle={episodeTitle}
+          attempts={sourceSession.attempts}
+          onPlayNow={sourceSession.onPlayNow}
+          onOpenSources={() => setSourcePanelOpen(true)}
+          onRetry={sourceSession.onRefresh}
+          onBack={onBack}
+        />
+      )}
+
+      {(isBuffering || error) && !switchingTo && !switchError && !isResolving && (
         <div className="player__overlay">
           {error ? (
             <>
@@ -749,6 +816,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setPanelOpen(false);
             onSelectEpisode?.(episode);
           }}
+        />
+      )}
+
+      {sourceSession && (
+        <SourcePanel
+          open={sourcePanelOpen}
+          sources={sourceSession.sources}
+          activeInfoHash={sourceSession.activeInfoHash}
+          searching={!sourceSession.searchDone}
+          searched={sourceSession.searched}
+          totalIndexers={sourceSession.totalIndexers}
+          switchingTo={pendingSourceHash}
+          error={sourceSession.phase === 'error' ? sourceSession.error : undefined}
+          onClose={() => setSourcePanelOpen(false)}
+          onSelect={(source) => {
+            setPendingSourceHash(source.infoHash);
+            sourceSession.onSelectSource(source);
+          }}
+          onRefresh={sourceSession.onRefresh}
+          onDownload={sourceSession.onDownloadSource}
         />
       )}
 
@@ -883,6 +970,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               title="Episodes (E)"
             >
               <List size={18} />
+            </button>
+          )}
+
+          {sourceSession && (
+            <button
+              className="icon-button"
+              onClick={() => setSourcePanelOpen((v) => !v)}
+              aria-label="Sources"
+              title="Change source"
+            >
+              <Radio size={18} />
+              {sourceSession.sources.length > 0 && (
+                <span className="icon-button__badge">{sourceSession.sources.length}</span>
+              )}
             </button>
           )}
 

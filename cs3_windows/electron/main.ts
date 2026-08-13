@@ -9,6 +9,7 @@ import { BinaryDownloader } from './binaryDownloader';
 import { OFFICIAL_REPOSITORIES } from './officialRepositories';
 import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
+import { PlaybackSessionManager } from './playbackSession';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
@@ -33,6 +34,7 @@ const contentService = new ContentService(datastore, pluginManager, torrentEngin
 const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
 const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
+const playbackSessions = new PlaybackSessionManager(contentService);
 
 downloadService.setTorrentEngine(torrentEngine);
 
@@ -122,6 +124,14 @@ app.whenReady().then(async () => {
   batchDownloader.setNotifier((progress) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('download:batchProgress', progress);
+    }
+  });
+
+  // The player renders from these snapshots, so they must keep flowing for the
+  // whole life of a session — source discovery, failover and switching alike.
+  playbackSessions.setNotifier((snapshot) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('playback:update', snapshot);
     }
   });
 
@@ -226,6 +236,56 @@ ipcMain.handle('torrent:autoPlay', async (_, request: SourceQuery) => {
     return { ok: true, ...(await contentService.autoPlay(request)) };
   } catch (error) {
     return { ...fail(error), handle: null, source: null, attempts: [], query: null };
+  }
+});
+
+/**
+ * Opens a playback session and returns immediately.
+ *
+ * The renderer shows the player on this return, not on a stream being ready;
+ * everything after this point arrives as `playback:update` snapshots.
+ */
+ipcMain.handle(
+  'playback:start',
+  async (_, request: SourceQuery, title: string, episodeTitle?: string) => {
+    try {
+      return { ok: true, snapshot: playbackSessions.start(request, title, episodeTitle) };
+    } catch (error) {
+      return { ...fail(error), snapshot: null };
+    }
+  }
+);
+
+ipcMain.handle('playback:playNow', async (_, sessionId: string) => {
+  try {
+    return { ok: true, snapshot: await playbackSessions.playNow(sessionId) };
+  } catch (error) {
+    return { ...fail(error), snapshot: null };
+  }
+});
+
+ipcMain.handle('playback:selectSource', async (_, sessionId: string, infoHash: string) => {
+  try {
+    return { ok: true, snapshot: await playbackSessions.selectSource(sessionId, infoHash) };
+  } catch (error) {
+    return { ...fail(error), snapshot: null };
+  }
+});
+
+ipcMain.handle('playback:refreshSources', async (_, sessionId: string) => {
+  try {
+    return { ok: true, snapshot: await playbackSessions.refresh(sessionId) };
+  } catch (error) {
+    return { ...fail(error), snapshot: null };
+  }
+});
+
+ipcMain.handle('playback:stop', async (_, sessionId: string, keepFiles?: boolean) => {
+  try {
+    await playbackSessions.stop(sessionId, keepFiles ?? true);
+    return { ok: true };
+  } catch (error) {
+    return fail(error);
   }
 });
 

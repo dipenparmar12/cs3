@@ -28,6 +28,7 @@ import type {
   WatchStatus,
 } from './cs3/libraryStore';
 import type { StreamHandle } from './torrent/torrentEngine';
+import type { PlaybackSnapshot } from './playbackSession';
 
 /**
  * Typed, allow-listed IPC surface (ARCH-2 / SEC-9).
@@ -89,6 +90,27 @@ export interface CloudStreamElectronAPI {
       attempts: StreamAttempt[];
     }
   >;
+  // Playback sessions — the progressive "press play, watch it resolve" flow.
+  /** Opens the session; returns as soon as it exists, not when a stream is ready. */
+  startPlayback: (
+    request: { mediaUrl: string; season?: number; episode?: number; titleOverride?: string },
+    title: string,
+    episodeTitle?: string
+  ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
+  /** Starts the best source found so far instead of waiting for every indexer. */
+  playbackPlayNow: (
+    sessionId: string
+  ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
+  playbackSelectSource: (
+    sessionId: string,
+    infoHash: string
+  ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
+  playbackRefreshSources: (
+    sessionId: string
+  ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
+  stopPlayback: (sessionId: string, keepFiles?: boolean) => Promise<Envelope>;
+  onPlaybackUpdate: (callback: (snapshot: PlaybackSnapshot) => void) => () => void;
+
   getStreamStats: (infoHash: string) => Promise<TorrentStreamStats | null>;
   selectStreamFile: (infoHash: string, fileIndex: number) => Promise<StreamHandle | null>;
   stopStream: (infoHash: string, keepFiles?: boolean) => Promise<void>;
@@ -220,6 +242,21 @@ const api: CloudStreamElectronAPI = {
   startBestStream: (sources, season, episode) =>
     ipcRenderer.invoke('torrent:startBestStream', sources, season, episode),
   autoPlay: (request) => ipcRenderer.invoke('torrent:autoPlay', request),
+  startPlayback: (request, title, episodeTitle) =>
+    ipcRenderer.invoke('playback:start', request, title, episodeTitle),
+  playbackPlayNow: (sessionId) => ipcRenderer.invoke('playback:playNow', sessionId),
+  playbackSelectSource: (sessionId, infoHash) =>
+    ipcRenderer.invoke('playback:selectSource', sessionId, infoHash),
+  playbackRefreshSources: (sessionId) =>
+    ipcRenderer.invoke('playback:refreshSources', sessionId),
+  stopPlayback: (sessionId, keepFiles) =>
+    ipcRenderer.invoke('playback:stop', sessionId, keepFiles),
+  onPlaybackUpdate: (callback) => {
+    const listener = (_: unknown, snapshot: PlaybackSnapshot) => callback(snapshot);
+    ipcRenderer.on('playback:update', listener);
+    return () => ipcRenderer.removeListener('playback:update', listener);
+  },
+
   getStreamStats: (infoHash) => ipcRenderer.invoke('torrent:getStats', infoHash),
   selectStreamFile: (infoHash, fileIndex) =>
     ipcRenderer.invoke('torrent:selectFile', infoHash, fileIndex),
