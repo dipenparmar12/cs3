@@ -2198,6 +2198,11 @@
   color: var(--text-muted);
   padding: 0.4rem 0.2rem;
 }
+.scope__loading--quiet {
+  font-size: 0.7rem;
+  color: var(--text-subtle);
+  padding: 0.1rem 0.2rem 0.3rem;
+}
 
 /* Windowed list: the inner wrapper is sized to the full row count so the
    scrollbar reflects everything, while only a visible slice is mounted. */

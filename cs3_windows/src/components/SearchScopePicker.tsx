@@ -147,15 +147,36 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     setLoaded(true);
   }, []);
 
-  // Deferred until the picker is first opened: building the tree loads every
-  // installed extension, which is far too much to do during cold start.
+  /**
+   * Refetched every time the menu opens, not once per session.
+   *
+   * The set of installed extensions changes underneath this component and it
+   * has no way to know: first-run bootstrap installs a few dozen in the
+   * background, the extensions screen adds and removes them, and providers
+   * register asynchronously as the sidecar works through the archives. Fetching
+   * once and caching meant a picker opened early — which is exactly when a new
+   * user opens it — showed a nearly empty tree and kept showing it for the rest
+   * of the session, no matter how much had been installed since.
+   *
+   * The previous tree stays on screen while the refetch runs, so reopening does
+   * not flash empty. Still deferred until first open: building the tree loads
+   * every installed extension, which is far too much for cold start.
+   */
   useEffect(() => {
-    if (open && !loaded) void load();
-  }, [open, loaded, load]);
+    if (open) void load();
+  }, [open, load]);
 
   useEffect(() => {
-    if (refreshKey > 0) setLoaded(false);
-  }, [refreshKey]);
+    if (refreshKey > 0 && open) void load();
+  }, [refreshKey, open, load]);
+
+  // Installs land while the menu may already be open, so the tree follows them.
+  useEffect(() => {
+    const dispose = window.cloudstream?.onBootstrapProgress?.((progress) => {
+      if (progress.phase === 'done') void load();
+    });
+    return () => dispose?.();
+  }, [load]);
 
   const signature = useCallback(
     () => `${[...providers].sort().join('|')}#${[...chosenIndexers].sort().join('|')}`,
@@ -461,9 +482,16 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
             <span className="scope__count">{totalAvailable}</span>
           </button>
 
-          {loading && (
+          {/* Only takes the panel over when there is nothing to show yet; a
+              refresh over an existing tree is a quiet line, not a blank menu. */}
+          {loading && !loaded && (
             <div className="scope__loading">
               <Loader2 size={14} className="spin" /> Loading extensions…
+            </div>
+          )}
+          {loading && loaded && (
+            <div className="scope__loading scope__loading--quiet">
+              <Loader2 size={12} className="spin" /> Refreshing…
             </div>
           )}
 
