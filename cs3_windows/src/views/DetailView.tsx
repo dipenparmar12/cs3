@@ -178,6 +178,15 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [startingStream, setStartingStream] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [seasonDownloadOpen, setSeasonDownloadOpen] = useState(false);
+  /**
+   * Set when a fallback route answered rather than the row's own.
+   *
+   * Everything downstream keys off `detail.url`, which is whichever route
+   * worked, so nothing else needs to know — but the viewer does, because the
+   * episode list they are looking at came from a different site than the row
+   * said it would.
+   */
+  const [fellBackTo, setFellBackTo] = useState<string | null>(null);
 
   // --- load detail ---------------------------------------------------------
 
@@ -195,25 +204,59 @@ export const DetailView: React.FC<DetailViewProps> = ({
         return;
       }
 
-      const response = await window.cloudstream.loadMedia(mediaItem.url);
-      if (cancelled) return;
+      /**
+       * The winning row is not the only way in.
+       *
+       * A merged result carries `alternates` — the other providers and
+       * catalogues that returned the same work — and the merge picked one to
+       * show. When that one cannot open the title, the others are still there
+       * and usually still work: a scraper whose page shape changed this morning
+       * sits beside two that are fine. Giving up on the first failure threw all
+       * of them away and reported "could not load details", which is why so
+       * many titles looked dead when only their top route was.
+       *
+       * Tried in merge order, which puts the routes carrying the strongest
+       * identity first.
+       */
+      const routes = [mediaItem.url, ...(mediaItem.alternates ?? []).map((a) => a.url)];
+      const reasons: string[] = [];
 
-      if (!response.ok || !response.detail) {
-        setLoadError(response.error ?? 'Could not load details for this title.');
-      } else {
-        const data = response.detail as DetailData;
-        setDetail(data);
-        const seasons = groupBySeason(data.episodes ?? []);
-        const first = [...seasons.keys()].sort((a, b) => a - b)[0];
-        if (first !== undefined) setActiveSeason(first);
+      for (const [index, route] of routes.entries()) {
+        const response = await window.cloudstream.loadMedia(route);
+        if (cancelled) return;
+
+        if (response.ok && response.detail) {
+          const data = response.detail as DetailData;
+          setDetail(data);
+          // Only worth saying when it is not the route the row advertised.
+          setFellBackTo(
+            index > 0 ? (mediaItem.alternates?.[index - 1]?.apiName ?? 'another source') : null
+          );
+          const seasons = groupBySeason(data.episodes ?? []);
+          const first = [...seasons.keys()].sort((a, b) => a - b)[0];
+          if (first !== undefined) setActiveSeason(first);
+          setIsLoading(false);
+          return;
+        }
+
+        if (response.error) reasons.push(response.error);
       }
+
+      // Every route failed. Report what each one said rather than a summary:
+      // "Voe returned no links" and "the catalogue is unreachable" call for
+      // completely different responses from the user.
+      setLoadError(
+        reasons.length > 0
+          ? [...new Set(reasons)].join(' · ')
+          : 'No source could open this title.'
+      );
       setIsLoading(false);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [mediaItem.url]);
+  }, [mediaItem.url, mediaItem.alternates]);
 
   const seasons = useMemo(() => groupBySeason(detail?.episodes ?? []), [detail]);
   const seasonNumbers = useMemo(
@@ -502,7 +545,13 @@ export const DetailView: React.FC<DetailViewProps> = ({
     return (
       <div className="detail-view detail-view--state">
         <AlertTriangle size={32} />
+        {/* Every route's own reason, not a summary of them. */}
         <p>{loadError ?? 'No details available.'}</p>
+        {(mediaItem.alternates?.length ?? 0) > 0 && (
+          <p className="detail-view__tried">
+            Tried {(mediaItem.alternates?.length ?? 0) + 1} sources for “{mediaItem.name}”.
+          </p>
+        )}
         <button className="btn" onClick={onBack}>
           <ArrowLeft size={16} /> Back
         </button>
@@ -524,6 +573,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
         )}
         <div className="detail-hero__body">
           <h1>{detail.name}</h1>
+          {fellBackTo && (
+            <p className="detail-hero__fallback">
+              The listed source could not open this, so these details came from {fellBackTo}.
+            </p>
+          )}
 
           <div className="detail-hero__meta">
             {detail.year && (

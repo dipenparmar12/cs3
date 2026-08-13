@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import type { SearchResponse } from '../types/api';
+import { TvType, type SearchResponse } from '../types/api';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, Search, Target, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
@@ -32,6 +32,35 @@ function sourcesOf(item: SearchResponse): string[] {
     if (alternate?.apiName) names.add(alternate.apiName);
   }
   return names.size > 0 ? [...names] : ['Unknown source'];
+}
+
+/**
+ * Content-type tabs, as CloudStream has on Android.
+ *
+ * Grouped rather than one-per-`TvType`: a viewer looking for a series does not
+ * distinguish `TvSeries` from `AsianDrama`, and anime is split across three
+ * types upstream (`Anime`, `AnimeMovie`, `OVA`) that all mean "anime" to the
+ * person reading the screen.
+ *
+ * `NSFW` is deliberately absent. Adult providers are withdrawn before results
+ * are ever built (`PluginManager.enabledProviderNames`), so a tab for it would
+ * be empty for everyone who has not opted in, and a category label nobody asked
+ * for on the screen of everyone who has not.
+ */
+const TYPE_TABS: Array<{ id: string; label: string; types: TvType[] }> = [
+  { id: 'movie', label: 'Movies', types: [TvType.Movie] },
+  { id: 'series', label: 'Series & Shows', types: [TvType.TvSeries, TvType.AsianDrama] },
+  { id: 'anime', label: 'Anime', types: [TvType.Anime, TvType.AnimeMovie, TvType.OVA] },
+  { id: 'documentary', label: 'Documentaries', types: [TvType.Documentary] },
+  { id: 'live', label: 'Live', types: [TvType.Live] },
+  { id: 'torrent', label: 'Torrents', types: [TvType.Torrent] },
+];
+
+/** Every type a row can be filed under, counting its alternates too. */
+function typesOf(item: SearchResponse): TvType[] {
+  const types = new Set<TvType>();
+  if (item.type) types.add(item.type);
+  return [...types];
 }
 
 /** "MegaRepo > Extension A" style scope line, kept to one line. */
@@ -95,8 +124,35 @@ export const SearchView: React.FC<SearchViewProps> = ({
   error,
 }) => {
   const [sourceFilter, setSourceFilter] = useState<string>('all');
+  const [typeTab, setTypeTab] = useState<string>('all');
 
   const results = search?.results ?? [];
+
+  /**
+   * Tabs that would actually leave something, with counts.
+   *
+   * Only shown when the results span more than one — a search that returned
+   * nothing but films does not need a row of tabs to say so, and offering tabs
+   * that lead to an empty grid is worse than offering none.
+   */
+  const typeTabs = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of results) {
+      const types = typesOf(item);
+      for (const tab of TYPE_TABS) {
+        if (types.some((type) => tab.types.includes(type))) {
+          counts.set(tab.id, (counts.get(tab.id) ?? 0) + 1);
+        }
+      }
+    }
+    return TYPE_TABS.filter((tab) => (counts.get(tab.id) ?? 0) > 0).map((tab) => ({
+      ...tab,
+      count: counts.get(tab.id) ?? 0,
+    }));
+  }, [results]);
+
+  // A tab that stops matching as results stream in must not strand the grid.
+  const activeTab = typeTabs.some((tab) => tab.id === typeTab) ? typeTab : 'all';
 
   /**
    * Source options, with the count each would leave.
@@ -115,9 +171,13 @@ export const SearchView: React.FC<SearchViewProps> = ({
   }, [results]);
 
   const filtered = useMemo(() => {
-    if (sourceFilter === 'all') return results;
-    return results.filter((item) => sourcesOf(item).includes(sourceFilter));
-  }, [results, sourceFilter]);
+    const tab = TYPE_TABS.find((entry) => entry.id === activeTab);
+    return results.filter((item) => {
+      if (sourceFilter !== 'all' && !sourcesOf(item).includes(sourceFilter)) return false;
+      if (tab && !typesOf(item).some((type) => tab.types.includes(type))) return false;
+      return true;
+    });
+  }, [results, sourceFilter, activeTab]);
 
   const running = Boolean(search && !search.done);
   const scopeLabel = describeScope(search);
@@ -182,6 +242,31 @@ export const SearchView: React.FC<SearchViewProps> = ({
         )}
       </header>
 
+      {/* Content-type tabs, directly under the header as on Android. */}
+      {typeTabs.length > 1 && (
+        <div className="type-tabs" role="tablist" aria-label="Filter by content type">
+          <button
+            role="tab"
+            aria-selected={activeTab === 'all'}
+            className={`type-tabs__tab${activeTab === 'all' ? ' type-tabs__tab--on' : ''}`}
+            onClick={() => setTypeTab('all')}
+          >
+            All <span>{results.length}</span>
+          </button>
+          {typeTabs.map((tab) => (
+            <button
+              key={tab.id}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={`type-tabs__tab${activeTab === tab.id ? ' type-tabs__tab--on' : ''}`}
+              onClick={() => setTypeTab(tab.id)}
+            >
+              {tab.label} <span>{tab.count}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {search && search.total > 0 && (search.settled < search.total || search.cancelled) && (
         <SourceProgress snapshot={search} onCancel={onCancel} />
       )}
@@ -207,11 +292,23 @@ export const SearchView: React.FC<SearchViewProps> = ({
 
       {filtered.length === 0 ? (
         <div className="search-empty">
-          {sourceFilter !== 'all' ? (
+          {sourceFilter !== 'all' || activeTab !== 'all' ? (
             <>
-              <p>Nothing from {sourceFilter} matched.</p>
-              <button className="btn btn-secondary" onClick={() => setSourceFilter('all')}>
-                Show all sources
+              <p>
+                Nothing matched
+                {activeTab !== 'all'
+                  ? ` in ${TYPE_TABS.find((t) => t.id === activeTab)?.label ?? activeTab}`
+                  : ''}
+                {sourceFilter !== 'all' ? ` from ${sourceFilter}` : ''}.
+              </p>
+              <button
+                className="btn btn-secondary"
+                onClick={() => {
+                  setSourceFilter('all');
+                  setTypeTab('all');
+                }}
+              >
+                Clear filters
               </button>
             </>
           ) : (
