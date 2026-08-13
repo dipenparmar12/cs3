@@ -177,7 +177,14 @@ export class ContentService {
     const cinemetaRef = parseCinemetaUrl(base);
     if (cinemetaRef) {
       const detail = await this.cinemeta.load(cinemetaRef.type, cinemetaRef.imdbId);
-      if (!detail) return null;
+      // Named, like the provider path: "the catalogue has no entry" and "the
+      // catalogue is unreachable" need different reactions from the user, and
+      // a null told them neither.
+      if (!detail) {
+        throw new Error(
+          `The catalogue has no entry for ${cinemetaRef.imdbId}. It may have been removed, or Cinemeta may be unreachable from this network — Settings → Connection can test that.`
+        );
+      }
 
       const mapped: MetadataDetail = {
         name: detail.name,
@@ -202,18 +209,27 @@ export class ContentService {
 
     if (parseMetadataUrl(base)) {
       const detail = await this.metadata.load(base);
-      if (detail) {
-        // Backfill an IMDb id when the catalogue did not supply one; it
-        // materially improves indexer precision.
-        if (!detail.imdbId) {
-          detail.imdbId = await this.metadata.resolveImdbId(detail.name, detail.year);
-        }
-        this.detailCache.set(base, detail);
+      if (!detail) {
+        throw new Error(
+          'TVmaze/AniList returned no details for this title. It may have been withdrawn, or the catalogue may be unreachable from this network.'
+        );
       }
+      // Backfill an IMDb id when the catalogue did not supply one; it
+      // materially improves indexer precision.
+      if (!detail.imdbId) {
+        detail.imdbId = await this.metadata.resolveImdbId(detail.name, detail.year);
+      }
+      this.detailCache.set(base, detail);
       return detail;
     }
 
-    return this.plugins.loadMedia(base);
+    const fromProvider = await this.plugins.loadMedia(base);
+    if (!fromProvider) {
+      // `loadMedia` throws with a reason for every failure it can name; a null
+      // here means the URL was not addressed to a provider at all.
+      throw new Error(`Nothing knows how to open this address: ${base.slice(0, 120)}`);
+    }
+    return fromProvider;
   }
 
   // --- sources -------------------------------------------------------------

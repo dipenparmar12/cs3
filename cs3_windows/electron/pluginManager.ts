@@ -1184,8 +1184,36 @@ export class PluginManager {
     );
     if (!response.ok) return null;
 
+    /**
+     * Every way this can fail says which way it was.
+     *
+     * It used to return a bare `null` for all of them, which the detail view
+     * could only render as "Could not load details for this title." — the same
+     * sentence whether the extension runtime was down, the provider threw, the
+     * scraped page had changed shape, or the title genuinely no longer exists.
+     * Four different problems, three of them actionable, one message.
+     */
+    if (!response.ok) {
+      throw new Error(response.error ?? 'The extension runtime did not answer.');
+    }
+
     const parsed = safeParse(String(response.result?.json ?? ''));
-    if (!parsed?.ok || !parsed.found || !parsed.detail) return null;
+    if (!parsed) {
+      throw new Error(`${ref.provider} returned a reply that could not be read.`);
+    }
+    if (!parsed.ok) {
+      throw new Error(
+        typeof parsed.error === 'string'
+          ? `${ref.provider}: ${parsed.error}`
+          : `${ref.provider} could not load this title.`
+      );
+    }
+    if (!parsed.found) {
+      throw new Error(`${ref.provider} no longer has a page for this title.`);
+    }
+    if (!parsed.detail) {
+      throw new Error(`${ref.provider} returned a page with no details on it.`);
+    }
 
     const detail = parsed.detail as Record<string, unknown>;
     const episodes = Array.isArray(detail.episodes)

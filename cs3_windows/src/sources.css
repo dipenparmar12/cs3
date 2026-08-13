@@ -1841,6 +1841,57 @@
   color: var(--text-subtle);
 }
 
+/* Content-type tabs. Scroll rather than wrap: the row must stay one line so
+   the results grid does not move down as tabs appear during a streaming search. */
+.type-tabs {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding-bottom: 0.15rem;
+  scrollbar-width: thin;
+}
+.type-tabs__tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.type-tabs__tab:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.type-tabs__tab--on {
+  border-color: var(--accent-primary);
+  background: rgba(59, 130, 246, 0.16);
+  color: #fff;
+}
+.type-tabs__tab span {
+  font-size: 0.68rem;
+  font-weight: 500;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.detail-view__tried {
+  font-size: 0.78rem;
+  color: var(--text-subtle);
+  margin: 0;
+}
+.detail-hero__fallback {
+  margin: 0.2rem 0 0;
+  font-size: 0.76rem;
+  color: #fcd34d;
+}
+
 .search-progress {
   display: flex;
   flex-direction: column;
