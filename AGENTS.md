@@ -70,12 +70,25 @@ cs3/
 | Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` |
 | Sidecar tests | `sidecar/` | `mvn test` (15 tests) |
+| Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
+| Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
+
+Run the two Maven commands above **in that order** on a fresh clone; the bridge compiles
+against `library-jvm`, which runtime-deps puts in place. Both are needed before any
+extension can execute, and both are one-time (the output is gitignored, not vendored).
 
 Toolchain present in the cloud environment: Java 21, Maven, Bun, Node 22.
 
 There is **no automated test suite for the Electron/React side** and no CI workflow
-(`.github/` does not exist). `bun run build` — i.e. `tsc` passing — is the strongest
-automated signal available. Say so plainly rather than implying tests passed.
+(`.github/` does not exist).
+
+**The `tsc` in `bun run build` typechecks nothing.** The root `tsconfig.json` is
+solution-style (`"files": []` plus two `references`), and plain `tsc` on such a config is a
+no-op — it does not build referenced projects. Use **`tsc -b`** (or
+`tsc -p tsconfig.app.json` / `-p tsconfig.node.json`) to get a real signal. Running
+`tsc -b` for the first time surfaced seven pre-existing errors, since fixed; the tree is
+clean now, so a new error is yours. Say "typechecks with `tsc -b`" rather than implying
+tests passed.
 
 **Electron cannot actually be launched in a headless cloud container.** Verify by
 typechecking and by reading; do not report "I ran the app" unless you really did.
@@ -107,8 +120,14 @@ Manager    Service       Manager         Engine         Service         Store
 ### The IPC contract
 
 `electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration:
-false`. Channels are namespaced: `api:*`, `torrent:*`, `indexer:*`, `sources:*`,
-`download:*`, `extension:*`, `library:*`, `datastore:*`, `binary:*`, `dialog:*`.
+false`. Channels are namespaced: `api:*`, `torrent:*`, `playback:*`, `indexer:*`,
+`sources:*`, `download:*`, `extension:*`, `library:*`, `datastore:*`, `binary:*`,
+`dialog:*`.
+
+`playback:*` is push-shaped, unlike the rest: `playback:start` returns a session id
+immediately and everything after arrives as `playback:update` snapshots on a
+`webContents.send` channel. That inversion is the point — the player renders from snapshots
+from the moment it opens, before any stream exists.
 
 Fallible handlers return an **envelope**, `{ ok: boolean; error?: string; …payload }`,
 instead of rejecting. `main.ts` has a `fail()` helper for this. A transport failure must
@@ -131,7 +150,10 @@ not a layering mistake.
 | `main.ts` | Window, lifecycle, service wiring, every IPC handler. |
 | `preload.ts` | The typed API surface. |
 | `datastore.ts` | Persistence. Reimplements **Android's 6-bucket key grammar** (`_Bool`/`_Int`/`_String`/`_Float`/`_Long`/`_StringSet`) so Android backups import losslessly. Non-transferable keys (tokens, device ids, cache paths) are filtered on import by regex. |
-| `contentService.ts` | The content pipeline orchestrator: `search → MetadataProvider → getSources → IndexerRegistry → startStream → TorrentEngine`. Extension providers are consulted first when runnable; torrents are today's working fallback. |
+| `contentService.ts` | The content pipeline orchestrator: `search → MetadataProvider → getSources → IndexerRegistry → startStream → TorrentEngine`. Extension providers are consulted first; torrents are the fallback. A `cs3ext://` media URL bypasses indexers entirely — the provider already knows its links. |
+| `playbackSession.ts` | Owns one "user pressed play" interaction. Opens the player *before* a stream exists and streams discovery progress into it, so the viewer can start the best source found so far instead of waiting for the slowest indexer. Also owns in-player source switching and refresh. Retains the `SourceQuery`, which is what makes refresh possible without navigating back. |
+| `searchSuggestions.ts` | Title autocomplete merged across Cinemeta + TVmaze + AniList, deduped on normalised title+year, misspelling-tolerant. Their blind spots do not overlap — see the file header for what was measured about each. |
+| `searchHistory.ts` | Past search *queries* (not results — a cached result set goes stale silently), stored via the datastore so backups carry it. |
 | `metadataProvider.ts` | TVmaze + AniList. **Catalogue metadata only, never streams.** Its key output is the IMDb id, which indexers match on far better than free text. |
 | `cinemeta.ts` | Stremio Cinemeta metadata provider, prioritised in search. |
 | `pluginManager.ts` | `.cs3` repository discovery, plugin-list parsing (mirrors upstream `RepositoryManager.kt`), download + SHA-256 verification, Android-style install paths, then hands archives to the sidecar. |
@@ -178,18 +200,56 @@ barrier to *desktop* though, only to *JavaScript runtimes* — so:
 392 translated, 18,217 classes emitted, 0 verification failures, 6,617 Kotlin coroutine
 state machines, 0 failures — see `docs/PRD/35`, reproducible via `tools/dex-spike/`.
 
-### The current, honest limitation — do not paper over it
+### Provider execution: working as of 2026-08-13
 
-Plugins link against `library-jvm.jar` (upstream's `MainAPI`, `ExtractorApi`, `Plugin`),
-published **only via JitPack**, not Maven Central. Until that jar is on the sidecar's
-runtime classpath:
+PRD-36 steps 1–4 are **done**, and this section previously said they were not. Providers
+now search, load and resolve playable links. Verified end-to-end against the real
+`InternetArchiveProvider` from `recloudstream/extensions`: tier `T1_DROPIN`, 26 search
+results, detail load, and 4 live HTTP video URLs (confirmed `HTTP 200`, `video/mp4`,
+`Accept-Ranges: bytes`).
 
-- `inspect` works, every plugin classifies as `T4_BLOCKED` naming
-  `com.lagradost.cloudstream3.plugins.BasePlugin`, and `status` explains exactly why.
-- Even with the jar present, *calling* a provider is unimplemented work: the API is Kotlin
-  `suspend` functions with `Function1` callbacks, which plain Java reflection cannot invoke
-  usefully. `docs/PRD/36` sequences that work honestly ("step 1 is a day; steps 2–5 are the
-  actual work").
+How the pieces fit:
+
+- `sidecar/runtime-deps/pom.xml` resolves `com.github.recloudstream.cloudstream:library-jvm`
+  (pinned **4.8.0**) plus its whole transitive runtime into `sidecar/runtime/` — 56 jars.
+  Upstream's POM declares every third-party version (jsoup, NiceHttp, jackson, ksoup, ktor,
+  rhino, fuzzywuzzy, coroutines…), so **do not restate them by hand**; transitive resolution
+  reproduces exactly what providers were compiled against. Needs Google's Maven repo too:
+  `androidx.annotation:annotation-jvm` is published only there.
+- `sidecar/bridge/` is a **Kotlin** module producing `cs3-provider-bridge.jar`, which is
+  copied into `sidecar/runtime/`. It must live there, not on the sidecar's own classpath:
+  provider instances are created by the plugin loader whose ancestry runs through the shared
+  loader that owns `library-jvm.jar`, and only code loaded by that same loader resolves the
+  identical `MainAPI` class. The sidecar reaches it reflectively across a deliberately
+  trivial surface — primitives in, JSON strings out.
+- RPC methods added: `providerSearch`, `providerLoad`, `providerLoadLinks`, `providers`.
+- `PluginManager.searchAll/loadMedia/loadLinks` are real now. Provider results are
+  re-addressed as `cs3ext://<provider>/<handle>` because a provider's own URLs carry nothing
+  identifying which provider produced them.
+
+Two findings that contradict PRD-36 and cost real debugging time:
+
+1. **`BasePlugin`, `CloudstreamPlugin`, `APIHolder`, `ExtractorApi` all ship inside
+   `library-jvm` 4.8.0.** Doc 36 §3 treats them as `:app` types needing a hand-built
+   `cs3-app-shim.jar` (~1 week budgeted). Upstream moved them; that shim was not needed.
+2. **`search(query, page)` is the primary overload in 4.8.0, not `search(query)`.** Doc 36
+   §4 says the reverse. Calling only the single-argument form returns "unsupported" from the
+   base class for a modern provider. The bridge tries paginated first and falls back.
+
+Also fixed while getting there, both real bugs on the load path:
+
+- `DexTranslator` derived its temp file name from the archive SHA alone, so two concurrent
+  translations of the *same* archive collided (`inspect` on install races `load`). The temp
+  name now carries a nonce; the final move stays atomic.
+- `PluginClassLoader` was given only the translated jar. dex2jar converts `classes.dex` and
+  nothing else, so `manifest.json` — which step 5 must read *through the loader* — was not
+  visible. The original `.cs3` is now a second classpath entry, which is what Android does.
+
+**Never reintroduce a synthetic/placeholder source.** That rule is unchanged and still
+load-bearing. When nothing real is found, return an empty list *and a reason*.
+
+Still outstanding from doc 36: step 5 (jlink a JRE), step 6 (OS-level sandbox), step 7 (the
+WebView bridge, needed by ~7% of providers).
 
 An earlier revision of this app registered installed plugins as fake providers backed by a
 metadata API and a **hardcoded demo video**. That was removed deliberately, and the
