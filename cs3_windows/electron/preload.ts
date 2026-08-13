@@ -23,6 +23,7 @@ import type {
   RepositoryFetchResult,
 } from './pluginManager';
 import type { SearchScope } from './searchScope';
+import type { SearchSnapshot } from './searchSession';
 import type { DnsPreset, NetworkSettings } from './networkSettings';
 import type {
   AvailableUpdate,
@@ -61,6 +62,22 @@ export interface CloudStreamElectronAPI {
     query: string,
     options?: SearchOptions
   ) => Promise<Envelope & { results: SearchResponse[] }>;
+
+  /**
+   * Opens a search and returns its opening snapshot immediately.
+   *
+   * Push-shaped, like `startPlayback`: results, per-source outcomes and the
+   * resolved scope all arrive afterwards through {@link onSearchUpdate}. The
+   * search can be abandoned with {@link cancelSearch} once the viewer has found
+   * what they wanted, which stops the providers still scraping.
+   */
+  startSearch: (
+    query: string,
+    options?: SearchOptions
+  ) => Promise<Envelope & { snapshot: SearchSnapshot | null }>;
+  cancelSearch: (id: string) => Promise<Envelope & { snapshot: SearchSnapshot | null }>;
+  /** Returns an unsubscribe function. */
+  onSearchUpdate: (callback: (snapshot: SearchSnapshot) => void) => () => void;
   loadMedia: (url: string) => Promise<Envelope & { detail: MetadataDetail | null }>;
   getSources: (request: {
     mediaUrl: string;
@@ -331,6 +348,13 @@ export type { TorrentFileEntry };
 
 const api: CloudStreamElectronAPI = {
   searchAll: (query, options) => ipcRenderer.invoke('api:searchAll', query, options),
+  startSearch: (query, options) => ipcRenderer.invoke('search:start', query, options),
+  cancelSearch: (id) => ipcRenderer.invoke('search:cancel', id),
+  onSearchUpdate: (callback) => {
+    const listener = (_: unknown, snapshot: SearchSnapshot) => callback(snapshot);
+    ipcRenderer.on('search:update', listener);
+    return () => ipcRenderer.removeListener('search:update', listener);
+  },
   loadMedia: (url) => ipcRenderer.invoke('api:loadMedia', url),
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),

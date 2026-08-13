@@ -58,13 +58,41 @@ export interface PluginData {
   isEnabled: boolean;
 }
 
+/**
+ * The source hierarchy, which is exactly three levels deep:
+ * repository → extension → provider. The provider is the selectable leaf.
+ *
+ * `id` fields are always populated by the main process. They are optional here
+ * only because the extensions screen synthesises placeholder nodes for
+ * repositories whose archives have not been loaded yet, and those have no
+ * identity to give.
+ */
+export interface ProviderTreeProvider {
+  name: string;
+  lang?: string;
+  supportedTypes: string[];
+  /** Stable identity for selection, filtering and result attribution. */
+  id?: string;
+  /** False when the provider is switched off in the extensions screen. */
+  enabled?: boolean;
+}
+
+export interface ProviderTreeExtension {
+  internalName: string;
+  name: string;
+  language?: string;
+  providers: ProviderTreeProvider[];
+  id?: string;
+  /**
+   * Why this extension offers nothing to select. Present only when it offers
+   * nothing — never invent a provider to stand in for it.
+   */
+  unavailableReason?: string;
+}
+
 export interface ProviderTreeRepository {
   url: string;
   name: string;
-  extensions: Array<{
-    internalName: string;
-    name: string;
-    language?: string;
-    providers: Array<{ name: string; lang?: string; supportedTypes: string[] }>;
-  }>;
+  extensions: ProviderTreeExtension[];
+  id?: string;
 }

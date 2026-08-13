@@ -166,6 +166,18 @@ app.whenReady().then(async () => {
     }
   });
 
+  // Search results stream in the same way: one snapshot per source that answers.
+  contentService.getSearches().setNotifier((snapshot) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('search:update', snapshot);
+    }
+    // A finished search is what the history remembers, so a cancelled one — and
+    // the count it never reached — is deliberately not recorded.
+    if (snapshot.done && !snapshot.cancelled && snapshot.query) {
+      searchHistory.record(snapshot.query, snapshot.results.length);
+    }
+  });
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -211,6 +223,30 @@ ipcMain.handle('api:searchAll', async (_, query: string, options?: SearchOptions
     return { ok: true, results };
   } catch (error) {
     return { ...fail(error), results: [] };
+  }
+});
+
+/**
+ * Opens a search and returns immediately.
+ *
+ * The renderer renders from the returned snapshot, not from a completed search;
+ * every source that answers afterwards arrives as a `search:update`. Fifteen
+ * extension providers are fifteen independent scrapes, and the slowest of them
+ * should not decide when the first result becomes visible.
+ */
+ipcMain.handle('search:start', async (_, query: string, options?: SearchOptions) => {
+  try {
+    return { ok: true, snapshot: contentService.startSearch(query, options ?? {}) };
+  } catch (error) {
+    return { ...fail(error), snapshot: null };
+  }
+});
+
+ipcMain.handle('search:cancel', async (_, id: string) => {
+  try {
+    return { ok: true, snapshot: contentService.cancelSearch(id) };
+  } catch (error) {
+    return { ...fail(error), snapshot: null };
   }
 });
 

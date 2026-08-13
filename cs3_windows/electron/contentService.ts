@@ -19,8 +19,8 @@ import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
 import { parseExtensionUrl, type PluginManager } from './pluginManager';
 import { SourceCache } from './sourceCache';
-import { mergeSearchResults, restrictToExact } from './searchMerge';
 import { SearchScopeStore } from './searchScope';
+import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -106,6 +106,7 @@ export class ContentService {
   private plugins: PluginManager;
   private cache: SourceCache;
   private scope: SearchScopeStore;
+  private searches: SearchSessionManager;
   private detailCache = new Map<string, MetadataDetail>();
 
   constructor(datastore: DatastoreManager, plugins: PluginManager, engine: TorrentEngine) {
@@ -114,10 +115,22 @@ export class ContentService {
     this.engine = engine;
     this.cache = new SourceCache(datastore);
     this.scope = new SearchScopeStore(datastore);
+    this.searches = new SearchSessionManager({
+      plugins: this.plugins,
+      registry: this.registry,
+      cinemeta: this.cinemeta,
+      metadata: this.metadata,
+      scope: this.scope,
+      onResults: (results) => this.rememberRoutes(results),
+    });
   }
 
   public getScope(): SearchScopeStore {
     return this.scope;
+  }
+
+  public getSearches(): SearchSessionManager {
+    return this.searches;
   }
 
   public getCache(): SourceCache {
@@ -134,74 +147,25 @@ export class ContentService {
 
   // --- search --------------------------------------------------------------
 
-  public async search(
-    query: string,
-    options: SearchOptions = {}
-  ): Promise<SearchResponse[]> {
-    const trimmed = query.trim();
-    if (!trimmed) return [];
+  /**
+   * Opens a search and returns immediately.
+   *
+   * Everything after this point arrives as `search:update` snapshots — the
+   * scope it resolved to, each source as it answers, and the merged results so
+   * far. See `searchSession.ts` for why a search is push-shaped.
+   */
+  public startSearch(query: string, options: SearchOptions = {}): SearchSnapshot {
+    return this.searches.start(query, options);
+  }
 
-    // A pasted magnet is directly playable — surface it as its own result
-    // rather than sending it to a catalogue search that cannot understand it.
-    if (trimmed.startsWith('magnet:')) {
-      const infoHash = infoHashFromMagnet(trimmed);
-      const name = decodeURIComponent(trimmed.match(/dn=([^&]+)/)?.[1] ?? 'Magnet link');
-      return [
-        {
-          name,
-          url: trimmed,
-          apiName: 'Magnet',
-          type: TvType.Torrent,
-          quality: infoHash ? infoHash.slice(0, 8) : undefined,
-        },
-      ];
-    }
+  public cancelSearch(id: string): SearchSnapshot | null {
+    return this.searches.cancel(id);
+  }
 
-    const results: SearchResponse[] = [];
-    const currentScope = this.scope.get();
-    const hasScopedProviders = currentScope.providers.length > 0;
-    const hasScopedIndexers = currentScope.indexers.length > 0;
-    const isScoped = hasScopedProviders || hasScopedIndexers;
-
-    // 1. Scoped or Global Extension Provider Search
-    if (hasScopedProviders) {
-      const enabledProvs = await this.plugins.listEnabledProviders();
-      const scopedProviders = this.scope.applyToProviders(enabledProvs);
-      const pluginResults = await this.plugins.searchAll(trimmed, scopedProviders);
-      results.push(...pluginResults);
-    } else if (!isScoped) {
-      const pluginResults = await this.plugins.searchAll(
-        trimmed,
-        await this.plugins.listEnabledProviders()
-      );
-      results.push(...pluginResults);
-    }
-
-    // 2. Metadata Catalogues (Cinemeta / TVmaze / AniList) are queried ONLY when search scope is default (global)
-    if (!isScoped) {
-      const [cinemeta, legacy] = await Promise.allSettled([
-        this.cinemeta.search(trimmed),
-        this.metadata.search(trimmed),
-      ]);
-
-      if (cinemeta.status === 'fulfilled') results.push(...cinemeta.value);
-
-      if (legacy.status === 'fulfilled') {
-        const seen = new Set(results.map((r) => `${r.name.toLowerCase()}|${r.year ?? ''}`));
-        for (const item of legacy.value) {
-          const key = `${item.name.toLowerCase()}|${item.year ?? ''}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            results.push(item);
-          }
-        }
-      }
-    }
-
-    const merged = mergeSearchResults(results);
-    const scoped = options.exact ? restrictToExact(merged, options.exact) : merged;
-    this.rememberRoutes(scoped);
-    return scoped;
+  /** Runs a search to completion. For callers that cannot use a partial answer. */
+  public async search(query: string, options: SearchOptions = {}): Promise<SearchResponse[]> {
+    if (!query.trim()) return [];
+    return (await this.searches.runToCompletion(query, options)).results;
   }
 
   public async load(url: string): Promise<MetadataDetail | null> {
@@ -401,27 +365,32 @@ export class ContentService {
      * find peers first — so they are streamed into progress as they land rather
      * than appended once the indexers finish.
      */
-    const allowedIndexers = new Set(
-      this.scope.applyToIndexers(
-        this.registry.getConfigs().filter((c) => c.enabled).map((c) => c.id)
-      )
+    const indexerScope = this.scope.resolveIndexers(
+      this.registry.getConfigs().filter((c) => c.enabled).map((c) => c.id)
     );
+    const allowedIndexers = new Set(indexerScope.allowed);
 
-    const scopedProviders = this.scope.get().providers;
+    const providerScope = this.scope.resolveProviders(
+      await this.plugins.listEnabledProviders()
+    );
+    const allowedProviders = new Set(providerScope.allowed);
+
     let routes = (this.alternateRoutes.get(base) ?? []).filter((route) => {
-      if (scopedProviders.length === 0) return true;
+      if (!providerScope.narrowed) return true;
       const ref = parseExtensionUrl(route);
-      return ref ? scopedProviders.includes(ref.provider) : true;
+      return ref ? allowedProviders.has(ref.provider) : false;
     });
 
     // Fallback: If no alternate route was cached from a previous search step,
     // query enabled extension providers for `title` directly so catalogue items
     // (opened from HomeView/Trending) draw on active extension providers too.
-    if (routes.length === 0 && title) {
+    // A narrowed scope that resolves to nothing asks nothing, which is the
+    // point of narrowing — `undefined` here would mean "every provider".
+    if (routes.length === 0 && title && !(providerScope.narrowed && allowedProviders.size === 0)) {
       try {
         const matches = await this.plugins.searchAll(
           title,
-          scopedProviders.length > 0 ? scopedProviders : undefined
+          providerScope.narrowed ? providerScope.allowed : undefined
         );
         routes = matches.map((m) => m.url).filter((url) => url.startsWith('cs3ext://'));
       } catch (e) {
@@ -463,9 +432,8 @@ export class ContentService {
           }),
         // Source discovery honours the same scope the search did, so narrowing
         // to one site does not quietly widen again the moment you press play.
-        // The allowed set is resolved once, up front: `applyToIndexers` falls
-        // back to everything when the scope names nothing that still exists,
-        // and that rule only means anything against the whole candidate list.
+        // Resolved once, up front, against the whole enabled list: an indexer
+        // outside the scope is reported as skipped rather than simply absent.
         (id) => allowedIndexers.has(id)
       ),
       ...routes.map(async (route) => {

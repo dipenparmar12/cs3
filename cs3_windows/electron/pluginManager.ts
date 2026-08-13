@@ -75,17 +75,52 @@ export interface ExtensionProvider {
   supportedTypes: string[];
 }
 
-/** One node of the repository → extension → provider tree. */
+/**
+ * One selectable source, and the leaf of the tree.
+ *
+ * `id` is the provider's name because that *is* its app-wide address: the
+ * `cs3ext://` URL scheme, the sidecar RPC, the enable/disable list and the
+ * search scope all key on it. Giving the UI a second, synthetic identity would
+ * mean two things to keep in step and one more place for a selection to stop
+ * matching the provider it names.
+ */
+export interface ProviderTreeProvider {
+  id: string;
+  name: string;
+  lang?: string;
+  supportedTypes: string[];
+  /** False when switched off in the extensions screen. */
+  enabled: boolean;
+}
+
+export interface ProviderTreeExtension {
+  id: string;
+  internalName: string;
+  name: string;
+  language?: string;
+  providers: ProviderTreeProvider[];
+  /**
+   * Why this extension offers nothing to select, when it offers nothing.
+   *
+   * An extension with no providers is not the same as an extension that is not
+   * installed — it is loading, blocked, or lost a name to another extension —
+   * and callers that cannot tell the difference end up inventing a placeholder
+   * provider to fill the gap. One did exactly that, and selecting the invented
+   * name scoped the search to a provider that has never existed.
+   */
+  unavailableReason?: string;
+}
+
+/** One node of the repository → extension → provider tree. Exactly three levels. */
 export interface ProviderTreeRepository {
+  id: string;
   url: string;
   name: string;
-  extensions: Array<{
-    internalName: string;
-    name: string;
-    language?: string;
-    providers: Array<{ name: string; lang?: string; supportedTypes: string[] }>;
-  }>;
+  extensions: ProviderTreeExtension[];
 }
+
+/** Repositories are keyed by URL; a sideloaded archive has none. */
+const SIDELOADED_REPOSITORY_ID = 'sideloaded';
 
 /**
  * A readable name for a repository we only know by URL.
@@ -283,6 +318,48 @@ async function resolveRepositoryDocument(
   throw directError instanceof Error ? directError : new Error(String(directError));
 }
 
+/** What one provider had to say about one query. */
+export interface ProviderSearchOutcome {
+  /** The registered provider name, which is its identity everywhere else. */
+  provider: string;
+  results: SearchResponse[];
+  latencyMs: number;
+  /** Set when this provider failed; the others are unaffected. */
+  error?: string;
+}
+
+/** How many provider searches are in flight at once. See `searchEach`. */
+const PROVIDER_SEARCH_CONCURRENCY = 8;
+
+/**
+ * Turns one provider's raw reply into search rows.
+ *
+ * `apiName` is forced to the registered provider name rather than whatever the
+ * provider called itself. That name is the app's identity for this source —
+ * the scope picker selects it, `cs3ext://` addresses it, the results filter
+ * groups by it — and a provider that answers under a different label would
+ * appear in the results as a source the user cannot find in the picker.
+ */
+function mapProviderResults(providerName: string, raw: unknown): SearchResponse[] {
+  if (!Array.isArray(raw)) return [];
+
+  const out: SearchResponse[] = [];
+  for (const item of raw as Array<Record<string, unknown>>) {
+    if (!item.name || !item.url) continue;
+    out.push({
+      name: String(item.name),
+      url: buildExtensionUrl(providerName, String(item.url)),
+      apiName: providerName,
+      type: item.type as SearchResponse['type'],
+      posterUrl: item.posterUrl ? String(item.posterUrl) : undefined,
+      posterHeaders: item.posterHeaders as Record<string, string> | undefined,
+      quality: item.quality ? String(item.quality) : undefined,
+      year: typeof item.year === 'number' ? item.year : undefined,
+    });
+  }
+  return out;
+}
+
 /** The bridge's replies arrive as JSON strings; a malformed one is not fatal. */
 function safeParse(raw: string): Record<string, unknown> | null {
   try {
@@ -307,6 +384,8 @@ export class PluginManager {
 
   /** Providers registered by loaded plugins, keyed by provider name. */
   private providers = new Map<string, ExtensionProvider>();
+  /** Names an extension tried to register that another extension already held. */
+  private providerNameClashes = new Map<string, string[]>();
   private providersLoaded = false;
   private providersLoading: Promise<void> | null = null;
 
@@ -711,36 +790,84 @@ export class PluginManager {
    * archive a provider came from and which repository that archive came from —
    * a provider reports its own name and nothing about its ancestry.
    *
-   * An extension that registered no providers is still listed. It is either
-   * still loading or blocked, and hiding it would make a failed extension
-   * indistinguishable from one that was never installed.
+   * Exactly three levels, always. There is no fourth entity in the CloudStream
+   * model: a repository ships archives, an archive registers providers, and a
+   * provider is what search actually asks. A tree that appears to nest deeper
+   * is a rendering artefact of the common case where an archive registers one
+   * provider named after itself, not a real extra level.
+   *
+   * An extension that registered no providers is still listed, with a reason.
+   * It is loading, blocked, or lost its name to another extension, and hiding
+   * it would make a failed extension indistinguishable from one that was never
+   * installed.
+   *
+   * Indexed rather than scanned: the corpus runs to hundreds of extensions and
+   * hundreds of providers, and filtering the whole registry once per extension
+   * made this quadratic in the exact case it has to stay fast for.
    */
   public getProviderTree(): ProviderTreeRepository[] {
+    const disabled = new Set(this.getDisabledProviders());
+
+    const byExtension = new Map<string, ExtensionProvider[]>();
+    for (const provider of this.providers.values()) {
+      const bucket = byExtension.get(provider.pluginInternalName);
+      if (bucket) bucket.push(provider);
+      else byExtension.set(provider.pluginInternalName, [provider]);
+    }
+
     const byRepo = new Map<string, ProviderTreeRepository>();
 
     for (const record of this.installedPlugins.values()) {
       const repoUrl = record.meta?.repositoryUrl ?? '';
-      let repo = byRepo.get(repoUrl);
+      const repoId = repoUrl || SIDELOADED_REPOSITORY_ID;
+      let repo = byRepo.get(repoId);
       if (!repo) {
-        repo = { url: repoUrl, name: repositoryLabel(repoUrl), extensions: [] };
-        byRepo.set(repoUrl, repo);
+        repo = { id: repoId, url: repoUrl, name: repositoryLabel(repoUrl), extensions: [] };
+        byRepo.set(repoId, repo);
       }
 
+      const providers: ProviderTreeProvider[] = (byExtension.get(record.internalName) ?? []).map(
+        (provider) => ({
+          id: provider.name,
+          name: provider.name,
+          lang: provider.lang,
+          supportedTypes: provider.supportedTypes,
+          enabled: !disabled.has(provider.name),
+        })
+      );
+      providers.sort((a, b) => a.name.localeCompare(b.name));
+
       repo.extensions.push({
+        id: record.internalName,
         internalName: record.internalName,
         name: record.meta?.name ?? record.internalName,
         language: record.meta?.language,
-        providers: [...this.providers.values()]
-          .filter((provider) => provider.pluginInternalName === record.internalName)
-          .map((provider) => ({
-            name: provider.name,
-            lang: provider.lang,
-            supportedTypes: provider.supportedTypes,
-          })),
+        providers,
+        ...(providers.length === 0
+          ? { unavailableReason: this.explainNoProviders(record.internalName) }
+          : {}),
       });
     }
 
-    return [...byRepo.values()];
+    const repositories = [...byRepo.values()];
+    for (const repo of repositories) {
+      repo.extensions.sort((a, b) => a.name.localeCompare(b.name));
+    }
+    repositories.sort((a, b) => a.name.localeCompare(b.name));
+    return repositories;
+  }
+
+  /** Why an installed extension contributed nothing selectable. */
+  private explainNoProviders(internalName: string): string {
+    const clashes = this.providerNameClashes.get(internalName);
+    if (clashes && clashes.length > 0) {
+      return `Its provider name is already registered by another extension: ${clashes.join(', ')}.`;
+    }
+    const report = this.runtimeReports.get(internalName);
+    if (report?.reason) return report.reason;
+    return this.providersLoaded
+      ? 'This extension loaded but registered no providers.'
+      : 'This extension has not been loaded yet.';
   }
 
   // --- provider execution --------------------------------------------------
@@ -759,6 +886,10 @@ export class PluginManager {
     this.providersLoading = (async () => {
       const started = await this.sidecar.ensureStarted();
       if (!started) return;
+
+      // Recomputed from scratch each pass: an uninstall can resolve a clash,
+      // and a stale entry would keep blaming an extension that is now fine.
+      this.providerNameClashes.clear();
 
       for (const record of this.installedPlugins.values()) {
         if (!record.filePath || !fs.existsSync(record.filePath)) continue;
@@ -786,6 +917,26 @@ export class PluginManager {
         for (const raw of registered as Array<Record<string, unknown>>) {
           const name = raw.name ? String(raw.name) : null;
           if (!name) continue;
+
+          /**
+           * A provider name is the app-wide address for a provider — `cs3ext://`
+           * URLs, the scope and the enable/disable list all key on it — so two
+           * extensions cannot both hold one. The first keeps it, because that is
+           * stable across reloads in a way "whichever loaded last" is not.
+           *
+           * The loser is recorded rather than dropped: without this it shows up
+           * in the tree as an extension that registered nothing, which reads as
+           * a translation failure and sends whoever investigates to the wrong
+           * place entirely.
+           */
+          const owner = this.providers.get(name);
+          if (owner && owner.pluginInternalName !== record.internalName) {
+            const clashes = this.providerNameClashes.get(record.internalName) ?? [];
+            clashes.push(`${name} (held by ${owner.pluginName})`);
+            this.providerNameClashes.set(record.internalName, clashes);
+            continue;
+          }
+
           this.providers.set(name, {
             name,
             pluginInternalName: record.internalName,
@@ -852,49 +1003,113 @@ export class PluginManager {
   }
 
   /**
-   * Searches every enabled extension provider.
+   * Narrows a requested provider list to what is actually switched on.
    *
-   * Results are re-addressed as `cs3ext://` URLs. A provider's own URLs are
-   * plain site links with nothing in them identifying which provider produced
-   * them, so a later `load` would have no way to route back to the right one.
+   * `undefined` means "every enabled provider"; an empty array means none, and
+   * the two must stay distinguishable — a scoped search that resolves to
+   * nothing has to search nothing, not everything.
+   *
+   * A named provider that is disabled is dropped rather than re-enabled, which
+   * is what keeps the extensions screen authoritative over the scope picker.
    */
-  public async searchAll(query: string, only?: string[]): Promise<SearchResponse[]> {
-    await this.ensureProvidersLoaded();
-
+  private narrowToEnabled(only?: string[]): string[] {
     const enabled = this.enabledProviderNames();
-    // `only` narrows within what is enabled — it can never switch a disabled
-    // provider back on, which is what keeps the extensions screen authoritative.
-    const names = only ? enabled.filter((name) => only.includes(name)) : enabled;
-    if (names.length === 0) return [];
+    if (!only) return enabled;
+    const wanted = new Set(only);
+    return enabled.filter((name) => wanted.has(name));
+  }
 
+  /**
+   * Searches extension providers, reporting each one the moment it answers.
+   *
+   * One RPC per provider, rather than the single batched call this replaced.
+   * The batched form asked the sidecar for every provider at once and the
+   * sidecar collected the futures in order, so the reply landed at the speed of
+   * the slowest provider — with fifteen installed, a scrape that took forty
+   * seconds held back fourteen answers that were ready in two. Every result was
+   * already known long before the user saw any of them.
+   *
+   * Concurrency is capped because the sidecar dispatches each RPC onto a
+   * bounded worker pool (`Main.pool`, sized to the core count); firing a
+   * hundred at once would queue there instead of here, and lose the ability to
+   * stop early on cancel. The provider calls themselves run on an unbounded
+   * pool inside the sidecar, so the cap costs nothing in throughput.
+   */
+  public async searchEach(
+    query: string,
+    only: string[] | undefined,
+    onProvider: (outcome: ProviderSearchOutcome) => void,
+    signal?: AbortSignal
+  ): Promise<void> {
+    await this.ensureProvidersLoaded();
+    if (signal?.aborted) return;
+
+    const targets = this.narrowToEnabled(only);
+    if (targets.length === 0) return;
+
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < targets.length) {
+        if (signal?.aborted) return;
+        const name = targets[next++];
+        const outcome = await this.searchOne(query, name);
+        // A cancelled search must not keep mutating the caller's snapshot;
+        // the reply that was already in flight is simply dropped.
+        if (signal?.aborted) return;
+        onProvider(outcome);
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(PROVIDER_SEARCH_CONCURRENCY, targets.length) }, worker)
+    );
+  }
+
+  /** One provider's answer, as an outcome rather than a throw. */
+  private async searchOne(query: string, name: string): Promise<ProviderSearchOutcome> {
+    const started = Date.now();
     const response = await this.sidecar.call(
       'providerSearch',
-      { query, providers: names },
+      { query, providers: [name] },
       PROVIDER_CALL_TIMEOUT_MS
     );
-    if (!response.ok) return [];
+    const latencyMs = Date.now() - started;
+
+    if (!response.ok) {
+      return {
+        provider: name,
+        results: [],
+        latencyMs,
+        error: response.error ?? 'The extension runtime did not answer.',
+      };
+    }
 
     const byProvider = (response.result?.byProvider ?? {}) as Record<string, string>;
-    const out: SearchResponse[] = [];
-
-    for (const [providerName, raw] of Object.entries(byProvider)) {
-      const parsed = safeParse(raw);
-      if (!parsed?.ok || !Array.isArray(parsed.results)) continue;
-
-      for (const item of parsed.results as Array<Record<string, unknown>>) {
-        if (!item.name || !item.url) continue;
-        out.push({
-          name: String(item.name),
-          url: buildExtensionUrl(providerName, String(item.url)),
-          apiName: item.apiName ? String(item.apiName) : providerName,
-          type: item.type as SearchResponse['type'],
-          posterUrl: item.posterUrl ? String(item.posterUrl) : undefined,
-          posterHeaders: item.posterHeaders as Record<string, string> | undefined,
-          quality: item.quality ? String(item.quality) : undefined,
-          year: typeof item.year === 'number' ? item.year : undefined,
-        });
-      }
+    const parsed = byProvider[name] ? safeParse(byProvider[name]) : null;
+    if (!parsed) {
+      return { provider: name, results: [], latencyMs, error: 'The provider returned no usable answer.' };
     }
+    if (!parsed.ok) {
+      return {
+        provider: name,
+        results: [],
+        latencyMs,
+        error: typeof parsed.error === 'string' ? parsed.error : 'The provider reported a failure.',
+      };
+    }
+
+    return { provider: name, results: mapProviderResults(name, parsed.results), latencyMs };
+  }
+
+  /**
+   * Searches every enabled extension provider and waits for all of them.
+   *
+   * The batch form, for callers with nothing to do with a partial answer —
+   * source discovery, which cannot start a stream from half a result set.
+   */
+  public async searchAll(query: string, only?: string[]): Promise<SearchResponse[]> {
+    const out: SearchResponse[] = [];
+    await this.searchEach(query, only, (outcome) => out.push(...outcome.results));
     return out;
   }
 
