@@ -14,6 +14,7 @@ import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
 import { SubtitlePanel } from './player/SubtitlePanel';
+import type { MediaProbe } from '../../electron/audioTranscoder';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
@@ -156,6 +157,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [audioTracks, setAudioTracks] = useState<AudioTrackInfo[]>([]);
   const [activeAudioTrack, setActiveAudioTrack] = useState<string | number>('default');
 
+  /**
+   * Audio compatibility state.
+   *
+   * Chromium ships no AC-3, E-AC-3 or DTS decoder, and the failure is silent —
+   * the container opens, video decodes, and the audio track is dropped with no
+   * error. Measured on this build: an H.264 + AC-3 file decodes 65 KB of video
+   * and exactly 0 bytes of audio. So the stream is probed up front and remuxed
+   * through ffmpeg when its audio cannot be played.
+   */
+  const [audioProbe, setAudioProbe] = useState<MediaProbe | null>(null);
+  const [transcode, setTranscode] = useState<{ url: string; token: string } | null>(null);
+  const [transcodeOffset, setTranscodeOffset] = useState(0);
+  const [audioNeedsComponents, setAudioNeedsComponents] = useState(false);
+  const [selectedAudioIndex, setSelectedAudioIndex] = useState(0);
+
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState(0);
 
@@ -236,7 +252,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (data.fatal) setError(`Playback error: ${data.details}`);
       });
     } else {
-      video.src = streamUrl;
+      // When the audio needed remuxing, the loopback URL is what plays; the
+      // original is left untouched and is still what everything else refers to.
+      video.src = transcode?.url ?? streamUrl;
     }
 
     video.volume = volume;
@@ -272,7 +290,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.removeAttribute('src');
       video.load();
     };
-  }, [streamUrl, mimeType, volume, isMuted]);
+  }, [streamUrl, mimeType, volume, isMuted, transcode?.url]);
 
   useEffect(() => {
     const hls = hlsRef.current;
@@ -441,17 +459,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // --- video element events ------------------------------------------------
 
+  // Read inside listeners registered once, so they must not close over state.
+  const offsetRef = useRef(0);
+  const probedDurationRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    offsetRef.current = transcode ? transcodeOffset : 0;
+  }, [transcode, transcodeOffset]);
+  useEffect(() => {
+    probedDurationRef.current = transcode ? audioProbe?.durationSeconds : undefined;
+  }, [transcode, audioProbe]);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     const onTime = () => {
-      setCurrentTime(video.currentTime);
+      // A remuxed stream always starts at zero regardless of where the viewer
+      // seeked to, so the offset is what makes the scrubber tell the truth.
+      setCurrentTime(offsetRef.current + video.currentTime);
       if (video.buffered.length > 0) {
-        setBuffered(video.buffered.end(video.buffered.length - 1));
+        setBuffered(offsetRef.current + video.buffered.end(video.buffered.length - 1));
       }
     };
-    const onMeta = () => setDuration(video.duration);
+    const onMeta = () => {
+      // ffmpeg reports the remaining duration from the seek point, not the
+      // whole file; the probe knows the real length.
+      const probed = probedDurationRef.current;
+      setDuration(probed && probed > 0 ? probed : video.duration);
+    };
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
     const onError = () =>
@@ -545,15 +580,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     else video.pause();
   }, []);
 
-  const seekBy = useCallback((delta: number) => {
-    const video = videoRef.current;
-    if (video) video.currentTime = Math.max(0, video.currentTime + delta);
-  }, []);
+  /**
+   * Seeks, accounting for a remuxed stream having no seekable range.
+   *
+   * A fragmented MP4 produced live by ffmpeg carries no index, so setting
+   * `currentTime` on it does nothing. Seeking is performed by restarting the
+   * remux at the target time and remembering the offset, which is what keeps
+   * the scrubber honest — the element always believes it is at zero.
+   */
+  const seekTo = useCallback(
+    (time: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      const target = Math.max(0, time);
 
-  const seekTo = useCallback((time: number) => {
-    const video = videoRef.current;
-    if (video) video.currentTime = Math.max(0, time);
-  }, []);
+      if (transcode) {
+        setTranscodeOffset(target);
+        const wasPlaying = !video.paused;
+        video.src = `${transcode.url}?t=${Math.floor(target)}`;
+        video.load();
+        if (wasPlaying) void video.play().catch(() => undefined);
+        return;
+      }
+      video.currentTime = target;
+    },
+    [transcode]
+  );
+
+  const seekBy = useCallback(
+    (delta: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      seekTo((transcode ? transcodeOffset : 0) + video.currentTime + delta);
+    },
+    [seekTo, transcode, transcodeOffset]
+  );
 
   const toggleFullscreen = useCallback(async () => {
     const container = containerRef.current;
@@ -663,11 +724,112 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const progressPercent = duration ? (currentTime / duration) * 100 : 0;
 
-  /** Subtitles shipped with the stream, plus any fetched from online search. */
-  const allSubtitles = useMemo(
-    () => [...subtitles, ...fetchedSubtitles],
-    [subtitles, fetchedSubtitles]
+  /**
+   * Probes the stream's audio and remuxes it when Chromium cannot decode it.
+   *
+   * Runs on every new stream. HLS is excluded: hls.js handles its own
+   * demuxing and its segments are already in a browser-friendly codec set.
+   */
+  useEffect(() => {
+    if (!streamUrl) return;
+    const isHls = /\.m3u8(\?|$)/i.test(streamUrl) || mimeType === 'application/x-mpegURL';
+    if (isHls) return;
+
+    let cancelled = false;
+    let openedToken: string | null = null;
+
+    (async () => {
+      const response = await window.cloudstream?.probeAudio(streamUrl);
+      if (cancelled || !response) return;
+
+      setAudioNeedsComponents(Boolean(response.needsComponents));
+      if (!response.ok || !response.probe) return;
+
+      setAudioProbe(response.probe);
+      const preferred = response.probe.audio.find((a) => a.isDefault) ?? response.probe.audio[0];
+      if (preferred) setSelectedAudioIndex(preferred.index);
+
+      if (!response.probe.needsTranscode) return;
+
+      const session = await window.cloudstream?.openAudioTranscode(
+        streamUrl,
+        preferred?.index ?? 0
+      );
+      if (cancelled || !session?.ok || !session.url) return;
+
+      openedToken = session.url.split('/').pop() ?? null;
+      setTranscodeOffset(0);
+      setTranscode({ url: session.url, token: openedToken ?? '' });
+    })();
+
+    return () => {
+      cancelled = true;
+      // The ffmpeg process outlives the component otherwise.
+      if (openedToken) void window.cloudstream?.closeAudioTranscode(openedToken);
+    };
+  }, [streamUrl, mimeType]);
+
+  // A new stream invalidates everything learned about the previous one.
+  useEffect(() => {
+    setAudioProbe(null);
+    setTranscode(null);
+    setTranscodeOffset(0);
+    setAudioNeedsComponents(false);
+  }, [streamUrl]);
+
+  /**
+   * Switches audio track. On a remuxed stream this restarts ffmpeg mapping the
+   * chosen track, because the element only ever receives the one stereo track
+   * that was selected for it.
+   */
+  const selectProbedAudio = useCallback(
+    async (index: number) => {
+      setSelectedAudioIndex(index);
+      if (!transcode) return;
+
+      const video = videoRef.current;
+      const at = transcodeOffset + (video?.currentTime ?? 0);
+      const session = await window.cloudstream?.openAudioTranscode(streamUrl, index);
+      if (!session?.ok || !session.url) return;
+
+      if (transcode.token) void window.cloudstream?.closeAudioTranscode(transcode.token);
+      setTranscodeOffset(at);
+      setTranscode({ url: session.url, token: session.url.split('/').pop() ?? '' });
+    },
+    [transcode, transcodeOffset, streamUrl]
   );
+
+  /** Audio tracks as ffprobe reported them, labelled for the picker. */
+  const probedAudioTracks = useMemo(
+    () =>
+      (audioProbe?.audio ?? []).map((track) => {
+        const language = track.language && track.language !== 'und'
+          ? track.language.toUpperCase()
+          : null;
+        const name = track.title || language || `Track ${track.index + 1}`;
+        const facts = [
+          track.codec.toUpperCase(),
+          track.channels === 6 ? '5.1' : track.channels === 2 ? 'Stereo' : undefined,
+          // Worth saying: it is why this track sounds different from the file.
+          track.playable ? undefined : 'converted',
+        ].filter(Boolean);
+        return { index: track.index, label: name, detail: facts.join(' · ') };
+      }),
+    [audioProbe]
+  );
+
+  /** Subtitles shipped with the stream, plus any fetched from online search. */
+  const allSubtitles = useMemo(() => {
+    const combined = [...subtitles, ...fetchedSubtitles];
+    const englishFirst = combined.sort((a, b) => {
+      const aIsEnglish = /english|eng/i.test(a.name);
+      const bIsEnglish = /english|eng/i.test(b.name);
+      if (aIsEnglish && !bIsEnglish) return -1;
+      if (!aIsEnglish && bIsEnglish) return 1;
+      return 0;
+    });
+    return englishFirst;
+  }, [subtitles, fetchedSubtitles]);
 
   /**
    * Applies the selected subtitle by driving `TextTrack.mode` directly.
@@ -829,6 +991,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               )}
             </>
           )}
+        </div>
+      )}
+
+      {/* Silence with no error is the worst possible failure mode: the volume
+          control works, the video plays, and nothing says why. If the audio
+          cannot be decoded and the components that would fix it are missing,
+          say so on screen. */}
+      {audioNeedsComponents && audioProbe?.needsTranscode && (
+        <div className="player__audio-notice">
+          <AlertTriangle size={14} />
+          <span>
+            This file&rsquo;s audio uses a format Windows cannot play here. Install
+            the media components in Settings to enable it.
+          </span>
         </div>
       )}
 
@@ -1128,21 +1304,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             />
           )}
 
-          {audioTracks.length > 1 && (
+          {/* Probed tracks take precedence over the element's own list: a
+              `<video>` does not expose tracks it cannot decode at all, so the
+              AC-3 Japanese dub simply would not appear without the probe. */}
+          {probedAudioTracks.length > 1 ? (
             <HoverMenu
               icon={<Volume2 size={16} />}
               label="Audio"
-              value={activeAudioTrack}
-              onChange={(val) => selectAudioTrack(val)}
+              value={selectedAudioIndex}
+              onChange={(val) => void selectProbedAudio(Number(val))}
               triggerText={
-                audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
+                probedAudioTracks.find((t) => t.index === selectedAudioIndex)?.label ?? 'Audio'
               }
-              options={audioTracks.map((track) => ({
-                value: track.id,
+              options={probedAudioTracks.map((track) => ({
+                value: track.index,
                 label: track.label,
-                detail: track.language ? track.language.toUpperCase() : undefined,
+                detail: track.detail,
               }))}
             />
+          ) : (
+            audioTracks.length > 1 && (
+              <HoverMenu
+                icon={<Volume2 size={16} />}
+                label="Audio"
+                value={activeAudioTrack}
+                onChange={(val) => selectAudioTrack(val)}
+                triggerText={
+                  audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
+                }
+                options={audioTracks.map((track) => ({
+                  value: track.id,
+                  label: track.label,
+                  detail: track.language ? track.language.toUpperCase() : undefined,
+                }))}
+              />
+            )
           )}
 
           <HoverMenu
