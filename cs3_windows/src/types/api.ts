@@ -42,6 +42,19 @@ export const BUCKET_LABELS: Record<WatchStatus, string> = {
   Dropped: 'Dropped',
 };
 
+/**
+ * One provider's route to a title, kept alongside the merged row that won.
+ *
+ * Two providers naming the same work produce one row, but the losing row's URL
+ * is not noise — it is a second way to reach the same content, and the source
+ * layer asks all of them. Discarding it would mean a title found by both the
+ * catalogue and an extension could only ever be played through one of them.
+ */
+export interface SearchAlternate {
+  apiName: string;
+  url: string;
+}
+
 export interface SearchResponse {
   name: string;
   url: string;
@@ -52,6 +65,69 @@ export interface SearchResponse {
   year?: number;
   quality?: string;
   id?: number;
+  /** Present when the identity is known; the strongest merge key there is. */
+  imdbId?: string;
+  /** Present when the item is the exact selection chosen from search suggestions. */
+  isExactMatch?: boolean;
+  /** The other providers that returned this same title. */
+  alternates?: SearchAlternate[];
+}
+
+/**
+ * One autocomplete row under the search box.
+ *
+ * Distinct from {@link SearchResponse}: this describes a *title* the user might
+ * mean, merged across every catalogue that knows about it, and carries the
+ * extra context that makes a guess resolvable at a glance — the official
+ * spelling, the year, and a line of plot. `sources` records which catalogues
+ * agreed, which is the strongest available signal that a row is the real thing
+ * rather than one catalogue's fuzzy near-miss.
+ */
+export interface SearchSuggestion {
+  /** The catalogue's official title, which is what should be searched. */
+  title: string;
+  year?: number;
+  type?: TvType;
+  posterUrl?: string;
+  plot?: string;
+  genres: string[];
+  /** Catalogue URL, so a suggestion can open the title directly. */
+  url: string;
+  imdbId?: string;
+  /** Catalogues that independently returned this title. */
+  sources: string[];
+}
+
+/**
+ * The exact work the viewer meant, when they picked it rather than typed it.
+ *
+ * Choosing "Spider-Man: No Way Home" from the dropdown is a much stronger
+ * statement than the text "spider-man": it names one work, out of a franchise
+ * of a dozen that all match that text. Carrying the identity through to the
+ * search is what lets the results honour the choice instead of re-deriving a
+ * guess from the title string.
+ */
+export interface ExactMedia {
+  title: string;
+  year?: number;
+  type?: TvType;
+  imdbId?: string;
+  /** The catalogue URL the suggestion came from, so the row always survives. */
+  url?: string;
+  posterUrl?: string;
+}
+
+export interface SearchOptions {
+  exact?: ExactMedia;
+}
+
+/** One past search, newest first. */
+export interface SearchHistoryEntry {
+  query: string;
+  /** Epoch millis of the most recent time this query was run. */
+  at: number;
+  /** How many results it produced, so a fruitless query looks different. */
+  resultCount?: number;
 }
 
 export interface Episode {

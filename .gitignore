@@ -25,3 +25,7 @@ dist-ssr
 
 target/
 cs3_windows/dist-electron/
+
+# Portable JDK 21 + Maven fetched to build the sidecar. Downloaded, never
+# vendored: ~250 MB of third-party binaries do not belong in git history.
+tools/toolchain/

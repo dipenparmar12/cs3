@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import type { SearchResponse } from '../types/api';
-import { Filter, Loader2 } from 'lucide-react';
+import { Filter, Loader2, CheckCircle2, Search } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
 
 interface SearchViewProps {
   query: string;
   results: SearchResponse[];
   onSelectMedia: (item: SearchResponse) => void;
+  /** Quick-play from the card, bypassing the detail page. */
+  onPlayDirectly?: (item: SearchResponse) => void;
   isLoading: boolean;
   /** Surfaced when the search itself failed, so the user sees a cause not an empty grid. */
   error?: string | null;
@@ -16,6 +18,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
   query,
   results,
   onSelectMedia,
+  onPlayDirectly,
   isLoading,
   error,
 }) => {
@@ -23,8 +26,17 @@ export const SearchView: React.FC<SearchViewProps> = ({
 
   const providerCounts = (results || []).reduce<Record<string, number>>((acc, item) => {
     if (!item) return acc;
-    const key = item.apiName || 'Unknown Provider';
-    acc[key] = (acc[key] || 0) + 1;
+    const itemProviders = new Set<string>();
+    if (item.apiName) itemProviders.add(item.apiName);
+    if (Array.isArray(item.alternates)) {
+      for (const alt of item.alternates) {
+        if (alt?.apiName) itemProviders.add(alt.apiName);
+      }
+    }
+    if (itemProviders.size === 0) itemProviders.add('Unknown Provider');
+    for (const prov of itemProviders) {
+      acc[prov] = (acc[prov] || 0) + 1;
+    }
     return acc;
   }, {});
 
@@ -32,7 +44,11 @@ export const SearchView: React.FC<SearchViewProps> = ({
 
   const filteredResults = activeProviderFilter === 'All'
     ? results
-    : (results || []).filter((item) => item?.apiName === activeProviderFilter);
+    : (results || []).filter((item) => {
+        if (!item) return false;
+        if (item.apiName === activeProviderFilter) return true;
+        return Array.isArray(item.alternates) && item.alternates.some((alt) => alt?.apiName === activeProviderFilter);
+      });
 
   if (isLoading) {
     return (
@@ -150,19 +166,85 @@ export const SearchView: React.FC<SearchViewProps> = ({
         </div>
       )}
 
-      {/* Media Results Grid */}
+      {/* Media Results Grid & Section Splitting */}
       {filteredResults.length === 0 ? (
         <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
           <p>No results found matching your provider filter.</p>
         </div>
-      ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1.25rem' }}>
-          {filteredResults.map((item, idx) => {
-            if (!item || !item.url) return null;
-            return <PosterCard key={`${item.url}-${idx}`} item={item} onSelectMedia={onSelectMedia} />;
-          })}
-        </div>
-      )}
+      ) : (() => {
+        const exactMatches = (filteredResults || []).filter((item) => item?.isExactMatch);
+        const otherMatches = (filteredResults || []).filter((item) => !item?.isExactMatch);
+
+        if (exactMatches.length > 0 && otherMatches.length > 0) {
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+              {/* Section 1: Top Selected Match */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                  <CheckCircle2 size={18} style={{ color: 'var(--accent-light)' }} />
+                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                    Selected Match
+                  </h3>
+                  <span
+                    className="chip"
+                    style={{
+                      fontSize: '0.72rem',
+                      padding: '0.15rem 0.65rem',
+                      background: 'rgba(59, 130, 246, 0.2)',
+                      color: 'var(--accent-light)',
+                      border: '1px solid rgba(59, 130, 246, 0.4)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    🎯 Chosen from suggestions
+                  </span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1.25rem' }}>
+                  {exactMatches.map((item, idx) => (
+                    <PosterCard
+                      key={`exact-${item.url}-${idx}`}
+                      item={item}
+                      onSelectMedia={onSelectMedia}
+                      onPlayDirectly={onPlayDirectly}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Section 2: Other Search Results */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                  <Search size={16} style={{ color: 'var(--text-subtle)' }} />
+                  <h3 style={{ fontSize: '0.98rem', fontWeight: 600, color: 'var(--text-muted)', margin: 0 }}>
+                    Other Search Matches ({otherMatches.length})
+                  </h3>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1.25rem' }}>
+                  {otherMatches.map((item, idx) => (
+                    <PosterCard
+                      key={`other-${item.url}-${idx}`}
+                      item={item}
+                      onSelectMedia={onSelectMedia}
+                      onPlayDirectly={onPlayDirectly}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1.25rem' }}>
+            {filteredResults.map((item, idx) => {
+              if (!item || !item.url) return null;
+              return <PosterCard key={`${item.url}-${idx}`} item={item} onSelectMedia={onSelectMedia} onPlayDirectly={onPlayDirectly} />;
+            })}
+          </div>
+        );
+      })()}
     </div>
   );
 };

@@ -28,7 +28,8 @@ export const ContentHoverCard: React.FC<ContentHoverCardProps> = ({
       setLoading(true);
       try {
         const res = await window.cloudstream.loadMedia(item.url);
-        if (active && res) setDetails(res);
+        // `loadMedia` answers with an envelope; the card renders the payload.
+        if (active && res?.ok) setDetails(res.detail);
       } catch {
         // Best-effort fallback
       } finally {

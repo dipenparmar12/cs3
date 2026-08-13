@@ -167,9 +167,9 @@ body {
 }
 
 .poster-card:hover,
-.poster-card:focus-within,
+.poster-card:focus-visible,
 .poster-card--active-hover {
-  z-index: 9999 !important;
+  z-index: 10;
   transform: translateY(-4px);
   border-color: rgba(59, 130, 246, 0.5);
   box-shadow: 0 16px 32px -8px rgba(0, 0, 0, 0.7);
@@ -193,36 +193,52 @@ body {
   transition: transform 0.3s ease;
 }
 
-.poster-card:hover .poster-container img {
+.poster-card:hover .poster-container img,
+.poster-card:focus-visible .poster-container img {
   transform: scale(1.05);
 }
 
+/*
+ * Play sits in the bottom-right corner rather than the middle of the poster.
+ *
+ * Centred, it landed on top of the artwork the viewer is using to decide, and
+ * it put the "play" target directly over the middle of the "open details"
+ * target — the two intents overlapped exactly where the pointer naturally
+ * rests. In the corner they are spatially separate, the poster stays readable,
+ * and the gradient only darkens the strip the button occupies.
+ */
 .poster-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.65) 0%, rgba(0, 0, 0, 0) 45%);
   opacity: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: opacity 0.25s ease;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 10px;
+  transition: opacity 0.2s ease;
 }
 
-.poster-card:hover .poster-overlay {
+.poster-card:hover .poster-overlay,
+.poster-card:focus-visible .poster-overlay {
   opacity: 1;
 }
 
 .play-button-overlay {
-  width: 44px;
-  height: 44px;
+  width: 38px;
+  height: 38px;
   border-radius: var(--radius-full);
   background: var(--accent-primary);
   border: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.5);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.55);
   cursor: pointer;
+  transition: transform 0.15s ease;
+}
+.play-button-overlay:hover {
+  transform: scale(1.1);
 }
 
 .poster-badge {

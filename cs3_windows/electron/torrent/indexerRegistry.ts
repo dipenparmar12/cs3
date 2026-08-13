@@ -135,6 +135,26 @@ export interface AggregateSearchResult {
   }>;
 }
 
+/**
+ * Progress of an in-flight aggregate search.
+ *
+ * Emitted as each indexer settles so a caller can act on partial results. The
+ * point is that waiting for the slowest indexer is not the same as waiting for
+ * a usable answer: Torrentio typically answers in under a second while a
+ * blocked scraper burns its full 20s timeout, and there is no reason a viewer
+ * should wait for the latter to start watching.
+ */
+export interface SearchProgress {
+  /** Best-ranked results from the indexers that have answered so far. */
+  results: TorrentResult[];
+  /** Indexers that have settled, out of `totalRelevant`. */
+  settled: number;
+  totalRelevant: number;
+  /** Name of the indexer that just settled, for a "searched X" readout. */
+  lastIndexerName: string;
+  done: boolean;
+}
+
 export class IndexerRegistry {
   private configs: IndexerConfig[] = [];
   private circuits = new Map<string, CircuitState>();
@@ -348,15 +368,77 @@ export class IndexerRegistry {
 
   public async search(
     query: IndexerQuery,
-    rankContext?: Omit<RankContext, 'preferences'> & { preferences?: SourcePreferences }
+    rankContext?: Omit<RankContext, 'preferences'> & { preferences?: SourcePreferences },
+    /**
+     * Called each time an indexer settles, with the best results known so far.
+     * Optional: the batch callers (source picker, downloads) ignore it, while
+     * the playback session uses it to offer "play now" before every indexer has
+     * answered.
+     */
+    onProgress?: (progress: SearchProgress) => void,
+    /**
+     * Narrows the search to the indexers the user has scoped it to. Applied on
+     * top of `enabled`, never instead of it, and reported as a skip reason so
+     * "0 sources" never looks like an outage when it was a filter.
+     */
+    inScope?: (indexerId: string) => boolean
   ): Promise<AggregateSearchResult> {
     const preferences = rankContext?.preferences ?? this.getPreferences();
     const outcomes: AggregateSearchResult['indexerOutcomes'] = [];
 
-    const tasks = this.configs.map(async (config) => {
+    /** Everything received so far, re-ranked on each arrival for `onProgress`. */
+    const collected: TorrentResult[] = [];
+    let settled = 0;
+    let totalRelevant = 0;
+
+    const rank = (input: TorrentResult[]) =>
+      rankResults(dedupeByInfoHash(input), {
+        expectedTitle: rankContext?.expectedTitle,
+        expectedYear: rankContext?.expectedYear,
+        season: rankContext?.season ?? query.season,
+        episode: rankContext?.episode ?? query.episode,
+        runtimeMinutes: rankContext?.runtimeMinutes,
+        preferences,
+      });
+
+    /**
+     * Reports partial progress. Ranking the whole accumulated set on every
+     * arrival is deliberate: appending an already-ranked tail would let a weak
+     * early result outrank a strong late one, and the "play now" button acts on
+     * whatever is at the top at the moment it is pressed.
+     */
+    const report = (name: string, isRelevant: boolean) => {
+      if (!onProgress) return;
+      if (isRelevant) settled += 1;
+      onProgress({
+        results: rank(collected).accepted,
+        settled,
+        totalRelevant,
+        lastIndexerName: name,
+        done: settled >= totalRelevant,
+      });
+    };
+
+    // Which indexers will actually be queried is decided synchronously, before
+    // any of them start, because `totalRelevant` is the denominator the UI
+    // shows ("searched 3 of 5") and it must not climb as tasks resolve.
+    const runnable: Array<{ config: IndexerConfig; adapter: TorrentIndexer }> = [];
+
+    for (const config of this.configs) {
       if (!config.enabled) {
         outcomes.push({ id: config.id, name: config.name, ok: false, count: 0, latencyMs: 0, skipped: 'Disabled' });
-        return [] as TorrentResult[];
+        continue;
+      }
+      if (inScope && !inScope(config.id)) {
+        outcomes.push({
+          id: config.id,
+          name: config.name,
+          ok: true,
+          count: 0,
+          latencyMs: 0,
+          skipped: 'Not in the current search scope',
+        });
+        continue;
       }
       if (this.isCircuitOpen(config.id)) {
         outcomes.push({
@@ -367,11 +449,11 @@ export class IndexerRegistry {
           latencyMs: 0,
           skipped: 'Temporarily disabled after repeated failures',
         });
-        return [] as TorrentResult[];
+        continue;
       }
       if (!this.isRelevant(config, query)) {
         outcomes.push({ id: config.id, name: config.name, ok: true, count: 0, latencyMs: 0, skipped: 'Not applicable to this content type' });
-        return [] as TorrentResult[];
+        continue;
       }
 
       const adapter = this.buildAdapter(config);
@@ -384,9 +466,18 @@ export class IndexerRegistry {
           latencyMs: 0,
           skipped: adapter ? 'Cannot serve this query (missing IMDb id or unsupported)' : 'No adapter',
         });
-        return [] as TorrentResult[];
+        continue;
       }
 
+      runnable.push({ config, adapter });
+    }
+
+    totalRelevant = runnable.length;
+    // A search with nothing to run still owes the caller one terminal event,
+    // otherwise a session waiting on `done` never resolves.
+    if (totalRelevant === 0) report('', false);
+
+    const tasks = runnable.map(async ({ config, adapter }) => {
       const started = Date.now();
       try {
         const raw = await adapter.search(query, AbortSignal.timeout(PER_INDEXER_TIMEOUT_MS));
@@ -404,6 +495,8 @@ export class IndexerRegistry {
           count: normalised.length,
           latencyMs: latency,
         });
+        collected.push(...normalised);
+        report(config.name, true);
         return normalised;
       } catch (error) {
         const latency = Date.now() - started;
@@ -416,24 +509,16 @@ export class IndexerRegistry {
           latencyMs: latency,
           error: describeError(error),
         });
+        report(config.name, true);
         return [] as TorrentResult[];
       }
     });
 
     // `allSettled` is deliberate: a rejected task must not collapse the search.
-    const settled = await Promise.allSettled(tasks);
-    const merged = settled.flatMap((s) => (s.status === 'fulfilled' ? s.value : []));
+    const finished = await Promise.allSettled(tasks);
+    const merged = finished.flatMap((s) => (s.status === 'fulfilled' ? s.value : []));
 
-    const deduped = dedupeByInfoHash(merged);
-    const { accepted, rejected } = rankResults(deduped, {
-      expectedTitle: rankContext?.expectedTitle,
-      expectedYear: rankContext?.expectedYear,
-      season: rankContext?.season ?? query.season,
-      episode: rankContext?.episode ?? query.episode,
-      runtimeMinutes: rankContext?.runtimeMinutes,
-      preferences,
-    });
-
+    const { accepted, rejected } = rank(merged);
     return { results: accepted, rejected, indexerOutcomes: outcomes };
   }
 }

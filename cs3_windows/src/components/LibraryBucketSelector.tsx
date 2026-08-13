@@ -51,9 +51,7 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
 
   useEffect(() => {
     if (!open) return;
-    const handleOutside = (e: MouseEvent) => {
-      setOpen(false);
-    };
+    const handleOutside = () => setOpen(false);
     document.addEventListener('click', handleOutside);
     return () => document.removeEventListener('click', handleOutside);
   }, [open]);

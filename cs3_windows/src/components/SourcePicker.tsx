@@ -5,6 +5,12 @@ import {
 } from 'lucide-react';
 import type { TorrentResult } from '../types/torrent';
 import { Resolution } from '../types/torrent';
+import { SourceFilterBar } from './SourceFilterBar';
+import {
+  DEFAULT_FILTER_STATE,
+  filterAndSortSources,
+  type SourceFilterState,
+} from '../utils/sourceFilter';
 
 export interface SourcePickerData {
   sources: TorrentResult[];
@@ -81,8 +87,14 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
   const [showFiltered, setShowFiltered] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [expandedHash, setExpandedHash] = useState<string | null>(null);
+  const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);
 
   const best = useMemo(() => data?.sources[0] ?? null, [data]);
+
+  const displayedSources = useMemo(
+    () => (data ? filterAndSortSources(data.sources, filterState) : []),
+    [data, filterState]
+  );
 
   if (!isOpen) return null;
 
@@ -144,7 +156,7 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
           <>
             <div className="source-picker__toolbar">
               <span className="muted">
-                {data.sources.length} source{data.sources.length === 1 ? '' : 's'}
+                {displayedSources.length} showing (of {data.sources.length} total)
                 {data.query.imdbId && ` · matched on ${data.query.imdbId}`}
               </span>
               {best && (
@@ -153,6 +165,13 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                 </button>
               )}
             </div>
+
+            <SourceFilterBar
+              filterState={filterState}
+              onChange={setFilterState}
+              totalCount={data.sources.length}
+              filteredCount={displayedSources.length}
+            />
 
             {failedIndexers.length > 0 && (
               <div className="source-picker__warning">
@@ -168,7 +187,7 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
             )}
 
             <ul className="source-list">
-              {data.sources.map((source, index) => {
+              {displayedSources.map((source, index) => {
                 const isExpanded = expandedHash === source.infoHash;
                 return (
                   <li

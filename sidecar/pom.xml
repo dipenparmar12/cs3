@@ -123,6 +123,35 @@
           </execution>
         </executions>
       </plugin>
+
+      <!--
+        The shim belongs on the plugin classpath, which is `runtime/`.
+
+        It was built and then left in `target/`, where nothing reads it, so
+        `android.content.Context` was not resolvable by plugin code at all. Every
+        extension that touches Context - which is most of them, since that is how
+        Android reaches settings storage - would have failed even after the
+        `Plugin` class was supplied.
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-antrun-plugin</artifactId>
+        <version>3.1.0</version>
+        <executions>
+          <execution>
+            <id>install-shim-to-runtime</id>
+            <phase>package</phase>
+            <goals><goal>run</goal></goals>
+            <configuration>
+              <target>
+                <copy file="${project.build.directory}/cs3-sidecar-android-shim.jar"
+                      todir="${project.basedir}/runtime"
+                      overwrite="true"/>
+              </target>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
 </project>

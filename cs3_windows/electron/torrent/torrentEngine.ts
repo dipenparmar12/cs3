@@ -397,18 +397,31 @@ export class TorrentEngine {
    */
   public async waitUntilPlayable(
     infoHash: string,
-    timeoutMs: number
-  ): Promise<{ playable: boolean; reason?: string }> {
+    timeoutMs: number,
+    /**
+     * Abandons the wait early. Without this, a viewer who picks a different
+     * source sits behind the remaining seconds of a wait whose answer is
+     * already irrelevant — the single largest source of "it just keeps
+     * loading" after an explicit choice.
+     */
+    signal?: AbortSignal
+  ): Promise<{ playable: boolean; reason?: string; aborted?: boolean }> {
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
+      if (signal?.aborted) return { playable: false, aborted: true, reason: 'Superseded.' };
+
       const stats = await this.getStats(infoHash);
       if (!stats) return { playable: false, reason: 'The stream was closed before it started.' };
       if (stats.error) return { playable: false, reason: stats.error };
       if (stats.isPlayable) return { playable: true };
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Polled in short slices so an abort is noticed promptly rather than
+      // after the full sleep.
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
+
+    if (signal?.aborted) return { playable: false, aborted: true, reason: 'Superseded.' };
 
     const stats = await this.getStats(infoHash);
     return {

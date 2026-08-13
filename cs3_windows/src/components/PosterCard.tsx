@@ -49,6 +49,24 @@ export const PosterCard: React.FC<PosterCardProps> = ({
     setHoverCardOpen(false);
   };
 
+  const releaseCardFocus = (e: React.MouseEvent) => {
+    handleMouseLeave();
+    (e.currentTarget as HTMLElement)?.blur();
+    (document.activeElement as HTMLElement)?.blur();
+  };
+
+  const handleCardClick = (e: React.MouseEvent) => {
+    releaseCardFocus(e);
+    onSelectMedia(item);
+  };
+
+  const handlePlayClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    releaseCardFocus(e);
+    if (onPlayDirectly) onPlayDirectly(item);
+    else onSelectMedia(item);
+  };
+
   const titleText = item?.name || 'Untitled';
 
   return (
@@ -58,17 +76,40 @@ export const PosterCard: React.FC<PosterCardProps> = ({
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      <div className="poster-container" onClick={() => onSelectMedia(item)}>
+      <div className="poster-container" onClick={handleCardClick}>
         {item?.posterUrl ? (
           <img src={item.posterUrl} alt={titleText} loading="lazy" />
         ) : (
           <div className="poster-image--empty">{titleText.slice(0, 1)}</div>
         )}
-        <span className="poster-badge">{item?.type || 'Movie'}</span>
+        {item?.isExactMatch ? (
+          <span
+            className="poster-badge"
+            style={{
+              background: 'var(--accent-primary)',
+              color: '#fff',
+              fontWeight: 700,
+              boxShadow: '0 2px 8px rgba(59, 130, 246, 0.4)',
+            }}
+          >
+            🎯 Selected
+          </span>
+        ) : (
+          <span className="poster-badge">{item?.type || 'Movie'}</span>
+        )}
 
+        {/* Two intents on one card: the poster opens details, this opens the
+            player. Without it, watching something meant four clicks through
+            details and a source list, which is the friction this removes.
+            The click must not bubble — the container behind it navigates. */}
         <div className="poster-overlay">
-          <button className="play-button-overlay">
-            <Play size={20} fill="#fff" />
+          <button
+            className="play-button-overlay"
+            aria-label={`Play ${titleText}`}
+            title="Play now"
+            onClick={handlePlayClick}
+          >
+            <Play size={17} fill="#fff" />
           </button>
         </div>
 
@@ -80,7 +121,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
       </div>
 
       <div className="poster-info">
-        <h4 className="poster-title" title={titleText} onClick={() => onSelectMedia(item)}>
+        <h4 className="poster-title" title={titleText} onClick={handleCardClick}>
           {titleText}
         </h4>
         <div className="poster-meta">
@@ -89,6 +130,10 @@ export const PosterCard: React.FC<PosterCardProps> = ({
             <span style={{ color: 'var(--accent-light)', fontSize: '0.72rem' }}>{item.apiName}</span>
           )}
         </div>
+
+        {/* Where the viewer left off. Supplied by the library and continue-watching
+            rows, which is the only place a resume point is meaningful. */}
+        {watchedText && <p className="poster-watched">{watchedText}</p>}
 
         {showBucketButton && item?.url && (
           <div style={{ marginTop: '0.4rem' }}>
