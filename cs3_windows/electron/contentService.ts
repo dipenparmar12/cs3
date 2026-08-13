@@ -44,6 +44,9 @@ const DEFAULT_FAILOVER_ATTEMPTS = 4;
 /** Time each candidate gets to prove its swarm is alive. */
 const DEFAULT_SOURCE_BUDGET_MS = 25_000;
 
+/** Enough for a long browsing session; see `ContentService.alternateRoutes`. */
+const MAX_REMEMBERED_ROUTES = 500;
+
 /** One rejected candidate, kept so the UI can say what was tried and why it failed. */
 export interface StreamAttempt {
   title: string;
@@ -177,7 +180,9 @@ export class ContentService {
      * Merging on identity also collects the losing URLs as alternates, which is
      * what lets one title draw sources from both ecosystems.
      */
-    return mergeSearchResults(results);
+    const merged = mergeSearchResults(results);
+    this.rememberRoutes(merged);
+    return merged;
   }
 
   public async load(url: string): Promise<MetadataDetail | null> {
@@ -308,7 +313,10 @@ export class ContentService {
     // search for. Asking indexers for a title the provider serves directly
     // would be slower and worse than what the provider just handed us.
     if (base.startsWith('cs3ext://')) {
-      const sources = await this.extensionSources(base);
+      // Season and episode are forwarded because the URL may address the show
+      // rather than the episode — the detail view hands over an episode handle,
+      // but a quick-play straight from a search row does not.
+      const sources = await this.extensionSources(base, season, episode);
       onProgress?.({
         results: sources,
         settled: 1,
@@ -362,21 +370,65 @@ export class ContentService {
       limit: 100,
     };
 
-    const outcome = await this.registry.search(
-      indexerQuery,
-      {
-        expectedTitle: title,
-        // Anime releases rarely carry a year; enforcing one loses good sources.
-        expectedYear: isAnime ? undefined : detail?.year,
-        season,
-        episode,
-        runtimeMinutes: detail?.runtimeMinutes,
-      },
-      onProgress
-    );
+    /**
+     * Extension providers and torrent indexers answer the same question, so
+     * they are asked at the same time and report into the same list.
+     *
+     * This is what stops the extension ecosystem from being a parallel app the
+     * viewer has to opt into by clicking the right search row: a title reached
+     * through the catalogue now draws on every installed provider that also
+     * carries it. Provider links matter disproportionately for time-to-first-
+     * frame — a direct HTTP stream starts in a second where a swarm needs to
+     * find peers first — so they are streamed into progress as they land rather
+     * than appended once the indexers finish.
+     */
+    const routes = this.alternateRoutes.get(base) ?? [];
+    const fromExtensions: TorrentResult[] = [];
+    let extensionsSettled = 0;
+
+    let latest: SearchProgress | null = null;
+    const report = (progress: SearchProgress | null) => {
+      if (!onProgress || !progress) return;
+      onProgress({
+        ...progress,
+        // Provider links lead: they are already resolved and start fastest.
+        results: [...fromExtensions, ...progress.results],
+        settled: progress.settled + extensionsSettled,
+        totalRelevant: progress.totalRelevant + routes.length,
+        done: progress.done && extensionsSettled >= routes.length,
+      });
+    };
+
+    const [outcome] = await Promise.all([
+      this.registry.search(
+        indexerQuery,
+        {
+          expectedTitle: title,
+          // Anime releases rarely carry a year; enforcing one loses good sources.
+          expectedYear: isAnime ? undefined : detail?.year,
+          season,
+          episode,
+          runtimeMinutes: detail?.runtimeMinutes,
+        },
+        onProgress &&
+          ((progress) => {
+            latest = progress;
+            report(progress);
+          })
+      ),
+      ...routes.map(async (route) => {
+        try {
+          fromExtensions.push(...(await this.extensionSources(route, season, episode)));
+        } catch {
+          // One provider failing is not a search failure; the rest still answer.
+        }
+        extensionsSettled += 1;
+        report(latest);
+      }),
+    ]);
 
     const response: SourceResponse = {
-      sources: outcome.results,
+      sources: [...fromExtensions, ...outcome.results],
       filtered: outcome.rejected.slice(0, 50).map((r) => ({
         title: r.result.title,
         reason: r.reason,
@@ -386,10 +438,10 @@ export class ContentService {
       query: { title, season, episode, imdbId: detail?.imdbId },
     };
 
-    if (outcome.results.length === 0) {
-      response.emptyReason = this.explainEmptyResult(outcome);
+    if (response.sources.length === 0) {
+      response.emptyReason = this.explainEmptyResult(outcome, routes.length);
     } else {
-      this.cache.write(base, outcome.results, season, episode);
+      this.cache.write(base, response.sources, season, episode);
     }
     return response;
   }
@@ -401,8 +453,13 @@ export class ContentService {
    * signal available — there is no swarm health to weigh and no release name to
    * parse, so the ranker's usual inputs do not exist here.
    */
-  private async extensionSources(url: string): Promise<TorrentResult[]> {
-    let links = await this.plugins.loadLinks(url);
+  private async extensionSources(
+    url: string,
+    season?: number,
+    episode?: number
+  ): Promise<TorrentResult[]> {
+    const target = await this.resolveExtensionTarget(url, season, episode);
+    let links = await this.plugins.loadLinks(target);
 
     // An episode's URL already *is* the provider's playable handle, but a
     // film's is its detail page — and those differ (Internet Archive answers
@@ -410,10 +467,10 @@ export class ContentService {
     // as the handle). When the page address yields nothing, resolving the
     // detail and retrying with its `dataUrl` is what makes films playable.
     if (links.length === 0) {
-      const detail = (await this.plugins.loadMedia(url)) as
+      const detail = (await this.plugins.loadMedia(target)) as
         | (MetadataDetail & { dataUrl?: string })
         | null;
-      if (detail?.dataUrl && detail.dataUrl !== url) {
+      if (detail?.dataUrl && detail.dataUrl !== target) {
         links = await this.plugins.loadLinks(detail.dataUrl);
       }
     }
@@ -456,17 +513,92 @@ export class ContentService {
   }
 
   /**
+   * Narrows an extension URL to the exact thing that should be played.
+   *
+   * A provider's search hit addresses a *show*, not an episode. Asking it for
+   * links directly returns either nothing or the wrong episode, so when a
+   * season and episode are wanted the show is loaded and its episode list is
+   * consulted — each episode carries its own opaque handle, and that handle is
+   * the only thing `loadLinks` can act on.
+   *
+   * Falling back to the original URL is correct rather than lazy: a film has no
+   * episode list, and a provider whose numbering does not line up should still
+   * get a chance to answer.
+   */
+  private async resolveExtensionTarget(
+    url: string,
+    season?: number,
+    episode?: number
+  ): Promise<string> {
+    if (episode === undefined) return url;
+
+    const detail = (await this.plugins.loadMedia(url)) as
+      | (MetadataDetail & { episodes?: Array<{ url: string; season?: number; episode?: number }> })
+      | null;
+    const episodes = detail?.episodes;
+    if (!episodes?.length) return url;
+
+    const match =
+      episodes.find(
+        (e) => e.episode === episode && (season === undefined || e.season === season)
+      ) ??
+      // Providers routinely omit the season on a single-season show; matching
+      // on episode number alone is better than refusing to play it.
+      (season === undefined || season === 1
+        ? episodes.find((e) => e.episode === episode && e.season === undefined)
+        : undefined);
+
+    return match?.url ?? url;
+  }
+
+  /**
+   * Extension routes to the same work, recorded when the search merged them.
+   *
+   * Discovery is addressed by a single URL, so without this a title the viewer
+   * reached through the catalogue could only ever be played from torrents even
+   * when three installed extensions also carry it. The merge already knows they
+   * are the same work; this is what keeps that knowledge alive long enough for
+   * source discovery to use it.
+   *
+   * Bounded and insertion-ordered: it is a convenience for the current session,
+   * not state worth persisting, and an unbounded map fed by every search is a
+   * leak in an app that stays open for days.
+   */
+  private alternateRoutes = new Map<string, string[]>();
+
+  private rememberRoutes(results: SearchResponse[]): void {
+    for (const result of results) {
+      const routes = (result.alternates ?? [])
+        .map((alternate) => alternate.url)
+        .filter((url) => url.startsWith('cs3ext://'));
+      if (routes.length === 0) continue;
+
+      this.alternateRoutes.set(result.url, routes);
+      if (this.alternateRoutes.size > MAX_REMEMBERED_ROUTES) {
+        const oldest = this.alternateRoutes.keys().next().value;
+        if (oldest !== undefined) this.alternateRoutes.delete(oldest);
+      }
+    }
+  }
+
+  /**
    * Turns "no results" into an actionable message. The distinction between
    * "every indexer is unreachable" and "the indexers worked and nothing matched"
    * is the difference between a network problem and a search problem, and the
    * user cannot fix either without being told which it is.
    */
-  private explainEmptyResult(outcome: AggregateSearchResult): string {
+  private explainEmptyResult(
+    outcome: AggregateSearchResult,
+    /** Extension providers that also carry this title and were asked too. */
+    extensionRoutes = 0
+  ): string {
     const attempted = outcome.indexerOutcomes.filter((o) => !o.skipped);
     const failed = attempted.filter((o) => !o.ok);
 
     if (attempted.length === 0) {
-      return 'No indexers are enabled for this content type. Add a Jackett or Prowlarr indexer in Settings → Sources.';
+      return extensionRoutes > 0
+        ? `No indexers are enabled for this content type, and the ${extensionRoutes} extension provider(s) carrying this title returned no playable links.`
+        : 'No indexers are enabled for this content type. Add a Jackett or Prowlarr indexer in Settings → Sources.';
     }
     if (failed.length === attempted.length) {
       const reasons = [...new Set(failed.map((f) => f.error ?? 'unknown error'))];
