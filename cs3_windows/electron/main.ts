@@ -5,6 +5,7 @@ import { DatastoreManager } from './datastore';
 import { Aria2Engine } from './aria2Engine';
 import { DownloadService } from './downloadService';
 import { PluginManager } from './pluginManager';
+import type { SearchScope } from './searchScope';
 import { BinaryDownloader } from './binaryDownloader';
 import { OFFICIAL_REPOSITORIES } from './officialRepositories';
 import { TorrentEngine } from './torrent/torrentEngine';
@@ -590,6 +591,44 @@ ipcMain.handle(
 ipcMain.handle(
   'extension:setProvidersEnabled',
   async (_, names: string[], enabled: boolean) => pluginManager.setProvidersEnabled(names, enabled)
+);
+
+// --- search scope ---------------------------------------------------------
+
+/**
+ * Everything the scope picker needs to draw itself, in one call.
+ *
+ * Loading plugins is part of it, for the same reason `extension:getProviders`
+ * does: which providers an archive registers is only knowable by running it.
+ * The picker opening is a good moment to pay that cost, and it is paid once.
+ */
+ipcMain.handle('search:getScopeOptions', async () => {
+  try {
+    await pluginManager.loadProviders();
+    return {
+      ok: true,
+      repositories: pluginManager.getProviderTree(),
+      disabledProviders: pluginManager.getDisabledProviders(),
+      indexers: contentService
+        .getRegistry()
+        .getConfigs()
+        .filter((config) => config.enabled)
+        .map((config) => ({ id: config.id, name: config.name })),
+      scope: contentService.getScope().get(),
+    };
+  } catch (error) {
+    return {
+      ...fail(error),
+      repositories: [],
+      disabledProviders: [],
+      indexers: [],
+      scope: { providers: [], indexers: [] },
+    };
+  }
+});
+
+ipcMain.handle('search:setScope', async (_, scope: Partial<SearchScope>) =>
+  contentService.getScope().set(scope)
 );
 
 // --- extension updates (over-the-air) ------------------------------------

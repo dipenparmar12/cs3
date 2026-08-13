@@ -17,9 +17,10 @@ import { TorrentEngine, type StreamHandle } from './torrent/torrentEngine';
 import { infoHashFromMagnet } from './torrent/indexers/base';
 import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
-import type { PluginManager } from './pluginManager';
+import { parseExtensionUrl, type PluginManager } from './pluginManager';
 import { SourceCache } from './sourceCache';
 import { mergeSearchResults, restrictToExact } from './searchMerge';
+import { SearchScopeStore } from './searchScope';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -104,6 +105,7 @@ export class ContentService {
   private engine: TorrentEngine;
   private plugins: PluginManager;
   private cache: SourceCache;
+  private scope: SearchScopeStore;
   private detailCache = new Map<string, MetadataDetail>();
 
   constructor(datastore: DatastoreManager, plugins: PluginManager, engine: TorrentEngine) {
@@ -111,6 +113,11 @@ export class ContentService {
     this.plugins = plugins;
     this.engine = engine;
     this.cache = new SourceCache(datastore);
+    this.scope = new SearchScopeStore(datastore);
+  }
+
+  public getScope(): SearchScopeStore {
+    return this.scope;
   }
 
   public getCache(): SourceCache {
@@ -153,7 +160,10 @@ export class ContentService {
     const results: SearchResponse[] = [];
 
     // Runnable extension providers get first refusal, matching Android's ordering.
-    const pluginResults = await this.plugins.searchAll(trimmed);
+    const pluginResults = await this.plugins.searchAll(
+      trimmed,
+      this.scope.applyToProviders(await this.plugins.listEnabledProviders())
+    );
     results.push(...pluginResults);
 
     // Cinemeta is primary: it is the only source that yields an IMDb id for
@@ -395,7 +405,18 @@ export class ContentService {
      * find peers first — so they are streamed into progress as they land rather
      * than appended once the indexers finish.
      */
-    const routes = this.alternateRoutes.get(base) ?? [];
+    const allowedIndexers = new Set(
+      this.scope.applyToIndexers(
+        this.registry.getConfigs().filter((c) => c.enabled).map((c) => c.id)
+      )
+    );
+
+    const scopedProviders = this.scope.get().providers;
+    const routes = (this.alternateRoutes.get(base) ?? []).filter((route) => {
+      if (scopedProviders.length === 0) return true;
+      const ref = parseExtensionUrl(route);
+      return ref ? scopedProviders.includes(ref.provider) : true;
+    });
     const fromExtensions: TorrentResult[] = [];
     let extensionsSettled = 0;
 
@@ -427,7 +448,13 @@ export class ContentService {
           ((progress) => {
             latest = progress;
             report(progress);
-          })
+          }),
+        // Source discovery honours the same scope the search did, so narrowing
+        // to one site does not quietly widen again the moment you press play.
+        // The allowed set is resolved once, up front: `applyToIndexers` falls
+        // back to everything when the scope names nothing that still exists,
+        // and that rule only means anything against the whole candidate list.
+        (id) => allowedIndexers.has(id)
       ),
       ...routes.map(async (route) => {
         try {

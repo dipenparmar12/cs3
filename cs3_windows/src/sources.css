@@ -1521,3 +1521,156 @@
   border-color: var(--accent-primary);
   background: rgba(255, 255, 255, 0.1);
 }
+
+/* --- Search scope picker ------------------------------------------------- */
+
+.scope {
+  position: relative;
+}
+
+.scope__trigger {
+  padding: 0.4rem 0.85rem;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.scope__trigger--active {
+  border-color: var(--accent-primary);
+  color: #fff;
+}
+.scope__label {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scope__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 300px;
+  max-height: 420px;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.65);
+  z-index: 9999;
+  padding: 0.6rem;
+}
+
+.scope__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  padding: 0 0.2rem 0.4rem;
+}
+.scope__reset {
+  border: none;
+  background: none;
+  color: var(--accent-light);
+  font-size: 0.7rem;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+  padding: 0;
+}
+.scope__reset:disabled {
+  color: var(--text-subtle);
+  cursor: default;
+}
+
+.scope__hint,
+.scope__empty {
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--text-subtle);
+  margin: 0 0 0.5rem;
+  padding: 0 0.2rem;
+}
+
+.scope__loading {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  padding: 0.4rem 0.2rem;
+}
+
+.scope__repo + .scope__repo {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.scope__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.35rem 0.4rem;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+}
+.scope__row:hover {
+  background: var(--bg-card-hover);
+}
+/* Indentation is the hierarchy: repository, extension, provider. */
+.scope__row--repo {
+  font-weight: 600;
+  color: #fff;
+}
+.scope__row--ext {
+  padding-left: 1.4rem;
+  color: var(--text-main);
+}
+.scope__row--provider {
+  padding-left: 2.4rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.scope__name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope__count,
+.scope__lang {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.scope__box {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: transparent;
+  color: #fff;
+}
+.scope__box--on,
+.scope__box--mixed {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+}

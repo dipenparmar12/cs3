@@ -60,8 +60,8 @@ export const App: React.FC = () => {
   }, [session]);
 
   const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>([]);
+  /** Indexer names, for the F12 inspector. The search scope owns its own list. */
   const [providersList, setProvidersList] = useState<string[]>([]);
-  const [selectedProvider, setSelectedProvider] = useState<string>('All');
 
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const [isBinaryModalOpen, setIsBinaryModalOpen] = useState(false);
@@ -347,9 +347,6 @@ export const App: React.FC = () => {
           onSearch={handleSearch}
           isSearching={isSearching}
           onOpenInspector={() => setIsInspectorOpen(true)}
-          providers={providersList}
-          selectedProvider={selectedProvider}
-          setSelectedProvider={setSelectedProvider}
         />
 
         <main className="view-viewport">

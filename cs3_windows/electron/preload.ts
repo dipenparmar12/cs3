@@ -18,7 +18,12 @@ import type {
 import type { OfficialRepository } from './officialRepositories';
 import type { MetadataDetail } from './metadataProvider';
 import type { SourceResponse, StreamAttempt } from './contentService';
-import type { ExtensionProvider, RepositoryFetchResult } from './pluginManager';
+import type {
+  ExtensionProvider,
+  ProviderTreeRepository,
+  RepositoryFetchResult,
+} from './pluginManager';
+import type { SearchScope } from './searchScope';
 import type {
   AvailableUpdate,
   UpdateCheckResult,
@@ -146,6 +151,17 @@ export interface CloudStreamElectronAPI {
   >;
   setProviderEnabled: (name: string, enabled: boolean) => Promise<string[]>;
   setProvidersEnabled: (names: string[], enabled: boolean) => Promise<string[]>;
+
+  /** The repository → extension → provider tree, plus the current narrowing. */
+  getSearchScopeOptions: () => Promise<
+    Envelope & {
+      repositories: ProviderTreeRepository[];
+      disabledProviders: string[];
+      indexers: Array<{ id: string; name: string }>;
+      scope: SearchScope;
+    }
+  >;
+  setSearchScope: (scope: Partial<SearchScope>) => Promise<SearchScope>;
 
   /**
    * Inspects a stream's audio tracks. Reports tracks Chromium cannot decode,
@@ -336,6 +352,8 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('extension:setProviderEnabled', name, enabled),
   setProvidersEnabled: (names, enabled) =>
     ipcRenderer.invoke('extension:setProvidersEnabled', names, enabled),
+  getSearchScopeOptions: () => ipcRenderer.invoke('search:getScopeOptions'),
+  setSearchScope: (scope) => ipcRenderer.invoke('search:setScope', scope),
 
   probeAudio: (url) => ipcRenderer.invoke('audio:probe', url),
   openAudioTranscode: (url, audioIndex) =>

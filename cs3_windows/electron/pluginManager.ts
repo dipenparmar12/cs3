@@ -75,6 +75,40 @@ export interface ExtensionProvider {
   supportedTypes: string[];
 }
 
+/** One node of the repository → extension → provider tree. */
+export interface ProviderTreeRepository {
+  url: string;
+  name: string;
+  extensions: Array<{
+    internalName: string;
+    name: string;
+    language?: string;
+    providers: Array<{ name: string; lang?: string; supportedTypes: string[] }>;
+  }>;
+}
+
+/**
+ * A readable name for a repository we only know by URL.
+ *
+ * Repository documents carry a `name`, but it is not retained past the install
+ * — the plugin records keep the URL and nothing else. The owner/repo segment of
+ * a GitHub raw URL is what the user recognises anyway, and is far better than
+ * showing them a 90-character raw.githubusercontent.com link.
+ */
+function repositoryLabel(url: string): string {
+  if (!url) return 'Sideloaded';
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    if (parsed.hostname.includes('github') && segments.length >= 2) {
+      return `${segments[0]}/${segments[1]}`;
+    }
+    return parsed.hostname;
+  } catch {
+    return url;
+  }
+}
+
 const SETTINGS_KEY_DISABLED_PROVIDERS = 'cs3_disabled_providers';
 
 /**
@@ -496,6 +530,45 @@ export class PluginManager {
     return [...this.providers.values()];
   }
 
+  /**
+   * The repository → extension → provider tree, as the UI needs to draw it.
+   *
+   * Built here rather than in the renderer because only this class knows which
+   * archive a provider came from and which repository that archive came from —
+   * a provider reports its own name and nothing about its ancestry.
+   *
+   * An extension that registered no providers is still listed. It is either
+   * still loading or blocked, and hiding it would make a failed extension
+   * indistinguishable from one that was never installed.
+   */
+  public getProviderTree(): ProviderTreeRepository[] {
+    const byRepo = new Map<string, ProviderTreeRepository>();
+
+    for (const record of this.installedPlugins.values()) {
+      const repoUrl = record.meta?.repositoryUrl ?? '';
+      let repo = byRepo.get(repoUrl);
+      if (!repo) {
+        repo = { url: repoUrl, name: repositoryLabel(repoUrl), extensions: [] };
+        byRepo.set(repoUrl, repo);
+      }
+
+      repo.extensions.push({
+        internalName: record.internalName,
+        name: record.meta?.name ?? record.internalName,
+        language: record.meta?.language,
+        providers: [...this.providers.values()]
+          .filter((provider) => provider.pluginInternalName === record.internalName)
+          .map((provider) => ({
+            name: provider.name,
+            lang: provider.lang,
+            supportedTypes: provider.supportedTypes,
+          })),
+      });
+    }
+
+    return [...byRepo.values()];
+  }
+
   // --- provider execution --------------------------------------------------
 
   /**
@@ -561,7 +634,17 @@ export class PluginManager {
     return this.providersLoading;
   }
 
-  /** Providers the user has left switched on; all of them by default. */
+  /**
+   * Providers the user has left switched on; all of them by default.
+   *
+   * Loading must have happened first, or this reports an empty registry rather
+   * than an empty selection — a distinction the scope layer cannot make.
+   */
+  public async listEnabledProviders(): Promise<string[]> {
+    await this.ensureProvidersLoaded();
+    return this.enabledProviderNames();
+  }
+
   private enabledProviderNames(): string[] {
     const disabled = new Set(
       this.datastore.getObject<string[]>(SETTINGS_KEY_DISABLED_PROVIDERS, []) ?? []
@@ -601,10 +684,13 @@ export class PluginManager {
    * plain site links with nothing in them identifying which provider produced
    * them, so a later `load` would have no way to route back to the right one.
    */
-  public async searchAll(query: string): Promise<SearchResponse[]> {
+  public async searchAll(query: string, only?: string[]): Promise<SearchResponse[]> {
     await this.ensureProvidersLoaded();
 
-    const names = this.enabledProviderNames();
+    const enabled = this.enabledProviderNames();
+    // `only` narrows within what is enabled — it can never switch a disabled
+    // provider back on, which is what keeps the extensions screen authoritative.
+    const names = only ? enabled.filter((name) => only.includes(name)) : enabled;
     if (names.length === 0) return [];
 
     const response = await this.sidecar.call(
