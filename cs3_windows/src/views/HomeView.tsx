@@ -7,9 +7,11 @@ import { PosterCard } from '../components/PosterCard';
 
 interface HomeViewProps {
   onSelectMedia: (item: SearchResponse) => void;
+  /** Quick-play from the card, bypassing the detail page. */
+  onPlayDirectly?: (item: SearchResponse) => void;
 }
 
-export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia }) => {
+export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia, onPlayDirectly }) => {
   const [trendingMovies, setTrendingMovies] = useState<SearchResponse[]>([]);
   const [trendingAnime, setTrendingAnime] = useState<SearchResponse[]>([]);
   const [popularSeries, setPopularSeries] = useState<SearchResponse[]>([]);
@@ -99,7 +101,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia }) => {
 
       <div className="poster-grid">
         {items.map((item, idx) => (
-          <PosterCard key={`${item.url}-${idx}`} item={item} onSelectMedia={onSelectMedia} />
+          <PosterCard key={`${item.url}-${idx}`} item={item} onSelectMedia={onSelectMedia} onPlayDirectly={onPlayDirectly} />
         ))}
       </div>
     </div>

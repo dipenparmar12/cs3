@@ -66,8 +66,21 @@ export const PosterCard: React.FC<PosterCardProps> = ({
         )}
         <span className="poster-badge">{item?.type || 'Movie'}</span>
 
+        {/* Two intents on one card: the poster opens details, this opens the
+            player. Without it, watching something meant four clicks through
+            details and a source list, which is the friction this removes.
+            The click must not bubble — the container behind it navigates. */}
         <div className="poster-overlay">
-          <button className="play-button-overlay">
+          <button
+            className="play-button-overlay"
+            aria-label={`Play ${titleText}`}
+            title="Play now"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onPlayDirectly) onPlayDirectly(item);
+              else onSelectMedia(item);
+            }}
+          >
             <Play size={20} fill="#fff" />
           </button>
         </div>

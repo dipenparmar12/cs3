@@ -49,6 +49,9 @@ export const App: React.FC = () => {
    */
   const [session, setSession] = useState<ActiveSession | null>(null);
 
+  /** Holds the player open between a quick-play click and the session existing. */
+  const [preparing, setPreparing] = useState<{ title: string } | null>(null);
+
   // `startSession` is handed down into the detail view and must not close over
   // `session`, or it would go stale between episode switches.
   const sessionRef = useRef<ActiveSession | null>(null);
@@ -203,10 +206,64 @@ export const App: React.FC = () => {
     // session owns its own stream, so it is ended explicitly instead.
     if (session) window.cloudstream?.stopPlayback(session.id, true);
     setSession(null);
+    setPreparing(null);
     setPlayback(null);
     setSwitchingTo(null);
     setSwitchError(null);
   };
+
+  /**
+   * Quick-play straight from a card.
+   *
+   * The player is shown on the click, before anything is known about the title,
+   * because resolving the detail is a network round trip and a card that
+   * appears to do nothing for half a second reads as broken. `preparing` holds
+   * the player open in its resolving state until the real session exists.
+   *
+   * A series starts at its first episode. Handing a series URL to source
+   * discovery finds season packs at best, and nothing at all more often.
+   */
+  const handleQuickPlay = useCallback(
+    async (item: SearchResponse) => {
+      setSelectedMedia(null);
+      setPreparing({ title: item.name });
+
+      try {
+        const response = await window.cloudstream?.loadMedia(item.url);
+        const detail = response?.ok ? response.detail : null;
+
+        const episodes = detail?.episodes ?? [];
+        const first = [...episodes].sort(
+          (a, b) => (a.season ?? 1) - (b.season ?? 1) || (a.episode ?? 0) - (b.episode ?? 0)
+        )[0];
+
+        await startSession({
+          request: {
+            mediaUrl: first?.url ?? item.url,
+            season: first?.season,
+            episode: first?.episode,
+          },
+          title: detail?.name ?? item.name,
+          episodeTitle: first?.name,
+          progress: {
+            mediaUrl: first?.url ?? item.url,
+            year: detail?.year ?? item.year,
+            posterUrl: detail?.posterUrl ?? item.posterUrl,
+            season: first?.season,
+            episode: first?.episode,
+          },
+          subtitleContext: {
+            imdbId: (detail as { imdbId?: string } | null)?.imdbId,
+            season: first?.season,
+            episode: first?.episode,
+          },
+        });
+      } finally {
+        setPreparing(null);
+      }
+    },
+    [startSession]
+  );
 
   /**
    * Tells the originating view which release actually started.
@@ -346,6 +403,28 @@ export const App: React.FC = () => {
                 onDownloadSource: session.context.onDownloadSource,
               }}
             />
+          ) : preparing ? (
+            /* The click already happened; this is the gap before the session
+               exists. Same player, same resolving overlay, no flicker when the
+               real session replaces it. */
+            <VideoPlayer
+              streamUrl=""
+              mimeType=""
+              title={preparing.title}
+              subtitles={[]}
+              onBack={handleClosePlayer}
+              sourceSession={{
+                phase: 'searching',
+                sources: [],
+                searched: 0,
+                totalIndexers: 0,
+                searchDone: false,
+                attempts: [],
+                onPlayNow: () => {},
+                onSelectSource: () => {},
+                onRefresh: () => {},
+              }}
+            />
           ) : playback ? (
             <VideoPlayer
               streamUrl={playback.streamUrl}
@@ -380,7 +459,7 @@ export const App: React.FC = () => {
             <>
               {activeTab === 'home' && (
                 <ErrorBoundary>
-                  <HomeView onSelectMedia={handleSelectMedia} />
+                  <HomeView onSelectMedia={handleSelectMedia} onPlayDirectly={handleQuickPlay} />
                 </ErrorBoundary>
               )}
               {activeTab === 'search' && (
@@ -389,6 +468,7 @@ export const App: React.FC = () => {
                     query={searchQuery}
                     results={searchResults}
                     onSelectMedia={handleSelectMedia}
+                    onPlayDirectly={handleQuickPlay}
                     isLoading={isSearching}
                     error={searchError}
                   />

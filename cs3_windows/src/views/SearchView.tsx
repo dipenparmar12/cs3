@@ -7,6 +7,8 @@ interface SearchViewProps {
   query: string;
   results: SearchResponse[];
   onSelectMedia: (item: SearchResponse) => void;
+  /** Quick-play from the card, bypassing the detail page. */
+  onPlayDirectly?: (item: SearchResponse) => void;
   isLoading: boolean;
   /** Surfaced when the search itself failed, so the user sees a cause not an empty grid. */
   error?: string | null;
@@ -16,6 +18,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
   query,
   results,
   onSelectMedia,
+  onPlayDirectly,
   isLoading,
   error,
 }) => {
@@ -159,7 +162,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1.25rem' }}>
           {filteredResults.map((item, idx) => {
             if (!item || !item.url) return null;
-            return <PosterCard key={`${item.url}-${idx}`} item={item} onSelectMedia={onSelectMedia} />;
+            return <PosterCard key={`${item.url}-${idx}`} item={item} onSelectMedia={onSelectMedia} onPlayDirectly={onPlayDirectly} />;
           })}
         </div>
       )}
