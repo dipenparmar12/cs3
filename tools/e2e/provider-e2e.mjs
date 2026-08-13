@@ -91,11 +91,13 @@ function parseArgs(argv) {
     list: false,
     json: null,
     keep: false,
+    java: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--list') args.list = true;
     else if (arg === '--keep') args.keep = true;
+    else if (arg === '--java') args.java = argv[++i];
     else if (arg === '--repo') args.repo = argv[++i];
     else if (arg === '--plugins') args.plugins = Math.max(1, parseInt(argv[++i], 10) || 2);
     else if (arg === '--json') args.json = argv[++i];
@@ -137,10 +139,15 @@ const dim = (msg) => log(`  ${C.dim}${msg}${C.reset}`);
  * good JDK 21 checked into `tools/toolchain`, and every extension reported
  * itself permanently "initializing" as a result.
  */
-function resolveJava() {
+function resolveJava(explicit) {
   const exe = process.platform === 'win32' ? 'java.exe' : 'java';
   const candidates = [];
 
+  // `--java` points at the runtime that will actually ship. Running the corpus
+  // against the jlinked JRE is the only way to know the module set is complete:
+  // a missing `jdk.crypto.ec` or `jdk.localedata` breaks TLS or date parsing at
+  // runtime, in one provider at a time, long after the build succeeded.
+  if (explicit) candidates.push(explicit);
   if (process.env.JAVA_HOME) candidates.push(path.join(process.env.JAVA_HOME, 'bin', exe));
   try {
     for (const entry of fs.readdirSync(TOOLCHAIN).sort().reverse()) {
@@ -451,11 +458,21 @@ async function resolveLinks(sidecar, provider, item) {
     return { list: [], error: 'unparsable detail reply' };
   }
   if (!parsedDetail.ok) return { list: [], error: parsedDetail.error ?? 'detail load failed' };
+  if (parsedDetail.found === false) return { list: [], error: 'provider has no detail page for this' };
 
+  /**
+   * The bridge nests the load response under `detail`, and reading the top
+   * level instead silently produced `undefined` for every handle — so the fall
+   * back to the search result's page URL fired for *every* film, and providers
+   * whose `loadLinks` expects an opaque handle reported "0 links" or choked on
+   * being handed a URL. That understated link resolution across the whole
+   * corpus. `data` is upstream's load-bearing field; see `encodeEpisode`.
+   */
+  const detailBody = parsedDetail.detail ?? parsedDetail;
   const handle =
-    parsedDetail.dataUrl ??
-    parsedDetail.episodes?.[0]?.data ??
-    parsedDetail.episodes?.[0]?.url ??
+    detailBody.dataUrl ??
+    detailBody.episodes?.[0]?.data ??
+    detailBody.episodes?.[0]?.url ??
     item.url;
 
   const links = await sidecar.call('providerLoadLinks', { provider, data: handle });
@@ -490,7 +507,7 @@ async function main() {
     return 2;
   }
 
-  const java = resolveJava();
+  const java = resolveJava(args.java);
   step(`Java ${java.major} at ${java.path}`);
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cs3-e2e-'));
@@ -636,6 +653,7 @@ async function main() {
       if (candidates.length > 0) {
         answered.push({
           provider: provider.name,
+          repo: provider.repo,
           candidates: candidates.slice(0, CANDIDATES_PER_PROVIDER),
         });
       }
@@ -654,7 +672,7 @@ async function main() {
     report.streams = streams;
 
     for (const entry of answered) {
-      const record = { provider: entry.provider, attempts: [] };
+      const record = { provider: entry.provider, repo: entry.repo, attempts: [] };
       streams.push(record);
 
       for (const candidate of entry.candidates) {
@@ -708,6 +726,39 @@ async function main() {
     // --- verdict ------------------------------------------------------------
     const withBytes = streams.filter((s) => s.stream?.bytes > 0);
     const searched = searchReport.filter((r) => r.queries.some((q) => q.count > 0));
+
+    // --- per repository -----------------------------------------------------
+    log('');
+    step(`${C.bold}By repository${C.reset}`);
+    const perRepo = new Map();
+    for (const provider of loaded) {
+      const row = perRepo.get(provider.repo) ?? { loaded: 0, answering: 0, links: 0, bytes: 0 };
+      row.loaded += 1;
+      perRepo.set(provider.repo, row);
+    }
+    for (const entry of searchReport) {
+      if (entry.queries.some((q) => q.count > 0)) {
+        const row = perRepo.get(entry.repo);
+        if (row) row.answering += 1;
+      }
+    }
+    for (const entry of streams) {
+      const row = perRepo.get(entry.repo);
+      if (!row) continue;
+      if (entry.linkCount > 0) row.links += 1;
+      if (entry.stream?.bytes > 0) row.bytes += 1;
+    }
+    report.byRepository = Object.fromEntries(perRepo);
+
+    log(`  ${'repository'.padEnd(18)} ${'loaded'} ${'answer'} ${'links'} ${'bytes'}`);
+    for (const [name, row] of perRepo) {
+      const health = row.bytes > 0 ? C.green : row.answering > 0 ? C.yellow : C.red;
+      log(
+        `  ${health}${name.padEnd(18)}${C.reset} ` +
+          `${String(row.loaded).padStart(6)} ${String(row.answering).padStart(6)} ` +
+          `${String(row.links).padStart(5)} ${String(row.bytes).padStart(5)}`
+      );
+    }
 
     log('');
     step(`${C.bold}Result${C.reset}`);

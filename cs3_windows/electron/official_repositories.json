@@ -10,7 +10,8 @@
     "language": "Multilingual",
     "iconUrl": "https://raw.githubusercontent.com/recloudstream/cloudstream/master/app/src/main/res/drawable/ic_splash_logo.png",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "bundled": true
   },
   {
     "id": "extensions",
@@ -46,7 +47,8 @@
     "category": "Regional",
     "language": "German (DE)",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "bundled": true
   },
   {
     "id": "italia_in_streaming",
@@ -166,7 +168,8 @@
     "category": "Movies & Shows",
     "language": "English",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "bundled": true
   },
   {
     "id": "redowan",
@@ -250,7 +253,8 @@
     "category": "Community",
     "language": "English",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "bundled": true
   },
   {
     "id": "dogiors",
@@ -274,7 +278,8 @@
     "category": "Community",
     "language": "English",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "bundled": true
   },
   {
     "id": "skillshare",
