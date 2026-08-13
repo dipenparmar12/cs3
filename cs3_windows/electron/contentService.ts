@@ -6,7 +6,11 @@ import type {
 } from '../src/types/torrent';
 import { MetadataProvider, parseMetadataUrl, type MetadataDetail } from './metadataProvider';
 import { CinemetaProvider, parseCinemetaUrl } from './cinemeta';
-import { IndexerRegistry, type AggregateSearchResult } from './torrent/indexerRegistry';
+import {
+  IndexerRegistry,
+  type AggregateSearchResult,
+  type SearchProgress,
+} from './torrent/indexerRegistry';
 import { TorrentEngine, type StreamHandle } from './torrent/torrentEngine';
 import { infoHashFromMagnet } from './torrent/indexers/base';
 import { parseReleaseName } from './torrent/releaseParser';
@@ -220,7 +224,11 @@ export class ContentService {
 
   // --- sources -------------------------------------------------------------
 
-  public async getSources(request: SourceQuery): Promise<SourceResponse> {
+  public async getSources(
+    request: SourceQuery,
+    /** Fires as each indexer answers, so a caller can act on partial results. */
+    onProgress?: (progress: SearchProgress) => void
+  ): Promise<SourceResponse> {
     const fromUrl = parseEpisodeParams(request.mediaUrl);
     const season = request.season ?? fromUrl.season;
     const episode = request.episode ?? fromUrl.episode;
@@ -230,22 +238,32 @@ export class ContentService {
     if (base.startsWith('magnet:')) {
       const infoHash = infoHashFromMagnet(base) ?? '';
       const title = decodeURIComponent(base.match(/dn=([^&]+)/)?.[1] ?? 'Magnet link');
+      const sources: TorrentResult[] = [
+        {
+          infoHash,
+          title,
+          magnet: base,
+          sizeBytes: 0,
+          seeders: 0,
+          leechers: 0,
+          indexerId: 'magnet',
+          indexerName: 'Direct magnet',
+          parsed: parseReleaseName(title),
+          score: 0,
+          scoreReasons: ['Supplied directly by the user'],
+        },
+      ];
+      // A magnet is already the answer, so the one progress event a caller gets
+      // is the terminal one — otherwise a session waiting on `done` would hang.
+      onProgress?.({
+        results: sources,
+        settled: 0,
+        totalRelevant: 0,
+        lastIndexerName: 'Direct magnet',
+        done: true,
+      });
       return {
-        sources: [
-          {
-            infoHash,
-            title,
-            magnet: base,
-            sizeBytes: 0,
-            seeders: 0,
-            leechers: 0,
-            indexerId: 'magnet',
-            indexerName: 'Direct magnet',
-            parsed: parseReleaseName(title),
-            score: 0,
-            scoreReasons: ['Supplied directly by the user'],
-          },
-        ],
+        sources,
         filtered: [],
         indexerOutcomes: [],
         query: { title, season, episode },
@@ -256,6 +274,13 @@ export class ContentService {
     const title = request.titleOverride ?? detail?.name;
 
     if (!title) {
+      onProgress?.({
+        results: [],
+        settled: 0,
+        totalRelevant: 0,
+        lastIndexerName: '',
+        done: true,
+      });
       return {
         sources: [],
         filtered: [],
@@ -278,14 +303,18 @@ export class ContentService {
       limit: 100,
     };
 
-    const outcome = await this.registry.search(indexerQuery, {
-      expectedTitle: title,
-      // Anime releases rarely carry a year; enforcing one loses good sources.
-      expectedYear: isAnime ? undefined : detail?.year,
-      season,
-      episode,
-      runtimeMinutes: detail?.runtimeMinutes,
-    });
+    const outcome = await this.registry.search(
+      indexerQuery,
+      {
+        expectedTitle: title,
+        // Anime releases rarely carry a year; enforcing one loses good sources.
+        expectedYear: isAnime ? undefined : detail?.year,
+        season,
+        episode,
+        runtimeMinutes: detail?.runtimeMinutes,
+      },
+      onProgress
+    );
 
     const response: SourceResponse = {
       sources: outcome.results,

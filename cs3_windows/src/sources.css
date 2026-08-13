@@ -964,3 +964,111 @@
 /* --- Detail view: per-episode actions ----------------------------------- */
 
 .episode-row__actions { display: flex; gap: 0.35rem; align-items: center; flex-shrink: 0; }
+
+/* --- Source panel: switching release without leaving playback ----------- */
+
+.player-panel__head-actions { display: flex; gap: 0.25rem; flex-shrink: 0; }
+.player-panel__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  color: var(--status-warning, #fbbf24);
+}
+.player-panel__empty { margin: 0; font-size: 0.78rem; color: var(--text-muted); }
+
+.player-panel__sources { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.player-panel__sources > li { position: relative; }
+
+.player-panel__source {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.player-panel__source:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
+.player-panel__source:disabled { cursor: default; opacity: 0.75; }
+.player-panel__source--current { background: rgba(255, 255, 255, 0.1); border-color: var(--accent-primary); }
+
+.player-panel__source-text { min-width: 0; flex: 1; }
+.player-panel__source-text strong {
+  display: block;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  /* Release names are long and the useful part is the front of the string. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-panel__source-text > span {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.69rem;
+  color: var(--accent-light);
+}
+.player-panel__source-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+  font-size: 0.67rem;
+  color: var(--text-muted);
+}
+.player-panel__source-facts span { display: inline-flex; align-items: center; gap: 0.2rem; }
+.player-panel__now { display: inline-flex; align-items: center; gap: 0.2rem; }
+
+.player-panel__source-download {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  padding: 0.12rem 0.4rem;
+  font-size: 0.64rem;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(0, 0, 0, 0.45);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.player-panel__sources > li:hover .player-panel__source-download { opacity: 1; }
+.player-panel__source-download:hover { color: #fff; border-color: var(--accent-primary); }
+
+/* --- Resolve overlay: the wait between pressing play and the picture ---- */
+
+.player__resolve-best {
+  max-width: 52ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player__attempts {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  max-width: 60ch;
+  max-height: 7em;
+  overflow-y: auto;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+  text-align: left;
+}
+.player__attempts strong { color: var(--text-subtle); font-weight: 600; }
+
+/* --- Poster card: resume readout ---------------------------------------- */
+
+.poster-watched {
+  margin: 0.2rem 0 0;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
