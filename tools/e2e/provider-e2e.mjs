@@ -78,6 +78,8 @@ const REPO_FILENAMES = [
 
 const RPC_TIMEOUT_MS = 90_000;
 const STREAM_BYTES_WANTED = 2 * 1024 * 1024;
+/** Search hits tried per provider before giving up on it. See the search stage. */
+const CANDIDATES_PER_PROVIDER = 3;
 
 // --- arguments --------------------------------------------------------------
 
@@ -430,6 +432,46 @@ function looksLikeHls(url, contentType) {
   return url.includes('.m3u8') || (contentType ?? '').includes('mpegurl');
 }
 
+/**
+ * Detail page → playable handle → links, for one search result.
+ *
+ * The two-step is not incidental. An episode's URL already *is* the provider's
+ * playable handle, but a film's is its detail page, and those differ — so
+ * `loadLinks` has to be given `dataUrl` from the detail response rather than
+ * the URL the search returned.
+ */
+async function resolveLinks(sidecar, provider, item) {
+  const detail = await sidecar.call('providerLoad', { provider, url: item.url });
+  if (!detail.ok) return { list: [], error: detail.error };
+
+  let parsedDetail;
+  try {
+    parsedDetail = JSON.parse(detail.result?.json ?? '{}');
+  } catch {
+    return { list: [], error: 'unparsable detail reply' };
+  }
+  if (!parsedDetail.ok) return { list: [], error: parsedDetail.error ?? 'detail load failed' };
+
+  const handle =
+    parsedDetail.dataUrl ??
+    parsedDetail.episodes?.[0]?.data ??
+    parsedDetail.episodes?.[0]?.url ??
+    item.url;
+
+  const links = await sidecar.call('providerLoadLinks', { provider, data: handle });
+  if (!links.ok) return { list: [], error: links.error };
+
+  let parsedLinks;
+  try {
+    parsedLinks = JSON.parse(links.result?.json ?? '{}');
+  } catch {
+    return { list: [], error: 'unparsable links reply' };
+  }
+
+  const list = Array.isArray(parsedLinks.links) ? parsedLinks.links.filter((l) => l?.url) : [];
+  return { list, error: list.length === 0 ? (parsedLinks.error ?? undefined) : undefined };
+}
+
 // --- main -------------------------------------------------------------------
 
 async function main() {
@@ -545,7 +587,15 @@ async function main() {
     for (const provider of loaded) {
       const record = { provider: provider.name, repo: provider.repo, queries: [] };
       searchReport.push(record);
-      let best = null;
+      /**
+       * Several candidates, not one.
+       *
+       * A provider's top hit is regularly something with no stream behind it —
+       * a trailer, a listing page, an episode that has aged out of a
+       * broadcaster's catch-up window. Judging the provider on that one row
+       * reported working providers as broken.
+       */
+      const candidates = [];
 
       for (const query of args.queries) {
         const started = Date.now();
@@ -565,7 +615,9 @@ async function main() {
             const parsed = JSON.parse(raw ?? '{}');
             if (parsed.ok && Array.isArray(parsed.results)) {
               count = parsed.results.length;
-              if (!best && count > 0) best = { query, item: parsed.results[0] };
+              for (const item of parsed.results.slice(0, CANDIDATES_PER_PROVIDER)) {
+                if (item?.url) candidates.push({ query, item });
+              }
             } else {
               error = parsed.error ?? 'provider reported failure';
             }
@@ -581,7 +633,12 @@ async function main() {
         else warn(line);
       }
 
-      if (best) answered.push({ provider: provider.name, ...best });
+      if (candidates.length > 0) {
+        answered.push({
+          provider: provider.name,
+          candidates: candidates.slice(0, CANDIDATES_PER_PROVIDER),
+        });
+      }
     }
 
     if (answered.length === 0) {
@@ -596,94 +653,55 @@ async function main() {
     const streams = [];
     report.streams = streams;
 
-    for (const candidate of answered) {
-      const record = { provider: candidate.provider, title: candidate.item?.name };
+    for (const entry of answered) {
+      const record = { provider: entry.provider, attempts: [] };
       streams.push(record);
 
-      const detail = await sidecar.call('providerLoad', {
-        provider: candidate.provider,
-        url: candidate.item.url,
-      });
-      if (!detail.ok) {
-        bad(`${candidate.provider}: load failed — ${detail.error}`);
-        record.error = detail.error;
-        continue;
-      }
+      for (const candidate of entry.candidates) {
+        const attempt = { title: candidate.item?.name, query: candidate.query };
+        record.attempts.push(attempt);
 
-      let parsedDetail;
-      try {
-        parsedDetail = JSON.parse(detail.result?.json ?? '{}');
-      } catch {
-        record.error = 'unparsable detail reply';
-        bad(`${candidate.provider}: unparsable detail reply`);
-        continue;
-      }
-      if (!parsedDetail.ok) {
-        record.error = parsedDetail.error ?? 'detail load failed';
-        bad(`${candidate.provider}: ${record.error}`);
-        continue;
-      }
+        const links = await resolveLinks(sidecar, entry.provider, candidate.item);
+        attempt.linkCount = links.list.length;
+        if (links.error) attempt.error = links.error;
 
-      // A film's playable handle is its `dataUrl`; an episode carries its own.
-      const handle =
-        parsedDetail.dataUrl ??
-        parsedDetail.episodes?.[0]?.data ??
-        parsedDetail.episodes?.[0]?.url ??
-        candidate.item.url;
-
-      const links = await sidecar.call('providerLoadLinks', {
-        provider: candidate.provider,
-        data: handle,
-      });
-      if (!links.ok) {
-        record.error = links.error;
-        bad(`${candidate.provider}: loadLinks failed — ${links.error}`);
-        continue;
-      }
-
-      let parsedLinks;
-      try {
-        parsedLinks = JSON.parse(links.result?.json ?? '{}');
-      } catch {
-        record.error = 'unparsable links reply';
-        bad(`${candidate.provider}: unparsable links reply`);
-        continue;
-      }
-
-      const list = Array.isArray(parsedLinks.links) ? parsedLinks.links.filter((l) => l?.url) : [];
-      record.linkCount = list.length;
-      if (list.length === 0) {
-        record.error = parsedLinks.error ?? 'no playable links';
-        warn(`${candidate.provider}: 0 links (${record.error})`);
-        continue;
-      }
-      ok(`${candidate.provider}: ${list.length} link(s) for "${record.title}"`);
-
-      // Only the first few are pulled: the goal is proof that the chain works,
-      // not a survey of every mirror a provider knows about.
-      for (const link of list.slice(0, 3)) {
-        if (!/^https?:/i.test(link.url)) continue;
-        try {
-          const pulled = await pullBytes(link);
-          record.stream = {
-            source: link.source ?? link.name,
-            status: pulled.status,
-            bytes: pulled.bytes,
-            contentType: pulled.contentType,
-            acceptsRanges: pulled.acceptsRanges,
-            hls: looksLikeHls(link.url, pulled.contentType),
-          };
-          const size = (pulled.bytes / 1024 / 1024).toFixed(2);
-          ok(
-            `${candidate.provider} ← ${size} MB from ${link.source ?? 'link'} ` +
-              `(HTTP ${pulled.status}, ${pulled.contentType ?? 'no content-type'}` +
-              `${pulled.acceptsRanges ? ', ranges ok' : ''})`
-          );
-          break;
-        } catch (error) {
-          record.streamError = error.message;
-          warn(`${candidate.provider} ← ${link.source ?? 'link'}: ${error.message}`);
+        if (links.list.length === 0) {
+          warn(`${entry.provider} "${attempt.title}": 0 links (${links.error ?? 'none offered'})`);
+          continue;
         }
+        ok(`${entry.provider} "${attempt.title}": ${links.list.length} link(s)`);
+        record.linkCount = links.list.length;
+
+        // Only the first few are pulled: the goal is proof that the chain
+        // works, not a survey of every mirror a provider knows about.
+        for (const link of links.list.slice(0, 3)) {
+          if (!/^https?:/i.test(link.url)) continue;
+          try {
+            const pulled = await pullBytes(link);
+            const stream = {
+              source: link.source ?? link.name,
+              status: pulled.status,
+              bytes: pulled.bytes,
+              contentType: pulled.contentType,
+              acceptsRanges: pulled.acceptsRanges,
+              hls: looksLikeHls(link.url, pulled.contentType),
+            };
+            record.stream = stream;
+            attempt.stream = stream;
+            ok(
+              `${entry.provider} ← ${(pulled.bytes / 1024 / 1024).toFixed(2)} MB from ` +
+                `${link.source ?? 'link'} (HTTP ${pulled.status}, ` +
+                `${pulled.contentType ?? 'no content-type'}` +
+                `${pulled.acceptsRanges ? ', ranges ok' : ''})`
+            );
+            break;
+          } catch (error) {
+            attempt.streamError = error.message;
+            warn(`${entry.provider} ← ${link.source ?? 'link'}: ${error.message}`);
+          }
+        }
+
+        if (record.stream) break;
       }
     }
 

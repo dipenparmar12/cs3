@@ -10,8 +10,10 @@
     "postinstall": "node --experimental-require-module node_modules/electron/install.js",
     "dev": "vite",
     "build": "tsc && vite build",
+    "typecheck": "tsc -b",
     "preview": "vite preview",
-    "electron:build": "vite build && electron-builder"
+    "electron:build": "vite build && electron-builder",
+    "e2e:providers": "node ../tools/e2e/provider-e2e.mjs"
   },
   "build": {
     "appId": "com.lagradost.cloudstream3.desktop",

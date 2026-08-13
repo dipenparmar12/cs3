@@ -68,8 +68,10 @@ cs3/
 | Typecheck + build | `cs3_windows/` | `bun run build` (`tsc && vite build`) |
 | Package (Windows) | `cs3_windows/` | `bun run electron:build` → `release/` |
 | Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
+| Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (15 tests) |
+| Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
 | Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
 
@@ -78,8 +80,20 @@ shim the bridge compiles against, runtime-deps puts `library-jvm` in place, and 
 needs both. Nothing can execute an extension until all three have run.
 
 The sidecar needs **Java 21 or newer** — it is compiled to class file 65. An older
-`JAVA_HOME` is now detected and named rather than crashing the runtime at startup; a
-portable JDK 21 lives in `tools/toolchain/` if the system one is older.
+`JAVA_HOME` is detected and named rather than crashing the runtime at startup, and
+`SidecarSupervisor.resolveJava` now actually *looks* in `tools/toolchain/jdk-*` before
+falling back to PATH. It did not until 2026-08-13, and the consequence was severe: a
+machine with `JAVA_HOME` on Java 17 — an entirely ordinary setup — could not start the
+sidecar at all while a perfectly good JDK 21 sat checked in beside it. Maven for the
+sidecar builds lives in `tools/toolchain/apache-maven-3.9.16` and is likewise not on PATH.
+
+**A sidecar that cannot start must say so.** `ensureProvidersLoaded` used to `return`
+silently when `ensureStarted()` failed. Every installed extension then reported zero
+providers with no reason, which the extensions screen rendered as a permanent "JVM sidecar
+is initializing providers…" spinner — an infinite progress message for something that was
+never going to happen. It now writes a `T4_BLOCKED` runtime report naming the real cause to
+every installed plugin, and the UI shows it. If you add another early return on that path,
+carry a reason with it.
 
 Toolchain present in the cloud environment: Java 21, Maven, Bun, Node 22.
 
@@ -133,6 +147,20 @@ immediately and everything after arrives as `playback:update` snapshots on a
 `webContents.send` channel. That inversion is the point — the player renders from snapshots
 from the moment it opens, before any stream exists.
 
+`search:*` is push-shaped for the same reason. `search:start` returns an opening snapshot
+naming the sources it is about to ask; results, per-source outcomes and progress arrive as
+`search:update`, and `search:cancel` abandons the rest. A search across fifteen extension
+providers is fifteen independent scrapes of third-party sites and the slowest routinely
+takes 20–40s (measured: Cinevood times out at 20s while ARD answers in 350ms), so a
+request/response search spent that entire time showing a spinner over results it already
+had. `api:searchAll` still exists for callers that genuinely cannot use a partial answer.
+
+Making that work required breaking up `PluginManager.searchAll`. It issued **one** batched
+`providerSearch` RPC for every provider, and the sidecar collected the futures in order —
+so the reply landed at the speed of the slowest provider no matter how fast the others
+were. It is now one RPC per provider (`searchEach`), capped at 8 in flight because the
+sidecar dispatches each onto a bounded pool sized to the core count.
+
 Also namespaced: `subtitles:*` (online search, SubRip→WebVTT), `audio:*` (ffprobe
 inspection and remux sessions), `sources:getCacheStats` / `sources:clearCache`.
 
@@ -159,6 +187,8 @@ not a layering mistake.
 | `datastore.ts` | Persistence. Reimplements **Android's 6-bucket key grammar** (`_Bool`/`_Int`/`_String`/`_Float`/`_Long`/`_StringSet`) so Android backups import losslessly. Non-transferable keys (tokens, device ids, cache paths) are filtered on import by regex. |
 | `contentService.ts` | The content pipeline orchestrator: `search → MetadataProvider → getSources → IndexerRegistry → startStream → TorrentEngine`. Extension providers are consulted first; torrents are the fallback. A `cs3ext://` media URL bypasses indexers entirely — the provider already knows its links. |
 | `playbackSession.ts` | Owns one "user pressed play" interaction. Opens the player *before* a stream exists and streams discovery progress into it, so the viewer can start the best source found so far instead of waiting for the slowest indexer. Also owns in-player source switching and refresh. Retains the `SourceQuery`, which is what makes refresh possible without navigating back. |
+| `searchScope.ts` | Which sources a search may ask. **A selection is a strict filter, not a preference** — see below. |
+| `searchSession.ts` | One "the user pressed search" interaction. Push-shaped like `playback:*`: fans out per source, emits a snapshot as each answers, and can be cancelled. |
 | `searchSuggestions.ts` | Title autocomplete merged across Cinemeta + TVmaze + AniList, deduped on normalised title+year, misspelling-tolerant. Their blind spots do not overlap — see the file header for what was measured about each. |
 | `searchHistory.ts` | Past search *queries* (not results — a cached result set goes stale silently), stored via the datastore so backups carry it. |
 | `sourceCache.ts` | Resolved sources, with expiry tracked **per source**: magnets never expire, provider links carry a deadline read from the URL (`Expires`/`exp`/JWT claim, case-insensitively) or a short TTL. A cache hit can be partially stale — good magnets beside dead links — and `read()` reports that split. |
@@ -317,6 +347,21 @@ everything downstream of it, so they only surface one at a time.
    `KotlinNameRepair` rewrites a reference only when the underscore form is absent from the
    owner and the hyphen form exists with an identical descriptor. If a future symptom looks
    like "provider works until you press play", check this first.
+
+   **The repair was itself broken until 2026-08-13, and it failed in a way designed to
+   fool you.** `rewriteClass` decided whether a class had changed by comparing a *global*
+   rewrite counter before and after, while `repairedName` memoises its decisions — so the
+   second class to reference `kotlin.Result.constructor_impl` took the cache path, bumped
+   no counter, and had its correctly-rewritten bytes discarded. Exactly one class per
+   distinct broken reference was ever repaired.
+
+   The reason this hid so well: the repair instance is shared across every plugin in a
+   session, so **the failure depends on how many extensions are installed**. A minimal
+   test with three plugins passed and streamed video; the same provider in an eight-plugin
+   run failed with `NoSuchMethodError`, because an earlier plugin had already claimed the
+   decision. "Works in a small test, fails in the real app" was the whole signature.
+   Changed-ness is now tracked per class by the visitor. Never re-derive it from a counter
+   that a cache can skip.
 3. **The android.* shim was built and never delivered.** It sat in `sidecar/target/`; the
    plugin classpath is `sidecar/runtime/`. `android.content.Context` was unresolvable.
 4. **The dev runtime classpath pointed at a directory that has never existed.**
@@ -328,6 +373,45 @@ everything downstream of it, so they only surface one at a time.
 After all five: Filmpalast, EinschaltenIn and Serienstream load, register 3 `MainAPI`
 providers and 10 `ExtractorApi`s, and answer searches — 8 results for "Matrix", 33 for
 "Breaking Bad", 21 for "Dune", with posters, plot and year on detail load.
+
+### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
+
+Run it before believing anything about extension health:
+
+```
+node tools/e2e/provider-e2e.mjs                       # all five repositories
+node tools/e2e/provider-e2e.mjs --repo MegaRepo       # one
+node tools/e2e/provider-e2e.mjs --plugins 3 --queries "one piece,dune" --json report.json
+node tools/e2e/provider-e2e.mjs --list                # what it knows about
+```
+
+It drives the whole chain — repository JSON → `.cs3` download + SHA-256 → DEX→JVM →
+`load()` → `search()` → `load()` → `loadLinks()` → **a 2 MB range-GET off the real host** —
+against Kraptor123/cs-kraptor, Bnyro/GermanProviders, phisher98, rockhero1234/cinephile and
+self-similarity/MegaRepo. Exit 0 requires bytes, not just search results; `PARTIAL` means
+providers scraped but no link played.
+
+It talks to the sidecar over the same stdio JSON-RPC the main process uses, with **no
+Electron in the way**. That split is most of its value: if the harness passes and the app
+does not, the bug is in `cs3_windows/`; if the harness fails, it is in the runtime or the
+extension.
+
+Measured 2026-08-13, all five repositories, 2 plugins each: 6 providers loaded, 4 answering
+(ARD 30/31 results, AllMovieLand 4/6, AllWish 2/1, Binged 18/18), and ARD resolved 5 links
+and delivered **2.00 MB of `video/mp4`, HTTP 206, `Accept-Ranges: bytes`**. The rest are
+honest per-source failures worth recognising rather than re-debugging:
+
+| Symptom | Cause |
+|---|---|
+| Aniworld — HTML `403` where JSON was expected | Google bot protection on the host, not translation |
+| Cinevood — `SocketTimeoutException` | the site is slow/unreachable from here |
+| Binged — "does not implement that operation" | `BingedReview` is a review catalogue; it has no `loadLinks`. Correct. |
+| Anichi — `NoClassDefFoundError: AniListApi$CoverImage` | an `:app` type absent from `library-jvm`; flagged `T3_DEGRADED` at load |
+| cs-kraptor — `InvocationTargetException: null` at load | not yet diagnosed |
+
+`fileHash` is published as `sha256-<hex>`. Strip the prefix before comparing — the app does
+(`installPlugin`), and the first version of the harness did not, which reported every
+download in the corpus as a hash mismatch.
 
 **Where it still stops.** `loadLinks` runs the real extractors and they fail on the *hosts*:
 Voe returns "encoded string not found", Vidsonic gets HTML where it expects hex. Those are
@@ -345,6 +429,35 @@ metadata API and a **hardcoded demo video**. That was removed deliberately, and 
 codebase now carries comments saying so. **Never reintroduce a synthetic/placeholder
 source.** When nothing real is found, return an empty list *and a reason*. A system that
 cannot run must say so, not return empty results dressed up as "no matches found".
+
+### Search scope: selecting a source is a filter, not a preference
+
+`searchScope.ts` used to widen back to *every* source whenever the stored selection matched
+nothing currently installed (`kept.length > 0 ? kept : candidates`). Combined with a picker
+that could offer a name no provider actually had — it synthesised a fake provider named
+after the extension whenever an extension registered none — the result was the worst
+possible failure: the user picks one site, the button reads "1 source", and the app queries
+all two hundred. Resolution is strict now, and an unresolvable selection is *reported*
+(`missingProviders` / `missingIndexers`) rather than quietly ignored.
+
+The rules, all enforced in `SearchSession.plan()`:
+
+- **Nothing selected** → global: every enabled provider, plus the metadata catalogues.
+- **Providers selected** → exactly those, and **no catalogues**. Catalogue rows in a scoped
+  search would reintroduce the sources the user just excluded under a different name.
+- **Indexers selected** → those indexers are title-searched. They normally answer at
+  source-discovery time, so before this a scope of "just this torrent site" had nothing to
+  ask and returned a blank page.
+
+The hierarchy is **exactly three levels: repository → extension → provider**, and the
+provider is the selectable leaf. There is no fourth entity in the CloudStream model. What
+looked like duplication in the picker — `Fivemovierulz > Fivemovierulz` — was the ordinary
+case of an archive registering one provider named after itself, rendered at two levels;
+`SearchScopePicker` collapses that pair into one row. A provider name is globally unique by
+construction (`PluginManager.providers` is a `Map` keyed by name), which is why the name is
+also the scope identity, the `cs3ext://` address and the enable/disable key. Two extensions
+claiming one name is a genuine collision: the first keeps it and the loser is reported via
+`unavailableReason` instead of silently showing zero providers.
 
 ### Sandbox: enforced vs. not
 
