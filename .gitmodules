@@ -108,3 +108,6 @@
 [submodule "repositories/cloudstream-18plus-Extensions"]
 	path = repositories/cloudstream-18plus-Extensions
 	url = git@github.com:punpunsx/cloudstream-18plus-Extensions.git
+[submodule "repositories/Cs-GizliKeyif"]
+	path = repositories/Cs-GizliKeyif
+	url = git@github.com:Kraptor123/Cs-GizliKeyif.git
