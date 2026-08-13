@@ -66,7 +66,8 @@ cs3/
 | Install deps | `cs3_windows/` | `bun install` (lockfile is `bun.lock`; npm works but will churn it) |
 | Dev app | `cs3_windows/` | `bun run dev` — Vite on :5173, `vite-plugin-electron` launches Electron and rebuilds main/preload on change |
 | Typecheck + build | `cs3_windows/` | `bun run build` (`tsc && vite build`) |
-| Package (Windows) | `cs3_windows/` | `bun run electron:build` → `release/` |
+| Bundle the JVM | repo root | `node tools/package/build-runtime.mjs --verify` → `sidecar/dist/` |
+| Package (Windows) | `cs3_windows/` | `bun run electron:build` → `release/` (runs the above first) |
 | Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
@@ -200,6 +201,7 @@ not a layering mistake.
 | `pluginAnalyzer.ts` | Static compatibility classification of a plugin before it is trusted. |
 | `cs3/sidecarSupervisor.ts` | Spawns and supervises the JVM child process; line-delimited JSON-RPC over stdio; never throws on a missing/broken sidecar. |
 | `cs3/extensionUpdater.ts` | Over-the-air extension updates on a schedule, so a provider fix does not wait for an app release. |
+| `cs3/bootstrap.ts` | First-run install of the bundled repositories, and the adult-content opt-in. |
 | `cs3/batchDownloader.ts` | Season/series batch download orchestration. |
 | `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, and remembered source choices. |
 | `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. |
@@ -459,6 +461,57 @@ also the scope identity, the `cs3ext://` address and the enable/disable key. Two
 claiming one name is a genuine collision: the first keeps it and the loser is reported via
 `unavailableReason` instead of silently showing zero providers.
 
+### Shipping: the box has to contain everything
+
+The target user has used Netflix and has not used a plugin manager. They install
+one thing and they stream. Two consequences, both structural:
+
+**The JVM ships inside the app.** `electron-builder` used to package `dist/`,
+`dist-electron/` and `node_modules/` and *nothing else* — no sidecar jar, no
+provider classpath, no Java — so a packaged build had no extension capability at
+all, and no amount of correct runtime code would have changed that.
+`tools/package/build-runtime.mjs` assembles `sidecar/dist/` (sidecar + `lib/` +
+`runtime/` + a jlinked JRE, ~90 MB) and `extraResources` copies it to
+`resources/sidecar/`, which is exactly where `SidecarSupervisor` looks when
+`app.isPackaged`.
+
+The jlink module list is curated rather than `ALL-MODULE-PATH`, and the entries
+that look optional are the ones that bite: `jdk.crypto.ec` (ECDHE — without it
+TLS fails against most sites, one provider at a time), `jdk.unsupported`
+(`sun.misc.Unsafe`, reached by coroutines/OkHttp/Jackson), `jdk.localedata` (a
+multilingual corpus parsing dates under a C locale silently returns nothing),
+`java.sql` (Jackson resolves `java.sql.Date` reflectively). Verify a change to
+that list by running the corpus against the linked runtime, not by checking that
+the build succeeded:
+
+```
+node tools/package/build-runtime.mjs --verify
+node tools/e2e/provider-e2e.mjs --java sidecar/dist/jre/bin/java.exe
+```
+
+**First launch installs the verified repositories itself** (`cs3/bootstrap.ts`),
+in the background, with progress — an app that opens to an empty home screen
+until you find the extensions tab and install plugins one at a time has shipped a
+construction kit, not a product. It runs once (`BOOTSTRAP_VERSION`), caps at
+`PLUGINS_PER_REPOSITORY` because ~170 archives means ~170 DEX translations before
+the first search, and never blocks: the catalogues and indexers answer normally
+while providers arrive. Repositories opt in via `bundled: true`, which is a claim
+that `tools/e2e/provider-e2e.mjs` has driven them end-to-end.
+
+### Adult content is opt-in, and the gate is central
+
+Off by default. The enforcement point is `PluginManager.enabledProviderNames`,
+because search, the scope picker, source discovery, playback and downloads all
+funnel through it — filtering at each call site would be five places to forget.
+A provider is adult when its `supportedTypes` include upstream's `NSFW` `TvType`,
+which catches an adult provider bundled inside an otherwise ordinary repository.
+That is the real case: measured against the catalogue, **four** repositories
+publish NSFW-tagged plugins (`indostream`, `cinephile`, `redowan`,
+`uk_extensions`) and none is a wholly-adult repository — `cinephile` is in the
+bundled set. `BootstrapService` additionally declines to *download* them while
+the setting is off, which is politeness rather than protection; the gate above is
+the protection.
+
 ### Sandbox: enforced vs. not
 
 Enforced — plugin cannot reach sidecar internals (`PluginClassLoader`, tested);
@@ -509,6 +562,19 @@ Where they disagree, trust the code and fix the doc.
   native `.node` binaries (`node-datachannel`, `utp-native`) that cannot exist in a JS
   bundle and must also be `asarUnpack`-ed for packaging.
 - **External links open in the system browser**, never in-app (`setWindowOpenHandler`).
+- **Player controls hide from one place.** Visibility is a state machine polled on
+  a timer (`VideoPlayer`), not a chain of `setTimeout`s. The rule that keeps it
+  stable: a `mousemove` with zero `movementX`/`movementY` is never activity.
+  Chromium synthesises exactly that event when hiding the controls changes what
+  sits under a stationary cursor — and toggling `cursor: none` on idle does it
+  too — so treating synthetic events as activity created a genuine reveal/hide
+  feedback loop, seen as controls flashing while the mouse was not moving.
+- **Provider subtitles are a real source.** `loadLinks` returns subtitles
+  alongside links and `PluginManager.loadSubtitles` exposes them; `subtitles:search`
+  merges them ahead of OpenSubtitles. This matters most where OpenSubtitles cannot
+  help at all — extension-sourced content with no IMDb id — and the method existed
+  with no caller for some time, so a film played from an extension had no
+  subtitles even when the provider had handed them over with the video.
 - **Shutdown is explicit**: `downloadService.stop()`, `extensionUpdater.stop()`,
   `pluginManager.shutdown()` (kills the JVM — otherwise you orphan a Java process), and
   `torrentEngine.destroy()` on `before-quit` (otherwise: zombie process, locked cache dir).
