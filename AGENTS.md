@@ -68,14 +68,18 @@ cs3/
 | Typecheck + build | `cs3_windows/` | `bun run build` (`tsc && vite build`) |
 | Package (Windows) | `cs3_windows/` | `bun run electron:build` → `release/` |
 | Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
-| Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` |
+| Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (15 tests) |
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
 | Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
 
-Run the two Maven commands above **in that order** on a fresh clone; the bridge compiles
-against `library-jvm`, which runtime-deps puts in place. Both are needed before any
-extension can execute, and both are one-time (the output is gitignored, not vendored).
+On a fresh clone run all three **in that order**: the sidecar build produces the android
+shim the bridge compiles against, runtime-deps puts `library-jvm` in place, and the bridge
+needs both. Nothing can execute an extension until all three have run.
+
+The sidecar needs **Java 21 or newer** — it is compiled to class file 65. An older
+`JAVA_HOME` is now detected and named rather than crashing the runtime at startup; a
+portable JDK 21 lives in `tools/toolchain/` if the system one is older.
 
 Toolchain present in the cloud environment: Java 21, Maven, Bun, Node 22.
 
@@ -291,6 +295,50 @@ load-bearing. When nothing real is found, return an empty list *and a reason*.
 
 Still outstanding from doc 36: step 5 (jlink a JRE), step 6 (OS-level sandbox), step 7 (the
 WebView bridge, needed by ~7% of providers).
+
+### Community extensions: five defects found by running them (2026-08-13)
+
+`InternetArchiveProvider` worked because it is one of the few extensions that extends
+`BasePlugin`. Every *community* extension extends `Plugin`, and none of them ran. Found by
+installing `Bnyro/GermanProviders` and driving the whole pipeline; each of these blocked
+everything downstream of it, so they only surface one at a time.
+
+1. **`com.lagradost.cloudstream3.plugins.Plugin` is not published anywhere.** It lives in
+   the Android `:app` module; `library-jvm` has only `BasePlugin`. Every community `.cs3`
+   failed with `NoClassDefFoundError` before running a line. Now supplied by
+   `sidecar/bridge/` — it has to be that module, because the jar must be loaded by the
+   loader that owns `library-jvm.jar` or the `BasePlugin` it extends is a different Class
+   object than the plugin's own superclass resolves to. Note this is the *opposite* of
+   finding 1 above: some `:app` types did move into `library-jvm`, and `Plugin` did not.
+2. **dex2jar corrupts Kotlin's mangled method names.** Kotlin names inline-value-class
+   members with a hyphen (`kotlin.Result.constructor-impl`); dex2jar rewrites it to an
+   underscore, which resolves against nothing. `Result` is what `runCatching` compiles to,
+   so search and metadata worked and *link resolution* failed with a Kotlin-internal error.
+   `KotlinNameRepair` rewrites a reference only when the underscore form is absent from the
+   owner and the hyphen form exists with an identical descriptor. If a future symptom looks
+   like "provider works until you press play", check this first.
+3. **The android.* shim was built and never delivered.** It sat in `sidecar/target/`; the
+   plugin classpath is `sidecar/runtime/`. `android.content.Context` was unresolvable.
+4. **The dev runtime classpath pointed at a directory that has never existed.**
+   `sidecar/pom.xml` builds into `target/`, `runtime-deps` into `runtime/` — siblings. Every
+   plugin reported `T4_BLOCKED: library-jvm.jar is not present` regardless of the build.
+5. **`resolveJava` accepted any JVM that existed.** A `JAVA_HOME` on Java 17 produced
+   `UnsupportedClassVersionError`, reported only as "the extension runtime crashed".
+
+After all five: Filmpalast, EinschaltenIn and Serienstream load, register 3 `MainAPI`
+providers and 10 `ExtractorApi`s, and answer searches — 8 results for "Matrix", 33 for
+"Breaking Bad", 21 for "Dune", with posters, plot and year on detail load.
+
+**Where it still stops.** `loadLinks` runs the real extractors and they fail on the *hosts*:
+Voe returns "encoded string not found", Vidsonic gets HTML where it expects hex. Those are
+bot-protected file hosts, which is doc 36 step 7 (WebView) territory, not a translation
+problem. Do not "fix" this by weakening the extractor path — the correct next step is the
+WebView bridge.
+
+Repository URLs: the curated list stores project pages (`https://github.com/owner/repo`),
+which return HTML. `pluginManager` resolves those to raw documents by probing branch and
+filename combinations, because there is no convention — `master/repo.json`,
+`builds/repo.json` and `builds/plugins.json` are all in use across the bundled list.
 
 An earlier revision of this app registered installed plugins as fake providers backed by a
 metadata API and a **hardcoded demo video**. That was removed deliberately, and the
