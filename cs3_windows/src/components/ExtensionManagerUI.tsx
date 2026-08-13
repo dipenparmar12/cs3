@@ -1,9 +1,29 @@
 import React, { useEffect, useState } from 'react';
 import type { SitePlugin, PluginCompatibilityReport } from '../types/plugin';
 import type { OfficialRepository } from '../../electron/officialRepositories';
-import { Puzzle, Plus, Download, ShieldCheck, Globe, CheckCircle2, Layers } from 'lucide-react';
+import {
+  Puzzle, Plus, Download, ShieldCheck, Globe, CheckCircle2, Layers,
+  Loader2, RefreshCw, RotateCcw, Trash2,
+} from 'lucide-react';
 import { ProviderSelector } from './ProviderSelector';
 import { ExtensionUpdates } from './ExtensionUpdates';
+
+/**
+ * Adds plugins to the grid without duplicating what is already there.
+ *
+ * Every source of plugin rows appended blindly, so the installed list and a
+ * repository fetch of the same repository produced two cards per extension —
+ * and re-fetching a repository produced another set each time. Later entries
+ * win because they are the fresher metadata (a repository fetch knows the
+ * current version; the local install record knows the version on disk).
+ */
+function mergePlugins(current: SitePlugin[], incoming: SitePlugin[]): SitePlugin[] {
+  const byName = new Map<string, SitePlugin>();
+  for (const plugin of [...current, ...incoming]) {
+    if (plugin?.internalName) byName.set(plugin.internalName, plugin);
+  }
+  return [...byName.values()];
+}
 
 export const ExtensionManagerUI: React.FC = () => {
   const [repoUrlInput, setRepoUrlInput] = useState('');
@@ -20,6 +40,11 @@ export const ExtensionManagerUI: React.FC = () => {
 
   const [installedPluginNames, setInstalledPluginNames] = useState<Set<string>>(new Set());
   const [activeReport, setActiveReport] = useState<PluginCompatibilityReport | null>(null);
+
+  /** The extension a lifecycle action is running against, so its row can wait. */
+  const [busy, setBusy] = useState<string | null>(null);
+  /** Uninstall is destructive and one row over from update; it asks first. */
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
   useEffect(() => {
     if (window.cloudstream) {
@@ -41,7 +66,7 @@ export const ExtensionManagerUI: React.FC = () => {
         .getInstalledPlugins()
         .then((list) => {
           if (Array.isArray(list) && list.length > 0) {
-            setPlugins((prev) => [...prev, ...list]);
+            setPlugins((prev) => mergePlugins(prev, list));
             setInstalledPluginNames(
               new Set(list.filter((p) => p && p.internalName).map((p) => p.internalName))
             );
@@ -67,7 +92,7 @@ export const ExtensionManagerUI: React.FC = () => {
 
         const { repository } = response;
         if (Array.isArray(repository?.plugins) && repository.plugins.length > 0) {
-          setPlugins((prev) => [...prev, ...repository.plugins]);
+          setPlugins((prev) => mergePlugins(prev, repository.plugins));
         }
 
         const updatedUrls = await window.cloudstream.getInstalledRepositories().catch(() => []);
@@ -105,6 +130,67 @@ export const ExtensionManagerUI: React.FC = () => {
         setToastMessage(`✗ Install failed: ${err instanceof Error ? err.message : String(err)}`);
         setTimeout(() => setToastMessage(null), 5000);
       }
+    }
+  };
+
+  /**
+   * Installing again over the top.
+   *
+   * A provider whose site changed can leave a translated archive that loads but
+   * no longer scrapes anything, and there is no way to tell that apart from a
+   * dead site. Re-fetching the same version is the cheap first thing to try,
+   * and without it the only route back is uninstall-then-reinstall — which
+   * loses the per-provider switches along the way.
+   */
+  const handleReinstall = async (plugin: SitePlugin) => {
+    if (!plugin?.internalName || !window.cloudstream) return;
+    setBusy(plugin.internalName);
+    try {
+      await window.cloudstream.installPlugin(plugin);
+      setToastMessage(`✓ ${plugin.name} reinstalled`);
+    } catch (err) {
+      setToastMessage(`✗ Reinstall failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(null);
+      setTimeout(() => setToastMessage(null), 4000);
+    }
+  };
+
+  const handleUpdate = async (plugin: SitePlugin) => {
+    if (!plugin?.internalName || !window.cloudstream) return;
+    setBusy(plugin.internalName);
+    try {
+      const outcome = await window.cloudstream.updateExtension(plugin.internalName);
+      setToastMessage(`${outcome.ok ? '✓' : '✗'} ${plugin.name}: ${outcome.message}`);
+    } catch (err) {
+      setToastMessage(`✗ Update failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(null);
+      setTimeout(() => setToastMessage(null), 5000);
+    }
+  };
+
+  const handleUninstall = async (plugin: SitePlugin) => {
+    if (!plugin?.internalName || !window.cloudstream) return;
+    setBusy(plugin.internalName);
+    try {
+      const removed = await window.cloudstream.uninstallPlugin(plugin.internalName);
+      if (removed) {
+        setInstalledPluginNames((prev) => {
+          const next = new Set(prev);
+          next.delete(plugin.internalName);
+          return next;
+        });
+        setToastMessage(`✓ ${plugin.name} uninstalled`);
+      } else {
+        setToastMessage(`✗ ${plugin.name} could not be uninstalled`);
+      }
+    } catch (err) {
+      setToastMessage(`✗ Uninstall failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(null);
+      setConfirmRemove(null);
+      setTimeout(() => setToastMessage(null), 4000);
     }
   };
 
@@ -354,6 +440,8 @@ export const ExtensionManagerUI: React.FC = () => {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
           {safePlugins.map((plugin, idx) => {
             const isInstalled = plugin.internalName ? installedPluginNames.has(plugin.internalName) : false;
+            const isBusy = busy === plugin.internalName;
+            const isConfirming = confirmRemove === plugin.internalName;
 
             return (
               <div
@@ -395,20 +483,90 @@ export const ExtensionManagerUI: React.FC = () => {
                   </p>
                 </div>
 
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button onClick={() => handleAnalyze(plugin)} className="btn btn-secondary" style={{ flex: 1, fontSize: '0.78rem' }}>
-                    <ShieldCheck size={14} />
-                    <span>Analyze</span>
-                  </button>
-                  <button
-                    onClick={() => handleInstallPlugin(plugin)}
-                    className={`btn ${isInstalled ? 'btn-secondary' : 'btn-primary'}`}
-                    style={{ flex: 1, fontSize: '0.78rem' }}
-                  >
-                    {isInstalled ? <CheckCircle2 size={14} style={{ color: 'var(--status-success)' }} /> : <Download size={14} />}
-                    <span>{isInstalled ? 'Active' : 'Install'}</span>
-                  </button>
-                </div>
+                {/*
+                  An installed extension used to end at a non-clickable "Active"
+                  badge — no update, no reinstall, no way to remove it. Enabling
+                  something has to be reversible, so the same slot now carries
+                  its whole lifecycle.
+                */}
+                {isBusy ? (
+                  <div className="ext-actions ext-actions--busy">
+                    <Loader2 size={14} className="spin" />
+                    <span>Working…</span>
+                  </div>
+                ) : isConfirming ? (
+                  <div className="ext-actions">
+                    <span className="ext-actions__ask">Remove {plugin.name}?</span>
+                    <button
+                      onClick={() => handleUninstall(plugin)}
+                      className="btn btn-danger ext-actions__btn"
+                    >
+                      <Trash2 size={14} />
+                      <span>Remove</span>
+                    </button>
+                    <button
+                      onClick={() => setConfirmRemove(null)}
+                      className="btn btn-secondary ext-actions__btn"
+                    >
+                      <span>Cancel</span>
+                    </button>
+                  </div>
+                ) : isInstalled ? (
+                  <div className="ext-actions">
+                    <span className="ext-actions__state">
+                      <CheckCircle2 size={13} /> Installed
+                    </span>
+                    <button
+                      onClick={() => handleUpdate(plugin)}
+                      className="btn btn-secondary ext-actions__btn"
+                      title="Check the repository for a newer version"
+                    >
+                      <RefreshCw size={13} />
+                      <span>Update</span>
+                    </button>
+                    <button
+                      onClick={() => handleReinstall(plugin)}
+                      className="btn btn-secondary ext-actions__btn"
+                      title="Download and translate this version again"
+                    >
+                      <RotateCcw size={13} />
+                      <span>Reinstall</span>
+                    </button>
+                    <button
+                      onClick={() => setConfirmRemove(plugin.internalName)}
+                      className="btn btn-secondary ext-actions__btn ext-actions__btn--danger"
+                      title="Uninstall this extension"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                    <button
+                      onClick={() => handleAnalyze(plugin)}
+                      className="btn btn-secondary ext-actions__btn"
+                      title="Compatibility report"
+                    >
+                      <ShieldCheck size={13} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="ext-actions">
+                    <button
+                      onClick={() => handleAnalyze(plugin)}
+                      className="btn btn-secondary ext-actions__btn"
+                      style={{ flex: 1 }}
+                    >
+                      <ShieldCheck size={14} />
+                      <span>Analyze</span>
+                    </button>
+                    <button
+                      onClick={() => handleInstallPlugin(plugin)}
+                      className="btn btn-primary ext-actions__btn"
+                      style={{ flex: 1 }}
+                    >
+                      <Download size={14} />
+                      <span>Install</span>
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}
