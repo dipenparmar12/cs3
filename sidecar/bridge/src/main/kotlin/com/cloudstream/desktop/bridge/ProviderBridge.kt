@@ -193,6 +193,10 @@ object ProviderBridge {
         field("apiName", item.apiName.ifBlank { api.name })
         field("type", item.type?.name)
         field("posterUrl", item.posterUrl)
+        val year = (item as? com.lagradost.cloudstream3.MovieSearchResponse)?.year
+            ?: (item as? com.lagradost.cloudstream3.TvSeriesSearchResponse)?.year
+            ?: (item as? com.lagradost.cloudstream3.AnimeSearchResponse)?.year
+        field("year", year)
         stringMap("posterHeaders", item.posterHeaders)
         field("id", item.id)
         field("quality", item.quality?.name)
