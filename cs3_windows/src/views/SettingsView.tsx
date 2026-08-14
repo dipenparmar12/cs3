@@ -40,6 +40,13 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
     max: number;
     def: number;
   } | null>(null);
+  const [prefetchSources, setPrefetchSources] = useState(true);
+
+  useEffect(() => {
+    void window.cloudstream?.getSourcePrefetchSetting?.().then((response) => {
+      if (response?.ok) setPrefetchSources(response.enabled);
+    });
+  }, []);
 
   const checkComponentStatus = useCallback(async () => {
     try {
@@ -181,6 +188,41 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                   <span>{concurrency.value}</span>
                 </div>
               )}
+            </SettingRow>
+
+            {/*
+              Opt-out rather than opt-in: the default is what makes Play feel
+              instant, and it is the behaviour most people want. It is offered
+              at all because opening a detail page is not a commitment to watch
+              — someone on a metered connection should not have to discover
+              this by watching their allowance go.
+            */}
+            <SettingRow
+              label="Load sources while you read"
+              note={prefetchSources ? 'On' : 'Off'}
+              hint={
+                <>
+                  Starts looking for playable sources a moment after a title’s page opens, so
+                  pressing Play usually starts immediately instead of beginning the search
+                  then. Results are cached and reused until they expire, and pressing Play
+                  during the search joins it rather than starting a second one — so this never
+                  costs more than one search. Turning it off means every Play begins from cold.
+                </>
+              }
+            >
+              <label className="settings__switch">
+                <input
+                  type="checkbox"
+                  checked={prefetchSources}
+                  onChange={async (event) => {
+                    const response = await window.cloudstream?.setSourcePrefetchSetting?.(
+                      event.target.checked
+                    );
+                    if (response?.ok) setPrefetchSources(response.enabled);
+                  }}
+                />
+                <span>{prefetchSources ? 'Enabled' : 'Disabled'}</span>
+              </label>
             </SettingRow>
           </SettingGroup>
 

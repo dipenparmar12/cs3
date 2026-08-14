@@ -11,6 +11,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "typecheck": "tsc -b",
+    "test:electron": "node --experimental-strip-types electron/sharedDiscovery.test.mts",
     "preview": "vite preview",
     "build:runtime": "node ../tools/package/build-runtime.mjs --verify",
     "electron:build": "npm run build:runtime && vite build && electron-builder",

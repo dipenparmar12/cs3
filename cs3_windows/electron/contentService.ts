@@ -26,6 +26,7 @@ import { rawFetch } from './torrent/http';
 import { SearchScopeStore } from './searchScope';
 import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
+import { SharedDiscovery } from './sharedDiscovery';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -400,11 +401,73 @@ export class ContentService {
 
   // --- sources -------------------------------------------------------------
 
+  /**
+   * Whether this query could be answered from cache right now.
+   *
+   * Asked speculatively — by the prefetcher, before deciding whether a scrape is
+   * warranted at all — so it uses `peek` rather than `read` and never writes.
+   */
+  public hasFreshSources(request: SourceQuery): boolean {
+    const fromUrl = parseEpisodeParams(request.mediaUrl);
+    const base = stripQuery(request.mediaUrl);
+    // A magnet is its own source; there is nothing to discover or cache.
+    if (base.startsWith('magnet:')) return true;
+    return (
+      this.cache.peek(
+        base,
+        request.season ?? fromUrl.season,
+        request.episode ?? fromUrl.episode
+      ).fresh.length > 0
+    );
+  }
+
+  /** Identity of a discovery run, so two callers asking the same thing share one. */
+  private sourceKey(request: SourceQuery): string {
+    const fromUrl = parseEpisodeParams(request.mediaUrl);
+    return [
+      stripQuery(request.mediaUrl),
+      request.season ?? fromUrl.season ?? '',
+      request.episode ?? fromUrl.episode ?? '',
+    ].join('|');
+  }
+
+  /**
+   * Discovery runs currently in flight, so a second caller joins rather than
+   * starting an identical scrape.
+   *
+   * This is what makes background prefetching worth doing instead of harmful —
+   * see {@link SharedDiscovery}, which owns the refcounted cancellation.
+   */
+  private inFlightSources = new SharedDiscovery<SourceResponse, SearchProgress>();
+
   public async getSources(
     request: SourceQuery,
     /** Fires as each indexer answers, so a caller can act on partial results. */
     onProgress?: (progress: SearchProgress) => void,
     /** Set by an explicit refresh, which must not be answered from cache. */
+    options: { bypassCache?: boolean; signal?: AbortSignal } = {}
+  ): Promise<SourceResponse> {
+    const bypass = Boolean(options.bypassCache);
+    return this.inFlightSources.run(
+      this.sourceKey(request),
+      bypass ? 'bypass' : 'cached',
+      // A plain caller joins any run. A refresh joins only a run that also
+      // bypassed the cache — the point of a refresh is that it must not be
+      // served by something that may have answered from cache.
+      (existingTag) => !bypass || existingTag === 'bypass',
+      (emit, signal) => this.runDiscovery(request, emit, { bypassCache: bypass, signal }),
+      { onProgress, signal: options.signal }
+    );
+  }
+
+  /** True while a discovery for this exact query is already running. */
+  public isDiscovering(request: SourceQuery): boolean {
+    return this.inFlightSources.has(this.sourceKey(request));
+  }
+
+  private async runDiscovery(
+    request: SourceQuery,
+    onProgress?: (progress: SearchProgress) => void,
     options: { bypassCache?: boolean; signal?: AbortSignal } = {}
   ): Promise<SourceResponse> {
     const fromUrl = parseEpisodeParams(request.mediaUrl);

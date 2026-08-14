@@ -13,6 +13,8 @@ import {
   Search,
   SearchCheck,
   Star,
+  Loader2,
+  Zap,
 } from 'lucide-react';
 
 /**
@@ -67,6 +69,22 @@ interface DetailHeroProps {
   provenance: DetailHeroProvenance;
   saved: boolean;
   busy?: boolean;
+  /**
+   * How the background source search is getting on.
+   *
+   * Shown because the work is otherwise invisible, and invisible work is
+   * indistinguishable from no work: someone who does not know sources are
+   * already loading has no reason to expect Play to be instant, and someone
+   * whose providers found nothing should learn it here rather than by pressing
+   * Play and waiting for the same answer.
+   */
+  sourceReadiness?: {
+    status: 'idle' | 'waiting' | 'searching' | 'ready' | 'empty' | 'failed' | 'disabled';
+    count: number;
+    fromCache: boolean;
+    settled?: number;
+    total?: number;
+  } | null;
 
   onPlay: () => void;
   onToggleSave: () => void;
@@ -94,6 +112,7 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   provenance,
   saved,
   busy = false,
+  sourceReadiness,
   onPlay,
   onToggleSave,
   onChooseSource,
@@ -134,6 +153,33 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
     Boolean
   ) as string[];
 
+  /**
+   * One short phrase, or nothing.
+   *
+   * `waiting` and `idle` say nothing on purpose: the prefetcher holds off for a
+   * moment to see whether the page is actually being read, and announcing that
+   * pause would put a label on screen for every title someone merely glanced
+   * at. A badge that appears and disappears as you scroll is worse than no
+   * badge.
+   */
+  const readinessLabel = (() => {
+    if (!sourceReadiness) return null;
+    switch (sourceReadiness.status) {
+      case 'ready':
+        return sourceReadiness.fromCache
+          ? 'Ready to play'
+          : `${sourceReadiness.count} source${sourceReadiness.count === 1 ? '' : 's'} ready`;
+      case 'searching':
+        return sourceReadiness.count > 0
+          ? `${sourceReadiness.count} found…`
+          : 'Finding sources…';
+      case 'empty':
+        return 'No sources found';
+      default:
+        return null;
+    }
+  })();
+
   return (
     <header className="detail-hero detail-hero--v2">
       {/*
@@ -162,6 +208,23 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
         <span className="detail-art__caption" aria-hidden>
           {isSeries ? 'Play first episode' : 'Play'}
         </span>
+
+        {/*
+          Sits on the artwork rather than beside the buttons, because it is
+          about what the artwork does. Only ever a state, never a spinner
+          blocking anything — the page is fully usable throughout and Play works
+          at any point, joining whatever is already running.
+        */}
+        {readinessLabel && (
+          <span
+            className={`detail-art__ready detail-art__ready--${sourceReadiness!.status}`}
+            aria-hidden
+          >
+            {sourceReadiness!.status === 'searching' && <Loader2 size={11} className="spin" />}
+            {sourceReadiness!.status === 'ready' && <Zap size={11} />}
+            {readinessLabel}
+          </span>
+        )}
       </button>
 
       <div className="detail-hero__body">

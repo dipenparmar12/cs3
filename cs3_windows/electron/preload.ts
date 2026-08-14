@@ -29,6 +29,7 @@ import type { DnsPreset, NetworkSettings } from './networkSettings';
 import type { SystemRuntimeStatus, RuntimeProgress } from './cs3/runtimeProvisioner';
 import type { Bookmark } from './cs3/bookmarkStore';
 import type { DiscoverySection } from './cs3/discovery';
+import type { PrefetchState } from './cs3/sourcePrefetcher';
 import type { EnrichedMetadata } from './cs3/titleEnricher';
 import type {
   AnalyticsSettings,
@@ -539,6 +540,27 @@ export interface CloudStreamElectronAPI {
     callback: (progress: RuntimeProgress) => void
   ) => () => void;
 
+  // Background source loading
+  /**
+   * Starts looking for sources for what this page would play.
+   *
+   * Fire-and-forget: nothing waits on the reply. Results go into the source
+   * cache, so pressing Play afterwards is answered from it — and pressing Play
+   * *during* it joins the same run rather than starting a second scrape.
+   * Progress arrives through `onSourcePrefetch`.
+   */
+  prefetchSources: (request: {
+    mediaUrl: string;
+    season?: number;
+    episode?: number;
+    titleOverride?: string;
+  }) => Promise<Envelope>;
+  /** Abandons the pending prefetch; safe to call when there is none. */
+  cancelSourcePrefetch: () => Promise<Envelope>;
+  onSourcePrefetch: (callback: (state: PrefetchState) => void) => () => void;
+  getSourcePrefetchSetting: () => Promise<Envelope & { enabled: boolean }>;
+  setSourcePrefetchSetting: (enabled: boolean) => Promise<Envelope & { enabled: boolean }>;
+
   // Discovery — the dynamic home screen
   /**
    * Home-screen sections, already ordered.
@@ -951,6 +973,17 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.on('runtime:progress', listener);
     return () => ipcRenderer.removeListener('runtime:progress', listener);
   },
+
+  prefetchSources: (request) => ipcRenderer.invoke('sources:prefetch', request),
+  cancelSourcePrefetch: () => ipcRenderer.invoke('sources:cancelPrefetch'),
+  onSourcePrefetch: (callback) => {
+    const listener = (_: unknown, state: PrefetchState) => callback(state);
+    ipcRenderer.on('sources:prefetch', listener);
+    return () => ipcRenderer.removeListener('sources:prefetch', listener);
+  },
+  getSourcePrefetchSetting: () => ipcRenderer.invoke('sources:getPrefetchSetting'),
+  setSourcePrefetchSetting: (enabled) =>
+    ipcRenderer.invoke('sources:setPrefetchSetting', enabled),
 
   getDiscoverySections: (options) => ipcRenderer.invoke('discover:sections', options),
   getMoreDiscovery: (section, skip) => ipcRenderer.invoke('discover:more', section, skip),

@@ -17,6 +17,7 @@ import { SeasonDownloadDialog } from '../components/SeasonDownloadDialog';
 import { LibraryBucketSelector } from '../components/LibraryBucketSelector';
 import { CopyErrorButton } from '../components/CopyErrorButton';
 import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
+import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
 
 export interface PlaybackRequest {
   streamUrl: string;
@@ -194,6 +195,9 @@ export const DetailView: React.FC<DetailViewProps> = ({
   /** Whether this page is in the user's saved list, and where it came from. */
   const [saved, setSaved] = useState(false);
   const [provenance, setProvenance] = useState<DetailHeroProvenance>({});
+
+  /** How the background source search for this page is getting on. */
+  const [prefetch, setPrefetch] = useState<PrefetchState | null>(null);
 
   const [activeSeason, setActiveSeason] = useState<number>(1);
   const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
@@ -563,6 +567,72 @@ export const DetailView: React.FC<DetailViewProps> = ({
     );
   }, [detail, mediaItem.url, provenance, searchQuery, flash]);
 
+  /**
+   * What pressing Play on this page would ask for.
+   *
+   * Must match `playEpisodeDirectly` exactly — the same media URL, season and
+   * episode — because the whole benefit comes from the cache being keyed on
+   * that tuple. Prefetching the show's own URL while Play asks for episode 1
+   * would warm an entry nothing ever reads and cost a scrape for nothing.
+   */
+  const playTarget = useMemo(() => {
+    if (!detail) return null;
+    if (!isSeries) return { mediaUrl: detail.url };
+    const episode = selectedEpisode ?? (seasons.get(activeSeason) ?? [])[0];
+    if (!episode) return { mediaUrl: detail.url };
+    return { mediaUrl: episode.url, season: episode.season, episode: episode.episode };
+  }, [detail, isSeries, selectedEpisode, seasons, activeSeason]);
+
+  /**
+   * Looks for sources while the viewer is still reading the page.
+   *
+   * The window between a detail page opening and Play being pressed is several
+   * seconds of doing nothing, and discovery is the slowest thing in the app —
+   * so it runs there instead. The main process holds the policy: it waits to
+   * see whether the page is actually being read, skips entirely when the cache
+   * can already answer, and runs one at a time. Nothing here waits on it.
+   *
+   * Cancelled on unmount, which is safe: the abort only reaches the underlying
+   * run if nobody else has joined it, so leaving the page after pressing Play
+   * cannot cancel the discovery the player is now waiting on.
+   */
+  /*
+   * Depended on as primitives, not as the object.
+   *
+   * `playTarget` is rebuilt whenever any of its inputs change identity —
+   * `setSelectedEpisode` on the episode already showing produces an equal but
+   * new object — and an effect keyed on the object would then cancel and
+   * re-schedule the prefetch for a target that had not actually changed.
+   */
+  const playMediaUrl = playTarget?.mediaUrl;
+  const playSeason = playTarget?.season;
+  const playEpisode = playTarget?.episode;
+
+  useEffect(() => {
+    if (!playMediaUrl) return;
+    void window.cloudstream?.prefetchSources?.({
+      mediaUrl: playMediaUrl,
+      season: playSeason,
+      episode: playEpisode,
+    });
+    return () => {
+      void window.cloudstream?.cancelSourcePrefetch?.();
+    };
+  }, [playMediaUrl, playSeason, playEpisode]);
+
+  useEffect(() => {
+    setPrefetch(null);
+    const dispose = window.cloudstream?.onSourcePrefetch?.((state) => {
+      // Snapshots for a target this page is no longer showing would make the
+      // badge describe something else — a different episode, or the title the
+      // viewer just navigated away from.
+      if (!playMediaUrl || state.mediaUrl !== playMediaUrl) return;
+      if (state.season !== playSeason || state.episode !== playEpisode) return;
+      setPrefetch(state);
+    });
+    return () => dispose?.();
+  }, [playMediaUrl, playSeason, playEpisode]);
+
   /** Queues one release for download, from either the picker or the player. */
   const downloadSource = useCallback(
     (source: TorrentResult, episode: Episode | null) => {
@@ -879,6 +949,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         provenance={{ ...provenance, imdbId: detail.imdbId }}
         saved={saved}
         busy={startingStream}
+        sourceReadiness={prefetch}
         onPlay={() => playNow(isSeries ? (episodesInSeason[0] ?? null) : null)}
         onToggleSave={() => void toggleSaved()}
         onChooseSource={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}

@@ -35,6 +35,7 @@ import { ExternalPlayerService, PLAYER_DOWNLOADS } from './externalPlayer';
 import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
 import { DiscoveryService } from './cs3/discovery';
+import { SourcePrefetcher } from './cs3/sourcePrefetcher';
 import { TitleEnricher } from './cs3/titleEnricher';
 import type { DownloadTask } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
@@ -61,6 +62,13 @@ const libraryStore = new LibraryStore(datastore);
 const bookmarks = new BookmarkStore(datastore);
 const discovery = new DiscoveryService();
 const titleEnricher = new TitleEnricher();
+/**
+ * Warms the source cache while a detail page is being read.
+ *
+ * Safe to race with Play because `ContentService` shares in-flight discovery —
+ * pressing Play during a prefetch joins it rather than starting a second scrape.
+ */
+const sourcePrefetcher = new SourcePrefetcher(contentService, datastore);
 const bootstrap = new BootstrapService(datastore, pluginManager);
 const titleOutcomes = new TitleOutcomeStore(datastore);
 const diagnostics = new DiagnosticsLog();
@@ -327,6 +335,14 @@ app.whenReady().then(async () => {
   pluginManager.onProviderLoadProgress((progress) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('extension:providerLoadProgress', progress);
+    }
+  });
+
+  // Background source loading, so the detail page can say whether Play will be
+  // instant rather than leaving the viewer to find out by pressing it.
+  sourcePrefetcher.setNotifier((state) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('sources:prefetch', state);
     }
   });
 
@@ -665,6 +681,39 @@ ipcMain.handle(
     return { ok: true };
   }
 );
+
+// --- source prefetch ------------------------------------------------------
+
+/**
+ * Begins looking for sources for what this page would play.
+ *
+ * Fire-and-forget on purpose: the caller is a detail page opening, not someone
+ * waiting for an answer. Progress arrives on `sources:prefetch` and the results
+ * land in the source cache, where Play finds them.
+ */
+ipcMain.handle('sources:prefetch', async (_, request: SourceQuery) => {
+  try {
+    sourcePrefetcher.schedule(request);
+    return { ok: true };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('sources:cancelPrefetch', async () => {
+  sourcePrefetcher.cancel();
+  return { ok: true };
+});
+
+ipcMain.handle('sources:getPrefetchSetting', async () => ({
+  ok: true,
+  enabled: sourcePrefetcher.isEnabled(),
+}));
+
+ipcMain.handle('sources:setPrefetchSetting', async (_, enabled: boolean) => ({
+  ok: true,
+  enabled: sourcePrefetcher.setEnabled(enabled),
+}));
 
 // --- discovery (the dynamic home screen) ----------------------------------
 
