@@ -4,7 +4,7 @@ import type { AddressInfo } from 'net';
 import type { BinaryDownloader } from './binaryDownloader';
 
 /**
- * Makes audio audible that Chromium refuses to decode.
+ * Makes media playable that Chromium refuses to decode.
  *
  * Measured against this Electron build with `canPlayType`, not assumed:
  *
@@ -25,15 +25,64 @@ import type { BinaryDownloader } from './binaryDownloader';
  * rather than codec-specific: TV releases are overwhelmingly HDTV or WEB-DL
  * carrying broadcast AC-3/E-AC-3, while film web-rips usually carry AAC.
  *
- * The fix is to remux on the fly — copy the video untouched and re-encode only
- * the audio to AAC — and serve the result from a loopback HTTP server. Video is
- * never re-encoded: it is the expensive part and there is nothing wrong with it.
+ * The fix is to remux on the fly and serve the result from a loopback HTTP
+ * server.
+ *
+ * **Video has the same problem, and it is worse.** Chromium decodes H.264, VP8,
+ * VP9 and AV1; it does not decode HEVC outside specific platform-decoder builds,
+ * and it decodes none of MPEG-2, VC-1, MPEG-4 Part 2 (DivX/Xvid) or WMV. HEVC is
+ * now routine in exactly the releases people want — 4K and most 10-bit encodes —
+ * so "the browser could not decode this file" was a dead end for a growing share
+ * of sources. Android does not have this problem: ExoPlayer hands the stream to
+ * the device's hardware decoders, which handle all of these.
+ *
+ * So video is re-encoded **only when it has to be**, and copied otherwise. That
+ * distinction matters more here than anywhere else in this file: re-encoding
+ * video is expensive enough to matter on a laptop, where remuxing audio is free.
+ * A hardware encoder is used when one exists (NVENC, QSV, AMF) precisely because
+ * the software fallback is the difference between watchable and not.
+ *
+ * What is decodable is **measured, not assumed** — see {@link setCapabilities}.
+ * Chromium's HEVC support varies by build and platform, so the renderer reports
+ * what its own `canPlayType` actually says and this file believes it over any
+ * table compiled here.
  */
 
 /** Codecs this Chromium has no decoder for. Everything else is left alone. */
 const UNSUPPORTED_AUDIO = new Set([
   'ac3', 'eac3', 'dts', 'truehd', 'mlp', 'dtshd', 'dca',
 ]);
+
+/**
+ * Video codecs assumed undecodable until the renderer says otherwise.
+ *
+ * Conservative on purpose: transcoding something that would have played costs
+ * CPU, while failing to transcode something that will not play costs the user
+ * the film. `hevc` is the entry that matters and the one most likely to be
+ * corrected at runtime — some Electron builds decode it through platform
+ * decoders, and {@link setCapabilities} is how they say so.
+ */
+const UNSUPPORTED_VIDEO = new Set([
+  'hevc', 'h265', 'mpeg2video', 'vc1', 'wmv1', 'wmv2', 'wmv3',
+  'msmpeg4v1', 'msmpeg4v2', 'msmpeg4v3', 'mpeg4', 'msvideo1',
+  'prores', 'dnxhd', 'cinepak', 'rv40', 'vp6f',
+]);
+
+/**
+ * ffprobe codec names mapped to what `canPlayType` needs to be asked.
+ *
+ * The two vocabularies do not overlap: ffprobe says `hevc`, MSE wants
+ * `hvc1.1.6.L93.B0`. Only codecs worth correcting are listed — there is no
+ * value in asking the renderer about ones nothing produces.
+ */
+export const VIDEO_CODEC_PROBES: Record<string, string> = {
+  hevc: 'video/mp4; codecs="hvc1.1.6.L93.B0"',
+  h264: 'video/mp4; codecs="avc1.42E01E"',
+  vp9: 'video/webm; codecs="vp09.00.10.08"',
+  av1: 'video/mp4; codecs="av01.0.04M.08"',
+  mpeg2video: 'video/mp2t; codecs="mp2v"',
+  mpeg4: 'video/mp4; codecs="mp4v.20.8"',
+};
 
 export interface AudioStreamInfo {
   /** Index within the file's audio streams, which is what `-map 0:a:N` takes. */
@@ -50,9 +99,21 @@ export interface AudioStreamInfo {
 export interface MediaProbe {
   audio: AudioStreamInfo[];
   videoCodec?: string;
+  /** False when Chromium has no decoder for the video, so it must be re-encoded. */
+  videoPlayable: boolean;
   durationSeconds?: number;
   /** True when the default audio track cannot be played as-is. */
+  needsAudioTranscode: boolean;
+  /** True when the video stream has to be re-encoded. The expensive case. */
+  needsVideoTranscode: boolean;
+  /** Either of the above. What a caller checks to decide whether to remux at all. */
   needsTranscode: boolean;
+}
+
+/** What the renderer measured about its own decoders. See `setCapabilities`. */
+export interface RendererCapabilities {
+  /** ffprobe codec name to whether `canPlayType` returned anything but "". */
+  video: Record<string, boolean>;
 }
 
 interface FfprobeStream {
@@ -80,17 +141,47 @@ function inputOptionsFor(url: string): string[] {
     : [];
 }
 
-export class AudioTranscoder {
+export class MediaTranscoder {
   private binaries: BinaryDownloader;
   private server: http.Server | null = null;
   private port = 0;
   /** Live ffmpeg processes, keyed by session token, so each can be replaced. */
   private active = new Map<string, ChildProcessWithoutNullStreams>();
-  private sessions = new Map<string, { url: string; audioIndex: number }>();
+  private sessions = new Map<
+    string,
+    { url: string; audioIndex: number; transcodeVideo: boolean }
+  >();
   private nextToken = 1;
+  /** What the renderer reported it can decode; overrides the static table. */
+  private capabilities: RendererCapabilities | null = null;
+  /** Cached `ffmpeg -encoders` verdict, since it never changes within a run. */
+  private videoEncoder: string | null = null;
 
   constructor(binaries: BinaryDownloader) {
     this.binaries = binaries;
+  }
+
+  /**
+   * Records what the renderer's own decoders actually support.
+   *
+   * Believed over {@link UNSUPPORTED_VIDEO}, in both directions. Chromium's HEVC
+   * support depends on the build and on platform decoders being present, so a
+   * table compiled here is a guess about someone else's machine; `canPlayType`
+   * in the renderer is a measurement of the machine in question. The same
+   * reasoning produced the audio table in the first place — it was measured, not
+   * looked up.
+   */
+  public setCapabilities(capabilities: RendererCapabilities): void {
+    this.capabilities = capabilities;
+  }
+
+  /** True when this codec plays as-is, preferring the measured answer. */
+  private canPlayVideo(codec: string | undefined): boolean {
+    if (!codec) return true;
+    const name = codec.toLowerCase();
+    const measured = this.capabilities?.video?.[name];
+    if (typeof measured === 'boolean') return measured;
+    return !UNSUPPORTED_VIDEO.has(name);
   }
 
   public isAvailable(): boolean {
@@ -156,14 +247,50 @@ export class AudioTranscoder {
 
     const preferred = audio.find((a) => a.isDefault) ?? audio[0];
     const duration = Number(parsed.format?.duration);
+    const videoPlayable = this.canPlayVideo(videoCodec);
+    // No audio at all is not a transcoding problem, so it is not claimed as one.
+    const needsAudioTranscode = Boolean(preferred && !preferred.playable);
+    const needsVideoTranscode = Boolean(videoCodec) && !videoPlayable;
 
     return {
       audio,
       videoCodec,
+      videoPlayable,
       durationSeconds: Number.isFinite(duration) ? duration : undefined,
-      // No audio at all is not a transcoding problem, so it is not claimed as one.
-      needsTranscode: Boolean(preferred && !preferred.playable),
+      needsAudioTranscode,
+      needsVideoTranscode,
+      needsTranscode: needsAudioTranscode || needsVideoTranscode,
     };
+  }
+
+  /**
+   * The best available H.264 encoder.
+   *
+   * Hardware first, and not as an optimisation: software H.264 encoding of a 4K
+   * HEVC source does not keep up with playback on most laptops, so the choice
+   * here is frequently the difference between watchable and a stall. Probed once
+   * by asking ffmpeg what it was built with, rather than trying each and seeing
+   * what fails at the worst possible moment.
+   *
+   * `libx264` is last and always present. `veryfast` is chosen over anything
+   * slower because this output is watched once and discarded — file size is
+   * irrelevant and latency is everything.
+   */
+  private async resolveVideoEncoder(): Promise<string> {
+    if (this.videoEncoder) return this.videoEncoder;
+
+    const ffmpeg = this.binaries.resolveBinary('ffmpeg');
+    if (!ffmpeg) return 'libx264';
+
+    const listing = (await this.run(ffmpeg, ['-hide_banner', '-encoders'], 15_000)) ?? '';
+    for (const candidate of ['h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_videotoolbox']) {
+      if (listing.includes(candidate)) {
+        this.videoEncoder = candidate;
+        return candidate;
+      }
+    }
+    this.videoEncoder = 'libx264';
+    return this.videoEncoder;
   }
 
   // --- transcoding ---------------------------------------------------------
@@ -175,13 +302,20 @@ export class AudioTranscoder {
    * range request restarts ffmpeg from the requested position. Handing back a
    * new URL per seek would reset the element and lose playback state.
    */
-  public async createSession(url: string, audioIndex: number): Promise<string | null> {
+  public async createSession(
+    url: string,
+    audioIndex: number,
+    transcodeVideo = false
+  ): Promise<string | null> {
     if (!this.isAvailable()) return null;
     await this.ensureServer();
+    // Resolved before the first request so the decision is not made on the hot
+    // path, where a 15-second encoder probe would look like a stalled stream.
+    if (transcodeVideo) await this.resolveVideoEncoder();
 
     const token = String(this.nextToken++);
-    this.sessions.set(token, { url, audioIndex });
-    return `http://127.0.0.1:${this.port}/audio/${token}`;
+    this.sessions.set(token, { url, audioIndex, transcodeVideo });
+    return `http://127.0.0.1:${this.port}/media/${token}`;
   }
 
   public setAudioIndex(token: string, audioIndex: number): void {
@@ -218,7 +352,7 @@ export class AudioTranscoder {
   }
 
   private handle(req: http.IncomingMessage, res: http.ServerResponse): void {
-    const match = req.url?.match(/^\/audio\/(\d+)/);
+    const match = req.url?.match(/^\/media\/(\d+)/);
     const token = match?.[1];
     const session = token ? this.sessions.get(token) : undefined;
 
@@ -247,6 +381,30 @@ export class AudioTranscoder {
       return;
     }
 
+    /**
+     * Video is copied unless it genuinely cannot be decoded.
+     *
+     * Copying is close to free and re-encoding is not, so the two cases are
+     * kept strictly apart. When a re-encode is unavoidable — HEVC being the
+     * common reason — it targets H.264 through whatever hardware encoder this
+     * machine has, because software encoding a 4K source in real time is not
+     * something most laptops manage.
+     */
+    const videoArgs = session.transcodeVideo
+      ? [
+          '-c:v', this.videoEncoder ?? 'libx264',
+          // Watched once and thrown away: latency matters, file size does not.
+          '-preset', (this.videoEncoder ?? 'libx264') === 'libx264' ? 'veryfast' : 'fast',
+          // 8-bit 4:2:0 is what Chromium decodes. HEVC sources are routinely
+          // 10-bit, and handing back 10-bit H.264 would swap one undecodable
+          // stream for another.
+          '-pix_fmt', 'yuv420p',
+          '-b:v', '6M',
+          '-maxrate', '8M',
+          '-bufsize', '12M',
+        ]
+      : ['-c:v', 'copy'];
+
     const args = [
       '-hide_banner', '-loglevel', 'error',
       ...inputOptionsFor(session.url),
@@ -255,9 +413,7 @@ export class AudioTranscoder {
       '-i', session.url,
       '-map', '0:v:0',
       '-map', `0:a:${session.audioIndex}?`,
-      // The video is fine — it is only the audio Chromium cannot decode — so
-      // copying it keeps this cheap enough to run on a laptop.
-      '-c:v', 'copy',
+      ...videoArgs,
       '-c:a', 'aac',
       '-b:a', '192k',
       // Downmixed to stereo: a 5.1 AC-3 track re-encoded to 5.1 AAC is decoded

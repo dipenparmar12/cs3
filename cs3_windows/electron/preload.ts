@@ -44,7 +44,7 @@ import type {
 import type { StreamHandle } from './torrent/torrentEngine';
 import type { PlaybackSnapshot } from './playbackSession';
 import type { SubtitleSearchResult } from './subtitleService';
-import type { MediaProbe } from './audioTranscoder';
+import type { MediaProbe, RendererCapabilities } from './mediaTranscoder';
 
 /**
  * Typed, allow-listed IPC surface (ARCH-2 / SEC-9).
@@ -287,17 +287,42 @@ export interface CloudStreamElectronAPI {
    * Inspects a stream's audio tracks. Reports tracks Chromium cannot decode,
    * which a `<video>` element does not expose at all.
    */
-  probeAudio: (
+  /**
+   * Inspects a stream's audio *and* video for codecs Chromium cannot decode.
+   *
+   * A `<video>` element exposes almost nothing about tracks it cannot decode,
+   * so without this the app cannot tell the difference between a file with no
+   * sound and one whose AC-3 track was silently dropped — nor between a broken
+   * source and an HEVC one.
+   */
+  probeMedia: (
     url: string
   ) => Promise<
     Envelope & { probe: MediaProbe | null; needsComponents: boolean }
   >;
-  /** Opens a remuxing session and returns a loopback URL with playable audio. */
-  openAudioTranscode: (
+  /** Codec strings to hand `canPlayType`, keyed by ffprobe's name for each. */
+  getCodecProbes: () => Promise<Record<string, string>>;
+  /**
+   * Reports what this build actually decodes.
+   *
+   * Believed over the main process's own table: Chromium's HEVC support depends
+   * on the build and on platform decoders being present, so only the renderer
+   * can answer for the machine in front of the user.
+   */
+  setMediaCapabilities: (capabilities: RendererCapabilities) => Promise<Envelope>;
+  /**
+   * Opens a remuxing session and returns a loopback URL that plays.
+   *
+   * `transcodeVideo` is the expensive half and is only worth passing when the
+   * probe said the video cannot be decoded — audio-only remuxing copies the
+   * video untouched and costs almost nothing.
+   */
+  openMediaTranscode: (
     url: string,
-    audioIndex: number
+    audioIndex: number,
+    transcodeVideo?: boolean
   ) => Promise<Envelope & { url: string | null }>;
-  closeAudioTranscode: (token: string) => Promise<Envelope>;
+  closeMediaTranscode: (token: string) => Promise<Envelope>;
 
   getSourceCacheStats: () => Promise<{ entries: number; sources: number }>;
   clearSourceCache: () => Promise<Envelope>;
@@ -507,10 +532,13 @@ const api: CloudStreamElectronAPI = {
   getSearchScopeOptions: () => ipcRenderer.invoke('search:getScopeOptions'),
   setSearchScope: (scope) => ipcRenderer.invoke('search:setScope', scope),
 
-  probeAudio: (url) => ipcRenderer.invoke('audio:probe', url),
-  openAudioTranscode: (url, audioIndex) =>
-    ipcRenderer.invoke('audio:openTranscode', url, audioIndex),
-  closeAudioTranscode: (token) => ipcRenderer.invoke('audio:closeTranscode', token),
+  probeMedia: (url) => ipcRenderer.invoke('media:probe', url),
+  getCodecProbes: () => ipcRenderer.invoke('media:getCodecProbes'),
+  setMediaCapabilities: (capabilities) =>
+    ipcRenderer.invoke('media:setCapabilities', capabilities),
+  openMediaTranscode: (url, audioIndex, transcodeVideo) =>
+    ipcRenderer.invoke('media:openTranscode', url, audioIndex, transcodeVideo),
+  closeMediaTranscode: (token) => ipcRenderer.invoke('media:closeTranscode', token),
 
   getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
   clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),

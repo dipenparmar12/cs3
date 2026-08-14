@@ -100,6 +100,27 @@ export const App: React.FC = () => {
         .then((configs) => setProvidersList(configs.filter((c) => c.enabled).map((c) => c.name)));
     }
 
+    /**
+     * Tells the main process what this build can actually decode.
+     *
+     * Chromium's HEVC support depends on the build and on platform decoders
+     * being present, so a table of "unsupported codecs" compiled in the main
+     * process is a guess about someone else's machine. `canPlayType` here is a
+     * measurement of this one, and the transcoder believes it over its own
+     * table — in both directions, so a build that *can* decode HEVC is not made
+     * to re-encode it for nothing.
+     */
+    void (async () => {
+      const probes = await window.cloudstream?.getCodecProbes?.();
+      if (!probes) return;
+      const element = document.createElement('video');
+      const video: Record<string, boolean> = {};
+      for (const [codec, type] of Object.entries(probes)) {
+        video[codec] = element.canPlayType(type) !== '';
+      }
+      await window.cloudstream?.setMediaCapabilities?.({ video });
+    })();
+
     // Subscribed once, filtered by session id: the player is driven entirely by
     // these snapshots from the moment it opens until the session ends.
     const disposePlayback = window.cloudstream?.onPlaybackUpdate((snapshot) => {

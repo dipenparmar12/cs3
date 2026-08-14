@@ -21,7 +21,7 @@ import { PlaybackSessionManager } from './playbackSession';
 import { SearchSuggestionService } from './searchSuggestions';
 import { SearchHistoryStore } from './searchHistory';
 import { SubtitleService } from './subtitleService';
-import { AudioTranscoder } from './audioTranscoder';
+import { MediaTranscoder, VIDEO_CODEC_PROBES, type RendererCapabilities } from './mediaTranscoder';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { BootstrapService } from './cs3/bootstrap';
@@ -58,7 +58,7 @@ const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
 const subtitles = new SubtitleService();
-const audioTranscoder = new AudioTranscoder(binaryDownloader);
+const mediaTranscoder = new MediaTranscoder(binaryDownloader);
 const network = new NetworkSettingsStore(datastore);
 
 downloadService.setTorrentEngine(torrentEngine);
@@ -220,7 +220,7 @@ app.on('before-quit', async (event) => {
   try {
     // Owns child processes and a socket, so it has to be torn down explicitly
     // or a killed app leaves orphaned ffmpeg processes behind.
-    audioTranscoder.shutdown();
+    mediaTranscoder.shutdown();
     await torrentEngine.destroy();
   } catch {
     // Shutdown is best-effort; never block quit on it.
@@ -570,9 +570,24 @@ ipcMain.handle('playback:stop', async (_, sessionId: string, keepFiles?: boolean
  * Called before playback so the UI can name the tracks — including ones
  * Chromium cannot decode, which a `<video>` element does not expose at all.
  */
-ipcMain.handle('audio:probe', async (_, url: string) => {
+/**
+ * What this renderer can actually decode.
+ *
+ * Reported once at startup and believed over any table in the main process:
+ * Chromium's HEVC support depends on the build and on platform decoders, so
+ * only the renderer can answer for the machine in front of the user. The probe
+ * strings live beside the codec table they correct.
+ */
+ipcMain.handle('media:setCapabilities', async (_, capabilities: RendererCapabilities) => {
+  mediaTranscoder.setCapabilities(capabilities);
+  return { ok: true };
+});
+
+ipcMain.handle('media:getCodecProbes', async () => VIDEO_CODEC_PROBES);
+
+ipcMain.handle('media:probe', async (_, url: string) => {
   try {
-    if (!audioTranscoder.isAvailable()) {
+    if (!mediaTranscoder.isAvailable()) {
       return {
         ok: false,
         probe: null,
@@ -582,26 +597,33 @@ ipcMain.handle('audio:probe', async (_, url: string) => {
         needsComponents: true,
       };
     }
-    return { ok: true, probe: await audioTranscoder.probe(url), needsComponents: false };
+    return { ok: true, probe: await mediaTranscoder.probe(url), needsComponents: false };
   } catch (error) {
     return { ...fail(error), probe: null, needsComponents: false };
   }
 });
 
-ipcMain.handle('audio:openTranscode', async (_, url: string, audioIndex: number) => {
-  try {
-    const streamUrl = await audioTranscoder.createSession(url, audioIndex);
-    if (!streamUrl) {
-      return { ok: false, url: null, error: 'Media components are not installed.' };
+ipcMain.handle(
+  'media:openTranscode',
+  async (_, url: string, audioIndex: number, transcodeVideo?: boolean) => {
+    try {
+      const streamUrl = await mediaTranscoder.createSession(
+        url,
+        audioIndex,
+        Boolean(transcodeVideo)
+      );
+      if (!streamUrl) {
+        return { ok: false, url: null, error: 'Media components are not installed.' };
+      }
+      return { ok: true, url: streamUrl };
+    } catch (error) {
+      return { ...fail(error), url: null };
     }
-    return { ok: true, url: streamUrl };
-  } catch (error) {
-    return { ...fail(error), url: null };
   }
-});
+);
 
-ipcMain.handle('audio:closeTranscode', async (_, token: string) => {
-  audioTranscoder.closeSession(token);
+ipcMain.handle('media:closeTranscode', async (_, token: string) => {
+  mediaTranscoder.closeSession(token);
   return { ok: true };
 });
 

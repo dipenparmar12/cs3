@@ -14,7 +14,7 @@ import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
 import { SubtitlePanel } from './player/SubtitlePanel';
-import type { MediaProbe } from '../../electron/audioTranscoder';
+import type { MediaProbe } from '../../electron/mediaTranscoder';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
@@ -175,6 +175,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * through ffmpeg when its audio cannot be played.
    */
   const [audioProbe, setAudioProbe] = useState<MediaProbe | null>(null);
+  /**
+   * The probe, readable from the `error` listener.
+   *
+   * That listener is attached once per stream and would otherwise close over
+   * whatever the probe was at attach time — which is always `null`, because the
+   * probe finishes later than the element starts loading.
+   */
+  const audioProbeRef = useRef<MediaProbe | null>(null);
   const [transcode, setTranscode] = useState<{ url: string; token: string } | null>(null);
   const [transcodeOffset, setTranscodeOffset] = useState(0);
   const [audioNeedsComponents, setAudioNeedsComponents] = useState(false);
@@ -497,10 +505,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
-    const onError = () =>
+    /**
+     * Names the codec rather than guessing at it.
+     *
+     * The old message said "HEVC is common", which is a hint and not a
+     * diagnosis — it was equally shown for a dead link, a truncated file and an
+     * MPEG-2 stream. The probe already knows what the video actually is, so it
+     * says so, and it distinguishes the case where a conversion is available
+     * from the one where nothing can be done.
+     */
+    const onError = () => {
+      const codec = audioProbeRef.current?.videoCodec;
+      const convertible = Boolean(audioProbeRef.current?.needsVideoTranscode);
+      if (codec && convertible) {
+        setError(
+          `This file is ${codec.toUpperCase()}, which this build cannot decode directly. ` +
+            `Converting it now — if it does not start shortly, install the media components ` +
+            `in Settings → Advanced, or try another source.`
+        );
+        return;
+      }
       setError(
-        'The browser could not decode this file. It may use a codec Chromium does not support (HEVC is common) — try another source.'
+        codec
+          ? `The player could not decode this ${codec.toUpperCase()} stream. Try another source.`
+          : 'The player could not decode this file. It may be an unsupported codec, or the source may be dead — try another source.'
       );
+    };
 
     video.addEventListener('timeupdate', onTime);
     video.addEventListener('progress', onTime);
@@ -831,7 +861,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let openedToken: string | null = null;
 
     (async () => {
-      const response = await window.cloudstream?.probeAudio(streamUrl);
+      const response = await window.cloudstream?.probeMedia(streamUrl);
       if (cancelled || !response) return;
 
       setAudioNeedsComponents(Boolean(response.needsComponents));
@@ -843,9 +873,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       if (!response.probe.needsTranscode) return;
 
-      const session = await window.cloudstream?.openAudioTranscode(
+      /**
+       * Video is only re-encoded when the probe says it cannot be decoded.
+       *
+       * The audio case copies the video and is nearly free; this one is not, so
+       * the flag is passed through rather than transcoding both whenever either
+       * needs it.
+       */
+      const session = await window.cloudstream?.openMediaTranscode(
         streamUrl,
-        preferred?.index ?? 0
+        preferred?.index ?? 0,
+        response.probe.needsVideoTranscode
       );
       if (cancelled || !session?.ok || !session.url) return;
 
@@ -857,9 +895,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       cancelled = true;
       // The ffmpeg process outlives the component otherwise.
-      if (openedToken) void window.cloudstream?.closeAudioTranscode(openedToken);
+      if (openedToken) void window.cloudstream?.closeMediaTranscode(openedToken);
     };
   }, [streamUrl, mimeType]);
+
+  useEffect(() => {
+    audioProbeRef.current = audioProbe;
+  }, [audioProbe]);
 
   // A new stream invalidates everything learned about the previous one.
   useEffect(() => {
@@ -881,14 +923,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       const video = videoRef.current;
       const at = transcodeOffset + (video?.currentTime ?? 0);
-      const session = await window.cloudstream?.openAudioTranscode(streamUrl, index);
+      const session = await window.cloudstream?.openMediaTranscode(
+        streamUrl,
+        index,
+        audioProbe?.needsVideoTranscode ?? false
+      );
       if (!session?.ok || !session.url) return;
 
-      if (transcode.token) void window.cloudstream?.closeAudioTranscode(transcode.token);
+      if (transcode.token) void window.cloudstream?.closeMediaTranscode(transcode.token);
       setTranscodeOffset(at);
       setTranscode({ url: session.url, token: session.url.split('/').pop() ?? '' });
     },
-    [transcode, transcodeOffset, streamUrl]
+    [transcode, transcodeOffset, streamUrl, audioProbe]
   );
 
   /** Audio tracks as ffprobe reported them, labelled for the picker. */
