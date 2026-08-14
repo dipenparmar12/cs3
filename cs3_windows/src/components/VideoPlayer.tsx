@@ -212,6 +212,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const skipRef = useRef<((reason: string) => void) | null>(null);
   const skippedFor = useRef<string | null>(null);
+  /**
+   * Forces a remux of the current URL, once, before giving up on it.
+   *
+   * A link that downloads at full speed is a good link — the reported case was
+   * an 860 MB file that fetched perfectly and would not play, because H.264 in
+   * Matroska is not something Chromium can demux. Abandoning it for a different
+   * source throws away a working URL to go looking for another one that may
+   * have exactly the same problem.
+   *
+   * So the ladder per source is: play it raw, and if that fails push it through
+   * ffmpeg unconditionally, and only if *that* fails rule the source out. The
+   * forced pass does not consult the probe — this runs precisely when the probe
+   * has already been wrong about something.
+   */
+  const forceTranscodeRef = useRef<(() => void) | null>(null);
+  const forcedFor = useRef<string | null>(null);
   const [transcode, setTranscode] = useState<{ url: string; token: string } | null>(null);
   const [transcodeOffset, setTranscodeOffset] = useState(0);
   const [audioNeedsComponents, setAudioNeedsComponents] = useState(false);
@@ -547,6 +563,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // The source answering 404 outranks anything guessed about codecs.
       const failure = probeFailureRef.current;
       if (failure) {
+        // A dead source is not a conversion problem; remuxing a 404 is pointless.
         setError(failure.reason);
         skipRef.current?.(failure.reason);
         return;
@@ -564,6 +581,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const message = codec
         ? `The player could not decode this ${codec.toUpperCase()} stream.`
         : 'The player could not decode this file.';
+
+      // Convert first, abandon second. See `forceTranscodeRef`.
+      if (forcedFor.current !== streamUrl) {
+        setError(`${message} Converting it and trying again…`);
+        forceTranscodeRef.current?.();
+        return;
+      }
+
       setError(message);
       skipRef.current?.(message);
     };
@@ -949,6 +974,42 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     probeFailureRef.current = probeFailure;
   }, [probeFailure]);
 
+  /**
+   * The forced conversion pass.
+   *
+   * Deliberately ignores the probe: it runs only after the probe's verdict has
+   * already proved wrong. Video is copied unless the probe positively said it
+   * could not be decoded — the common case is a container problem, where a copy
+   * is nearly free, and re-encoding video on a guess would burn a CPU for
+   * nothing.
+   */
+  useEffect(() => {
+    forceTranscodeRef.current = () => {
+      if (forcedFor.current === streamUrl) return;
+      forcedFor.current = streamUrl;
+
+      void (async () => {
+        const previous = transcode?.token;
+        const at = transcodeOffset + (videoRef.current?.currentTime ?? 0);
+        const session = await window.cloudstream?.openMediaTranscode(
+          streamUrl,
+          selectedAudioIndex ?? 0,
+          audioProbeRef.current?.needsVideoTranscode ?? false,
+          audioProbeRef.current?.needsAudioTranscode ?? false
+        );
+        if (!session?.ok || !session.url) {
+          // Conversion is unavailable; the source has had its chance.
+          skipRef.current?.('This file could not be converted for playback.');
+          return;
+        }
+        if (previous) void window.cloudstream?.closeMediaTranscode(previous);
+        setError(null);
+        setTranscodeOffset(at);
+        setTranscode({ url: session.url, token: session.url.split('/').pop() ?? '' });
+      })();
+    };
+  }, [streamUrl, transcode?.token, transcodeOffset, selectedAudioIndex]);
+
   useEffect(() => {
     const skip = sourceSession?.onSourceUnplayable;
     skipRef.current = skip
@@ -964,6 +1025,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     setAudioProbe(null);
     setProbeFailure(null);
+    forcedFor.current = null;
+    skippedFor.current = null;
     setTranscode(null);
     setTranscodeOffset(0);
     setAudioNeedsComponents(false);
