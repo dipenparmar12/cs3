@@ -53,6 +53,26 @@ public final class DexTranslator {
         }
     }
 
+    /**
+     * Bumped whenever translated output changes shape.
+     *
+     * <p>The cache is keyed on the archive's content hash, which answers "is
+     * this the same plugin" and nothing else. It does not answer "was this
+     * translated by the current code", and that omission made a fixed bug come
+     * back: {@link KotlinNameRepair} was corrected, and every plugin already in
+     * the cache kept being served from its pre-fix jar, so
+     * {@code kotlin.Result.constructor_impl} still failed on exactly the
+     * installs that had been working longest. A fresh machine was fine and an
+     * existing one was not, which is the worst possible signature.
+     *
+     * <p>Raise this by one for any change to translation or to the repair pass.
+     * It costs one re-translation per plugin and nothing else.
+     *
+     * <p>2 — KotlinNameRepair rewrote only the first class carrying each broken
+     * reference; every later class kept the underscore spelling.
+     */
+    private static final int CACHE_GENERATION = 2;
+
     private final Path cacheRoot;
 
     /**
@@ -80,6 +100,28 @@ public final class DexTranslator {
      * a repository can republish a plugin without incrementing its version and a
      * stale translation would then be silently loaded.
      */
+    /**
+     * Removes this archive's translations from every other generation.
+     *
+     * Best-effort throughout: a jar that cannot be deleted is wasted disk, not
+     * a failed translation, and the one being written does not depend on it.
+     */
+    private void discardOtherGenerations(String sha) {
+        String keep = sha + ".g" + CACHE_GENERATION + ".jar";
+        try (DirectoryStream<Path> stale = Files.newDirectoryStream(cacheRoot, sha + "*.jar")) {
+            for (Path path : stale) {
+                if (path.getFileName().toString().equals(keep)) continue;
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException ignored) {
+                    // Held open by a live class loader; it will go on the next run.
+                }
+            }
+        } catch (IOException ignored) {
+            // No cache directory to sweep.
+        }
+    }
+
     public Outcome translate(Path cs3) {
         if (!Files.isRegularFile(cs3)) {
             return Outcome.failure("ARCHIVE_MISSING", "No file at " + cs3);
@@ -110,7 +152,7 @@ public final class DexTranslator {
                     "Archive contains no classes.dex; it is not an Android-built CloudStream extension.");
         }
 
-        Path out = cacheRoot.resolve(sha + ".jar");
+        Path out = cacheRoot.resolve(sha + ".g" + CACHE_GENERATION + ".jar");
         if (Files.isRegularFile(out)) {
             return new Outcome(true, out, sha, dexes.size(), countClasses(out),
                     manifest.pluginClassName, manifest.requiresResources, manifest.version,
@@ -129,6 +171,10 @@ public final class DexTranslator {
         // bogus TRANSLATION_FAILED. The final move stays atomic, so a race now
         // costs one duplicated translation instead of a spurious failure.
         Path tmp = cacheRoot.resolve(sha + "." + UUID.randomUUID() + ".jar.tmp");
+        // Superseded jars for this archive are dead weight the moment the
+        // generation moves; removing them here rather than in a startup sweep
+        // keeps the clean-up next to the thing that caused it.
+        discardOtherGenerations(sha);
         try {
             BaseDexFileReader reader = MultiDexFileReader.open(packForReader(dexes));
             Dex2jar.from(reader)
