@@ -158,6 +158,11 @@ export interface AnalyticsSettings {
   /** Score a provider must reach, over `autoEnableMinSamples`, to be enabled. */
   autoEnableMinScore: number;
   autoEnableMinSamples: number;
+  /**
+   * Per-criterion weights, by id. Absent ids fall back to the criterion's own
+   * default, so a build that adds a criterion does not need a migration.
+   */
+  criterionWeights?: Record<string, number>;
 }
 
 export interface ProviderRecommendation {

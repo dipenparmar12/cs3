@@ -161,7 +161,7 @@ const CRITERIA: CriterionDefinition[] = [
     defaultWeight: 1.2,
     minSamples: 3,
     available: true,
-    evaluate(record, analytics) {
+    evaluate(record) {
       const counters = record.stages.links;
       const attempted = counters.successes + counters.empty + counters.failures;
       if (attempted === 0) return { score: null, samples: 0, detail: 'No link resolutions yet.' };
@@ -306,8 +306,10 @@ const CRITERIA: CriterionDefinition[] = [
 
 export class ProviderRanking {
   private weights = new Map<string, number>();
+  private analytics: ProviderAnalytics;
 
-  constructor(private analytics: ProviderAnalytics) {
+  constructor(analytics: ProviderAnalytics) {
+    this.analytics = analytics;
     for (const criterion of CRITERIA) this.weights.set(criterion.id, criterion.defaultWeight);
     this.restoreWeights();
   }

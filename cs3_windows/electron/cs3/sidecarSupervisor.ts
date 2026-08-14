@@ -68,9 +68,17 @@ export class SidecarSupervisor {
     if (this.restarts > MAX_RESTARTS) return false;
     if (this.starting) return this.starting;
 
-    // Try auto-provisioning if components are missing
+    // Provision when components are missing, and re-provision when the
+    // app-managed copy has fallen behind the build it came from. The second
+    // case is not cosmetic: the copy under %APPDATA% is resolved ahead of every
+    // build location, so without this check an app keeps running the shim and
+    // bridge it was first installed with and reports NoClassDefFoundError for
+    // classes that shipped long ago.
     const status = this.provisioner.getStatus();
-    if (!status.ready) {
+    if (!status.ready || status.stale) {
+      if (status.stale) {
+        console.warn(`[cs3-sidecar] refreshing the extension runtime: ${status.staleReason}`);
+      }
       await this.provisioner.provisionRuntime();
     }
 
