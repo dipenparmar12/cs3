@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import type { SearchResponse } from '../types/api';
 import { TYPE_TABS, matchesTab, tabsFor } from '../utils/contentTypes';
+import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/resultGroups';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, Search, Target, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
@@ -17,7 +18,30 @@ interface SearchViewProps {
   onCancel?: () => void;
   /** Surfaced when the search itself failed, so the user sees a cause not an empty grid. */
   error?: string | null;
+  /**
+   * Filters and disclosure state, held by the parent.
+   *
+   * Opening a title unmounts this view — the detail page replaces it inside the
+   * same scroll container — so anything kept in local state is gone by the time
+   * the viewer presses Back. Which filter they had picked and which groups they
+   * had opened are decisions, and asking someone to make them again because
+   * they looked at a poster is the kind of thing that makes an app tiring.
+   */
+  ui: SearchUiState;
+  onUiChange: (next: SearchUiState) => void;
 }
+
+export interface SearchUiState {
+  sourceFilter: string;
+  typeTab: string;
+  openGroups: Record<string, boolean>;
+}
+
+export const EMPTY_SEARCH_UI: SearchUiState = {
+  sourceFilter: 'all',
+  typeTab: 'all',
+  openGroups: {},
+};
 
 /**
  * Which sources a row came from, counting each row once per source.
@@ -94,9 +118,23 @@ export const SearchView: React.FC<SearchViewProps> = ({
   onPlayDirectly,
   onCancel,
   error,
+  ui,
+  onUiChange,
 }) => {
-  const [sourceFilter, setSourceFilter] = useState<string>('all');
-  const [typeTab, setTypeTab] = useState<string>('all');
+  const { sourceFilter, typeTab, openGroups } = ui;
+  const setSourceFilter = (value: string) => onUiChange({ ...ui, sourceFilter: value });
+  const setTypeTab = (value: string) => onUiChange({ ...ui, typeTab: value });
+
+  const onToggleGroup = useCallback(
+    (id: ResultGroupId) => {
+      const fallback = id !== 'other';
+      onUiChange({
+        ...ui,
+        openGroups: { ...ui.openGroups, [id]: !(ui.openGroups[id] ?? fallback) },
+      });
+    },
+    [ui, onUiChange]
+  );
 
   const results = search?.results ?? [];
 
@@ -136,6 +174,14 @@ export const SearchView: React.FC<SearchViewProps> = ({
       }),
     [results, sourceFilter, activeTab]
   );
+
+  /**
+   * What the viewer asked for, what is nearby, and what the sources volunteered.
+   *
+   * Grouped after filtering so the counts on each heading describe what is
+   * actually on screen rather than what would be there without the tabs.
+   */
+  const groups = useMemo(() => groupResults(filtered, query), [filtered, query]);
 
   const running = Boolean(search && !search.done);
   const scopeLabel = describeScope(search);
@@ -275,7 +321,9 @@ export const SearchView: React.FC<SearchViewProps> = ({
         </div>
       ) : (
         <ResultGrid
-          results={filtered}
+          groups={groups}
+          openGroups={openGroups}
+          onToggleGroup={onToggleGroup}
           onSelectMedia={onSelectMedia}
           onPlayDirectly={onPlayDirectly}
         />
@@ -286,65 +334,74 @@ export const SearchView: React.FC<SearchViewProps> = ({
   );
 };
 
+/**
+ * The three groups, each with its own disclosure.
+ *
+ * `openGroups` is lifted to the parent rather than held here so that leaving for
+ * a title and coming back does not silently re-collapse what the viewer opened.
+ */
 const ResultGrid: React.FC<{
-  results: SearchResponse[];
+  groups: ResultGroup[];
+  openGroups: Record<string, boolean>;
+  onToggleGroup: (id: ResultGroupId) => void;
   onSelectMedia: (item: SearchResponse) => void;
   onPlayDirectly?: (item: SearchResponse) => void;
-}> = ({ results, onSelectMedia, onPlayDirectly }) => {
-  const exact = results.filter((item) => item?.isExactMatch);
-  const others = results.filter((item) => !item?.isExactMatch);
-  const hasBoth = exact.length > 0 && others.length > 0;
-  const [showOthers, setShowOthers] = useState(false);
-
-  if (hasBoth) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-        <section style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div className="search-section">
-            <CheckCircle2 size={18} style={{ color: 'var(--accent-light)' }} />
-            <h3>Selected match</h3>
-            <span className="chip search-section__chip">Chosen from suggestions</span>
-          </div>
-          <Grid items={exact} onSelectMedia={onSelectMedia} onPlayDirectly={onPlayDirectly} />
-        </section>
-
-        <section style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div className="search-section">
-            <button
-              className="search-section__toggle"
-              onClick={() => setShowOthers(!showOthers)}
-              aria-expanded={showOthers}
-              aria-controls="other-matches-list"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-                background: 'none',
-                border: 'none',
-                color: 'inherit',
-                cursor: 'pointer',
-                padding: 0,
-                font: 'inherit',
-              }}
-            >
-              {showOthers ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-              <Search size={16} style={{ color: 'var(--text-subtle)' }} />
-              <h3 className="search-section__muted" style={{ margin: 0 }}>
-                Other matches ({others.length})
-              </h3>
-            </button>
-          </div>
-          {showOthers && (
-            <div id="other-matches-list">
-              <Grid items={others} onSelectMedia={onSelectMedia} onPlayDirectly={onPlayDirectly} />
-            </div>
-          )}
-        </section>
-      </div>
-    );
+}> = ({ groups, openGroups, onToggleGroup, onSelectMedia, onPlayDirectly }) => {
+  // One group and nothing to separate it from: a heading over the only thing on
+  // screen is a label for the obvious.
+  if (groups.length === 1) {
+    return <Grid items={groups[0].items} onSelectMedia={onSelectMedia} onPlayDirectly={onPlayDirectly} />;
   }
 
-  return <Grid items={results} onSelectMedia={onSelectMedia} onPlayDirectly={onPlayDirectly} />;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
+      {groups.map((group) => {
+        const open = openGroups[group.id] ?? group.defaultOpen;
+        return (
+          <section key={group.id} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div className="search-section">
+              <button
+                className="search-group__toggle"
+                onClick={() => onToggleGroup(group.id)}
+                aria-expanded={open}
+                aria-controls={`group-${group.id}`}
+              >
+                {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                {group.id === 'chosen' ? (
+                  <CheckCircle2 size={16} style={{ color: 'var(--accent-light)' }} />
+                ) : (
+                  <Search size={15} style={{ color: 'var(--text-subtle)' }} />
+                )}
+                <h3 className={group.id === 'other' ? 'search-section__muted' : undefined}>
+                  {group.label}
+                </h3>
+                <span className="search-group__count">{group.items.length}</span>
+              </button>
+
+              {group.id === 'chosen' && (
+                <span className="chip search-section__chip">Chosen from suggestions</span>
+              )}
+              {group.id === 'other' && open && (
+                <span className="search-group__note">
+                  These sources returned this without matching what you typed.
+                </span>
+              )}
+            </div>
+
+            {open && (
+              <div id={`group-${group.id}`}>
+                <Grid
+                  items={group.items}
+                  onSelectMedia={onSelectMedia}
+                  onPlayDirectly={onPlayDirectly}
+                />
+              </div>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
 };
 
 const Grid: React.FC<{
