@@ -134,6 +134,15 @@ export interface MediaProbe {
 }
 
 /** What the renderer measured about its own decoders. See `setCapabilities`. */
+/** Why a probe produced nothing, when it produced nothing. */
+export interface ProbeFailure {
+  /** HTTP status the source answered with, when it answered at all. */
+  status?: number;
+  reason: string;
+  /** True when the source is gone rather than merely undecodable. */
+  dead: boolean;
+}
+
 export interface RendererCapabilities {
   /** ffprobe codec name to whether `canPlayType` returned anything but "". */
   video: Record<string, boolean>;

@@ -532,6 +532,31 @@ also the scope identity, the `cs3ext://` address and the enable/disable key. Two
 claiming one name is a genuine collision: the first keeps it and the loser is reported via
 `unavailableReason` instead of silently showing zero providers.
 
+### When we cannot play it, hand it to something that can
+
+`externalPlayer.ts` detects VLC, mpv, MPC-HC/BE and PotPlayer and offers to open
+the stream in them. This is not a fallback for our bugs — there is a category of
+file Chromium will never decode, and VLC and mpv carry their own ffmpeg and play
+essentially anything.
+
+**The URL handed over is the proxied one.** External players each have their own
+incompatible way of setting a `Referer` (`--http-referrer`, `--http-header-fields`,
+nothing at all), and a provider link without its header is a 403 in any of them.
+The loopback URL has the headers applied already, so every player works with no
+per-player knowledge.
+
+**Nothing is downloaded on the user's behalf.** Players are detected, never
+fetched; when none is found the official download pages open in the browser.
+`shell:openExternal` re-checks the scheme because, unlike `setWindowOpenHandler`,
+it is reachable from the renderer with an arbitrary string.
+
+The offer is suppressed when the source is dead — a 404 plays no better in VLC,
+and sending someone to install a player that cannot help is worse than saying
+nothing. That distinction comes from `describeUnreadableSource`: when a probe
+returns nothing, the source is asked for its HTTP status with a one-byte range
+GET (HEAD is refused by some hosts). A reported failure turned out to be a plain
+404 while the message on screen was still guessing at codecs.
+
 ### Provider links need the provider's headers, and a browser cannot send them
 
 Extension links routinely only answer when accompanied by the `Referer` the

@@ -35,6 +35,7 @@ import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader'
 import type { BootstrapProgress } from './cs3/bootstrap';
 import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
 import type { DiagnosticRecord, DiagnosticStage } from './cs3/diagnostics';
+import type { ExternalPlayer } from './externalPlayer';
 import type {
   LibraryEntry,
   SourceMemory,
@@ -44,7 +45,7 @@ import type {
 import type { StreamHandle } from './torrent/torrentEngine';
 import type { PlaybackSnapshot } from './playbackSession';
 import type { SubtitleSearchResult } from './subtitleService';
-import type { MediaProbe, RendererCapabilities } from './mediaTranscoder';
+import type { MediaProbe, ProbeFailure, RendererCapabilities } from './mediaTranscoder';
 
 /**
  * Typed, allow-listed IPC surface (ARCH-2 / SEC-9).
@@ -298,7 +299,12 @@ export interface CloudStreamElectronAPI {
   probeMedia: (
     url: string
   ) => Promise<
-    Envelope & { probe: MediaProbe | null; needsComponents: boolean }
+    Envelope & {
+      probe: MediaProbe | null;
+      needsComponents: boolean;
+      /** Present when `probe` is null: why, including the source's HTTP status. */
+      failure: ProbeFailure | null;
+    }
   >;
   /** Codec strings to hand `canPlayType`, keyed by ffprobe's name for each. */
   getCodecProbes: () => Promise<Record<string, string>>;
@@ -323,6 +329,33 @@ export interface CloudStreamElectronAPI {
     transcodeVideo?: boolean
   ) => Promise<Envelope & { url: string | null }>;
   closeMediaTranscode: (token: string) => Promise<Envelope>;
+
+  /**
+   * Media players installed on this machine, and where to get one.
+   *
+   * Chromium decodes a subset of what people stream, and this app closes part
+   * of the gap by transcoding. Handing the stream to VLC or mpv closes the rest
+   * for free — they carry their own ffmpeg and play essentially anything.
+   * Nothing is ever downloaded on the user's behalf; `downloads` are links.
+   */
+  listExternalPlayers: (
+    refresh?: boolean
+  ) => Promise<
+    Envelope & {
+      players: ExternalPlayer[];
+      downloads: Array<{ id: string; name: string; url: string; note: string }>;
+    }
+  >;
+  /**
+   * Opens a stream in one of them.
+   *
+   * Pass the URL the player is using, proxied and all: external players each
+   * have their own incompatible way of setting a `Referer`, and the loopback
+   * URL has the provider's headers already applied.
+   */
+  openInExternalPlayer: (playerId: string, url: string) => Promise<Envelope>;
+  /** Opens an http(s) link in the system browser. Other schemes are refused. */
+  openExternalLink: (url: string) => Promise<Envelope>;
 
   getSourceCacheStats: () => Promise<{ entries: number; sources: number }>;
   clearSourceCache: () => Promise<Envelope>;
@@ -539,6 +572,10 @@ const api: CloudStreamElectronAPI = {
   openMediaTranscode: (url, audioIndex, transcodeVideo) =>
     ipcRenderer.invoke('media:openTranscode', url, audioIndex, transcodeVideo),
   closeMediaTranscode: (token) => ipcRenderer.invoke('media:closeTranscode', token),
+  listExternalPlayers: (refresh) => ipcRenderer.invoke('player:listExternal', refresh),
+  openInExternalPlayer: (playerId, url) =>
+    ipcRenderer.invoke('player:openExternal', playerId, url),
+  openExternalLink: (url) => ipcRenderer.invoke('shell:openExternal', url),
 
   getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
   clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),

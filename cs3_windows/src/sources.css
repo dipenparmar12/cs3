@@ -3143,3 +3143,45 @@
   flex-wrap: wrap;
   justify-content: center;
 }
+
+/* --- External player handoff ---------------------------------------------- */
+
+.extplayer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.7rem 0.9rem;
+  margin-top: 0.4rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);
+  max-width: 520px;
+}
+.extplayer--compact { padding: 0.5rem 0.75rem; }
+.extplayer__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.extplayer__note {
+  margin: 0;
+  font-size: 0.73rem;
+  line-height: 1.45;
+  color: var(--text-subtle);
+  text-align: center;
+}
+.extplayer__row {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.extplayer__row .btn { font-size: 0.76rem; padding: 0.28rem 0.7rem; }
+.extplayer__status {
+  font-size: 0.73rem;
+  color: var(--accent-light);
+}

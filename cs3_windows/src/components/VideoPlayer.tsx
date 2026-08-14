@@ -14,11 +14,12 @@ import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
 import { SubtitlePanel } from './player/SubtitlePanel';
-import type { MediaProbe } from '../../electron/mediaTranscoder';
+import type { MediaProbe, ProbeFailure } from '../../electron/mediaTranscoder';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
 import { CopyErrorButton } from './CopyErrorButton';
+import { ExternalPlayerFallback } from './player/ExternalPlayerFallback';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -184,6 +185,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * probe finishes later than the element starts loading.
    */
   const audioProbeRef = useRef<MediaProbe | null>(null);
+  /**
+   * Why the probe came back empty, when it did.
+   *
+   * Separates "this link is a 404" from "this format cannot be decoded". They
+   * were being reported as one sentence offering both, and only one of them is
+   * worth opening another player for.
+   */
+  const [probeFailure, setProbeFailure] = useState<ProbeFailure | null>(null);
+  const probeFailureRef = useRef<ProbeFailure | null>(null);
   const [transcode, setTranscode] = useState<{ url: string; token: string } | null>(null);
   const [transcodeOffset, setTranscodeOffset] = useState(0);
   const [audioNeedsComponents, setAudioNeedsComponents] = useState(false);
@@ -516,6 +526,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
      * from the one where nothing can be done.
      */
     const onError = () => {
+      // The source answering 404 outranks anything guessed about codecs.
+      const failure = probeFailureRef.current;
+      if (failure) {
+        setError(failure.reason);
+        return;
+      }
       const codec = audioProbeRef.current?.videoCodec;
       const convertible = Boolean(audioProbeRef.current?.needsVideoTranscode);
       if (codec && convertible) {
@@ -866,6 +882,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (cancelled || !response) return;
 
       setAudioNeedsComponents(Boolean(response.needsComponents));
+      // A probe that produced nothing now says why, and the source's own HTTP
+      // status is the difference between "expired link" and "odd codec".
+      if (response.failure) setProbeFailure(response.failure);
       if (!response.ok || !response.probe) return;
 
       setAudioProbe(response.probe);
@@ -904,9 +923,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     audioProbeRef.current = audioProbe;
   }, [audioProbe]);
 
+  useEffect(() => {
+    probeFailureRef.current = probeFailure;
+  }, [probeFailure]);
+
   // A new stream invalidates everything learned about the previous one.
   useEffect(() => {
     setAudioProbe(null);
+    setProbeFailure(null);
     setTranscode(null);
     setTranscodeOffset(0);
     setAudioNeedsComponents(false);
@@ -1121,6 +1145,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   }}
                 />
               </div>
+              {/*
+                Offered only when the source is actually there. A dead link
+                plays no better in VLC, and suggesting it would send the viewer
+                to fetch a player that cannot help.
+              */}
+              {!probeFailure?.dead && <ExternalPlayerFallback streamUrl={streamUrl} compact />}
             </>
           ) : (
             <>

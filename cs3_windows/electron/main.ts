@@ -27,6 +27,7 @@ import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloade
 import { BootstrapService } from './cs3/bootstrap';
 import { TitleOutcomeStore, type TitleOutcomeKind } from './cs3/titleOutcomes';
 import { DiagnosticsLog } from './cs3/diagnostics';
+import { ExternalPlayerService, PLAYER_DOWNLOADS } from './externalPlayer';
 import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
 import type { DownloadTask } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
@@ -53,6 +54,7 @@ const libraryStore = new LibraryStore(datastore);
 const bootstrap = new BootstrapService(datastore, pluginManager);
 const titleOutcomes = new TitleOutcomeStore(datastore);
 const diagnostics = new DiagnosticsLog();
+const externalPlayers = new ExternalPlayerService();
 pluginManager.setDiagnostics(diagnostics);
 const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
@@ -586,6 +588,106 @@ ipcMain.handle('media:setCapabilities', async (_, capabilities: RendererCapabili
 
 ipcMain.handle('media:getCodecProbes', async () => VIDEO_CODEC_PROBES);
 
+// --- external players -----------------------------------------------------
+
+/**
+ * Players already on this machine, and where to get one if there are none.
+ *
+ * `refresh` exists because someone who follows a download link will install a
+ * player while the app is running, and being told to restart for it would be a
+ * poor end to the sentence "we cannot play this, try VLC".
+ */
+/**
+ * Opens a link in the system browser.
+ *
+ * Scheme-checked here as well as in `setWindowOpenHandler`: this one is
+ * reachable from the renderer with an arbitrary string, and `shell.openExternal`
+ * will happily launch a `file:` or custom-protocol handler if allowed to.
+ */
+ipcMain.handle('shell:openExternal', async (_, url: string) => {
+  if (!/^https?:\/\//i.test(url)) {
+    return { ok: false, error: 'Only http and https links can be opened.' };
+  }
+  await shell.openExternal(url);
+  return { ok: true };
+});
+
+ipcMain.handle('player:listExternal', async (_, refresh?: boolean) => ({
+  ok: true,
+  players: refresh ? externalPlayers.refresh() : externalPlayers.list(),
+  downloads: PLAYER_DOWNLOADS,
+}));
+
+ipcMain.handle('player:openExternal', async (_, playerId: string, url: string) => {
+  const result = externalPlayers.open(playerId, url);
+  if (!result.ok) {
+    diagnostics.record({
+      level: 'error',
+      stage: 'playback',
+      source: playerId,
+      url,
+      message: result.error ?? 'The external player could not be started.',
+    });
+  }
+  return result;
+});
+
+/**
+ * Asks the source itself why it could not be read.
+ *
+ * One request, and it distinguishes the case that matters: a 4xx/5xx means the
+ * link is gone or refused and no decoder would have helped, while a source that
+ * answers 200 and still cannot be probed is a real format problem.
+ */
+async function describeUnreadableSource(url: string): Promise<{
+  status?: number;
+  reason: string;
+  dead: boolean;
+}> {
+  if (!/^https?:\/\//i.test(url)) {
+    return { reason: 'This source could not be read.', dead: false };
+  }
+  try {
+    // GET with a one-byte range: some hosts refuse HEAD outright, and a range
+    // keeps this from pulling a film to find out whether it exists.
+    const response = await net.fetch(url, {
+      method: 'GET',
+      headers: { Range: 'bytes=0-0' },
+      signal: AbortSignal.timeout(12_000),
+    });
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Nothing to cancel.
+    }
+
+    if (response.status >= 400) {
+      return {
+        status: response.status,
+        dead: true,
+        reason:
+          response.status === 404 || response.status === 410
+            ? `This link no longer exists (HTTP ${response.status}). It has probably expired — try another source.`
+            : `The source refused this request (HTTP ${response.status}). The link may have expired, or need credentials this app does not have.`,
+      };
+    }
+
+    return {
+      status: response.status,
+      dead: false,
+      reason:
+        'The source is reachable but its format could not be read. It may use a container or codec that cannot be played here.',
+    };
+  } catch (error) {
+    return {
+      dead: true,
+      reason: `The source could not be reached: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+}
+
 ipcMain.handle('media:probe', async (_, url: string) => {
   try {
     if (!mediaTranscoder.isAvailable()) {
@@ -598,9 +700,30 @@ ipcMain.handle('media:probe', async (_, url: string) => {
         needsComponents: true,
       };
     }
-    return { ok: true, probe: await mediaTranscoder.probe(url), needsComponents: false };
+    const probe = await mediaTranscoder.probe(url);
+    if (probe) return { ok: true, probe, needsComponents: false, failure: null };
+
+    /**
+     * A probe that returns nothing has not said why, and the two reasons need
+     * different responses from the viewer.
+     *
+     * A dead link is one click — try another source. An undecodable codec is
+     * not, and may be worth an external player. The player was reporting both
+     * as "unsupported codec, or the source may be dead", which is two guesses
+     * where one HTTP request gives the answer: a reported link turned out to be
+     * a plain 404, and nothing on screen said so.
+     */
+    const failure = await describeUnreadableSource(url);
+    diagnostics.record({
+      level: 'error',
+      stage: 'playback',
+      url,
+      message: failure.reason,
+      detail: failure.status ? `HTTP ${failure.status}` : undefined,
+    });
+    return { ok: true, probe: null, needsComponents: false, failure };
   } catch (error) {
-    return { ...fail(error), probe: null, needsComponents: false };
+    return { ...fail(error), probe: null, needsComponents: false, failure: null };
   }
 });
 
