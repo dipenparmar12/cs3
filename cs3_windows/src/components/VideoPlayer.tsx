@@ -9,11 +9,14 @@ import type { TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
 import { AspectRatioMode } from '../types/player';
 import type { TorrentResult } from '../types/torrent';
+import type { DownloadTask } from '../types/download';
+import { DownloadState } from '../types/download';
 import { HoverMenu } from './player/HoverMenu';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
 import { SubtitlePanel } from './player/SubtitlePanel';
+import { PlayerDownloadPanel } from './player/PlayerDownloadPanel';
 import type { MediaProbe, ProbeFailure } from '../../electron/mediaTranscoder';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
@@ -162,6 +165,42 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [panelOpen, setPanelOpen] = useState(false);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
   const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false);
+  const [downloadPanelOpen, setDownloadPanelOpen] = useState(false);
+  const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    window.cloudstream?.getDownloadQueue?.().then((tasks) => {
+      if (active && tasks) setDownloadQueue(tasks);
+    });
+
+    const unsub = window.cloudstream?.onDownloadProgress?.((tasks) => {
+      if (active && tasks) setDownloadQueue(tasks);
+    });
+
+    return () => {
+      active = false;
+      if (unsub) unsub();
+    };
+  }, []);
+
+  const currentDownload = useMemo(() => {
+    return downloadQueue.find(
+      (t) =>
+        t.title === title ||
+        (t.mediaUrl && progress?.mediaUrl && t.mediaUrl === progress.mediaUrl)
+    );
+  }, [downloadQueue, title, progress?.mediaUrl]);
+
+  const activeDownloadsCount = useMemo(() => {
+    return downloadQueue.filter(
+      (t) =>
+        t.state === DownloadState.Downloading ||
+        t.state === DownloadState.Queued ||
+        t.state === DownloadState.RefreshingSource ||
+        t.state === DownloadState.Retrying
+    ).length;
+  }, [downloadQueue]);
   /** Subtitles fetched from the online search, as blob-backed WebVTT tracks. */
   const [fetchedSubtitles, setFetchedSubtitles] = useState<
     Array<{ name: string; url: string }>
@@ -740,13 +779,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         case 'e': if (series) setPanelOpen((v) => !v); break;
         case 'n': if (nextEpisode && onSelectEpisode) onSelectEpisode(nextEpisode); break;
         case 'p': if (previousEpisode && onSelectEpisode) onSelectEpisode(previousEpisode); break;
-        case 'Escape': if (!document.fullscreenElement) onBack(); break;
+        case 'Escape':
+          if (panelOpen || sourcePanelOpen || subtitlePanelOpen || downloadPanelOpen) {
+            setPanelOpen(false);
+            setSourcePanelOpen(false);
+            setSubtitlePanelOpen(false);
+            setDownloadPanelOpen(false);
+          } else if (!document.fullscreenElement) {
+            onBack();
+          }
+          break;
         default: break;
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [togglePlay, seekBy, toggleFullscreen, onBack, series, nextEpisode, previousEpisode, onSelectEpisode]);
+  }, [
+    togglePlay, seekBy, toggleFullscreen, onBack, series, nextEpisode, previousEpisode,
+    onSelectEpisode, panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen,
+  ]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -786,6 +837,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     panelOpen ||
     sourcePanelOpen ||
     subtitlePanelOpen ||
+    downloadPanelOpen ||
     !isPlaying ||
     Boolean(error) ||
     isHoveringControls;
@@ -1153,7 +1205,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Close any open side-panel when the user clicks outside it on the player.
   const handlePlayerPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!panelOpen && !sourcePanelOpen && !subtitlePanelOpen) return;
+      if (!panelOpen && !sourcePanelOpen && !subtitlePanelOpen && !downloadPanelOpen) return;
       const target = e.target as HTMLElement;
       // If the click is inside a .player-panel element, leave it open.
       if (target.closest('.player-panel')) return;
@@ -1162,8 +1214,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setPanelOpen(false);
       setSourcePanelOpen(false);
       setSubtitlePanelOpen(false);
+      setDownloadPanelOpen(false);
     },
-    [panelOpen, sourcePanelOpen, subtitlePanelOpen]
+    [panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen]
   );
 
   return (
@@ -1429,6 +1482,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }}
       />
 
+      <PlayerDownloadPanel
+        open={downloadPanelOpen}
+        tasks={downloadQueue}
+        onClose={() => setDownloadPanelOpen(false)}
+        onPause={(id) => window.cloudstream?.pauseDownload(id)}
+        onResume={(id) => window.cloudstream?.resumeDownload(id)}
+        onRemove={(id) => window.cloudstream?.removeDownload(id)}
+        onReveal={(filePath) => window.cloudstream?.revealInFolder(filePath)}
+      />
+
       <footer
         className={`player__controls${controlsVisible || keepControls ? '' : ' hidden'}`}
         onMouseEnter={() => setIsHoveringControls(true)}
@@ -1597,16 +1660,103 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <Subtitles size={18} />
           </button>
 
-          {onDownloadCurrent && (
-            <button
-              className="icon-button"
-              onClick={onDownloadCurrent}
-              aria-label="Download"
-              title="Download what is playing"
+          {/* Active Download Status Badge for Currently Playing Media */}
+          {currentDownload && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+                padding: '0.2rem 0.6rem',
+                borderRadius: '16px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                color: '#60a5fa',
+              }}
             >
-              <Download size={18} />
-            </button>
+              <RotateCw
+                size={12}
+                className={
+                  currentDownload.state === DownloadState.Downloading ||
+                  currentDownload.state === DownloadState.RefreshingSource ||
+                  currentDownload.state === DownloadState.Retrying
+                    ? 'spin'
+                    : ''
+                }
+              />
+              <span>
+                {currentDownload.state === DownloadState.Downloading
+                  ? `${currentDownload.totalBytes > 0 ? `${Math.min(100, Math.floor((currentDownload.bytesDownloaded / currentDownload.totalBytes) * 100))}%` : 'Downloading'}`
+                  : currentDownload.state === DownloadState.RefreshingSource
+                  ? 'Refreshing...'
+                  : currentDownload.state === DownloadState.Retrying
+                  ? 'Retrying...'
+                  : currentDownload.state}
+              </span>
+              {currentDownload.state === DownloadState.Downloading && (
+                <button
+                  style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', display: 'flex', padding: 0 }}
+                  onClick={() => window.cloudstream?.pauseDownload(currentDownload.id)}
+                  title="Pause Download"
+                >
+                  <Pause size={12} />
+                </button>
+              )}
+              {(currentDownload.state === DownloadState.Paused || currentDownload.state === DownloadState.Failed) && (
+                <button
+                  style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', display: 'flex', padding: 0 }}
+                  onClick={() => window.cloudstream?.resumeDownload(currentDownload.id)}
+                  title="Resume / Retry Download"
+                >
+                  <Play size={12} />
+                </button>
+              )}
+            </div>
           )}
+
+          {/* Download Current Stream / In-Player Active Downloads Panel Trigger */}
+          <button
+            className={`icon-button ${downloadPanelOpen ? 'active' : ''}`}
+            data-panel-toggle
+            onClick={() => {
+              if (activeDownloadsCount > 0 || downloadQueue.length > 0) {
+                setDownloadPanelOpen((v) => !v);
+              } else if (onDownloadCurrent) {
+                onDownloadCurrent();
+              } else {
+                setDownloadPanelOpen((v) => !v);
+              }
+            }}
+            aria-label="Downloads"
+            title={
+              activeDownloadsCount > 0
+                ? `Downloads (${activeDownloadsCount} active)`
+                : 'Download current media'
+            }
+            style={{ position: 'relative' }}
+          >
+            <Download size={18} />
+            {activeDownloadsCount > 0 && (
+              <span
+                style={{
+                  position: 'absolute',
+                  top: '-4px',
+                  right: '-4px',
+                  backgroundColor: '#ef4444',
+                  color: '#fff',
+                  fontSize: '0.65rem',
+                  fontWeight: 700,
+                  borderRadius: '10px',
+                  padding: '1px 5px',
+                  lineHeight: 1,
+                }}
+              >
+                {activeDownloadsCount}
+              </span>
+            )}
+          </button>
 
           {qualities.length > 1 && (
             <HoverMenu
