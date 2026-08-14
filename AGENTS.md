@@ -71,7 +71,7 @@ cs3/
 | Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
-| Sidecar tests | `sidecar/` | `mvn test` (15 tests) |
+| Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
 | Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
@@ -111,6 +111,41 @@ tests passed.
 
 **Electron cannot actually be launched in a headless cloud container.** Verify by
 typechecking and by reading; do not report "I ran the app" unless you really did.
+
+### The runtime the app runs is not the one you just built
+
+`RuntimeProvisioner` copies the sidecar and the provider runtime into
+`%APPDATA%/<app>/cs3-runtime/` and resolves that copy **before** every build location. That
+is what makes an installed app independent of where it was built, and it is also the single
+most expensive trap in this repo, because for a while nothing noticed when the copy drifted:
+
+- `provisionRuntime()` asked `findRuntimeDir()` where to copy *from* — and that answers with
+  the app-managed copy first — then skipped the copy because the source "already" lived under
+  `baseDir`. The first provision was therefore the last one.
+- Installed apps kept serving the shim and bridge they were first installed with. A user
+  reported `NoClassDefFoundError` for `DataStore`, `android/net/Uri`, `AppCompatActivity`,
+  `DialogFragment` and `FragmentManager` — **every one of them a class that had shipped weeks
+  earlier.** Five of eight failing extensions in that report were this bug alone.
+
+Three things now prevent it, and all three matter:
+
+1. **The copy carries a stamp** (`runtime-stamp.json`: generation + a fingerprint of every
+   jar's name, size and mtime). `getStatus()` reports `stale` separately from `ready`,
+   because a stale runtime is complete and starts fine — folding it into `ready` would make a
+   working install look broken, and leaving it out is what produced the bug.
+2. **Provisioning reads from build locations only** (`findSourceComponents`), and picks the
+   **newest** rather than the first. `sidecar/dist/` is generated *from* `sidecar/runtime/`,
+   so in a dev checkout it is a snapshot that goes stale the moment Maven runs again — and it
+   sits earlier in the candidate list.
+3. **Translations are dropped when the sidecar changes.** DEX→JVM output is cached by archive
+   hash alone, so it survives a translator upgrade and keeps serving bytecode from the version
+   that had the bug. An absent stamp counts as changed: that is the upgrade case, and it is
+   the run most likely to be holding output from the broken `KotlinNameRepair`.
+
+**Bump `RUNTIME_GENERATION` whenever the shim, the bridge or the translator changes in a way
+an already-provisioned copy would get wrong.** If you are debugging a "class that should
+exist doesn't", check `%APPDATA%/<app>/cs3-runtime/runtime/` before anything else — compare
+its jars against `sidecar/runtime/`.
 
 ---
 
@@ -162,7 +197,9 @@ so the reply landed at the speed of the slowest provider no matter how fast the 
 were. It is now one RPC per provider (`searchEach`), capped at 8 in flight because the
 sidecar dispatches each onto a bounded pool sized to the core count.
 
-Also namespaced: `subtitles:*` (online search, SubRip→WebVTT), `audio:*` (ffprobe
+Also namespaced: `analytics:*` (provider measurement, ranking weights, recommendations,
+and the erase control), `bookmarks:*` (saved detail pages), `discover:*` (home-screen
+catalogues and title enrichment), `subtitles:*` (online search, SubRip→WebVTT), `audio:*` (ffprobe
 inspection and remux sessions), `sources:getCacheStats` / `sources:clearCache`.
 
 Fallible handlers return an **envelope**, `{ ok: boolean; error?: string; …payload }`,
@@ -206,6 +243,13 @@ not a layering mistake.
 | `cs3/titleOutcomes.ts` | How each title last behaved, so a dead row is not clicked twice. |
 | `cs3/batchDownloader.ts` | Season/series batch download orchestration. |
 | `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, and remembered source choices. |
+| `cs3/bookmarkStore.ts` | Saved *detail pages*, with the provider, extension, repository and query that produced them. Deliberately **not** the library: that keys on a normalised title so one film from five providers is one entry, which is right for watch tracking and useless for "reopen the page I was on". Identity and origin are stored; resolved links are not, because they expire. |
+| `cs3/providerAnalytics.ts` | How every provider has actually behaved, counted. Aggregates only — no queries, no titles, no viewing history — because provider quality does not depend on any of them and this file is meant to be shareable. `empty` is tracked separately from `failure`: a provider with nothing for this title is working, and folding the two together would rank providers by catalogue breadth. |
+| `cs3/providerRanking.ts` | Weighted scoring over those counts. Criteria are **rows in a table**, not a formula: an id, a weight, a sample floor and a function to `0..1` or `null`. A `null` is excluded from the denominator rather than scored zero — a provider nobody has downloaded from must not rank below one whose downloads always fail. Rates are smoothed toward a neutral prior so a new extension starts mid-table and can never be permanently buried by one unlucky first call. |
+| `cs3/providerRecommendations.ts` | Turns scores into advice, and (only with `autoEnableProven`) into action. Nothing is ever auto-**disabled**: a site being down for a week is not consent to remove a source the user chose. |
+| `cs3/failureTaxonomy.ts` | `classifyFailure` — one closed set of causes, shared by the ranking and the diagnostics. Counting free text produces a tally with one entry per failure; grouping by cause is what showed 113 load failures came from six missing classes. |
+| `cs3/discovery.ts` | The home screen's catalogues. Stale-while-revalidate over Stremio's keyless Cinemeta catalogs (`top`/`year`/`imdbRating`, filterable by 19 genres, pageable) plus AniList for anime. Finds **nothing playable** — sources are resolved by providers when an item is opened. |
+| `cs3/titleEnricher.ts` | Resolves `Avengers End Game 720p Hindi Dubbed` to the film it is about. Conservative on purpose: a disagreeing year is disqualifying and the similarity bar is high enough that `Avengers` does not match `Avengers: Endgame`. An unenriched row is a small loss; a mislabelled one reads as data corruption. |
 | `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. |
 | `torrent/indexerRegistry.ts`, `indexers/*` | 7 built-in public indexers, Torznab (Jackett/Prowlarr), and aggregators (Torrentio, apibay). |
 | `torrent/ranker.ts`, `releaseParser.ts` | Release-name parsing (quality/codec/group/season/episode) and result ranking. |
@@ -533,6 +577,66 @@ BottomSheetDialogFragment`, both reached by Anichi during `loadLinks`. Same cate
 above — an `:app` type and a Material Components type — and the same fix shape if they turn
 out to matter to more than one archive. **Count first.**
 
+### Community extensions: the fourth round (2026-08-15)
+
+A user reported eight Phisher extensions with "No providers", each naming a class.
+**Five of the eight were not extension bugs at all** — they were the stale-runtime trap in
+§3: `DataStore`, `android/net/Uri`, `AppCompatActivity`, `DialogFragment` and
+`FragmentManager` had all shipped weeks earlier and the installed app was still serving the
+copy it was first provisioned with. Check that directory before writing a shim.
+
+The remaining three were real, and each revealed the next exactly as before:
+
+1. **`Context.getSystemService` threw for every name; Android returns `null`.** The corpus
+   call site is the *first statement* of a provider's `load()`, unguarded, asking how much
+   memory the device has to size a buffer. Throwing there aborted the load and cost the
+   extension every provider it was about to register — StreamPlay lost all of them, and the
+   reported cause named `getSystemService` rather than anything actionable. `null` is both
+   the documented contract and the safer failure: a caller that checks gets Android's
+   behaviour, one that does not fails on the line that *uses* the service. `"activity"`
+   answers with a real `ActivityManager` whose `MemoryInfo` reports this JVM's actual
+   figures — DROP-9 forbids lying about the platform, and a fabricated memory number would
+   make the extension size its buffer wrongly.
+2. **`android.os.Handler` was absent, and the shim for it *works* rather than throwing.**
+   Almost every use in the corpus is a retry backoff, a debounce or a timeout guard — plain
+   scheduling the JVM does fine. Refusing would break working scraper code to make a point
+   about a platform difference that does not exist here. One single-threaded daemon executor
+   per handler, because Android guarantees ordering on one Handler and code written against
+   a Looper is entitled to assume it. `Looper.getMainLooper()` must return non-null:
+   `Handler(Looper.getMainLooper())` is how essentially everything that defers work is built.
+3. **The whole `syncproviders` cluster is `:app`.** `library-jvm` 4.8.0 ships only
+   `SyncIdName` out of that package. TorraStream died at `load` on `SyncRepo`; StreamPlay and
+   Anichi reach the same cluster. Supplied from `sidecar/bridge/`: `AuthAPI`, `AuthRepo`,
+   `SyncAPI` (+ its nested `SyncResult`, `LibraryList`, `LibraryMetadata`, `SyncStatus`),
+   `SyncRepo`, `AccountManager`, `AniListApi` with its ten nested data classes, plus
+   `UiText`, `ListSorting` and `SyncWatchType`.
+
+   **Data classes are faithful; behaviour is refused.** The data classes are Jackson binding
+   targets reached through `parseJson`, and `jackson-module-kotlin` binds by constructor
+   parameter *name* — a renamed property does not fail, it binds to null, and the resulting
+   "AniList returned no artwork" is close to untraceable. The operations answer null, because
+   there is no signed-in account here and a caller's "not logged in" branch is the right one.
+
+   One descriptor mistake was caught in the act and is worth remembering: declaring
+   `AccountManager.aniListApi` as `SyncRepo` (the wrapper) compiled fine and failed at
+   TorraStream's call site with
+   `NoSuchMethodError: AniListApi AccountManager$Companion.getAniListApi()`. **A getter
+   returning a supertype is a different method to the JVM.** The evidence said `AniListApi`;
+   the evidence won.
+
+Measured after all three, `--repo phisher --only <the eight>`: **seven of eight now load**
+(StreamPlay 2 providers, TorraStream 2, ShowBox 15 search results, StremioX 20 results and
+55 links, plus DoraBash, MovieBoxProvider and XDMovies). Across the repository at large,
+`--plugins 40`: **45 providers loaded, 20 answering, 12 links resolved, 8 streams delivering
+bytes, and zero `NoClassDefFoundError` of any kind.**
+
+**Still outstanding: Ultima.** It needs `com.lagradost.cloudstream3.CloudStreamApp`, behind
+which sit `MainActivity`, `CommonActivity`, `HomeViewModel`, `PluginWrapper`,
+`AppContextUtils` and `DataStoreHelper$ResumeWatchingResult`. That is a different category
+from everything above — Ultima is a host-UI replacement rather than a scraper, and shimming
+it means shimming the Android app itself. Left alone deliberately; one extension is not worth
+a fake `MainActivity`.
+
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 
 Run it before believing anything about extension health:
@@ -542,6 +646,7 @@ node tools/e2e/provider-e2e.mjs                       # all five repositories
 node tools/e2e/provider-e2e.mjs --repo MegaRepo       # one
 node tools/e2e/provider-e2e.mjs --plugins 3 --queries "one piece,dune" --json report.json
 node tools/e2e/provider-e2e.mjs --list                # what it knows about
+node tools/e2e/provider-e2e.mjs --repo phisher --only TorraStream,Ultima   # named extensions
 ```
 
 It drives the whole chain — repository JSON → `.cs3` download + SHA-256 → DEX→JVM →
@@ -669,6 +774,102 @@ main process is going to drop — selecting it searches nothing and reports itse
 direction. Anything new that reads the tree to decide what may be searched has the same
 obligation.
 
+### The mini player: the `<video>` element is never remounted
+
+Minimising is a **geometry change to an element that stays mounted** — the same node, in the
+same place in the tree, with `player--mini` and an inline position. That is not an
+implementation detail. The `<video>` *is* the playback: unmount it and the stream stops, the
+position is lost and the swarm is renegotiated. Anything that recreates the element to change
+its size has broken the feature it was trying to add.
+
+What that buys, and what it costs:
+
+- **Full chrome is hidden with CSS, not conditionally rendered.** Unmounting the controls
+  would unmount their state — open panels, scroll positions, the source list — and restoring
+  the player would drop all of it. The mini window gets its own much smaller control set,
+  because at 420px the real seek bar and eleven buttons are unusable.
+- **Keyboard shortcuts are disarmed in mini exactly as in hidden**, and it matters *more*
+  here: the window is visible, so it looks focused, while the whole point is that the viewer
+  is typing somewhere else. A space bar in the search box must not pause the film.
+- **The drag/resize gesture is owned rather than delegated to `resize: both`**, which cannot
+  hold an aspect ratio and puts its handle in the bottom-right corner — precisely where a
+  window parked in the corner of the screen is against the edge. The resize handle is
+  top-left for that reason. See `useMiniFrame`, which also clamps on window resize: a player
+  parked at the right edge of a maximised window is unreachable once it is restored, because
+  the part that has gone off screen is the drag handle.
+
+`MiniPlayerBar` remains for the `hidden` state, but every path in the app now minimises
+instead. Stepping out to Downloads used to blank the video and leave a bar saying it was
+still playing, which is a strange thing to tell someone about a film they were watching a
+second ago.
+
+### The home screen is discovered, not hardcoded
+
+It ran three fixed searches — `Spider-Man`, `One Piece`, `Stranger Things` — against every
+installed provider and called the result "Trending". The obvious problem is that the front
+page never changed. The real one is that **a site scraper has no opinion about what is
+popular**, so the label was a category error, and it cost the slowest scraper's timeout on
+every launch.
+
+`cs3/discovery.ts` answers from catalogue services instead. The binding constraint was that
+**the user must not have to obtain an API key**, which eliminated TMDB, Trakt, OMDb, Fanart
+and TheTVDB outright — a key embedded in a distributed client is both a licence violation and
+a key that gets revoked. What survives:
+
+- `cinemeta-catalogs.strem.io/{top,year,imdbRating}/catalog/{movie,series}/…` — keyless,
+  IMDb-keyed, filterable by 19 genres, pageable with `skip`. Its popularity numbers come from
+  Trakt and TMDB, so the ordering reflects the same signal the keyed services sell.
+- AniList's public GraphQL for seasonal anime. Kept separate from the Animation genre on
+  purpose: "Animation" on IMDb is mostly Western film, and an anime row built from it returns
+  Pixar.
+
+Two behaviours are load-bearing. **Stale-while-revalidate, with the "while" doing the work**:
+cached sections render instantly and are replaced a second later, so the page never shows a
+spinner after the first launch and still works offline. And **discovery finds nothing
+playable** — items are addressed by IMDb id and sources are resolved by the providers when
+one is opened. Keeping that boundary is what lets the page be fast and current at once.
+
+Personalised rows come from genres counted out of the local library. Nothing about the user
+leaves the machine: the genre picks which public catalogue URL to fetch, and the catalogue is
+not told who asked.
+
+### Search scope: why it looked empty until you searched
+
+The picker only fetched when the menu opened, and that fetch loaded **every installed
+extension into the sidecar first** — minutes of DEX translation on a bootstrapped install,
+with nothing on screen saying so. Users opened it, saw nothing, closed it, ran a search, and
+found it populated afterwards. Searching appeared to be the fix because it awaited the very
+same load.
+
+Two calls now, and the split is the fix: `getSearchScopeOptions(false)` on mount answers
+instantly from whatever is already registered, and `getSearchScopeOptions(true)` on open pays
+the cost with a menu on screen to show progress in. `PluginManager` emits
+`extension:providerLoadProgress` per archive, so the tree fills in as the pass runs instead of
+appearing all at once at the end.
+
+The picker also gained facets — content type, language, and extensions-vs-torrents — derived
+from what is installed, counted rather than listed, with **OR within a facet and AND across
+facets**. Same rule as the extensions screen; anything else reads as broken.
+
+### Provider ranking: measured, arguable, and never silently punitive
+
+`providerAnalytics` counts, `providerRanking` scores, `providerRecommendations` advises. Four
+rules keep it honest:
+
+1. **`empty` is not `failure`.** An anime provider with nothing for *Dune* is behaving
+   correctly. Merging them would rank by catalogue breadth and bury every specialist.
+2. **Smoothing toward a neutral prior**, or the ranking is self-fulfilling: a provider that
+   answered its single search scores 100%, sorts above one with 95% over four hundred calls,
+   gets asked first, and stays there.
+3. **A criterion with no data is excluded from the denominator**, never scored zero.
+4. **Nothing is ever auto-disabled.** Auto-*enable* is opt-in and gated on score *and* sample
+   count; a site being down for a week is not consent to remove a source the user picked.
+
+The settings panel shows every number, every criterion's sample count, and the erase button,
+because a system that reorders results on evidence nobody can see is one users learn to
+distrust the first time it is wrong — and with hundreds of third-party scrapers it will
+sometimes be wrong.
+
 ### When we cannot play it, hand it to something that can
 
 `externalPlayer.ts` detects VLC, mpv, MPC-HC/BE and PotPlayer and offers to open
@@ -747,6 +948,31 @@ resolve is not an exception at that layer — but the reason goes to the log.
 because that is the only side holding the environment. It leads with app,
 Electron, platform and extension-runtime versions: the two questions every
 maintainer asks first are the two a reporter is least able to answer.
+
+**Two sizes, and the small one is the default.** It used to copy the whole
+session — up to three hundred entries — which is wrong in both directions:
+whoever receives it has to find the failure being described inside it, and
+whoever sends it has pasted an evening's viewing history into a chat window
+without meaning to. `mode: 'current'` selects by context (provider, url, title
+or query, within a recent window) and falls back to recent history *while saying
+so*, rather than silently implying unrelated entries describe the failure.
+
+Both modes deduplicate. Grouping normalises durations, byte counts and
+timestamps out of the key — those differ on every occurrence and never
+distinguish one failure from another — but **bare integers are left alone**,
+because `HTTP 403` and `HTTP 404` differ by one digit and mean opposite things.
+A shorter report that says something false is not an improvement. The report also
+leads with a `Failures by cause` tally: grouping by class is what turned 113 load
+failures into six missing types, and that is the shape a maintainer needs.
+
+**`loadLinksDetailed` is why the message can now be specific.** `loadLinks`
+returning a bare `[]` is the reason "the extension provider returned no playable
+links for this item" was the only thing anyone could ever be told — one sentence
+covering a timeout, a thrown extractor, a blocked host, a provider with no
+`loadLinks` at all, a title that genuinely has no sources, and a reply full of
+links with empty URLs. The empty list still goes back; what changed is that a
+`SourceDiagnosis` travels beside it, carrying the summary for the screen, a hint
+for the user, and the facts for the clipboard.
 
 ### Shipping: the box has to contain everything
 
