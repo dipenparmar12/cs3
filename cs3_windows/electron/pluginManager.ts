@@ -1242,17 +1242,38 @@ export class PluginManager {
   private publishProvenance(): void {
     if (!this.analytics) return;
     for (const provider of this.providers.values()) {
-      const record = this.installedPlugins.get(provider.pluginInternalName);
-      this.analytics.describe(provider.name, {
-        repositoryId: record?.meta?.repositoryUrl || SIDELOADED_REPOSITORY_ID,
-        repositoryName: record?.meta?.repositoryUrl
-          ? (findOfficialRepository(record.meta.repositoryUrl)?.name ??
-             repositoryLabel(record.meta.repositoryUrl))
-          : undefined,
-        extensionInternalName: provider.pluginInternalName,
-        extensionName: record?.meta?.name ?? provider.pluginInternalName,
-      });
+      this.analytics.describe(provider.name, this.provenanceOf(provider.name));
     }
+  }
+
+  /**
+   * Where a provider came from: repository ▸ extension ▸ provider.
+   *
+   * A provider knows its own name and nothing about its ancestry, and this
+   * class is the only layer holding the mapping. Everything that needs to
+   * attribute a result — a bookmark, a poor ranking, a failure report — needs
+   * this, so it is one method rather than three near-copies.
+   */
+  public provenanceOf(providerName: string): {
+    provider: string;
+    repositoryId?: string;
+    repositoryName?: string;
+    extensionInternalName?: string;
+    extensionName?: string;
+  } {
+    const provider = this.providers.get(providerName);
+    if (!provider) return { provider: providerName };
+    const record = this.installedPlugins.get(provider.pluginInternalName);
+    const repoUrl = record?.meta?.repositoryUrl;
+    return {
+      provider: provider.name,
+      repositoryId: repoUrl || SIDELOADED_REPOSITORY_ID,
+      repositoryName: repoUrl
+        ? (findOfficialRepository(repoUrl)?.name ?? repositoryLabel(repoUrl))
+        : 'Sideloaded',
+      extensionInternalName: provider.pluginInternalName,
+      extensionName: record?.meta?.name ?? provider.pluginInternalName,
+    };
   }
 
   public getProvidersList(): string[] {

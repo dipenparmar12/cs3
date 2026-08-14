@@ -27,6 +27,9 @@ import type { SearchScope } from './searchScope';
 import type { SearchSnapshot } from './searchSession';
 import type { DnsPreset, NetworkSettings } from './networkSettings';
 import type { SystemRuntimeStatus, RuntimeProgress } from './cs3/runtimeProvisioner';
+import type { Bookmark } from './cs3/bookmarkStore';
+import type { DiscoverySection } from './cs3/discovery';
+import type { EnrichedMetadata } from './cs3/titleEnricher';
 import type {
   AnalyticsSettings,
   ProviderAnalyticsRecord,
@@ -536,6 +539,78 @@ export interface CloudStreamElectronAPI {
     callback: (progress: RuntimeProgress) => void
   ) => () => void;
 
+  // Discovery — the dynamic home screen
+  /**
+   * Home-screen sections, already ordered.
+   *
+   * Answers from cache immediately and refreshes behind that answer, so the
+   * page draws at once and quietly improves. Sections with nothing in them are
+   * omitted rather than rendered empty.
+   */
+  getDiscoverySections: (options?: { includeAnime?: boolean }) => Promise<
+    Envelope & { sections: DiscoverySection[]; personalGenres: string[] }
+  >;
+  /** Pages one row further. */
+  getMoreDiscovery: (
+    section: string,
+    skip: number
+  ) => Promise<Envelope & { items: SearchResponse[] }>;
+  refreshDiscovery: () => Promise<Envelope>;
+  /**
+   * Replaces provider release names with catalogue titles and artwork.
+   *
+   * The source is untouched — only what the user reads changes. A row that
+   * cannot be matched confidently keeps its original name rather than being
+   * given a plausible wrong one.
+   */
+  enrichResults: (
+    results: SearchResponse[],
+    limit?: number
+  ) => Promise<Envelope & { results: SearchResponse[] }>;
+  resolveTitle: (
+    rawTitle: string,
+    hint?: { year?: number }
+  ) => Promise<Envelope & { metadata: EnrichedMetadata | null }>;
+
+  /** repository ▸ extension ▸ provider, for a provider name. */
+  getProviderProvenance: (providerName: string) => Promise<
+    Envelope & {
+      provenance: {
+        provider: string;
+        repositoryId?: string;
+        repositoryName?: string;
+        extensionInternalName?: string;
+        extensionName?: string;
+      };
+    }
+  >;
+
+  // Saved detail pages
+  /**
+   * Saved pages, newest first, with the facets to filter them by.
+   *
+   * The facets come from what has been saved rather than from the installed
+   * catalogue: "only search this provider next time" needs a list of the
+   * providers the user actually keeps things from.
+   */
+  listBookmarks: () => Promise<
+    Envelope & {
+      bookmarks: Bookmark[];
+      facets: { providers: string[]; repositories: Array<{ id: string; name: string }>; types: string[] };
+    }
+  >;
+  getBookmark: (mediaUrl: string) => Promise<Envelope & { bookmark: Bookmark | null }>;
+  /** Save and unsave in one call, so the button and the store cannot disagree. */
+  toggleBookmark: (
+    input: Omit<Bookmark, 'id' | 'savedAt' | 'openCount'>
+  ) => Promise<Envelope & { saved: boolean; bookmark: Bookmark | null }>;
+  removeBookmark: (mediaUrl: string) => Promise<Envelope & { removed: boolean }>;
+  setBookmarkNote: (
+    mediaUrl: string,
+    note?: string
+  ) => Promise<Envelope & { bookmark: Bookmark | null }>;
+  markBookmarkOpened: (mediaUrl: string) => Promise<Envelope>;
+
   // Provider analytics and ranking
   /**
    * Measured behaviour and the score derived from it, together.
@@ -876,6 +951,22 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.on('runtime:progress', listener);
     return () => ipcRenderer.removeListener('runtime:progress', listener);
   },
+
+  getDiscoverySections: (options) => ipcRenderer.invoke('discover:sections', options),
+  getMoreDiscovery: (section, skip) => ipcRenderer.invoke('discover:more', section, skip),
+  refreshDiscovery: () => ipcRenderer.invoke('discover:refresh'),
+  enrichResults: (results, limit) => ipcRenderer.invoke('discover:enrich', results, limit),
+  resolveTitle: (rawTitle, hint) => ipcRenderer.invoke('discover:resolveTitle', rawTitle, hint),
+
+  getProviderProvenance: (providerName) =>
+    ipcRenderer.invoke('api:getProviderProvenance', providerName),
+
+  listBookmarks: () => ipcRenderer.invoke('bookmarks:list'),
+  getBookmark: (mediaUrl) => ipcRenderer.invoke('bookmarks:get', mediaUrl),
+  toggleBookmark: (input) => ipcRenderer.invoke('bookmarks:toggle', input),
+  removeBookmark: (mediaUrl) => ipcRenderer.invoke('bookmarks:remove', mediaUrl),
+  setBookmarkNote: (mediaUrl, note) => ipcRenderer.invoke('bookmarks:setNote', mediaUrl, note),
+  markBookmarkOpened: (mediaUrl) => ipcRenderer.invoke('bookmarks:markOpened', mediaUrl),
 
   getProviderLeaderboard: () => ipcRenderer.invoke('analytics:getLeaderboard'),
   getProviderRecommendations: (limit) =>
