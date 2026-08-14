@@ -16,6 +16,7 @@ import { SourceSettings } from '../components/SourceSettings';
 import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
 import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
+import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
 
 /**
  * Settings, organised so the first look is calm.
@@ -212,6 +213,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
       {tab === 'advanced' && (
         <>
+          <DiagnosticsPanel />
+
           <MediaComponentsCard />
 
           <SettingGroup title="Migration" icon={<RefreshCw size={15} />}>

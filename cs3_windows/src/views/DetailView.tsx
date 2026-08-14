@@ -15,6 +15,7 @@ import {
 } from '../components/player/seriesContext';
 import { SeasonDownloadDialog } from '../components/SeasonDownloadDialog';
 import { LibraryBucketSelector } from '../components/LibraryBucketSelector';
+import { CopyErrorButton } from '../components/CopyErrorButton';
 
 export interface PlaybackRequest {
   streamUrl: string;
@@ -568,9 +569,19 @@ export const DetailView: React.FC<DetailViewProps> = ({
             Tried {(mediaItem.alternates?.length ?? 0) + 1} sources for “{mediaItem.name}”.
           </p>
         )}
-        <button className="btn" onClick={onBack}>
-          <ArrowLeft size={16} /> Back
-        </button>
+        <div className="detail-view__actions">
+          <button className="btn" onClick={onBack}>
+            <ArrowLeft size={16} /> Back
+          </button>
+          <CopyErrorButton
+            context={{
+              title: mediaItem.name,
+              url: mediaItem.url,
+              source: mediaItem.apiName,
+              message: loadError ?? undefined,
+            }}
+          />
+        </div>
       </div>
     );
   }
