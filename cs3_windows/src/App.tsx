@@ -202,6 +202,16 @@ export const App: React.FC = () => {
     if (previous?.query) void handleSearch(previous.query, previous.options);
   }, [handleSearch]);
 
+  const handleSearchFromDetail = useCallback(
+    (query: string) => {
+      setSelectedMedia(null);
+      setActiveTab('search');
+      setSearchQuery(query);
+      void handleSearch(query);
+    },
+    [handleSearch]
+  );
+
   const handleSelectMedia = (item: SearchResponse) => {
     savedScroll.current = viewportRef.current?.scrollTop ?? 0;
     setSelectedMedia(item);
@@ -616,6 +626,7 @@ export const App: React.FC = () => {
               onPlay={setPlayback}
               onStartSession={startSession}
               onEnqueueDownload={handleEnqueueDownload}
+              onSearch={handleSearchFromDetail}
             />
           ) : (
             <>

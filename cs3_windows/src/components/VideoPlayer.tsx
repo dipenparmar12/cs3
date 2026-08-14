@@ -3,7 +3,8 @@ import Hls from 'hls.js';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
-  SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio, Download,
+  SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
+  HardDriveDownload, FolderDown,
 } from 'lucide-react';
 import type { TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
@@ -1660,6 +1661,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <Subtitles size={18} />
           </button>
 
+          {/* Button 1: Download Current Media Action Button */}
+          {onDownloadCurrent && (
+            <button
+              className="icon-button"
+              onClick={onDownloadCurrent}
+              aria-label="Download current media"
+              title={
+                currentDownload
+                  ? `Downloading current media (${currentDownload.state})`
+                  : 'Download current playing media'
+              }
+              disabled={Boolean(currentDownload && currentDownload.state === DownloadState.Completed)}
+            >
+              <HardDriveDownload size={18} />
+            </button>
+          )}
+
           {/* Active Download Status Badge for Currently Playing Media */}
           {currentDownload && (
             <div
@@ -1716,28 +1734,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </div>
           )}
 
-          {/* Download Current Stream / In-Player Active Downloads Panel Trigger */}
+          {/* Button 2: Downloads Manager Popover Panel Trigger */}
           <button
             className={`icon-button ${downloadPanelOpen ? 'active' : ''}`}
             data-panel-toggle
-            onClick={() => {
-              if (activeDownloadsCount > 0 || downloadQueue.length > 0) {
-                setDownloadPanelOpen((v) => !v);
-              } else if (onDownloadCurrent) {
-                onDownloadCurrent();
-              } else {
-                setDownloadPanelOpen((v) => !v);
-              }
-            }}
-            aria-label="Downloads"
+            onClick={() => setDownloadPanelOpen((v) => !v)}
+            aria-label="Downloads Manager Panel"
             title={
               activeDownloadsCount > 0
-                ? `Downloads (${activeDownloadsCount} active)`
-                : 'Download current media'
+                ? `Downloads Manager (${activeDownloadsCount} active)`
+                : 'Downloads Manager Panel'
             }
             style={{ position: 'relative' }}
           >
-            <Download size={18} />
+            <FolderDown size={18} />
             {activeDownloadsCount > 0 && (
               <span
                 style={{

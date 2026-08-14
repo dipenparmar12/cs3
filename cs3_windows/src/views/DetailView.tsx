@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Play, Download, Star, ArrowLeft, Loader2, AlertTriangle, Calendar, Layers, ListVideo,
+  Play, Download, Star, ArrowLeft, Loader2, AlertTriangle, Calendar, Layers, ListVideo, Search,
 } from 'lucide-react';
 import type { SearchResponse, Episode } from '../types/api';
 import { TvType } from '../types/api';
@@ -107,6 +107,7 @@ interface DetailViewProps {
   /** Opens the player immediately and resolves a source into it. */
   onStartSession: (context: PlaybackSessionRequest) => void;
   onEnqueueDownload: (task: DownloadTask) => void;
+  onSearch?: (query: string) => void;
 }
 
 interface DetailData {
@@ -180,6 +181,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
   onPlay,
   onStartSession,
   onEnqueueDownload,
+  onSearch,
 }) => {
   const [detail, setDetail] = useState<DetailData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -738,6 +740,15 @@ export const DetailView: React.FC<DetailViewProps> = ({
             >
               <Download size={16} /> {isSeries ? 'Download episode' : 'Download'}
             </button>
+            {onSearch && (
+              <button
+                className="btn"
+                onClick={() => onSearch(`${detail.name}${detail.year ? ` ${detail.year}` : ''}`)}
+                title={`Search "${detail.name}${detail.year ? ` ${detail.year}` : ''}" across all sources`}
+              >
+                <Search size={16} /> Search title
+              </button>
+            )}
             {isSeries && (
               <button className="btn" onClick={() => setSeasonDownloadOpen(true)}>
                 <Layers size={16} /> Download season
