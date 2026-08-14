@@ -206,20 +206,73 @@ export class DiagnosticsLog {
    */
   public report(records: DiagnosticRecord[], environment: Record<string, string>): string {
     const lines: string[] = [
-      'CloudStream Desktop — diagnostics report',
+      'CloudStream Desktop — Player Debug & Diagnostics Report',
       `Generated: ${new Date().toISOString()}`,
       '',
+      'Environment',
     ];
 
     for (const [key, value] of Object.entries(environment)) {
-      lines.push(`${key}: ${value}`);
+      lines.push(`  ${key}: ${value}`);
     }
-    lines.push('', `${records.length} record(s)`, '');
 
-    for (const record of records) {
+    // Deduplicate records sharing identical level, stage, source, url, message, and detail
+    interface GroupedRecord {
+      record: DiagnosticRecord;
+      count: number;
+      firstAt: number;
+      lastAt: number;
+    }
+
+    const groups: GroupedRecord[] = [];
+    const groupMap = new Map<string, GroupedRecord>();
+    const uniqueUrls = new Set<string>();
+    const uniqueProviders = new Set<string>();
+    const uniqueMessages = new Set<string>();
+
+    for (const rec of records) {
+      if (rec.url) uniqueUrls.add(rec.url);
+      if (rec.source) uniqueProviders.add(rec.source);
+      if (rec.message) uniqueMessages.add(rec.message);
+
+      const key = `${rec.level}|${rec.stage}|${rec.source ?? ''}|${rec.url ?? ''}|${rec.message}|${rec.detail ?? ''}`;
+      const existing = groupMap.get(key);
+      if (existing) {
+        existing.count++;
+        if (rec.at < existing.firstAt) existing.firstAt = rec.at;
+        if (rec.at > existing.lastAt) existing.lastAt = rec.at;
+      } else {
+        const group: GroupedRecord = {
+          record: rec,
+          count: 1,
+          firstAt: rec.at,
+          lastAt: rec.at,
+        };
+        groupMap.set(key, group);
+        groups.push(group);
+      }
+    }
+
+    const totalCount = records.length;
+    const uniqueCount = groups.length;
+
+    lines.push('', 'Diagnostic Events (Deduplicated)', '');
+
+    for (const { record, count, firstAt, lastAt } of groups) {
+      let timeHeader: string;
+      if (count > 1 && firstAt !== lastAt) {
+        const t1 = new Date(firstAt).toISOString();
+        const t2 = new Date(lastAt).toISOString();
+        timeHeader = `[${t1} ... ${t2}]`;
+      } else {
+        timeHeader = `[${new Date(record.at).toISOString()}]`;
+      }
+
+      const repeatSuffix = count > 1 ? ` (Occurrences: ${count})` : '';
       lines.push(
-        `[${new Date(record.at).toISOString()}] ${record.level.toUpperCase()} ${record.stage}` +
-          (record.source ? ` · ${record.source}` : '')
+        `${timeHeader} ${record.level.toUpperCase()} ${record.stage}` +
+          (record.source ? ` · ${record.source}` : '') +
+          repeatSuffix
       );
       if (record.query) lines.push(`  query: ${record.query}`);
       if (record.title) lines.push(`  title: ${record.title}`);
@@ -231,6 +284,15 @@ export class DiagnosticsLog {
       }
       lines.push('');
     }
+
+    lines.push(
+      'Summary',
+      `  Unique Errors:       ${uniqueMessages.size}`,
+      `  Unique Diagnostic:   ${uniqueCount}`,
+      `  Unique Sources/URLs: ${uniqueUrls.size}`,
+      `  Unique Providers:    ${uniqueProviders.size}`,
+      `  Total Logged Events: ${totalCount} (Compressed to ${uniqueCount})`
+    );
 
     return lines.join('\n');
   }
