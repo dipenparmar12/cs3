@@ -991,11 +991,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       void (async () => {
         const previous = transcode?.token;
         const at = transcodeOffset + (videoRef.current?.currentTime ?? 0);
+
+        // Fetch probe if not available yet (resolves race condition when video errors before probe finishes)
+        let probe = audioProbeRef.current;
+        if (!probe) {
+          const res = await window.cloudstream?.probeMedia(streamUrl);
+          if (res?.ok && res.probe) {
+            probe = res.probe;
+            setAudioProbe(probe);
+          }
+        }
+
+        const urlLower = streamUrl.toLowerCase();
+        const isHevc = Boolean(
+          probe?.needsVideoTranscode ||
+            probe?.videoCodec === 'hevc' ||
+            probe?.videoCodec === 'h265' ||
+            urlLower.includes('hevc') ||
+            urlLower.includes('x265') ||
+            urlLower.includes('10bit')
+        );
+        const isAudioTranscode = probe ? probe.needsAudioTranscode : true;
+
         const session = await window.cloudstream?.openMediaTranscode(
           streamUrl,
           selectedAudioIndex ?? 0,
-          audioProbeRef.current?.needsVideoTranscode ?? false,
-          audioProbeRef.current?.needsAudioTranscode ?? false
+          isHevc,
+          isAudioTranscode
         );
         if (!session?.ok || !session.url) {
           // Conversion is unavailable; the source has had its chance.

@@ -201,9 +201,15 @@ const PROBE_TIMEOUT_MS = 20_000;
  * always or never.
  */
 function inputOptionsFor(url: string): string[] {
-  return /^https?:\/\//i.test(url)
-    ? ['-user_agent', 'Mozilla/5.0 CloudStreamDesktop']
-    : [];
+  if (!/^https?:\/\//i.test(url)) return [];
+  return [
+    '-user_agent',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+    '-reconnect', '1',
+    '-reconnect_at_eof', '1',
+    '-reconnect_streamed', '1',
+    '-reconnect_delay_max', '5',
+  ];
 }
 
 export class MediaTranscoder {
@@ -301,6 +307,8 @@ export class MediaTranscoder {
       '-print_format', 'json',
       '-show_streams',
       '-show_entries', 'format=duration,format_name',
+      '-probesize', '5000000',
+      '-analyzeduration', '5000000',
       ...inputOptionsFor(url),
       url,
     ];

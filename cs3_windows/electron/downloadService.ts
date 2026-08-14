@@ -170,6 +170,17 @@ export class DownloadService {
           task.etaSeconds = 0;
           this.gidToTaskId.delete(gid);
         } else if (status.status === 'error') {
+          const isRangeError =
+            status.errorMessage &&
+            /range|invalid range|416/i.test(status.errorMessage);
+          if (isRangeError) {
+            console.warn(
+              `[downloads] aria2 range error (${status.errorMessage}); falling back to HTTP downloader for task ${taskId}`
+            );
+            this.gidToTaskId.delete(gid);
+            this.startHttpTask(task);
+            return;
+          }
           task.state = DownloadState.Failed;
           task.errorMessage = status.errorMessage || 'aria2 transfer error';
           this.gidToTaskId.delete(gid);

@@ -567,6 +567,44 @@ export const App: React.FC = () => {
                   ? (episode) => handleSwitchEpisode(episode)
                   : undefined
               }
+              /*
+                A manually chosen source gets the same player as a quick-played
+                one. It did not: this path passed a bare stream URL, so choosing
+                a source deliberately produced a player with no source list, no
+                download button and no way past a source that would not play —
+                the more considered action giving the less capable result.
+              */
+              onDownloadCurrent={
+                playback.sources
+                  ? () => {
+                      const current = playback.sources!.list.find(
+                        (source) => source.infoHash === playback.sources!.activeInfoHash
+                      );
+                      if (current) playback.sources!.onDownload(current);
+                    }
+                  : undefined
+              }
+              sourceSession={
+                playback.sources
+                  ? {
+                      // Discovery is already finished on this path — the viewer
+                      // picked from its results — so the panel opens straight
+                      // onto the list rather than a progress bar.
+                      phase: 'playing',
+                      sources: playback.sources.list,
+                      activeInfoHash: playback.sources.activeInfoHash,
+                      searched: 0,
+                      totalIndexers: 0,
+                      searchDone: true,
+                      attempts: [],
+                      onPlayNow: () => {},
+                      onSelectSource: playback.sources.onSelect,
+                      onRefresh: () => {},
+                      onSourceUnplayable: playback.sources.onUnplayable,
+                      onDownloadSource: playback.sources.onDownload,
+                    }
+                  : undefined
+              }
             />
           ) : null}
 

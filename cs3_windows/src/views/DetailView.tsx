@@ -46,6 +46,23 @@ export interface PlaybackRequest {
    * instead of leaving the player on a frozen frame.
    */
   onRequestEpisode?: (episode: Episode) => Promise<void>;
+  /**
+   * The other sources for this item, so a manually chosen one keeps everything
+   * a quick-played one gets.
+   *
+   * Choosing a source explicitly used to hand the player a bare stream URL: no
+   * source list, no download button, and no way to move on when it would not
+   * play. The instant-play path had all three, so the *more* deliberate action
+   * produced the *less* capable player — which is exactly backwards.
+   */
+  sources?: {
+    list: TorrentResult[];
+    activeInfoHash: string;
+    onSelect: (source: TorrentResult) => void;
+    onDownload: (source: TorrentResult) => void;
+    /** Called when the chosen source starts but cannot be decoded. */
+    onUnplayable: (reason: string) => void;
+  };
 }
 
 /**
@@ -188,6 +205,25 @@ export const DetailView: React.FC<DetailViewProps> = ({
    * said it would.
    */
   const [fellBackTo, setFellBackTo] = useState<string | null>(null);
+  /**
+   * Sources ruled out on this page, by infoHash.
+   *
+   * The manual-play path has no playback session to hold this, so it lives
+   * here. Same rule as the session's: keyed on infoHash, because two releases
+   * of one film share a title and are not the same source.
+   */
+  const unplayableSources = useRef<Set<string>>(new Set());
+  /**
+   * Stable handles to the play and download actions.
+   *
+   * The player is handed these inside `handlePlaySource`, which is itself one
+   * of them — a direct reference would be circular, and capturing the value
+   * would freeze it at the first call.
+   */
+  const playSourceRef = useRef<(source: TorrentResult) => void>(() => {});
+  const downloadSourceRef = useRef<(source: TorrentResult, episode: Episode | null) => void>(
+    () => {}
+  );
 
   // --- load detail ---------------------------------------------------------
 
@@ -517,6 +553,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
       const watchState = await loadWatchState(detail.url);
 
+      const others = pickerData?.sources ?? [];
+
       onPlay({
         streamUrl: response.handle.streamUrl,
         mimeType: response.handle.mimeType,
@@ -526,6 +564,19 @@ export const DetailView: React.FC<DetailViewProps> = ({
         subtitles: response.handle.subtitleUrls,
         series: seriesContextFor(pendingEpisode, watchState),
         onRequestEpisode: (episode) => playEpisodeDirectlyRef.current(episode),
+        sources: {
+          list: others,
+          activeInfoHash: response.handle.infoHash,
+          onSelect: (next) => void playSourceRef.current(next),
+          onDownload: (next) => downloadSourceRef.current(next, pendingEpisode),
+          onUnplayable: () => {
+            unplayableSources.current.add(source.infoHash);
+            const next = others.find(
+              (candidate) => !unplayableSources.current.has(candidate.infoHash)
+            );
+            if (next) void playSourceRef.current(next);
+          },
+        },
         progress: {
           mediaUrl: pendingEpisode?.url ?? detail.url,
           year: detail.year,
@@ -536,8 +587,18 @@ export const DetailView: React.FC<DetailViewProps> = ({
         },
       });
     },
-    [detail, pendingEpisode, onPlay, rememberChoice, seriesContextFor]
+    [detail, pendingEpisode, onPlay, rememberChoice, seriesContextFor, pickerData]
   );
+
+  // Assigned after definition: `handlePlaySource` hands these to the player and
+  // is itself one of them.
+  useEffect(() => {
+    playSourceRef.current = (source: TorrentResult) => void handlePlaySource(source);
+  }, [handlePlaySource]);
+
+  useEffect(() => {
+    downloadSourceRef.current = downloadSource;
+  }, [downloadSource]);
 
   const handleDownloadSource = useCallback(
     (source: TorrentResult) => {
