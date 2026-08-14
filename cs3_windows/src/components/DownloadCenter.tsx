@@ -13,6 +13,8 @@ import {
   ChevronDown,
   ChevronRight,
   Layers,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 interface DownloadCenterProps {
@@ -66,6 +68,8 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
   formatSize,
   isEpisode = false,
 }) => {
+  const [copiedMeta, setCopiedMeta] = useState(false);
+
   const percent =
     task.totalBytes > 0
       ? Math.min(100, Math.floor((task.bytesDownloaded / task.totalBytes) * 100))
@@ -74,6 +78,42 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
   const isDownloading = task.state === DownloadState.Downloading;
   const isResumable =
     task.state === DownloadState.Paused || task.state === DownloadState.Failed;
+
+  const handleCopyMeta = () => {
+    const isEpisodeItem = task.episodeNumber !== undefined;
+    const itemText = isEpisodeItem
+      ? task.seasonNumber !== undefined
+        ? `S${task.seasonNumber} E${task.episodeNumber}`
+        : `Episode ${task.episodeNumber}`
+      : 'Movie / Single';
+
+    const lines = [
+      `CloudStream Desktop — Download Metadata`,
+      `Title:          ${task.title}`,
+      `Item:           ${itemText}`,
+      `Provider:       ${task.providerName || 'Extension / Built-in'}`,
+      `Quality:        ${task.quality || task.resolution ? `${task.quality || task.resolution}p` : 'Unknown'}`,
+      `State:          ${task.state}`,
+      `Progress:       ${formatSize(task.bytesDownloaded)} / ${formatSize(task.totalBytes)} (${percent}%)`,
+      `Speed:          ${formatSpeed(task.downloadSpeed)}`,
+      `ETA:            ${task.etaSeconds > 0 ? `${task.etaSeconds}s` : 'N/A'}`,
+      `Retry Count:    ${task.retryCount || 0}/4`,
+      task.errorMessage ? `Last Status:    ${task.errorMessage}` : null,
+      `Source Link:    ${task.link.url}`,
+      `Target Path:    ${task.targetFilePath}`,
+      task.mediaUrl ? `Media URL:      ${task.mediaUrl}` : null,
+      task.headers && Object.keys(task.headers).length > 0
+        ? `Headers:        ${JSON.stringify(task.headers)}`
+        : null,
+      `Timestamp:      ${new Date().toISOString()}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    void navigator.clipboard.writeText(lines);
+    setCopiedMeta(true);
+    setTimeout(() => setCopiedMeta(false), 2500);
+  };
 
   return (
     <div
@@ -229,6 +269,13 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
 
       {/* Control Action Buttons */}
       <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0 }}>
+        <button
+          onClick={handleCopyMeta}
+          className="btn btn-secondary btn-icon"
+          title="Copy Download Metadata & Debug Info"
+        >
+          {copiedMeta ? <Check size={15} style={{ color: 'var(--status-success)' }} /> : <Copy size={15} />}
+        </button>
         {isDownloading && (
           <button
             onClick={() => onPause(task.id)}

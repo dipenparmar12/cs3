@@ -398,7 +398,21 @@ export class DownloadService {
   }
 
   /**
-   * Matches a fresh direct source from provider against the download task's original metadata.
+   * Classifies whether a download error is recoverable via smart source refresh.
+   */
+  private isRecoverableError(message: string): boolean {
+    if (!message) return true;
+    // Non-recoverable: User cancelled, bad target path, unsupported file, filesystem write error
+    if (/cancelled|user cancel|invalid path|unsupported format|permission denied|no space/i.test(message)) {
+      return false;
+    }
+    // Recoverable: expired token, 401, 403, 404, 410, connection reset, timeout, range header mismatch, 5xx
+    return true;
+  }
+
+  /**
+   * Intelligently matches a fresh direct source from provider against the download task's original metadata.
+   * Prioritises Tier 1 (Provider + Quality + Size), Tier 2 (Provider + Size), Tier 3 (Quality + Size), Tier 4 (Best Fallback).
    */
   private findMatchingSource(
     task: DownloadTask,
@@ -407,7 +421,16 @@ export class DownloadService {
     const directSources = sources.filter((s) => Boolean(s.directUrl));
     if (directSources.length === 0) return null;
 
-    // 1. Exact match on provider name and quality/resolution
+    const isSizeCompatible = (s: TorrentResult): boolean => {
+      if (!task.totalBytes || task.totalBytes <= 0 || !s.sizeBytes || s.sizeBytes <= 0) {
+        return true; // Size unknown; do not penalise
+      }
+      // Size matches within 10% tolerance
+      const diff = Math.abs(s.sizeBytes - task.totalBytes);
+      return diff / task.totalBytes <= 0.10;
+    };
+
+    // Tier 1: Exact match on providerName AND resolution AND size compatibility
     let best = directSources.find((s) => {
       const providerMatch =
         s.indexerName === task.providerName ||
@@ -416,30 +439,34 @@ export class DownloadService {
       const qualityMatch =
         (task.quality && (resStr === String(task.quality) || resStr === `${task.quality}p`)) ||
         (task.resolution && (resStr === String(task.resolution) || resStr === `${task.resolution}p`));
-      return providerMatch && qualityMatch;
+      return providerMatch && qualityMatch && isSizeCompatible(s);
     });
-
     if (best) return best;
 
-    // 2. Match on provider name alone
-    best = directSources.find(
-      (s) =>
+    // Tier 2: Match on providerName AND size compatibility
+    best = directSources.find((s) => {
+      const providerMatch =
         s.indexerName === task.providerName ||
-        (s.title && s.title.toLowerCase().includes(task.providerName.toLowerCase()))
-    );
+        (s.title && s.title.toLowerCase().includes(task.providerName.toLowerCase()));
+      return providerMatch && isSizeCompatible(s);
+    });
     if (best) return best;
 
-    // 3. Match on quality / resolution alone
+    // Tier 3: Match on quality / resolution AND size compatibility
     best = directSources.find((s) => {
       const resStr = s.parsed?.resolution ? String(s.parsed.resolution) : '';
-      return (
+      const qualityMatch =
         (task.quality && (resStr === String(task.quality) || resStr === `${task.quality}p`)) ||
-        (task.resolution && (resStr === String(task.resolution) || resStr === `${task.resolution}p`))
-      );
+        (task.resolution && (resStr === String(task.resolution) || resStr === `${task.resolution}p`));
+      return qualityMatch && isSizeCompatible(s);
     });
     if (best) return best;
 
-    // 4. Fall back to top-scoring direct source
+    // Tier 4: Any direct source matching size compatibility
+    best = directSources.find(isSizeCompatible);
+    if (best) return best;
+
+    // Fallback: Top direct source
     return directSources[0];
   }
 
@@ -450,18 +477,18 @@ export class DownloadService {
     const maxRetries = 4;
     const currentRetries = task.retryCount || 0;
 
-    // Any direct link download failure (expired token, 403, 404, network reset, range mismatch) can be auto-recovered
     const canRecover =
       Boolean(task.mediaUrl) &&
       this.contentService !== null &&
       isDirectLink &&
-      currentRetries < maxRetries;
+      currentRetries < maxRetries &&
+      this.isRecoverableError(message);
 
     if (canRecover && this.contentService && task.mediaUrl) {
       const attemptNum = currentRetries + 1;
       task.retryCount = attemptNum;
       task.state = DownloadState.RefreshingSource;
-      task.errorMessage = `Link expired or interrupted — refreshing source from provider (attempt ${attemptNum}/${maxRetries})...`;
+      task.errorMessage = `Refreshing source from provider (attempt ${attemptNum}/${maxRetries})...`;
       this.saveQueueToStorage();
 
       try {
@@ -477,7 +504,7 @@ export class DownloadService {
 
         const matched = this.findMatchingSource(task, response.sources);
         if (matched && matched.directUrl) {
-          // Remove old aria2 GID mapping if aria2 was tracking this task
+          // 1. Session & Engine Cleanup: Remove old aria2 GID mapping if present
           for (const [gid, taskId] of this.gidToTaskId.entries()) {
             if (taskId === task.id) {
               await this.aria2.remove(gid).catch(() => {});
@@ -485,14 +512,47 @@ export class DownloadService {
             }
           }
 
+          // 2. Data Integrity Check: If size changed dramatically (>20%), truncate partial file to avoid corruption
+          if (
+            task.bytesDownloaded > 0 &&
+            matched.sizeBytes &&
+            matched.sizeBytes > 0 &&
+            task.totalBytes > 0
+          ) {
+            const sizeDiff = Math.abs(matched.sizeBytes - task.totalBytes);
+            if (sizeDiff / task.totalBytes > 0.2) {
+              console.warn(
+                `[download] Refreshed source size (${matched.sizeBytes}) differs from original (${task.totalBytes}); restarting partial file`
+              );
+              try {
+                fs.rmSync(`${task.targetFilePath}.part`, { force: true });
+              } catch {}
+              task.bytesDownloaded = 0;
+            }
+          }
+
+          // 3. Update task link & headers
           task.link.url = matched.directUrl;
           if (matched.directHeaders) {
             task.headers = { ...task.headers, ...matched.directHeaders };
           }
+          if (matched.sizeBytes) task.totalBytes = matched.sizeBytes;
+
+          // 4. Update Source Cache so future requests reuse fresh valid link
+          try {
+            this.contentService
+              .getCache()
+              .write(task.mediaUrl, [matched], task.seasonNumber, task.episodeNumber);
+          } catch {}
+
           task.state = DownloadState.Retrying;
-          task.errorMessage = `Resuming download with fresh link (attempt ${attemptNum}/${maxRetries})...`;
+          const downloadedMb = task.bytesDownloaded > 0 ? (task.bytesDownloaded / 1e6).toFixed(0) : '0';
+          task.errorMessage = task.bytesDownloaded > 0
+            ? `Resuming download from ${downloadedMb} MB (attempt ${attemptNum}/${maxRetries})...`
+            : `Retrying download with fresh link (attempt ${attemptNum}/${maxRetries})...`;
           this.saveQueueToStorage();
 
+          // 5. Exponential Backoff (1s, 2s, 4s, 8s)
           const delay = Math.min(1000 * Math.pow(2, currentRetries), 8000);
           setTimeout(() => {
             void this.startTask(task);
