@@ -33,6 +33,9 @@ import { ProviderRanking } from './cs3/providerRanking';
 import { ProviderRecommender } from './cs3/providerRecommendations';
 import { ExternalPlayerService, PLAYER_DOWNLOADS } from './externalPlayer';
 import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
+import { BookmarkStore } from './cs3/bookmarkStore';
+import { DiscoveryService } from './cs3/discovery';
+import { TitleEnricher } from './cs3/titleEnricher';
 import type { DownloadTask } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
 import type { IndexerConfig, SourcePreferences, TorrentResult } from '../src/types/torrent';
@@ -55,6 +58,9 @@ const contentService = new ContentService(datastore, pluginManager, torrentEngin
 const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
 const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
+const bookmarks = new BookmarkStore(datastore);
+const discovery = new DiscoveryService();
+const titleEnricher = new TitleEnricher();
 const bootstrap = new BootstrapService(datastore, pluginManager);
 const titleOutcomes = new TitleOutcomeStore(datastore);
 const diagnostics = new DiagnosticsLog();
@@ -659,6 +665,161 @@ ipcMain.handle(
     return { ok: true };
   }
 );
+
+// --- discovery (the dynamic home screen) ----------------------------------
+
+/**
+ * The home screen's sections.
+ *
+ * Genres are derived from what the user has watched, on this machine, and are
+ * used only to choose which public catalogue URL to fetch. Nothing about the
+ * user is sent anywhere: the catalogue is asked "what is popular in Horror",
+ * not "what should this person watch".
+ */
+ipcMain.handle('discover:sections', async (_, options?: { includeAnime?: boolean }) => {
+  try {
+    const genres = topGenresFromHistory();
+    const sections = await discovery.sections({
+      genres,
+      includeAnime: options?.includeAnime,
+    });
+    return { ok: true, sections, personalGenres: genres };
+  } catch (error) {
+    return { ...fail(error), sections: [], personalGenres: [] };
+  }
+});
+
+ipcMain.handle('discover:more', async (_, section: string, skip: number) => {
+  try {
+    return { ok: true, items: await discovery.more(section as never, skip) };
+  } catch (error) {
+    return { ...fail(error), items: [] };
+  }
+});
+
+/** Forces the next fetch to hit the network. The "refresh" button. */
+ipcMain.handle('discover:refresh', async () => {
+  discovery.invalidate();
+  return { ok: true };
+});
+
+/**
+ * The genres this user actually watches, most-watched first.
+ *
+ * Read from the library rather than from a preferences screen nobody fills in.
+ * Capped at three sections so the home page does not become a list of one
+ * genre per film they have ever opened.
+ */
+function topGenresFromHistory(): string[] {
+  try {
+    const tally = new Map<string, number>();
+    for (const entry of libraryStore.getEntries()) {
+      const bookmark = bookmarks.get(entry.urls[0] ?? '');
+      for (const genre of bookmark?.genres ?? []) {
+        if (!DiscoveryService.GENRES.includes(genre)) continue;
+        tally.set(genre, (tally.get(genre) ?? 0) + 1);
+      }
+    }
+    return [...tally.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([genre]) => genre);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Normalises a provider's release name to its catalogue record.
+ *
+ * Exposed as its own channel rather than folded into search, because the
+ * caller decides when it is worth the round trips — a grid of two hundred rows
+ * does not want two hundred lookups before it draws anything.
+ */
+ipcMain.handle(
+  'discover:enrich',
+  async (_, results: Parameters<TitleEnricher['enrichAll']>[0], limit?: number) => {
+    try {
+      return { ok: true, results: await titleEnricher.enrichAll(results, { limit }) };
+    } catch (error) {
+      return { ...fail(error), results };
+    }
+  }
+);
+
+ipcMain.handle(
+  'discover:resolveTitle',
+  async (_, rawTitle: string, hint?: { type?: never; year?: number }) => {
+    try {
+      return { ok: true, metadata: await titleEnricher.resolve(rawTitle, hint ?? {}) };
+    } catch (error) {
+      return { ...fail(error), metadata: null };
+    }
+  }
+);
+
+/**
+ * Where a provider came from, for showing on the detail page.
+ *
+ * A result carries its provider's name and nothing else, so a page could say
+ * which site served it and never whose extension or whose repository that was
+ * — which is exactly what someone needs when a provider starts returning
+ * nothing and they want to know what to turn off.
+ */
+ipcMain.handle('api:getProviderProvenance', async (_, providerName: string) => {
+  try {
+    return { ok: true, provenance: pluginManager.provenanceOf(providerName) };
+  } catch (error) {
+    return { ...fail(error), provenance: { provider: providerName } };
+  }
+});
+
+// --- saved detail pages (bookmarks) ---------------------------------------
+
+ipcMain.handle('bookmarks:list', async () => ({
+  ok: true,
+  bookmarks: bookmarks.list(),
+  facets: bookmarks.originFacets(),
+}));
+
+ipcMain.handle('bookmarks:get', async (_, mediaUrl: string) => ({
+  ok: true,
+  bookmark: bookmarks.get(mediaUrl),
+}));
+
+/**
+ * One channel for save and unsave.
+ *
+ * The control is a single toggle on the page and modelling it as two calls
+ * invites the two to disagree — the button reads "Saved" while the store has
+ * already dropped it, because one of the pair failed and the UI only checked
+ * the other.
+ */
+ipcMain.handle(
+  'bookmarks:toggle',
+  async (_, input: Parameters<BookmarkStore['toggle']>[0]) => {
+    try {
+      return { ok: true, ...bookmarks.toggle(input) };
+    } catch (error) {
+      return { ...fail(error), saved: false, bookmark: null };
+    }
+  }
+);
+
+ipcMain.handle('bookmarks:remove', async (_, mediaUrl: string) => ({
+  ok: true,
+  removed: bookmarks.remove(mediaUrl),
+}));
+
+ipcMain.handle('bookmarks:setNote', async (_, mediaUrl: string, note?: string) => ({
+  ok: true,
+  bookmark: bookmarks.setNote(mediaUrl, note),
+}));
+
+ipcMain.handle('bookmarks:markOpened', async (_, mediaUrl: string) => {
+  bookmarks.markOpened(mediaUrl);
+  return { ok: true };
+});
 
 // --- provider analytics and ranking ---------------------------------------
 

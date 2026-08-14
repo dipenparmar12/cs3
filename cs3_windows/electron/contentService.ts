@@ -25,6 +25,7 @@ import { mergeSearchResults } from './searchMerge';
 import { rawFetch } from './torrent/http';
 import { SearchScopeStore } from './searchScope';
 import { SearchSessionManager, type SearchSnapshot } from './searchSession';
+import type { SourceDiagnosis } from '../src/types/diagnostics';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -83,6 +84,15 @@ export interface SourceResponse {
   indexerOutcomes: AggregateSearchResult['indexerOutcomes'];
   /** Present when zero sources were produced; explains why, for the UI. */
   emptyReason?: string;
+  /**
+   * The structured form of `emptyReason`.
+   *
+   * Both, because they serve different readers: the sentence goes on screen and
+   * the facts go on the clipboard. Collapsing them would either put a stack of
+   * addresses and HTTP statuses in front of a viewer or leave the person
+   * helping them with one sentence, which is where this started.
+   */
+  diagnosis?: SourceDiagnosis;
   query: { title: string; season?: number; episode?: number; imdbId?: string };
 }
 
@@ -471,7 +481,7 @@ export class ContentService {
       // Season and episode are forwarded because the URL may address the show
       // rather than the episode — the detail view hands over an episode handle,
       // but a quick-play straight from a search row does not.
-      const sources = await this.extensionSources(base, season, episode);
+      const { sources, diagnosis } = await this.extensionSources(base, season, episode);
       onProgress?.({
         results: sources,
         settled: 1,
@@ -484,10 +494,15 @@ export class ContentService {
         sources,
         filtered: [],
         indexerOutcomes: [],
+        // The specific reason when there is one. The generic sentence remains
+        // only as the fallback for a path that produced no verdict at all —
+        // it was previously the answer for six distinct situations.
         emptyReason:
           sources.length === 0
-            ? 'The extension provider returned no playable links for this item.'
+            ? (diagnosis?.summary ??
+              'The extension provider returned no playable links for this item.')
             : undefined,
+        diagnosis: sources.length === 0 ? diagnosis : undefined,
         query: { title: request.titleOverride ?? '', season, episode },
       };
     }
@@ -617,7 +632,7 @@ export class ContentService {
         // yet never should.
         if (options.signal?.aborted) return;
         try {
-          fromExtensions.push(...(await this.extensionSources(route, season, episode)));
+          fromExtensions.push(...(await this.extensionSources(route, season, episode)).sources);
         } catch {
           // One provider failing is not a search failure; the rest still answer.
         }
@@ -656,14 +671,16 @@ export class ContentService {
     url: string,
     season?: number,
     episode?: number
-  ): Promise<TorrentResult[]> {
+  ): Promise<{ sources: TorrentResult[]; diagnosis?: SourceDiagnosis }> {
     const target = await this.resolveExtensionTarget(url, season, episode);
     // `cs3ext://<provider>/<handle>` — the provider is the part worth
     // attributing outcomes to, and the only place it is still available.
     const providerName = target.startsWith('cs3ext://')
       ? decodeURIComponent(target.slice('cs3ext://'.length).split('/')[0] ?? '') || undefined
       : undefined;
-    let links = await this.plugins.loadLinks(target);
+    let attempt = await this.plugins.loadLinksDetailed(target);
+    let links = attempt.links;
+    let diagnosis = attempt.diagnosis;
 
     // An episode's URL already *is* the provider's playable handle, but a
     // film's is its detail page — and those differ (Internet Archive answers
@@ -675,11 +692,15 @@ export class ContentService {
         | (MetadataDetail & { dataUrl?: string })
         | null;
       if (detail?.dataUrl && detail.dataUrl !== target) {
-        links = await this.plugins.loadLinks(detail.dataUrl);
+        // The retry's verdict replaces the first one: the first address was
+        // never the playable handle, so its failure describes the wrong thing.
+        attempt = await this.plugins.loadLinksDetailed(detail.dataUrl);
+        links = attempt.links;
+        diagnosis = attempt.diagnosis;
       }
     }
 
-    return links
+    const sources = links
       .filter((link) => link.url)
       .map((link, index) => {
         const parsed = parseReleaseName(link.name || link.source || 'Stream');
@@ -715,6 +736,8 @@ export class ContentService {
         } satisfies TorrentResult;
       })
       .sort((a, b) => b.score - a.score);
+
+    return { sources, diagnosis: sources.length === 0 ? diagnosis : undefined };
   }
 
   /**
