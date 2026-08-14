@@ -166,6 +166,26 @@ export class DiagnosticsLog {
     return [...this.records];
   }
 
+  /**
+   * Writes immediately, for shutdown.
+   *
+   * `scheduleWrite` debounces by a second and the timer is `unref`ed, so a quit
+   * inside that window drops everything since the last flush — which is exactly
+   * the window a crash-adjacent session ends in, and would explain a report
+   * arriving with no records in it.
+   */
+  public flush(): void {
+    if (this.writeTimer) {
+      clearTimeout(this.writeTimer);
+      this.writeTimer = null;
+    }
+    try {
+      fs.writeFileSync(this.file, JSON.stringify(this.records), 'utf8');
+    } catch {
+      // Shutdown is not the place to start reporting problems.
+    }
+  }
+
   public clear(): void {
     this.records = [];
     this.scheduleWrite();

@@ -179,6 +179,10 @@ export class ContentService {
     return this.engine;
   }
 
+  public getProxy(): MediaProxy {
+    return this.proxy;
+  }
+
   /** Owns a socket, so it is wired into app shutdown like the other services. */
   public shutdown(): void {
     this.proxy.shutdown();

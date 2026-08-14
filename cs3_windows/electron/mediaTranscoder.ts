@@ -225,6 +225,16 @@ export class MediaTranscoder {
   private nextToken = 1;
   /** What the renderer reported it can decode; overrides the static table. */
   private capabilities: RendererCapabilities | null = null;
+  /** Where probe and encode failures are reported; see `setDiagnostics`. */
+  private diagnostics: {
+    record(entry: {
+      level: 'error' | 'warn' | 'info';
+      stage: 'playback';
+      url?: string;
+      message: string;
+      detail?: string;
+    }): void;
+  } | null = null;
   /** The encoder that passed its test encode. Fixed for the run once chosen. */
   private videoEncoder: VideoEncoder | null = null;
 
@@ -242,6 +252,10 @@ export class MediaTranscoder {
    * reasoning produced the audio table in the first place — it was measured, not
    * looked up.
    */
+  public setDiagnostics(sink: NonNullable<MediaTranscoder['diagnostics']>): void {
+    this.diagnostics = sink;
+  }
+
   public setCapabilities(capabilities: RendererCapabilities): void {
     this.capabilities = capabilities;
   }
@@ -313,8 +327,29 @@ export class MediaTranscoder {
       url,
     ];
 
-    const raw = await this.run(ffprobe, args, PROBE_TIMEOUT_MS);
-    if (!raw) return null;
+    const probe = await this.run(ffprobe, args, PROBE_TIMEOUT_MS);
+    if (!probe.ok) {
+      /**
+       * ffprobe already said what was wrong; pass it on.
+       *
+       * This returned a bare null, which became "could not decode this file"
+       * on screen and *nothing at all* in the diagnostics report — the one
+       * place a user would look. The stderr from this tool is usually the
+       * entire answer ("Server returned 404", "Invalid data found", a TLS
+       * failure), so it is the thing worth keeping.
+       */
+      this.diagnostics?.record({
+        level: 'error',
+        stage: 'playback',
+        url,
+        message: probe.timedOut
+          ? `ffprobe timed out after ${PROBE_TIMEOUT_MS}ms`
+          : `ffprobe failed (exit ${probe.code ?? 'none'})`,
+        detail: probe.stderr.trim() || undefined,
+      });
+      return null;
+    }
+    const raw = probe.stdout;
 
     let parsed: {
       streams?: FfprobeStream[];
@@ -414,8 +449,7 @@ export class MediaTranscoder {
         ],
         20_000
       );
-      // `run` resolves null on a non-zero exit, which is exactly the signal.
-      if (works !== null) {
+      if (works.ok) {
         this.videoEncoder = candidate;
         return candidate;
       }
@@ -576,9 +610,33 @@ export class MediaTranscoder {
     });
 
     proc.stdout.pipe(res);
+    /**
+     * ffmpeg's own account of a failed conversion.
+     *
+     * `-loglevel error` means anything arriving here is a real problem, and it
+     * is the only description of why a conversion produced no video. Kept for
+     * the exit handler rather than only logged, so the diagnostics report can
+     * carry it — a console line helps nobody who is not running from a terminal.
+     */
+    let stderr = '';
     proc.stderr.on('data', (chunk: Buffer) => {
-      const text = chunk.toString().trim();
-      if (text) console.warn(`[transcode] ${text.slice(0, 300)}`);
+      const text = chunk.toString();
+      if (stderr.length < 4_000) stderr += text;
+      const trimmed = text.trim();
+      if (trimmed) console.warn(`[transcode] ${trimmed.slice(0, 300)}`);
+    });
+
+    proc.on('close', (code) => {
+      // Code 255 is the kill this issues itself on seek or teardown, which is
+      // routine and not worth reporting.
+      if (code === 0 || code === null || code === 255) return;
+      this.diagnostics?.record({
+        level: 'error',
+        stage: 'playback',
+        url: session.url,
+        message: `ffmpeg exited ${code} while converting this stream`,
+        detail: stderr.trim() || undefined,
+      });
     });
 
     const cleanup = () => this.kill(token);
@@ -590,32 +648,67 @@ export class MediaTranscoder {
     });
   }
 
-  private run(command: string, args: string[], timeoutMs: number): Promise<string | null> {
+  /**
+   * Runs a tool and keeps everything it said.
+   *
+   * This used to return `string | null` — stdout on success, `null` on any
+   * failure — which discarded the exit code, the stderr, and the difference
+   * between "timed out" and "refused". ffprobe puts its entire diagnosis on
+   * stderr, so a failed probe produced a null, then a generic "could not decode
+   * this file", then a diagnostics report containing **zero records**. The tool
+   * had said exactly what was wrong and we threw it away.
+   */
+  private run(
+    command: string,
+    args: string[],
+    timeoutMs: number
+  ): Promise<{ ok: boolean; stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
     return new Promise((resolve) => {
-      let output = '';
+      let stdout = '';
+      let stderr = '';
       let settled = false;
+
+      const finish = (result: {
+        ok: boolean;
+        code: number | null;
+        timedOut: boolean;
+        spawnError?: string;
+      }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({
+          ok: result.ok,
+          stdout,
+          stderr: (result.spawnError ? `${result.spawnError}
+` : '') + stderr,
+          code: result.code,
+          timedOut: result.timedOut,
+        });
+      };
 
       const proc = spawn(command, args, { windowsHide: true });
       const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        try { proc.kill('SIGKILL'); } catch { /* already gone */ }
-        resolve(null);
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          /* already gone */
+        }
+        finish({ ok: false, code: null, timedOut: true });
       }, timeoutMs);
 
-      proc.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
-      proc.on('error', () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(null);
+      proc.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString();
       });
-      proc.on('close', (code) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(code === 0 ? output : null);
+      // Bounded: a failing ffmpeg can produce megabytes of repeated warnings,
+      // and only the first part of that is ever read by anyone.
+      proc.stderr.on('data', (chunk: Buffer) => {
+        if (stderr.length < 8_000) stderr += chunk.toString();
       });
+      proc.on('error', (error) =>
+        finish({ ok: false, code: null, timedOut: false, spawnError: error.message })
+      );
+      proc.on('close', (code) => finish({ ok: code === 0, code, timedOut: false }));
     });
   }
 

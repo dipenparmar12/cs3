@@ -61,6 +61,7 @@ const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
 const subtitles = new SubtitleService();
 const mediaTranscoder = new MediaTranscoder(binaryDownloader);
+mediaTranscoder.setDiagnostics(diagnostics);
 const network = new NetworkSettingsStore(datastore);
 
 downloadService.setTorrentEngine(torrentEngine);
@@ -222,6 +223,7 @@ app.on('before-quit', async (event) => {
   try {
     // Owns child processes and a socket, so it has to be torn down explicitly
     // or a killed app leaves orphaned ffmpeg processes behind.
+    diagnostics.flush();
     mediaTranscoder.shutdown();
     contentService.shutdown();
     await torrentEngine.destroy();
@@ -724,6 +726,7 @@ async function describeUnreadableSource(url: string): Promise<{
 
 ipcMain.handle('media:probe', async (_, url: string) => {
   try {
+    const wrappedUrl = await contentService.getProxy().wrap(url);
     if (!mediaTranscoder.isAvailable()) {
       return {
         ok: false,
@@ -734,7 +737,7 @@ ipcMain.handle('media:probe', async (_, url: string) => {
         needsComponents: true,
       };
     }
-    const probe = await mediaTranscoder.probe(url);
+    const probe = await mediaTranscoder.probe(wrappedUrl);
     if (probe) return { ok: true, probe, needsComponents: false, failure: null };
 
     /**
@@ -747,7 +750,7 @@ ipcMain.handle('media:probe', async (_, url: string) => {
      * where one HTTP request gives the answer: a reported link turned out to be
      * a plain 404, and nothing on screen said so.
      */
-    const failure = await describeUnreadableSource(url);
+    const failure = await describeUnreadableSource(wrappedUrl);
     diagnostics.record({
       level: 'error',
       stage: 'playback',
@@ -765,8 +768,9 @@ ipcMain.handle(
   'media:openTranscode',
   async (_, url: string, audioIndex: number, transcodeVideo?: boolean, transcodeAudio?: boolean) => {
     try {
+      const wrappedUrl = await contentService.getProxy().wrap(url);
       const streamUrl = await mediaTranscoder.createSession(
-        url,
+        wrappedUrl,
         audioIndex,
         Boolean(transcodeVideo),
         transcodeAudio !== false
