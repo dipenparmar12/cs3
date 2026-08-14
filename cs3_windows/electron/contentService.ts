@@ -19,7 +19,9 @@ import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
 import { parseExtensionUrl, type PluginManager } from './pluginManager';
 import { SourceCache } from './sourceCache';
+import { MediaProxy } from './mediaProxy';
 import { mergeSearchResults } from './searchMerge';
+import { rawFetch } from './torrent/http';
 import { SearchScopeStore } from './searchScope';
 import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 
@@ -108,6 +110,13 @@ export class ContentService {
   private cache: SourceCache;
   private scope: SearchScopeStore;
   private searches: SearchSessionManager;
+  /**
+   * Applies a provider's `Referer`/`User-Agent` to the stream it handed us.
+   *
+   * A browser cannot send `Referer` itself — it is a forbidden header — so a
+   * provider link that requires one can only be played through this.
+   */
+  private proxy = new MediaProxy((input, init) => rawFetch(input, init));
   private detailCache = new Map<string, MetadataDetail>();
 
   constructor(datastore: DatastoreManager, plugins: PluginManager, engine: TorrentEngine) {
@@ -144,6 +153,11 @@ export class ContentService {
 
   public getEngine(): TorrentEngine {
     return this.engine;
+  }
+
+  /** Owns a socket, so it is wired into app shutdown like the other services. */
+  public shutdown(): void {
+    this.proxy.shutdown();
   }
 
   // --- search --------------------------------------------------------------
@@ -694,18 +708,29 @@ export class ContentService {
       | 'fileIndex'
       | 'expectedFileName'
       | 'directUrl'
+      | 'directHeaders'
       | 'isM3u8'
       | 'title'
     >,
     season?: number,
     episode?: number
   ): Promise<StreamHandle> {
-    // A provider stream is already an addressable URL. There is no swarm to
-    // join and nothing to download first, so it is handed to the player as-is.
+    /**
+     * A provider stream is already an addressable URL — but usually not one the
+     * player can fetch unaided.
+     *
+     * Most extension links only answer when accompanied by the `Referer` the
+     * provider supplied, and a `<video>` element cannot send one. Routing
+     * through the proxy is what makes the difference between a 403 and a
+     * stream, and it covers hls.js and ffprobe at the same time because they
+     * are handed the same URL. A link with no headers is passed through
+     * untouched.
+     */
     if (source.directUrl) {
+      const streamUrl = await this.proxy.wrap(source.directUrl, source.directHeaders);
       return {
         infoHash: source.infoHash,
-        streamUrl: source.directUrl,
+        streamUrl,
         fileName: source.title ?? 'Stream',
         fileSize: 0,
         diskPath: '',

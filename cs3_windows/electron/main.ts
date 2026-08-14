@@ -221,6 +221,7 @@ app.on('before-quit', async (event) => {
     // Owns child processes and a socket, so it has to be torn down explicitly
     // or a killed app leaves orphaned ffmpeg processes behind.
     mediaTranscoder.shutdown();
+    contentService.shutdown();
     await torrentEngine.destroy();
   } catch {
     // Shutdown is best-effort; never block quit on it.

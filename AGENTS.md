@@ -532,6 +532,38 @@ also the scope identity, the `cs3ext://` address and the enable/disable key. Two
 claiming one name is a genuine collision: the first keeps it and the loser is reported via
 `unavailableReason` instead of silently showing zero providers.
 
+### Provider links need the provider's headers, and a browser cannot send them
+
+Extension links routinely only answer when accompanied by the `Referer` the
+provider supplied. `ExtractorLink` carries it, and for a long time it reached the
+download engine and nothing else: playback handed the raw URL to `<video>`, which
+sends neither `Referer` nor a custom `User-Agent`. No renderer-side fix was
+possible — `Referer` is a forbidden header for `fetch`/XHR precisely so pages
+cannot forge it.
+
+One cause, two unrecognisably different symptoms:
+
+- **HLS** — `manifestLoadError` from hls.js, because the host 403'd the playlist.
+- **Progressive** — "could not decode this file", because *ffprobe* could not read
+  it either, so the player had no codec to name and fell through to the generic
+  message.
+
+`mediaProxy.ts` serves the stream from loopback with the headers applied, and
+`ContentService.startStream` wraps every `directUrl` through it. That fixes all
+three consumers at once — the media element, hls.js and ffprobe/ffmpeg — because
+they are all handed the same loopback URL. A link with no headers is passed
+through untouched rather than gaining a pointless hop.
+
+**HLS playlists are rewritten, not forwarded.** A manifest names its segments,
+keys and variant playlists by URL, and those requests would otherwise go straight
+from the renderer to the host without headers — succeeding on the manifest and
+then failing on every segment, which is worse than failing outright. Both forms
+are covered: bare URI lines and quoted `URI="…"` attributes (`EXT-X-KEY`,
+`EXT-X-MAP`, `EXT-X-MEDIA`). Relative URIs resolve against the *final* upstream
+URL so a playlist reached via redirect still resolves correctly.
+
+Bound to loopback only: it forwards arbitrary URLs with caller-supplied headers.
+
 ### Diagnosability: a message is not a report
 
 A failure message is a fact about a string. `Expected URL scheme 'http' or 'https'`

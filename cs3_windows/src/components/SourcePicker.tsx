@@ -6,6 +6,7 @@ import {
 import type { TorrentResult } from '../types/torrent';
 import { Resolution } from '../types/torrent';
 import { SourceFilterBar } from './SourceFilterBar';
+import { CopyErrorButton } from './CopyErrorButton';
 import {
   DEFAULT_FILTER_STATE,
   filterAndSortSources,
@@ -148,6 +149,15 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                   Show {data.filtered.length} filtered
                 </button>
               )}
+              {/* The most commonly hit dead end, and the one carrying the least
+                  on screen — the provider's own reason is in the log. */}
+              <CopyErrorButton
+                compact
+                context={{
+                  title: data.query?.title,
+                  message: data.emptyReason ?? 'No playable sources found',
+                }}
+              />
             </div>
           </div>
         )}

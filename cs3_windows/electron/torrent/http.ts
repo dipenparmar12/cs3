@@ -42,6 +42,20 @@ export function setHttpFetch(implementation: FetchLike): void {
   activeFetch = implementation;
 }
 
+/**
+ * The configured fetch, unwrapped.
+ *
+ * `fetchJson` and friends add retries, timeouts and body parsing, all of which
+ * are wrong for streaming a film: the response has to stay a stream, the
+ * timeout is the length of the movie, and retrying a partial range would start
+ * it again. `MediaProxy` needs the transport and none of the policy — but it
+ * does need this indirection rather than global `fetch`, so proxied streams
+ * honour the DNS setting like everything else.
+ */
+export function rawFetch(input: string, init?: RequestInit): Promise<Response> {
+  return activeFetch(input, init);
+}
+
 export class HttpError extends Error {
   // Declared as fields rather than constructor parameter properties, which
   // `erasableSyntaxOnly` forbids.
