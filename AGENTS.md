@@ -72,6 +72,7 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (10 tests, Node type-stripping — no framework) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
 | Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
@@ -98,8 +99,14 @@ carry a reason with it.
 
 Toolchain present in the cloud environment: Java 21, Maven, Bun, Node 22.
 
-There is **no automated test suite for the Electron/React side** and no CI workflow
-(`.github/` does not exist).
+There is **almost no automated test suite for the Electron/React side** and no CI workflow
+(`.github/` does not exist). The exception is `electron/sharedDiscovery.test.mts`, run by
+`bun run test:electron`: Node strips the types itself — possible only because
+`erasableSyntaxOnly` is set — so there is no framework, no transform and no config to keep
+working. That module earns tests where the rest of `electron/` has none because its failure
+modes are invisible: a doubled scrape reads as a slow provider and a wrongly-cancelled run
+reads as a flaky site, and neither would ever be traced back to it from a bug report. `.mts`
+is in `tsconfig.node.json`'s `include`, so the tests are typechecked too.
 
 **The `tsc` in `bun run build` typechecks nothing.** The root `tsconfig.json` is
 solution-style (`"files": []` plus two `references`), and plain `tsc` on such a config is a
@@ -773,6 +780,50 @@ main process is going to drop — selecting it searches nothing and reports itse
 `missingProviders`. Same class of failure as the widen-back bug above, from the other
 direction. Anything new that reads the tree to decide what may be searched has the same
 obligation.
+
+### Sources are found while the page is being read
+
+Pressing Play used to begin a fifteen-provider scrape from cold. Meanwhile the viewer had
+been on the detail page for several seconds reading the plot — the exact window the work
+could have run in. `cs3/sourcePrefetcher.ts` uses it: a moment after a detail page settles,
+it runs the same discovery Play would, and the results land in `SourceCache` where Play
+finds them.
+
+**The in-flight sharing is what makes this safe rather than harmful**, and it is the reason
+`sharedDiscovery.ts` exists as its own module. Warming the cache only helps if pressing Play
+a second later *joins* the running discovery; without that it would start a second identical
+scrape beside the first, doubling the load on every community site involved and arriving no
+sooner. Two rules in there are load-bearing:
+
+- **Cancellation is by consensus.** Each caller brings its own `AbortSignal` and the work
+  stops only when *every* caller has withdrawn. Otherwise closing the detail page — which
+  happens immediately after Play — would cancel the discovery the player just joined.
+- **An aborted run is never joined.** It stays in the map until its promise settles, and
+  handing it to a new caller would return a cancelled result.
+
+Both are covered by `sharedDiscovery.test.mts`, along with late-joiner progress replay and
+the refresh rule (a cache-bypassing caller may not be served by a run that might have
+answered from cache; the reverse is fine).
+
+The prefetch itself is deliberately restrained, because opening a detail page is not a
+commitment to watch and speculative traffic is the fastest way to get an IP blocked by a
+scraper target:
+
+- nothing runs until the page has been open ~1.2s, so paging through six titles fires zero
+  scrapes rather than six;
+- nothing runs when `hasFreshSources` says the cache can already answer — a `peek`, so the
+  check neither writes nor promotes the entry;
+- one at a time, a new target superseding the old;
+- and it can be switched off, with the cost stated, for metered connections.
+
+The detail page shows the state on the artwork ("3 sources ready", "Finding sources…"),
+because invisible work is indistinguishable from no work — nobody expects Play to be instant
+unless something says so. `waiting` and `idle` deliberately render nothing: announcing the
+settle delay would put a badge on every title someone merely glanced at.
+
+Reuse and expiry are `SourceCache`'s existing behaviour, not a second policy: magnets never
+expire, provider links carry the deadline in their URL or a short TTL, and a partially stale
+entry serves its good half.
 
 ### The mini player: the `<video>` element is never remounted
 
