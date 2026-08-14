@@ -131,6 +131,10 @@ interface VideoPlayerProps {
     onCancelSearch?: () => void;
     onDownloadSource?: (source: TorrentResult) => void;
   };
+  /** When provided, overrides the stored setting for showing aspect ratio control (default false) */
+  showAspectRatioControl?: boolean;
+  /** When provided, overrides the stored setting for showing playback speed control (default false) */
+  showPlaybackSpeedControl?: boolean;
 }
 
 export type PlaybackPhase = 'searching' | 'starting' | 'playing' | 'error';
@@ -183,7 +187,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamUrl, mimeType, title, episodeTitle, infoHash, subtitles, onBack,
   series, onSelectEpisode, switchingTo, switchError, progress, sourceSession,
   subtitleContext, onDownloadCurrent, onOpenDownloads, hidden = false,
-  mini = false, onMinimize, onExpand,
+  mini = false, onMinimize, onExpand, showAspectRatioControl, showPlaybackSpeedControl,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -199,6 +203,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [speed, setSpeed] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [aspect, setAspect] = useState<AspectRatioMode>(AspectRatioMode.Fit);
+  const [showSpeedControl, setShowSpeedControl] = useState(showPlaybackSpeedControl ?? false);
+  const [showAspectControl, setShowAspectControl] = useState(showAspectRatioControl ?? false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isHoveringControls, setIsHoveringControls] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -209,6 +215,44 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false);
   const [downloadPanelOpen, setDownloadPanelOpen] = useState(false);
   const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    const loadPlayerControlsSettings = async () => {
+      if (!window.cloudstream) return;
+      try {
+        const [speedEnabled, resizeEnabled, customSpeed, customAspect, savedAspect, savedSpeed] =
+          await Promise.all([
+            window.cloudstream.getSetting('playback_speed_enabled_key', 'false'),
+            window.cloudstream.getSetting('player_resize_enabled_key', 'false'),
+            window.cloudstream.getSetting('player_show_playback_speed', 'false'),
+            window.cloudstream.getSetting('player_show_aspect_ratio', 'false'),
+            window.cloudstream.getSetting('default_aspect_ratio', ''),
+            window.cloudstream.getSetting('default_playback_speed', ''),
+          ]);
+        if (active) {
+          if (showPlaybackSpeedControl === undefined) {
+            setShowSpeedControl(speedEnabled === 'true' || customSpeed === 'true');
+          }
+          if (showAspectRatioControl === undefined) {
+            setShowAspectControl(resizeEnabled === 'true' || customAspect === 'true');
+          }
+          if (savedAspect && Object.values(AspectRatioMode).includes(savedAspect as AspectRatioMode)) {
+            setAspect(savedAspect as AspectRatioMode);
+          }
+          if (savedSpeed && !isNaN(Number(savedSpeed)) && Number(savedSpeed) > 0) {
+            setSpeed(Number(savedSpeed));
+          }
+        }
+      } catch {
+        // Defaults to false
+      }
+    };
+    void loadPlayerControlsSettings();
+    return () => {
+      active = false;
+    };
+  }, [showPlaybackSpeedControl, showAspectRatioControl]);
 
   useEffect(() => {
     let active = true;
@@ -2069,20 +2113,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )
           )}
 
-          <HoverMenu
-            label="Speed"
-            value={speed}
-            onChange={setSpeed}
-            options={SPEEDS.map((s) => ({ value: s, label: `${s}×` }))}
-            triggerText={`${speed}×`}
-          />
+          {showSpeedControl && (
+            <HoverMenu
+              label="Speed"
+              value={speed}
+              onChange={setSpeed}
+              options={SPEEDS.map((s) => ({ value: s, label: `${s}×` }))}
+              triggerText={`${speed}×`}
+            />
+          )}
 
-          <HoverMenu
-            label="Aspect ratio"
-            value={aspect}
-            onChange={setAspect}
-            options={Object.values(AspectRatioMode).map((mode) => ({ value: mode, label: mode }))}
-          />
+          {showAspectControl && (
+            <HoverMenu
+              label="Aspect ratio"
+              value={aspect}
+              onChange={setAspect}
+              options={Object.values(AspectRatioMode).map((mode) => ({ value: mode, label: mode }))}
+            />
+          )}
 
           <button className="icon-button" onClick={toggleFullscreen} aria-label="Fullscreen">
             {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}

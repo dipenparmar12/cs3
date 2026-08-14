@@ -12,16 +12,18 @@ import {
   Zap,
   Wrench,
   AlertTriangle,
+  Play,
 } from 'lucide-react';
 import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
+import { PlayerSettings } from '../components/PlayerSettings';
 import { ProviderRankingPanel } from '../components/settings/ProviderRankingPanel';
 import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
 import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
 import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
 
-type TabId = 'general' | 'components' | 'sources' | 'downloads' | 'network' | 'advanced';
+type TabId = 'general' | 'player' | 'components' | 'sources' | 'downloads' | 'network' | 'advanced';
 
 interface SettingsViewProps {
   hasBinaries?: boolean;
@@ -100,6 +102,7 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
 
   const tabs: Array<{ id: TabId; label: string; icon: React.ReactNode; badge?: React.ReactNode }> = [
     { id: 'general', label: 'General', icon: <Sliders size={14} /> },
+    { id: 'player', label: 'Player', icon: <Play size={14} /> },
     {
       id: 'components',
       label: 'Components & Binaries',
@@ -229,6 +232,8 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
           <AdultContentSetting />
         </>
       )}
+
+      {tab === 'player' && <PlayerSettings />}
 
       {tab === 'components' && <UnifiedComponentManager />}
 

@@ -2024,6 +2024,9 @@ ipcMain.handle('datastore:getSetting', async (_, key: string, defaultValue: any)
 );
 
 ipcMain.handle('datastore:setSetting', async (_, key: string, value: any) => {
+  if (typeof value === 'boolean') {
+    datastore.setBool(key, value, true);
+  }
   datastore.setString(key, String(value), true);
 });
 
