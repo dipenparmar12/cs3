@@ -145,9 +145,27 @@ class SidecarTest {
 
         assertNotEquals(a.getFilesDir().toPath(), b.getFilesDir().toPath());
         assertTrue(a.getFilesDir().toPath().startsWith(dir));
-        // DROP-12: no ambient authority beyond the plugin's own directory.
-        assertThrows(android.content.UnsupportedAndroidApiException.class,
-                () -> a.getSystemService("window"));
+
+        /*
+         * DROP-12: no ambient authority beyond the plugin's own directory —
+         * and `null` is how Android itself says so.
+         *
+         * This used to throw for every service name, which looks stricter and
+         * is worse. The call site in the corpus is the first statement of a
+         * provider's `load()`, unguarded, asking how much memory the device has
+         * so it can size a buffer; throwing there aborted the load and cost the
+         * extension every provider it was about to register. StreamPlay lost
+         * all of its providers to exactly that, and the reported cause named
+         * `getSystemService` rather than anything anyone could act on.
+         *
+         * `null` is the documented contract for a name the platform does not
+         * recognise, so a caller that checks gets Android's behaviour and one
+         * that does not fails on the line that *uses* the service rather than
+         * the line that asked for it.
+         */
+        assertNull(a.getSystemService("window"));
+        assertNull(a.getSystemService("audio"));
+        assertNull(a.getSystemService(null));
 
         /*
          * `getPackageManager` hands back a manager rather than throwing, and
@@ -190,11 +208,76 @@ class SidecarTest {
     @Test
     void unsupportedAndroidApiNamesTheApiItRefused() {
         var e = assertThrows(android.content.UnsupportedAndroidApiException.class,
-                () -> android.content.Context.cs3CreateScoped("p", "/tmp").getSystemService("audio"));
+                () -> android.content.Context.cs3CreateScoped("p", "/tmp").getAssets());
 
         // AC-D5: the message must identify the API, not just fail.
-        assertTrue(e.getMessage().contains("android.content.Context.getSystemService"));
-        assertEquals("android.content.Context.getSystemService(audio)", e.api());
+        assertTrue(e.getMessage().contains("android.content.Context.getAssets"));
+        assertEquals("android.content.Context.getAssets", e.api());
+    }
+
+    /**
+     * The one system service the corpus asks for answers with real numbers.
+     *
+     * Real ones, about this JVM. DROP-9 forbids telling plugin code something
+     * false about its platform, and an extension sizing a buffer against a
+     * fabricated device memory figure would size it wrongly — which is the
+     * failure mode a made-up answer was supposed to avoid.
+     */
+    @Test
+    void activityManagerReportsRealMemory(@TempDir Path dir) {
+        android.content.Context context =
+                android.content.Context.cs3CreateScoped("plugin.a", dir.toString());
+
+        Object service = context.getSystemService(android.content.Context.ACTIVITY_SERVICE);
+        assertNotNull(service);
+        assertInstanceOf(android.app.ActivityManager.class, service);
+
+        android.app.ActivityManager manager = (android.app.ActivityManager) service;
+        android.app.ActivityManager.MemoryInfo info = new android.app.ActivityManager.MemoryInfo();
+        manager.getMemoryInfo(info);
+
+        assertTrue(info.totalMem > 0, "total memory must be a real figure");
+        assertTrue(info.availMem >= 0);
+        assertTrue(info.availMem <= info.totalMem);
+        assertTrue(manager.getMemoryClass() > 0);
+
+        // Enumerating the host's processes is not the plugin's business, and an
+        // empty list is what an unprivileged Android app has received since API 24.
+        assertTrue(manager.getRunningAppProcesses().isEmpty());
+    }
+
+    /**
+     * `Handler` runs what it is given rather than refusing it.
+     *
+     * Almost every use in the corpus is a retry backoff or a timeout guard, not
+     * a UI hop — ordinary scheduling that the JVM does perfectly well. Refusing
+     * would break working scraper code to make a point about a platform
+     * difference that does not exist here.
+     */
+    @Test
+    void handlerRunsPostedWorkInOrder() throws Exception {
+        android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+        java.util.List<Integer> seen = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(3);
+
+        for (int i = 1; i <= 3; i++) {
+            final int value = i;
+            handler.post(() -> {
+                seen.add(value);
+                done.countDown();
+            });
+        }
+
+        assertTrue(done.await(5, java.util.concurrent.TimeUnit.SECONDS));
+        // Android guarantees ordering on one Handler; a pool would not.
+        assertEquals(java.util.List.of(1, 2, 3), seen);
+
+        // A cancelled task must not run.
+        Runnable never = () -> seen.add(99);
+        handler.postDelayed(never, 2_000);
+        handler.removeCallbacks(never);
+        Thread.sleep(200);
+        assertFalse(seen.contains(99));
     }
 
     /**
