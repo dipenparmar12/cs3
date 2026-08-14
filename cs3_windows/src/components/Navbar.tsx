@@ -15,6 +15,20 @@ interface NavbarProps {
   /** Fired when the scope picker closes having changed the scope. */
   onScopeChange?: () => void;
   onOpenInspector: () => void;
+  /**
+   * The query the app believes is running, when it was not typed here.
+   *
+   * The box used to hold its own text and nothing else, so a search started
+   * anywhere else left it showing the previous one: pressing "Search title" on
+   * *Avengers: Age of Ultron* ran the right search and the bar still read
+   * "Avengers". The results were right and the one visible statement of what
+   * had been asked was wrong — which is worse than either alone, because it is
+   * the thing a user checks when the results surprise them.
+   *
+   * Not fully controlled: typing must stay local so every keystroke does not
+   * re-render the app. This is the app *telling* the box what it just ran.
+   */
+  externalQuery?: string;
 }
 
 /** Long enough that typing a word costs one request, short enough to feel live. */
@@ -25,8 +39,24 @@ export const Navbar: React.FC<NavbarProps> = ({
   isSearching = false,
   onScopeChange,
   onOpenInspector,
+  externalQuery,
 }) => {
   const [query, setQuery] = useState('');
+
+  /**
+   * Adopts a query the app started elsewhere.
+   *
+   * Guarded on the previous *external* value rather than on `query`, so a user
+   * who edits the box after such a search keeps their edit — re-syncing on
+   * every render would fight their typing.
+   */
+  const lastExternal = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (externalQuery === undefined) return;
+    if (externalQuery === lastExternal.current) return;
+    lastExternal.current = externalQuery;
+    setQuery(externalQuery);
+  }, [externalQuery]);
 
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
   const [history, setHistory] = useState<SearchHistoryEntry[]>([]);
