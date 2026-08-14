@@ -189,6 +189,19 @@ app.whenReady().then(async () => {
   });
   bootstrap.start();
 
+  /**
+   * A stale title refreshed behind the viewer's back reaches them here.
+   *
+   * Cached metadata is served instantly and refreshed after; without this push
+   * the refreshed copy would sit in the cache until the *next* visit, which is
+   * the one case the caching was supposed to make unnecessary.
+   */
+  contentService.setDetailListener((url, detail) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('detail:update', { url, detail });
+    }
+  });
+
   // Search results stream in the same way: one snapshot per source that answers.
   contentService.getSearches().setNotifier((snapshot) => {
     if (mainWindow && !mainWindow.isDestroyed()) {

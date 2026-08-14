@@ -20,6 +20,7 @@ import type { DatastoreManager } from './datastore';
 import { parseExtensionUrl, type PluginManager } from './pluginManager';
 import { SourceCache } from './sourceCache';
 import { MediaProxy } from './mediaProxy';
+import { DetailCache } from './detailCache';
 import { mergeSearchResults } from './searchMerge';
 import { rawFetch } from './torrent/http';
 import { SearchScopeStore } from './searchScope';
@@ -141,7 +142,11 @@ export class ContentService {
    * provider link that requires one can only be played through this.
    */
   private proxy = new MediaProxy((input, init) => rawFetch(input, init));
-  private detailCache = new Map<string, MetadataDetail>();
+  private details = new DetailCache();
+  /** Base URLs with a background refresh already running. */
+  private revalidating = new Set<string>();
+  /** Notified when a background refresh produced new metadata. */
+  private onDetailRefreshed: ((url: string, detail: MetadataDetail) => void) | null = null;
 
   constructor(datastore: DatastoreManager, plugins: PluginManager, engine: TorrentEngine) {
     this.registry = new IndexerRegistry(datastore);
@@ -179,6 +184,11 @@ export class ContentService {
     return this.engine;
   }
 
+  /** Wired by `main.ts` so a refreshed title reaches whoever is viewing it. */
+  public setDetailListener(listener: (url: string, detail: MetadataDetail) => void): void {
+    this.onDetailRefreshed = listener;
+  }
+
   public getProxy(): MediaProxy {
     return this.proxy;
   }
@@ -186,6 +196,7 @@ export class ContentService {
   /** Owns a socket, so it is wired into app shutdown like the other services. */
   public shutdown(): void {
     this.proxy.shutdown();
+    this.details.flush();
   }
 
   // --- search --------------------------------------------------------------
@@ -247,12 +258,62 @@ export class ContentService {
     return mergeSearchResults(results);
   }
 
+  /**
+   * Title metadata, served from cache the moment there is one.
+   *
+   * Stale-while-revalidate: a cached answer goes back immediately whatever its
+   * age, and a stale one starts a refresh behind it whose result is pushed to
+   * whoever is looking. Revisiting a title is then instant, and still correct
+   * within a few seconds if anything changed.
+   *
+   * The alternative — refetching on every visit — meant a blank screen and a
+   * network round trip for a plot and a poster the app had displayed minutes
+   * earlier, and for extension-sourced titles it meant re-scraping a web page.
+   */
   public async load(url: string): Promise<MetadataDetail | null> {
     const base = stripQuery(url);
 
-    const cached = this.detailCache.get(base);
-    if (cached) return cached;
+    const cached = this.details.read(base);
+    if (cached) {
+      if (cached.stale) this.revalidateDetail(base);
+      return cached.detail;
+    }
 
+    const detail = await this.fetchDetail(base);
+    this.details.write(base, detail);
+    return detail;
+  }
+
+  /**
+   * Refreshes a stale entry without making anyone wait for it.
+   *
+   * Deduplicated: opening the same title twice in quick succession, or a list
+   * that renders several cards for one work, must not start several scrapes of
+   * the same page. Failures are deliberately swallowed — the viewer already has
+   * a usable answer on screen, and replacing it with an error because a
+   * *background* refresh failed would be a strictly worse outcome than saying
+   * nothing.
+   */
+  private revalidateDetail(base: string): void {
+    if (this.revalidating.has(base)) return;
+    this.revalidating.add(base);
+
+    void (async () => {
+      try {
+        const fresh = await this.fetchDetail(base);
+        this.details.write(base, fresh);
+        this.onDetailRefreshed?.(base, fresh);
+      } catch {
+        // Keep the stale entry: it is better than nothing, and the next visit
+        // will try again.
+      } finally {
+        this.revalidating.delete(base);
+      }
+    })();
+  }
+
+  /** The actual fetch, by address type. Throws with a reason on every failure. */
+  private async fetchDetail(base: string): Promise<MetadataDetail> {
     const cinemetaRef = parseCinemetaUrl(base);
     if (cinemetaRef) {
       const detail = await this.cinemeta.load(cinemetaRef.type, cinemetaRef.imdbId);
@@ -265,7 +326,7 @@ export class ContentService {
         );
       }
 
-      const mapped: MetadataDetail = {
+      return {
         name: detail.name,
         url: base,
         apiName: 'Catalogue',
@@ -282,8 +343,6 @@ export class ContentService {
         imdbId: detail.imdbId,
         episodes: detail.episodes,
       };
-      this.detailCache.set(base, mapped);
-      return mapped;
     }
 
     if (parseMetadataUrl(base)) {
@@ -298,7 +357,6 @@ export class ContentService {
       if (!detail.imdbId) {
         detail.imdbId = await this.metadata.resolveImdbId(detail.name, detail.year);
       }
-      this.detailCache.set(base, detail);
       return detail;
     }
 
@@ -308,7 +366,9 @@ export class ContentService {
       // here means the URL was not addressed to a provider at all.
       throw new Error(`Nothing knows how to open this address: ${base.slice(0, 120)}`);
     }
-    return fromProvider;
+    // Cached like the catalogue paths, which it previously was not — and it is
+    // the expensive one, because it is a scrape rather than an API call.
+    return fromProvider as MetadataDetail;
   }
 
   // --- sources -------------------------------------------------------------

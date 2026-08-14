@@ -231,9 +231,18 @@ export const DetailView: React.FC<DetailViewProps> = ({
     let cancelled = false;
 
     (async () => {
+      /**
+       * The previous title's data is cleared; this one's is not blanked.
+       *
+       * `loadMedia` answers from cache on a revisit, so the fetch is usually
+       * instant — but setting `detail` to null first still flashed the loading
+       * state on the way through, which is the exact wait the cache exists to
+       * remove.
+       */
       setIsLoading(true);
       setLoadError(null);
       setDetail(null);
+      setFellBackTo(null);
 
       if (!window.cloudstream) {
         setLoadError('Desktop bridge unavailable.');
@@ -310,6 +319,20 @@ export const DetailView: React.FC<DetailViewProps> = ({
       cancelled = true;
     };
   }, [mediaItem.url, mediaItem.alternates]);
+
+  /**
+   * A background refresh landing while this title is open.
+   *
+   * Matched on the URL that actually opened rather than the row's, because a
+   * fallback route may have answered and that is the address the cache is
+   * keyed by. Ignored when it is for something else the user is not looking at.
+   */
+  useEffect(() => {
+    const dispose = window.cloudstream?.onDetailUpdate?.(({ url, detail: fresh }) => {
+      setDetail((current) => (current && current.url === url ? (fresh as DetailData) : current));
+    });
+    return () => dispose?.();
+  }, []);
 
   const seasons = useMemo(() => groupBySeason(detail?.episodes ?? []), [detail]);
   const seasonNumbers = useMemo(

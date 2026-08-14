@@ -132,7 +132,17 @@ export interface CloudStreamElectronAPI {
     kind: TitleOutcomeKind,
     reason?: string
   ) => Promise<Envelope>;
+  /**
+   * Title metadata, from cache when there is one.
+   *
+   * Returns immediately on a hit whatever its age; a stale entry is refreshed
+   * behind the call and the result arrives through {@link onDetailUpdate}.
+   */
   loadMedia: (url: string) => Promise<Envelope & { detail: MetadataDetail | null }>;
+  /** Fires when a background refresh produced newer metadata. Returns a disposer. */
+  onDetailUpdate: (
+    callback: (payload: { url: string; detail: MetadataDetail }) => void
+  ) => () => void;
   getSources: (request: {
     mediaUrl: string;
     season?: number;
@@ -519,6 +529,12 @@ const api: CloudStreamElectronAPI = {
   recordTitleOutcome: (url, kind, reason) =>
     ipcRenderer.invoke('api:recordTitleOutcome', url, kind, reason),
   loadMedia: (url) => ipcRenderer.invoke('api:loadMedia', url),
+  onDetailUpdate: (callback) => {
+    const listener = (_: unknown, payload: { url: string; detail: MetadataDetail }) =>
+      callback(payload);
+    ipcRenderer.on('detail:update', listener);
+    return () => ipcRenderer.removeListener('detail:update', listener);
+  },
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),
 
