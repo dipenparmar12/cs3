@@ -283,6 +283,122 @@
 .detail-hero__plot { font-size: 0.88rem; line-height: 1.6; color: #d1d5db; max-width: 76ch; }
 .detail-hero__actions { display: flex; gap: 0.6rem; margin-top: 0.4rem; }
 
+/* ---- dynamic home ------------------------------------------------------ */
+
+.home { display: flex; flex-direction: column; gap: 1.8rem; }
+
+.home-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  gap: 0.7rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.home-loading h3 { font-size: 1.05rem; font-weight: 600; color: #fff; }
+.home-loading p { font-size: 0.82rem; color: var(--text-subtle); margin: 0; }
+
+.home-hero {
+  position: relative;
+  min-height: 280px;
+  border-radius: var(--radius-lg, 12px);
+  overflow: hidden;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  background-size: cover;
+  background-position: center 30%;
+  display: flex;
+  align-items: center;
+  padding: 2.5rem;
+}
+
+.home-hero__body { max-width: 34rem; display: flex; flex-direction: column; gap: 0.75rem; }
+
+.home-hero__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-light, #60a5fa);
+}
+
+.home-hero h2 { font-size: 1.9rem; font-weight: 800; color: #fff; line-height: 1.15; }
+.home-hero__meta { font-size: 0.85rem; color: var(--text-muted); margin: 0; }
+.home-hero .btn { width: fit-content; padding: 0.62rem 1.4rem; }
+
+.home-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.home-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+  padding: 0.32rem 0.7rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.home-refresh:hover:not(:disabled) { color: #fff; border-color: rgba(255, 255, 255, 0.28); }
+.home-refresh:disabled { opacity: 0.6; cursor: default; }
+
+.home-error { font-size: 0.82rem; color: var(--text-muted); line-height: 1.5; }
+
+.home-row { display: flex; flex-direction: column; gap: 0.75rem; }
+
+.home-row header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  color: #fff;
+}
+
+.home-row header h3 { font-size: 1.05rem; font-weight: 700; }
+.home-row header svg { align-self: center; color: var(--accent-light, #60a5fa); }
+
+.home-row__subtitle { font-size: 0.74rem; color: var(--text-subtle); font-weight: 400; }
+
+/* Horizontal rails keep every section's opening visible, so the page can be
+   scanned top to bottom before anything is scrolled sideways. */
+.home-rail {
+  display: flex;
+  gap: 0.85rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.4rem;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+
+.home-rail > * {
+  flex: 0 0 auto;
+  width: 158px;
+  scroll-snap-align: start;
+}
+
+.home-rail::-webkit-scrollbar { height: 7px; }
+.home-rail::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+.home-rail::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
+
+.poster-meta__accent { color: var(--accent-light, #60a5fa); font-size: 0.72rem; }
+
 /* ---- saved detail pages ------------------------------------------------ */
 
 .library-modes { display: flex; gap: 0.5rem; flex-wrap: wrap; }
