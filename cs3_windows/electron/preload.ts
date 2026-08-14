@@ -25,6 +25,7 @@ import type {
 import type { SearchScope } from './searchScope';
 import type { SearchSnapshot } from './searchSession';
 import type { DnsPreset, NetworkSettings } from './networkSettings';
+import type { SystemRuntimeStatus, RuntimeProgress } from './cs3/runtimeProvisioner';
 import type {
   AvailableUpdate,
   UpdateCheckResult,
@@ -444,6 +445,14 @@ export interface CloudStreamElectronAPI {
   ) => () => void;
   setupBinaries: () => Promise<{ success: boolean; message: string }>;
 
+  // Plug-and-Play Runtime Provisioner
+  getSystemRuntimeStatus: () => Promise<Envelope & SystemRuntimeStatus>;
+  provisionSystemRuntime: () => Promise<Envelope & { ready: boolean }>;
+  repairSystemRuntime: () => Promise<Envelope & { ready: boolean }>;
+  onSystemRuntimeProgress: (
+    callback: (progress: RuntimeProgress) => void
+  ) => () => void;
+
   // Extensions
   getOfficialRepositories: () => Promise<OfficialRepository[]>;
   fetchRepository: (
@@ -669,7 +678,7 @@ const api: CloudStreamElectronAPI = {
     return () => ipcRenderer.removeListener('download:batchProgress', listener);
   },
 
-  checkBinaries: () => ipcRenderer.invoke('binary:check'),
+  checkBinaries: () => ipcRenderer.invoke('binary:checkBinaries'),
   setupFfmpeg: () => ipcRenderer.invoke('binary:setupFfmpeg'),
   onBinarySetupProgress: (callback) => {
     const listener = (_: unknown, progress: { status: string; percent: number }) =>
@@ -677,7 +686,16 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.on('binary:setupProgress', listener);
     return () => ipcRenderer.removeListener('binary:setupProgress', listener);
   },
-  setupBinaries: () => ipcRenderer.invoke('binary:setup'),
+  setupBinaries: () => ipcRenderer.invoke('binary:setupBinaries'),
+
+  getSystemRuntimeStatus: () => ipcRenderer.invoke('runtime:getStatus'),
+  provisionSystemRuntime: () => ipcRenderer.invoke('runtime:provision'),
+  repairSystemRuntime: () => ipcRenderer.invoke('runtime:repair'),
+  onSystemRuntimeProgress: (callback) => {
+    const listener = (_: unknown, progress: RuntimeProgress) => callback(progress);
+    ipcRenderer.on('runtime:progress', listener);
+    return () => ipcRenderer.removeListener('runtime:progress', listener);
+  },
 
   getOfficialRepositories: () => ipcRenderer.invoke('extension:getOfficialRepositories'),
   fetchRepository: (repoUrl) => ipcRenderer.invoke('extension:fetchRepository', repoUrl),

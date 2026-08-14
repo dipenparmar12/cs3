@@ -12,6 +12,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { MediaComponentsCard } from '../components/MediaComponentsCard';
+import { RuntimeProvisionerCard } from '../components/RuntimeProvisionerCard';
 import { SourceSettings } from '../components/SourceSettings';
 import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
@@ -167,7 +168,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </>
       )}
 
-      {tab === 'sources' && <SourceSettings />}
+      {tab === 'sources' && (
+        <>
+          <RuntimeProvisionerCard />
+          <SourceSettings />
+        </>
+      )}
 
       {tab === 'downloads' && (
         <>
@@ -213,6 +219,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
       {tab === 'advanced' && (
         <>
+          <RuntimeProvisionerCard />
+
           <DiagnosticsPanel />
 
           <MediaComponentsCard />

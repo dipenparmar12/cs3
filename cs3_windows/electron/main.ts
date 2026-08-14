@@ -569,6 +569,43 @@ ipcMain.handle(
   }
 );
 
+// --- runtime provisioner ---------------------------------------------------
+
+ipcMain.handle('runtime:getStatus', async () => {
+  try {
+    const status = pluginManager.getSidecar().getProvisioner().getStatus();
+    return { ok: true, ...status };
+  } catch (error) {
+    return { ...fail(error), ready: false, javaReady: false, sidecarReady: false, bridgeReady: false, isAppManaged: false };
+  }
+});
+
+ipcMain.handle('runtime:provision', async () => {
+  try {
+    const provisioner = pluginManager.getSidecar().getProvisioner();
+    provisioner.setProgressCallback((progress) => {
+      mainWindow?.webContents.send('runtime:progress', progress);
+    });
+    const ready = await provisioner.provisionRuntime();
+    return { ok: ready, ready };
+  } catch (error) {
+    return { ...fail(error), ready: false };
+  }
+});
+
+ipcMain.handle('runtime:repair', async () => {
+  try {
+    const provisioner = pluginManager.getSidecar().getProvisioner();
+    provisioner.setProgressCallback((progress) => {
+      mainWindow?.webContents.send('runtime:progress', progress);
+    });
+    const ready = await provisioner.repairRuntime();
+    return { ok: ready, ready };
+  } catch (error) {
+    return { ...fail(error), ready: false };
+  }
+});
+
 /** Catalogue browsing for the home screen. Fast by construction; see `browse`. */
 ipcMain.handle('api:browse', async (_, query: string, provider?: string) => {
   try {

@@ -443,6 +443,10 @@ export class PluginManager {
   private providersLoaded = false;
   private providersLoading: Promise<void> | null = null;
 
+  public getSidecar(): SidecarSupervisor {
+    return this.sidecar;
+  }
+
   constructor(datastore: DatastoreManager, sidecar?: SidecarSupervisor) {
     this.datastore = datastore;
     this.sidecar = sidecar ?? new SidecarSupervisor();
