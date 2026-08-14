@@ -14,6 +14,7 @@ import {
   type NetworkSettings,
 } from './networkSettings';
 import { setHttpFetch } from './torrent/http';
+import { ResilientFetch, classifyNetworkError } from './networkResilience';
 import { BinaryDownloader } from './binaryDownloader';
 import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
@@ -56,6 +57,9 @@ const titleOutcomes = new TitleOutcomeStore(datastore);
 const diagnostics = new DiagnosticsLog();
 const externalPlayers = new ExternalPlayerService();
 pluginManager.setDiagnostics(diagnostics);
+// Stream failures are otherwise invisible: the request succeeded, and the break
+// happens minutes later with nothing watching.
+contentService.getProxy().setDiagnostics(diagnostics);
 const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
@@ -68,6 +72,100 @@ downloadService.setTorrentEngine(torrentEngine);
 downloadService.setContentService(contentService);
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
+/**
+ * Retries, backs off, and downgrades HTTP/2 origins to HTTP/1.1.
+ *
+ * Node's `fetch` is the fallback because undici speaks HTTP/1.1 only, which is
+ * exactly the property wanted: an origin whose HTTP/2 frontend is broken is
+ * reachable over HTTP/1.1, and no amount of retrying on Chromium's stack gets
+ * there. It is a rescue path rather than the default because it bypasses
+ * `configureHostResolver`, and therefore the user's DNS setting.
+ */
+const resilientFetch = new ResilientFetch({
+  primary: (input, init) => net.fetch(input, init),
+  fallback: (input, init) => fetch(input, init),
+  diagnostics,
+});
+
+/**
+ * The last line of defence for the main process.
+ *
+ * A network failure that arrives after its promise has settled has no call site
+ * left to catch it. That is not hypothetical — it is the reported crash, and it
+ * was reproduced here against an HTTP/2 origin that answers normally and then
+ * fails mid-body:
+ *
+ *     upstream status=200
+ *     UNCAUGHT: net::ERR_CONNECTION_CLOSED
+ *       at SimpleURLLoaderWrapper.<anonymous> (node:electron/js2c/browser_init:2:138489)
+ *       at SimpleURLLoaderWrapper.emit (node:events:509:28)
+ *
+ * The individual leaks are fixed where they live — `MediaProxy` was the one that
+ * mattered — but "we found them all" is not a claim worth betting a viewer's
+ * session on. Electron's default handler puts a modal error dialog over the app;
+ * for a dropped connection that is a worse outcome than the dropped connection.
+ *
+ * Scope is deliberately narrow. Only recognisable transport failures are
+ * swallowed. Anything else is logged and rethrown, because silently continuing
+ * past a genuine bug is how a corrupt datastore gets written.
+ */
+function installProcessGuards(): void {
+  const swallow = (error: unknown, origin: string): boolean => {
+    const failure = classifyNetworkError(error);
+    if (!failure.code) return false;
+
+    diagnostics.record({
+      level: 'warn',
+      stage: 'runtime',
+      source: 'network',
+      message: `Recovered from an unhandled ${failure.code} (${origin})`,
+      detail: [
+        `code:   ${failure.code}`,
+        `raw:    ${failure.message}`,
+        `origin: ${origin}`,
+        'The request that produced this had already settled, so no caller could',
+        'catch it. Playback and downloads were left running.',
+        error instanceof Error && error.stack ? `stack:\n${error.stack}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    });
+    console.warn(`[network] contained ${failure.code} from ${origin}`);
+    return true;
+  };
+
+  process.on('uncaughtException', (error) => {
+    if (swallow(error, 'uncaughtException')) return;
+
+    // Not ours to swallow. Report it the way Electron would have, and let the
+    // default behaviour stand.
+    console.error('Uncaught exception in main process:', error);
+    diagnostics.record({
+      level: 'error',
+      stage: 'runtime',
+      source: 'main',
+      message: error instanceof Error ? error.message : String(error),
+      detail: error instanceof Error ? error.stack : undefined,
+    });
+    diagnostics.flush();
+    throw error;
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    if (swallow(reason, 'unhandledRejection')) return;
+    console.error('Unhandled rejection in main process:', reason);
+    diagnostics.record({
+      level: 'error',
+      stage: 'runtime',
+      source: 'main',
+      message: reason instanceof Error ? reason.message : String(reason),
+      detail: reason instanceof Error ? reason.stack : undefined,
+    });
+  });
+}
+
+installProcessGuards();
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -135,7 +233,7 @@ app.whenReady().then(async () => {
    * Node's `fetch` would ignore it entirely. And the system proxy comes for
    * free, which Node's `fetch` also does not honour.
    */
-  setHttpFetch((input, init) => net.fetch(input, init));
+  setHttpFetch((input, init) => resilientFetch.fetch(input, init));
   network.apply();
 
   try {
@@ -699,11 +797,19 @@ async function describeUnreadableSource(url: string): Promise<{
   try {
     // GET with a one-byte range: some hosts refuse HEAD outright, and a range
     // keeps this from pulling a film to find out whether it exists.
-    const response = await net.fetch(url, {
-      method: 'GET',
-      headers: { Range: 'bytes=0-0' },
-      signal: AbortSignal.timeout(12_000),
-    });
+    //
+    // Through the resilient path deliberately. This function's answer decides
+    // whether a link is reported dead, and a single transient HTTP/2 reset would
+    // otherwise condemn a source that works perfectly on the next attempt.
+    const response = await resilientFetch.fetch(
+      url,
+      {
+        method: 'GET',
+        headers: { Range: 'bytes=0-0' },
+        signal: AbortSignal.timeout(12_000),
+      },
+      { operation: 'source-probe' }
+    );
     try {
       await response.body?.cancel();
     } catch {

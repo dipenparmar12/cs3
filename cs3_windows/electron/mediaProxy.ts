@@ -1,6 +1,7 @@
 import http from 'http';
 import type { AddressInfo } from 'net';
-import { Readable } from 'stream';
+import { classifyNetworkError } from './networkResilience';
+import type { DiagnosticsSink } from './pluginManager';
 
 /**
  * Serves a provider's stream with the headers that provider requires.
@@ -31,9 +32,24 @@ import { Readable } from 'stream';
  * outright. Every URI in the playlist is rewritten to point back here, carrying
  * the same headers.
  *
+ * **A stream that dies mid-film is resumed, not surfaced.** Providers sit behind
+ * cheap CDNs that reset long connections routinely, and a film is a connection
+ * held open for two hours. Because this proxy knows the byte offset it has
+ * already delivered, it can re-request the remainder with a `Range` header and
+ * carry on writing into the same response — the player sees one uninterrupted
+ * stream. This is also where the reported main-process crash lived: the body was
+ * piped with no error handler, so a transport failure after the response had
+ * been handed over had nothing to catch it.
+ *
  * Bound to loopback only. This forwards arbitrary URLs with attacker-influenced
  * headers, and must never be reachable from off the machine.
  */
+
+/** Attempts to resume a broken stream before giving up on it. */
+const MAX_RESUME_ATTEMPTS = 4;
+
+/** Pause before a resume, so a CDN having a moment is not hammered. */
+const RESUME_DELAY_MS = 400;
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -55,6 +71,59 @@ const FORWARDED_RESPONSE_HEADERS = [
 /** Playlist attributes whose quoted value is a URL. */
 const URI_ATTRIBUTE = /URI="([^"]+)"/g;
 
+/**
+ * Keeps a `Referer` from getting the whole request thrown away.
+ *
+ * Chromium refuses to send an `https://` referrer on an `http://` request — the
+ * referrer-downgrade rule — and Electron's `net` surfaces that refusal as
+ * `net::ERR_BLOCKED_BY_CLIENT`. The request never reaches the network. Measured
+ * under Electron 43, holding everything else constant:
+ *
+ *     http target  + https referer -> ERR_BLOCKED_BY_CLIENT
+ *     http target  + http  referer -> 200
+ *     https target + https referer -> 200
+ *     https target + http  referer -> 200
+ *
+ * Only the first row fails, and it is a row the app hits routinely: extensions
+ * report `Referer` from the page they scraped, which is virtually always
+ * `https`, while the media URL that page hands back is quite often plain `http`.
+ * Every one of those was dead on arrival, and the failure looked like a network
+ * error rather than a header the app chose to send.
+ *
+ * The scheme is rewritten rather than the header dropped, because what these
+ * origins check is the *host* — dropping it fails their hotlink check, which is
+ * the problem the referrer was forwarded to solve in the first place.
+ */
+export function alignRefererScheme(
+  targetUrl: string,
+  headers: Record<string, string>
+): Record<string, string> {
+  if (!/^http:\/\//i.test(targetUrl)) return headers;
+
+  const out = { ...headers };
+  for (const [name, value] of Object.entries(out)) {
+    if (name.toLowerCase() !== 'referer') continue;
+    if (/^https:\/\//i.test(value)) out[name] = value.replace(/^https:/i, 'http:');
+  }
+  return out;
+}
+
+/** First byte of `bytes 40000-99999/1000000`, which is where a resume continues. */
+function offsetFromContentRange(value: string | null): number | null {
+  const match = value?.match(/bytes\s+(\d+)-/i);
+  return match ? Number(match[1]) : null;
+}
+
+/** First byte of a request's own `bytes=40000-` — a seek, before any reply. */
+function offsetFromRange(value: string | undefined): number | null {
+  const match = value?.match(/bytes=(\d+)-/i);
+  return match ? Number(match[1]) : null;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function looksLikeHls(url: string, contentType: string | null): boolean {
   if (contentType) {
     const type = contentType.toLowerCase();
@@ -71,9 +140,21 @@ export class MediaProxy {
   private tokensByKey = new Map<string, string>();
   private nextToken = 1;
   private fetchImpl: FetchLike;
+  private diagnostics: DiagnosticsSink | null = null;
 
   constructor(fetchImpl: FetchLike) {
     this.fetchImpl = fetchImpl;
+  }
+
+  /**
+   * Where stream failures are reported.
+   *
+   * These are the most valuable network records the app produces: a stream that
+   * breaks at 40 minutes is invisible everywhere else, because the request
+   * succeeded and the failure happened long after anything was watching.
+   */
+  public setDiagnostics(sink: DiagnosticsSink): void {
+    this.diagnostics = sink;
   }
 
   /**
@@ -166,12 +247,12 @@ export class MediaProxy {
       defaultReferer = `${u.protocol}//${u.host}/`;
     } catch {}
 
-    const requestHeaders: Record<string, string> = {
+    const requestHeaders: Record<string, string> = alignRefererScheme(route.url, {
       ...(hasUserAgent ? {} : { 'User-Agent': CHROME_USER_AGENT }),
       ...(hasReferer ? {} : { Referer: defaultReferer }),
       ...route.headers,
       ...(req.headers.range ? { Range: String(req.headers.range) } : {}),
-    };
+    });
 
     try {
       const upstream = await this.fetchImpl(route.url, {
@@ -213,13 +294,188 @@ export class MediaProxy {
         return;
       }
 
-      // Piped rather than buffered: these are whole films, and buffering one
-      // would hold it in memory for as long as it plays.
-      Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+      await this.stream(upstream, res, route, requestHeaders);
     } catch (error) {
+      this.recordFailure(route.url, error, 'Upstream request failed before any body was sent');
       if (!res.headersSent) res.writeHead(502);
       res.end(error instanceof Error ? error.message : 'Upstream request failed');
     }
+  }
+
+  /**
+   * Forwards a body, counting it, and resumes it if the transport fails.
+   *
+   * Read explicitly rather than piped. `Readable.fromWeb(body).pipe(res)` — what
+   * this replaces — has two faults that only appear once something goes wrong:
+   * `pipe` does not forward errors, so a failure on the source stream reached an
+   * `EventEmitter` with no `error` listener and took the whole process down with
+   * it; and it leaves nobody counting bytes, so there is no offset to resume
+   * from even if the failure were caught.
+   *
+   * Reading in a loop fixes both. The failure lands inside a `try`, and `sent`
+   * is exact, so the remainder can be re-requested with a `Range` header and
+   * written into the same response. The player never learns anything happened.
+   */
+  private async stream(
+    first: Response,
+    res: http.ServerResponse,
+    route: Route,
+    requestHeaders: Record<string, string>
+  ): Promise<void> {
+    /**
+     * Where this response started in the file.
+     *
+     * A resume has to ask for `startedAt + sent`, not `sent`: the client may
+     * itself have asked for a range — every seek does — and resuming a request
+     * that began at 40 MB from byte zero would splice the start of the film into
+     * the middle of it.
+     */
+    const startedAt = offsetFromContentRange(first.headers.get('content-range')) ??
+      offsetFromRange(requestHeaders.Range) ??
+      0;
+
+    // Resuming is only sound when the origin honours ranges. Several of the
+    // hosts these links point at answer a range request with a 200 and the whole
+    // file, and re-requesting one of those would restart the film rather than
+    // continue it.
+    const resumable =
+      first.status === 206 || (first.headers.get('accept-ranges') ?? '').toLowerCase().includes('bytes');
+
+    let response = first;
+    let sent = 0;
+    let clientGone = false;
+    res.on('close', () => {
+      clientGone = true;
+    });
+
+    for (let attempt = 0; attempt <= MAX_RESUME_ATTEMPTS; attempt++) {
+      try {
+        await this.pump(response, res, () => clientGone, (n) => {
+          sent += n;
+        });
+        res.end();
+        return;
+      } catch (error) {
+        // The viewer closed the player or seeked elsewhere. Not a failure, and
+        // resuming would fetch a film nobody is watching.
+        if (clientGone || res.writableEnded) return;
+
+        const failure = classifyNetworkError(error);
+        const canResume = resumable && failure.retryable && attempt < MAX_RESUME_ATTEMPTS;
+
+        this.recordFailure(
+          route.url,
+          error,
+          canResume
+            ? `Stream failed after ${sent} byte(s); resuming from ${startedAt + sent}`
+            : `Stream failed after ${sent} byte(s) and could not be resumed`,
+          {
+            attempt: attempt + 1,
+            resumable,
+            offset: startedAt + sent,
+          }
+        );
+
+        if (!canResume) {
+          // Ending rather than destroying: a short read is something the player
+          // and ffmpeg both understand, and it lets the failover in
+          // `playbackSession` see a source that stopped rather than a hang.
+          res.end();
+          return;
+        }
+
+        await delay(RESUME_DELAY_MS * (attempt + 1));
+        if (clientGone || res.writableEnded) return;
+
+        response = await this.fetchImpl(route.url, {
+          method: 'GET',
+          headers: { ...requestHeaders, Range: `bytes=${startedAt + sent}-` },
+          redirect: 'follow',
+        });
+
+        // An origin that answers a resume with 200 is about to send the file
+        // from the beginning, which would corrupt what has already been written.
+        if (response.status !== 206 || !response.body) {
+          this.recordFailure(
+            route.url,
+            new Error(`resume answered HTTP ${response.status}`),
+            'Origin ignored the resume range; ending the stream instead of corrupting it'
+          );
+          res.end();
+          return;
+        }
+      }
+    }
+  }
+
+  /**
+   * Copies one response body into the client, respecting backpressure.
+   *
+   * The `drain` wait is also watched for the socket closing, because a client
+   * that disappears mid-write never drains and the await would otherwise hang
+   * for the lifetime of the app.
+   */
+  private async pump(
+    response: Response,
+    res: http.ServerResponse,
+    cancelled: () => boolean,
+    onBytes: (count: number) => void
+  ): Promise<void> {
+    if (!response.body) return;
+    const reader = response.body.getReader();
+
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        if (cancelled() || res.writableEnded) return;
+        if (!value) continue;
+
+        onBytes(value.byteLength);
+        if (!res.write(Buffer.from(value.buffer, value.byteOffset, value.byteLength))) {
+          await new Promise<void>((resolve) => {
+            const finish = () => {
+              res.off('drain', finish);
+              res.off('close', finish);
+              resolve();
+            };
+            res.once('drain', finish);
+            res.once('close', finish);
+          });
+        }
+      }
+    } finally {
+      // Releasing the lock lets the underlying connection be torn down; without
+      // it a cancelled stream holds its socket until GC.
+      try {
+        reader.releaseLock();
+      } catch {
+        // Already released by the error that brought us here.
+      }
+    }
+  }
+
+  private recordFailure(
+    url: string,
+    error: unknown,
+    message: string,
+    extra: Record<string, unknown> = {}
+  ): void {
+    const failure = classifyNetworkError(error);
+    if (failure.aborted) return;
+
+    this.diagnostics?.record({
+      level: 'warn',
+      stage: 'playback',
+      source: 'MediaProxy',
+      url,
+      message: `${failure.code ?? 'network error'}: ${message}`,
+      detail: [
+        `code:   ${failure.code ?? 'none'}`,
+        `raw:    ${failure.message}`,
+        ...Object.entries(extra).map(([key, value]) => `${key.padEnd(7)}: ${String(value)}`),
+      ].join('\n'),
+    });
   }
 
   /**
