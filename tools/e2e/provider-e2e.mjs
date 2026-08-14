@@ -92,6 +92,7 @@ function parseArgs(argv) {
     json: null,
     keep: false,
     java: null,
+    only: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -101,6 +102,16 @@ function parseArgs(argv) {
     else if (arg === '--repo') args.repo = argv[++i];
     else if (arg === '--plugins') args.plugins = Math.max(1, parseInt(argv[++i], 10) || 2);
     else if (arg === '--json') args.json = argv[++i];
+    // Names a specific extension, which `--plugins N` cannot reach: it takes
+    // the first N as published, and a failing extension is as likely to be
+    // sixtieth as second. Reproducing a user's report meant running the whole
+    // repository and waiting for the one archive that mattered.
+    else if (arg === '--only') {
+      args.only = argv[++i]
+        .split(',')
+        .map((n) => n.trim().toLowerCase())
+        .filter(Boolean);
+    }
     else if (arg === '--queries') {
       args.queries = argv[++i]
         .split(',')
@@ -555,7 +566,20 @@ async function main() {
         .filter((p) => p.status === undefined || p.status !== 0);
       ok(`${plugins.length} plugin(s) published`);
 
-      for (const plugin of plugins.slice(0, args.plugins)) {
+      // `--only` overrides the cap: naming three extensions and then taking the
+      // first two of them would silently drop one.
+      const selected = args.only
+        ? plugins.filter((p) =>
+            args.only.some(
+              (want) =>
+                String(p.internalName).toLowerCase().includes(want) ||
+                String(p.name ?? '').toLowerCase().includes(want)
+            )
+          )
+        : plugins.slice(0, args.plugins);
+      if (args.only) ok(`${selected.length} plugin(s) matched --only`);
+
+      for (const plugin of selected) {
         const record = { internalName: plugin.internalName, name: plugin.name };
         entry.plugins.push(record);
         try {

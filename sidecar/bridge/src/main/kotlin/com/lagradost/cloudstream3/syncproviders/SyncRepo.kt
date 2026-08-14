@@ -60,8 +60,18 @@ open class SyncRepo(override val api: SyncAPI) : AuthRepo(api) {
 abstract class AccountManager(open val idPrefixOverride: String? = null) {
 
     companion object {
+        /**
+         * Typed `AniListApi`, not `SyncRepo`, and the difference was measured.
+         *
+         * Declaring it as the repository wrapper compiled fine and then failed
+         * at TorraStream's call site with
+         * `NoSuchMethodError: AniListApi AccountManager$Companion.getAniListApi()`.
+         * The JVM resolves by exact descriptor, so a getter returning a
+         * supertype is a different method — this is the same near-miss the
+         * `PluginManager` shim warns about, caught in the act.
+         */
         @JvmStatic
-        val aniListApi = SyncRepo(AniListApi())
+        val aniListApi = AniListApi()
 
         /**
          * Every sync service the app knows about.
@@ -74,7 +84,7 @@ abstract class AccountManager(open val idPrefixOverride: String? = null) {
          * extension is seen to need one.
          */
         @JvmStatic
-        val syncApis: Array<SyncRepo> = arrayOf(aniListApi)
+        val syncApis: Array<SyncRepo> = arrayOf(SyncRepo(aniListApi))
 
         @JvmStatic
         val subtitleProviders: Array<Any> = emptyArray()

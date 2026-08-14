@@ -110,11 +110,41 @@ public class Context {
         return pluginId;
     }
 
-    // --- deliberately unimplemented -----------------------------------------
-
+    /**
+     * Answers with a service when there is an honest one, and {@code null}
+     * otherwise — which is Android's own answer for a name it does not know.
+     *
+     * This used to throw for every name. That looks defensible until you notice
+     * where it is called from: the first statement of a provider's
+     * {@code load()}, guarded by nothing, asking how much memory the device has
+     * so it can size a buffer. Throwing there aborted the load and cost the
+     * extension every provider it was about to register, and the reported cause
+     * named {@code getSystemService} rather than anything the user could act
+     * on. StreamPlay lost all of its providers to exactly that.
+     *
+     * {@code null} is both the documented contract and the safer failure: a
+     * caller that checks gets the Android behaviour, and a caller that does not
+     * fails on the line that actually uses the service instead of on the line
+     * that asked for it.
+     */
     public Object getSystemService(String name) {
-        throw new UnsupportedAndroidApiException("android.content.Context.getSystemService(" + name + ")");
+        if (name == null) return null;
+        return switch (name) {
+            case ACTIVITY_SERVICE -> new android.app.ActivityManager();
+            default -> null;
+        };
     }
+
+    public static final String ACTIVITY_SERVICE = "activity";
+    public static final String LAYOUT_INFLATER_SERVICE = "layout_inflater";
+    public static final String CONNECTIVITY_SERVICE = "connectivity";
+    public static final String CLIPBOARD_SERVICE = "clipboard";
+    public static final String WINDOW_SERVICE = "window";
+    public static final String INPUT_METHOD_SERVICE = "input_method";
+    public static final String NOTIFICATION_SERVICE = "notification";
+    public static final String DOWNLOAD_SERVICE = "download";
+
+    // --- deliberately unimplemented -----------------------------------------
 
     /**
      * Returns the real {@link android.content.res.Resources} type, not `Object`.
