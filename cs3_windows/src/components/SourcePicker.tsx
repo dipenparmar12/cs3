@@ -4,6 +4,7 @@ import {
   ChevronRight, Play, Download, Info, Zap, ShieldAlert, Square,
 } from 'lucide-react';
 import type { TorrentResult } from '../types/torrent';
+import type { SourceDiagnosis } from '../types/diagnostics';
 import { Resolution } from '../types/torrent';
 import { SourceFilterBar } from './SourceFilterBar';
 import { CopyErrorButton } from './CopyErrorButton';
@@ -26,6 +27,8 @@ export interface SourcePickerData {
     skipped?: string;
   }>;
   emptyReason?: string;
+  /** The structured form of `emptyReason`, when the failure produced one. */
+  diagnosis?: SourceDiagnosis;
   query: { title: string; season?: number; episode?: number; imdbId?: string };
 }
 
@@ -215,6 +218,40 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                 ? 'No source had answered yet when the search was stopped.'
                 : (data.emptyReason ?? 'Nothing matched this title.')}
             </span>
+
+            {/*
+              What to try, when the cause implies something.
+
+              Separate from the sentence above and phrased as advice: "the file
+              host refused the request" is a diagnosis, and on its own it reads
+              as a dead end rather than as "other providers may still work".
+            */}
+            {data.diagnosis?.hint && !cancelled && (
+              <span className="source-picker__hint">{data.diagnosis.hint}</span>
+            )}
+
+            {/*
+              The tuple, behind a disclosure.
+
+              Which provider, which address, what it took, what the host said.
+              This is the whole reason the diagnosis is structured rather than a
+              string — but it is debugging detail, so it stays folded away from
+              a viewer who only wants to try something else.
+            */}
+            {data.diagnosis?.facts?.length ? (
+              <details className="source-picker__facts">
+                <summary>Technical detail</summary>
+                <dl>
+                  {data.diagnosis.facts.map((fact) => (
+                    <React.Fragment key={`${fact.label}:${fact.value}`}>
+                      <dt>{fact.label}</dt>
+                      <dd>{fact.value}</dd>
+                    </React.Fragment>
+                  ))}
+                </dl>
+              </details>
+            ) : null}
+
             <div className="source-picker__state-actions">
               <button className="btn" onClick={onRetry}>Search again</button>
               {data.filtered.length > 0 && (
@@ -228,6 +265,8 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                 compact
                 context={{
                   title: data.query?.title,
+                  source: data.diagnosis?.provider,
+                  url: data.diagnosis?.address,
                   message: data.emptyReason ?? 'No playable sources found',
                 }}
               />
