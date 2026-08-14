@@ -3185,3 +3185,16 @@
   font-size: 0.73rem;
   color: var(--accent-light);
 }
+
+.diag__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.diag__toggle input { accent-color: var(--accent-primary); cursor: pointer; }
+/* Successes are present but must not compete with the failures. */
+.diag__row--info { opacity: 0.72; }
+.diag__row--info .diag__message { color: var(--text-muted); }

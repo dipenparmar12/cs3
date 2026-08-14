@@ -240,6 +240,56 @@ export class PlaybackSessionManager {
   }
 
   /**
+   * Abandons the playing source and starts the next one down.
+   *
+   * The renderer is the only place this can be triggered from, because the
+   * failure it responds to is invisible here: source discovery already fails
+   * over when a stream will not *start*, but a source that starts perfectly and
+   * then cannot be decoded looks like success from the main process. That is
+   * not a rare case — a file downloads at full speed and simply will not play —
+   * and it left the viewer on a dead frame with a list of working sources one
+   * click away that they had no reason to think would be any different.
+   *
+   * Already-attempted sources are excluded so a repeated failure walks down the
+   * list instead of retrying the same one. Running out is a real outcome and is
+   * reported as such rather than silently doing nothing.
+   */
+  public async skipCurrentSource(
+    sessionId: string,
+    reason: string
+  ): Promise<PlaybackSnapshot | null> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+
+    const current = session.sources.find((s) => s.infoHash === session.activeInfoHash);
+    if (current) {
+      session.attempts.push({
+        title: current.title,
+        indexerName: current.indexerName,
+        error: reason,
+      });
+    }
+
+    const failed = new Set(session.attempts.map((attempt) => attempt.title));
+    const remaining = session.sources.filter(
+      (source) => source.infoHash !== session.activeInfoHash && !failed.has(source.title)
+    );
+
+    if (remaining.length === 0) {
+      session.phase = 'error';
+      session.error =
+        `No source could be played. ${session.attempts.length} were tried; the last said: ${reason}`;
+      this.emit(session);
+      return this.snapshot(session);
+    }
+
+    // Failover off: this *is* the failover step, and letting `beginStream` run
+    // its own would burn the rest of the list on one decode failure.
+    await this.beginStream(session, [remaining[0]], { failover: false, immediate: true });
+    return this.snapshot(session);
+  }
+
+  /**
    * Re-runs discovery for the same query, keeping the current stream playing.
    *
    * Bypasses the cache, necessarily: a viewer pressing "refresh" is telling us

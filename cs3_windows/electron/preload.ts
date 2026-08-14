@@ -108,8 +108,12 @@ export interface CloudStreamElectronAPI {
    * kept and `reportDiagnostics` renders it as pasteable text.
    */
   getDiagnostics: (
-    limit?: number
-  ) => Promise<Envelope & { records: DiagnosticRecord[]; filePath: string }>;
+    limit?: number,
+    /** Defaults to problems only; pass `info` too for the full activity log. */
+    levels?: Array<'error' | 'warn' | 'info'>
+  ) => Promise<
+    Envelope & { records: DiagnosticRecord[]; total: number; filePath: string }
+  >;
   clearDiagnostics: () => Promise<Envelope>;
   /** Omit `ids` for the whole log; pass them for the one failure on screen. */
   reportDiagnostics: (ids?: string[]) => Promise<Envelope & { text: string }>;
@@ -206,6 +210,11 @@ export interface CloudStreamElectronAPI {
     episodeTitle?: string
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
   /** Starts the best source found so far instead of waiting for every indexer. */
+  /** Abandons a source that started but will not play, and tries the next. */
+  skipPlaybackSource: (
+    sessionId: string,
+    reason: string
+  ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
   playbackPlayNow: (
     sessionId: string
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
@@ -326,7 +335,9 @@ export interface CloudStreamElectronAPI {
   openMediaTranscode: (
     url: string,
     audioIndex: number,
-    transcodeVideo?: boolean
+    transcodeVideo?: boolean,
+    /** False copies the audio stream, for the container-only case. */
+    transcodeAudio?: boolean
   ) => Promise<Envelope & { url: string | null }>;
   closeMediaTranscode: (token: string) => Promise<Envelope>;
 
@@ -501,7 +512,7 @@ const api: CloudStreamElectronAPI = {
   },
   browse: (query, provider) => ipcRenderer.invoke('api:browse', query, provider),
   getTitleOutcomes: () => ipcRenderer.invoke('api:getTitleOutcomes'),
-  getDiagnostics: (limit) => ipcRenderer.invoke('diagnostics:list', limit),
+  getDiagnostics: (limit, levels) => ipcRenderer.invoke('diagnostics:list', limit, levels),
   clearDiagnostics: () => ipcRenderer.invoke('diagnostics:clear'),
   reportDiagnostics: (ids) => ipcRenderer.invoke('diagnostics:report', ids),
   recordDiagnostic: (entry) => ipcRenderer.invoke('diagnostics:record', entry),
@@ -528,6 +539,8 @@ const api: CloudStreamElectronAPI = {
   startPlayback: (request, title, episodeTitle) =>
     ipcRenderer.invoke('playback:start', request, title, episodeTitle),
   playbackPlayNow: (sessionId) => ipcRenderer.invoke('playback:playNow', sessionId),
+  skipPlaybackSource: (sessionId, reason) =>
+    ipcRenderer.invoke('playback:skipSource', sessionId, reason),
   playbackSelectSource: (sessionId, infoHash) =>
     ipcRenderer.invoke('playback:selectSource', sessionId, infoHash),
   playbackRefreshSources: (sessionId) =>
@@ -569,8 +582,8 @@ const api: CloudStreamElectronAPI = {
   getCodecProbes: () => ipcRenderer.invoke('media:getCodecProbes'),
   setMediaCapabilities: (capabilities) =>
     ipcRenderer.invoke('media:setCapabilities', capabilities),
-  openMediaTranscode: (url, audioIndex, transcodeVideo) =>
-    ipcRenderer.invoke('media:openTranscode', url, audioIndex, transcodeVideo),
+  openMediaTranscode: (url, audioIndex, transcodeVideo, transcodeAudio) =>
+    ipcRenderer.invoke('media:openTranscode', url, audioIndex, transcodeVideo, transcodeAudio),
   closeMediaTranscode: (token) => ipcRenderer.invoke('media:closeTranscode', token),
   listExternalPlayers: (refresh) => ipcRenderer.invoke('player:listExternal', refresh),
   openInExternalPlayer: (playerId, url) =>

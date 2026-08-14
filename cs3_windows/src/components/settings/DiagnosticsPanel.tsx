@@ -22,14 +22,27 @@ export const DiagnosticsPanel: React.FC = () => {
   const [sourceFilter, setSourceFilter] = useState('all');
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
+  /**
+   * Problems only, until asked otherwise.
+   *
+   * The log records successes too — the search that worked is the control for
+   * the one that did not — but a list where every successful search scrolls
+   * past the one error is not a debugging tool.
+   */
+  const [showActivity, setShowActivity] = useState(false);
+  const [total, setTotal] = useState(0);
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    const response = await window.cloudstream?.getDiagnostics?.(200);
+    const response = await window.cloudstream?.getDiagnostics?.(
+      300,
+      showActivity ? ['error', 'warn', 'info'] : ['error', 'warn']
+    );
     setRecords(response?.records ?? []);
+    setTotal(response?.total ?? 0);
     setFilePath(response?.filePath ?? '');
     setLoading(false);
-  }, []);
+  }, [showActivity]);
 
   useEffect(() => {
     void refresh();
@@ -76,6 +89,8 @@ export const DiagnosticsPanel: React.FC = () => {
       <p className="diag__intro">
         Every provider failure, with the query and item that produced it. Copy this
         into a bug report — it carries the app and extension-runtime versions too.
+        Successful searches and links are kept as well, for up to six months, so a
+        session can be reconstructed rather than described from memory.
       </p>
 
       <div className="diag__actions">
@@ -96,6 +111,14 @@ export const DiagnosticsPanel: React.FC = () => {
             allLabel={`All sources (${records.length})`}
           />
         )}
+        <label className="diag__toggle">
+          <input
+            type="checkbox"
+            checked={showActivity}
+            onChange={(event) => setShowActivity(event.target.checked)}
+          />
+          <span>Include what worked ({total} kept)</span>
+        </label>
         <button
           className="btn btn-secondary"
           onClick={async () => {

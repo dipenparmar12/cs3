@@ -392,6 +392,30 @@ export const App: React.FC = () => {
     []
   );
 
+  /**
+   * A source started and then would not play; move to the next.
+   *
+   * The distinction the main process cannot make on its own — it saw the stream
+   * start successfully. Without this the viewer sat on a dead frame with a list
+   * of other sources one click away and no reason to believe any of them would
+   * behave differently.
+   */
+  const handleSourceUnplayable = useCallback(
+    async (reason: string) => {
+      const id = sessionRef.current?.id;
+      if (!id) return;
+      const response = await window.cloudstream?.skipPlaybackSource?.(id, reason);
+      if (response?.snapshot) {
+        setSession((current) =>
+          current && current.id === response.snapshot!.sessionId
+            ? { ...current, snapshot: response.snapshot! }
+            : current
+        );
+      }
+    },
+    []
+  );
+
   const handleRefreshSources = useCallback(() => {
     if (!sessionRef.current) return;
     window.cloudstream?.playbackRefreshSources(sessionRef.current.id);
@@ -499,6 +523,7 @@ export const App: React.FC = () => {
                 onPlayNow: handlePlayNow,
                 onSelectSource: handleSelectSource,
                 onRefresh: handleRefreshSources,
+                onSourceUnplayable: handleSourceUnplayable,
                 onDownloadSource: session.context.onDownloadSource,
               }}
             />

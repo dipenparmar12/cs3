@@ -390,11 +390,22 @@ async function diagnosticsEnvironment(): Promise<Record<string, string>> {
   };
 }
 
-ipcMain.handle('diagnostics:list', async (_, limit?: number) => ({
-  ok: true,
-  records: diagnostics.list(limit ?? 200),
-  filePath: diagnostics.filePath,
-}));
+/**
+ * Problems by default, everything on request.
+ *
+ * The log now records successes too, because reproducing a failure needs the
+ * session around it — but a panel where every successful search scrolls past
+ * the one error is not a debugging tool.
+ */
+ipcMain.handle(
+  'diagnostics:list',
+  async (_, limit?: number, levels?: Array<'error' | 'warn' | 'info'>) => ({
+    ok: true,
+    records: diagnostics.list(limit ?? 200, levels ?? ['error', 'warn']),
+    total: diagnostics.all().length,
+    filePath: diagnostics.filePath,
+  })
+);
 
 ipcMain.handle('diagnostics:clear', async () => {
   diagnostics.clear();
@@ -410,8 +421,10 @@ ipcMain.handle('diagnostics:clear', async () => {
  */
 ipcMain.handle('diagnostics:report', async (_, ids?: string[]) => {
   try {
-    const all = diagnostics.list();
-    const chosen = ids?.length ? all.filter((record) => ids.includes(record.id)) : all;
+    // Reports carry everything retained, successes included: the run that
+    // worked is the control for the one that did not.
+    const all = diagnostics.all();
+    const chosen = ids?.length ? all.filter((record) => ids.includes(record.id)) : all.slice(0, 300);
     return { ok: true, text: diagnostics.report(chosen, await diagnosticsEnvironment()) };
   } catch (error) {
     return { ...fail(error), text: '' };
@@ -531,6 +544,27 @@ ipcMain.handle(
     }
   }
 );
+
+/**
+ * The stream started but could not be played; move on.
+ *
+ * Distinct from `selectSource`, which is a deliberate choice and must not fail
+ * over. This is the opposite: the viewer chose nothing and the app owes them
+ * the next candidate.
+ */
+ipcMain.handle('playback:skipSource', async (_, sessionId: string, reason: string) => {
+  try {
+    diagnostics.record({
+      level: 'warn',
+      stage: 'playback',
+      message: reason,
+      detail: 'Source could not be played; advancing to the next.',
+    });
+    return { ok: true, snapshot: await playbackSessions.skipCurrentSource(sessionId, reason) };
+  } catch (error) {
+    return { ...fail(error), snapshot: null };
+  }
+});
 
 ipcMain.handle('playback:playNow', async (_, sessionId: string) => {
   try {
@@ -729,12 +763,13 @@ ipcMain.handle('media:probe', async (_, url: string) => {
 
 ipcMain.handle(
   'media:openTranscode',
-  async (_, url: string, audioIndex: number, transcodeVideo?: boolean) => {
+  async (_, url: string, audioIndex: number, transcodeVideo?: boolean, transcodeAudio?: boolean) => {
     try {
       const streamUrl = await mediaTranscoder.createSession(
         url,
         audioIndex,
-        Boolean(transcodeVideo)
+        Boolean(transcodeVideo),
+        transcodeAudio !== false
       );
       if (!streamUrl) {
         return { ok: false, url: null, error: 'Media components are not installed.' };

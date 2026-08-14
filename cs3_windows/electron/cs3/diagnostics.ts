@@ -34,7 +34,8 @@ export type DiagnosticStage =
 export interface DiagnosticRecord {
   id: string;
   at: number;
-  level: 'error' | 'warn';
+  /** `info` records things that worked, which is what makes replay possible. */
+  level: 'error' | 'warn' | 'info';
   stage: DiagnosticStage;
   /** Provider, extension or indexer the failure belongs to. */
   source?: string;
@@ -49,8 +50,22 @@ export interface DiagnosticRecord {
   detail?: string;
 }
 
-/** Enough to cover a session's worth of failures without unbounded growth. */
-const MAX_RECORDS = 500;
+/**
+ * Enough to reconstruct months of use, not just the last thing that broke.
+ *
+ * The log started as a failure list. That answers "what went wrong just now"
+ * and not "what was I doing when it worked", and the second question is the one
+ * that lets a problem be reproduced: the source that played on Tuesday is the
+ * control for the one that will not play today.
+ *
+ * So successes are recorded too, at `info`, and retention is measured in months
+ * rather than entries. The cap remains as a floor under pathological cases — a
+ * provider failing on a loop should not be able to push out a week of history.
+ */
+const MAX_RECORDS = 20_000;
+
+/** How long a record is kept. Six months of ordinary use fits comfortably. */
+const RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
 
 /** A raw provider reply can be a whole HTML page; the first part is the useful part. */
 const MAX_DETAIL_CHARS = 2_000;
@@ -73,7 +88,12 @@ export class DiagnosticsLog {
     try {
       const raw = fs.readFileSync(this.file, 'utf8');
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) this.records = parsed.slice(0, MAX_RECORDS);
+      if (Array.isArray(parsed)) {
+        const cutoff = Date.now() - RETENTION_MS;
+        this.records = parsed
+          .filter((record) => typeof record?.at === 'number' && record.at >= cutoff)
+          .slice(0, MAX_RECORDS);
+      }
     } catch {
       // No log yet, or an unreadable one. Neither is worth reporting: this is
       // the thing that reports problems, and it failing loudly would be absurd.
@@ -117,12 +137,33 @@ export class DiagnosticsLog {
     };
 
     this.records.unshift(record);
+
+    // Age first, then the cap. Trimming by count alone would discard six-month
+    // history the moment a provider started failing in a loop.
+    const cutoff = Date.now() - RETENTION_MS;
+    while (this.records.length > 0 && this.records[this.records.length - 1].at < cutoff) {
+      this.records.pop();
+    }
     if (this.records.length > MAX_RECORDS) this.records.length = MAX_RECORDS;
     this.scheduleWrite();
   }
 
-  public list(limit = MAX_RECORDS): DiagnosticRecord[] {
-    return this.records.slice(0, limit);
+  /**
+   * Recent records, newest first.
+   *
+   * `levels` narrows to what the caller is asking about — the diagnostics panel
+   * shows problems by default, because a list where every successful playback
+   * scrolls past the one failure is not a debugging tool.
+   */
+  public list(limit = 200, levels?: Array<DiagnosticRecord['level']>): DiagnosticRecord[] {
+    const wanted = levels?.length ? new Set(levels) : null;
+    const rows = wanted ? this.records.filter((record) => wanted.has(record.level)) : this.records;
+    return rows.slice(0, limit);
+  }
+
+  /** Everything retained, for export. */
+  public all(): DiagnosticRecord[] {
+    return [...this.records];
   }
 
   public clear(): void {

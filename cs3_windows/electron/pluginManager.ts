@@ -393,7 +393,8 @@ function mapProviderResults(providerName: string, raw: unknown): SearchResponse[
  */
 export interface DiagnosticsSink {
   record(entry: {
-    level: 'error' | 'warn';
+    /** `info` records what worked, which is what makes a failure reproducible. */
+    level: 'error' | 'warn' | 'info';
     stage: 'search' | 'detail' | 'links' | 'sources' | 'playback' | 'runtime' | 'install';
     source?: string;
     query?: string;
@@ -1241,7 +1242,18 @@ export class PluginManager {
       return { provider: name, results: [], latencyMs, error };
     }
 
-    return { provider: name, results: mapProviderResults(name, parsed.results), latencyMs };
+    const results = mapProviderResults(name, parsed.results);
+    // Recorded at `info`: knowing a provider answered — and how fast — is what
+    // makes a later failure by the same provider diagnosable rather than just
+    // annoying.
+    this.diagnostics?.record({
+      level: 'info',
+      stage: 'search',
+      source: name,
+      query,
+      message: `${results.length} result(s) in ${latencyMs}ms`,
+    });
+    return { provider: name, results, latencyMs };
   }
 
   /**
@@ -1405,6 +1417,14 @@ export class PluginManager {
       });
       return [];
     }
+
+    this.diagnostics?.record({
+      level: 'info',
+      stage: 'links',
+      source: ref.provider,
+      url,
+      message: `${(parsed.links as unknown[]).length} playable link(s)`,
+    });
 
     return (parsed.links as Array<Record<string, unknown>>).map((link) => ({
       source: link.source ? String(link.source) : ref.provider,

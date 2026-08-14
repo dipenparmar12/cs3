@@ -96,6 +96,30 @@ function parseEpisodeParams(url: string): { season?: number; episode?: number } 
   };
 }
 
+/**
+ * A truthful content type for a direct link.
+ *
+ * This claimed `video/mp4` for every non-HLS URL, `.mkv` included. The element
+ * sniffs the bytes so it did not break playback on its own, but the lie
+ * propagated: anything downstream reasoning about the type — an external
+ * player, a download's suggested filename, the HLS check itself — was told
+ * something false about the stream.
+ */
+function mimeForStreamUrl(url: string, isM3u8?: boolean): string {
+  if (isM3u8 || /\.m3u8(\?|$)/i.test(url)) return 'application/x-mpegURL';
+  const path = url.split('?')[0].toLowerCase();
+  if (path.endsWith('.webm')) return 'video/webm';
+  if (path.endsWith('.mkv')) return 'video/x-matroska';
+  if (path.endsWith('.avi')) return 'video/x-msvideo';
+  if (path.endsWith('.mov')) return 'video/quicktime';
+  if (path.endsWith('.ts')) return 'video/mp2t';
+  if (path.endsWith('.flv')) return 'video/x-flv';
+  if (path.endsWith('.ogv')) return 'video/ogg';
+  // Unknown extensions are far more often MP4 than anything else, and a
+  // download link commonly has no extension at all.
+  return 'video/mp4';
+}
+
 function stripQuery(url: string): string {
   const index = url.indexOf('?');
   return index >= 0 ? url.slice(0, index) : url;
@@ -736,7 +760,7 @@ export class ContentService {
         diskPath: '',
         files: [],
         subtitleUrls: [],
-        mimeType: source.isM3u8 ? 'application/x-mpegURL' : 'video/mp4',
+        mimeType: mimeForStreamUrl(source.directUrl, source.isM3u8),
       };
     }
 

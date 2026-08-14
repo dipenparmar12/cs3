@@ -76,6 +76,14 @@ interface VideoPlayerProps {
     attempts: Array<{ title: string; indexerName: string; error: string }>;
     onPlayNow: () => void;
     onSelectSource: (source: TorrentResult) => void;
+    /**
+     * Abandons a source that started but will not play.
+     *
+     * Only the renderer can detect this: discovery already fails over when a
+     * stream will not *start*, but one that starts fine and then cannot be
+     * decoded looks like success from the main process.
+     */
+    onSourceUnplayable?: (reason: string) => void;
     onRefresh: () => void;
     onDownloadSource?: (source: TorrentResult) => void;
   };
@@ -194,6 +202,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const [probeFailure, setProbeFailure] = useState<ProbeFailure | null>(null);
   const probeFailureRef = useRef<ProbeFailure | null>(null);
+  /**
+   * Asks for the next source, at most once per stream.
+   *
+   * Held in a ref because the `error` listener is attached once per stream and
+   * would otherwise close over a stale callback. Latched because a failing
+   * element can fire `error` repeatedly, and each one would burn another
+   * candidate off a list that is not long.
+   */
+  const skipRef = useRef<((reason: string) => void) | null>(null);
+  const skippedFor = useRef<string | null>(null);
   const [transcode, setTranscode] = useState<{ url: string; token: string } | null>(null);
   const [transcodeOffset, setTranscodeOffset] = useState(0);
   const [audioNeedsComponents, setAudioNeedsComponents] = useState(false);
@@ -530,6 +548,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const failure = probeFailureRef.current;
       if (failure) {
         setError(failure.reason);
+        skipRef.current?.(failure.reason);
         return;
       }
       const codec = audioProbeRef.current?.videoCodec;
@@ -542,11 +561,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         );
         return;
       }
-      setError(
-        codec
-          ? `The player could not decode this ${codec.toUpperCase()} stream. Try another source.`
-          : 'The player could not decode this file. It may be an unsupported codec, or the source may be dead — try another source.'
-      );
+      const message = codec
+        ? `The player could not decode this ${codec.toUpperCase()} stream.`
+        : 'The player could not decode this file.';
+      setError(message);
+      skipRef.current?.(message);
     };
 
     video.addEventListener('timeupdate', onTime);
@@ -903,7 +922,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const session = await window.cloudstream?.openMediaTranscode(
         streamUrl,
         preferred?.index ?? 0,
-        response.probe.needsVideoTranscode
+        response.probe.needsVideoTranscode,
+        // Container-only problems copy the audio; re-encoding a perfectly good
+        // track to reach a different wrapper is work for nothing.
+        response.probe.needsAudioTranscode
       );
       if (cancelled || !session?.ok || !session.url) return;
 
@@ -926,6 +948,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     probeFailureRef.current = probeFailure;
   }, [probeFailure]);
+
+  useEffect(() => {
+    const skip = sourceSession?.onSourceUnplayable;
+    skipRef.current = skip
+      ? (reason: string) => {
+          if (skippedFor.current === streamUrl) return;
+          skippedFor.current = streamUrl;
+          skip(reason);
+        }
+      : null;
+  }, [sourceSession?.onSourceUnplayable, streamUrl]);
 
   // A new stream invalidates everything learned about the previous one.
   useEffect(() => {
@@ -951,7 +984,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const session = await window.cloudstream?.openMediaTranscode(
         streamUrl,
         index,
-        audioProbe?.needsVideoTranscode ?? false
+        audioProbe?.needsVideoTranscode ?? false,
+        audioProbe?.needsAudioTranscode ?? true
       );
       if (!session?.ok || !session.url) return;
 
@@ -1127,6 +1161,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <>
               <AlertTriangle size={36} />
               <p>{error}</p>
+              {/* Failover is silent otherwise, and a viewer watching a dead
+                  frame has no way to tell trying-the-next from given-up. */}
+              {sourceSession && sourceSession.attempts.length > 0 && (
+                <span className="muted">
+                  Tried {sourceSession.attempts.length} of {sourceSession.sources.length} source
+                  {sourceSession.sources.length === 1 ? '' : 's'}
+                  {sourceSession.attempts.length < sourceSession.sources.length
+                    ? ' — trying the next…'
+                    : ''}
+                </span>
+              )}
               {/* Codecs and stream URL, because a playback failure is the least
                   reproducible thing in the app: the stream is transient and the
                   viewer has no way to describe it afterwards. */}
