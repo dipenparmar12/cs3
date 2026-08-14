@@ -33,6 +33,7 @@ import type {
 } from './cs3/extensionUpdater';
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
 import type { BootstrapProgress } from './cs3/bootstrap';
+import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
 import type {
   LibraryEntry,
   SourceMemory,
@@ -79,6 +80,28 @@ export interface CloudStreamElectronAPI {
   cancelSearch: (id: string) => Promise<Envelope & { snapshot: SearchSnapshot | null }>;
   /** Returns an unsubscribe function. */
   onSearchUpdate: (callback: (snapshot: SearchSnapshot) => void) => () => void;
+  /**
+   * A catalogue row for browsing, not a search.
+   *
+   * Answers from the metadata catalogues in a few hundred milliseconds instead
+   * of waiting on every installed scraper. Pass a provider name to browse that
+   * one provider's own library instead.
+   */
+  browse: (query: string, provider?: string) => Promise<Envelope & { results: SearchResponse[] }>;
+  /**
+   * What happened last time each title was opened, keyed by URL.
+   *
+   * `no-sources` is the source's problem and is worth showing on the row;
+   * `app-error` is ours, and is shown as such rather than as the title being
+   * unavailable — blaming the content for our own bug is how one broken
+   * translation pass came to look like a hundred broken providers.
+   */
+  getTitleOutcomes: () => Promise<Record<string, TitleOutcome>>;
+  recordTitleOutcome: (
+    url: string,
+    kind: TitleOutcomeKind,
+    reason?: string
+  ) => Promise<Envelope>;
   loadMedia: (url: string) => Promise<Envelope & { detail: MetadataDetail | null }>;
   getSources: (request: {
     mediaUrl: string;
@@ -393,6 +416,10 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.on('search:update', listener);
     return () => ipcRenderer.removeListener('search:update', listener);
   },
+  browse: (query, provider) => ipcRenderer.invoke('api:browse', query, provider),
+  getTitleOutcomes: () => ipcRenderer.invoke('api:getTitleOutcomes'),
+  recordTitleOutcome: (url, kind, reason) =>
+    ipcRenderer.invoke('api:recordTitleOutcome', url, kind, reason),
   loadMedia: (url) => ipcRenderer.invoke('api:loadMedia', url),
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),

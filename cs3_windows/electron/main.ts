@@ -25,6 +25,7 @@ import { AudioTranscoder } from './audioTranscoder';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { BootstrapService } from './cs3/bootstrap';
+import { TitleOutcomeStore, type TitleOutcomeKind } from './cs3/titleOutcomes';
 import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
 import type { DownloadTask } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
@@ -49,6 +50,7 @@ const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
 const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
 const bootstrap = new BootstrapService(datastore, pluginManager);
+const titleOutcomes = new TitleOutcomeStore(datastore);
 const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
@@ -351,6 +353,31 @@ ipcMain.handle('api:removeSearchHistory', async (_, query: string) =>
 );
 
 ipcMain.handle('api:clearSearchHistory', async () => searchHistory.clear());
+
+/**
+ * What happened last time each title was opened.
+ *
+ * Read once per search rather than per row, so the grid can mark dead entries
+ * without a round trip for every poster on screen.
+ */
+ipcMain.handle('api:getTitleOutcomes', async () => titleOutcomes.list());
+
+ipcMain.handle(
+  'api:recordTitleOutcome',
+  async (_, url: string, kind: TitleOutcomeKind, reason?: string) => {
+    titleOutcomes.record(url, kind, reason);
+    return { ok: true };
+  }
+);
+
+/** Catalogue browsing for the home screen. Fast by construction; see `browse`. */
+ipcMain.handle('api:browse', async (_, query: string, provider?: string) => {
+  try {
+    return { ok: true, results: await contentService.browse(query, provider) };
+  } catch (error) {
+    return { ...fail(error), results: [] };
+  }
+});
 
 ipcMain.handle('api:loadMedia', async (_, url: string) => {
   try {

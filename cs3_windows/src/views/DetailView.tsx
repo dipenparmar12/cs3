@@ -228,6 +228,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         if (response.ok && response.detail) {
           const data = response.detail as DetailData;
           setDetail(data);
+          window.cloudstream?.recordTitleOutcome?.(mediaItem.url, 'played');
           // Only worth saying when it is not the route the row advertised.
           setFellBackTo(
             index > 0 ? (mediaItem.alternates?.[index - 1]?.apiName ?? 'another source') : null
@@ -245,10 +246,25 @@ export const DetailView: React.FC<DetailViewProps> = ({
       // Every route failed. Report what each one said rather than a summary:
       // "Voe returned no links" and "the catalogue is unreachable" call for
       // completely different responses from the user.
-      setLoadError(
-        reasons.length > 0
-          ? [...new Set(reasons)].join(' · ')
-          : 'No source could open this title.'
+      const combined =
+        reasons.length > 0 ? [...new Set(reasons)].join(' · ') : 'No source could open this title.';
+      setLoadError(combined);
+
+      /**
+       * Remembered, and attributed.
+       *
+       * A message naming a Java or transport failure is our problem, not the
+       * title's, and marking the row "unavailable" for it would blame the
+       * content for our bug — which is precisely how one broken translation
+       * pass came to look like a hundred broken providers.
+       */
+      const ours = /NoSuchMethodError|NoClassDefFoundError|IncompatibleClassChange|runtime|sidecar/i.test(
+        combined
+      );
+      window.cloudstream?.recordTitleOutcome?.(
+        mediaItem.url,
+        ours ? 'app-error' : 'no-sources',
+        combined.slice(0, 300)
       );
       setIsLoading(false);
     })();

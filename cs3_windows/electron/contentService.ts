@@ -19,6 +19,7 @@ import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
 import { parseExtensionUrl, type PluginManager } from './pluginManager';
 import { SourceCache } from './sourceCache';
+import { mergeSearchResults } from './searchMerge';
 import { SearchScopeStore } from './searchScope';
 import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 
@@ -166,6 +167,42 @@ export class ContentService {
   public async search(query: string, options: SearchOptions = {}): Promise<SearchResponse[]> {
     if (!query.trim()) return [];
     return (await this.searches.runToCompletion(query, options)).results;
+  }
+
+  /**
+   * A catalogue row, for browsing rather than searching.
+   *
+   * The home screen used to build its rows with the full search — every enabled
+   * extension provider, waited on to completion, three times over in parallel.
+   * That made opening the app cost as much as the slowest scraper on the slowest
+   * of three queries, and the whole screen sat behind a spinner while it
+   * happened. It is also the wrong question: a row titled "Trending" wants a
+   * catalogue's idea of a popular film, and a site scraper has no view on that.
+   *
+   * So: catalogues only, which answer in a few hundred milliseconds. Asking one
+   * named provider stays possible, because browsing a specific provider's own
+   * library is a real thing the home screen offers — and one provider is fast
+   * for the same reason thirty are not.
+   */
+  public async browse(query: string, provider?: string): Promise<SearchResponse[]> {
+    const trimmed = query.trim();
+    if (!trimmed) return [];
+
+    if (provider) {
+      const results = await this.plugins.searchAll(trimmed, [provider]);
+      return mergeSearchResults(results);
+    }
+
+    const [cinemeta, legacy] = await Promise.allSettled([
+      this.cinemeta.search(trimmed),
+      this.metadata.search(trimmed),
+    ]);
+
+    const results = [
+      ...(cinemeta.status === 'fulfilled' ? cinemeta.value : []),
+      ...(legacy.status === 'fulfilled' ? legacy.value : []),
+    ];
+    return mergeSearchResults(results);
   }
 
   public async load(url: string): Promise<MetadataDetail | null> {

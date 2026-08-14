@@ -31,46 +31,77 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia, onPlayDirectl
     }).catch(() => {});
   }, []);
 
+  /**
+   * Each row lands on its own, and the page never waits for all of them.
+   *
+   * This used to run three full searches in a `Promise.all` and hold the whole
+   * screen behind a spinner until the last one returned — and a full search asks
+   * every installed extension provider and waits for the slowest. Opening the
+   * app therefore cost as much as the worst scraper on the worst of three
+   * queries, every time.
+   *
+   * `browse` answers from the metadata catalogues instead, which is both fast
+   * and the right source for a row called "Trending": a site scraper has no
+   * opinion about what is popular. Picking a specific provider still browses
+   * that provider's own library, which is one call rather than thirty.
+   */
   useEffect(() => {
     let isMounted = true;
+    const provider = selectedProvider === 'all' ? undefined : selectedProvider;
 
-    const fetchHomeContent = async () => {
-      setIsLoading(true);
-      if (window.cloudstream) {
-        const [movies, anime, series] = await Promise.all([
-          window.cloudstream.searchAll('Spider-Man'),
-          window.cloudstream.searchAll('One Piece'),
-          window.cloudstream.searchAll('Stranger Things')
-        ]);
+    const rows: Array<[string, (items: SearchResponse[]) => void]> = [
+      ['Spider-Man', setTrendingMovies],
+      ['One Piece', setTrendingAnime],
+      ['Stranger Things', setPopularSeries],
+    ];
 
-        const filterByProv = (items: SearchResponse[]) => {
-          if (selectedProvider === 'all') return items;
-          return items.filter((item) =>
-            item && (
-              item.apiName === selectedProvider ||
-              (Array.isArray(item.alternates) && item.alternates.some((a) => a.apiName === selectedProvider))
-            )
-          );
-        };
+    // Cleared up front so a provider change does not leave the previous
+    // provider's titles on screen while the new ones load.
+    for (const [, set] of rows) set([]);
+    setIsLoading(true);
 
-        if (isMounted) {
-          setTrendingMovies(filterByProv(movies.results));
-          setTrendingAnime(filterByProv(anime.results));
-          setPopularSeries(filterByProv(series.results));
-        }
-      }
-      setIsLoading(false);
-    };
+    let outstanding = rows.length;
+    for (const [query, set] of rows) {
+      window.cloudstream
+        ?.browse(query, provider)
+        .then((response) => {
+          if (isMounted && response?.ok) set(response.results ?? []);
+        })
+        .catch(() => {
+          // One empty row is not a broken home screen.
+        })
+        .finally(() => {
+          outstanding -= 1;
+          // The spinner only covers the gap before the *first* row arrives;
+          // after that there is real content to look at.
+          if (isMounted && outstanding === 0) setIsLoading(false);
+        });
+    }
 
-    window.cloudstream?.getContinueWatching(12).then((rows) => {
-      if (isMounted) setContinueWatching(rows);
+    window.cloudstream?.getContinueWatching(12).then((watching) => {
+      if (isMounted) setContinueWatching(watching);
     });
 
-    fetchHomeContent();
-    return () => { isMounted = false; };
+    return () => {
+      isMounted = false;
+    };
   }, [selectedProvider]);
 
-  if (isLoading) {
+  /**
+   * The spinner only covers an empty screen.
+   *
+   * Once any row has landed there is something to look at, and replacing it
+   * with a spinner because two other rows are still in flight is worse than
+   * showing what exists. Continue-watching counts too: it comes from local
+   * state and is on screen almost immediately.
+   */
+  const hasAnything =
+    trendingMovies.length > 0 ||
+    trendingAnime.length > 0 ||
+    popularSeries.length > 0 ||
+    continueWatching.length > 0;
+
+  if (isLoading && !hasAnything) {
     return (
       <div
         style={{

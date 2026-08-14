@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { SearchResponse } from '../types/api';
 import { TYPE_TABS, matchesTab, tabsFor } from '../utils/contentTypes';
 import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/resultGroups';
@@ -408,7 +408,9 @@ const Grid: React.FC<{
   items: SearchResponse[];
   onSelectMedia: (item: SearchResponse) => void;
   onPlayDirectly?: (item: SearchResponse) => void;
-}> = ({ items, onSelectMedia, onPlayDirectly }) => (
+}> = ({ items, onSelectMedia, onPlayDirectly }) => {
+  const outcomes = useTitleOutcomes();
+  return (
   <div
     style={{
       display: 'grid',
@@ -424,11 +426,29 @@ const Grid: React.FC<{
           item={item}
           onSelectMedia={onSelectMedia}
           onPlayDirectly={onPlayDirectly}
+          outcome={outcomes[item.url]}
         />
       );
     })}
-  </div>
-);
+    </div>
+  );
+};
+
+/**
+ * Last-time outcomes for every title, fetched once per mount.
+ *
+ * Per-card lookups would be one IPC round trip per poster on screen; the whole
+ * map is small and the grid needs most of it anyway.
+ */
+function useTitleOutcomes(): Record<string, { kind: 'played' | 'no-sources' | 'app-error'; reason?: string }> {
+  const [outcomes, setOutcomes] = useState<
+    Record<string, { kind: 'played' | 'no-sources' | 'app-error'; reason?: string }>
+  >({});
+  useEffect(() => {
+    window.cloudstream?.getTitleOutcomes?.().then((value) => setOutcomes(value ?? {}));
+  }, []);
+  return outcomes;
+}
 
 /**
  * What each source actually contributed, once the search is over.
