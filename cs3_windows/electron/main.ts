@@ -28,6 +28,9 @@ import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloade
 import { BootstrapService } from './cs3/bootstrap';
 import { TitleOutcomeStore, type TitleOutcomeKind } from './cs3/titleOutcomes';
 import { DiagnosticsLog } from './cs3/diagnostics';
+import { ProviderAnalytics } from './cs3/providerAnalytics';
+import { ProviderRanking } from './cs3/providerRanking';
+import { ProviderRecommender } from './cs3/providerRecommendations';
 import { ExternalPlayerService, PLAYER_DOWNLOADS } from './externalPlayer';
 import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
 import type { DownloadTask } from '../src/types/download';
@@ -57,6 +60,25 @@ const titleOutcomes = new TitleOutcomeStore(datastore);
 const diagnostics = new DiagnosticsLog();
 const externalPlayers = new ExternalPlayerService();
 pluginManager.setDiagnostics(diagnostics);
+
+/**
+ * Provider measurement, and the ordering built on it.
+ *
+ * Two objects rather than one because they answer different questions and have
+ * very different lifetimes: the analytics store accumulates for months and is
+ * the thing a privacy control has to be able to erase, while the ranking is a
+ * pure function of it that any build may compute differently.
+ */
+const providerAnalytics = new ProviderAnalytics();
+const providerRanking = new ProviderRanking(providerAnalytics);
+const providerRecommender = new ProviderRecommender(
+  providerAnalytics,
+  providerRanking,
+  pluginManager
+);
+pluginManager.setAnalytics(providerAnalytics);
+contentService.setAnalytics(providerAnalytics);
+downloadService.setAnalytics(providerAnalytics);
 // Stream failures are otherwise invisible: the request succeeded, and the break
 // happens minutes later with nothing watching.
 contentService.getProxy().setDiagnostics(diagnostics);
@@ -149,6 +171,7 @@ function installProcessGuards(): void {
       detail: error instanceof Error ? error.stack : undefined,
     });
     diagnostics.flush();
+    providerAnalytics.flush();
     throw error;
   });
 
@@ -288,6 +311,20 @@ app.whenReady().then(async () => {
   });
 
   /**
+   * The one-time provider load, reported as it happens.
+   *
+   * Every screen that lists sources depends on this pass and none of them could
+   * see it. The scope picker is the clearest case: it waited on a load that
+   * takes minutes, showed nothing while it ran, and gave the impression that
+   * the app had no providers at all.
+   */
+  pluginManager.onProviderLoadProgress((progress) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('extension:providerLoadProgress', progress);
+    }
+  });
+
+  /**
    * First launch installs the verified repositories in the background.
    *
    * After the window exists, never before it: this downloads and DEX-translates
@@ -349,6 +386,7 @@ app.on('before-quit', async (event) => {
     // Owns child processes and a socket, so it has to be torn down explicitly
     // or a killed app leaves orphaned ffmpeg processes behind.
     diagnostics.flush();
+    providerAnalytics.flush();
     mediaTranscoder.shutdown();
     contentService.shutdown();
     await torrentEngine.destroy();
@@ -579,6 +617,123 @@ ipcMain.handle(
   'api:recordTitleOutcome',
   async (_, url: string, kind: TitleOutcomeKind, reason?: string) => {
     titleOutcomes.record(url, kind, reason);
+    return { ok: true };
+  }
+);
+
+// --- provider analytics and ranking ---------------------------------------
+
+/**
+ * Everything measured, plus the score derived from it.
+ *
+ * One channel rather than two because the UI never wants one without the
+ * other: a score with no counters behind it cannot be argued with, and
+ * counters with no score are a spreadsheet.
+ */
+ipcMain.handle('analytics:getLeaderboard', async () => {
+  try {
+    return {
+      ok: true,
+      scores: providerRecommender.leaderboard(),
+      records: providerAnalytics.all(),
+      settings: providerAnalytics.getSettings(),
+      criteria: providerRanking.criteria(),
+    };
+  } catch (error) {
+    return { ...fail(error), scores: [], records: [], criteria: [] };
+  }
+});
+
+ipcMain.handle('analytics:getRecommendations', async (_, limit?: number) => {
+  try {
+    return { ok: true, recommendations: providerRecommender.recommendations(limit ?? 20) };
+  } catch (error) {
+    return { ...fail(error), recommendations: [] };
+  }
+});
+
+ipcMain.handle('analytics:getSettings', async () => ({
+  ok: true,
+  settings: providerAnalytics.getSettings(),
+  criteria: providerRanking.criteria(),
+}));
+
+ipcMain.handle(
+  'analytics:setSettings',
+  async (_, next: Partial<ReturnType<typeof providerAnalytics.getSettings>>) => {
+    try {
+      return { ok: true, settings: providerAnalytics.setSettings(next) };
+    } catch (error) {
+      return { ...fail(error), settings: providerAnalytics.getSettings() };
+    }
+  }
+);
+
+ipcMain.handle('analytics:setWeight', async (_, id: string, weight: number) => {
+  try {
+    providerRanking.setWeight(id, weight);
+    return { ok: true, criteria: providerRanking.criteria() };
+  } catch (error) {
+    return { ...fail(error), criteria: providerRanking.criteria() };
+  }
+});
+
+ipcMain.handle('analytics:resetWeights', async () => {
+  providerRanking.resetWeights();
+  return { ok: true, criteria: providerRanking.criteria() };
+});
+
+/**
+ * The user's thumb on the scale.
+ *
+ * Explicit preference outranks every measurement, because these are averages
+ * over scrapes of third-party sites and someone who knows their region's best
+ * source should not have to out-argue a running total.
+ */
+ipcMain.handle(
+  'analytics:setPreference',
+  async (_, provider: string, preference: 'preferred' | 'blocked' | null) => {
+    providerAnalytics.setPreference(provider, preference);
+    return { ok: true, score: providerRanking.score(provider) };
+  }
+);
+
+/** The privacy control. Erases the history; the settings survive. */
+ipcMain.handle('analytics:reset', async (_, provider?: string) => {
+  if (provider) providerAnalytics.resetProvider(provider);
+  else providerAnalytics.reset();
+  return { ok: true };
+});
+
+ipcMain.handle('analytics:applyAutoEnable', async () => {
+  try {
+    return { ok: true, enabled: providerRecommender.applyAutoEnable() };
+  } catch (error) {
+    return { ...fail(error), enabled: [] };
+  }
+});
+
+/**
+ * Records an outcome only the renderer can see.
+ *
+ * Playback is the case this exists for: whether a source actually produced
+ * pictures is known to the `<video>` element and to nothing in the main
+ * process. Downloads report from the main process directly.
+ */
+ipcMain.handle(
+  'analytics:observe',
+  async (
+    _,
+    input: {
+      provider: string;
+      stage: 'search' | 'detail' | 'links' | 'playback' | 'download';
+      outcome: 'success' | 'empty' | 'failure';
+      produced?: number;
+      latencyMs?: number;
+      error?: string;
+    }
+  ) => {
+    providerAnalytics.observe(input);
     return { ok: true };
   }
 );
@@ -1407,13 +1562,22 @@ ipcMain.handle('extension:getProviderTree', async () => {
 /**
  * Everything the scope picker needs to draw itself, in one call.
  *
- * Loading plugins is part of it, for the same reason `extension:getProviders`
- * does: which providers an archive registers is only knowable by running it.
- * The picker opening is a good moment to pay that cost, and it is paid once.
+ * `ensureLoaded` is the whole design here. Which providers an archive registers
+ * is only knowable by running it, and running all of them takes minutes on a
+ * bootstrapped install — so this used to load them unconditionally and the
+ * picker had nothing to show until that finished. Since nothing said so, it
+ * simply looked empty, and the only thing that appeared to fix it was running a
+ * search: that awaited the very same load, and by the time the user reopened
+ * the menu it had completed.
+ *
+ * Two calls instead of one. The picker asks with `ensureLoaded: false` when it
+ * mounts, which answers instantly from whatever is already registered, and with
+ * `true` when the user opens it — paying the cost at the moment there is a
+ * menu open to show progress in.
  */
-ipcMain.handle('search:getScopeOptions', async () => {
+ipcMain.handle('search:getScopeOptions', async (_, ensureLoaded = true) => {
   try {
-    await pluginManager.loadProviders();
+    if (ensureLoaded) await pluginManager.loadProviders();
     return {
       ok: true,
       repositories: pluginManager.getProviderTree(),
@@ -1424,6 +1588,8 @@ ipcMain.handle('search:getScopeOptions', async () => {
         .filter((config) => config.enabled)
         .map((config) => ({ id: config.id, name: config.name })),
       scope: contentService.getScope().get(),
+      ready: pluginManager.providersReady(),
+      progress: pluginManager.getProviderLoadProgress(),
     };
   } catch (error) {
     return {
@@ -1432,6 +1598,8 @@ ipcMain.handle('search:getScopeOptions', async () => {
       disabledProviders: [],
       indexers: [],
       scope: { providers: [], indexers: [] },
+      ready: false,
+      progress: pluginManager.getProviderLoadProgress(),
     };
   }
 });

@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { spawnSync } from 'child_process';
@@ -16,7 +17,41 @@ export interface SystemRuntimeStatus {
   runtimeDir?: string;
   isAppManaged: boolean;
   reason?: string;
+  /**
+   * The app-managed copy no longer matches the build it was copied from.
+   *
+   * Reported separately from `ready` on purpose: a stale runtime is complete
+   * and starts fine, it just runs last month's shim. Folding it into `ready`
+   * would make a working install look broken; leaving it out entirely is what
+   * produced the bug this field exists to catch.
+   */
+  stale: boolean;
+  staleReason?: string;
+  generation?: number;
 }
+
+/**
+ * Bumped whenever the shim, the bridge or the translator changes in a way that
+ * an already-provisioned copy would get wrong.
+ *
+ * Generation 2 covers the androidx UI closure, `android.net.Uri`, the `DataStore`
+ * and `CloudflareKiller` bridge types, and the per-class fix to
+ * `KotlinNameRepair` — every one of which shipped into `sidecar/runtime` while
+ * installed apps kept serving the generation-1 copy out of `%APPDATA%`.
+ */
+const RUNTIME_GENERATION = 2;
+
+/** Records which build the app-managed copy was taken from. */
+interface RuntimeStamp {
+  generation: number;
+  runtimeFingerprint: string;
+  sidecarFingerprint: string;
+  installedAt: string;
+  sourceRuntimeDir?: string;
+  sourceSidecarDir?: string;
+}
+
+const STAMP_FILE = 'runtime-stamp.json';
 
 export interface RuntimeProgress {
   step: 'idle' | 'checking' | 'downloading' | 'extracting' | 'verifying' | 'completed' | 'error';
@@ -127,6 +162,9 @@ export class RuntimeProvisioner {
       reason = `Required components missing: ${missing.join(', ')}. Click "Install Required Components" in Settings to set up automatically.`;
     }
 
+    const stamp = this.readStamp();
+    const staleReason = this.describeStaleness(stamp);
+
     return {
       ready,
       javaReady,
@@ -141,7 +179,108 @@ export class RuntimeProvisioner {
           javaInfo?.exePath.startsWith(this.baseDir)
       ),
       reason,
+      stale: staleReason !== undefined,
+      staleReason,
+      generation: stamp?.generation,
     };
+  }
+
+  // --- staleness -----------------------------------------------------------
+
+  /**
+   * Why the app-managed copy should be replaced, or `undefined` when it is current.
+   *
+   * The app-managed copy under `%APPDATA%` is resolved *before* every build
+   * location, which is what makes the packaged app self-contained. The cost is
+   * that once it exists it shadows the build forever unless something notices
+   * it has drifted — and nothing did. Installed apps kept serving a shim with
+   * no `androidx/**` and a bridge with no `DataStore` long after both were
+   * fixed, and every extension that touched one reported `NoClassDefFoundError`
+   * naming a class that had been shipped weeks earlier. Comparing a recorded
+   * fingerprint against the source build is the whole fix.
+   */
+  private describeStaleness(stamp: RuntimeStamp | null): string | undefined {
+    const managedRuntime = path.join(this.baseDir, 'runtime');
+    const managedSidecar = path.join(this.baseDir, 'sidecar');
+    // Nothing has been copied yet, so there is nothing to be stale.
+    if (!fs.existsSync(managedRuntime) && !fs.existsSync(managedSidecar)) return undefined;
+
+    if (!stamp) {
+      return 'The extension runtime was installed by an older build that did not record its version.';
+    }
+    if (stamp.generation !== RUNTIME_GENERATION) {
+      return `The extension runtime is generation ${stamp.generation}; this build ships generation ${RUNTIME_GENERATION}.`;
+    }
+
+    const source = this.findSourceComponents();
+    if (source.runtimeDir) {
+      const current = this.fingerprintDir(source.runtimeDir);
+      if (current && current !== stamp.runtimeFingerprint) {
+        return 'A newer provider runtime (library-jvm, bridge and android shim) is available in this build.';
+      }
+    }
+    if (source.sidecarDir) {
+      const current = this.fingerprintDir(source.sidecarDir);
+      if (current && current !== stamp.sidecarFingerprint) {
+        return 'A newer extension sidecar is available in this build.';
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Content identity of a jar directory: name, size and mtime of every jar.
+   *
+   * Hashing the bytes would be more exact and costs seconds over ~60 jars on
+   * every startup, which is not a trade worth making for a check that runs
+   * before the window opens. Size plus mtime catches a rebuild, which is the
+   * only way these directories ever change.
+   */
+  private fingerprintDir(dir: string): string | null {
+    try {
+      const parts: string[] = [];
+      const walk = (d: string, prefix: string): void => {
+        for (const entry of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) =>
+          a.name.localeCompare(b.name)
+        )) {
+          const full = path.join(d, entry.name);
+          const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) {
+            walk(full, rel);
+          } else if (entry.name.endsWith('.jar')) {
+            const st = fs.statSync(full);
+            parts.push(`${rel}:${st.size}:${Math.floor(st.mtimeMs)}`);
+          }
+        }
+      };
+      walk(dir, '');
+      if (parts.length === 0) return null;
+      return crypto.createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 32);
+    } catch {
+      return null;
+    }
+  }
+
+  private get stampPath(): string {
+    return path.join(this.baseDir, STAMP_FILE);
+  }
+
+  private readStamp(): RuntimeStamp | null {
+    try {
+      const raw = fs.readFileSync(this.stampPath, 'utf8');
+      const parsed = JSON.parse(raw) as RuntimeStamp;
+      return typeof parsed?.generation === 'number' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeStamp(stamp: RuntimeStamp): void {
+    try {
+      fs.writeFileSync(this.stampPath, JSON.stringify(stamp, null, 2), 'utf8');
+    } catch (err) {
+      console.warn('[RuntimeProvisioner] Could not record the runtime stamp:', err);
+    }
   }
 
   /**
@@ -205,16 +344,16 @@ export class RuntimeProvisioner {
   }
 
   /**
-   * Resolves the sidecar JAR across all managed & fallback paths.
+   * Build locations the app-managed copy is populated *from*, best first.
+   *
+   * Deliberately excludes `this.baseDir`. Provisioning used to call
+   * `findSidecarJar()`/`findRuntimeDir()` — which answer with the app-managed
+   * copy first — and then skip the copy when the answer already lived under
+   * `baseDir`. That made the very first provision the last one: every later
+   * build was resolved to the copy it was supposed to replace.
    */
-  public findSidecarJar(): { jarPath: string; libDir: string } | null {
-    const candidates = [
-      // 1. App-managed directory (%APPDATA%\CloudStream 3 Desktop\cs3-runtime\sidecar\cs3-sidecar.jar)
-      {
-        jar: path.join(this.baseDir, 'sidecar', 'cs3-sidecar.jar'),
-        lib: path.join(this.baseDir, 'sidecar', 'lib'),
-      },
-      // 2. Bundled electron resources
+  private sourceSidecarCandidates(): Array<{ jar: string; lib: string }> {
+    return [
       ...(app?.isPackaged
         ? [
             {
@@ -223,7 +362,6 @@ export class RuntimeProvisioner {
             },
           ]
         : []),
-      // 3. Prebuilt sidecar dist
       {
         jar: path.join(process.cwd(), '..', 'sidecar', 'dist', 'cs3-sidecar.jar'),
         lib: path.join(process.cwd(), '..', 'sidecar', 'dist', 'lib'),
@@ -232,7 +370,6 @@ export class RuntimeProvisioner {
         jar: path.join(process.cwd(), 'sidecar', 'dist', 'cs3-sidecar.jar'),
         lib: path.join(process.cwd(), 'sidecar', 'dist', 'lib'),
       },
-      // 4. Maven target directory (dev environment)
       {
         jar: path.join(process.cwd(), '..', 'sidecar', 'target', 'cs3-sidecar.jar'),
         lib: path.join(process.cwd(), '..', 'sidecar', 'target', 'lib'),
@@ -242,13 +379,136 @@ export class RuntimeProvisioner {
         lib: path.join(process.cwd(), 'sidecar', 'target', 'lib'),
       },
     ];
+  }
 
-    for (const item of candidates) {
-      if (fs.existsSync(item.jar)) {
-        return { jarPath: item.jar, libDir: item.lib };
+  private sourceRuntimeCandidates(): string[] {
+    return [
+      ...(app?.isPackaged ? [path.join(process.resourcesPath, 'sidecar', 'runtime')] : []),
+      path.join(process.cwd(), '..', 'sidecar', 'dist', 'runtime'),
+      path.join(process.cwd(), 'sidecar', 'dist', 'runtime'),
+      path.join(process.cwd(), '..', 'sidecar', 'runtime'),
+      path.join(process.cwd(), 'sidecar', 'runtime'),
+    ];
+  }
+
+  /**
+   * A runtime directory is usable only if it has the provider API *and* the
+   * bridge. A directory holding `library-jvm` alone is a half-built dev tree,
+   * and copying it over a complete app-managed runtime would remove the bridge
+   * the app was working with.
+   */
+  private describeRuntimeDir(dir: string): { dir: string; hasBridge: boolean } | null {
+    try {
+      if (!fs.existsSync(dir)) return null;
+      const files = fs.readdirSync(dir);
+      const hasLibraryJvm = files.some((f) => f.startsWith('library-jvm') && f.endsWith('.jar'));
+      if (!hasLibraryJvm) return null;
+      const hasBridge = files.some(
+        (f) => f.startsWith('cs3-provider-bridge') && f.endsWith('.jar')
+      );
+      return { dir, hasBridge };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Newest mtime among the jars under a directory, or 0 if there are none. */
+  private newestJarMtime(dir: string): number {
+    let newest = 0;
+    const walk = (d: string): void => {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(d, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const full = path.join(d, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+        } else if (entry.name.endsWith('.jar')) {
+          try {
+            newest = Math.max(newest, fs.statSync(full).mtimeMs);
+          } catch {
+            // Unreadable jar; it cannot be the newest for our purposes.
+          }
+        }
+      }
+    };
+    walk(dir);
+    return newest;
+  }
+
+  /**
+   * The best build-side runtime and sidecar, ignoring the app-managed copy.
+   *
+   * Chosen by build time, not by list order. `sidecar/dist/` is generated
+   * *from* `sidecar/runtime/` by `tools/package/build-runtime.mjs`, so in a dev
+   * checkout it is a snapshot that goes stale the moment Maven runs again —
+   * and it sits earlier in the candidate list. Preferring whichever directory
+   * was built most recently means a fresh `mvn package` takes effect without
+   * anyone having to remember to re-run the packaging script first.
+   *
+   * A directory that carries the bridge always beats one that does not,
+   * however new: a runtime without it can be started but cannot call a
+   * provider.
+   */
+  private findSourceComponents(): {
+    runtimeDir?: string;
+    sidecarDir?: string;
+    sidecarLib?: string;
+  } {
+    let runtime: { dir: string; hasBridge: boolean; mtime: number } | undefined;
+    for (const candidate of this.sourceRuntimeCandidates()) {
+      const described = this.describeRuntimeDir(candidate);
+      if (!described) continue;
+      const mtime = this.newestJarMtime(described.dir);
+      if (
+        !runtime ||
+        (described.hasBridge && !runtime.hasBridge) ||
+        (described.hasBridge === runtime.hasBridge && mtime > runtime.mtime)
+      ) {
+        runtime = { ...described, mtime };
       }
     }
 
+    let sidecar: { dir: string; lib: string; mtime: number } | undefined;
+    for (const candidate of this.sourceSidecarCandidates()) {
+      if (!fs.existsSync(candidate.jar)) continue;
+      let mtime = 0;
+      try {
+        mtime = fs.statSync(candidate.jar).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (!sidecar || mtime > sidecar.mtime) {
+        sidecar = { dir: path.dirname(candidate.jar), lib: candidate.lib, mtime };
+      }
+    }
+
+    return { runtimeDir: runtime?.dir, sidecarDir: sidecar?.dir, sidecarLib: sidecar?.lib };
+  }
+
+  /**
+   * Resolves the sidecar JAR across all managed & fallback paths.
+   */
+  public findSidecarJar(): { jarPath: string; libDir: string } | null {
+    // The app-managed copy wins when it exists — that is what makes an
+    // installed app independent of where it was built — and provisioning keeps
+    // it current. Anything else falls back to the newest build on disk.
+    const managed = {
+      jar: path.join(this.baseDir, 'sidecar', 'cs3-sidecar.jar'),
+      lib: path.join(this.baseDir, 'sidecar', 'lib'),
+    };
+    if (fs.existsSync(managed.jar)) return { jarPath: managed.jar, libDir: managed.lib };
+
+    const source = this.findSourceComponents();
+    if (source.sidecarDir) {
+      return {
+        jarPath: path.join(source.sidecarDir, 'cs3-sidecar.jar'),
+        libDir: source.sidecarLib ?? path.join(source.sidecarDir, 'lib'),
+      };
+    }
     return null;
   }
 
@@ -256,41 +516,11 @@ export class RuntimeProvisioner {
    * Resolves the provider runtime directory (containing library-jvm-4.8.0.jar & bridge).
    */
   public findRuntimeDir(): { dir: string; hasBridge: boolean } | null {
-    const candidates = [
-      // 1. App-managed directory (%APPDATA%\CloudStream 3 Desktop\cs3-runtime\runtime)
-      path.join(this.baseDir, 'runtime'),
-      // 2. Bundled electron resources
-      ...(app?.isPackaged
-        ? [path.join(process.resourcesPath, 'sidecar', 'runtime')]
-        : []),
-      // 3. Prebuilt dist runtime
-      path.join(process.cwd(), '..', 'sidecar', 'dist', 'runtime'),
-      path.join(process.cwd(), 'sidecar', 'dist', 'runtime'),
-      // 4. Dev runtime
-      path.join(process.cwd(), '..', 'sidecar', 'runtime'),
-      path.join(process.cwd(), 'sidecar', 'runtime'),
-    ];
+    const managed = this.describeRuntimeDir(path.join(this.baseDir, 'runtime'));
+    if (managed) return managed;
 
-    for (const candidate of candidates) {
-      try {
-        if (!fs.existsSync(candidate)) continue;
-        const files = fs.readdirSync(candidate);
-        const hasLibraryJvm = files.some(
-          (f) => f.startsWith('library-jvm') && f.endsWith('.jar')
-        );
-        const hasBridge = files.some(
-          (f) => f.startsWith('cs3-provider-bridge') && f.endsWith('.jar')
-        );
-
-        if (hasLibraryJvm) {
-          return { dir: candidate, hasBridge };
-        }
-      } catch {
-        // Ignore read errors
-      }
-    }
-
-    return null;
+    const source = this.findSourceComponents();
+    return source.runtimeDir ? this.describeRuntimeDir(source.runtimeDir) : null;
   }
 
   private probeJavaVersion(exePath: string): number | null {
@@ -328,35 +558,67 @@ export class RuntimeProvisioner {
       });
 
       try {
-        // 1. Copy available bundled or dev runtime dependencies into app-managed directory
-        const runtimeInfo = this.findRuntimeDir();
+        const source = this.findSourceComponents();
+        const stamp = this.readStamp();
         const targetRuntimeDir = path.join(this.baseDir, 'runtime');
+        const targetSidecarDir = path.join(this.baseDir, 'sidecar');
         fs.mkdirSync(targetRuntimeDir, { recursive: true });
+        fs.mkdirSync(targetSidecarDir, { recursive: true });
 
-        if (runtimeInfo && !runtimeInfo.dir.startsWith(this.baseDir)) {
+        // 1. Provider dependencies (library-jvm, the bridge, the android shim).
+        //
+        // Mirrored rather than merged: a jar the build dropped — a superseded
+        // library-jvm, a renamed bridge — has to disappear from the copy too,
+        // or it stays on the plugin classpath and the loader can resolve the
+        // old class in preference to the new one.
+        let runtimeFingerprint = stamp?.runtimeFingerprint ?? '';
+        if (source.runtimeDir) {
           this.notifyProgress({
             step: 'extracting',
             progress: 25,
             message: 'Deploying CloudStream provider dependencies (library-jvm)...',
           });
-          this.copyRecursiveSync(runtimeInfo.dir, targetRuntimeDir);
+          this.mirrorDirSync(source.runtimeDir, targetRuntimeDir);
+          runtimeFingerprint = this.fingerprintDir(source.runtimeDir) ?? '';
         }
 
-        // 2. Copy available sidecar files into app-managed directory
-        const sidecarInfo = this.findSidecarJar();
-        const targetSidecarDir = path.join(this.baseDir, 'sidecar');
-        fs.mkdirSync(targetSidecarDir, { recursive: true });
-
-        if (sidecarInfo && !sidecarInfo.jarPath.startsWith(this.baseDir)) {
+        // 2. The sidecar itself and its own dependencies.
+        let sidecarFingerprint = stamp?.sidecarFingerprint ?? '';
+        if (source.sidecarDir) {
           this.notifyProgress({
             step: 'extracting',
             progress: 50,
             message: 'Configuring extension compatibility sidecar (cs3-sidecar.jar)...',
           });
-          this.copyRecursiveSync(path.dirname(sidecarInfo.jarPath), targetSidecarDir);
+          this.mirrorDirSync(source.sidecarDir, targetSidecarDir);
+          // `lib/` is a sibling of the jar in a dev checkout and a child of it
+          // in `dist/`, so it is only copied separately when it is not already
+          // underneath what was just mirrored.
+          if (source.sidecarLib && !source.sidecarLib.startsWith(source.sidecarDir)) {
+            this.mirrorDirSync(source.sidecarLib, path.join(targetSidecarDir, 'lib'));
+          }
+          sidecarFingerprint = this.fingerprintDir(source.sidecarDir) ?? '';
         }
 
-        // 3. Check Java status; if missing, auto-provision portable Java 21
+        // 3. A new sidecar means a new translator, and translations are cached
+        //    by archive hash alone. Serving generation-1 output to a
+        //    generation-2 runtime is exactly how the KotlinNameRepair fix
+        //    stayed invisible after it shipped.
+        //
+        //    An absent stamp counts as changed. That is the upgrade case — a
+        //    copy installed before stamping existed — and it is the one run
+        //    where the cache is most likely to hold output from the broken
+        //    translator. On a genuinely fresh install the cache is empty, so
+        //    clearing it costs nothing.
+        const translatorChanged =
+          stamp === null ||
+          stamp.generation !== RUNTIME_GENERATION ||
+          stamp.sidecarFingerprint !== sidecarFingerprint;
+        if (translatorChanged) {
+          this.clearTranslationCache();
+        }
+
+        // 4. Check Java status; if missing, auto-provision portable Java 21
         const javaInfo = this.findJavaBinary();
         if (!javaInfo || javaInfo.version < REQUIRED_JAVA_VERSION) {
           this.notifyProgress({
@@ -367,7 +629,7 @@ export class RuntimeProvisioner {
           await this.downloadPortableJava();
         }
 
-        // 4. Verify final setup
+        // 5. Verify final setup
         this.notifyProgress({
           step: 'verifying',
           progress: 95,
@@ -376,6 +638,14 @@ export class RuntimeProvisioner {
 
         const finalStatus = this.getStatus();
         if (finalStatus.ready) {
+          this.writeStamp({
+            generation: RUNTIME_GENERATION,
+            runtimeFingerprint,
+            sidecarFingerprint,
+            installedAt: new Date().toISOString(),
+            sourceRuntimeDir: source.runtimeDir,
+            sourceSidecarDir: source.sidecarDir,
+          });
           this.notifyProgress({
             step: 'completed',
             progress: 100,
@@ -569,6 +839,73 @@ export class RuntimeProvisioner {
     } catch (e: any) {
       return { ok: false, message: e?.message || 'Failed to remove runtime directory.' };
     }
+  }
+
+  /**
+   * Copies `src` over `dest` and removes anything in `dest` that `src` no
+   * longer has. Only files whose size or mtime differ are rewritten, so a
+   * no-op refresh over ~60 jars costs a stat each rather than 90 MB of I/O.
+   */
+  private mirrorDirSync(src: string, dest: string): void {
+    if (!fs.existsSync(src)) return;
+    fs.mkdirSync(dest, { recursive: true });
+
+    const wanted = new Set<string>();
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      wanted.add(entry.name);
+      const from = path.join(src, entry.name);
+      const to = path.join(dest, entry.name);
+      if (entry.isDirectory()) {
+        this.mirrorDirSync(from, to);
+        continue;
+      }
+      try {
+        const a = fs.statSync(from);
+        const b = fs.existsSync(to) ? fs.statSync(to) : null;
+        if (b && b.size === a.size && Math.floor(b.mtimeMs) === Math.floor(a.mtimeMs)) continue;
+        fs.copyFileSync(from, to);
+        // Carrying the mtime across is what makes the comparison above and the
+        // fingerprint stable; without it every run looks like a change.
+        fs.utimesSync(to, a.atime, a.mtime);
+      } catch (err) {
+        console.warn(`[RuntimeProvisioner] Could not copy ${from}:`, err);
+      }
+    }
+
+    for (const existing of fs.readdirSync(dest)) {
+      if (wanted.has(existing)) continue;
+      try {
+        fs.rmSync(path.join(dest, existing), { recursive: true, force: true });
+      } catch {
+        // A locked jar is left behind; the fingerprint will retry next launch.
+      }
+    }
+  }
+
+  /**
+   * Drops cached DEX→JVM output.
+   *
+   * Translations are keyed by archive hash and nothing else, so they survive a
+   * translator upgrade and keep serving bytecode produced by the version that
+   * had the bug. Clearing costs one re-translation per installed extension.
+   */
+  public clearTranslationCache(): number {
+    const dir = path.join(this.baseDir, 'translated');
+    let removed = 0;
+    try {
+      if (!fs.existsSync(dir)) return 0;
+      for (const entry of fs.readdirSync(dir)) {
+        try {
+          fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
+          removed++;
+        } catch {
+          // In use by the running sidecar; it will be replaced in place.
+        }
+      }
+    } catch (err) {
+      console.warn('[RuntimeProvisioner] Could not clear the translation cache:', err);
+    }
+    return removed;
   }
 
   private copyRecursiveSync(src: string, dest: string): void {

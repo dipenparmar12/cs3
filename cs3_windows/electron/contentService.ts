@@ -17,7 +17,7 @@ import { TorrentEngine, type StreamHandle } from './torrent/torrentEngine';
 import { infoHashFromMagnet } from './torrent/indexers/base';
 import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
-import { parseExtensionUrl, type PluginManager } from './pluginManager';
+import { parseExtensionUrl, type AnalyticsSink, type PluginManager } from './pluginManager';
 import { SourceCache } from './sourceCache';
 import { MediaProxy } from './mediaProxy';
 import { DetailCache } from './detailCache';
@@ -57,6 +57,8 @@ export interface StreamAttempt {
   title: string;
   indexerName: string;
   error: string;
+  /** The extension provider behind this source, when it came from one. */
+  providerName?: string;
 }
 
 export interface AutoStreamResult {
@@ -147,6 +149,21 @@ export class ContentService {
   private revalidating = new Set<string>();
   /** Notified when a background refresh produced new metadata. */
   private onDetailRefreshed: ((url: string, detail: MetadataDetail) => void) | null = null;
+
+  /**
+   * Where playback outcomes are counted.
+   *
+   * Recorded here rather than in the renderer because this is the layer that
+   * knows *which source* started and which ones were tried and discarded first
+   * — by the time a stream reaches the `<video>` element the failed candidates
+   * are gone.
+   */
+  private analytics: AnalyticsSink | null = null;
+
+  /** Wired by `main.ts`; playback outcomes are counted from here onwards. */
+  public setAnalytics(sink: AnalyticsSink): void {
+    this.analytics = sink;
+  }
 
   constructor(datastore: DatastoreManager, plugins: PluginManager, engine: TorrentEngine) {
     this.registry = new IndexerRegistry(datastore);
@@ -641,6 +658,11 @@ export class ContentService {
     episode?: number
   ): Promise<TorrentResult[]> {
     const target = await this.resolveExtensionTarget(url, season, episode);
+    // `cs3ext://<provider>/<handle>` — the provider is the part worth
+    // attributing outcomes to, and the only place it is still available.
+    const providerName = target.startsWith('cs3ext://')
+      ? decodeURIComponent(target.slice('cs3ext://'.length).split('/')[0] ?? '') || undefined
+      : undefined;
     let links = await this.plugins.loadLinks(target);
 
     // An episode's URL already *is* the provider's playable handle, but a
@@ -678,6 +700,7 @@ export class ContentService {
           leechers: 0,
           indexerId: 'extension',
           indexerName: link.source || 'Extension provider',
+          providerName,
           parsed: {
             ...parsed,
             resolution: (link.quality || parsed.resolution) as ParsedRelease['resolution'],
@@ -888,10 +911,54 @@ export class ContentService {
     const perSourceMs = options.perSourceMs ?? DEFAULT_SOURCE_BUDGET_MS;
     const signal = options.signal;
     const attempts: StreamAttempt[] = [];
+    const startedAt = Date.now();
 
     const abortError = () => Object.assign(new Error('Superseded by a newer selection.'), {
       name: 'AbortError',
     });
+
+    /**
+     * Records the outcome and hands back the result.
+     *
+     * Wrapped because there are four ways out of the loop below that all count
+     * as "this source started" — a direct URL, an explicit choice, a torrent
+     * that reached playability, and one that is merely slow but making
+     * progress. Recording at each `return` by hand is how one of them ends up
+     * uncounted and a provider looks worse than it is.
+     */
+    const succeed = (
+      handle: StreamHandle,
+      source: TorrentResult
+    ): AutoStreamResult => {
+      if (source.providerName) {
+        this.analytics?.observe({
+          provider: source.providerName,
+          stage: 'playback',
+          outcome: 'success',
+          produced: 1,
+          latencyMs: Date.now() - startedAt,
+        });
+      }
+      return { handle, source, attempts };
+    };
+
+    const failed = (source: TorrentResult, error: string): void => {
+      attempts.push({
+        title: source.title,
+        indexerName: source.indexerName,
+        providerName: source.providerName,
+        error,
+      });
+      if (source.providerName) {
+        this.analytics?.observe({
+          provider: source.providerName,
+          stage: 'playback',
+          outcome: 'failure',
+          latencyMs: Date.now() - startedAt,
+          error,
+        });
+      }
+    };
 
     const usable = candidates.filter(
       (c) => c.directUrl || c.magnet || c.torrentUrl || c.infoHash
@@ -907,11 +974,7 @@ export class ContentService {
       try {
         handle = await this.startStream(source, season, episode);
       } catch (error) {
-        attempts.push({
-          title: source.title,
-          indexerName: source.indexerName,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        failed(source, error instanceof Error ? error.message : String(error));
         continue;
       }
 
@@ -926,14 +989,14 @@ export class ContentService {
       // bytes or the player reports the failure. Waiting on torrent readiness
       // here would block forever on a source that is already ready.
       if (source.directUrl) {
-        return { handle, source, attempts };
+        return succeed(handle, source);
       }
 
       // An explicit choice starts now. Readiness is the player's problem from
       // here — it already renders buffer progress, peers and speed, which is
       // strictly more informative than a blank wait.
       if (options.returnImmediately) {
-        return { handle, source, attempts };
+        return succeed(handle, source);
       }
 
       const verdict = await this.engine.waitUntilPlayable(
@@ -947,7 +1010,7 @@ export class ContentService {
         throw abortError();
       }
       if (verdict.playable) {
-        return { handle, source, attempts };
+        return succeed(handle, source);
       }
 
       // Not playable inside the budget. A source that is merely slow — bytes are
@@ -956,14 +1019,10 @@ export class ContentService {
       const stats = await this.engine.getStats(handle.infoHash);
       const makingProgress = Boolean(stats && stats.downloaded > 0 && stats.peers > 0);
       if (makingProgress) {
-        return { handle, source, attempts };
+        return succeed(handle, source);
       }
 
-      attempts.push({
-        title: source.title,
-        indexerName: source.indexerName,
-        error: verdict.reason ?? 'No data arrived within the time budget.',
-      });
+      failed(source, verdict.reason ?? 'No data arrived within the time budget.');
       // Discard the cache too: a swarm that produced nothing has nothing worth keeping.
       await this.engine.stopStream(handle.infoHash, false);
     }

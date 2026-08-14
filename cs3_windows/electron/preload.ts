@@ -20,12 +20,21 @@ import type { MetadataDetail } from './metadataProvider';
 import type { SourceResponse, StreamAttempt } from './contentService';
 import type {
   ExtensionProvider,
+  ProviderLoadProgress,
   RepositoryFetchResult,
 } from './pluginManager';
 import type { SearchScope } from './searchScope';
 import type { SearchSnapshot } from './searchSession';
 import type { DnsPreset, NetworkSettings } from './networkSettings';
 import type { SystemRuntimeStatus, RuntimeProgress } from './cs3/runtimeProvisioner';
+import type {
+  AnalyticsSettings,
+  ProviderAnalyticsRecord,
+  ProviderPreference,
+  ProviderRecommendation,
+  ProviderScore,
+  RankingCriterionInfo,
+} from '../src/types/analytics';
 import type {
   AvailableUpdate,
   UpdateCheckResult,
@@ -329,15 +338,28 @@ export interface CloudStreamElectronAPI {
     }>;
   }>;
 
-  getSearchScopeOptions: () => Promise<
+  /**
+   * @param ensureLoaded pay for the one-time load of every installed extension.
+   * Pass `false` for an instant answer from whatever is already registered —
+   * which is what a component should do when it mounts, so it can render
+   * something rather than waiting minutes for a list it could partly show now.
+   */
+  getSearchScopeOptions: (ensureLoaded?: boolean) => Promise<
     Envelope & {
       repositories: ProviderTreeRepository[];
       disabledProviders: string[];
       indexers: Array<{ id: string; name: string }>;
       scope: SearchScope;
+      /** False while extensions are still being loaded into the sidecar. */
+      ready: boolean;
+      progress: ProviderLoadProgress;
     }
   >;
   setSearchScope: (scope: Partial<SearchScope>) => Promise<SearchScope>;
+  /** Fires as each installed extension is loaded, so lists can fill in. */
+  onProviderLoadProgress: (
+    callback: (progress: ProviderLoadProgress) => void
+  ) => () => void;
 
   /**
    * Inspects a stream's audio tracks. Reports tracks Chromium cannot decode,
@@ -502,6 +524,59 @@ export interface CloudStreamElectronAPI {
   onSystemRuntimeProgress: (
     callback: (progress: RuntimeProgress) => void
   ) => () => void;
+
+  // Provider analytics and ranking
+  /**
+   * Measured behaviour and the score derived from it, together.
+   *
+   * They travel as one reply because the UI never wants one without the other:
+   * a score with no counters behind it cannot be argued with, and counters with
+   * no score are a spreadsheet.
+   */
+  getProviderLeaderboard: () => Promise<
+    Envelope & {
+      scores: ProviderScore[];
+      records: ProviderAnalyticsRecord[];
+      settings?: AnalyticsSettings;
+      criteria: RankingCriterionInfo[];
+    }
+  >;
+  getProviderRecommendations: (
+    limit?: number
+  ) => Promise<Envelope & { recommendations: ProviderRecommendation[] }>;
+  getAnalyticsSettings: () => Promise<
+    Envelope & { settings: AnalyticsSettings; criteria: RankingCriterionInfo[] }
+  >;
+  setAnalyticsSettings: (
+    next: Partial<AnalyticsSettings>
+  ) => Promise<Envelope & { settings: AnalyticsSettings }>;
+  setRankingWeight: (
+    id: string,
+    weight: number
+  ) => Promise<Envelope & { criteria: RankingCriterionInfo[] }>;
+  resetRankingWeights: () => Promise<Envelope & { criteria: RankingCriterionInfo[] }>;
+  /** Pins or blocks a provider by hand; `null` returns it to being measured. */
+  setProviderPreference: (
+    provider: string,
+    preference: ProviderPreference | null
+  ) => Promise<Envelope & { score: ProviderScore }>;
+  /** Erases measured history. Omit `provider` to erase everything. */
+  resetProviderAnalytics: (provider?: string) => Promise<Envelope>;
+  applyProviderAutoEnable: () => Promise<Envelope & { enabled: string[] }>;
+  /**
+   * Records an outcome only the renderer can observe.
+   *
+   * Playback is why this exists: whether a source produced pictures is known to
+   * the `<video>` element and to nothing in the main process.
+   */
+  recordProviderOutcome: (input: {
+    provider: string;
+    stage: 'search' | 'detail' | 'links' | 'playback' | 'download';
+    outcome: 'success' | 'empty' | 'failure';
+    produced?: number;
+    latencyMs?: number;
+    error?: string;
+  }) => Promise<Envelope>;
 
   // Extensions
   getOfficialRepositories: () => Promise<OfficialRepository[]>;
@@ -695,8 +770,14 @@ const api: CloudStreamElectronAPI = {
   setNetworkSettings: (settings) => ipcRenderer.invoke('network:set', settings),
   resetNetworkSettings: () => ipcRenderer.invoke('network:reset'),
   testNetwork: () => ipcRenderer.invoke('network:test'),
-  getSearchScopeOptions: () => ipcRenderer.invoke('search:getScopeOptions'),
+  getSearchScopeOptions: (ensureLoaded = true) =>
+    ipcRenderer.invoke('search:getScopeOptions', ensureLoaded),
   setSearchScope: (scope) => ipcRenderer.invoke('search:setScope', scope),
+  onProviderLoadProgress: (callback) => {
+    const listener = (_: unknown, progress: ProviderLoadProgress) => callback(progress);
+    ipcRenderer.on('extension:providerLoadProgress', listener);
+    return () => ipcRenderer.removeListener('extension:providerLoadProgress', listener);
+  },
 
   probeMedia: (url) => ipcRenderer.invoke('media:probe', url),
   getCodecProbes: () => ipcRenderer.invoke('media:getCodecProbes'),
@@ -784,6 +865,19 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.on('runtime:progress', listener);
     return () => ipcRenderer.removeListener('runtime:progress', listener);
   },
+
+  getProviderLeaderboard: () => ipcRenderer.invoke('analytics:getLeaderboard'),
+  getProviderRecommendations: (limit) =>
+    ipcRenderer.invoke('analytics:getRecommendations', limit),
+  getAnalyticsSettings: () => ipcRenderer.invoke('analytics:getSettings'),
+  setAnalyticsSettings: (next) => ipcRenderer.invoke('analytics:setSettings', next),
+  setRankingWeight: (id, weight) => ipcRenderer.invoke('analytics:setWeight', id, weight),
+  resetRankingWeights: () => ipcRenderer.invoke('analytics:resetWeights'),
+  setProviderPreference: (provider, preference) =>
+    ipcRenderer.invoke('analytics:setPreference', provider, preference),
+  resetProviderAnalytics: (provider) => ipcRenderer.invoke('analytics:reset', provider),
+  applyProviderAutoEnable: () => ipcRenderer.invoke('analytics:applyAutoEnable'),
+  recordProviderOutcome: (input) => ipcRenderer.invoke('analytics:observe', input),
 
   getOfficialRepositories: () => ipcRenderer.invoke('extension:getOfficialRepositories'),
   fetchRepository: (repoUrl) => ipcRenderer.invoke('extension:fetchRepository', repoUrl),

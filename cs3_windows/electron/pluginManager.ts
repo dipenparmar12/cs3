@@ -9,6 +9,13 @@ import { fetchBuffer, fetchJson } from './torrent/http';
 import type { DatastoreManager } from './datastore';
 import { SidecarSupervisor } from './cs3/sidecarSupervisor';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from './officialRepositories';
+import { classifyFailure, FAILURE_KIND_LABELS } from './cs3/failureTaxonomy';
+import type { FailureKind } from '../src/types/analytics';
+import type {
+  DiagnosisFact,
+  DiagnosisKind,
+  SourceDiagnosis,
+} from '../src/types/diagnostics';
 
 /**
  * CloudStream extension (`.cs3`) repository and install management.
@@ -512,6 +519,80 @@ export interface DiagnosticsSink {
   }): void;
 }
 
+/**
+ * Somewhere to send measurements, on the same terms as {@link DiagnosticsSink}.
+ *
+ * Separate from diagnostics on purpose even though both are fed from the same
+ * call sites. Diagnostics answers "what went wrong just now, in enough detail
+ * to reproduce it" and keeps queries, titles and URLs to do so. This answers
+ * "which providers are worth asking" and keeps none of that — only counts. One
+ * file is meant to be pasted into a bug report; the other never leaves the
+ * machine unless the user exports it.
+ */
+/** Progress of the one-time load of every installed extension. */
+export interface ProviderLoadProgress {
+  /** Archives whose `load()` has been attempted. */
+  loaded: number;
+  /** Archives that will be attempted in this pass. */
+  total: number;
+  /** True while a pass is in flight. */
+  running: boolean;
+  /** Providers registered so far, which is what the scope picker can offer. */
+  providers: number;
+  /** The archive currently being loaded, for a progress line worth reading. */
+  current?: string;
+}
+
+export interface AnalyticsSink {
+  observe(input: {
+    provider: string;
+    stage: 'search' | 'detail' | 'links' | 'playback' | 'download';
+    outcome: 'success' | 'empty' | 'failure';
+    produced?: number;
+    latencyMs?: number;
+    error?: string;
+  }): void;
+  describe(
+    provider: string,
+    provenance: {
+      repositoryId?: string;
+      repositoryName?: string;
+      extensionInternalName?: string;
+      extensionName?: string;
+    }
+  ): void;
+}
+
+/**
+ * One sentence naming the provider and the cause, for the failure kinds that
+ * have a plain-language reading.
+ *
+ * Kept short deliberately. The detail belongs in `facts`, which the debug copy
+ * collects; a message that tries to be a report ends up being neither.
+ */
+function summarizeLinkFailure(provider: string, kind: DiagnosisKind, raw: string): string {
+  switch (kind) {
+    case 'blocked':
+      return `The file host refused ${provider}'s request for this item.`;
+    case 'not-found':
+      return `${provider}'s source for this item is gone.`;
+    case 'expired':
+      return `${provider}'s link for this item had already expired.`;
+    case 'server-error':
+      return `The file host returned an error to ${provider}.`;
+    case 'network':
+      return `${provider} could not reach the file host.`;
+    case 'timeout':
+      return `${provider} did not answer in time.`;
+    case 'unsupported-operation':
+      return `${provider} does not resolve playable links — it is a catalogue, not a source.`;
+    case 'unreadable-reply':
+      return `${provider} could not read the page it was given; the site has probably changed.`;
+    default:
+      return raw.length <= 160 ? raw : `${provider} failed while resolving this item.`;
+  }
+}
+
 /** The bridge's replies arrive as JSON strings; a malformed one is not fatal. */
 function safeParse(raw: string): Record<string, unknown> | null {
   try {
@@ -543,12 +624,34 @@ export class PluginManager {
    */
   private diagnostics: DiagnosticsSink | null = null;
 
+  /** Where provider outcomes are counted, when the host supplies a store. */
+  private analytics: AnalyticsSink | null = null;
+
   /** Providers registered by loaded plugins, keyed by provider name. */
   private providers = new Map<string, ExtensionProvider>();
   /** Names an extension tried to register that another extension already held. */
   private providerNameClashes = new Map<string, string[]>();
   private providersLoaded = false;
   private providersLoading: Promise<void> | null = null;
+
+  /**
+   * How far the one-time provider load has got.
+   *
+   * Loading runs DEX translation and each plugin's own `load()`, serially,
+   * across every installed archive — on a bootstrapped install that is a
+   * hundred and seventy of them and it takes minutes. Nothing reported that,
+   * so every consumer that waits on `loadProviders()` looked frozen, and the
+   * search scope picker in particular appeared to be permanently empty until
+   * the user happened to run a search and wait long enough for the same load to
+   * finish underneath it. The work was always fine; its silence was the bug.
+   */
+  private loadProgress: ProviderLoadProgress = {
+    loaded: 0,
+    total: 0,
+    running: false,
+    providers: 0,
+  };
+  private loadProgressListeners = new Set<(progress: ProviderLoadProgress) => void>();
 
   public getSidecar(): SidecarSupervisor {
     return this.sidecar;
@@ -1082,6 +1185,76 @@ export class PluginManager {
     this.diagnostics = sink;
   }
 
+  /**
+   * Whether the provider registry reflects what is installed.
+   *
+   * Lets a caller tell "no providers" from "not asked yet", which is the whole
+   * difference between an empty source list and a loading one.
+   */
+  public providersReady(): boolean {
+    return this.providersLoaded;
+  }
+
+  public getProviderLoadProgress(): ProviderLoadProgress {
+    return { ...this.loadProgress, providers: this.providers.size };
+  }
+
+  public onProviderLoadProgress(
+    listener: (progress: ProviderLoadProgress) => void
+  ): () => void {
+    this.loadProgressListeners.add(listener);
+    return () => {
+      this.loadProgressListeners.delete(listener);
+    };
+  }
+
+  private emitLoadProgress(patch: Partial<ProviderLoadProgress>): void {
+    this.loadProgress = {
+      ...this.loadProgress,
+      ...patch,
+      providers: this.providers.size,
+    };
+    const snapshot = this.getProviderLoadProgress();
+    for (const listener of this.loadProgressListeners) {
+      try {
+        listener(snapshot);
+      } catch {
+        // A listener that throws must not stop the load it is watching.
+      }
+    }
+  }
+
+  /** Wired by `main.ts`; provider outcomes are counted from here onwards. */
+  public setAnalytics(sink: AnalyticsSink): void {
+    this.analytics = sink;
+    this.publishProvenance();
+  }
+
+  /**
+   * Tells the analytics store which extension and repository each provider
+   * came from.
+   *
+   * This class is the only layer that knows. A provider reports its own name
+   * and nothing about its ancestry, so without this a poor score is a bare
+   * string — and the point of ranking is to be able to say whose code and
+   * whose repository is behind it.
+   */
+  private publishProvenance(): void {
+    if (!this.analytics) return;
+    for (const provider of this.providers.values()) {
+      const record = this.installedPlugins.get(provider.pluginInternalName);
+      this.analytics.describe(provider.name, {
+        repositoryId: record?.meta?.repositoryUrl || SIDELOADED_REPOSITORY_ID,
+        repositoryName: record?.meta?.repositoryUrl
+          ? (findOfficialRepository(record.meta.repositoryUrl)?.name ??
+             repositoryLabel(record.meta.repositoryUrl))
+          : undefined,
+        extensionInternalName: provider.pluginInternalName,
+        extensionName: record?.meta?.name ?? provider.pluginInternalName,
+      });
+    }
+  }
+
   public getProvidersList(): string[] {
     return [...this.providers.keys()];
   }
@@ -1295,13 +1468,22 @@ export class PluginManager {
       // and a stale entry would keep blaming an extension that is now fine.
       this.providerNameClashes.clear();
 
-      for (const record of this.installedPlugins.values()) {
-        if (!record.filePath || !fs.existsSync(record.filePath)) continue;
+      const pending = [...this.installedPlugins.values()].filter(
+        (record) => record.filePath && fs.existsSync(record.filePath)
+      );
+      this.emitLoadProgress({ loaded: 0, total: pending.length, running: true });
+
+      for (const record of pending) {
+        this.emitLoadProgress({ current: record.meta?.name ?? record.internalName });
 
         const response = await this.sidecar.call('load', {
           pluginId: record.internalName,
           path: record.filePath,
         });
+        // Reported per archive rather than at the end. Consumers that wait on
+        // this — the scope picker most visibly — can then show a list that
+        // fills in, instead of nothing followed by everything.
+        this.emitLoadProgress({ loaded: this.loadProgress.loaded + 1 });
 
         if (!response.ok) {
           // A plugin that will not load is a per-plugin outcome, not a search
@@ -1359,6 +1541,8 @@ export class PluginManager {
         }
       }
       this.providersLoaded = true;
+      this.publishProvenance();
+      this.emitLoadProgress({ running: false, current: undefined });
     })().finally(() => {
       this.providersLoading = null;
     });
@@ -1616,13 +1800,28 @@ export class PluginManager {
         message: error,
         detail: response.errorKind,
       });
+      this.analytics?.observe({
+        provider: name,
+        stage: 'search',
+        outcome: 'failure',
+        latencyMs,
+        error: response.errorKind ? `${response.errorKind}: ${error}` : error,
+      });
       return { provider: name, results: [], latencyMs, error };
     }
 
     const byProvider = (response.result?.byProvider ?? {}) as Record<string, string>;
     const parsed = byProvider[name] ? safeParse(byProvider[name]) : null;
     if (!parsed) {
-      return { provider: name, results: [], latencyMs, error: 'The provider returned no usable answer.' };
+      const error = 'The provider returned no usable answer.';
+      this.analytics?.observe({
+        provider: name,
+        stage: 'search',
+        outcome: 'failure',
+        latencyMs,
+        error,
+      });
+      return { provider: name, results: [], latencyMs, error };
     }
     if (!parsed.ok) {
       const error =
@@ -1633,6 +1832,13 @@ export class PluginManager {
         source: name,
         query,
         message: error,
+      });
+      this.analytics?.observe({
+        provider: name,
+        stage: 'search',
+        outcome: 'failure',
+        latencyMs,
+        error,
       });
       return { provider: name, results: [], latencyMs, error };
     }
@@ -1647,6 +1853,17 @@ export class PluginManager {
       source: name,
       query,
       message: `${results.length} result(s) in ${latencyMs}ms`,
+    });
+    // A clean run with no matches is `empty`, not `failure`. An anime provider
+    // that has nothing for "Dune" is behaving correctly, and counting that
+    // against it would rank providers by catalogue breadth rather than by
+    // whether they work.
+    this.analytics?.observe({
+      provider: name,
+      stage: 'search',
+      outcome: results.length > 0 ? 'success' : 'empty',
+      produced: results.length,
+      latencyMs,
     });
     return { provider: name, results, latencyMs };
   }
@@ -1668,12 +1885,13 @@ export class PluginManager {
     if (!ref) return null;
     await this.ensureProvidersLoaded();
 
+    const startedAt = Date.now();
     const response = await this.sidecar.call(
       'providerLoad',
       { provider: ref.provider, url: ref.target },
       PROVIDER_CALL_TIMEOUT_MS
     );
-    if (!response.ok) return null;
+    const latencyMs = Date.now() - startedAt;
 
     /**
      * Every way this can fail says which way it was.
@@ -1694,6 +1912,13 @@ export class PluginManager {
         message,
         detail,
       });
+      this.analytics?.observe({
+        provider: ref.provider,
+        stage: 'detail',
+        outcome: 'failure',
+        latencyMs,
+        error: detail ? `${detail}: ${message}` : message,
+      });
       return new Error(message);
     };
 
@@ -1712,6 +1937,14 @@ export class PluginManager {
     }
     if (!parsed.found) throw fail(`${ref.provider} no longer has a page for this title.`);
     if (!parsed.detail) throw fail(`${ref.provider} returned a page with no details on it.`);
+
+    this.analytics?.observe({
+      provider: ref.provider,
+      stage: 'detail',
+      outcome: 'success',
+      produced: 1,
+      latencyMs,
+    });
 
     const detail = parsed.detail as Record<string, unknown>;
     const episodes = Array.isArray(detail.episodes)
@@ -1754,74 +1987,152 @@ export class PluginManager {
 
   /** Resolves playable links for one movie or episode handle. */
   public async loadLinks(url: string): Promise<ExtractorLink[]> {
+    return (await this.loadLinksDetailed(url)).links;
+  }
+
+  /**
+   * Link resolution, with the reason attached when there is nothing to return.
+   *
+   * `loadLinks` returning a bare `[]` is why "the extension provider returned
+   * no playable links for this item" was the only thing anyone could ever be
+   * told. That sentence covers a timeout, a thrown extractor, a blocked host, a
+   * provider with no `loadLinks` at all, a title that genuinely has no sources,
+   * and a reply full of links with empty URLs — six situations, three of them
+   * actionable, one message. The empty list still goes back, because a failed
+   * resolve is not an exception at this layer; what changes is that the caller
+   * can now say which of the six it was.
+   */
+  public async loadLinksDetailed(
+    url: string
+  ): Promise<{ links: ExtractorLink[]; diagnosis?: SourceDiagnosis }> {
     const ref = parseExtensionUrl(url);
-    if (!ref) return [];
+    if (!ref) {
+      return {
+        links: [],
+        diagnosis: {
+          kind: 'unreadable-reply',
+          stage: 'links',
+          summary: 'This item does not carry an extension address, so no provider could be asked.',
+          address: url,
+          facts: [{ label: 'address', value: url }],
+          at: Date.now(),
+        },
+      };
+    }
     await this.ensureProvidersLoaded();
 
+    const startedAt = Date.now();
     const response = await this.sidecar.call(
       'providerLoadLinks',
       { provider: ref.provider, data: ref.target },
       PROVIDER_CALL_TIMEOUT_MS
     );
-    /**
-     * Every way this returns nothing is recorded first.
-     *
-     * The caller can only render "no playable links for this item", which is
-     * true of a provider that timed out, one whose extractor threw, and one
-     * that genuinely has nothing — three different situations with one
-     * sentence. The empty list still goes back, because a failed resolve is not
-     * an exception at this layer; the reason goes to the log.
-     */
-    if (!response.ok) {
+    const latencyMs = Date.now() - startedAt;
+
+    /** Shared shape for the four ways this ends with nothing. */
+    const nothing = (
+      kind: DiagnosisKind,
+      summary: string,
+      options: { hint?: string; error?: string; extra?: DiagnosisFact[]; level?: 'error' | 'warn' } = {}
+    ): { links: ExtractorLink[]; diagnosis: SourceDiagnosis } => {
       this.diagnostics?.record({
-        level: 'error',
+        level: options.level ?? 'error',
         stage: 'links',
         source: ref.provider,
         url,
-        message: response.error ?? 'The extension runtime did not answer.',
-        detail: response.errorKind,
+        message: summary,
+        detail: options.error,
       });
-      return [];
+      this.analytics?.observe({
+        provider: ref.provider,
+        stage: 'links',
+        // A provider that ran and has nothing is `empty`; one that broke is
+        // `failure`. The ranking treats them differently and the distinction
+        // is only available here.
+        outcome: kind === 'no-links' ? 'empty' : 'failure',
+        latencyMs,
+        error: options.error ?? summary,
+      });
+      return {
+        links: [],
+        diagnosis: {
+          kind,
+          stage: 'links',
+          summary,
+          hint: options.hint,
+          provider: ref.provider,
+          address: url,
+          at: Date.now(),
+          facts: [
+            { label: 'provider', value: ref.provider },
+            { label: 'address', value: url },
+            { label: 'handle', value: ref.target },
+            { label: 'took', value: `${latencyMs} ms` },
+            ...(options.error ? [{ label: 'reported', value: options.error }] : []),
+            ...(options.extra ?? []),
+          ],
+        },
+      };
+    };
+
+    if (!response.ok) {
+      const error = response.error ?? 'The extension runtime did not answer.';
+      const kind: DiagnosisKind =
+        response.errorKind === 'TIMEOUT'
+          ? 'timeout'
+          : classifyFailure(`${response.errorKind ?? ''} ${error}`);
+      return nothing(
+        kind,
+        kind === 'timeout'
+          ? `${ref.provider} did not answer in time.`
+          : `${ref.provider} could not be reached.`,
+        {
+          error,
+          extra: response.errorKind ? [{ label: 'errorKind', value: response.errorKind }] : [],
+          hint:
+            kind === 'timeout'
+              ? 'The site is slow or unreachable from here. Other providers may still have this title.'
+              : undefined,
+        }
+      );
     }
 
     const parsed = safeParse(String(response.result?.json ?? ''));
     if (!parsed?.ok) {
-      this.diagnostics?.record({
-        level: 'error',
-        stage: 'links',
-        source: ref.provider,
-        url,
-        message:
-          typeof parsed?.error === 'string'
-            ? parsed.error
-            : 'The provider returned an unreadable reply for this item.',
+      const error =
+        typeof parsed?.error === 'string'
+          ? parsed.error
+          : 'The provider returned an unreadable reply for this item.';
+      const kind = classifyFailure(error);
+      return nothing(kind, summarizeLinkFailure(ref.provider, kind, error), {
+        error,
+        hint: FAILURE_KIND_LABELS[kind as FailureKind]?.hint,
       });
-      return [];
-    }
-    if (!Array.isArray(parsed.links) || parsed.links.length === 0) {
-      this.diagnostics?.record({
-        level: 'warn',
-        stage: 'links',
-        source: ref.provider,
-        url,
-        message: 'The provider ran successfully but offered no playable links.',
-        detail:
-          parsed.reportedSuccess === false
-            ? 'The provider reported failure for this item.'
-            : undefined,
-      });
-      return [];
     }
 
-    this.diagnostics?.record({
-      level: 'info',
-      stage: 'links',
-      source: ref.provider,
-      url,
-      message: `${(parsed.links as unknown[]).length} playable link(s)`,
-    });
+    const rawLinks = Array.isArray(parsed.links)
+      ? (parsed.links as Array<Record<string, unknown>>)
+      : [];
 
-    return (parsed.links as Array<Record<string, unknown>>).map((link) => ({
+    if (rawLinks.length === 0) {
+      // The provider ran. Whether that is a fault depends on what it said about
+      // itself, and the bridge already reports it.
+      const reportedFailure = parsed.reportedSuccess === false;
+      return nothing(
+        reportedFailure ? 'provider-error' : 'no-links',
+        reportedFailure
+          ? `${ref.provider} reported a failure while resolving this item.`
+          : `${ref.provider} has no sources for this item.`,
+        {
+          level: reportedFailure ? 'error' : 'warn',
+          hint: reportedFailure
+            ? 'The extension ran but could not extract anything. Worth reporting to its maintainer.'
+            : 'Try “Find more sources” to ask the other enabled providers.',
+        }
+      );
+    }
+
+    const links = rawLinks.map((link) => ({
       source: link.source ? String(link.source) : ref.provider,
       name: link.name ? String(link.name) : ref.provider,
       url: String(link.url ?? ''),
@@ -1831,6 +2142,41 @@ export class PluginManager {
       isDash: link.type === 'DASH',
       headers: (link.headers as Record<string, string> | undefined) ?? {},
     }));
+
+    // Links with no address are not links. This happens when an extractor
+    // half-succeeds — it built the result object and failed to fill it — and
+    // it used to reach the player as a source that could never load.
+    const usable = links.filter((link) => /^https?:\/\//i.test(link.url) || link.url.startsWith('magnet:'));
+    if (usable.length === 0) {
+      return nothing(
+        'links-unusable',
+        `${ref.provider} returned ${links.length} source(s), none with a usable address.`,
+        {
+          hint: 'The extractor produced results but could not resolve them to a playable URL — usually the file host changed.',
+          extra: links.slice(0, 5).map((link, index) => ({
+            label: `source ${index + 1}`,
+            value: `${link.name} → ${link.url || '(empty)'}`,
+          })),
+        }
+      );
+    }
+
+    this.diagnostics?.record({
+      level: 'info',
+      stage: 'links',
+      source: ref.provider,
+      url,
+      message: `${usable.length} playable link(s)`,
+    });
+    this.analytics?.observe({
+      provider: ref.provider,
+      stage: 'links',
+      outcome: 'success',
+      produced: usable.length,
+      latencyMs,
+    });
+
+    return { links: usable };
   }
 
   /** Subtitles a provider offered alongside its links, for the same handle. */

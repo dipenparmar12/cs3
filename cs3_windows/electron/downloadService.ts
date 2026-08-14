@@ -9,6 +9,7 @@ import { YtDlpEngine } from './ytdlpEngine';
 import { startHttpDownload } from './httpDownloader';
 import type { TorrentEngine } from './torrent/torrentEngine';
 import type { ContentService } from './contentService';
+import type { AnalyticsSink } from './pluginManager';
 import type { TorrentResult } from '../src/types/torrent';
 
 /**
@@ -56,6 +57,13 @@ export class DownloadService {
   private handles: Map<string, ActiveHandle> = new Map();
   private pollInterval: NodeJS.Timeout | null = null;
   private onProgressCallback?: (tasks: DownloadTask[]) => void;
+  /** Where download outcomes are counted, when the host supplies a store. */
+  private analytics: AnalyticsSink | null = null;
+
+  /** Wired by `main.ts`; download outcomes are counted from here onwards. */
+  public setAnalytics(sink: AnalyticsSink): void {
+    this.analytics = sink;
+  }
 
   constructor(datastore: DatastoreManager, aria2: Aria2Engine) {
     this.datastore = datastore;
@@ -387,6 +395,16 @@ export class DownloadService {
 
   private markCompleted(task: DownloadTask, totalBytes: number): void {
     this.handles.delete(task.id);
+    // Counted here rather than at the engine: a download that retried through a
+    // refreshed source still succeeded, and the provider that supplied the link
+    // that finally worked is the one that earned the credit.
+    this.analytics?.observe({
+      provider: task.providerName,
+      stage: 'download',
+      outcome: 'success',
+      produced: 1,
+      latencyMs: Date.now() - task.createdTime,
+    });
     task.state = DownloadState.Completed;
     task.totalBytes = totalBytes || task.totalBytes;
     task.bytesDownloaded = task.totalBytes;
@@ -564,6 +582,16 @@ export class DownloadService {
       }
     }
 
+    // Only after every refresh and retry has been exhausted. Counting the first
+    // failed attempt would penalise a provider whose links simply expire
+    // quickly but always regenerate.
+    this.analytics?.observe({
+      provider: task.providerName,
+      stage: 'download',
+      outcome: 'failure',
+      latencyMs: Date.now() - task.createdTime,
+      error: message,
+    });
     task.state = DownloadState.Failed;
     task.errorMessage = message;
     task.downloadSpeed = 0;
