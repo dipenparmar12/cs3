@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
+import { ProviderRankingPanel } from '../components/settings/ProviderRankingPanel';
 import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
 import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
@@ -189,7 +190,15 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
 
       {tab === 'components' && <UnifiedComponentManager />}
 
-      {tab === 'sources' && <SourceSettings />}
+      {tab === 'sources' && (
+        <>
+          <SourceSettings />
+          {/* Which providers are worth asking, measured rather than assumed.
+              Lives under Sources because that is what it is about, and next to
+              the enable switches it explains. */}
+          <ProviderRankingPanel />
+        </>
+      )}
 
       {tab === 'downloads' && (
         <>
