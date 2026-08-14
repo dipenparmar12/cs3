@@ -2583,6 +2583,63 @@
   padding: 0.1rem 0.2rem 0.3rem;
 }
 
+/* Facets narrow what the tree contains, so they sit above it and are visually
+   distinct from the rows — a filter that looks like a row reads as a source. */
+.scope__facets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.35rem 0.1rem 0.45rem;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  margin-bottom: 0.35rem;
+}
+
+.scope__facet-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+/* Groups are separated by a hairline rather than a gap: with a dozen language
+   chips the eye needs the boundary to read "OR within, AND across". */
+.scope__facet-group + .scope__facet-group {
+  padding-left: 0.4rem;
+  border-left: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.scope__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  font-size: 0.66rem;
+  line-height: 1;
+  padding: 0.24rem 0.42rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.scope__chip:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong, rgba(255, 255, 255, 0.24));
+}
+
+.scope__chip--on {
+  background: var(--accent, #e50914);
+  border-color: var(--accent, #e50914);
+  color: #fff;
+}
+
+.scope__chip--clear {
+  margin-left: auto;
+  color: var(--text-subtle);
+}
+
 /* Windowed list: the inner wrapper is sized to the full row count so the
    scrollbar reflects everything, while only a visible slice is mounted. */
 .scope__list {
