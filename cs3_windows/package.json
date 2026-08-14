@@ -15,7 +15,8 @@
     "build:runtime": "node ../tools/package/build-runtime.mjs --verify",
     "electron:build": "npm run build:runtime && vite build && electron-builder",
     "e2e:providers": "node ../tools/e2e/provider-e2e.mjs",
-    "e2e:network": "node ../tools/e2e/network-resilience.mjs"
+    "e2e:network": "node ../tools/e2e/network-resilience.mjs",
+    "e2e:sources": "node ../tools/e2e/source-discovery.mjs"
   },
   "build": {
     "appId": "com.lagradost.cloudstream3.desktop",

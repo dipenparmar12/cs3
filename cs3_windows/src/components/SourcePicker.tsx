@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   X, Users, HardDrive, Loader2, AlertTriangle, Filter, ChevronDown,
-  ChevronRight, Play, Download, Info, Zap, ShieldAlert,
+  ChevronRight, Play, Download, Info, Zap, ShieldAlert, Square,
 } from 'lucide-react';
 import type { TorrentResult } from '../types/torrent';
 import { Resolution } from '../types/torrent';
@@ -31,7 +31,25 @@ export interface SourcePickerData {
 
 interface SourcePickerProps {
   isOpen: boolean;
+  /** A chosen source is being started — a genuinely blocking wait. */
   isLoading: boolean;
+  /**
+   * Discovery is still running.
+   *
+   * Deliberately separate from `isLoading`. Searching is *not* a blocking wait:
+   * sources arrive one provider at a time and any of them is playable the moment
+   * it appears, so hiding the list behind a spinner until the slowest indexer
+   * finished — which is what this did — threw away most of the value of running
+   * them in parallel in the first place.
+   */
+  searching?: boolean;
+  /** Providers that have answered, out of how many are being asked. */
+  searched?: number;
+  totalSources?: number;
+  /** The viewer stopped the search rather than it finishing. */
+  cancelled?: boolean;
+  /** Stops waiting for the rest, keeping whatever has been found. */
+  onCancelSearch?: () => void;
   data: SourcePickerData | null;
   error?: string;
   contextLabel: string;
@@ -84,6 +102,7 @@ function resolutionLabel(resolution: number): string {
  */
 export const SourcePicker: React.FC<SourcePickerProps> = ({
   isOpen, isLoading, data, error, contextLabel, onClose, onPlay, onDownload, onRetry,
+  searching = false, searched = 0, totalSources = 0, cancelled = false, onCancelSearch,
 }) => {
   const [showFiltered, setShowFiltered] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -120,11 +139,61 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
           </button>
         </header>
 
+        {/*
+          Progress, and the action on it.
+
+          Shown above the list rather than instead of it, so a source that has
+          already arrived can be played while the slow providers are still
+          scraping. The count is the honest one — providers settled out of
+          providers asked — and the found total beside it is what tells someone
+          whether waiting is still worth it.
+        */}
+        {searching && (
+          <div className="source-picker__progress">
+            <div className="source-picker__progress-line">
+              <Loader2 className="spin" size={14} />
+              <span>
+                {totalSources > 0
+                  ? `Searching sources… ${searched} / ${totalSources}`
+                  : 'Searching sources…'}
+              </span>
+              <strong>{data?.sources.length ?? 0} found</strong>
+              {onCancelSearch && (
+                <button className="source-picker__progress-stop" onClick={onCancelSearch}>
+                  <Square size={11} /> Stop
+                </button>
+              )}
+            </div>
+            {totalSources > 0 && (
+              <div
+                className="source-picker__progress-track"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={totalSources}
+                aria-valuenow={searched}
+              >
+                <div
+                  className="source-picker__progress-fill"
+                  style={{ width: `${Math.min(100, Math.round((searched / totalSources) * 100))}%` }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         {isLoading && (
           <div className="source-picker__state">
             <Loader2 className="spin" size={28} />
-            <p>Searching indexers…</p>
-            <span className="muted">Querying every enabled indexer in parallel.</span>
+            <p>Starting the stream…</p>
+            <span className="muted">Connecting to the source you picked.</span>
+          </div>
+        )}
+
+        {searching && !isLoading && (data?.sources.length ?? 0) === 0 && (
+          <div className="source-picker__state">
+            <Loader2 className="spin" size={28} />
+            <p>Searching every enabled provider…</p>
+            <span className="muted">Results appear here as each one answers.</span>
           </div>
         )}
 
@@ -137,11 +206,15 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
           </div>
         )}
 
-        {!isLoading && !error && data && data.sources.length === 0 && (
+        {!isLoading && !searching && !error && data && data.sources.length === 0 && (
           <div className="source-picker__state">
             <AlertTriangle size={28} />
-            <p>No playable sources found</p>
-            <span className="muted">{data.emptyReason ?? 'Nothing matched this title.'}</span>
+            <p>{cancelled ? 'Search stopped' : 'No playable sources found'}</p>
+            <span className="muted">
+              {cancelled
+                ? 'No source had answered yet when the search was stopped.'
+                : (data.emptyReason ?? 'Nothing matched this title.')}
+            </span>
             <div className="source-picker__state-actions">
               <button className="btn" onClick={onRetry}>Search again</button>
               {data.filtered.length > 0 && (

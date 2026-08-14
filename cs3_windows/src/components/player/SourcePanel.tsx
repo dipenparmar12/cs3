@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   X, Play, RefreshCw, Loader2, Users, HardDrive, Radio, Check, AlertTriangle, Download, Filter,
+  Square,
 } from 'lucide-react';
 import type { TorrentResult } from '../../types/torrent';
 import { SourceFilterBar } from '../SourceFilterBar';
@@ -32,12 +33,16 @@ interface SourcePanelProps {
   searching: boolean;
   searched: number;
   totalIndexers: number;
+  /** True when the last search was stopped by the viewer rather than finishing. */
+  cancelled?: boolean;
   /** Set while a chosen source is being started. */
   switchingTo?: string | null;
   error?: string;
   onClose: () => void;
   onSelect: (source: TorrentResult) => void;
   onRefresh: () => void;
+  /** Stops waiting for the rest; the sources already found stay on the list. */
+  onCancelSearch?: () => void;
   /** Offered per source, so a viewer can grab the release they are watching. */
   onDownload?: (source: TorrentResult) => void;
 }
@@ -71,11 +76,13 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
   searching,
   searched,
   totalIndexers,
+  cancelled,
   switchingTo,
   error,
   onClose,
   onSelect,
   onRefresh,
+  onCancelSearch,
   onDownload,
 }) => {
   const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);
@@ -104,11 +111,11 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
     <aside className="player-panel player-panel--sources" aria-label="Stream sources">
       <header className="player-panel__head player-panel__head--sticky">
         <div>
-          <h3>Sources</h3>
+          <h3>Select a source</h3>
           <div className="player-panel__facts">
             <span>
               {displayedSources.length} showing (of {sources.length} total)
-              {searching && totalIndexers > 0 && ` · searching ${searched}/${totalIndexers}`}
+              {cancelled && !searching && ' · search stopped'}
             </span>
           </div>
         </div>
@@ -121,20 +128,68 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
           >
             <Filter size={18} />
           </button>
-          <button
-            className="icon-button"
-            onClick={onRefresh}
-            disabled={searching}
-            title="Search again for fresh links"
-            aria-label="Refresh sources"
-          >
-            {searching ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-          </button>
           <button className="icon-button" onClick={onClose} aria-label="Close source list">
             <X size={18} />
           </button>
         </div>
       </header>
+
+      {/*
+        Search state and the action on it, spelled out.
+
+        This was an unlabelled circular-arrow icon in the header, which is the
+        same glyph the app uses for "retry a download" and reads as "redraw this
+        list" rather than "go and look again" — so the one control that fixes an
+        expired link was the one nobody would find. It is now a labelled action
+        with the count beside it, and while a search is running the same slot
+        becomes the way to stop it.
+      */}
+      <div className="player-panel__search-state">
+        {searching ? (
+          <>
+            <div className="player-panel__search-line">
+              <Loader2 className="spin" size={14} />
+              <span>
+                {totalIndexers > 0
+                  ? `Searching sources… ${searched} / ${totalIndexers}`
+                  : 'Searching sources…'}
+              </span>
+              <strong>
+                {sources.length} found
+              </strong>
+            </div>
+            {totalIndexers > 0 && (
+              <div
+                className="player-panel__search-track"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={totalIndexers}
+                aria-valuenow={searched}
+              >
+                <div
+                  className="player-panel__search-fill"
+                  style={{
+                    width: `${Math.min(100, Math.round((searched / totalIndexers) * 100))}%`,
+                  }}
+                />
+              </div>
+            )}
+            {onCancelSearch && (
+              <button className="player-panel__search-action" onClick={onCancelSearch}>
+                <Square size={12} />
+                Stop searching
+                <span className="muted">keeps what has been found</span>
+              </button>
+            )}
+          </>
+        ) : (
+          <button className="player-panel__search-action" onClick={onRefresh}>
+            <RefreshCw size={13} />
+            Search again
+            <span className="muted">re-checks providers, ignores cached links</span>
+          </button>
+        )}
+      </div>
 
       {showFilterBar && (
         <SourceFilterBar
@@ -230,7 +285,11 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
 
       {sources.length === 0 && (
         <p className="player-panel__empty">
-          {searching ? 'Searching for sources…' : 'No sources found.'}
+          {searching
+            ? 'Searching for sources…'
+            : cancelled
+              ? 'Search stopped before any source answered. Search again to retry.'
+              : 'No sources found.'}
         </p>
       )}
     </aside>

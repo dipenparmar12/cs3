@@ -57,6 +57,56 @@
 .source-picker__state--error { color: #f87171; }
 .source-picker__state-actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
 
+/*
+  Live search progress, above the list rather than in place of it — sources are
+  playable the moment they arrive, so the list stays usable while the slow
+  providers finish.
+*/
+.source-picker__progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.source-picker__progress-line {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.source-picker__progress-line strong {
+  margin-left: auto;
+  color: #fff;
+  font-size: 0.8rem;
+}
+.source-picker__progress-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.source-picker__progress-stop:hover { color: #fff; background: rgba(255, 255, 255, 0.13); }
+.source-picker__progress-track {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.source-picker__progress-fill {
+  height: 100%;
+  background: var(--accent-primary, #3b82f6);
+  transition: width 0.25s ease;
+}
+
 .source-picker__toolbar {
   display: flex;
   justify-content: space-between;
@@ -592,6 +642,65 @@
 .player-panel__head h3 { margin: 0 0 0.3rem; font-size: 0.98rem; }
 .player-panel__facts { display: flex; flex-wrap: wrap; gap: 0.6rem; font-size: 0.72rem; color: var(--text-muted); }
 .player-panel__facts span { display: inline-flex; align-items: center; gap: 0.22rem; }
+/*
+  Source-search state: progress while it runs, the action on it either way.
+
+  Given its own band under the header rather than an icon in it, because this is
+  where "the link expired, go and get another" is expressed and it has to be
+  findable by someone who does not already know the app.
+*/
+.player-panel__search-state {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.player-panel__search-line {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.player-panel__search-line strong {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--text-primary, #fff);
+}
+.player-panel__search-track {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.player-panel__search-fill {
+  height: 100%;
+  background: var(--accent-primary, #3b82f6);
+  transition: width 0.25s ease;
+}
+.player-panel__search-action {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.player-panel__search-action:hover { background: rgba(255, 255, 255, 0.12); }
+.player-panel__search-action .muted {
+  margin-left: auto;
+  font-weight: 400;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
 .player-panel__tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
 .player-panel__tags span {
   font-size: 0.66rem;

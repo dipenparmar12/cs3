@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Play, Download, Star, ArrowLeft, Loader2, AlertTriangle, Calendar, Layers, ListVideo, Search,
+  SearchCheck,
 } from 'lucide-react';
 import type { SearchResponse, Episode } from '../types/api';
 import { TvType } from '../types/api';
@@ -191,9 +192,30 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
 
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickerLoading, setPickerLoading] = useState(false);
   const [pickerData, setPickerData] = useState<SourcePickerData | null>(null);
   const [pickerError, setPickerError] = useState<string | undefined>();
+
+  /**
+   * The running cross-provider search behind the picker.
+   *
+   * The picker used to `await` one blocking `getSources` call: a spinner for as
+   * long as the slowest indexer took, no way to see what had already answered,
+   * and no way to stop. The player, asking the identical question of the
+   * identical providers, streamed its answers in — so the screen whose entire
+   * purpose is comparing sources had the worse view of them.
+   *
+   * It now runs the same discovery session the player does and renders from its
+   * snapshots, which is also why there is only one definition of how sources are
+   * found rather than two that can disagree.
+   */
+  const [discovery, setDiscovery] = useState<{
+    id: string;
+    searched: number;
+    total: number;
+    done: boolean;
+    cancelled: boolean;
+  } | null>(null);
+  const discoveryRef = useRef<string | null>(null);
   const [pendingEpisode, setPendingEpisode] = useState<Episode | null>(null);
   const [startingStream, setStartingStream] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -345,37 +367,108 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
   // --- sources -------------------------------------------------------------
 
+  /**
+   * Ends the running discovery, if any.
+   *
+   * Closing the picker has to stop the search behind it, or a dozen scrapers
+   * keep working for a list nobody is looking at — and the session would go on
+   * pushing snapshots into a picker that has moved on to a different episode.
+   */
+  const stopDiscovery = useCallback(() => {
+    const id = discoveryRef.current;
+    if (!id) return;
+    discoveryRef.current = null;
+    void window.cloudstream?.stopPlayback(id, true);
+  }, []);
+
   const openSources = useCallback(
-    async (episode: Episode | null) => {
+    async (episode: Episode | null, options: { refresh?: boolean } = {}) => {
       if (!window.cloudstream || !detail) return;
+
+      stopDiscovery();
 
       setPendingEpisode(episode);
       setPickerOpen(true);
-      setPickerLoading(true);
       setPickerError(undefined);
       setPickerData(null);
+      setDiscovery(null);
 
-      const response = await window.cloudstream.getSources({
-        mediaUrl: episode?.url ?? detail.url,
-        season: episode?.season,
-        episode: episode?.episode,
-      });
+      const response = await window.cloudstream.startSourceDiscovery(
+        {
+          mediaUrl: episode?.url ?? detail.url,
+          season: episode?.season,
+          episode: episode?.episode,
+        },
+        detail.name,
+        episode?.name,
+        // A refresh is the viewer saying the cached answer is wrong; serving it
+        // back is what makes the button look broken.
+        { bypassCache: options.refresh }
+      );
 
-      setPickerLoading(false);
-      if (!response.ok && response.error) {
-        setPickerError(response.error);
+      if (!response.ok || !response.snapshot) {
+        setPickerError(response.error ?? 'Could not start a source search.');
         return;
       }
-      setPickerData({
-        sources: response.sources,
-        filtered: response.filtered,
-        indexerOutcomes: response.indexerOutcomes,
-        emptyReason: response.emptyReason,
-        query: response.query,
+
+      discoveryRef.current = response.snapshot.sessionId;
+      setDiscovery({
+        id: response.snapshot.sessionId,
+        searched: 0,
+        total: 0,
+        done: false,
+        cancelled: false,
       });
     },
-    [detail]
+    [detail, stopDiscovery]
   );
+
+  /**
+   * Feeds the picker from the running session.
+   *
+   * Snapshots are filtered by id because a session that has just been replaced —
+   * the viewer switched episodes, or pressed refresh — can still emit once more
+   * before it notices, and those results belong to a different question.
+   */
+  useEffect(() => {
+    if (!discovery) return;
+
+    const dispose = window.cloudstream?.onPlaybackUpdate((snapshot) => {
+      if (snapshot.sessionId !== discoveryRef.current) return;
+
+      setDiscovery((current) =>
+        current && current.id === snapshot.sessionId
+          ? {
+              ...current,
+              searched: snapshot.searched,
+              total: snapshot.totalIndexers,
+              done: snapshot.searchDone,
+              cancelled: snapshot.searchCancelled,
+            }
+          : current
+      );
+
+      setPickerData({
+        sources: snapshot.sources,
+        // Neither is reported by the session: `filtered` and `indexerOutcomes`
+        // are batch summaries produced after everything settles, and this list
+        // is deliberately being shown before that point.
+        filtered: [],
+        indexerOutcomes: [],
+        emptyReason: snapshot.searchDone ? snapshot.emptyReason : undefined,
+        query: {
+          title: snapshot.title,
+          season: pendingEpisode?.season,
+          episode: pendingEpisode?.episode,
+        },
+      });
+    });
+
+    return dispose;
+  }, [discovery?.id, pendingEpisode]);
+
+  // A picker left open when the view goes away would leave its session running.
+  useEffect(() => stopDiscovery, [stopDiscovery]);
 
   const flash = useCallback((message: string) => {
     setToast(message);
@@ -728,6 +821,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
               item={{ ...detail, apiName: mediaItem.apiName }}
               size="md"
             />
+            {/*
+              Both of these open the same picker, which offers play and download
+              per row — they are two doors into one screen, kept because people
+              arrive with one of two intentions and look for the matching word.
+            */}
             <button
               className="btn"
               onClick={() => openSources(isSeries ? episodesInSeason[0] ?? null : null)}
@@ -739,6 +837,23 @@ export const DetailView: React.FC<DetailViewProps> = ({
               onClick={() => openSources(isSeries ? episodesInSeason[0] ?? null : null)}
             >
               <Download size={16} /> {isSeries ? 'Download episode' : 'Download'}
+            </button>
+            {/*
+              The same search, with the cache bypassed.
+
+              Worth its own button rather than being folded into "Choose source":
+              the case it answers is "the list I was just shown is stale or too
+              short", and that is exactly when someone will not think to close
+              and reopen the thing that gave them the bad list.
+            */}
+            <button
+              className="btn"
+              onClick={() =>
+                openSources(isSeries ? episodesInSeason[0] ?? null : null, { refresh: true })
+              }
+              title="Search every enabled provider again, ignoring cached links"
+            >
+              <SearchCheck size={16} /> Find more sources
             </button>
             {onSearch && (
               <button
@@ -819,7 +934,9 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
       <SourcePicker
         isOpen={pickerOpen}
-        isLoading={pickerLoading || startingStream}
+        // Only a stream actually starting is a blocking wait; discovery is not,
+        // and conflating them is what hid the results until the search was over.
+        isLoading={startingStream}
         data={pickerData}
         error={pickerError}
         contextLabel={
@@ -827,10 +944,22 @@ export const DetailView: React.FC<DetailViewProps> = ({
             ? `${detail.name} — ${pendingEpisode.name}`
             : `${detail.name}${detail.year ? ` (${detail.year})` : ''}`
         }
-        onClose={() => setPickerOpen(false)}
+        searching={Boolean(discovery && !discovery.done)}
+        searched={discovery?.searched ?? 0}
+        totalSources={discovery?.total ?? 0}
+        cancelled={discovery?.cancelled ?? false}
+        onClose={() => {
+          stopDiscovery();
+          setPickerOpen(false);
+        }}
         onPlay={handlePlaySource}
         onDownload={handleDownloadSource}
-        onRetry={() => openSources(pendingEpisode)}
+        onRetry={() => openSources(pendingEpisode, { refresh: true })}
+        onCancelSearch={() => {
+          if (discoveryRef.current) {
+            void window.cloudstream?.playbackCancelSourceSearch(discoveryRef.current);
+          }
+        }}
       />
 
       {isSeries && (

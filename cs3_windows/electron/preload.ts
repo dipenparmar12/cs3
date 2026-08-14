@@ -235,6 +235,22 @@ export interface CloudStreamElectronAPI {
   playbackRefreshSources: (
     sessionId: string
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
+  /**
+   * Finds sources without starting one — the detail screen's picker.
+   *
+   * Reports through `onPlaybackUpdate` like playing does, so the caller filters
+   * snapshots by the session id this returns.
+   */
+  startSourceDiscovery: (
+    request: { mediaUrl: string; season?: number; episode?: number; titleOverride?: string },
+    title: string,
+    episodeTitle?: string,
+    options?: { bypassCache?: boolean }
+  ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
+  /** Stops waiting for the remaining providers; keeps what has been found. */
+  playbackCancelSourceSearch: (
+    sessionId: string
+  ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
   stopPlayback: (sessionId: string, keepFiles?: boolean) => Promise<Envelope>;
   onPlaybackUpdate: (callback: (snapshot: PlaybackSnapshot) => void) => () => void;
 
@@ -561,6 +577,10 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('playback:selectSource', sessionId, infoHash),
   playbackRefreshSources: (sessionId) =>
     ipcRenderer.invoke('playback:refreshSources', sessionId),
+  startSourceDiscovery: (request, title, episodeTitle, options) =>
+    ipcRenderer.invoke('playback:startDiscovery', request, title, episodeTitle, options),
+  playbackCancelSourceSearch: (sessionId) =>
+    ipcRenderer.invoke('playback:cancelSourceSearch', sessionId),
   stopPlayback: (sessionId, keepFiles) =>
     ipcRenderer.invoke('playback:stop', sessionId, keepFiles),
   onPlaybackUpdate: (callback) => {

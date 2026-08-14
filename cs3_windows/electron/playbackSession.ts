@@ -36,6 +36,15 @@ export interface PlaybackSnapshot {
   totalIndexers: number;
   lastIndexerName?: string;
   searchDone: boolean;
+  /**
+   * The viewer stopped the search rather than it finishing.
+   *
+   * Distinct from `searchDone` alone, which cannot tell "every provider
+   * answered" from "we stopped asking" — and those need different words on
+   * screen. Sources found before the cancel are kept: they are the reason
+   * someone presses stop.
+   */
+  searchCancelled: boolean;
   /** Set once a stream is starting or playing. */
   activeInfoHash?: string;
   handle?: StreamHandle;
@@ -73,6 +82,9 @@ interface Session {
   totalIndexers: number;
   lastIndexerName?: string;
   searchDone: boolean;
+  searchCancelled: boolean;
+  /** Aborts the running discovery when the viewer stops waiting for it. */
+  discovery?: AbortController;
   activeInfoHash?: string;
   handle?: StreamHandle;
   attempts: StreamAttempt[];
@@ -113,6 +125,7 @@ export class PlaybackSessionManager {
       totalIndexers: session.totalIndexers,
       lastIndexerName: session.lastIndexerName,
       searchDone: session.searchDone,
+      searchCancelled: session.searchCancelled,
       activeInfoHash: session.activeInfoHash,
       handle: session.handle,
       attempts: session.attempts,
@@ -148,6 +161,7 @@ export class PlaybackSessionManager {
       searched: 0,
       totalIndexers: 0,
       searchDone: false,
+      searchCancelled: false,
       attempts: [],
       unplayable: new Set<string>(),
       generation: 0,
@@ -157,6 +171,54 @@ export class PlaybackSessionManager {
     this.sessions.set(session.id, session);
 
     void this.discover(session, { autoStartWhenDone: true });
+    return this.snapshot(session);
+  }
+
+  /**
+   * Discovery without playback, for choosing a source before committing to one.
+   *
+   * The same `discover` the player uses, and deliberately so. The detail screen
+   * previously ran its own blocking `getSources` call: one spinner, no progress,
+   * no cancel, and results only when the slowest indexer had finished — while
+   * the player, asking the identical question, streamed answers in as they
+   * landed. Two implementations of one thing, and the worse one was on the
+   * screen where people compare sources.
+   *
+   * Now both report through `playback:update`, so the picker fills progressively
+   * and can be stopped, and there is a single place where "how sources are
+   * found" is defined.
+   */
+  public startDiscovery(
+    request: SourceQuery,
+    title: string,
+    episodeTitle?: string,
+    options: { bypassCache?: boolean } = {}
+  ): PlaybackSnapshot {
+    const session: Session = {
+      id: randomUUID(),
+      request,
+      title,
+      episodeTitle,
+      phase: 'searching',
+      sources: [],
+      searched: 0,
+      totalIndexers: 0,
+      searchDone: false,
+      searchCancelled: false,
+      attempts: [],
+      unplayable: new Set<string>(),
+      generation: 0,
+      // Nothing will auto-start, and nothing should: the viewer opened this to
+      // look at the list, not to be dropped into whatever ranked first.
+      started: true,
+      disposed: false,
+    };
+    this.sessions.set(session.id, session);
+
+    void this.discover(session, {
+      autoStartWhenDone: false,
+      bypassCache: options.bypassCache,
+    });
     return this.snapshot(session);
   }
 
@@ -171,7 +233,14 @@ export class PlaybackSessionManager {
     session: Session,
     options: { autoStartWhenDone: boolean; bypassCache?: boolean }
   ): Promise<void> {
+    // A refresh started while one is already running supersedes it, rather than
+    // both writing into the same session's source list.
+    session.discovery?.abort();
+    const controller = new AbortController();
+    session.discovery = controller;
+
     session.searchDone = false;
+    session.searchCancelled = false;
     session.searched = 0;
     session.emptyReason = undefined;
     this.emit(session);
@@ -180,28 +249,47 @@ export class PlaybackSessionManager {
       const response = await this.content.getSources(
         session.request,
         (progress) => {
-          if (session.disposed) return;
+          if (session.disposed || controller.signal.aborted) return;
           session.sources = progress.results;
           session.searched = progress.settled;
           session.totalIndexers = progress.totalRelevant;
           session.lastIndexerName = progress.lastIndexerName || session.lastIndexerName;
           this.emit(session);
         },
-        { bypassCache: options.bypassCache }
+        { bypassCache: options.bypassCache, signal: controller.signal }
       );
 
       if (session.disposed) return;
+      /**
+       * A cancelled run keeps what it found and discards the summary.
+       *
+       * `response.sources` is the *complete* answer, assembled after every
+       * indexer settled — assigning it here would silently undo the cancel and
+       * fill the list with the results the viewer just declined to wait for.
+       * What they saw at the moment they pressed stop is what they keep.
+       */
+      if (controller.signal.aborted) return;
+
       session.sources = response.sources;
       session.emptyReason = response.emptyReason;
     } catch (error) {
-      if (session.disposed) return;
+      if (session.disposed || controller.signal.aborted) return;
       session.emptyReason = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (!session.disposed && session.discovery === controller) {
+        session.searchDone = true;
+        this.emit(session);
+      }
     }
 
-    session.searchDone = true;
-    this.emit(session);
-
-    if (!options.autoStartWhenDone || session.started || session.disposed) return;
+    if (
+      !options.autoStartWhenDone ||
+      session.started ||
+      session.disposed ||
+      controller.signal.aborted
+    ) {
+      return;
+    }
 
     if (session.sources.length === 0) {
       session.phase = 'error';
@@ -337,6 +425,32 @@ export class PlaybackSessionManager {
     return this.snapshot(session);
   }
 
+  /**
+   * Stops waiting for the rest of the providers, keeping what has arrived.
+   *
+   * The sources already on screen are the reason anyone presses this: they have
+   * found what they want and the remaining scrapes are pure cost. So the list is
+   * left exactly as it stands and the search is simply declared over.
+   *
+   * One honest limitation. `IndexerRegistry.search` takes no abort signal, so an
+   * indexer request already on the wire runs to its own timeout rather than
+   * being torn down — the app stops *listening* immediately, which is what the
+   * viewer asked for, but a scrape in flight still finishes in the background.
+   * Threading a signal through every adapter is a bigger change than this
+   * button justifies, and the timeouts are seconds.
+   */
+  public cancelDiscovery(sessionId: string): PlaybackSnapshot | null {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    if (session.searchDone) return this.snapshot(session);
+
+    session.discovery?.abort();
+    session.searchDone = true;
+    session.searchCancelled = true;
+    this.emit(session);
+    return this.snapshot(session);
+  }
+
   private async beginStream(
     session: Session,
     candidates: TorrentResult[],
@@ -455,6 +569,7 @@ export class PlaybackSessionManager {
     // Closing the player must stop the search too, or a walk keeps running and
     // starting swarms for a session nobody is watching.
     session.inFlight?.abort();
+    session.discovery?.abort();
     this.sessions.delete(sessionId);
 
     if (session.activeInfoHash) {

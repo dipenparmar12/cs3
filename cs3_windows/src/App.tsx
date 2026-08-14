@@ -3,6 +3,7 @@ import { Sidebar } from './components/Sidebar';
 import type { ActiveTab } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
 import { VideoPlayer } from './components/VideoPlayer';
+import { MiniPlayerBar } from './components/player/MiniPlayerBar';
 import { DownloadCenter } from './components/DownloadCenter';
 import { ProviderInspector } from './components/ProviderInspector';
 import { ExtensionManagerUI } from './components/ExtensionManagerUI';
@@ -70,6 +71,16 @@ export const App: React.FC = () => {
 
   /** Holds the player open between a quick-play click and the session existing. */
   const [preparing, setPreparing] = useState<{ title: string } | null>(null);
+
+  /**
+   * The player is out of the way but still playing.
+   *
+   * Distinct from having no player at all, which is what closing it produces.
+   * Everything the session owns — the stream, its position, the source list,
+   * whatever is downloading — survives, because none of it is state the overlay
+   * holds. Only the overlay stops rendering.
+   */
+  const [playerHidden, setPlayerHidden] = useState(false);
 
   // `startSession` is handed down into the detail view and must not close over
   // `session`, or it would go stale between episode switches.
@@ -268,6 +279,9 @@ export const App: React.FC = () => {
 
     setPlayback(null);
     setSwitchError(null);
+    // Starting something new always brings the player back to the front, even
+    // if the last one was left minimised.
+    setPlayerHidden(false);
 
     const previous = sessionRef.current;
     if (previous) await window.cloudstream.stopPlayback(previous.id, true);
@@ -317,6 +331,23 @@ export const App: React.FC = () => {
     setPlayback(null);
     setSwitchingTo(null);
     setSwitchError(null);
+    setPlayerHidden(false);
+  };
+
+  /**
+   * Steps out of the player without ending it.
+   *
+   * The player is an overlay over the tab views, and closing it stops the
+   * stream — so "open the Downloads screen" could not be spelled as a close
+   * followed by a navigation without throwing away exactly the thing the viewer
+   * was watching. Hiding the overlay leaves the session, the stream and every
+   * running download untouched; the bar below is the way back in.
+   */
+  const handleLeavePlayer = (tab: ActiveTab) => {
+    if (!session && !playback && !preparing) return;
+    setPlayerHidden(true);
+    setSelectedMedia(null);
+    setActiveTab(tab);
   };
 
   /**
@@ -333,6 +364,7 @@ export const App: React.FC = () => {
   const handleQuickPlay = useCallback(
     async (item: SearchResponse) => {
       setSelectedMedia(null);
+      setPlayerHidden(false);
       setPreparing({ title: item.name });
 
       try {
@@ -431,6 +463,11 @@ export const App: React.FC = () => {
     window.cloudstream?.playbackRefreshSources(sessionRef.current.id);
   }, []);
 
+  const handleCancelSourceSearch = useCallback(() => {
+    if (!sessionRef.current) return;
+    window.cloudstream?.playbackCancelSourceSearch(sessionRef.current.id);
+  }, []);
+
   const handlePlayNow = useCallback(() => {
     if (!sessionRef.current) return;
     window.cloudstream?.playbackPlayNow(sessionRef.current.id);
@@ -498,6 +535,8 @@ export const App: React.FC = () => {
               infoHash={session.snapshot.activeInfoHash}
               subtitles={session.snapshot.handle?.subtitleUrls ?? []}
               onBack={handleClosePlayer}
+              hidden={playerHidden}
+              onOpenDownloads={() => handleLeavePlayer('downloads')}
               series={session.context.series}
               progress={session.context.progress}
               switchingTo={switchingTo}
@@ -528,11 +567,13 @@ export const App: React.FC = () => {
                 totalIndexers: session.snapshot.totalIndexers,
                 lastIndexerName: session.snapshot.lastIndexerName,
                 searchDone: session.snapshot.searchDone,
+                searchCancelled: session.snapshot.searchCancelled,
                 error: session.snapshot.error,
                 attempts: session.snapshot.attempts,
                 onPlayNow: handlePlayNow,
                 onSelectSource: handleSelectSource,
                 onRefresh: handleRefreshSources,
+                onCancelSearch: handleCancelSourceSearch,
                 onSourceUnplayable: handleSourceUnplayable,
                 onDownloadSource: session.context.onDownloadSource,
               }}
@@ -547,6 +588,8 @@ export const App: React.FC = () => {
               title={preparing.title}
               subtitles={[]}
               onBack={handleClosePlayer}
+              hidden={playerHidden}
+              onOpenDownloads={() => handleLeavePlayer('downloads')}
               sourceSession={{
                 phase: 'searching',
                 sources: [],
@@ -568,6 +611,8 @@ export const App: React.FC = () => {
               infoHash={playback.infoHash}
               subtitles={playback.subtitles}
               onBack={handleClosePlayer}
+              hidden={playerHidden}
+              onOpenDownloads={() => handleLeavePlayer('downloads')}
               series={playback.series}
               progress={playback.progress}
               switchingTo={switchingTo}
@@ -618,12 +663,33 @@ export const App: React.FC = () => {
             />
           ) : null}
 
+          {/*
+            The way back into a minimised player.
+
+            Without this the session would be running with nothing on screen
+            pointing at it — still holding a stream, still audible — and the only
+            route back would be to start the title again from scratch. Both
+            actions are offered, because "I am done with this" is at least as
+            likely as "take me back" once someone has walked off to Downloads.
+          */}
+          {playerHidden && (session || playback || preparing) && (
+            <MiniPlayerBar
+              title={session?.context.title ?? playback?.title ?? preparing?.title ?? 'Playing'}
+              episodeTitle={session?.context.episodeTitle ?? playback?.episodeTitle}
+              onReturn={() => setPlayerHidden(false)}
+              onStop={handleClosePlayer}
+            />
+          )}
+
           {/* Media Details View Overlay */}
           {selectedMedia ? (
             <DetailView
               mediaItem={selectedMedia}
               onBack={handleBackToResults}
-              onPlay={setPlayback}
+              onPlay={(request) => {
+                setPlayerHidden(false);
+                setPlayback(request);
+              }}
               onStartSession={startSession}
               onEnqueueDownload={handleEnqueueDownload}
               onSearch={handleSearchFromDetail}

@@ -1,7 +1,19 @@
 import React, { useState } from 'react';
-import { X, Play, Pause, RotateCw, Trash2, Check, Copy, Download, FolderOpen } from 'lucide-react';
+import {
+  X, Play, Pause, RotateCw, Trash2, Check, Copy, Download, FolderOpen, ArrowUpRight,
+} from 'lucide-react';
 import type { DownloadTask } from '../../types/download';
 import { DownloadState } from '../../types/download';
+
+/**
+ * The download summary shown over the player.
+ *
+ * Deliberately partial: it answers "is this downloading, and how fast", which is
+ * what someone watching a film wants to know without leaving it. The whole queue,
+ * completed items, retry history and file locations live on the Downloads
+ * screen — and until `onOpenDownloads` existed, the only way to reach that was
+ * to close the player, which ended the stream you were checking on.
+ */
 
 interface PlayerDownloadPanelProps {
   open: boolean;
@@ -11,6 +23,8 @@ interface PlayerDownloadPanelProps {
   onResume: (id: string) => void;
   onRemove: (id: string) => void;
   onReveal?: (filePath: string) => void;
+  /** Leaves the player running and shows the full Downloads screen. */
+  onOpenDownloads?: () => void;
 }
 
 export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
@@ -21,6 +35,7 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
   onResume,
   onRemove,
   onReveal,
+  onOpenDownloads,
 }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -281,6 +296,53 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
           })
         )}
       </div>
+
+      {/*
+        Anchored to the bottom rather than sitting in the list, so it stays
+        reachable with a long queue and does not compete with the per-download
+        controls above it.
+      */}
+      {onOpenDownloads && (
+        <div
+          style={{
+            padding: '0.85rem 1rem',
+            borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+          }}
+        >
+          <button
+            onClick={onOpenDownloads}
+            title="Show the full Downloads screen — playback keeps running"
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '0.5rem',
+              padding: '0.6rem 0.75rem',
+              background: 'rgba(255, 255, 255, 0.08)',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              borderRadius: '6px',
+              color: '#fff',
+              fontSize: '0.85rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Open Downloads
+            <ArrowUpRight size={15} />
+          </button>
+          <p
+            style={{
+              margin: '0.5rem 0 0',
+              fontSize: '0.72rem',
+              color: 'var(--text-subtle, #888)',
+              textAlign: 'center',
+            }}
+          >
+            Playback keeps running while you are there.
+          </p>
+        </div>
+      )}
     </div>
   );
 };

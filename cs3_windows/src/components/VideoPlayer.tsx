@@ -68,6 +68,27 @@ interface VideoPlayerProps {
   subtitleContext?: { imdbId?: string; season?: number; episode?: number };
   /** Downloads whatever is currently playing, without leaving the player. */
   onDownloadCurrent?: () => void;
+  /**
+   * Opens the full Downloads screen, leaving this player running behind it.
+   *
+   * The in-player panel is deliberately a summary — enough to see that a
+   * download is progressing and to pause it — and everything else (the whole
+   * queue, completed items, where files landed) lives on the Downloads screen.
+   * Without a way through, the only route there was to close the player.
+   */
+  onOpenDownloads?: () => void;
+  /**
+   * Rendered but not shown, because the viewer has stepped out to another
+   * screen.
+   *
+   * Not the same as unmounting. The `<video>` element *is* the playback: take it
+   * out of the tree and the stream stops, the position is lost, and returning
+   * means starting the whole discovery-and-buffer sequence again. Hiding keeps
+   * all of it, at the cost of having to disarm anything global — see the
+   * keyboard handler, which would otherwise let a stray space bar on the
+   * Downloads screen pause a film the viewer cannot see.
+   */
+  hidden?: boolean;
   sourceSession?: {
     phase: PlaybackPhase;
     sources: TorrentResult[];
@@ -76,6 +97,8 @@ interface VideoPlayerProps {
     totalIndexers: number;
     lastIndexerName?: string;
     searchDone: boolean;
+    /** True when the viewer stopped the search rather than it running out. */
+    searchCancelled?: boolean;
     error?: string;
     attempts: Array<{ title: string; indexerName: string; error: string }>;
     onPlayNow: () => void;
@@ -89,6 +112,8 @@ interface VideoPlayerProps {
      */
     onSourceUnplayable?: (reason: string) => void;
     onRefresh: () => void;
+    /** Stops waiting for the remaining providers, keeping what has arrived. */
+    onCancelSearch?: () => void;
     onDownloadSource?: (source: TorrentResult) => void;
   };
 }
@@ -142,7 +167,7 @@ export interface AudioTrackInfo {
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamUrl, mimeType, title, episodeTitle, infoHash, subtitles, onBack,
   series, onSelectEpisode, switchingTo, switchError, progress, sourceSession,
-  subtitleContext, onDownloadCurrent,
+  subtitleContext, onDownloadCurrent, onOpenDownloads, hidden = false,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -768,6 +793,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, []);
 
   useEffect(() => {
+    // Still mounted, but the viewer is looking at another screen. Leaving this
+    // bound would make typing in a search box seek the film.
+    if (hidden) return;
+
     const onKey = (e: KeyboardEvent) => {
       switch (e.key) {
         case ' ': case 'k': e.preventDefault(); togglePlay(); break;
@@ -798,6 +827,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [
     togglePlay, seekBy, toggleFullscreen, onBack, series, nextEpisode, previousEpisode,
     onSelectEpisode, panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen,
+    hidden,
   ]);
 
   useEffect(() => {
@@ -1224,6 +1254,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     <div
       ref={containerRef}
       className={`player${controlsVisible || keepControls ? '' : ' player--idle'}`}
+      // `display: none` rather than unmounting: see the `hidden` prop. The
+      // element keeps its buffer, its position and its decoder.
+      style={hidden ? { display: 'none' } : undefined}
+      aria-hidden={hidden || undefined}
       onMouseMove={revealControls}
       onMouseEnter={handlePlayerEnter}
       onMouseLeave={handlePlayerLeave}
@@ -1447,6 +1481,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           searching={!sourceSession.searchDone}
           searched={sourceSession.searched}
           totalIndexers={sourceSession.totalIndexers}
+          cancelled={sourceSession.searchCancelled}
           switchingTo={pendingSourceHash}
           error={sourceSession.phase === 'error' ? sourceSession.error : undefined}
           onClose={() => setSourcePanelOpen(false)}
@@ -1459,6 +1494,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setSourcePanelOpen(false);
           }}
           onRefresh={sourceSession.onRefresh}
+          onCancelSearch={sourceSession.onCancelSearch}
           onDownload={sourceSession.onDownloadSource}
         />
       )}
@@ -1491,6 +1527,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onResume={(id) => window.cloudstream?.resumeDownload(id)}
         onRemove={(id) => window.cloudstream?.removeDownload(id)}
         onReveal={(filePath) => window.cloudstream?.revealInFolder(filePath)}
+        onOpenDownloads={
+          onOpenDownloads
+            ? () => {
+                setDownloadPanelOpen(false);
+                onOpenDownloads();
+              }
+            : undefined
+        }
       />
 
       <footer

@@ -378,7 +378,7 @@ export class ContentService {
     /** Fires as each indexer answers, so a caller can act on partial results. */
     onProgress?: (progress: SearchProgress) => void,
     /** Set by an explicit refresh, which must not be answered from cache. */
-    options: { bypassCache?: boolean } = {}
+    options: { bypassCache?: boolean; signal?: AbortSignal } = {}
   ): Promise<SourceResponse> {
     const fromUrl = parseEpisodeParams(request.mediaUrl);
     const season = request.season ?? fromUrl.season;
@@ -559,6 +559,9 @@ export class ContentService {
     let latest: SearchProgress | null = null;
     const report = (progress: SearchProgress | null) => {
       if (!onProgress || !progress) return;
+      // Cancelled: the viewer has stopped waiting, and pushing later arrivals
+      // into their list would undo the decision they just made.
+      if (options.signal?.aborted) return;
       onProgress({
         ...progress,
         // Provider links lead: they are already resolved and start fastest.
@@ -592,6 +595,10 @@ export class ContentService {
         (id) => allowedIndexers.has(id)
       ),
       ...routes.map(async (route) => {
+        // Checked here rather than only at the top: these run concurrently, and
+        // a cancel part-way through means the ones that have not begun scraping
+        // yet never should.
+        if (options.signal?.aborted) return;
         try {
           fromExtensions.push(...(await this.extensionSources(route, season, episode)));
         } catch {

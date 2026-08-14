@@ -687,6 +687,33 @@ ipcMain.handle('playback:playNow', async (_, sessionId: string) => {
   }
 });
 
+/**
+ * Finds sources without starting one, for the detail screen's picker.
+ *
+ * Same session type and same `playback:update` stream as playing does, so the
+ * picker gets progressive results, a progress count and a cancel for free —
+ * rather than a second, worse copy of source discovery living in the renderer.
+ */
+ipcMain.handle(
+  'playback:startDiscovery',
+  (
+    _,
+    request: SourceQuery,
+    title: string,
+    episodeTitle?: string,
+    options?: { bypassCache?: boolean }
+  ) => {
+    try {
+      return {
+        ok: true,
+        snapshot: playbackSessions.startDiscovery(request, title, episodeTitle, options ?? {}),
+      };
+    } catch (error) {
+      return { ...fail(error), snapshot: null };
+    }
+  }
+);
+
 ipcMain.handle('playback:selectSource', async (_, sessionId: string, infoHash: string) => {
   try {
     return { ok: true, snapshot: await playbackSessions.selectSource(sessionId, infoHash) };
@@ -698,6 +725,20 @@ ipcMain.handle('playback:selectSource', async (_, sessionId: string, infoHash: s
 ipcMain.handle('playback:refreshSources', async (_, sessionId: string) => {
   try {
     return { ok: true, snapshot: await playbackSessions.refresh(sessionId) };
+  } catch (error) {
+    return { ...fail(error), snapshot: null };
+  }
+});
+
+/**
+ * Stops waiting for the remaining providers, keeping the sources already found.
+ *
+ * Synchronous on purpose: the answer is "stop", and making the viewer wait for
+ * the search they are cancelling would be its own small joke.
+ */
+ipcMain.handle('playback:cancelSourceSearch', (_, sessionId: string) => {
+  try {
+    return { ok: true, snapshot: playbackSessions.cancelDiscovery(sessionId) };
   } catch (error) {
     return { ...fail(error), snapshot: null };
   }
