@@ -385,6 +385,25 @@ function mapProviderResults(providerName: string, raw: unknown): SearchResponse[
   return out;
 }
 
+/**
+ * Somewhere to send failures, without depending on the whole diagnostics store.
+ *
+ * Structural rather than a concrete type so this module stays usable in a test
+ * or a tool that has no Electron app around it.
+ */
+export interface DiagnosticsSink {
+  record(entry: {
+    level: 'error' | 'warn';
+    stage: 'search' | 'detail' | 'links' | 'sources' | 'playback' | 'runtime' | 'install';
+    source?: string;
+    query?: string;
+    title?: string;
+    url?: string;
+    message: string;
+    detail?: string;
+  }): void;
+}
+
 /** The bridge's replies arrive as JSON strings; a malformed one is not fatal. */
 function safeParse(raw: string): Record<string, unknown> | null {
   try {
@@ -406,6 +425,15 @@ export class PluginManager {
   private installedRepoUrls = new Set<string>();
   private installedPlugins = new Map<string, PluginData & { meta: SitePlugin }>();
   private runtimeReports = new Map<string, PluginRuntimeReport>();
+
+  /**
+   * Where provider failures are recorded, when the host supplies a log.
+   *
+   * Optional so this class stays constructible in tests and tools without one.
+   * Recording happens here rather than at the call sites because this is the
+   * only layer that knows which provider was being asked.
+   */
+  private diagnostics: DiagnosticsSink | null = null;
 
   /** Providers registered by loaded plugins, keyed by provider name. */
   private providers = new Map<string, ExtensionProvider>();
@@ -799,6 +827,11 @@ export class PluginManager {
     this.sidecar.stop();
   }
 
+  /** Wired by `main.ts`; failures are recorded from this class onwards. */
+  public setDiagnostics(sink: DiagnosticsSink): void {
+    this.diagnostics = sink;
+  }
+
   public getProvidersList(): string[] {
     return [...this.providers.keys()];
   }
@@ -1178,12 +1211,16 @@ export class PluginManager {
     const latencyMs = Date.now() - started;
 
     if (!response.ok) {
-      return {
-        provider: name,
-        results: [],
-        latencyMs,
-        error: response.error ?? 'The extension runtime did not answer.',
-      };
+      const error = response.error ?? 'The extension runtime did not answer.';
+      this.diagnostics?.record({
+        level: 'error',
+        stage: 'search',
+        source: name,
+        query,
+        message: error,
+        detail: response.errorKind,
+      });
+      return { provider: name, results: [], latencyMs, error };
     }
 
     const byProvider = (response.result?.byProvider ?? {}) as Record<string, string>;
@@ -1192,12 +1229,16 @@ export class PluginManager {
       return { provider: name, results: [], latencyMs, error: 'The provider returned no usable answer.' };
     }
     if (!parsed.ok) {
-      return {
-        provider: name,
-        results: [],
-        latencyMs,
-        error: typeof parsed.error === 'string' ? parsed.error : 'The provider reported a failure.',
-      };
+      const error =
+        typeof parsed.error === 'string' ? parsed.error : 'The provider reported a failure.';
+      this.diagnostics?.record({
+        level: 'error',
+        stage: 'search',
+        source: name,
+        query,
+        message: error,
+      });
+      return { provider: name, results: [], latencyMs, error };
     }
 
     return { provider: name, results: mapProviderResults(name, parsed.results), latencyMs };
@@ -1236,27 +1277,34 @@ export class PluginManager {
      * scraped page had changed shape, or the title genuinely no longer exists.
      * Four different problems, three of them actionable, one message.
      */
+    /** Records the failure and hands back the error to throw. */
+    const fail = (message: string, detail?: string): Error => {
+      this.diagnostics?.record({
+        level: 'error',
+        stage: 'detail',
+        source: ref.provider,
+        url,
+        message,
+        detail,
+      });
+      return new Error(message);
+    };
+
     if (!response.ok) {
-      throw new Error(response.error ?? 'The extension runtime did not answer.');
+      throw fail(response.error ?? 'The extension runtime did not answer.', response.errorKind);
     }
 
     const parsed = safeParse(String(response.result?.json ?? ''));
-    if (!parsed) {
-      throw new Error(`${ref.provider} returned a reply that could not be read.`);
-    }
+    if (!parsed) throw fail(`${ref.provider} returned a reply that could not be read.`);
     if (!parsed.ok) {
-      throw new Error(
+      throw fail(
         typeof parsed.error === 'string'
           ? `${ref.provider}: ${parsed.error}`
           : `${ref.provider} could not load this title.`
       );
     }
-    if (!parsed.found) {
-      throw new Error(`${ref.provider} no longer has a page for this title.`);
-    }
-    if (!parsed.detail) {
-      throw new Error(`${ref.provider} returned a page with no details on it.`);
-    }
+    if (!parsed.found) throw fail(`${ref.provider} no longer has a page for this title.`);
+    if (!parsed.detail) throw fail(`${ref.provider} returned a page with no details on it.`);
 
     const detail = parsed.detail as Record<string, unknown>;
     const episodes = Array.isArray(detail.episodes)
@@ -1308,10 +1356,55 @@ export class PluginManager {
       { provider: ref.provider, data: ref.target },
       PROVIDER_CALL_TIMEOUT_MS
     );
-    if (!response.ok) return [];
+    /**
+     * Every way this returns nothing is recorded first.
+     *
+     * The caller can only render "no playable links for this item", which is
+     * true of a provider that timed out, one whose extractor threw, and one
+     * that genuinely has nothing — three different situations with one
+     * sentence. The empty list still goes back, because a failed resolve is not
+     * an exception at this layer; the reason goes to the log.
+     */
+    if (!response.ok) {
+      this.diagnostics?.record({
+        level: 'error',
+        stage: 'links',
+        source: ref.provider,
+        url,
+        message: response.error ?? 'The extension runtime did not answer.',
+        detail: response.errorKind,
+      });
+      return [];
+    }
 
     const parsed = safeParse(String(response.result?.json ?? ''));
-    if (!parsed?.ok || !Array.isArray(parsed.links)) return [];
+    if (!parsed?.ok) {
+      this.diagnostics?.record({
+        level: 'error',
+        stage: 'links',
+        source: ref.provider,
+        url,
+        message:
+          typeof parsed?.error === 'string'
+            ? parsed.error
+            : 'The provider returned an unreadable reply for this item.',
+      });
+      return [];
+    }
+    if (!Array.isArray(parsed.links) || parsed.links.length === 0) {
+      this.diagnostics?.record({
+        level: 'warn',
+        stage: 'links',
+        source: ref.provider,
+        url,
+        message: 'The provider ran successfully but offered no playable links.',
+        detail:
+          parsed.reportedSuccess === false
+            ? 'The provider reported failure for this item.'
+            : undefined,
+      });
+      return [];
+    }
 
     return (parsed.links as Array<Record<string, unknown>>).map((link) => ({
       source: link.source ? String(link.source) : ref.provider,

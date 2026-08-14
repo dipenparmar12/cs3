@@ -26,6 +26,7 @@ import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { BootstrapService } from './cs3/bootstrap';
 import { TitleOutcomeStore, type TitleOutcomeKind } from './cs3/titleOutcomes';
+import { DiagnosticsLog } from './cs3/diagnostics';
 import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
 import type { DownloadTask } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
@@ -51,6 +52,8 @@ const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
 const bootstrap = new BootstrapService(datastore, pluginManager);
 const titleOutcomes = new TitleOutcomeStore(datastore);
+const diagnostics = new DiagnosticsLog();
+pluginManager.setDiagnostics(diagnostics);
 const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
@@ -353,6 +356,73 @@ ipcMain.handle('api:removeSearchHistory', async (_, query: string) =>
 );
 
 ipcMain.handle('api:clearSearchHistory', async () => searchHistory.clear());
+
+// --- diagnostics ----------------------------------------------------------
+
+/**
+ * The environment questions every bug report needs answered first.
+ *
+ * Collected here rather than asked of the user: "which Java" and "which build"
+ * are the two things a reporter is least able to find and the two a maintainer
+ * asks for immediately.
+ */
+async function diagnosticsEnvironment(): Promise<Record<string, string>> {
+  let runtime = 'unknown';
+  try {
+    const status = await pluginManager.getRuntimeStatus();
+    runtime =
+      `available=${status.available} plugins=${status.installedCount}` +
+      (status.javaVersion ? ` java=${status.javaVersion}` : '') +
+      (status.reason ? ` — ${status.reason}` : '');
+  } catch {
+    // A runtime that cannot even be queried is itself worth reporting as such.
+  }
+  return {
+    App: app.getVersion(),
+    Electron: process.versions.electron ?? 'unknown',
+    Node: process.versions.node ?? 'unknown',
+    Platform: `${process.platform} ${os.release()}`,
+    'Extension runtime': runtime,
+    Providers: String(pluginManager.getProvidersList().length),
+  };
+}
+
+ipcMain.handle('diagnostics:list', async (_, limit?: number) => ({
+  ok: true,
+  records: diagnostics.list(limit ?? 200),
+  filePath: diagnostics.filePath,
+}));
+
+ipcMain.handle('diagnostics:clear', async () => {
+  diagnostics.clear();
+  return { ok: true };
+});
+
+/**
+ * A pasteable report.
+ *
+ * `ids` narrows it to the failure the user is looking at; omitting them reports
+ * everything. Both matter: one error is what you send a scraper's maintainer,
+ * and the whole log is what you attach to an issue about the app.
+ */
+ipcMain.handle('diagnostics:report', async (_, ids?: string[]) => {
+  try {
+    const all = diagnostics.list();
+    const chosen = ids?.length ? all.filter((record) => ids.includes(record.id)) : all;
+    return { ok: true, text: diagnostics.report(chosen, await diagnosticsEnvironment()) };
+  } catch (error) {
+    return { ...fail(error), text: '' };
+  }
+});
+
+/** Lets the renderer record what only it can see, such as a playback failure. */
+ipcMain.handle(
+  'diagnostics:record',
+  async (_, entry: Parameters<DiagnosticsLog['record']>[0]) => {
+    diagnostics.record(entry);
+    return { ok: true };
+  }
+);
 
 /**
  * What happened last time each title was opened.
