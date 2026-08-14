@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Play, Download, Star, ArrowLeft, Loader2, AlertTriangle, Calendar, Layers, ListVideo, Search,
-  SearchCheck,
+  Play, ArrowLeft, Loader2, AlertTriangle, ListVideo,
 } from 'lucide-react';
 import type { SearchResponse, Episode } from '../types/api';
 import { TvType } from '../types/api';
@@ -17,6 +16,7 @@ import {
 import { SeasonDownloadDialog } from '../components/SeasonDownloadDialog';
 import { LibraryBucketSelector } from '../components/LibraryBucketSelector';
 import { CopyErrorButton } from '../components/CopyErrorButton';
+import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
 
 export interface PlaybackRequest {
   streamUrl: string;
@@ -109,6 +109,8 @@ interface DetailViewProps {
   onStartSession: (context: PlaybackSessionRequest) => void;
   onEnqueueDownload: (task: DownloadTask) => void;
   onSearch?: (query: string) => void;
+  /** The query that produced this item, recorded on a bookmark so it can be re-run. */
+  searchQuery?: string;
 }
 
 interface DetailData {
@@ -183,10 +185,15 @@ export const DetailView: React.FC<DetailViewProps> = ({
   onStartSession,
   onEnqueueDownload,
   onSearch,
+  searchQuery,
 }) => {
   const [detail, setDetail] = useState<DetailData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  /** Whether this page is in the user's saved list, and where it came from. */
+  const [saved, setSaved] = useState(false);
+  const [provenance, setProvenance] = useState<DetailHeroProvenance>({});
 
   const [activeSeason, setActiveSeason] = useState<number>(1);
   const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
@@ -456,6 +463,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         filtered: [],
         indexerOutcomes: [],
         emptyReason: snapshot.searchDone ? snapshot.emptyReason : undefined,
+        diagnosis: snapshot.searchDone ? snapshot.diagnosis : undefined,
         query: {
           title: snapshot.title,
           season: pendingEpisode?.season,
@@ -474,6 +482,86 @@ export const DetailView: React.FC<DetailViewProps> = ({
     setToast(message);
     setTimeout(() => setToast(null), 5000);
   }, []);
+
+  /**
+   * Saved state and origin, resolved once per item.
+   *
+   * `apiName` is the provider that served this result and the only ancestry the
+   * item itself carries; the extension and repository behind it live in the
+   * main process, which is the only side holding that mapping.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    const url = mediaItem.url;
+    if (!url) return;
+
+    void (async () => {
+      const [bookmark, origin] = await Promise.all([
+        window.cloudstream?.getBookmark?.(url),
+        mediaItem.apiName
+          ? window.cloudstream?.getProviderProvenance?.(mediaItem.apiName)
+          : Promise.resolve(undefined),
+      ]);
+      if (cancelled) return;
+
+      setSaved(Boolean(bookmark?.bookmark));
+      setProvenance({
+        provider: origin?.provenance?.provider ?? mediaItem.apiName,
+        extensionName: origin?.provenance?.extensionName,
+        repositoryName: origin?.provenance?.repositoryName,
+        // A catalogue result has no extension behind it; naming the catalogue
+        // is what stops the origin line reading as "unknown" for half the app.
+        metadataSource: origin?.provenance?.extensionName ? undefined : mediaItem.apiName,
+        searchQuery,
+      });
+
+      // Reopening from the saved list is what makes "most used" meaningful.
+      if (bookmark?.bookmark) void window.cloudstream?.markBookmarkOpened?.(url);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mediaItem.url, mediaItem.apiName, searchQuery]);
+
+  /**
+   * Saves or unsaves this page.
+   *
+   * Everything needed to reopen it goes in — the exact address, the provider,
+   * the extension, the repository and the query that found it — plus a display
+   * copy of the metadata so the saved list can be drawn without asking thirty
+   * providers. Resolved links deliberately do not: they expire, and a saved
+   * page that opens and cannot play is worse than one that re-resolves.
+   */
+  const toggleSaved = useCallback(async () => {
+    if (!detail) return;
+    const response = await window.cloudstream?.toggleBookmark?.({
+      mediaUrl: mediaItem.url,
+      title: detail.name,
+      year: detail.year,
+      type: detail.type,
+      posterUrl: detail.posterUrl,
+      plot: detail.plot,
+      genres: detail.tags,
+      rating: detail.rating,
+      duration: detail.duration,
+      origin: {
+        provider: provenance.provider,
+        extensionName: provenance.extensionName,
+        repositoryName: provenance.repositoryName,
+        metadataSource: provenance.metadataSource,
+        searchQuery,
+        imdbId: detail.imdbId,
+      },
+    });
+    if (!response?.ok) return;
+    setSaved(response.saved);
+    flash(
+      response.saved
+        ? 'Saved. You can reopen this page from your library without searching again.'
+        : 'Removed from your saved pages.'
+    );
+  }, [detail, mediaItem.url, provenance, searchQuery, flash]);
 
   /** Queues one release for download, from either the picker or the player. */
   const downloadSource = useCallback(
@@ -773,105 +861,52 @@ export const DetailView: React.FC<DetailViewProps> = ({
         <ArrowLeft size={16} /> Back
       </button>
 
-      <header className="detail-hero">
-        {detail.posterUrl && (
-          <img className="detail-hero__poster" src={detail.posterUrl} alt="" loading="lazy" />
-        )}
-        <div className="detail-hero__body">
-          <h1>{detail.name}</h1>
-          {fellBackTo && (
-            <p className="detail-hero__fallback">
-              The listed source could not open this, so these details came from {fellBackTo}.
-            </p>
-          )}
-
-          <div className="detail-hero__meta">
-            {detail.year && (
-              <span><Calendar size={14} /> {detail.year}</span>
-            )}
-            {detail.rating !== undefined && (
-              <span><Star size={14} /> {detail.rating.toFixed(1)}</span>
-            )}
-            {detail.duration && <span>{detail.duration}</span>}
-            <span className="badge badge--muted">{detail.type}</span>
-          </div>
-
-          {detail.tags && detail.tags.length > 0 && (
-            <div className="detail-hero__tags">
-              {detail.tags.slice(0, 6).map((tag) => (
-                <span key={tag} className="badge badge--muted">{tag}</span>
-              ))}
-            </div>
-          )}
-
-          {detail.plot && <p className="detail-hero__plot">{detail.plot}</p>}
-
-          <div className="detail-hero__actions">
-            <button
-              className="btn btn-primary"
-              onClick={() => playNow(isSeries ? episodesInSeason[0] ?? null : null)}
-              disabled={startingStream}
-            >
-              <Play size={16} />
-              {isSeries ? 'Play first episode' : 'Play'}
-            </button>
-            {/* The selector keys off a search result; `detail` carries everything
-                except the provider name, which the originating item still has. */}
-            <LibraryBucketSelector
-              item={{ ...detail, apiName: mediaItem.apiName }}
-              size="md"
-            />
-            {/*
-              Both of these open the same picker, which offers play and download
-              per row — they are two doors into one screen, kept because people
-              arrive with one of two intentions and look for the matching word.
-            */}
-            <button
-              className="btn"
-              onClick={() => openSources(isSeries ? episodesInSeason[0] ?? null : null)}
-            >
-              <ListVideo size={16} /> Choose source
-            </button>
-            <button
-              className="btn"
-              onClick={() => openSources(isSeries ? episodesInSeason[0] ?? null : null)}
-            >
-              <Download size={16} /> {isSeries ? 'Download episode' : 'Download'}
-            </button>
-            {/*
-              The same search, with the cache bypassed.
-
-              Worth its own button rather than being folded into "Choose source":
-              the case it answers is "the list I was just shown is stale or too
-              short", and that is exactly when someone will not think to close
-              and reopen the thing that gave them the bad list.
-            */}
-            <button
-              className="btn"
-              onClick={() =>
-                openSources(isSeries ? episodesInSeason[0] ?? null : null, { refresh: true })
-              }
-              title="Search every enabled provider again, ignoring cached links"
-            >
-              <SearchCheck size={16} /> Find more sources
-            </button>
-            {onSearch && (
-              <button
-                className="btn"
-                onClick={() => onSearch(`${detail.name}${detail.year ? ` ${detail.year}` : ''}`)}
-                title={`Search "${detail.name}${detail.year ? ` ${detail.year}` : ''}" across all sources`}
-              >
-                <Search size={16} /> Search title
-              </button>
-            )}
-            {isSeries && (
-              <button className="btn" onClick={() => setSeasonDownloadOpen(true)}>
-                <Layers size={16} /> Download season
-              </button>
-            )}
-          </div>
-        </div>
-      </header>
+      <DetailHero
+        title={detail.name}
+        year={detail.year}
+        type={detail.type}
+        posterUrl={detail.posterUrl}
+        plot={detail.plot}
+        rating={detail.rating}
+        duration={detail.duration}
+        tags={detail.tags}
+        fallbackNote={
+          fellBackTo
+            ? `The listed source could not open this, so these details came from ${fellBackTo}.`
+            : undefined
+        }
+        isSeries={isSeries}
+        provenance={{ ...provenance, imdbId: detail.imdbId }}
+        saved={saved}
+        busy={startingStream}
+        onPlay={() => playNow(isSeries ? (episodesInSeason[0] ?? null) : null)}
+        onToggleSave={() => void toggleSaved()}
+        onChooseSource={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
+        onDownload={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
+        // "Find more" and "Refresh" are the same search with the cache bypassed,
+        // and they stay two entries because they answer two questions people
+        // actually ask: "is there anything else?" and "these links are dead".
+        onFindMoreSources={() =>
+          openSources(isSeries ? (episodesInSeason[0] ?? null) : null, { refresh: true })
+        }
+        onRefreshSources={() =>
+          openSources(isSeries ? (episodesInSeason[0] ?? null) : null, { refresh: true })
+        }
+        onSearchTitle={
+          onSearch
+            ? // The *full* title, not whatever is still sitting in the search
+              // box. Searching "Avengers" from the Age of Ultron page was the
+              // reported behaviour, and it came from the box owning its own text.
+              () => onSearch(`${detail.name}${detail.year ? ` ${detail.year}` : ''}`)
+            : undefined
+        }
+        onDownloadSeason={isSeries ? () => setSeasonDownloadOpen(true) : undefined}
+        libraryControl={
+          // The selector keys off a search result; `detail` carries everything
+          // except the provider name, which the originating item still has.
+          <LibraryBucketSelector item={{ ...detail, apiName: mediaItem.apiName }} size="sm" />
+        }
+      />
 
       {isSeries && (
         <section className="episode-section">
