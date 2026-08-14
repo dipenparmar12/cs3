@@ -211,12 +211,89 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, []);
 
   const currentDownload = useMemo(() => {
+    const norm = (s?: string) => s?.toLowerCase().trim() || '';
+    const normTitle = norm(title);
     return downloadQueue.find(
       (t) =>
-        t.title === title ||
-        (t.mediaUrl && progress?.mediaUrl && t.mediaUrl === progress.mediaUrl)
+        (normTitle && (norm(t.title) === normTitle || norm(t.title).startsWith(normTitle))) ||
+        (t.mediaUrl && progress?.mediaUrl && t.mediaUrl === progress.mediaUrl) ||
+        (t.link?.url && streamUrl && t.link.url === streamUrl) ||
+        (infoHash && t.id.includes(infoHash))
     );
-  }, [downloadQueue, title, progress?.mediaUrl]);
+  }, [downloadQueue, title, progress?.mediaUrl, streamUrl, infoHash]);
+
+  const handleDownloadCurrentMedia = useCallback(async () => {
+    if (onDownloadCurrent) {
+      onDownloadCurrent();
+      return;
+    }
+
+    const activeSource =
+      sourceSession?.sources?.find(
+        (s) => s.infoHash === (sourceSession.activeInfoHash || infoHash)
+      ) ?? sourceSession?.sources?.[0];
+
+    if (activeSource && sourceSession?.onDownloadSource) {
+      sourceSession.onDownloadSource(activeSource);
+      return;
+    }
+
+    const downloadUrl =
+      activeSource?.directUrl ||
+      activeSource?.magnet ||
+      activeSource?.torrentUrl ||
+      streamUrl;
+    if (!downloadUrl) return;
+
+    const taskTitle = title + (episodeTitle ? ` - ${episodeTitle}` : '');
+    const taskId = `dl-${infoHash || Date.now()}-${taskTitle}`.replace(
+      /[^a-zA-Z0-9-_]/g,
+      '_'
+    );
+
+    const task: DownloadTask = {
+      id: taskId,
+      parentId: progress?.mediaUrl || '',
+      title: taskTitle,
+      episodeNumber: subtitleContext?.episode,
+      seasonNumber: subtitleContext?.season,
+      posterUrl: '',
+      targetFilePath: '',
+      link: {
+        source: activeSource?.indexerName || 'Player Stream',
+        name: activeSource?.title || taskTitle,
+        url: downloadUrl,
+        referer:
+          activeSource?.directHeaders?.Referer ||
+          activeSource?.directHeaders?.referer ||
+          '',
+        quality: activeSource?.parsed?.resolution || 1080,
+      },
+      headers: activeSource?.directHeaders || {},
+      bytesDownloaded: 0,
+      totalBytes: activeSource?.sizeBytes || 0,
+      downloadSpeed: 0,
+      etaSeconds: 0,
+      state: DownloadState.Queued,
+      providerName: activeSource?.indexerName || 'Current Stream',
+      createdTime: Date.now(),
+      mediaUrl: progress?.mediaUrl || streamUrl,
+      resolution: activeSource?.parsed?.resolution,
+    };
+
+    await window.cloudstream?.enqueueDownload?.(task);
+    const queue = await window.cloudstream?.getDownloadQueue?.();
+    if (queue) setDownloadQueue(queue);
+  }, [
+    onDownloadCurrent,
+    sourceSession,
+    infoHash,
+    streamUrl,
+    title,
+    episodeTitle,
+    progress?.mediaUrl,
+    subtitleContext,
+  ]);
 
   const activeDownloadsCount = useMemo(() => {
     return downloadQueue.filter(
@@ -1706,21 +1783,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </button>
 
           {/* Button 1: Download Current Media Action Button */}
-          {onDownloadCurrent && (
-            <button
-              className="icon-button"
-              onClick={onDownloadCurrent}
-              aria-label="Download current media"
-              title={
-                currentDownload
-                  ? `Downloading current media (${currentDownload.state})`
-                  : 'Download current playing media'
-              }
-              disabled={Boolean(currentDownload && currentDownload.state === DownloadState.Completed)}
-            >
-              <HardDriveDownload size={18} />
-            </button>
-          )}
+          <button
+            className={`icon-button ${currentDownload ? 'active' : ''}`}
+            onClick={handleDownloadCurrentMedia}
+            aria-label="Download current media"
+            title={
+              currentDownload
+                ? `Downloading current media (${currentDownload.state})`
+                : 'Download current playing media'
+            }
+            disabled={Boolean(
+              currentDownload && currentDownload.state === DownloadState.Completed
+            )}
+          >
+            <HardDriveDownload size={18} />
+          </button>
 
           {/* Active Download Status Badge for Currently Playing Media */}
           {currentDownload && (

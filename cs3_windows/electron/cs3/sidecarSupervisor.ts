@@ -84,14 +84,14 @@ export class SidecarSupervisor {
     const sidecarInfo = this.provisioner.findSidecarJar();
     if (!sidecarInfo) {
       this.startFailure =
-        'The extension runtime is not provisioned. Click "Install / Repair Components" in Settings to set up automatically.';
+        'The extension runtime is not provisioned. Click "Install Required Components" in Settings to set up automatically.';
       return false;
     }
 
     const javaInfo = this.provisioner.findJavaBinary();
     if (!javaInfo) {
       this.startFailure =
-        'No compatible Java 21+ runtime was found. Click "Install / Repair Components" in Settings to set up automatically.';
+        'No compatible Java 21+ runtime was found. Click "Install Required Components" in Settings to set up automatically.';
       return false;
     }
 

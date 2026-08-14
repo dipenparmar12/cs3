@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   Cpu,
   Download,
@@ -10,58 +10,29 @@ import {
   ShieldAlert,
   Sliders,
   Zap,
+  Wrench,
+  AlertTriangle,
 } from 'lucide-react';
-import { MediaComponentsCard } from '../components/MediaComponentsCard';
-import { RuntimeProvisionerCard } from '../components/RuntimeProvisionerCard';
+import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
 import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
 import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
 import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
 
-/**
- * Settings, organised so the first look is calm.
- *
- * The previous screen was six full-width cards stacked vertically, each with a
- * heading, an icon and a paragraph of explanation, all permanently visible.
- * Everything had the same visual weight, so nothing was findable and the two
- * controls most people ever touch — where downloads go, and whether the
- * connection is the problem — were somewhere in the middle of a wall of prose.
- *
- * Three changes, no options removed:
- *
- *  - **Tabs.** One area at a time. Playback and Sources are separate concerns
- *    and were never worth scrolling past each other.
- *  - **Uniform rows.** Label left, control right, so a section can be scanned
- *    instead of read.
- *  - **Explanations behind an ⓘ.** The prose is still there, and it is still
- *    accurate; it is just not shouted at someone who already knows what a
- *    download folder is.
- */
-
-type TabId = 'general' | 'sources' | 'downloads' | 'network' | 'advanced';
-
-const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
-  { id: 'general', label: 'General', icon: <Sliders size={14} /> },
-  { id: 'sources', label: 'Sources', icon: <Layers size={14} /> },
-  { id: 'downloads', label: 'Downloads', icon: <Download size={14} /> },
-  { id: 'network', label: 'Connection', icon: <Globe size={14} /> },
-  { id: 'advanced', label: 'Advanced', icon: <Cpu size={14} /> },
-];
+type TabId = 'general' | 'components' | 'sources' | 'downloads' | 'network' | 'advanced';
 
 interface SettingsViewProps {
   hasBinaries?: boolean;
   onOpenBinarySetup?: () => void;
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = ({
-  hasBinaries = true,
-  onOpenBinarySetup,
-}) => {
+export const SettingsView: React.FC<SettingsViewProps> = () => {
   const [tab, setTab] = useState<TabId>('general');
   const [downloadDir, setDownloadDir] = useState('%USERPROFILE%\\Downloads\\CloudStream');
   const [useLiveStreams, setUseLiveStreams] = useState(true);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [missingComponentCount, setMissingComponentCount] = useState<number>(0);
   const [concurrency, setConcurrency] = useState<{
     value: number;
     min: number;
@@ -69,12 +40,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     def: number;
   } | null>(null);
 
+  const checkComponentStatus = useCallback(async () => {
+    try {
+      const res = await window.cloudstream?.getComponentStatus?.();
+      if (res && typeof res.missingCount === 'number') {
+        setMissingComponentCount(res.missingCount);
+      }
+    } catch {
+      // Best effort
+    }
+  }, []);
+
   useEffect(() => {
     window.cloudstream
       ?.getSetting('use_live_streaming_sources', 'true')
       .then((value) => setUseLiveStreams(value !== 'false'));
     window.cloudstream?.getSearchConcurrency?.().then(setConcurrency);
-  }, []);
+    void checkComponentStatus();
+  }, [checkComponentStatus]);
 
   const flash = (message: string) => {
     setStatusMessage(message);
@@ -107,24 +90,60 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     if (applied) setConcurrency(applied);
   };
 
+  const tabs: Array<{ id: TabId; label: string; icon: React.ReactNode; badge?: React.ReactNode }> = [
+    { id: 'general', label: 'General', icon: <Sliders size={14} /> },
+    {
+      id: 'components',
+      label: 'Components & Binaries',
+      icon: <Cpu size={14} />,
+      badge: missingComponentCount > 0 ? (
+        <span
+          style={{
+            marginLeft: '0.4rem',
+            padding: '0.1rem 0.45rem',
+            borderRadius: '10px',
+            fontSize: '0.7rem',
+            fontWeight: 700,
+            backgroundColor: 'rgba(245, 158, 11, 0.2)',
+            color: '#f59e0b',
+            border: '1px solid rgba(245, 158, 11, 0.4)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.2rem',
+          }}
+        >
+          <AlertTriangle size={10} /> {missingComponentCount} missing
+        </span>
+      ) : undefined,
+    },
+    { id: 'sources', label: 'Sources', icon: <Layers size={14} /> },
+    { id: 'downloads', label: 'Downloads', icon: <Download size={14} /> },
+    { id: 'network', label: 'Connection', icon: <Globe size={14} /> },
+    { id: 'advanced', label: 'Advanced', icon: <Wrench size={14} /> },
+  ];
+
   return (
     <div className="settings">
       <header className="settings__head">
         <h2>Settings</h2>
-        <p>Sources, downloads and connection. Everything has a sensible default.</p>
+        <p>Components, repositories, storage, and networking. Everything has a sensible default.</p>
       </header>
 
       <nav className="settings__tabs" role="tablist">
-        {TABS.map((entry) => (
+        {tabs.map((entry) => (
           <button
             key={entry.id}
             role="tab"
             aria-selected={tab === entry.id}
             className={`settings__tab${tab === entry.id ? ' settings__tab--on' : ''}`}
-            onClick={() => setTab(entry.id)}
+            onClick={() => {
+              setTab(entry.id);
+              if (entry.id === 'components') void checkComponentStatus();
+            }}
           >
             {entry.icon}
-            {entry.label}
+            <span>{entry.label}</span>
+            {entry.badge}
           </button>
         ))}
       </nav>
@@ -168,12 +187,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </>
       )}
 
-      {tab === 'sources' && (
-        <>
-          <RuntimeProvisionerCard />
-          <SourceSettings />
-        </>
-      )}
+      {tab === 'components' && <UnifiedComponentManager />}
+
+      {tab === 'sources' && <SourceSettings />}
 
       {tab === 'downloads' && (
         <>
@@ -193,22 +209,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <SettingGroup title="Download engines" icon={<Zap size={15} />}>
             <SettingRow
               label="aria2c and yt-dlp"
-              note={hasBinaries ? 'Installed and ready' : 'Not installed yet'}
+              note="Managed in Components & Binaries"
               hint={
                 <>
                   Downloads run through portable copies of <strong>aria2c</strong> (multi-connection
                   downloader) and <strong>yt-dlp</strong> (used when a source needs extracting
-                  first). They are fetched on demand and stored with the app — nothing is
-                  installed system-wide.
+                  first). They are managed in the <strong>Components & Binaries</strong> tab.
                 </>
               }
             >
               <button
-                onClick={onOpenBinarySetup}
-                className={`btn ${hasBinaries ? 'btn-secondary' : 'btn-primary'}`}
+                onClick={() => setTab('components')}
+                className="btn btn-secondary"
               >
-                <Download size={15} />
-                <span>{hasBinaries ? 'Reinstall' : 'Set up now'}</span>
+                <Cpu size={15} />
+                <span>Manage Components</span>
               </button>
             </SettingRow>
           </SettingGroup>
@@ -219,11 +234,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
       {tab === 'advanced' && (
         <>
-          <RuntimeProvisionerCard />
-
           <DiagnosticsPanel />
-
-          <MediaComponentsCard />
 
           <SettingGroup title="Migration" icon={<RefreshCw size={15} />}>
             <SettingRow
