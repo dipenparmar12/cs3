@@ -650,6 +650,22 @@ export class MediaTranscoder {
       'Cache-Control': 'no-store',
     });
 
+    /**
+     * Both ends of the pipe are guarded, not just the source.
+     *
+     * `pipe` does not forward errors, and this pipe breaks routinely: every seek
+     * kills the ffmpeg process mid-write, and a viewer closing the player
+     * destroys the socket underneath a conversion that is still producing
+     * output. An unhandled `error` on either stream is an uncaught exception in
+     * the main process — the same class of fault as the reported
+     * `SimpleURLLoaderWrapper` crash, arriving through a different pipe.
+     *
+     * Neither is worth reporting. A killed transcode is what seeking *is*, and
+     * a closed socket is the viewer leaving.
+     */
+    proc.stdout.on('error', () => this.kill(token));
+    res.on('error', () => this.kill(token));
+
     proc.stdout.pipe(res);
     /**
      * ffmpeg's own account of a failed conversion.
