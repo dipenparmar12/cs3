@@ -9,6 +9,7 @@ import { YtDlpEngine } from './ytdlpEngine';
 import { startHttpDownload } from './httpDownloader';
 import type { TorrentEngine } from './torrent/torrentEngine';
 import type { ContentService } from './contentService';
+import type { TorrentResult } from '../src/types/torrent';
 
 /**
  * The download queue, across every kind of source the app can play.
@@ -396,23 +397,71 @@ export class DownloadService {
     this.pump();
   }
 
+  /**
+   * Matches a fresh direct source from provider against the download task's original metadata.
+   */
+  private findMatchingSource(
+    task: DownloadTask,
+    sources: TorrentResult[]
+  ): TorrentResult | null {
+    const directSources = sources.filter((s) => Boolean(s.directUrl));
+    if (directSources.length === 0) return null;
+
+    // 1. Exact match on provider name and quality/resolution
+    let best = directSources.find((s) => {
+      const providerMatch =
+        s.indexerName === task.providerName ||
+        (s.title && s.title.toLowerCase().includes(task.providerName.toLowerCase()));
+      const resStr = s.parsed?.resolution ? String(s.parsed.resolution) : '';
+      const qualityMatch =
+        (task.quality && (resStr === String(task.quality) || resStr === `${task.quality}p`)) ||
+        (task.resolution && (resStr === String(task.resolution) || resStr === `${task.resolution}p`));
+      return providerMatch && qualityMatch;
+    });
+
+    if (best) return best;
+
+    // 2. Match on provider name alone
+    best = directSources.find(
+      (s) =>
+        s.indexerName === task.providerName ||
+        (s.title && s.title.toLowerCase().includes(task.providerName.toLowerCase()))
+    );
+    if (best) return best;
+
+    // 3. Match on quality / resolution alone
+    best = directSources.find((s) => {
+      const resStr = s.parsed?.resolution ? String(s.parsed.resolution) : '';
+      return (
+        (task.quality && (resStr === String(task.quality) || resStr === `${task.quality}p`)) ||
+        (task.resolution && (resStr === String(task.resolution) || resStr === `${task.resolution}p`))
+      );
+    });
+    if (best) return best;
+
+    // 4. Fall back to top-scoring direct source
+    return directSources[0];
+  }
+
   private async markFailed(task: DownloadTask, message: string): Promise<void> {
     this.handles.delete(task.id);
 
     const isDirectLink = task.link && task.link.url && !DownloadService.isMagnet(task.link.url);
-    const isExpiredOrHttpError =
-      /403|410|401|expired|forbidden|unauthorized|invalid|stale|timeout/i.test(message);
+    const maxRetries = 4;
+    const currentRetries = task.retryCount || 0;
+
+    // Any direct link download failure (expired token, 403, 404, network reset, range mismatch) can be auto-recovered
     const canRecover =
       Boolean(task.mediaUrl) &&
       this.contentService !== null &&
-      (task.retryCount || 0) < 3 &&
       isDirectLink &&
-      isExpiredOrHttpError;
+      currentRetries < maxRetries;
 
     if (canRecover && this.contentService && task.mediaUrl) {
+      const attemptNum = currentRetries + 1;
+      task.retryCount = attemptNum;
       task.state = DownloadState.RefreshingSource;
-      task.errorMessage = 'Link expired — refreshing source from provider...';
-      task.retryCount = (task.retryCount || 0) + 1;
+      task.errorMessage = `Link expired or interrupted — refreshing source from provider (attempt ${attemptNum}/${maxRetries})...`;
       this.saveQueueToStorage();
 
       try {
@@ -426,23 +475,32 @@ export class DownloadService {
           { bypassCache: true }
         );
 
-        const freshSource = response.sources.find((s) => Boolean(s.directUrl));
-        if (freshSource && freshSource.directUrl) {
-          task.link.url = freshSource.directUrl;
-          if (freshSource.directHeaders) {
-            task.headers = { ...task.headers, ...freshSource.directHeaders };
+        const matched = this.findMatchingSource(task, response.sources);
+        if (matched && matched.directUrl) {
+          // Remove old aria2 GID mapping if aria2 was tracking this task
+          for (const [gid, taskId] of this.gidToTaskId.entries()) {
+            if (taskId === task.id) {
+              await this.aria2.remove(gid).catch(() => {});
+              this.gidToTaskId.delete(gid);
+            }
+          }
+
+          task.link.url = matched.directUrl;
+          if (matched.directHeaders) {
+            task.headers = { ...task.headers, ...matched.directHeaders };
           }
           task.state = DownloadState.Retrying;
-          task.errorMessage = `Retrying download with fresh link (attempt ${task.retryCount}/3)...`;
+          task.errorMessage = `Resuming download with fresh link (attempt ${attemptNum}/${maxRetries})...`;
           this.saveQueueToStorage();
 
+          const delay = Math.min(1000 * Math.pow(2, currentRetries), 8000);
           setTimeout(() => {
             void this.startTask(task);
-          }, 1000);
+          }, delay);
           return;
         }
       } catch (err) {
-        console.warn('[download] Source refresh for expired download link failed:', err);
+        console.warn(`[download] Source refresh attempt ${attemptNum} failed:`, err);
       }
     }
 
@@ -489,6 +547,18 @@ export class DownloadService {
     const task = this.queue.get(id);
     if (!task) return;
     if (task.state !== DownloadState.Paused && task.state !== DownloadState.Failed) return;
+
+    // Reset retry count when manually retried by user to give a full retry budget
+    if (task.state === DownloadState.Failed) {
+      task.retryCount = 0;
+    }
+
+    // If it's a failed direct link download, auto-refresh source before restarting download
+    const isDirectLink = task.link && task.link.url && !DownloadService.isMagnet(task.link.url);
+    if (task.state === DownloadState.Failed && isDirectLink && task.mediaUrl && this.contentService) {
+      void this.markFailed(task, 'Manual user retry requested');
+      return;
+    }
 
     const infoHash = this.torrentTasks.get(id);
     if (infoHash && this.torrentEngine) {
