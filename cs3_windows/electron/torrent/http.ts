@@ -10,7 +10,7 @@
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_RETRIES = 1;
 const USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) CloudStreamDesktop/1.0';
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36';
 
 export interface HttpOptions {
   timeoutMs?: number;

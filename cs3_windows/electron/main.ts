@@ -123,6 +123,7 @@ const resilientFetch = new ResilientFetch({
   fallback: (input, init) => fetch(input, init),
   diagnostics,
 });
+setHttpFetch((input, init) => resilientFetch.fetch(input, init));
 
 /**
  * The last line of defence for the main process.

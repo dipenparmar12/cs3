@@ -167,13 +167,35 @@ export class TorrentioIndexer extends StremioAddonIndexer {
     super('torrentio', 'Torrentio', [
       'https://torrentio.strem.fun',
       'https://torrentio.deno.dev',
+      'https://torrentio-addon.com',
+    ]);
+  }
+}
+
+export class KnightCrawlerIndexer extends StremioAddonIndexer {
+  constructor() {
+    super('knightcrawler', 'KnightCrawler', [
+      'https://knightcrawler.elfhosted.com',
+      'https://knightcrawler.strem.fun',
+    ]);
+  }
+}
+
+export class CometIndexer extends StremioAddonIndexer {
+  constructor() {
+    super('comet', 'Comet', [
+      'https://comet.elfhosted.com',
+      'https://comet.strem.fun',
     ]);
   }
 }
 
 export class MediaFusionIndexer extends StremioAddonIndexer {
   constructor() {
-    super('mediafusion', 'MediaFusion', ['https://mediafusion.elfhosted.com']);
+    super('mediafusion', 'MediaFusion', [
+      'https://mediafusion.elfhosted.com',
+      'https://mediafusion.strem.fun',
+    ]);
   }
 }
 
@@ -213,7 +235,13 @@ export class KnabenIndexer implements TorrentIndexer {
   readonly name = 'Knaben';
   readonly specialises = 'any' as const;
 
-  private static readonly ENDPOINT = 'https://api.knaben.org/v1';
+  private static readonly MIRRORS = [
+    'https://api.knaben.org/v1',
+    'https://api.knaben.eu/v1',
+    'https://api.knaben.net/v1',
+    'https://knaben.eu/api/v1',
+    'https://knaben.org/api/v1',
+  ] as const;
 
   canHandle(query: IndexerQuery): boolean {
     return Boolean(query.query);
@@ -230,46 +258,131 @@ export class KnabenIndexer implements TorrentIndexer {
       terms.push(`S${String(query.season).padStart(2, '0')}`);
     }
 
-    const response = await postJson<KnabenResponse>(
-      KnabenIndexer.ENDPOINT,
-      {
-        search_type: 'score',
-        search_field: 'title',
-        query: terms.join(' '),
-        order_by: 'seeders',
-        order_direction: 'desc',
-        from: 0,
-        size: Math.min(query.limit ?? 100, 300),
-        hide_unsafe: true,
-        hide_xxx: true,
-      },
-      { signal, timeoutMs: 20_000 }
-    );
+    let lastError: unknown = new Error('No Knaben mirror responded');
 
-    return (response.hits ?? [])
-      .map((hit): RawTorrent | null => {
-        const title = String(hit.title ?? '').trim();
-        if (!title) return null;
+    for (const base of KnabenIndexer.MIRRORS) {
+      try {
+        const response = await postJson<KnabenResponse>(
+          base,
+          {
+            search_type: 'score',
+            search_field: 'title',
+            query: terms.join(' '),
+            order_by: 'seeders',
+            order_direction: 'desc',
+            from: 0,
+            size: Math.min(query.limit ?? 100, 300),
+            hide_unsafe: true,
+            hide_xxx: true,
+          },
+          { signal, timeoutMs: 20_000 }
+        );
 
-        const infoHash = hit.hash?.toLowerCase();
-        const magnet = hit.magnetUrl;
-        if (!infoHash && !magnet) return null;
+        return (response.hits ?? [])
+          .map((hit): RawTorrent | null => {
+            const title = String(hit.title ?? '').trim();
+            if (!title) return null;
 
-        const published = hit.date ? Date.parse(hit.date) : NaN;
+            const infoHash = hit.hash?.toLowerCase();
+            const magnet = hit.magnetUrl;
+            if (!infoHash && !magnet) return null;
 
-        return {
-          title,
-          infoHash: infoHash && /^[a-f0-9]{40}$/.test(infoHash) ? infoHash : undefined,
-          magnet,
-          sizeBytes: parseSize(hit.bytes ?? hit.size),
-          seeders: parseIntSafe(hit.seeders),
-          // Knaben reports total swarm size as `peers`.
-          leechers: Math.max(0, parseIntSafe(hit.peers) - parseIntSafe(hit.seeders)),
-          publishedAt: Number.isNaN(published) ? undefined : published,
-          category: hit.tracker ?? hit.category,
-        };
-      })
-      .filter((r): r is RawTorrent => r !== null);
+            const published = hit.date ? Date.parse(hit.date) : NaN;
+
+            return {
+              title,
+              infoHash: infoHash && /^[a-f0-9]{40}$/.test(infoHash) ? infoHash : undefined,
+              magnet,
+              sizeBytes: parseSize(hit.bytes ?? hit.size),
+              seeders: parseIntSafe(hit.seeders),
+              // Knaben reports total swarm size as `peers`.
+              leechers: Math.max(0, parseIntSafe(hit.peers) - parseIntSafe(hit.seeders)),
+              publishedAt: Number.isNaN(published) ? undefined : published,
+              category: hit.tracker ?? hit.category,
+            };
+          })
+          .filter((r): r is RawTorrent => r !== null);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SolidTorrents — fast, open REST search API across all torrent categories
+// ---------------------------------------------------------------------------
+
+interface SolidTorrentsItem {
+  title?: string;
+  infoHash?: string;
+  magnet?: string;
+  size?: number;
+  swarm?: { seeders?: number; leechers?: number };
+  imported?: number;
+  category?: string;
+}
+
+interface SolidTorrentsResponse {
+  results?: SolidTorrentsItem[];
+  hits?: number;
+}
+
+export class SolidTorrentsIndexer implements TorrentIndexer {
+  readonly id = 'solidtorrents';
+  readonly name = 'SolidTorrents';
+  readonly specialises = 'any' as const;
+
+  private static readonly MIRRORS = [
+    'https://solidtorrents.to',
+    'https://solidtorrents.net',
+    'https://solidtorrents.eu',
+  ] as const;
+
+  canHandle(query: IndexerQuery): boolean {
+    return Boolean(query.query);
+  }
+
+  async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
+    const terms = [query.query];
+    if (query.season !== undefined && query.episode !== undefined) {
+      terms.push(
+        `S${String(query.season).padStart(2, '0')}E${String(query.episode).padStart(2, '0')}`
+      );
+    } else if (query.season !== undefined) {
+      terms.push(`S${String(query.season).padStart(2, '0')}`);
+    }
+
+    let lastError: unknown = new Error('No SolidTorrents mirror responded');
+
+    for (const base of SolidTorrentsIndexer.MIRRORS) {
+      try {
+        const url = `${base}/api/v1/search?q=${encodeURIComponent(terms.join(' '))}&category=all&sort=seeders`;
+        const response = await fetchJson<SolidTorrentsResponse>(url, { signal, timeoutMs: 20_000 });
+        const items = response.results ?? [];
+
+        return items
+          .filter((item) => item?.title && (item.infoHash || item.magnet))
+          .map<RawTorrent>((item) => {
+            const infoHash = item.infoHash?.toLowerCase();
+            const title = String(item.title).trim();
+            return {
+              title,
+              infoHash: infoHash && /^[a-f0-9]{40}$/.test(infoHash) ? infoHash : undefined,
+              magnet: item.magnet || (infoHash ? buildMagnet(infoHash, title) : undefined),
+              sizeBytes: parseSize(item.size),
+              seeders: parseIntSafe(item.swarm?.seeders),
+              leechers: parseIntSafe(item.swarm?.leechers),
+              publishedAt: item.imported ? item.imported : undefined,
+              category: item.category ?? 'Video',
+            };
+          });
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
   }
 }
 
@@ -301,7 +414,10 @@ export class TorrentsCsvIndexer implements TorrentIndexer {
   readonly name = 'Torrents-CSV';
   readonly specialises = 'any' as const;
 
-  private static readonly MIRRORS = ['https://torrents-csv.com'] as const;
+  private static readonly MIRRORS = [
+    'https://torrents-csv.com',
+    'https://torrents-csv.ml',
+  ] as const;
 
   canHandle(query: IndexerQuery): boolean {
     return Boolean(query.query);
@@ -376,10 +492,14 @@ export class ApiBayIndexer implements TorrentIndexer {
   readonly name = 'The Pirate Bay';
   readonly specialises = 'any' as const;
 
-  private static readonly MIRRORS = ['https://apibay.org'] as const;
+  private static readonly MIRRORS = [
+    'https://apibay.org',
+    'https://pirateproxy.live/apibay',
+    'https://thepiratebay.zone/apibay',
+  ] as const;
 
   canHandle(query: IndexerQuery): boolean {
-    return Boolean(query.query);
+    return Boolean(query.query || query.imdbId);
   }
 
   async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
@@ -397,10 +517,37 @@ export class ApiBayIndexer implements TorrentIndexer {
 
     for (const base of ApiBayIndexer.MIRRORS) {
       try {
-        const items = await fetchJson<ApiBayItem[]>(
-          `${base}/q.php?q=${encodeURIComponent(terms.join(' '))}`,
-          { signal, timeoutMs: 20_000 }
-        );
+        let items: ApiBayItem[] = [];
+
+        // If an IMDb id is available, query by IMDb id first
+        if (query.imdbId) {
+          try {
+            const imdbQuery = query.imdbId.startsWith('tt') ? query.imdbId : `tt${query.imdbId}`;
+            const imdbItems = await fetchJson<ApiBayItem[]>(
+              `${base}/q.php?q=${encodeURIComponent(imdbQuery)}`,
+              { signal, timeoutMs: 12_000 }
+            );
+            if (Array.isArray(imdbItems) && imdbItems.length > 0) {
+              items = imdbItems.filter(
+                (item) => item?.info_hash && item.info_hash !== '0000000000000000000000000000000000000000'
+              );
+            }
+          } catch {
+            // Fallback to text query below
+          }
+        }
+
+        // If no items from IMDb lookup or no IMDb id, query by terms
+        if (items.length === 0 && terms.join(' ').trim()) {
+          const textItems = await fetchJson<ApiBayItem[]>(
+            `${base}/q.php?q=${encodeURIComponent(terms.join(' '))}`,
+            { signal, timeoutMs: 20_000 }
+          );
+          if (Array.isArray(textItems)) {
+            items = textItems;
+          }
+        }
+
         if (!Array.isArray(items)) return [];
 
         return items
