@@ -50,6 +50,20 @@ export interface PlaybackSnapshot {
 
 interface Session {
   id: string;
+  /**
+   * Sources ruled out for this session, by infoHash.
+   *
+   * Deliberately **not** `attempts`. That array belongs to `startBestStream`
+   * and is reset and replaced on every `beginStream`, which made it useless as
+   * a memory of what had been tried: the set was wiped on each skip, so the
+   * second failure saw the first source as untried and failover ping-ponged
+   * between two candidates forever instead of walking the list — exactly the
+   * 1 → 2 → 1 → 2 loop that was reported.
+   *
+   * Keyed on infoHash rather than title, because two releases of the same film
+   * share a title and are not the same source.
+   */
+  unplayable: Set<string>;
   request: SourceQuery;
   title: string;
   episodeTitle?: string;
@@ -135,6 +149,7 @@ export class PlaybackSessionManager {
       totalIndexers: 0,
       searchDone: false,
       attempts: [],
+      unplayable: new Set<string>(),
       generation: 0,
       started: false,
       disposed: false,
@@ -261,31 +276,50 @@ export class PlaybackSessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
 
-    const current = session.sources.find((s) => s.infoHash === session.activeInfoHash);
+    /**
+     * Rule out the source that just failed, permanently for this session.
+     *
+     * Recorded in `unplayable` rather than inferred from `attempts`, because
+     * `beginStream` clears and replaces that array on every call — so reading
+     * it back gave a set containing only the most recent failure, and failover
+     * bounced between the first two candidates indefinitely.
+     */
+    const current = session.activeInfoHash;
     if (current) {
-      session.attempts.push({
-        title: current.title,
-        indexerName: current.indexerName,
-        error: reason,
-      });
+      session.unplayable.add(current);
+      const source = session.sources.find((s) => s.infoHash === current);
+      if (source) {
+        session.attempts.push({
+          title: source.title,
+          indexerName: source.indexerName,
+          error: reason,
+        });
+      }
     }
 
-    const failed = new Set(session.attempts.map((attempt) => attempt.title));
     const remaining = session.sources.filter(
-      (source) => source.infoHash !== session.activeInfoHash && !failed.has(source.title)
+      (source) => !session.unplayable.has(source.infoHash)
     );
 
     if (remaining.length === 0) {
       session.phase = 'error';
       session.error =
-        `No source could be played. ${session.attempts.length} were tried; the last said: ${reason}`;
+        `None of the ${session.sources.length} source(s) could be played. ` +
+        `The last one said: ${reason}`;
       this.emit(session);
       return this.snapshot(session);
     }
 
-    // Failover off: this *is* the failover step, and letting `beginStream` run
-    // its own would burn the rest of the list on one decode failure.
+    // `beginStream` resets `attempts`; keep the history so the player can still
+    // say how far through the list it has got.
+    const history = [...session.attempts];
+
+    // Failover off: this *is* the failover step. Letting `beginStream` run its
+    // own would consume the rest of the list on a single decode failure.
     await this.beginStream(session, [remaining[0]], { failover: false, immediate: true });
+
+    session.attempts = [...history, ...session.attempts];
+    this.emit(session);
     return this.snapshot(session);
   }
 
