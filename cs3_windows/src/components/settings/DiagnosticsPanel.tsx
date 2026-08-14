@@ -68,11 +68,12 @@ export const DiagnosticsPanel: React.FC = () => {
   );
 
   const copyAll = async () => {
-    const response = await window.cloudstream?.reportDiagnostics?.(
+    const response = await window.cloudstream?.reportDiagnostics?.({
+      mode: 'full',
       // Copy what is on screen: a filtered view is a deliberate narrowing, and
       // silently reporting everything would undo it.
-      sourceFilter === 'all' ? undefined : shown.map((record) => record.id)
-    );
+      ids: sourceFilter === 'all' ? undefined : shown.map((record) => record.id),
+    });
     if (!response?.text) return;
     await navigator.clipboard.writeText(response.text);
     setCopied(true);
