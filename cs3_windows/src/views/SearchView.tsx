@@ -6,6 +6,7 @@ import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchS
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, Search, Target, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
 import { FacetMenu, type FacetOption } from '../components/FacetMenu';
+import { CopyErrorButton } from '../components/CopyErrorButton';
 
 interface SearchViewProps {
   query: string;
@@ -467,6 +468,21 @@ const SourceSummary: React.FC<{ snapshot: SearchSnapshot }> = ({ snapshot }) => 
         {snapshot.outcomes.length} source{snapshot.outcomes.length === 1 ? '' : 's'} asked
         {failed > 0 ? ` · ${failed} failed` : ''}
       </summary>
+      {failed > 0 && (
+        <div className="search-sources__copy">
+          <CopyErrorButton
+            compact
+            label="Copy these failures"
+            context={{
+              query: snapshot.query,
+              message: ordered
+                .filter((outcome) => outcome.state === 'failed')
+                .map((outcome) => `${outcome.name}: ${outcome.error ?? 'failed'}`)
+                .join(' · '),
+            }}
+          />
+        </div>
+      )}
       <ul>
         {ordered.map((outcome) => (
           <SourceRow key={`${outcome.kind}:${outcome.id}`} outcome={outcome} />
