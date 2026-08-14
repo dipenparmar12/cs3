@@ -81,6 +81,18 @@ export const App: React.FC = () => {
    * holds. Only the overlay stops rendering.
    */
   const [playerHidden, setPlayerHidden] = useState(false);
+
+  /**
+   * Shrunk to a floating window rather than hidden.
+   *
+   * The two are different answers to the same situation and the app needs
+   * both. `hidden` is for a viewer who wants the app back and does not need to
+   * see the video; `mini` is for one who wants to keep watching *while* they
+   * search, browse the library or check a download. Only the second is what
+   * people mean by "minimise", and the app previously offered only the first —
+   * a bar saying "still playing" over a player they could not see.
+   */
+  const [playerMini, setPlayerMini] = useState(false);
   const [missingComponents, setMissingComponents] = useState(0);
 
   const refreshMissingComponents = useCallback(async () => {
@@ -308,6 +320,7 @@ export const App: React.FC = () => {
     // Starting something new always brings the player back to the front, even
     // if the last one was left minimised.
     setPlayerHidden(false);
+    setPlayerMini(false);
 
     const previous = sessionRef.current;
     if (previous) await window.cloudstream.stopPlayback(previous.id, true);
@@ -358,6 +371,25 @@ export const App: React.FC = () => {
     setSwitchingTo(null);
     setSwitchError(null);
     setPlayerHidden(false);
+    setPlayerMini(false);
+  };
+
+  /**
+   * Shrinks the player and hands the app back, still playing.
+   *
+   * Nothing about the session changes — this is a geometry change to an element
+   * that stays mounted, so there is no stream to restart and no position to
+   * restore. That is the whole reason it is safe to offer.
+   */
+  const handleMinimizePlayer = () => {
+    if (!session && !playback && !preparing) return;
+    setPlayerMini(true);
+    setPlayerHidden(false);
+  };
+
+  const handleExpandPlayer = () => {
+    setPlayerMini(false);
+    setPlayerHidden(false);
   };
 
   /**
@@ -371,7 +403,11 @@ export const App: React.FC = () => {
    */
   const handleLeavePlayer = (tab: ActiveTab) => {
     if (!session && !playback && !preparing) return;
-    setPlayerHidden(true);
+    // Shrunk rather than hidden. Stepping out to Downloads used to blank the
+    // video and leave a bar saying it was still playing, which is a strange
+    // thing to tell someone about a film they were watching a second ago.
+    setPlayerMini(true);
+    setPlayerHidden(false);
     setSelectedMedia(null);
     setActiveTab(tab);
   };
@@ -391,6 +427,7 @@ export const App: React.FC = () => {
     async (item: SearchResponse) => {
       setSelectedMedia(null);
       setPlayerHidden(false);
+      setPlayerMini(false);
       setPreparing({ title: item.name });
 
       try {
@@ -543,6 +580,9 @@ export const App: React.FC = () => {
           isSearching={Boolean(search && !search.done)}
           onScopeChange={handleScopeChange}
           onOpenInspector={() => setIsInspectorOpen(true)}
+          // So a search started from the details page shows in the bar that
+          // claims to say what is being searched.
+          externalQuery={searchQuery}
         />
 
         {/* First launch only, and never blocking: the app works while the
@@ -563,6 +603,9 @@ export const App: React.FC = () => {
               subtitles={session.snapshot.handle?.subtitleUrls ?? []}
               onBack={handleClosePlayer}
               hidden={playerHidden}
+              mini={playerMini}
+              onMinimize={handleMinimizePlayer}
+              onExpand={handleExpandPlayer}
               onOpenDownloads={() => handleLeavePlayer('downloads')}
               series={session.context.series}
               progress={session.context.progress}
@@ -651,6 +694,9 @@ export const App: React.FC = () => {
               subtitles={[]}
               onBack={handleClosePlayer}
               hidden={playerHidden}
+              mini={playerMini}
+              onMinimize={handleMinimizePlayer}
+              onExpand={handleExpandPlayer}
               onOpenDownloads={() => handleLeavePlayer('downloads')}
               sourceSession={{
                 phase: 'searching',
@@ -674,6 +720,9 @@ export const App: React.FC = () => {
               subtitles={playback.subtitles}
               onBack={handleClosePlayer}
               hidden={playerHidden}
+              mini={playerMini}
+              onMinimize={handleMinimizePlayer}
+              onExpand={handleExpandPlayer}
               onOpenDownloads={() => handleLeavePlayer('downloads')}
               series={playback.series}
               progress={playback.progress}
@@ -760,15 +809,16 @@ export const App: React.FC = () => {
           ) : null}
 
           {/*
-            The way back into a minimised player.
+            The fallback marker for a player that is running out of sight.
 
-            Without this the session would be running with nothing on screen
-            pointing at it — still holding a stream, still audible — and the only
-            route back would be to start the title again from scratch. Both
-            actions are offered, because "I am done with this" is at least as
-            likely as "take me back" once someone has walked off to Downloads.
+            Now reached only when something is `hidden` rather than minimised —
+            minimising shows the video itself, which is a better answer to the
+            same problem and is what every path in this app now takes. The bar
+            stays because a session with nothing on screen pointing at it is the
+            failure it exists to prevent, and `hidden` is still a state the
+            player supports.
           */}
-          {playerHidden && (session || playback || preparing) && (
+          {playerHidden && !playerMini && (session || playback || preparing) && (
             <MiniPlayerBar
               title={session?.context.title ?? playback?.title ?? preparing?.title ?? 'Playing'}
               episodeTitle={session?.context.episodeTitle ?? playback?.episodeTitle}
@@ -784,17 +834,27 @@ export const App: React.FC = () => {
               onBack={handleBackToResults}
               onPlay={(request) => {
                 setPlayerHidden(false);
+                setPlayerMini(false);
                 setPlayback(request);
               }}
               onStartSession={startSession}
               onEnqueueDownload={handleEnqueueDownload}
               onSearch={handleSearchFromDetail}
+              // Recorded on a bookmark, so a saved page remembers the search
+              // that found it and can be reached that way again.
+              searchQuery={searchQuery}
             />
           ) : (
             <>
               {activeTab === 'home' && (
                 <ErrorBoundary>
-                  <HomeView onSelectMedia={handleSelectMedia} onPlayDirectly={handleQuickPlay} />
+                  <HomeView
+                    onSelectMedia={handleSelectMedia}
+                    onPlayDirectly={handleQuickPlay}
+                    // Trending anime carries no IMDb id, so those cards open
+                    // through a search rather than straight into a detail page.
+                    onSearch={handleSearchFromDetail}
+                  />
                 </ErrorBoundary>
               )}
               {activeTab === 'search' && (
@@ -813,7 +873,10 @@ export const App: React.FC = () => {
               )}
               {activeTab === 'library' && (
                 <ErrorBoundary>
-                  <LibraryView onSelectMedia={handleSelectMedia} />
+                  <LibraryView
+                    onSelectMedia={handleSelectMedia}
+                    onSearch={handleSearchFromDetail}
+                  />
                 </ErrorBoundary>
               )}
               {activeTab === 'downloads' && (

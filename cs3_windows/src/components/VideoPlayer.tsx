@@ -4,7 +4,7 @@ import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
   SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
-  HardDriveDownload, FolderDown,
+  HardDriveDownload, FolderDown, GripHorizontal, Maximize2, Minimize2, X,
 } from 'lucide-react';
 import type { TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
@@ -22,6 +22,7 @@ import type { MediaProbe, ProbeFailure } from '../../electron/mediaTranscoder';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
+import { useMiniFrame } from './player/useMiniFrame';
 import { CopyErrorButton } from './CopyErrorButton';
 import { ExternalPlayerFallback } from './player/ExternalPlayerFallback';
 
@@ -89,6 +90,20 @@ interface VideoPlayerProps {
    * Downloads screen pause a film the viewer cannot see.
    */
   hidden?: boolean;
+  /**
+   * Shrunk to a floating window, still playing, while the rest of the app is used.
+   *
+   * The same element in the same place in the tree as the full-screen player —
+   * only its geometry changes. That is not an implementation detail: the
+   * `<video>` *is* the playback, so anything that unmounts and remounts it to
+   * change size would drop the buffer, lose the position, and re-negotiate the
+   * swarm. Minimising has to be free, or nobody will use it twice.
+   */
+  mini?: boolean;
+  /** Shrinks the player without ending the session. */
+  onMinimize?: () => void;
+  /** Returns the mini player to full size. */
+  onExpand?: () => void;
   sourceSession?: {
     phase: PlaybackPhase;
     sources: TorrentResult[];
@@ -168,6 +183,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamUrl, mimeType, title, episodeTitle, infoHash, subtitles, onBack,
   series, onSelectEpisode, switchingTo, switchError, progress, sourceSession,
   subtitleContext, onDownloadCurrent, onOpenDownloads, hidden = false,
+  mini = false, onMinimize, onExpand,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -872,7 +888,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     // Still mounted, but the viewer is looking at another screen. Leaving this
     // bound would make typing in a search box seek the film.
-    if (hidden) return;
+    //
+    // The mini player is disarmed for the same reason and it matters more
+    // there: it is *visible*, so it looks like it has focus, and the whole
+    // point of it is that the viewer is typing somewhere else. A space bar in
+    // the search box must not pause the film.
+    if (hidden || mini) return;
 
     const onKey = (e: KeyboardEvent) => {
       switch (e.key) {
@@ -904,7 +925,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [
     togglePlay, seekBy, toggleFullscreen, onBack, series, nextEpisode, previousEpisode,
     onSelectEpisode, panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen,
-    hidden,
+    hidden, mini,
   ]);
 
   useEffect(() => {
@@ -1327,19 +1348,93 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen]
   );
 
+  const miniFrame = useMiniFrame(mini);
+
+  /**
+   * Geometry for the floating window.
+   *
+   * Applied as inline style on the same element the full-screen player uses.
+   * Swapping a class alone cannot express a position the user dragged to, and
+   * rendering a second player would mean a second `<video>` — which is the one
+   * thing this component must never do.
+   */
+  const miniStyle: React.CSSProperties | undefined = mini
+    ? {
+        left: miniFrame.frame.x,
+        top: miniFrame.frame.y,
+        width: miniFrame.frame.width,
+        height: miniFrame.height,
+      }
+    : undefined;
+
   return (
     <div
       ref={containerRef}
-      className={`player${controlsVisible || keepControls ? '' : ' player--idle'}`}
+      className={
+        `player${controlsVisible || keepControls ? '' : ' player--idle'}` +
+        (mini ? ' player--mini' : '')
+      }
       // `display: none` rather than unmounting: see the `hidden` prop. The
       // element keeps its buffer, its position and its decoder.
-      style={hidden ? { display: 'none' } : undefined}
+      style={hidden ? { display: 'none' } : miniStyle}
       aria-hidden={hidden || undefined}
       onMouseMove={revealControls}
       onMouseEnter={handlePlayerEnter}
       onMouseLeave={handlePlayerLeave}
       onPointerDown={handlePlayerPointerDown}
     >
+      {/*
+        The mini player's own chrome.
+
+        A separate, much smaller control set rather than the full one scaled
+        down: at 420px the real controls are unusable — a seek bar three hundred
+        pixels wide with eleven buttons on it — and the things wanted from a
+        window in the corner are only ever pause, expand, and close.
+      */}
+      {mini && (
+        <>
+          <div
+            className="player-mini__grip"
+            onPointerDown={miniFrame.startDrag}
+            title="Drag to move"
+            role="presentation"
+          >
+            <GripHorizontal size={13} />
+            <span className="player-mini__title">{episodeTitle || title}</span>
+          </div>
+
+          <div className="player-mini__bar">
+            <button onClick={togglePlay} title={isPlaying ? 'Pause' : 'Play'} aria-label={isPlaying ? 'Pause' : 'Play'}>
+              {isPlaying ? <Pause size={15} /> : <Play size={15} fill="currentColor" />}
+            </button>
+            <button
+              onClick={() => setIsMuted((value) => !value)}
+              title={isMuted ? 'Unmute' : 'Mute'}
+              aria-label={isMuted ? 'Unmute' : 'Mute'}
+            >
+              {isMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+            </button>
+            <div className="player-mini__spacer" />
+            {onExpand && (
+              <button onClick={onExpand} title="Back to the full player" aria-label="Expand player">
+                <Maximize2 size={15} />
+              </button>
+            )}
+            <button onClick={onBack} title="Stop and close" aria-label="Close player">
+              <X size={15} />
+            </button>
+          </div>
+
+          {/* Top-left rather than bottom-right: a window parked in the corner
+              of the screen has its bottom-right corner against the edge. */}
+          <div
+            className="player-mini__resize"
+            onPointerDown={miniFrame.startResize}
+            title="Drag to resize"
+            role="presentation"
+          />
+        </>
+      )}
       <video
         ref={videoRef}
         className={`player__video player__video--${aspect}`}
@@ -1499,6 +1594,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <button className="icon-button" onClick={onBack} aria-label="Back">
           <ArrowLeft size={22} />
         </button>
+        {/*
+          Minimise, next to Back and deliberately not folded into it.
+
+          They are opposite intentions — "I am done with this" and "keep this
+          running while I do something else" — and a viewer who wants the second
+          and gets the first has lost their place and their buffer.
+        */}
+        {onMinimize && (
+          <button
+            className="icon-button"
+            onClick={onMinimize}
+            aria-label="Minimise the player"
+            title="Keep playing in a small window while you browse"
+          >
+            <Minimize2 size={19} />
+          </button>
+        )}
         <div className="player__titles">
           <h2>{title}</h2>
           {(episodeTitle || currentEpisode) && (
