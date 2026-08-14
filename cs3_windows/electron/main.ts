@@ -273,6 +273,20 @@ app.whenReady().then(async () => {
     }
   });
 
+  // Global extension runtime provisioner notifier
+  pluginManager.getSidecar().getProvisioner().addProgressListener((progress) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('runtime:progress', progress);
+    }
+  });
+
+  // Global extension plugin install progress notifier
+  pluginManager.onInstallProgress((progress) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('extension:installProgress', progress);
+    }
+  });
+
   /**
    * First launch installs the verified repositories in the background.
    *
@@ -583,26 +597,64 @@ ipcMain.handle('runtime:getStatus', async () => {
 ipcMain.handle('runtime:provision', async () => {
   try {
     const provisioner = pluginManager.getSidecar().getProvisioner();
-    provisioner.setProgressCallback((progress) => {
-      mainWindow?.webContents.send('runtime:progress', progress);
-    });
     const ready = await provisioner.provisionRuntime();
+    if (ready) {
+      await pluginManager.loadProviders().catch((err) => {
+        console.warn('[runtime:provision] Post-provision provider load failed:', err);
+      });
+    }
     return { ok: ready, ready };
   } catch (error) {
     return { ...fail(error), ready: false };
   }
 });
 
-ipcMain.handle('runtime:repair', async () => {
+ipcMain.handle('runtime:test', async () => {
   try {
     const provisioner = pluginManager.getSidecar().getProvisioner();
-    provisioner.setProgressCallback((progress) => {
-      mainWindow?.webContents.send('runtime:progress', progress);
-    });
-    const ready = await provisioner.repairRuntime();
-    return { ok: ready, ready };
+    const result = await provisioner.testRuntime();
+    return { ...result };
   } catch (error) {
-    return { ...fail(error), ready: false };
+    return { ...fail(error), ok: false };
+  }
+});
+
+ipcMain.handle('runtime:clean', async () => {
+  try {
+    const provisioner = pluginManager.getSidecar().getProvisioner();
+    return await provisioner.cleanRuntime();
+  } catch (error) {
+    return { ...fail(error), ok: false };
+  }
+});
+
+ipcMain.handle('components:getStatus', async () => {
+  try {
+    const runtime = pluginManager.getSidecar().getProvisioner().getStatus();
+    const binaries = binaryDownloader.checkBinaries();
+    const mediaReady = Boolean(binaries.ffmpeg && binaries.ffprobe);
+    const downloadReady = Boolean(binaries.aria2 && binaries.ytdlp);
+    const runtimeReady = Boolean(runtime.ready);
+
+    let missingCount = 0;
+    if (!runtimeReady) missingCount++;
+    if (!downloadReady) missingCount++;
+    if (!mediaReady) missingCount++;
+
+    return {
+      ok: true,
+      allReady: missingCount === 0,
+      missingCount,
+      runtime,
+      binaries,
+      suites: {
+        runtime: runtimeReady,
+        downloads: downloadReady,
+        media: mediaReady,
+      },
+    };
+  } catch (error) {
+    return { ...fail(error), ok: false, allReady: false, missingCount: 3 };
   }
 });
 
@@ -1103,6 +1155,41 @@ ipcMain.handle('download:revealInFolder', async (_, targetPath?: string) => {
 // --- binaries ------------------------------------------------------------
 
 ipcMain.handle('binary:check', async () => binaryDownloader.checkBinaries());
+ipcMain.handle('binary:checkBinaries', async () => binaryDownloader.checkBinaries());
+
+ipcMain.handle('binary:testAll', async () => binaryDownloader.testAllBinaries());
+
+ipcMain.handle('binary:testOne', async (_, name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe') => {
+  return await binaryDownloader.testBinary(name);
+});
+
+ipcMain.handle('binary:remove', async (_, name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'media' | 'downloads' | 'all') => {
+  const removed = binaryDownloader.removeBinary(name);
+  return { ok: removed };
+});
+
+ipcMain.handle('binary:setupAria2', async () => {
+  try {
+    const ok = await binaryDownloader.setupAria2((status, percent) => {
+      mainWindow?.webContents.send('binary:setupProgress', { component: 'aria2c', status, percent });
+    });
+    if (ok) await aria2.start().catch(() => {});
+    return { ok, message: ok ? 'aria2c ready' : 'aria2c installation failed' };
+  } catch (error) {
+    return { ...fail(error), ok: false, message: 'aria2c installation failed' };
+  }
+});
+
+ipcMain.handle('binary:setupYtDlp', async () => {
+  try {
+    const ok = await binaryDownloader.setupYtDlp((status, percent) => {
+      mainWindow?.webContents.send('binary:setupProgress', { component: 'yt-dlp', status, percent });
+    });
+    return { ok, message: ok ? 'yt-dlp ready' : 'yt-dlp installation failed' };
+  } catch (error) {
+    return { ...fail(error), ok: false, message: 'yt-dlp installation failed' };
+  }
+});
 
 /**
  * One-click FFmpeg. Progress is pushed so a ~100 MB download can show its
@@ -1112,7 +1199,7 @@ ipcMain.handle('binary:setupFfmpeg', async () => {
   try {
     const ok = await binaryDownloader.setupFfmpeg((status, percent) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('binary:setupProgress', { status, percent });
+        mainWindow.webContents.send('binary:setupProgress', { component: 'ffmpeg', status, percent });
       }
     });
     return {
@@ -1123,6 +1210,18 @@ ipcMain.handle('binary:setupFfmpeg', async () => {
     };
   } catch (error) {
     return { ...fail(error), message: 'The media components could not be installed.' };
+  }
+});
+
+ipcMain.handle('binary:setupAll', async () => {
+  try {
+    const res = await binaryDownloader.setupAll((component, status, percent) => {
+      mainWindow?.webContents.send('binary:setupProgress', { component, status, percent });
+    });
+    await aria2.start().catch(() => {});
+    return res;
+  } catch (error) {
+    return { ...fail(error), ok: false, message: 'Component setup failed' };
   }
 });
 
@@ -1198,10 +1297,46 @@ ipcMain.handle('extension:getInstalledRepositories', async () =>
   pluginManager.getInstalledRepositories()
 );
 
+/**
+ * Removing a repository now uninstalls the extensions it brought with it, so the
+ * reply reports both — the caller needs to be able to say "removed, and 12
+ * extensions with it" rather than implying nothing else changed.
+ */
 ipcMain.handle('extension:removeRepository', async (_, repoUrl: string) => {
-  pluginManager.removeRepository(repoUrl);
-  return pluginManager.getInstalledRepositories();
+  const removedExtensions = pluginManager.removeRepository(repoUrl);
+  return { repositories: pluginManager.getInstalledRepositories(), removedExtensions };
 });
+
+/**
+ * Switch a repository or extension off without deleting anything.
+ *
+ * The reversible half of the pair above, and the one the UI offers first: a
+ * bundled repository the user does not want is silenced instantly and can be
+ * brought back without re-downloading ~170 archives.
+ */
+ipcMain.handle(
+  'extension:setRepositoryEnabled',
+  async (_, repositoryId: string, enabled: boolean) =>
+    pluginManager.setRepositoryEnabled(repositoryId, enabled)
+);
+
+ipcMain.handle(
+  'extension:setRepositoriesEnabled',
+  async (_, repositoryIds: string[], enabled: boolean) =>
+    pluginManager.setRepositoriesEnabled(repositoryIds, enabled)
+);
+
+ipcMain.handle(
+  'extension:setExtensionEnabled',
+  async (_, internalName: string, enabled: boolean) =>
+    pluginManager.setExtensionEnabled(internalName, enabled)
+);
+
+ipcMain.handle(
+  'extension:setExtensionsEnabled',
+  async (_, internalNames: string[], enabled: boolean) =>
+    pluginManager.setExtensionsEnabled(internalNames, enabled)
+);
 
 ipcMain.handle('extension:getInstalledPlugins', async () => pluginManager.getInstalledPlugins());
 
@@ -1238,12 +1373,32 @@ ipcMain.handle(
   async (_, names: string[], enabled: boolean) => pluginManager.setProvidersEnabled(names, enabled)
 );
 
+/**
+ * The tree plus every switched-off set, in one reply.
+ *
+ * They travel together because they are read together: a row's appearance
+ * depends on all three levels, and fetching them separately would render a tree
+ * against a stale disabled-set for one frame — visible as toggles flickering
+ * into place after the list draws.
+ */
 ipcMain.handle('extension:getProviderTree', async () => {
   try {
     await pluginManager.loadProviders();
-    return { ok: true, tree: pluginManager.getProviderTree() };
+    return {
+      ok: true,
+      tree: pluginManager.getProviderTree(),
+      disabled: pluginManager.getDisabledProviders(),
+      disabledExtensions: pluginManager.getDisabledExtensions(),
+      disabledRepositories: pluginManager.getDisabledRepositories(),
+    };
   } catch (error) {
-    return { ...fail(error), tree: [] };
+    return {
+      ...fail(error),
+      tree: [],
+      disabled: [],
+      disabledExtensions: [],
+      disabledRepositories: [],
+    };
   }
 });
 

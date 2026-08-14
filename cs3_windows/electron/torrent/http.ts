@@ -166,7 +166,40 @@ export async function fetchText(url: string, options: HttpOptions = {}): Promise
   return await response.text();
 }
 
-export async function fetchBuffer(url: string, options: HttpOptions = {}): Promise<Buffer> {
+export async function fetchBuffer(
+  url: string,
+  options: HttpOptions = {},
+  onProgress?: (downloadedBytes: number, totalBytes: number, percent: number) => void
+): Promise<Buffer> {
   const response = await withRetry(url, options);
-  return Buffer.from(await response.arrayBuffer());
+  const totalBytes = parseInt(response.headers.get('content-length') || '0', 10);
+
+  if (!response.body || !onProgress) {
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let downloadedBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      downloadedBytes += value.length;
+      const percent =
+        totalBytes > 0 ? Math.min(100, Math.floor((downloadedBytes / totalBytes) * 100)) : 0;
+      onProgress(downloadedBytes, totalBytes, percent);
+    }
+  }
+
+  const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+  const combined = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return Buffer.from(combined);
 }

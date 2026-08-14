@@ -73,8 +73,21 @@ export interface ProviderTreeProvider {
   supportedTypes: string[];
   /** Stable identity for selection, filtering and result attribution. */
   id?: string;
-  /** False when the provider is switched off in the extensions screen. */
+  /** False when the provider itself is switched off in the extensions screen. */
   enabled?: boolean;
+  /**
+   * False when an ancestor is switched off while this provider's own switch is
+   * still on. Distinct from `enabled` so the UI can say *why* a provider is
+   * silent — its own toggle would appear inert against an ancestor gate.
+   */
+  effectivelyEnabled?: boolean;
+  /** Provenance: which extension registered it, and which repository supplied that. */
+  extensionInternalName?: string;
+  extensionName?: string;
+  repositoryId?: string;
+  repositoryName?: string;
+  /** Declares upstream's NSFW `TvType`. */
+  adult?: boolean;
 }
 
 export interface ProviderTreeExtension {
@@ -88,6 +101,20 @@ export interface ProviderTreeExtension {
    * nothing — never invent a provider to stand in for it.
    */
   unavailableReason?: string;
+  /** False when switched off by the user. The archive is kept either way. */
+  enabled?: boolean;
+  /** False when its repository is switched off, whatever its own state. */
+  effectivelyEnabled?: boolean;
+  version?: number;
+  authors?: string[];
+  description?: string;
+  iconUrl?: string;
+  fileSize?: number;
+  repositoryId?: string;
+  repositoryName?: string;
+  /** Union of the content types its providers declare, for tag filtering. */
+  tvTypes?: string[];
+  enabledProviderCount?: number;
 }
 
 export interface ProviderTreeRepository {
@@ -95,4 +122,19 @@ export interface ProviderTreeRepository {
   name: string;
   extensions: ProviderTreeExtension[];
   id?: string;
+  /** False when the whole repository is switched off. Archives are kept. */
+  enabled?: boolean;
+  /** Installed on first launch. Labelled, never hidden, and always removable. */
+  bundled?: boolean;
+  description?: string;
+  category?: string;
+  iconUrl?: string;
+  /** Whether the catalogue confirmed this URL returns a document. */
+  verified?: boolean;
+  /** The project page, when `url` is a raw document link. */
+  homepageUrl?: string;
+  extensionCount?: number;
+  providerCount?: number;
+  enabledProviderCount?: number;
+  tvTypes?: string[];
 }

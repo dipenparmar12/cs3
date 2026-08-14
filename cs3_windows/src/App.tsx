@@ -6,7 +6,7 @@ import { VideoPlayer } from './components/VideoPlayer';
 import { MiniPlayerBar } from './components/player/MiniPlayerBar';
 import { DownloadCenter } from './components/DownloadCenter';
 import { ProviderInspector } from './components/ProviderInspector';
-import { ExtensionManagerUI } from './components/ExtensionManagerUI';
+import { ExtensionsScreen } from './components/extensions/ExtensionsScreen';
 import { BinarySetupModal } from './components/BinarySetupModal';
 import { HomeView } from './views/HomeView';
 import { SearchView, EMPTY_SEARCH_UI, type SearchUiState } from './views/SearchView';
@@ -22,7 +22,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { FirstRunBanner } from './components/FirstRunBanner';
 
 import type { Episode, SearchOptions, SearchResponse } from './types/api';
-import type { DownloadTask } from './types/download';
+import { type DownloadTask, DownloadState } from './types/download';
 import type { TorrentResult } from './types/torrent';
 import type { PlaybackSnapshot } from '../electron/playbackSession';
 import type { SearchSnapshot } from '../electron/searchSession';
@@ -81,6 +81,32 @@ export const App: React.FC = () => {
    * holds. Only the overlay stops rendering.
    */
   const [playerHidden, setPlayerHidden] = useState(false);
+  const [missingComponents, setMissingComponents] = useState(0);
+
+  const refreshMissingComponents = useCallback(async () => {
+    try {
+      const res = await window.cloudstream?.getComponentStatus?.();
+      if (res && typeof res.missingCount === 'number') {
+        setMissingComponents(res.missingCount);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshMissingComponents();
+    const unsubRuntime = window.cloudstream?.onSystemRuntimeProgress?.(() => {
+      void refreshMissingComponents();
+    });
+    const unsubBinary = window.cloudstream?.onBinarySetupProgress?.(() => {
+      void refreshMissingComponents();
+    });
+    return () => {
+      unsubRuntime?.();
+      unsubBinary?.();
+    };
+  }, [refreshMissingComponents]);
 
   // `startSession` is handed down into the detail view and must not close over
   // `session`, or it would go stale between episode switches.
@@ -507,6 +533,7 @@ export const App: React.FC = () => {
           setSelectedMedia(null);
         }}
         downloadCount={downloadQueue.filter((t) => t.state === 'Downloading' || t.state === 'Queued').length}
+        missingComponentCount={missingComponents}
       />
 
       {/* Main App View Area */}
@@ -542,18 +569,53 @@ export const App: React.FC = () => {
               switchingTo={switchingTo}
               switchError={switchError}
               subtitleContext={session.context.subtitleContext}
-              onDownloadCurrent={
-                // Downloads the release that is actually playing, which is not
-                // necessarily the top-ranked one after failover.
-                session.context.onDownloadSource && session.snapshot.activeInfoHash
-                  ? () => {
-                      const active = session.snapshot.sources.find(
-                        (s) => s.infoHash === session.snapshot.activeInfoHash
-                      );
-                      if (active) session.context.onDownloadSource?.(active);
-                    }
-                  : undefined
-              }
+              onDownloadCurrent={() => {
+                if (session.context.onDownloadSource) {
+                  const active =
+                    session.snapshot.sources.find(
+                      (s) => s.infoHash === session.snapshot.activeInfoHash
+                    ) ?? session.snapshot.sources[0];
+                  if (active) {
+                    session.context.onDownloadSource(active);
+                    return;
+                  }
+                }
+                const streamUrl = session.snapshot.handle?.streamUrl;
+                if (streamUrl) {
+                  const taskTitle =
+                    session.context.title +
+                    (session.context.episodeTitle ? ` - ${session.context.episodeTitle}` : '');
+                  const task: DownloadTask = {
+                    id: `dl-${session.snapshot.activeInfoHash || Date.now()}-${taskTitle}`.replace(
+                      /[^a-zA-Z0-9-_]/g,
+                      '_'
+                    ),
+                    parentId: session.context.progress?.mediaUrl || '',
+                    title: taskTitle,
+                    episodeNumber: session.context.subtitleContext?.episode,
+                    seasonNumber: session.context.subtitleContext?.season,
+                    posterUrl: '',
+                    targetFilePath: '',
+                    link: {
+                      source: 'Player Stream',
+                      name: taskTitle,
+                      url: streamUrl,
+                      referer: '',
+                      quality: 1080,
+                    },
+                    headers: {},
+                    bytesDownloaded: 0,
+                    totalBytes: 0,
+                    downloadSpeed: 0,
+                    etaSeconds: 0,
+                    state: DownloadState.Queued,
+                    providerName: 'Current Stream',
+                    createdTime: Date.now(),
+                    mediaUrl: session.context.progress?.mediaUrl || streamUrl,
+                  };
+                  void handleEnqueueDownload(task);
+                }
+              }}
               onSelectEpisode={
                 session.context.onRequestEpisode
                   ? (episode) => handleSwitchEpisode(episode)
@@ -629,16 +691,50 @@ export const App: React.FC = () => {
                 download button and no way past a source that would not play —
                 the more considered action giving the less capable result.
               */
-              onDownloadCurrent={
-                playback.sources
-                  ? () => {
-                      const current = playback.sources!.list.find(
-                        (source) => source.infoHash === playback.sources!.activeInfoHash
-                      );
-                      if (current) playback.sources!.onDownload(current);
-                    }
-                  : undefined
-              }
+              onDownloadCurrent={() => {
+                if (playback.sources) {
+                  const current =
+                    playback.sources.list.find(
+                      (source) => source.infoHash === playback.sources!.activeInfoHash
+                    ) ?? playback.sources.list[0];
+                  if (current) {
+                    playback.sources.onDownload(current);
+                    return;
+                  }
+                }
+                if (playback.streamUrl) {
+                  const taskTitle =
+                    playback.title +
+                    (playback.episodeTitle ? ` - ${playback.episodeTitle}` : '');
+                  const task: DownloadTask = {
+                    id: `dl-${playback.infoHash || Date.now()}-${taskTitle}`.replace(
+                      /[^a-zA-Z0-9-_]/g,
+                      '_'
+                    ),
+                    parentId: playback.progress?.mediaUrl || '',
+                    title: taskTitle,
+                    posterUrl: '',
+                    targetFilePath: '',
+                    link: {
+                      source: 'Player Stream',
+                      name: taskTitle,
+                      url: playback.streamUrl,
+                      referer: '',
+                      quality: 1080,
+                    },
+                    headers: {},
+                    bytesDownloaded: 0,
+                    totalBytes: 0,
+                    downloadSpeed: 0,
+                    etaSeconds: 0,
+                    state: DownloadState.Queued,
+                    providerName: 'Current Stream',
+                    createdTime: Date.now(),
+                    mediaUrl: playback.progress?.mediaUrl || playback.streamUrl,
+                  };
+                  void handleEnqueueDownload(task);
+                }
+              }}
               sourceSession={
                 playback.sources
                   ? {
@@ -744,7 +840,7 @@ export const App: React.FC = () => {
               )}
               {activeTab === 'extensions' && (
                 <ErrorBoundary fallbackTitle="Error loading Extensions Manager">
-                  <ExtensionManagerUI />
+                  <ExtensionsScreen />
                 </ErrorBoundary>
               )}
               {activeTab === 'settings' && (

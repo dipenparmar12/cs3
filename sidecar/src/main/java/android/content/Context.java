@@ -49,7 +49,12 @@ public class Context {
      * {@code load(Context)} invoke fails on an argument type mismatch.
      */
     public static Context cs3CreateScoped(String pluginId, String scopedDir) {
-        return new Context(pluginId, Paths.get(scopedDir, sanitize(pluginId)));
+        // An AppCompatActivity subclass rather than a bare Context, because the
+        // corpus casts to one as the first statement of `load()` and drops every
+        // provider when that fails. See PluginHostContext for the measurement
+        // and for what is and is not conceded by it. Still a Context, so the
+        // reflective `load(Context)` invoke resolves unchanged.
+        return new PluginHostContext(pluginId, Paths.get(scopedDir, sanitize(pluginId)));
     }
 
     private static String sanitize(String id) {
@@ -111,8 +116,23 @@ public class Context {
         throw new UnsupportedAndroidApiException("android.content.Context.getSystemService(" + name + ")");
     }
 
-    public Object getResources() {
-        throw new UnsupportedAndroidApiException("android.content.Context.getResources");
+    /**
+     * Returns the real {@link android.content.res.Resources} type, not `Object`.
+     *
+     * Exactly the descriptor bug fixed below for {@code getPackageManager}, and
+     * it survived here because nothing in the corpus reached it until the
+     * androidx types landed and extensions started getting far enough into
+     * {@code load()} to ask. An extension compiled against Android calls
+     * {@code getResources()Landroid/content/res/Resources;}; a method returning
+     * {@code Object} is a different method to the JVM and fails at the call site
+     * with {@code NoSuchMethodError}, not with the {@code Resources} stub's own
+     * message.
+     *
+     * The instance still throws on every accessor, which is the honest answer —
+     * see {@link android.content.res.Resources}.
+     */
+    public android.content.res.Resources getResources() {
+        return new android.content.res.Resources();
     }
 
     public Object getAssets() {

@@ -190,11 +190,93 @@ class SidecarTest {
     @Test
     void unsupportedAndroidApiNamesTheApiItRefused() {
         var e = assertThrows(android.content.UnsupportedAndroidApiException.class,
-                () -> android.content.Context.cs3CreateScoped("p", "/tmp").getResources());
+                () -> android.content.Context.cs3CreateScoped("p", "/tmp").getSystemService("audio"));
 
         // AC-D5: the message must identify the API, not just fail.
-        assertTrue(e.getMessage().contains("android.content.Context.getResources"));
-        assertEquals("android.content.Context.getResources", e.api());
+        assertTrue(e.getMessage().contains("android.content.Context.getSystemService"));
+        assertEquals("android.content.Context.getSystemService(audio)", e.api());
+    }
+
+    /**
+     * {@code getResources} returns the declared type and refuses on use.
+     *
+     * It used to throw immediately, and this test asserted that — but the
+     * signature was {@code ()Ljava/lang/Object;}, which is a *different method*
+     * to the JVM than the {@code ()Landroid/content/res/Resources;} extensions
+     * are compiled against. The refusal was never reached: the call site failed
+     * with {@code NoSuchMethodError} first, naming nothing. Returning the real
+     * type is what makes the call link; the refusal moves to the accessor, where
+     * it can finally be seen.
+     */
+    @Test
+    void getResourcesLinksAndRefusesOnUse() {
+        android.content.res.Resources resources =
+                android.content.Context.cs3CreateScoped("p", "/tmp").getResources();
+        assertNotNull(resources);
+
+        var e = assertThrows(android.content.UnsupportedAndroidApiException.class,
+                () -> resources.getString(1));
+        assertTrue(e.getMessage().contains("Resources.getString"));
+
+        // Android's documented answer for "no such resource", and truthful here.
+        assertEquals(0, resources.getIdentifier("x", "id", "pkg"));
+    }
+
+    /**
+     * The Context handed to a plugin is an {@code AppCompatActivity}.
+     *
+     * 25 archives in the corpus open {@code load()} with
+     * {@code context as AppCompatActivity} and lost every provider when that
+     * cast failed. It must keep succeeding — and the storage scope must survive
+     * the longer constructor chain, which is the part a careless change breaks
+     * silently.
+     */
+    @Test
+    void pluginContextSatisfiesTheAppCompatActivityCast(@TempDir Path dir) {
+        android.content.Context context =
+                android.content.Context.cs3CreateScoped("plugin.cast", dir.toString());
+
+        assertInstanceOf(androidx.appcompat.app.AppCompatActivity.class, context);
+
+        context.getSharedPreferences("s", 0).edit().putString("k", "v").apply();
+        android.content.Context reopened =
+                android.content.Context.cs3CreateScoped("plugin.cast", dir.toString());
+        assertEquals("v", reopened.getSharedPreferences("s", 0).getString("k", null));
+
+        // The activity surface itself still refuses — nothing is faked to make
+        // the cast work beyond the type identity.
+        assertThrows(android.content.UnsupportedAndroidApiException.class,
+                () -> ((androidx.appcompat.app.AppCompatActivity) context).getSupportFragmentManager());
+    }
+
+    /**
+     * {@code android.net.Uri} parses leniently and never throws.
+     *
+     * The inputs below are the ones {@code java.net.URI} rejects — a space, a
+     * pipe, a stray percent — and providers produce them routinely. Delegating
+     * to the validating parser would turn "untidy URL", which Android tolerates,
+     * into a hard failure mid-scrape.
+     */
+    @Test
+    void uriParsesLenientlyAndReadsQueryParameters() {
+        var uri = android.net.Uri.parse("https://host.example:8443/a/b%20c?id=42&q=one+two#frag");
+        assertEquals("https", uri.getScheme());
+        assertEquals("host.example", uri.getHost());
+        assertEquals(8443, uri.getPort());
+        assertEquals("42", uri.getQueryParameter("id"));
+        // getQueryParameter converts '+' to a space; Uri.decode deliberately does not.
+        assertEquals("one two", uri.getQueryParameter("q"));
+        assertEquals("frag", uri.getFragment());
+        assertEquals("b c", uri.getLastPathSegment());
+
+        for (String hostile : new String[] { "not a url", "http://h/p|q", "%%%", "" }) {
+            assertNotNull(android.net.Uri.parse(hostile).toString(), hostile);
+        }
+
+        assertEquals(
+                "https://h/p?a=1&b=2",
+                android.net.Uri.parse("https://h/p?a=1").buildUpon()
+                        .appendQueryParameter("b", "2").build().toString());
     }
 
     // --- class loader isolation ---------------------------------------------

@@ -8,6 +8,7 @@ import { PluginCompatibilityAnalyzer } from './pluginAnalyzer';
 import { fetchBuffer, fetchJson } from './torrent/http';
 import type { DatastoreManager } from './datastore';
 import { SidecarSupervisor } from './cs3/sidecarSupervisor';
+import { OFFICIAL_REPOSITORIES, type OfficialRepository } from './officialRepositories';
 
 /**
  * CloudStream extension (`.cs3`) repository and install management.
@@ -89,8 +90,26 @@ export interface ProviderTreeProvider {
   name: string;
   lang?: string;
   supportedTypes: string[];
-  /** False when switched off in the extensions screen. */
+  /** False when this provider itself is switched off. */
   enabled: boolean;
+  /**
+   * False when something *above* it is switched off — its extension or its
+   * repository — while its own switch is still on.
+   *
+   * Kept separate from `enabled` because collapsing the two loses the
+   * information the user needs to fix it. A provider greyed out because its
+   * repository is off must not look like one the user turned off individually:
+   * clicking its own toggle would appear to do nothing, since the ancestor gate
+   * still wins. The UI shows the reason instead.
+   */
+  effectivelyEnabled: boolean;
+  /** Where this provider came from, so a result can be traced to its source. */
+  extensionInternalName: string;
+  extensionName: string;
+  repositoryId: string;
+  repositoryName: string;
+  /** Whether the provider declares upstream's NSFW `TvType`. */
+  adult: boolean;
 }
 
 export interface ProviderTreeExtension {
@@ -99,6 +118,22 @@ export interface ProviderTreeExtension {
   name: string;
   language?: string;
   providers: ProviderTreeProvider[];
+  /** False when the user switched this extension off. Archives are kept. */
+  enabled: boolean;
+  /** False when its repository is switched off, whatever its own state. */
+  effectivelyEnabled: boolean;
+  /** Provenance — who wrote it, what version is on disk, where it came from. */
+  version?: number;
+  authors?: string[];
+  description?: string;
+  iconUrl?: string;
+  fileSize?: number;
+  repositoryId: string;
+  repositoryName: string;
+  /** Union of the content types its providers declare, for tag filtering. */
+  tvTypes: string[];
+  /** How many of its providers are answering right now. */
+  enabledProviderCount: number;
   /**
    * Why this extension offers nothing to select, when it offers nothing.
    *
@@ -117,6 +152,29 @@ export interface ProviderTreeRepository {
   url: string;
   name: string;
   extensions: ProviderTreeExtension[];
+  /** False when the user switched the whole repository off. Archives are kept. */
+  enabled: boolean;
+  /**
+   * True when this is one of the repositories installed on first launch.
+   *
+   * Surfaced so the UI can label it rather than hide it. A default the user
+   * cannot see the provenance of is a default they cannot make an informed
+   * decision about, and every one of these is removable.
+   */
+  bundled: boolean;
+  /** Present when the catalogue knows this repository; absent for sideloads. */
+  description?: string;
+  category?: string;
+  iconUrl?: string;
+  /** Whether the catalogue verified this URL returns a document. */
+  verified?: boolean;
+  /** The project page, when the stored URL is a raw document link. */
+  homepageUrl?: string;
+  extensionCount: number;
+  providerCount: number;
+  enabledProviderCount: number;
+  /** Union of the content types everything under it declares. */
+  tvTypes: string[];
 }
 
 /** Repositories are keyed by URL; a sideloaded archive has none. */
@@ -144,7 +202,56 @@ function repositoryLabel(url: string): string {
   }
 }
 
+/**
+ * The catalogue entry a stored repository URL came from, if any.
+ *
+ * Matching is not a plain equality check because the two ends hold different
+ * URLs by design: the catalogue stores a project page
+ * (`https://github.com/owner/repo`) while an install records whichever raw
+ * document actually resolved (`.../builds/repo.json`). Comparing them directly
+ * finds nothing, which is what left every repository in the tree labelled with a
+ * bare hostname and no provenance at all.
+ *
+ * Both sides are therefore normalised through the same `owner/repo` reduction
+ * `repositoryLabel` uses, with an exact match on either URL tried first.
+ */
+function findOfficialRepository(repoUrl: string): OfficialRepository | undefined {
+  if (!repoUrl) return undefined;
+  const exact = OFFICIAL_REPOSITORIES.find(
+    (repo) => repo.rawRepoUrl === repoUrl || repo.url === repoUrl
+  );
+  if (exact) return exact;
+
+  const wanted = repositoryLabel(repoUrl).toLowerCase();
+  return OFFICIAL_REPOSITORIES.find(
+    (repo) =>
+      repositoryLabel(repo.rawRepoUrl).toLowerCase() === wanted ||
+      repositoryLabel(repo.url).toLowerCase() === wanted
+  );
+}
+
 const SETTINGS_KEY_DISABLED_PROVIDERS = 'cs3_disabled_providers';
+/**
+ * Repositories and extensions the user has switched off.
+ *
+ * Switching off is deliberately **not** uninstalling, and the two are separate
+ * because they answer different questions. Uninstalling a bundled repository
+ * used to be the only way to silence it, and it did not even do that: it dropped
+ * the URL from `installedRepoUrls` and left every extension it had installed in
+ * place, still loaded, still registering providers, still answering searches. A
+ * user who turned off a default repository watched it keep producing results.
+ *
+ * Disabling silences the whole subtree immediately and keeps the archives, so
+ * turning it back on costs nothing. Removing still uninstalls — and now cascades
+ * to the extensions the repository brought with it, which is what makes the
+ * button mean what it says.
+ *
+ * Keyed by repository id (its URL) and by extension `internalName`, matching the
+ * identities the tree already exposes, so a stored decision survives a
+ * reinstall of the same extension.
+ */
+const SETTINGS_KEY_DISABLED_REPOSITORIES = 'cs3_disabled_repositories';
+const SETTINGS_KEY_DISABLED_EXTENSIONS = 'cs3_disabled_extensions';
 /** Shared with `BootstrapService`; both read the one user decision. */
 const SETTINGS_KEY_ADULT_ENABLED = 'cs3_adult_content_enabled';
 
@@ -595,12 +702,46 @@ export class PluginManager {
     return [...this.installedRepoUrls];
   }
 
-  public removeRepository(repoUrl: string): void {
-    this.installedRepoUrls.delete(repoUrl);
-    for (const candidate of rawDocumentCandidates(repoUrl)) {
-      this.installedRepoUrls.delete(candidate);
+  /**
+   * Removes a repository *and* the extensions it installed.
+   *
+   * The cascade is the whole point. This used to delete the URL and stop, which
+   * left every archive the repository had installed on disk, loaded in the
+   * sidecar, and answering searches — so "remove" removed a row from a list and
+   * changed nothing a user could observe. That was the concrete shape of "I
+   * cannot turn off the default repositories": the button reported success and
+   * the providers kept working.
+   *
+   * Returns the extensions it uninstalled so the caller can say what actually
+   * happened rather than claiming a bare success.
+   *
+   * To silence a repository without losing its archives, use
+   * {@link setRepositoryEnabled} — that is the reversible operation, and it is
+   * the one the UI offers first.
+   */
+  public removeRepository(repoUrl: string): string[] {
+    const urls = new Set<string>([repoUrl, ...rawDocumentCandidates(repoUrl)]);
+    for (const url of urls) this.installedRepoUrls.delete(url);
+
+    const removed: string[] = [];
+    for (const record of [...this.installedPlugins.values()]) {
+      const origin = record.meta?.repositoryUrl;
+      if (origin && urls.has(origin) && this.uninstallPlugin(record.internalName)) {
+        removed.push(record.internalName);
+      }
     }
+
+    // A repository that is gone cannot stay in the disabled set: re-adding it
+    // later would otherwise arrive silently switched off, with nothing on
+    // screen explaining why none of its providers answer.
+    if (this.getDisabledRepositories().some((id) => urls.has(id))) {
+      this.setRepositoriesEnabled([...urls], true);
+    }
+
+    // `uninstallPlugin` persists per plugin; this covers the URL removal when
+    // the repository had no installed extensions at all.
     this.persist();
+    return removed;
   }
 
   // --- plugin install ------------------------------------------------------
@@ -613,6 +754,49 @@ export class PluginManager {
    * archive is written to a temp path and atomically renamed so an interrupted
    * download can never leave a loadable partial plugin.
    */
+  private installProgressListeners = new Set<(progress: {
+    internalName: string;
+    name: string;
+    step: 'downloading' | 'verifying' | 'analyzing' | 'complete' | 'error';
+    downloadedBytes?: number;
+    totalBytes?: number;
+    percent: number;
+    message?: string;
+  }) => void>();
+
+  public onInstallProgress(
+    listener: (progress: {
+      internalName: string;
+      name: string;
+      step: 'downloading' | 'verifying' | 'analyzing' | 'complete' | 'error';
+      downloadedBytes?: number;
+      totalBytes?: number;
+      percent: number;
+      message?: string;
+    }) => void
+  ): () => void {
+    this.installProgressListeners.add(listener);
+    return () => this.installProgressListeners.delete(listener);
+  }
+
+  private notifyInstallProgress(data: {
+    internalName: string;
+    name: string;
+    step: 'downloading' | 'verifying' | 'analyzing' | 'complete' | 'error';
+    downloadedBytes?: number;
+    totalBytes?: number;
+    percent: number;
+    message?: string;
+  }): void {
+    for (const listener of this.installProgressListeners) {
+      try {
+        listener(data);
+      } catch (err) {
+        console.warn('[PluginManager] Install progress error:', err);
+      }
+    }
+  }
+
   public async installPlugin(
     plugin: SitePlugin,
     repositoryUrl?: string
@@ -626,12 +810,50 @@ export class PluginManager {
     try {
       fs.mkdirSync(path.dirname(target), { recursive: true });
 
-      const buffer = await fetchBuffer(plugin.url, { timeoutMs: 60_000 });
+      this.notifyInstallProgress({
+        internalName: plugin.internalName,
+        name: plugin.name,
+        step: 'downloading',
+        percent: 5,
+        message: `Downloading ${plugin.name}...`,
+      });
+
+      const buffer = await fetchBuffer(plugin.url, { timeoutMs: 60_000 }, (downloaded, total, percent) => {
+        const sizeStr =
+          total > 0
+            ? ` (${(downloaded / 1024).toFixed(0)} KB / ${(total / 1024).toFixed(0)} KB)`
+            : '';
+        this.notifyInstallProgress({
+          internalName: plugin.internalName,
+          name: plugin.name,
+          step: 'downloading',
+          downloadedBytes: downloaded,
+          totalBytes: total,
+          percent,
+          message: `Downloading ${plugin.name}${sizeStr}... ${percent}%`,
+        });
+      });
+
+      this.notifyInstallProgress({
+        internalName: plugin.internalName,
+        name: plugin.name,
+        step: 'verifying',
+        percent: 85,
+        message: `Verifying package integrity...`,
+      });
+
       const digest = crypto.createHash('sha256').update(buffer).digest('hex');
 
       if (plugin.fileHash) {
         const expected = plugin.fileHash.replace(/^sha256-/i, '').toLowerCase();
         if (expected !== digest) {
+          this.notifyInstallProgress({
+            internalName: plugin.internalName,
+            name: plugin.name,
+            step: 'error',
+            percent: 0,
+            message: `SHA-256 mismatch`,
+          });
           return {
             ok: false,
             message: `SHA-256 mismatch — the download does not match the hash the repository published. Install aborted.`,
@@ -684,6 +906,14 @@ export class PluginManager {
         console.warn(`[pluginManager] Could not auto-load providers for ${plugin.internalName}:`, err);
       }
 
+      this.notifyInstallProgress({
+        internalName: plugin.internalName,
+        name: plugin.name,
+        step: 'complete',
+        percent: 100,
+        message: `${plugin.name} installed successfully.`,
+      });
+
       return {
         ok: true,
         report,
@@ -692,6 +922,14 @@ export class PluginManager {
           : `${plugin.name} installed and verified. The extension runtime is unavailable, so it could not be analysed.`,
       };
     } catch (error) {
+      this.notifyInstallProgress({
+        internalName: plugin.internalName,
+        name: plugin.name,
+        step: 'error',
+        percent: 0,
+        message: `Installation failed`,
+      });
+
       try {
         if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
       } catch {
@@ -715,6 +953,13 @@ export class PluginManager {
     }
     this.installedPlugins.delete(internalName);
     this.persist();
+
+    // An uninstalled extension must not keep a stored "disabled" decision.
+    // Reinstalling it later would otherwise bring it back silently switched
+    // off, showing zero providers with nothing on screen to explain it.
+    if (this.getDisabledExtensions().includes(internalName)) {
+      this.setExtensionsEnabled([internalName], true);
+    }
 
     // Clean up provider registrations for uninstalled extension
     this.providersLoaded = false;
@@ -870,6 +1115,9 @@ export class PluginManager {
    */
   public getProviderTree(): ProviderTreeRepository[] {
     const disabled = new Set(this.getDisabledProviders());
+    const disabledExtensions = new Set(this.getDisabledExtensions());
+    const disabledRepositories = new Set(this.getDisabledRepositories());
+    const allowAdult = this.adultAllowed();
 
     const byExtension = new Map<string, ExtensionProvider[]>();
     for (const provider of this.providers.values()) {
@@ -885,20 +1133,62 @@ export class PluginManager {
       const repoId = repoUrl || SIDELOADED_REPOSITORY_ID;
       let repo = byRepo.get(repoId);
       if (!repo) {
-        repo = { id: repoId, url: repoUrl, name: repositoryLabel(repoUrl), extensions: [] };
+        // The catalogue is what turns a bare URL into something a user can
+        // judge — who publishes it, what it covers, whether the link was ever
+        // confirmed to resolve. A sideloaded archive has no entry and gets
+        // none of it, which is itself worth showing.
+        const catalogued = findOfficialRepository(repoUrl);
+        repo = {
+          id: repoId,
+          url: repoUrl,
+          name: catalogued?.name ?? repositoryLabel(repoUrl),
+          extensions: [],
+          enabled: !disabledRepositories.has(repoId),
+          bundled: catalogued?.bundled === true,
+          description: catalogued?.description,
+          category: catalogued?.category,
+          iconUrl: catalogued?.iconUrl,
+          verified: catalogued?.verified,
+          homepageUrl: catalogued?.url,
+          extensionCount: 0,
+          providerCount: 0,
+          enabledProviderCount: 0,
+          tvTypes: [],
+        };
         byRepo.set(repoId, repo);
       }
 
+      const extensionEnabled = !disabledExtensions.has(record.internalName);
+      const extensionEffective = extensionEnabled && repo.enabled;
+
       const providers: ProviderTreeProvider[] = (byExtension.get(record.internalName) ?? []).map(
-        (provider) => ({
-          id: provider.name,
-          name: provider.name,
-          lang: provider.lang,
-          supportedTypes: provider.supportedTypes,
-          enabled: !disabled.has(provider.name),
-        })
+        (provider) => {
+          const ownEnabled = !disabled.has(provider.name);
+          const adult = isAdultProvider(provider);
+          return {
+            id: provider.name,
+            name: provider.name,
+            lang: provider.lang,
+            supportedTypes: provider.supportedTypes,
+            enabled: ownEnabled,
+            // Mirrors `enabledProviderNames` exactly, including the adult gate.
+            // If these two ever disagree the screen is lying about what a
+            // search will ask, which is the failure this whole tree exists to
+            // prevent.
+            effectivelyEnabled: ownEnabled && extensionEffective && (allowAdult || !adult),
+            extensionInternalName: record.internalName,
+            extensionName: record.meta?.name ?? record.internalName,
+            repositoryId: repoId,
+            repositoryName: repo.name,
+            adult,
+          };
+        }
       );
       providers.sort((a, b) => a.name.localeCompare(b.name));
+
+      const tvTypes = [
+        ...new Set(providers.flatMap((provider) => provider.supportedTypes)),
+      ].sort();
 
       repo.extensions.push({
         id: record.internalName,
@@ -906,6 +1196,17 @@ export class PluginManager {
         name: record.meta?.name ?? record.internalName,
         language: record.meta?.language,
         providers,
+        enabled: extensionEnabled,
+        effectivelyEnabled: extensionEffective,
+        version: record.version ?? record.meta?.version,
+        authors: record.meta?.authors,
+        description: record.meta?.description,
+        iconUrl: record.meta?.iconUrl,
+        fileSize: record.meta?.fileSize,
+        repositoryId: repoId,
+        repositoryName: repo.name,
+        tvTypes,
+        enabledProviderCount: providers.filter((provider) => provider.effectivelyEnabled).length,
         ...(providers.length === 0
           ? { unavailableReason: this.explainNoProviders(record.internalName) }
           : {}),
@@ -915,6 +1216,13 @@ export class PluginManager {
     const repositories = [...byRepo.values()];
     for (const repo of repositories) {
       repo.extensions.sort((a, b) => a.name.localeCompare(b.name));
+      repo.extensionCount = repo.extensions.length;
+      repo.providerCount = repo.extensions.reduce((n, ext) => n + ext.providers.length, 0);
+      repo.enabledProviderCount = repo.extensions.reduce(
+        (n, ext) => n + ext.enabledProviderCount,
+        0
+      );
+      repo.tvTypes = [...new Set(repo.extensions.flatMap((ext) => ext.tvTypes))].sort();
     }
     repositories.sort((a, b) => a.name.localeCompare(b.name));
     return repositories;
@@ -971,10 +1279,16 @@ export class PluginManager {
             failureKind: 'SIDECAR_UNAVAILABLE',
           });
         }
-        // Marked loaded so the tree stops claiming the load has not happened
-        // yet; a retry still comes from any path that resets the flag.
-        this.providersLoaded = true;
+        // Leave providersLoaded false so retry occurs once runtime is ready
+        this.providersLoaded = false;
         return;
+      }
+
+      // Clear any transient sidecar unavailable reports from prior cold starts
+      for (const [name, report] of this.runtimeReports.entries()) {
+        if (report.failureKind === 'SIDECAR_UNAVAILABLE') {
+          this.runtimeReports.delete(name);
+        }
       }
 
       // Recomputed from scratch each pass: an uninstall can resolve a clash,
@@ -1001,6 +1315,9 @@ export class PluginManager {
           });
           continue;
         }
+
+        // Successfully loaded plugin into sidecar; remove any old failure report
+        this.runtimeReports.delete(record.internalName);
 
         const result = response.result ?? {};
         const registered = Array.isArray(result.providers) ? result.providers : [];
@@ -1074,20 +1391,90 @@ export class PluginManager {
     return this.datastore.getBool(SETTINGS_KEY_ADULT_ENABLED, false);
   }
 
+  /**
+   * Every gate, applied in one place.
+   *
+   * A provider answers only when nothing above it is switched off: not the
+   * provider, not the extension that registered it, not the repository that
+   * supplied that extension — and the adult gate on top. Search, the scope
+   * picker, source discovery, playback and downloads all funnel through here, so
+   * a single decision covers all of them; enforcing the cascade at each call
+   * site would be five places to forget it.
+   */
   private enabledProviderNames(): string[] {
-    const disabled = new Set(
-      this.datastore.getObject<string[]>(SETTINGS_KEY_DISABLED_PROVIDERS, []) ?? []
-    );
+    const disabled = new Set(this.getDisabledProviders());
+    const disabledExtensions = new Set(this.getDisabledExtensions());
+    const disabledRepositories = new Set(this.getDisabledRepositories());
     const allowAdult = this.adultAllowed();
 
     return [...this.providers.values()]
       .filter((provider) => !disabled.has(provider.name))
+      .filter((provider) => !disabledExtensions.has(provider.pluginInternalName))
+      .filter((provider) => !disabledRepositories.has(this.repositoryIdOf(provider.pluginInternalName)))
       .filter((provider) => allowAdult || !isAdultProvider(provider))
       .map((provider) => provider.name);
   }
 
+  /**
+   * The repository an extension came from, as the id the tree uses.
+   *
+   * A sideloaded archive has no repository URL and shares one synthetic id with
+   * every other sideloaded archive, which is correct: they are one group in the
+   * tree and the user switches them as one.
+   */
+  private repositoryIdOf(internalName: string): string {
+    const record = this.installedPlugins.get(internalName);
+    return record?.meta?.repositoryUrl || SIDELOADED_REPOSITORY_ID;
+  }
+
   public getDisabledProviders(): string[] {
     return this.datastore.getObject<string[]>(SETTINGS_KEY_DISABLED_PROVIDERS, []) ?? [];
+  }
+
+  public getDisabledRepositories(): string[] {
+    return this.datastore.getObject<string[]>(SETTINGS_KEY_DISABLED_REPOSITORIES, []) ?? [];
+  }
+
+  public getDisabledExtensions(): string[] {
+    return this.datastore.getObject<string[]>(SETTINGS_KEY_DISABLED_EXTENSIONS, []) ?? [];
+  }
+
+  /**
+   * Switches a whole repository on or off without touching its files.
+   *
+   * Returns the new disabled-repository list so the renderer re-renders from
+   * what was actually stored rather than from what it assumed — the same shape
+   * `setProviderEnabled` already returns, and the reason a failed write shows up
+   * as the toggle springing back instead of as a lie on screen.
+   */
+  public setRepositoryEnabled(repositoryId: string, enabled: boolean): string[] {
+    return this.setRepositoriesEnabled([repositoryId], enabled);
+  }
+
+  public setRepositoriesEnabled(repositoryIds: string[], enabled: boolean): string[] {
+    const disabled = new Set(this.getDisabledRepositories());
+    for (const id of repositoryIds) {
+      if (enabled) disabled.delete(id);
+      else disabled.add(id);
+    }
+    const next = [...disabled];
+    this.datastore.setObject(SETTINGS_KEY_DISABLED_REPOSITORIES, next);
+    return next;
+  }
+
+  public setExtensionEnabled(internalName: string, enabled: boolean): string[] {
+    return this.setExtensionsEnabled([internalName], enabled);
+  }
+
+  public setExtensionsEnabled(internalNames: string[], enabled: boolean): string[] {
+    const disabled = new Set(this.getDisabledExtensions());
+    for (const name of internalNames) {
+      if (enabled) disabled.delete(name);
+      else disabled.add(name);
+    }
+    const next = [...disabled];
+    this.datastore.setObject(SETTINGS_KEY_DISABLED_EXTENSIONS, next);
+    return next;
   }
 
   public setProviderEnabled(name: string, enabled: boolean): string[] {
@@ -1107,7 +1494,11 @@ export class PluginManager {
   }
 
   /** Public entry point for loading providers, used by the extension manager. */
-  public async loadProviders(): Promise<void> {
+  public async loadProviders(force = false): Promise<void> {
+    if (force || this.providers.size === 0) {
+      this.providersLoaded = false;
+      this.providersLoading = null;
+    }
     await this.ensureProvidersLoaded();
   }
 

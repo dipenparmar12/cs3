@@ -175,7 +175,7 @@ public final class Main {
      * keeps a deliberate {@code RuntimeException("could not parse the page")}
      * as the headline while unwrapping the wrappers that have nothing to say.
      */
-    private static String describe(Throwable t) {
+    static String describe(Throwable t) {
         for (Throwable c = t; c != null; c = c.getCause()) {
             String message = c.getMessage();
             if (message != null && !message.isBlank()) {

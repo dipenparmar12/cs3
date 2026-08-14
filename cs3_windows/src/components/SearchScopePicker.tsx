@@ -19,7 +19,24 @@ import {
   Search,
   X,
 } from 'lucide-react';
-import type { ProviderTreeRepository } from '../types/plugin';
+import type { ProviderTreeRepository, ProviderTreeProvider } from '../types/plugin';
+
+/**
+ * Whether a provider can be offered as a search scope.
+ *
+ * `effectivelyEnabled`, not `enabled` — the two differ once a whole repository
+ * or extension is switched off in the extensions screen, and only the former
+ * matches what `PluginManager.enabledProviderNames` will actually query.
+ *
+ * Filtering on the provider's own switch alone would list a provider that the
+ * main process is going to drop, so selecting it would search nothing and report
+ * itself through `missingProviders`. That is the same class of failure as the
+ * widen-back bug this picker was rewritten to fix, arriving from the other
+ * direction: the menu must never offer a source the search cannot ask.
+ */
+function isSelectable(provider: ProviderTreeProvider): boolean {
+  return provider.effectivelyEnabled !== false && provider.enabled !== false;
+}
 
 /**
  * "Search only these sources."
@@ -226,7 +243,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     for (const repo of repositories) {
       for (const ext of repo.extensions) {
         for (const provider of ext.providers) {
-          if (provider.enabled !== false) providerNames.push(provider.name);
+          if (isSelectable(provider)) providerNames.push(provider.name);
         }
       }
     }
@@ -256,7 +273,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
 
       for (const ext of repo.extensions) {
         const extKey = `${repoKey}/ext:${ext.id ?? ext.internalName}`;
-        const active = ext.providers.filter((provider) => provider.enabled !== false);
+        const active = ext.providers.filter(isSelectable);
         const extMatches = repoMatches || ext.name.toLowerCase().includes(needle);
         repoMembers.push(...active.map((provider) => provider.name));
 

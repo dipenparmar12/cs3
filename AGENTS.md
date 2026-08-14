@@ -197,7 +197,7 @@ not a layering mistake.
 | `mediaTranscoder.ts` | ffprobe/ffmpeg audio *and* video compatibility. See the codec section below — the fix for both the "no sound" bug and undecodable HEVC. |
 | `metadataProvider.ts` | TVmaze + AniList. **Catalogue metadata only, never streams.** Its key output is the IMDb id, which indexers match on far better than free text. |
 | `cinemeta.ts` | Stremio Cinemeta metadata provider, prioritised in search. |
-| `pluginManager.ts` | `.cs3` repository discovery, plugin-list parsing (mirrors upstream `RepositoryManager.kt`), download + SHA-256 verification, Android-style install paths, then hands archives to the sidecar. |
+| `pluginManager.ts` | `.cs3` repository discovery, plugin-list parsing (mirrors upstream `RepositoryManager.kt`), download + SHA-256 verification, Android-style install paths, then hands archives to the sidecar. Also owns the enable/disable cascade — see the extensions-screen section. |
 | `pluginAnalyzer.ts` | Static compatibility classification of a plugin before it is trusted. |
 | `cs3/sidecarSupervisor.ts` | Spawns and supervises the JVM child process; line-delimited JSON-RPC over stdio; never throws on a missing/broken sidecar. |
 | `cs3/extensionUpdater.ts` | Over-the-air extension updates on a schedule, so a provider fix does not wait for an app release. |
@@ -447,6 +447,92 @@ After all five: Filmpalast, EinschaltenIn and Serienstream load, register 3 `Mai
 providers and 10 `ExtractorApi`s, and answer searches — 8 results for "Matrix", 33 for
 "Breaking Bad", 21 for "Dune", with posters, plot and year on detail load.
 
+### Community extensions: the third round (2026-08-14)
+
+Found by counting, not guessing. A user's captured sidecar log held **113 load failures**
+across a full session, and grouping them by class showed the entire tail came from **six**
+missing types — no long tail at all:
+
+| Missing type | Failures | Category |
+|---|---|---|
+| `com.lagradost.cloudstream3.utils.DataStore` | 48 | `:app` type |
+| `androidx.appcompat.app.AppCompatActivity` | 23 | androidx UI |
+| `com.lagradost.cloudstream3.network.CloudflareKiller` | 16 | `:app` type |
+| `android.net.Uri` | 16 | shim gap |
+| `androidx.fragment.app.DialogFragment` / `FragmentManager` | 10 | androidx UI |
+
+**Count the log before fixing anything.** Six classes covered 100% of it; a
+plugin-by-plugin approach would have chased dozens of symptoms with one cause each.
+
+1. **`PluginHost.call` caught `ReflectiveOperationException` but not `LinkageError`.** This
+   is the one to remember, because the class it named was never the class at fault.
+   `Class.getMethod` resolves the parameter and return types of *every* public method on the
+   class, so a provider that merely declares `override val interceptor = CloudflareKiller()`
+   threw `NoClassDefFoundError` when asked for its own **name**. It had already registered
+   successfully. `describeProvider` let the error escape and the whole plugin load aborted,
+   blaming a class the provider never called. `diffProviders` now also isolates per-provider
+   describe failures — one unlistable provider must not discard the dozen `ExtractorApi`s
+   registered beside it.
+2. **`DataStore` and `CloudflareKiller` are `:app` types**, supplied from `sidecar/bridge/`
+   like `Plugin` before them. `DataStore` had to be a faithful `object`-with-`Context`-
+   extensions reimplementation: most of its API is `inline fun … reified`, so a shipped
+   `.cs3` carries a *copy of the body* and calls `getSharedPrefs(context)` and
+   `AppUtils.parseJson` directly — a top-level function or a differently-shaped class would
+   compile here and link against nothing there. `CloudflareKiller` forwards rather than
+   bypasses; the challenge needs a WebView (doc 36 step 7) and cannot be solved by an HTTP
+   client. Both need `-opt-in=com.lagradost.cloudstream3.InternalAPI` on the Kotlin compiler.
+3. **`android.net.Uri` is implemented, not stubbed**, and does **not** delegate to
+   `java.net.URI`. Android's parser never validates; `java.net.URI` throws on spaces, `|`
+   and stray percent signs, all of which scraped URLs carry routinely. Component splitting
+   uses the RFC 3986 Appendix B expression, which is total, so parsing cannot fail. Note the
+   asymmetry Android has and this reproduces: `getQueryParameter` decodes `+` as a space and
+   `Uri.decode` does not.
+4. **The androidx UI closure exists so *providers* can link.** An extension's settings
+   screen and its scraper ship in one archive, so `View`, `ViewGroup`, `LayoutInflater`,
+   `Bundle`, `Dialog`, `DialogInterface`, `Window`, `Activity`, `Fragment`, `DialogFragment`,
+   `FragmentManager` and `FragmentActivity` all have to resolve or the scraping half is lost
+   too. They throw `UnsupportedAndroidApiException` on use, which demotes the tier rather
+   than reporting a crash.
+5. **The Context handed to a plugin is now an `AppCompatActivity`** — see
+   `android/content/PluginHostContext.java`. Supplying the *type* fixed the
+   `NoClassDefFoundError` and immediately exposed what was underneath: the dominant corpus
+   shape is not a lambda but the first statement of `load()`,
+   `activity = context as AppCompatActivity`, followed by `registerMainAPI(…)`. 25 files do
+   exactly that, and every one still lost all its providers — to `ClassCastException`
+   instead. Measured on Aniworld, which now loads and searches. The reference is almost
+   always just stored, so satisfying the cast converts a total loss into an extension that
+   scrapes and has no settings screen. Every inherited Activity method still throws; only
+   the type identity is conceded. One file in the corpus tests `is AppCompatActivity` and
+   will now take the UI branch — 25 against 1, and the failure it hits is the one that
+   branch was avoiding.
+6. **`Context.getResources` returned `Object`.** The same descriptor bug already fixed for
+   `getPackageManager`, still present and unreached until extensions got far enough into
+   `load()` to ask. `()Ljava/lang/Object;` is a different method from
+   `()Landroid/content/res/Resources;`, so the call site failed with `NoSuchMethodError`
+   before the `Resources` stub's own message could ever be seen.
+
+Also worth knowing: **`androidx/**` must be excluded from `cs3-sidecar.jar`** alongside
+`android/**`. The shared runtime loader's parent is the sidecar's own loader, so delegation
+is parent-first into it — a stray `AppCompatActivity` there wins over the copy in `runtime/`
+and then fails to link, because its supertype chain ends at the `android.content.Context`
+that *is* excluded.
+
+Measured after all six, `--repo phisher --plugins 25`: **28 providers loaded** (was 26; both
+`ShowBox` and `Jellyfin` previously died at load), 12 answering, 7 links resolved, 5 streams
+delivering bytes, and **zero** occurrences of any of the six classes in the report.
+
+Across all five repositories (`--plugins 4 --queries "matrix,one piece"`): PASS, 12 providers
+loaded, 7 answering, 3 streams with bytes, **zero** of the six classes, and **no `T4_BLOCKED`
+at all** — 10 `T1_DROPIN`, 3 `T3_DEGRADED`. `Aniworld`, `AniDB` and `MegaProvider` now load
+and search where they previously died at load; their remaining failures are the honest
+per-host kind (`Aniworld` gets a Google 403, `AniDB` times out).
+
+Still outstanding and now visible underneath: `com.lagradost.cloudstream3.syncproviders.
+providers.AniListApi$CoverImage` and `com.google.android.material.bottomsheet.
+BottomSheetDialogFragment`, both reached by Anichi during `loadLinks`. Same category as the
+above — an `:app` type and a Material Components type — and the same fix shape if they turn
+out to matter to more than one archive. **Count first.**
+
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 
 Run it before believing anything about extension health:
@@ -531,6 +617,57 @@ construction (`PluginManager.providers` is a `Map` keyed by name), which is why 
 also the scope identity, the `cs3ext://` address and the enable/disable key. Two extensions
 claiming one name is a genuine collision: the first keeps it and the loser is reported via
 `unavailableReason` instead of silently showing zero providers.
+
+### The extensions screen: `src/components/extensions/`
+
+Rebuilt 2026-08-14. It was one 2,689-line component — 25 `useState` hooks, four tabs and
+~2,000 lines of inline-styled JSX in a single function body — replaced by a container plus
+focused children (`useExtensionCatalog`, `useExtensionFilters`, `FilterBar`, `SourceTree`,
+`RepositoryCatalog`, `ExtensionCatalog`, `ProvenancePanel`, `BulkActionBar`,
+`CompatibilityReport`, `primitives`, `extensions.css`). Every feature was kept. What changed
+and why it matters:
+
+- **Disable is not uninstall, and both now work.** `removeRepository` used to delete the URL
+  and stop — the extensions it installed stayed on disk, loaded, and answering searches, so
+  "remove" changed nothing observable. That was the real shape of "I can't turn off the
+  default repositories". Removing now cascades to uninstall them and reports how many;
+  `setRepositoryEnabled` / `setExtensionEnabled` are the reversible alternative, keeping the
+  archives so re-enabling costs no downloads.
+- **The enable cascade lives in `enabledProviderNames` and nowhere else.** A provider answers
+  only when it, its extension, its repository and the adult gate all allow it. Every consumer
+  — search, scope picker, source discovery, playback, downloads — already funnels through
+  that one method, so the cascade is enforced once. `getProviderTree` recomputes the same
+  predicate as `effectivelyEnabled`; **if those two ever disagree the screen is lying about
+  what a search will ask.**
+- **`enabled` and `effectivelyEnabled` are deliberately separate** on every tree node.
+  Collapsing them loses the information the user needs: a provider greyed out because its
+  repository is off must not look like one they turned off themselves, or clicking its toggle
+  appears to do nothing. The UI shows the responsible ancestor instead.
+- **Tag filters are multi-select and derived from the data.** The old filter was a single
+  `<select>` with three hardcoded options (Movies/TV/Anime), which could not express "anime
+  or series" and silently omitted every other `TvType` — `NSFW`, `Live`, `Documentary`,
+  `AsianDrama`, `Cartoon` and the rest. Facets are now counted from what is installed, so a
+  tag with nothing behind it cannot be offered and a tag that exists cannot be hidden.
+  Semantics: **OR within a facet, AND across facets** — anything else feels broken.
+- **The Providers tab is gone.** It was a flattened re-listing of the tree's leaves with its
+  own filter and selection state, so toggling a provider in one view did not update the
+  other. Three tabs now split by *question*: what do I have (Sources), what could I add
+  (Repositories), what do the repositories offer (Extensions).
+- **Progress is real.** `onExtensionInstallProgress` existed and was ignored in favour of a
+  scripted `setTimeout` sequence — "Translating DEX bytecode to JVM…" for 250 ms whether or
+  not that was happening — which added ~500 ms of invented delay to every action.
+- **Provenance is on the row, not buried.** Every repository, extension and provider can show
+  its `repository ▸ extension ▸ provider` chain, maintainers, version, declared content
+  types, origin URL and hash. A provider row previously showed a name and a toggle, so a
+  provider that returned nothing could not be traced to whose code or whose repository.
+
+**`SearchScopePicker` filters on `effectivelyEnabled`, not `enabled`**, and must keep doing
+so. It was the one consumer outside the extensions screen that read the provider's own switch
+directly; once repository-level disabling existed, that would have offered a provider the
+main process is going to drop — selecting it searches nothing and reports itself through
+`missingProviders`. Same class of failure as the widen-back bug above, from the other
+direction. Anything new that reads the tree to decide what may be searched has the same
+obligation.
 
 ### When we cannot play it, hand it to something that can
 

@@ -286,7 +286,26 @@ export interface CloudStreamElectronAPI {
   >;
   setProviderEnabled: (name: string, enabled: boolean) => Promise<string[]>;
   setProvidersEnabled: (names: string[], enabled: boolean) => Promise<string[]>;
-  getProviderTree: () => Promise<Envelope & { tree: ProviderTreeRepository[] }>;
+  getProviderTree: () => Promise<
+    Envelope & {
+      tree: ProviderTreeRepository[];
+      disabled: string[];
+      disabledExtensions: string[];
+      disabledRepositories: string[];
+    }
+  >;
+
+  /**
+   * Switch a repository or extension off without deleting it.
+   *
+   * Distinct from `removeRepository`/`uninstallPlugin`, which delete archives.
+   * Each returns the new disabled list so the renderer re-renders from what was
+   * stored rather than from what it assumed.
+   */
+  setRepositoryEnabled: (repositoryId: string, enabled: boolean) => Promise<string[]>;
+  setRepositoriesEnabled: (repositoryIds: string[], enabled: boolean) => Promise<string[]>;
+  setExtensionEnabled: (internalName: string, enabled: boolean) => Promise<string[]>;
+  setExtensionsEnabled: (internalNames: string[], enabled: boolean) => Promise<string[]>;
 
   /** The repository → extension → provider tree, plus the current narrowing. */
   /** DNS configuration, and a reachability check against real indexer hosts. */
@@ -431,17 +450,39 @@ export interface CloudStreamElectronAPI {
   getActiveBatches: () => Promise<BatchProgress[]>;
   onBatchProgress: (callback: (progress: BatchProgress) => void) => () => void;
 
-  // Binaries
+  // Unified Components & Binaries
+  getComponentStatus: () => Promise<Envelope & {
+    allReady: boolean;
+    missingCount: number;
+    runtime: SystemRuntimeStatus;
+    binaries: { aria2: boolean; ytdlp: boolean; ffmpeg: boolean; ffprobe: boolean };
+    suites: { runtime: boolean; downloads: boolean; media: boolean };
+  }>;
   checkBinaries: () => Promise<{
     aria2: boolean;
     ytdlp: boolean;
     ffmpeg: boolean;
     ffprobe: boolean;
   }>;
+  testAllBinaries: () => Promise<{
+    aria2: { ok: boolean; version?: string; path?: string; error?: string };
+    ytdlp: { ok: boolean; version?: string; path?: string; error?: string };
+    ffmpeg: { ok: boolean; version?: string; path?: string; error?: string };
+    ffprobe: { ok: boolean; version?: string; path?: string; error?: string };
+  }>;
+  testBinary: (
+    name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe'
+  ) => Promise<{ ok: boolean; version?: string; path?: string; error?: string }>;
+  removeBinary: (
+    name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'media' | 'downloads' | 'all'
+  ) => Promise<{ ok: boolean }>;
+  setupAria2: () => Promise<{ ok: boolean; message: string }>;
+  setupYtDlp: () => Promise<{ ok: boolean; message: string }>;
+  setupAllBinaries: () => Promise<{ ok: boolean; message: string }>;
   /** Installs FFmpeg + FFprobe. No PATH or codec configuration is exposed. */
   setupFfmpeg: () => Promise<Envelope & { message: string }>;
   onBinarySetupProgress: (
-    callback: (progress: { status: string; percent: number }) => void
+    callback: (progress: { component?: string; status: string; percent: number }) => void
   ) => () => void;
   setupBinaries: () => Promise<{ success: boolean; message: string }>;
 
@@ -449,6 +490,15 @@ export interface CloudStreamElectronAPI {
   getSystemRuntimeStatus: () => Promise<Envelope & SystemRuntimeStatus>;
   provisionSystemRuntime: () => Promise<Envelope & { ready: boolean }>;
   repairSystemRuntime: () => Promise<Envelope & { ready: boolean }>;
+  testSystemRuntime: () => Promise<{
+    ok: boolean;
+    version?: string;
+    javaPath?: string;
+    sidecarPath?: string;
+    runtimeDir?: string;
+    error?: string;
+  }>;
+  cleanSystemRuntime: () => Promise<{ ok: boolean; message: string }>;
   onSystemRuntimeProgress: (
     callback: (progress: RuntimeProgress) => void
   ) => () => void;
@@ -465,8 +515,25 @@ export interface CloudStreamElectronAPI {
   ) => Promise<{ ok: boolean; message: string; report?: PluginCompatibilityReport }>;
   uninstallPlugin: (internalName: string) => Promise<boolean>;
   getInstalledRepositories: () => Promise<string[]>;
-  removeRepository: (repoUrl: string) => Promise<string[]>;
+  /**
+   * Uninstalls the repository *and* the extensions it installed, reporting
+   * both. To silence one reversibly, use `setRepositoryEnabled`.
+   */
+  removeRepository: (
+    repoUrl: string
+  ) => Promise<{ repositories: string[]; removedExtensions: string[] }>;
   getInstalledPlugins: () => Promise<SitePlugin[]>;
+  onExtensionInstallProgress: (
+    callback: (progress: {
+      internalName: string;
+      name: string;
+      step: 'downloading' | 'verifying' | 'analyzing' | 'complete' | 'error';
+      downloadedBytes?: number;
+      totalBytes?: number;
+      percent: number;
+      message?: string;
+    }) => void
+  ) => () => void;
 
   // Extension updates (over-the-air; independent of app updates)
   checkExtensionUpdates: () => Promise<Envelope & { result: UpdateCheckResult | null }>;
@@ -616,6 +683,14 @@ const api: CloudStreamElectronAPI = {
   setProvidersEnabled: (names: string[], enabled: boolean) =>
     ipcRenderer.invoke('extension:setProvidersEnabled', names, enabled),
   getProviderTree: () => ipcRenderer.invoke('extension:getProviderTree'),
+  setRepositoryEnabled: (repositoryId, enabled) =>
+    ipcRenderer.invoke('extension:setRepositoryEnabled', repositoryId, enabled),
+  setRepositoriesEnabled: (repositoryIds, enabled) =>
+    ipcRenderer.invoke('extension:setRepositoriesEnabled', repositoryIds, enabled),
+  setExtensionEnabled: (internalName, enabled) =>
+    ipcRenderer.invoke('extension:setExtensionEnabled', internalName, enabled),
+  setExtensionsEnabled: (internalNames, enabled) =>
+    ipcRenderer.invoke('extension:setExtensionsEnabled', internalNames, enabled),
   getNetworkSettings: () => ipcRenderer.invoke('network:get'),
   setNetworkSettings: (settings) => ipcRenderer.invoke('network:set', settings),
   resetNetworkSettings: () => ipcRenderer.invoke('network:reset'),
@@ -678,19 +753,32 @@ const api: CloudStreamElectronAPI = {
     return () => ipcRenderer.removeListener('download:batchProgress', listener);
   },
 
+  // Unified Components & Binaries
+  getComponentStatus: () => ipcRenderer.invoke('components:getStatus'),
   checkBinaries: () => ipcRenderer.invoke('binary:checkBinaries'),
+  testAllBinaries: () => ipcRenderer.invoke('binary:testAll'),
+  testBinary: (name) => ipcRenderer.invoke('binary:testOne', name),
+  removeBinary: (name) => ipcRenderer.invoke('binary:remove', name),
+  setupAria2: () => ipcRenderer.invoke('binary:setupAria2'),
+  setupYtDlp: () => ipcRenderer.invoke('binary:setupYtDlp'),
+  setupAllBinaries: () => ipcRenderer.invoke('binary:setupAll'),
   setupFfmpeg: () => ipcRenderer.invoke('binary:setupFfmpeg'),
   onBinarySetupProgress: (callback) => {
-    const listener = (_: unknown, progress: { status: string; percent: number }) =>
-      callback(progress);
+    const listener = (
+      _: unknown,
+      progress: { component?: string; status: string; percent: number }
+    ) => callback(progress);
     ipcRenderer.on('binary:setupProgress', listener);
     return () => ipcRenderer.removeListener('binary:setupProgress', listener);
   },
   setupBinaries: () => ipcRenderer.invoke('binary:setupBinaries'),
 
+  // Plug-and-Play Runtime Provisioner
   getSystemRuntimeStatus: () => ipcRenderer.invoke('runtime:getStatus'),
   provisionSystemRuntime: () => ipcRenderer.invoke('runtime:provision'),
   repairSystemRuntime: () => ipcRenderer.invoke('runtime:repair'),
+  testSystemRuntime: () => ipcRenderer.invoke('runtime:test'),
+  cleanSystemRuntime: () => ipcRenderer.invoke('runtime:clean'),
   onSystemRuntimeProgress: (callback) => {
     const listener = (_: unknown, progress: RuntimeProgress) => callback(progress);
     ipcRenderer.on('runtime:progress', listener);
@@ -707,6 +795,11 @@ const api: CloudStreamElectronAPI = {
   getInstalledRepositories: () => ipcRenderer.invoke('extension:getInstalledRepositories'),
   removeRepository: (repoUrl) => ipcRenderer.invoke('extension:removeRepository', repoUrl),
   getInstalledPlugins: () => ipcRenderer.invoke('extension:getInstalledPlugins'),
+  onExtensionInstallProgress: (callback) => {
+    const listener = (_: unknown, progress: any) => callback(progress);
+    ipcRenderer.on('extension:installProgress', listener);
+    return () => ipcRenderer.removeListener('extension:installProgress', listener);
+  },
 
   checkExtensionUpdates: () => ipcRenderer.invoke('extension:checkUpdates'),
   getCachedExtensionUpdates: () => ipcRenderer.invoke('extension:getCachedUpdates'),

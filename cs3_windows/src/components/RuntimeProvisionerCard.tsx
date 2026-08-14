@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Cpu, CheckCircle2, AlertCircle, RefreshCw, Download } from 'lucide-react';
+import { Cpu, CheckCircle2, AlertCircle, RefreshCw, Download, Loader2 } from 'lucide-react';
 import type { SystemRuntimeStatus, RuntimeProgress } from '../../electron/cs3/runtimeProvisioner';
 
 export const RuntimeProvisionerCard: React.FC = () => {
@@ -23,7 +23,14 @@ export const RuntimeProvisionerCard: React.FC = () => {
 
     const unsub = window.cloudstream?.onSystemRuntimeProgress?.((p) => {
       setProgress(p);
-      if (p.step === 'completed' || p.step === 'error') {
+      if (
+        p.step === 'checking' ||
+        p.step === 'downloading' ||
+        p.step === 'extracting' ||
+        p.step === 'verifying'
+      ) {
+        setIsBusy(true);
+      } else if (p.step === 'completed' || p.step === 'error') {
         setIsBusy(false);
         void fetchStatus();
       }
@@ -37,8 +44,12 @@ export const RuntimeProvisionerCard: React.FC = () => {
   const handleProvision = async () => {
     setIsBusy(true);
     setProgress({ step: 'checking', progress: 5, message: 'Preparing CloudStream Runtime...' });
-    const res = await window.cloudstream?.provisionSystemRuntime?.();
-    if (!res?.ok) {
+    try {
+      const res = await window.cloudstream?.provisionSystemRuntime?.();
+      if (!res?.ok) {
+        setIsBusy(false);
+      }
+    } catch {
       setIsBusy(false);
     }
     await fetchStatus();
@@ -47,8 +58,12 @@ export const RuntimeProvisionerCard: React.FC = () => {
   const handleRepair = async () => {
     setIsBusy(true);
     setProgress({ step: 'checking', progress: 5, message: 'Repairing CloudStream Runtime...' });
-    const res = await window.cloudstream?.repairSystemRuntime?.();
-    if (!res?.ok) {
+    try {
+      const res = await window.cloudstream?.repairSystemRuntime?.();
+      if (!res?.ok) {
+        setIsBusy(false);
+      }
+    } catch {
       setIsBusy(false);
     }
     await fetchStatus();
@@ -101,11 +116,14 @@ export const RuntimeProvisionerCard: React.FC = () => {
       {isBusy && progress && (
         <div style={{ marginBottom: '1rem', background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: '8px', padding: '0.75rem 1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.35rem' }}>
-            <span>{progress.message}</span>
-            <span>{progress.progress}%</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Loader2 size={13} className="spin" />
+              {progress.message}
+            </span>
+            <span style={{ fontWeight: 600 }}>{progress.progress}%</span>
           </div>
           <div style={{ width: '100%', height: '6px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '3px', overflow: 'hidden' }}>
-            <div style={{ width: `${progress.progress}%`, height: '100%', background: '#3b82f6', transition: 'width 0.2s ease' }} />
+            <div style={{ width: `${Math.max(5, progress.progress)}%`, height: '100%', background: '#3b82f6', transition: 'width 0.25s ease' }} />
           </div>
           {progress.error && (
             <div style={{ color: '#ef4444', fontSize: '0.8rem', marginTop: '0.35rem' }}>
@@ -115,7 +133,7 @@ export const RuntimeProvisionerCard: React.FC = () => {
         </div>
       )}
 
-      {status?.reason && !status.ready && (
+      {status?.reason && !status.ready && !isBusy && (
         <div style={{ color: '#f59e0b', fontSize: '0.85rem', marginBottom: '1rem' }}>
           {status.reason}
         </div>
@@ -127,7 +145,7 @@ export const RuntimeProvisionerCard: React.FC = () => {
           onClick={handleProvision}
           disabled={isBusy}
         >
-          <Download size={14} />
+          {isBusy ? <Loader2 size={14} className="spin" /> : <Download size={14} />}
           <span>{status?.ready ? 'Re-provision Components' : 'Install Required Components'}</span>
         </button>
 
@@ -136,7 +154,7 @@ export const RuntimeProvisionerCard: React.FC = () => {
           onClick={handleRepair}
           disabled={isBusy}
         >
-          <RefreshCw size={14} />
+          <RefreshCw size={14} className={isBusy ? 'spin' : ''} />
           <span>Repair Runtime</span>
         </button>
       </div>
