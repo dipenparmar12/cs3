@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import type { TorrentResult } from '../src/types/torrent';
 import type { ContentService, SourceQuery, StreamAttempt } from './contentService';
 import type { StreamHandle } from './torrent/torrentEngine';
+import type { SourceDiagnosis } from '../src/types/diagnostics';
 
 /**
  * Owns one "the user pressed play" interaction, from the first click to the
@@ -53,6 +54,8 @@ export interface PlaybackSnapshot {
   error?: string;
   /** Why zero sources were found, when that is the outcome. */
   emptyReason?: string;
+  /** The structured form of `emptyReason`, when the failure produced one. */
+  diagnosis?: SourceDiagnosis;
   title: string;
   episodeTitle?: string;
 }
@@ -90,6 +93,7 @@ interface Session {
   attempts: StreamAttempt[];
   error?: string;
   emptyReason?: string;
+  diagnosis?: SourceDiagnosis;
   /**
    * Bumped on every start attempt. A start that loses the race — because the
    * viewer picked a different source while the previous one was still
@@ -131,6 +135,7 @@ export class PlaybackSessionManager {
       attempts: session.attempts,
       error: session.error,
       emptyReason: session.emptyReason,
+      diagnosis: session.diagnosis,
       title: session.title,
       episodeTitle: session.episodeTitle,
     };
@@ -243,6 +248,7 @@ export class PlaybackSessionManager {
     session.searchCancelled = false;
     session.searched = 0;
     session.emptyReason = undefined;
+    session.diagnosis = undefined;
     this.emit(session);
 
     try {
@@ -272,6 +278,7 @@ export class PlaybackSessionManager {
 
       session.sources = response.sources;
       session.emptyReason = response.emptyReason;
+      session.diagnosis = response.diagnosis;
     } catch (error) {
       if (session.disposed || controller.signal.aborted) return;
       session.emptyReason = error instanceof Error ? error.message : String(error);
