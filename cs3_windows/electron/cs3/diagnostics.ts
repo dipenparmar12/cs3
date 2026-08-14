@@ -2,6 +2,9 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
+import type { FailureKind } from '../../src/types/analytics';
+import { classifyFailure, FAILURE_KIND_LABELS } from './failureTaxonomy';
+
 /**
  * A record of what went wrong, with enough context to reproduce it.
  *
@@ -21,6 +24,35 @@ import path from 'path';
  * that can run to hundreds of entries, and it has no business travelling inside
  * a user's backup alongside their watch history.
  */
+
+/** What the user was looking at when they asked for a report. */
+export interface ReportContext {
+  query?: string;
+  title?: string;
+  url?: string;
+  source?: string;
+  message?: string;
+}
+
+/**
+ * The form of a message used for grouping, not for display.
+ *
+ * Durations, byte counts and timestamps differ on every occurrence and are
+ * never what distinguishes one failure from another, so thirty identical
+ * timeouts arrived as thirty unique entries. They are flattened here.
+ *
+ * Bare integers are deliberately **not** touched: `HTTP 403` and `HTTP 404`
+ * differ by one digit and mean opposite things, and merging them would produce
+ * a shorter report that says something false.
+ */
+function groupingForm(message: string): string {
+  return message
+    .replace(/\b\d+(\.\d+)?\s?ms\b/gi, '<ms>')
+    .replace(/\b\d+(\.\d+)?\s?s\b/gi, '<s>')
+    .replace(/\b\d+(\.\d+)?\s?(B|KB|MB|GB|KiB|MiB|GiB)\b/g, '<size>')
+    .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, '<time>')
+    .replace(/0x[0-9a-f]{6,}/gi, '<addr>');
+}
 
 export type DiagnosticStage =
   | 'search'
@@ -196,6 +228,52 @@ export class DiagnosticsLog {
   }
 
   /**
+   * The records that belong to what the user is currently looking at.
+   *
+   * This is what makes a "copy this error" button possible. Without it every
+   * report is the whole log — three hundred entries covering everything that
+   * happened all session — which is a real cost: the person receiving it has to
+   * find the one failure being described, and the person sending it cannot tell
+   * whether they have just pasted their entire viewing history into a chat.
+   *
+   * Matched on any of source, url, title or query rather than all of them,
+   * because a failure is rarely tagged with everything: a search failure has a
+   * query and no url, a link failure has a url and no query, and the record
+   * that explains both is usually one of each.
+   */
+  public selectForContext(
+    context: ReportContext,
+    windowMs = 15 * 60 * 1000,
+    limit = 60
+  ): { records: DiagnosticRecord[]; matched: boolean } {
+    const since = Date.now() - windowMs;
+    const wanted = {
+      source: context.source?.toLowerCase(),
+      url: context.url,
+      title: context.title?.toLowerCase(),
+      query: context.query?.toLowerCase(),
+    };
+    const hasCriteria = Object.values(wanted).some(Boolean);
+
+    if (hasCriteria) {
+      const matches = this.records.filter((record) => {
+        if (record.at < since) return false;
+        if (wanted.source && record.source?.toLowerCase() === wanted.source) return true;
+        if (wanted.url && record.url === wanted.url) return true;
+        if (wanted.title && record.title?.toLowerCase() === wanted.title) return true;
+        if (wanted.query && record.query?.toLowerCase() === wanted.query) return true;
+        return false;
+      });
+      if (matches.length > 0) return { records: matches.slice(0, limit), matched: true };
+    }
+
+    // Nothing matched. Recent history is still far more useful than an empty
+    // report, and the caller is told it is a fallback so the report can say so
+    // rather than implying these entries are about the failure on screen.
+    return { records: this.records.slice(0, 20), matched: false };
+  }
+
+  /**
    * A plain-text report, for pasting into an issue.
    *
    * Deliberately text rather than JSON: it is going into a chat message or a
@@ -203,10 +281,23 @@ export class DiagnosticsLog {
    * does not have this codebase open. The environment header goes first because
    * "which Java" and "which app version" are the first two questions anyone
    * asks and the two the reporter is least likely to know.
+   *
+   * `options.context` is folded in here rather than prepended by the caller.
+   * The button used to paste its on-screen context above this text, which
+   * restated the same provider, url and message that the log had already
+   * recorded — deduplicating the body and then duplicating its most important
+   * line above it.
    */
-  public report(records: DiagnosticRecord[], environment: Record<string, string>): string {
+  public report(
+    records: DiagnosticRecord[],
+    environment: Record<string, string>,
+    options: { context?: ReportContext; mode?: 'current' | 'full'; contextMatched?: boolean } = {}
+  ): string {
+    const mode = options.mode ?? 'full';
     const lines: string[] = [
-      'CloudStream Desktop — Player Debug & Diagnostics Report',
+      mode === 'current'
+        ? 'CloudStream Desktop — Diagnostics (this failure)'
+        : 'CloudStream Desktop — Diagnostics (full session)',
       `Generated: ${new Date().toISOString()}`,
       '',
       'Environment',
@@ -214,6 +305,21 @@ export class DiagnosticsLog {
 
     for (const [key, value] of Object.entries(environment)) {
       lines.push(`  ${key}: ${value}`);
+    }
+
+    const context = options.context;
+    if (context && Object.values(context).some(Boolean)) {
+      lines.push('', 'What was on screen');
+      if (context.query) lines.push(`  query:    ${context.query}`);
+      if (context.title) lines.push(`  title:    ${context.title}`);
+      if (context.source) lines.push(`  source:   ${context.source}`);
+      if (context.url) lines.push(`  url:      ${context.url}`);
+      if (context.message) lines.push(`  message:  ${context.message}`);
+      if (options.contextMatched === false) {
+        lines.push(
+          '  note:     no log entries matched this exactly, so recent history follows instead.'
+        );
+      }
     }
 
     // Deduplicate records sharing identical level, stage, source, url, message, and detail
@@ -235,7 +341,9 @@ export class DiagnosticsLog {
       if (rec.source) uniqueProviders.add(rec.source);
       if (rec.message) uniqueMessages.add(rec.message);
 
-      const key = `${rec.level}|${rec.stage}|${rec.source ?? ''}|${rec.url ?? ''}|${rec.message}|${rec.detail ?? ''}`;
+      const key =
+        `${rec.level}|${rec.stage}|${rec.source ?? ''}|${rec.url ?? ''}` +
+        `|${groupingForm(rec.message)}|${groupingForm(rec.detail ?? '')}`;
       const existing = groupMap.get(key);
       if (existing) {
         existing.count++;
@@ -255,6 +363,28 @@ export class DiagnosticsLog {
 
     const totalCount = records.length;
     const uniqueCount = groups.length;
+
+    /**
+     * What kind of failure this session actually had.
+     *
+     * Counted, and put before the events rather than after. Grouping a hundred
+     * and thirteen load failures by class is what showed they came from six
+     * missing types and not from a long tail — the same discipline is what a
+     * maintainer needs from a pasted report, and it belongs at the top where it
+     * will be read.
+     */
+    const kinds = new Map<FailureKind, number>();
+    for (const rec of records) {
+      if (rec.level !== 'error') continue;
+      const kind = classifyFailure(rec.message);
+      kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
+    }
+    if (kinds.size > 0) {
+      lines.push('', 'Failures by cause');
+      for (const [kind, count] of [...kinds.entries()].sort((a, b) => b[1] - a[1])) {
+        lines.push(`  ${String(count).padStart(4)} × ${FAILURE_KIND_LABELS[kind].label}`);
+      }
+    }
 
     lines.push('', 'Diagnostic Events (Deduplicated)', '');
 

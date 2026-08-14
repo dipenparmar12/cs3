@@ -126,7 +126,18 @@ export interface CloudStreamElectronAPI {
   >;
   clearDiagnostics: () => Promise<Envelope>;
   /** Omit `ids` for the whole log; pass them for the one failure on screen. */
-  reportDiagnostics: (ids?: string[]) => Promise<Envelope & { text: string }>;
+  /**
+   * Renders a pasteable report.
+   *
+   * `mode: 'current'` narrows to the failure described by `context`; `'full'`
+   * takes the session. Both deduplicate repeated events into occurrence counts,
+   * so the full report stays readable even when a provider failed in a loop.
+   */
+  reportDiagnostics: (options?: {
+    ids?: string[];
+    mode?: 'current' | 'full';
+    context?: { query?: string; title?: string; url?: string; source?: string; message?: string };
+  }) => Promise<Envelope & { text: string; records: number }>;
   recordDiagnostic: (entry: {
     level: 'error' | 'warn';
     stage: DiagnosticStage;
@@ -691,7 +702,7 @@ const api: CloudStreamElectronAPI = {
   getTitleOutcomes: () => ipcRenderer.invoke('api:getTitleOutcomes'),
   getDiagnostics: (limit, levels) => ipcRenderer.invoke('diagnostics:list', limit, levels),
   clearDiagnostics: () => ipcRenderer.invoke('diagnostics:clear'),
-  reportDiagnostics: (ids) => ipcRenderer.invoke('diagnostics:report', ids),
+  reportDiagnostics: (options) => ipcRenderer.invoke('diagnostics:report', options ?? {}),
   recordDiagnostic: (entry) => ipcRenderer.invoke('diagnostics:record', entry),
   recordTitleOutcome: (url, kind, reason) =>
     ipcRenderer.invoke('api:recordTitleOutcome', url, kind, reason),

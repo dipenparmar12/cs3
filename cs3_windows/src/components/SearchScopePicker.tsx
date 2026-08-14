@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import type { ProviderTreeRepository, ProviderTreeProvider } from '../types/plugin';
+import type { ProviderLoadProgress } from '../../electron/pluginManager';
 
 /**
  * Whether a provider can be offered as a search scope.
@@ -110,6 +111,42 @@ const ROW_HEIGHT = 28;
 const VIEWPORT_HEIGHT = 300;
 const OVERSCAN = 6;
 
+/**
+ * The facets a scope can be narrowed by, before anything is ticked.
+ *
+ * Derived from what is installed rather than hard-coded, for the same reason
+ * the extensions screen's filters are: a fixed list of Movies/TV/Anime cannot
+ * express "anime or series" and silently omits every other `TvType` the corpus
+ * actually declares — `NSFW`, `Live`, `Documentary`, `AsianDrama`, `Cartoon`.
+ * A facet with nothing behind it is not offered; one that exists cannot be
+ * hidden.
+ *
+ * Semantics are **OR within a facet, AND across facets**, matching the
+ * extensions screen. Anything else reads as broken.
+ */
+interface Facets {
+  types: string[];
+  languages: string[];
+}
+
+interface FacetSelection {
+  types: Set<string>;
+  languages: Set<string>;
+  /** Hide extensions, or hide torrent indexers. Never both. */
+  kinds: Set<'extension' | 'indexer'>;
+}
+
+const EMPTY_SELECTION: FacetSelection = {
+  types: new Set(),
+  languages: new Set(),
+  kinds: new Set(),
+};
+
+/** Upstream's `TvType` names are PascalCase; the menu is not. */
+function prettyType(value: string): string {
+  return value.replace(/([a-z])([A-Z])/g, '$1 $2');
+}
+
 /** Names differing only in case, spacing or punctuation are the same name. */
 function normalise(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -142,9 +179,12 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   const [providers, setProviders] = useState<Set<string>>(new Set());
   const [chosenIndexers, setChosenIndexers] = useState<Set<string>>(new Set());
 
+  const [progress, setProgress] = useState<ProviderLoadProgress | null>(null);
+
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [facets, setFacets] = useState<FacetSelection>(EMPTY_SELECTION);
   const [scrollTop, setScrollTop] = useState(0);
 
   const wrapper = useRef<HTMLDivElement | null>(null);
@@ -152,45 +192,70 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   /** The scope as it was when the menu opened, to detect a real change on close. */
   const openedWith = useRef<string>('');
 
-  const load = useCallback(async () => {
+  /**
+   * @param ensureLoaded pay for the one-time load of every installed extension.
+   */
+  const load = useCallback(async (ensureLoaded: boolean) => {
     if (!window.cloudstream?.getSearchScopeOptions) return;
     setLoading(true);
-    const response = await window.cloudstream.getSearchScopeOptions();
+    const response = await window.cloudstream.getSearchScopeOptions(ensureLoaded);
     setRepositories(response.repositories ?? []);
     setIndexers(response.indexers ?? []);
     setProviders(new Set(response.scope?.providers ?? []));
     setChosenIndexers(new Set(response.scope?.indexers ?? []));
+    setProgress(response.progress ?? null);
     setLoading(false);
     setLoaded(true);
   }, []);
 
   /**
-   * Refetched every time the menu opens, not once per session.
+   * Populated at mount, not at first open.
    *
-   * The set of installed extensions changes underneath this component and it
-   * has no way to know: first-run bootstrap installs a few dozen in the
-   * background, the extensions screen adds and removes them, and providers
-   * register asynchronously as the sidecar works through the archives. Fetching
-   * once and caching meant a picker opened early — which is exactly when a new
-   * user opens it — showed a nearly empty tree and kept showing it for the rest
-   * of the session, no matter how much had been installed since.
+   * This is the fix for the picker that "was empty until you searched". It only
+   * ever fetched when the menu opened, and that fetch loaded every installed
+   * extension into the sidecar first — minutes of DEX translation on a
+   * bootstrapped install. So the menu opened, showed a spinner or nothing, and
+   * the user closed it. Running a search awaited the *same* load, which is why
+   * searching appeared to be what fixed it.
    *
-   * The previous tree stays on screen while the refetch runs, so reopening does
-   * not flash empty. Still deferred until first open: building the tree loads
-   * every installed extension, which is far too much for cold start.
+   * Mounting asks with `ensureLoaded: false`: an instant answer from whatever
+   * is already registered. Opening asks with `true` and pays the cost with a
+   * menu on screen to show progress in. Between them, the progress stream below
+   * refreshes the tree as each archive lands, so the list fills in rather than
+   * appearing all at once at the end.
    */
   useEffect(() => {
-    if (open) void load();
+    void load(false);
+  }, [load]);
+
+  useEffect(() => {
+    if (open) void load(true);
   }, [open, load]);
 
   useEffect(() => {
-    if (refreshKey > 0 && open) void load();
-  }, [refreshKey, open, load]);
+    if (refreshKey > 0) void load(false);
+  }, [refreshKey, load]);
+
+  /**
+   * Follows the one-time provider load as it runs.
+   *
+   * Refetching per archive would mean a hundred and seventy tree rebuilds, so
+   * the counter is taken from every event and the tree itself is refetched only
+   * when the pass finishes or every tenth archive — often enough that the list
+   * visibly grows, rarely enough to stay cheap.
+   */
+  useEffect(() => {
+    const dispose = window.cloudstream?.onProviderLoadProgress?.((next) => {
+      setProgress(next);
+      if (!next.running || next.loaded % 10 === 0) void load(false);
+    });
+    return () => dispose?.();
+  }, [load]);
 
   // Installs land while the menu may already be open, so the tree follows them.
   useEffect(() => {
-    const dispose = window.cloudstream?.onBootstrapProgress?.((progress) => {
-      if (progress.phase === 'done') void load();
+    const dispose = window.cloudstream?.onBootstrapProgress?.((bootstrapProgress) => {
+      if (bootstrapProgress.phase === 'done') void load(false);
     });
     return () => dispose?.();
   }, [load]);
@@ -251,6 +316,86 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   }, [repositories, indexers]);
 
   /**
+   * The facet values that actually exist, counted from what is installed.
+   *
+   * Counted rather than listed: a language nobody has an extension for must not
+   * be offered, and a `TvType` that three extensions declare must not be
+   * missing because it was not in someone's hard-coded list.
+   */
+  const available = useMemo<Facets>(() => {
+    const types = new Map<string, number>();
+    const languages = new Map<string, number>();
+    for (const repo of repositories) {
+      for (const ext of repo.extensions) {
+        for (const provider of ext.providers) {
+          if (!isSelectable(provider)) continue;
+          for (const type of provider.supportedTypes ?? []) {
+            types.set(type, (types.get(type) ?? 0) + 1);
+          }
+          const lang = provider.lang ?? ext.language;
+          if (lang) languages.set(lang, (languages.get(lang) ?? 0) + 1);
+        }
+      }
+    }
+    const byCount = (a: [string, number], b: [string, number]) =>
+      b[1] - a[1] || a[0].localeCompare(b[0]);
+    return {
+      types: [...types.entries()].sort(byCount).map(([value]) => value),
+      languages: [...languages.entries()].sort(byCount).map(([value]) => value),
+    };
+  }, [repositories]);
+
+  const facetsActive =
+    facets.types.size > 0 || facets.languages.size > 0 || facets.kinds.size > 0;
+
+  /**
+   * OR within a facet, AND across facets.
+   *
+   * A provider matching *any* selected type and *any* selected language
+   * survives; one matching a type but no selected language does not. The other
+   * reading — AND everywhere — makes two selections in the same facet return
+   * nothing, which users read as a broken filter rather than a strict one.
+   */
+  const matchesFacets = useCallback(
+    (provider: ProviderTreeProvider, extensionLanguage?: string): boolean => {
+      if (facets.kinds.size > 0 && !facets.kinds.has('extension')) return false;
+      if (facets.types.size > 0) {
+        const types = provider.supportedTypes ?? [];
+        if (!types.some((type) => facets.types.has(type))) return false;
+      }
+      if (facets.languages.size > 0) {
+        const lang = provider.lang ?? extensionLanguage;
+        if (!lang || !facets.languages.has(lang)) return false;
+      }
+      return true;
+    },
+    [facets]
+  );
+
+  /** Indexers carry no language or content type, so only `kinds` can hide them. */
+  const indexersVisible =
+    (facets.kinds.size === 0 || facets.kinds.has('indexer')) &&
+    facets.types.size === 0 &&
+    facets.languages.size === 0;
+
+  const toggleFacet = useCallback(
+    (group: keyof FacetSelection, value: string) => {
+      setFacets((current) => {
+        const next: FacetSelection = {
+          types: new Set(current.types),
+          languages: new Set(current.languages),
+          kinds: new Set(current.kinds),
+        };
+        const bucket = next[group] as Set<string>;
+        if (bucket.has(value)) bucket.delete(value);
+        else bucket.add(value);
+        return next;
+      });
+    },
+    []
+  );
+
+  /**
    * The flattened row list.
    *
    * Rebuilt only when the data, the query or the collapse state changes —
@@ -273,11 +418,17 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
 
       for (const ext of repo.extensions) {
         const extKey = `${repoKey}/ext:${ext.id ?? ext.internalName}`;
-        const active = ext.providers.filter(isSelectable);
+        const active = ext.providers
+          .filter(isSelectable)
+          .filter((provider) => matchesFacets(provider, ext.language));
         const extMatches = repoMatches || ext.name.toLowerCase().includes(needle);
         repoMembers.push(...active.map((provider) => provider.name));
 
         if (active.length === 0) {
+          // A facet that filtered everything out of this extension is not the
+          // same as an extension that registered nothing, and saying "no
+          // providers registered" for the first would be a lie about the data.
+          if (facetsActive) continue;
           if (searching && !extMatches) continue;
           children.push({
             key: extKey,
@@ -362,12 +513,14 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       if (isOpen(repoKey)) out.push(...children);
     }
 
-    const matchingIndexers = searching
-      ? indexers.filter(
-          (indexer) =>
-            indexer.name.toLowerCase().includes(needle) || 'torrent sources'.includes(needle)
-        )
-      : indexers;
+    const matchingIndexers = !indexersVisible
+      ? []
+      : searching
+        ? indexers.filter(
+            (indexer) =>
+              indexer.name.toLowerCase().includes(needle) || 'torrent sources'.includes(needle)
+          )
+        : indexers;
 
     if (matchingIndexers.length > 0) {
       const groupKey = 'group:indexers';
@@ -397,7 +550,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     }
 
     return out;
-  }, [repositories, indexers, deferredQuery, collapsed]);
+  }, [repositories, indexers, deferredQuery, collapsed, matchesFacets, facetsActive, indexersVisible]);
 
   useEffect(() => {
     setScrollTop(0);
@@ -499,14 +652,102 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
             <span className="scope__count">{totalAvailable}</span>
           </button>
 
+          {/*
+            Facets, derived from what is installed.
+
+            Placed above the tree rather than inside it because they narrow what
+            the tree contains — a filter rendered as a row of the thing it
+            filters reads as another selectable source.
+          */}
+          {(available.types.length > 0 ||
+            available.languages.length > 0 ||
+            indexers.length > 0) && (
+            <div className="scope__facets">
+              {indexers.length > 0 && universe.providers.length > 0 && (
+                <div className="scope__facet-group" role="group" aria-label="Source kind">
+                  <button
+                    className={`scope__chip${facets.kinds.has('extension') ? ' scope__chip--on' : ''}`}
+                    onClick={() => toggleFacet('kinds', 'extension')}
+                    title="Show only extension providers"
+                  >
+                    <Package size={11} /> Extensions
+                  </button>
+                  <button
+                    className={`scope__chip${facets.kinds.has('indexer') ? ' scope__chip--on' : ''}`}
+                    onClick={() => toggleFacet('kinds', 'indexer')}
+                    title="Show only torrent indexers"
+                  >
+                    <Radio size={11} /> Torrents
+                  </button>
+                </div>
+              )}
+
+              {available.types.length > 0 && (
+                <div className="scope__facet-group" role="group" aria-label="Content type">
+                  {available.types.map((type) => (
+                    <button
+                      key={type}
+                      className={`scope__chip${facets.types.has(type) ? ' scope__chip--on' : ''}`}
+                      onClick={() => toggleFacet('types', type)}
+                    >
+                      {prettyType(type)}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {available.languages.length > 1 && (
+                <div className="scope__facet-group" role="group" aria-label="Language">
+                  {available.languages.slice(0, 12).map((lang) => (
+                    <button
+                      key={lang}
+                      className={`scope__chip${facets.languages.has(lang) ? ' scope__chip--on' : ''}`}
+                      onClick={() => toggleFacet('languages', lang)}
+                    >
+                      {lang.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {facetsActive && (
+                <button
+                  className="scope__chip scope__chip--clear"
+                  onClick={() => setFacets(EMPTY_SELECTION)}
+                >
+                  <X size={11} /> Clear filters
+                </button>
+              )}
+            </div>
+          )}
+
+          {/*
+            Progress, with a number in it.
+
+            "Loading extensions…" for four minutes is indistinguishable from a
+            hang, and that is precisely how long this can take on a bootstrapped
+            install. Saying which archive and how many are left turns the same
+            wait into something a user can judge.
+          */}
+          {progress?.running && (
+            <div className="scope__loading scope__loading--quiet">
+              <Loader2 size={12} className="spin" />
+              <span>
+                Loading extensions — {progress.loaded} of {progress.total}
+                {progress.providers > 0 ? `, ${progress.providers} providers so far` : ''}
+                {progress.current ? ` · ${progress.current}` : ''}
+              </span>
+            </div>
+          )}
+
           {/* Only takes the panel over when there is nothing to show yet; a
               refresh over an existing tree is a quiet line, not a blank menu. */}
-          {loading && !loaded && (
+          {loading && !loaded && !progress?.running && (
             <div className="scope__loading">
               <Loader2 size={14} className="spin" /> Loading extensions…
             </div>
           )}
-          {loading && loaded && (
+          {loading && loaded && !progress?.running && (
             <div className="scope__loading scope__loading--quiet">
               <Loader2 size={12} className="spin" /> Refreshing…
             </div>
@@ -516,7 +757,11 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
             <p className="scope__empty">
               {deferredQuery.trim()
                 ? `Nothing matches "${deferredQuery.trim()}".`
-                : 'No extension providers are installed. Add a repository in Extensions.'}
+                : facetsActive
+                  ? 'No source matches these filters.'
+                  : progress?.running
+                    ? 'Loading the installed extensions…'
+                    : 'No extension providers are installed. Add a repository in Extensions.'}
             </p>
           )}
 

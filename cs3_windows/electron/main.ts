@@ -578,23 +578,62 @@ ipcMain.handle('diagnostics:clear', async () => {
 });
 
 /**
- * A pasteable report.
+ * A pasteable report, in one of two sizes.
  *
- * `ids` narrows it to the failure the user is looking at; omitting them reports
- * everything. Both matter: one error is what you send a scraper's maintainer,
- * and the whole log is what you attach to an issue about the app.
+ * `mode: 'current'` is the one that was missing. Every report used to be the
+ * whole session — up to three hundred entries — which is unusable in both
+ * directions: whoever receives it has to find the failure being described, and
+ * whoever sends it has pasted their entire evening's viewing into a chat
+ * window without meaning to. Narrowing to the failure on screen is the common
+ * case; the full log is for an issue about the app itself.
+ *
+ * Both are deduplicated, and the full one especially: a provider failing on a
+ * loop produces the same line hundreds of times, and an occurrence count says
+ * everything the repetition did.
  */
-ipcMain.handle('diagnostics:report', async (_, ids?: string[]) => {
-  try {
-    // Reports carry everything retained, successes included: the run that
-    // worked is the control for the one that did not.
-    const all = diagnostics.all();
-    const chosen = ids?.length ? all.filter((record) => ids.includes(record.id)) : all.slice(0, 300);
-    return { ok: true, text: diagnostics.report(chosen, await diagnosticsEnvironment()) };
-  } catch (error) {
-    return { ...fail(error), text: '' };
+ipcMain.handle(
+  'diagnostics:report',
+  async (
+    _,
+    options: {
+      ids?: string[];
+      mode?: 'current' | 'full';
+      context?: Parameters<DiagnosticsLog['selectForContext']>[0];
+    } = {}
+  ) => {
+    try {
+      const mode = options.mode ?? 'full';
+      const all = diagnostics.all();
+
+      let chosen = all;
+      let contextMatched: boolean | undefined;
+
+      if (options.ids?.length) {
+        chosen = all.filter((record) => options.ids!.includes(record.id));
+      } else if (mode === 'current' && options.context) {
+        const selection = diagnostics.selectForContext(options.context);
+        chosen = selection.records;
+        contextMatched = selection.matched;
+      } else {
+        // Reports carry everything retained, successes included: the run that
+        // worked is the control for the one that did not.
+        chosen = all.slice(0, 300);
+      }
+
+      return {
+        ok: true,
+        text: diagnostics.report(chosen, await diagnosticsEnvironment(), {
+          mode,
+          context: options.context,
+          contextMatched,
+        }),
+        records: chosen.length,
+      };
+    } catch (error) {
+      return { ...fail(error), text: '', records: 0 };
+    }
   }
-});
+);
 
 /** Lets the renderer record what only it can see, such as a playback failure. */
 ipcMain.handle(
