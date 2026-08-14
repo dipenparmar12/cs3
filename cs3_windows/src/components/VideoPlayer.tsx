@@ -18,6 +18,7 @@ import type { MediaProbe } from '../../electron/mediaTranscoder';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
+import { CopyErrorButton } from './CopyErrorButton';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -1102,7 +1103,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <>
               <AlertTriangle size={36} />
               <p>{error}</p>
-              <button className="btn" onClick={onBack}>Choose another source</button>
+              {/* Codecs and stream URL, because a playback failure is the least
+                  reproducible thing in the app: the stream is transient and the
+                  viewer has no way to describe it afterwards. */}
+              <div className="player__error-actions">
+                <button className="btn" onClick={onBack}>Choose another source</button>
+                <CopyErrorButton
+                  compact
+                  context={{
+                    title: episodeTitle ? `${title} — ${episodeTitle}` : title,
+                    url: streamUrl,
+                    source: audioProbe?.videoCodec
+                      ? `video=${audioProbe.videoCodec}` +
+                        (audioProbe.audio[0]?.codec ? ` audio=${audioProbe.audio[0].codec}` : '')
+                      : undefined,
+                    message: error ?? undefined,
+                  }}
+                />
+              </div>
             </>
           ) : (
             <>

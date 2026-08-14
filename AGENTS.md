@@ -194,7 +194,7 @@ not a layering mistake.
 | `searchHistory.ts` | Past search *queries* (not results — a cached result set goes stale silently), stored via the datastore so backups carry it. |
 | `sourceCache.ts` | Resolved sources, with expiry tracked **per source**: magnets never expire, provider links carry a deadline read from the URL (`Expires`/`exp`/JWT claim, case-insensitively) or a short TTL. A cache hit can be partially stale — good magnets beside dead links — and `read()` reports that split. |
 | `subtitleService.ts` | Online subtitle search via the keyless OpenSubtitles v3 Stremio addon, keyed by IMDb id. Converts SubRip to WebVTT, which is **not optional**: `<track>` rejects `.srt` silently. |
-| `audioTranscoder.ts` | ffprobe/ffmpeg audio compatibility. See the audio section below — this is the fix for the "no sound" bug. |
+| `mediaTranscoder.ts` | ffprobe/ffmpeg audio *and* video compatibility. See the codec section below — the fix for both the "no sound" bug and undecodable HEVC. |
 | `metadataProvider.ts` | TVmaze + AniList. **Catalogue metadata only, never streams.** Its key output is the IMDb id, which indexers match on far better than free text. |
 | `cinemeta.ts` | Stremio Cinemeta metadata provider, prioritised in search. |
 | `pluginManager.ts` | `.cs3` repository discovery, plugin-list parsing (mirrors upstream `RepositoryManager.kt`), download + SHA-256 verification, Android-style install paths, then hands archives to the sidecar. |
@@ -202,6 +202,8 @@ not a layering mistake.
 | `cs3/sidecarSupervisor.ts` | Spawns and supervises the JVM child process; line-delimited JSON-RPC over stdio; never throws on a missing/broken sidecar. |
 | `cs3/extensionUpdater.ts` | Over-the-air extension updates on a schedule, so a provider fix does not wait for an app release. |
 | `cs3/bootstrap.ts` | First-run install of the bundled repositories, and the adult-content opt-in. |
+| `cs3/diagnostics.ts` | Provider failures with the context that makes them reproducible. See below. |
+| `cs3/titleOutcomes.ts` | How each title last behaved, so a dead row is not clicked twice. |
 | `cs3/batchDownloader.ts` | Season/series batch download orchestration. |
 | `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, and remembered source choices. |
 | `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. |
@@ -209,7 +211,7 @@ not a layering mistake.
 | `torrent/ranker.ts`, `releaseParser.ts` | Release-name parsing (quality/codec/group/season/episode) and result ranking. |
 | `downloadService.ts`, `aria2Engine.ts`, `ytdlpEngine.ts`, `binaryDownloader.ts` | Downloads via aria2c RPC with an HTTP fallback; portable `aria2c`/`yt-dlp` binaries are fetched on first use. |
 
-### Audio: Chromium cannot decode AC-3, E-AC-3 or DTS
+### Codecs: Chromium cannot decode a lot of what people actually stream
 
 Measured on this Electron build with `canPlayType`, not assumed. AAC, MP3, FLAC
 and Opus are fine; **AC-3, E-AC-3 and DTS all return `""`** in both MP4 and MKV.
@@ -225,9 +227,34 @@ This is why the bug looked provider-specific and why it hit **series** hardest:
 TV releases are overwhelmingly HDTV/WEB-DL carrying broadcast AC-3/E-AC-3, while
 film web-rips usually carry AAC. The provider was never the variable.
 
-`audioTranscoder.ts` probes with ffprobe and, when the selected track is
-undecodable, remuxes through ffmpeg to a loopback URL — `-c:v copy`, audio to
-AAC, downmixed to stereo. The same file then decodes 89,173 bytes of audio.
+**Video has the same problem and it is worse.** Chromium decodes H.264, VP8, VP9
+and AV1; it does not decode HEVC outside builds with platform decoders, nor any
+of MPEG-2, VC-1, MPEG-4 Part 2 or WMV. HEVC is routine in 4K and 10-bit releases,
+so "the browser could not decode this file" was a growing dead end. Android does
+not have this problem — ExoPlayer hands the stream to the device's hardware
+decoders.
+
+`mediaTranscoder.ts` (was `audioTranscoder.ts`) probes with ffprobe and remuxes
+through ffmpeg to a loopback URL. Audio goes to AAC downmixed to stereo; video is
+**copied unless it genuinely cannot be decoded**, because copying is free and
+re-encoding is not. Verified end to end: an HEVC + AC-3 file comes back as H.264
+High/yuv420p + AAC stereo.
+
+Two things about that path are load-bearing:
+
+- **What is decodable is measured in the renderer, not tabled in main.** Chromium's
+  HEVC support varies by build and platform, so `App.tsx` runs `canPlayType` over
+  `VIDEO_CODEC_PROBES` at startup and `setCapabilities` overrides the static
+  `UNSUPPORTED_VIDEO` set **in both directions** — a build that can decode HEVC is
+  not made to re-encode it for nothing.
+- **The hardware encoder is chosen by test-encoding, never by `ffmpeg -encoders`.**
+  That listing reports what the binary was *built* with, not what the machine can
+  run: the bundled build advertises `h264_nvenc`, `h264_qsv` and `h264_amf`
+  everywhere, and on the development machine only QSV opens — NVENC fails with
+  "Could not open encoder" for want of an NVIDIA GPU. Each candidate now encodes
+  one frame to null **with the exact arguments it would be used with**, which also
+  catches encoders that reject an option (AMF has no `-preset`). Getting this
+  wrong means picking an encoder that dies the moment a viewer presses play.
 
 Things that will bite if you change it:
 
@@ -504,6 +531,28 @@ construction (`PluginManager.providers` is a `Map` keyed by name), which is why 
 also the scope identity, the `cs3ext://` address and the enable/disable key. Two extensions
 claiming one name is a genuine collision: the first keeps it and the loser is reported via
 `unavailableReason` instead of silently showing zero providers.
+
+### Diagnosability: a message is not a report
+
+A failure message is a fact about a string. `Expected URL scheme 'http' or 'https'`
+names no provider, no query and no item, and by the time anyone investigates the
+query is gone and the provider was one of thirty. What makes a failure actionable
+is the **tuple**: which provider, on which query, for which item, at what address.
+
+`cs3/diagnostics.ts` records exactly that, persisted to its own file — not the
+datastore, because this is debugging exhaust that runs to hundreds of entries and
+has no business inside a user's backup next to their watch history. Recording
+happens in `PluginManager`, the only layer that knows which provider was asked.
+
+`loadLinks` was the worst offender and is the one to imitate: every failure
+returned `[]`, so a timeout, a thrown extractor and a provider that genuinely has
+nothing all produced one sentence. The empty list still goes back — a failed
+resolve is not an exception at that layer — but the reason goes to the log.
+
+`CopyErrorButton` renders a pasteable report, assembled in the main process
+because that is the only side holding the environment. It leads with app,
+Electron, platform and extension-runtime versions: the two questions every
+maintainer asks first are the two a reporter is least able to answer.
 
 ### Shipping: the box has to contain everything
 

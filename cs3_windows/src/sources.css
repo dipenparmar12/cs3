@@ -3135,3 +3135,11 @@
   font-size: 0.7rem;
   color: var(--text-subtle);
 }
+
+.player__error-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}

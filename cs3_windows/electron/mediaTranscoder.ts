@@ -75,6 +75,29 @@ const UNSUPPORTED_VIDEO = new Set([
  * `hvc1.1.6.L93.B0`. Only codecs worth correcting are listed — there is no
  * value in asking the renderer about ones nothing produces.
  */
+/** An encoder and the arguments it is used with; both are validated together. */
+interface VideoEncoder {
+  name: string;
+  args: string[];
+}
+
+/**
+ * Hardware first, software last.
+ *
+ * Not an optimisation: software-encoding a 4K HEVC source in real time is
+ * beyond most laptops, so this ordering is frequently the difference between
+ * watchable and a stall. Each carries its own options because they disagree —
+ * AMF has no `-preset` and rejects it.
+ */
+const ENCODER_CANDIDATES: VideoEncoder[] = [
+  { name: 'h264_nvenc', args: ['-preset', 'p4'] },
+  { name: 'h264_qsv', args: ['-preset', 'fast'] },
+  { name: 'h264_amf', args: ['-quality', 'speed'] },
+  { name: 'h264_videotoolbox', args: [] },
+  // Watched once and discarded: latency matters, file size does not.
+  { name: 'libx264', args: ['-preset', 'veryfast'] },
+];
+
 export const VIDEO_CODEC_PROBES: Record<string, string> = {
   hevc: 'video/mp4; codecs="hvc1.1.6.L93.B0"',
   h264: 'video/mp4; codecs="avc1.42E01E"',
@@ -154,8 +177,8 @@ export class MediaTranscoder {
   private nextToken = 1;
   /** What the renderer reported it can decode; overrides the static table. */
   private capabilities: RendererCapabilities | null = null;
-  /** Cached `ffmpeg -encoders` verdict, since it never changes within a run. */
-  private videoEncoder: string | null = null;
+  /** The encoder that passed its test encode. Fixed for the run once chosen. */
+  private videoEncoder: VideoEncoder | null = null;
 
   constructor(binaries: BinaryDownloader) {
     this.binaries = binaries;
@@ -264,33 +287,54 @@ export class MediaTranscoder {
   }
 
   /**
-   * The best available H.264 encoder.
+   * The best H.264 encoder this machine can actually run.
    *
-   * Hardware first, and not as an optimisation: software H.264 encoding of a 4K
-   * HEVC source does not keep up with playback on most laptops, so the choice
-   * here is frequently the difference between watchable and a stall. Probed once
-   * by asking ffmpeg what it was built with, rather than trying each and seeing
-   * what fails at the worst possible moment.
+   * **Test-encoded, not listed.** `ffmpeg -encoders` reports what the binary was
+   * *built* with, which is not what the hardware supports: the bundled build
+   * advertises `h264_nvenc`, `h264_qsv` and `h264_amf` on every machine, and on
+   * the one this was written on only QSV opens — NVENC fails with "Could not
+   * open encoder" because there is no NVIDIA GPU. Trusting the listing meant
+   * choosing an encoder that dies the moment a viewer presses play, which is the
+   * worst possible time to discover it.
    *
-   * `libx264` is last and always present. `veryfast` is chosen over anything
-   * slower because this output is watched once and discarded — file size is
-   * irrelevant and latency is everything.
+   * So each candidate encodes one frame to null with the exact arguments it
+   * would be used with. That also validates the arguments themselves — encoders
+   * disagree about `-preset` — so an option a given encoder rejects removes it
+   * from consideration instead of failing mid-stream.
+   *
+   * Costs a few hundred milliseconds, once, and only when a video transcode is
+   * actually needed. `libx264` is last and always works.
    */
-  private async resolveVideoEncoder(): Promise<string> {
+  private async resolveVideoEncoder(): Promise<VideoEncoder> {
     if (this.videoEncoder) return this.videoEncoder;
 
     const ffmpeg = this.binaries.resolveBinary('ffmpeg');
-    if (!ffmpeg) return 'libx264';
+    const fallback: VideoEncoder = { name: 'libx264', args: ['-preset', 'veryfast'] };
+    if (!ffmpeg) return fallback;
 
-    const listing = (await this.run(ffmpeg, ['-hide_banner', '-encoders'], 15_000)) ?? '';
-    for (const candidate of ['h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_videotoolbox']) {
-      if (listing.includes(candidate)) {
+    for (const candidate of ENCODER_CANDIDATES) {
+      const works = await this.run(
+        ffmpeg,
+        [
+          '-hide_banner', '-loglevel', 'error',
+          '-f', 'lavfi', '-i', 'color=c=black:s=128x128:d=0.1',
+          '-c:v', candidate.name,
+          ...candidate.args,
+          '-pix_fmt', 'yuv420p',
+          '-frames:v', '1',
+          '-f', 'null', '-',
+        ],
+        20_000
+      );
+      // `run` resolves null on a non-zero exit, which is exactly the signal.
+      if (works !== null) {
         this.videoEncoder = candidate;
         return candidate;
       }
     }
-    this.videoEncoder = 'libx264';
-    return this.videoEncoder;
+
+    this.videoEncoder = fallback;
+    return fallback;
   }
 
   // --- transcoding ---------------------------------------------------------
@@ -390,11 +434,11 @@ export class MediaTranscoder {
      * machine has, because software encoding a 4K source in real time is not
      * something most laptops manage.
      */
+    const encoder = this.videoEncoder ?? { name: 'libx264', args: ['-preset', 'veryfast'] };
     const videoArgs = session.transcodeVideo
       ? [
-          '-c:v', this.videoEncoder ?? 'libx264',
-          // Watched once and thrown away: latency matters, file size does not.
-          '-preset', (this.videoEncoder ?? 'libx264') === 'libx264' ? 'veryfast' : 'fast',
+          '-c:v', encoder.name,
+          ...encoder.args,
           // 8-bit 4:2:0 is what Chromium decodes. HEVC sources are routinely
           // 10-bit, and handing back 10-bit H.264 would swap one undecodable
           // stream for another.
