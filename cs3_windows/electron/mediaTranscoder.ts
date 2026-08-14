@@ -119,8 +119,21 @@ const PLAYABLE_CONTAINERS = ['mp4', 'mov', 'm4a', 'm4v', '3gp', '3g2', 'webm', '
 const WEBM_VIDEO = new Set(['vp8', 'vp9', 'av1']);
 const WEBM_AUDIO = new Set(['opus', 'vorbis']);
 
+/**
+ * Pixel formats carrying more than 8 bits per channel.
+ *
+ * Bit depth is a separate capability from the codec, and conflating them is a
+ * real bug rather than a nicety: a build that decodes 8-bit HEVC Main answers
+ * "yes" to a plain HEVC probe and then fails on Main 10. A measured example —
+ * a 1280x536 HEVC `yuv420p10le` file — was therefore stream-copied into MP4 as
+ * "playable" and still would not play.
+ */
+const TEN_BIT_PIXEL_FORMATS = /10le|10be|12le|12be|p010|yuv420p1[02]/i;
+
 export const VIDEO_CODEC_PROBES: Record<string, string> = {
   hevc: 'video/mp4; codecs="hvc1.1.6.L93.B0"',
+  // Main 10 asked for separately, because it is separately supported.
+  hevc10: 'video/mp4; codecs="hvc1.2.4.L120.B0"',
   h264: 'video/mp4; codecs="avc1.42E01E"',
   vp9: 'video/webm; codecs="vp09.00.10.08"',
   av1: 'video/mp4; codecs="av01.0.04M.08"',
@@ -185,6 +198,7 @@ interface FfprobeStream {
   index?: number;
   codec_type?: string;
   codec_name?: string;
+  pix_fmt?: string;
   channels?: number;
   disposition?: { default?: number };
   tags?: { language?: string; title?: string };
@@ -261,9 +275,24 @@ export class MediaTranscoder {
   }
 
   /** True when this codec plays as-is, preferring the measured answer. */
-  private canPlayVideo(codec: string | undefined): boolean {
+  private canPlayVideo(codec: string | undefined, pixFmt?: string): boolean {
     if (!codec) return true;
     const name = codec.toLowerCase();
+
+    /**
+     * Bit depth is asked about separately, because it is supported separately.
+     *
+     * A build that decodes 8-bit HEVC answers "yes" to a plain HEVC probe and
+     * then cannot decode Main 10 — so a 10-bit file was being stream-copied as
+     * playable and failing anyway. Where no 10-bit-specific answer exists, the
+     * assumption is that it cannot be played: converting something that would
+     * have worked costs CPU, and the reverse costs the viewer the film.
+     */
+    if (pixFmt && TEN_BIT_PIXEL_FORMATS.test(pixFmt)) {
+      const deep = this.capabilities?.video?.[`${name}10`];
+      return deep === true;
+    }
+
     const measured = this.capabilities?.video?.[name];
     if (typeof measured === 'boolean') return measured;
     return !UNSUPPORTED_VIDEO.has(name);
@@ -363,11 +392,13 @@ export class MediaTranscoder {
 
     const audio: AudioStreamInfo[] = [];
     let videoCodec: string | undefined;
+    let videoPixFmt: string | undefined;
     let audioOrdinal = 0;
 
     for (const stream of parsed.streams ?? []) {
       if (stream.codec_type === 'video' && !videoCodec) {
         videoCodec = stream.codec_name;
+        videoPixFmt = stream.pix_fmt;
         continue;
       }
       if (stream.codec_type !== 'audio') continue;
@@ -386,11 +417,21 @@ export class MediaTranscoder {
 
     const preferred = audio.find((a) => a.isDefault) ?? audio[0];
     const duration = Number(parsed.format?.duration);
-    const videoPlayable = this.canPlayVideo(videoCodec);
+    const videoPlayable = this.canPlayVideo(videoCodec, videoPixFmt);
     const container = parsed.format?.format_name;
     const containerPlayable = this.canPlayContainer(container, videoCodec, preferred?.codec);
-    // No audio at all is not a transcoding problem, so it is not claimed as one.
-    const needsAudioTranscode = Boolean(preferred && !preferred.playable);
+    /**
+     * No audio at all is not a transcoding problem, so it is not claimed as one.
+     *
+     * More than two channels is, though. The remux path copies audio to avoid
+     * re-encoding a good track, but copying 5.1 through reintroduces the exact
+     * fault the downmix exists to prevent: Chromium decodes it and routes it to
+     * the wrong outputs on most desktop setups, which sounds like the dialogue
+     * has gone missing. The measured file carried a 6-channel AAC track.
+     */
+    const needsAudioTranscode = Boolean(
+      preferred && (!preferred.playable || (preferred.channels ?? 0) > 2)
+    );
     const needsVideoTranscode = Boolean(videoCodec) && !videoPlayable;
     // Only the wrapper is wrong: both streams get copied, which is nearly free.
     const needsRemux = !containerPlayable && !needsAudioTranscode && !needsVideoTranscode;
