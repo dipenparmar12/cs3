@@ -34,6 +34,7 @@ import type {
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
 import type { BootstrapProgress } from './cs3/bootstrap';
 import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
+import type { DiagnosticRecord, DiagnosticStage } from './cs3/diagnostics';
 import type {
   LibraryEntry,
   SourceMemory,
@@ -97,6 +98,30 @@ export interface CloudStreamElectronAPI {
    * translation pass came to look like a hundred broken providers.
    */
   getTitleOutcomes: () => Promise<Record<string, TitleOutcome>>;
+
+  /**
+   * Recorded provider failures, newest first.
+   *
+   * What makes one of these actionable is the tuple — which provider, on which
+   * query, for which item, at what address — not the message, so all of it is
+   * kept and `reportDiagnostics` renders it as pasteable text.
+   */
+  getDiagnostics: (
+    limit?: number
+  ) => Promise<Envelope & { records: DiagnosticRecord[]; filePath: string }>;
+  clearDiagnostics: () => Promise<Envelope>;
+  /** Omit `ids` for the whole log; pass them for the one failure on screen. */
+  reportDiagnostics: (ids?: string[]) => Promise<Envelope & { text: string }>;
+  recordDiagnostic: (entry: {
+    level: 'error' | 'warn';
+    stage: DiagnosticStage;
+    source?: string;
+    query?: string;
+    title?: string;
+    url?: string;
+    message: string;
+    detail?: string;
+  }) => Promise<Envelope>;
   recordTitleOutcome: (
     url: string,
     kind: TitleOutcomeKind,
@@ -418,6 +443,10 @@ const api: CloudStreamElectronAPI = {
   },
   browse: (query, provider) => ipcRenderer.invoke('api:browse', query, provider),
   getTitleOutcomes: () => ipcRenderer.invoke('api:getTitleOutcomes'),
+  getDiagnostics: (limit) => ipcRenderer.invoke('diagnostics:list', limit),
+  clearDiagnostics: () => ipcRenderer.invoke('diagnostics:clear'),
+  reportDiagnostics: (ids) => ipcRenderer.invoke('diagnostics:report', ids),
+  recordDiagnostic: (entry) => ipcRenderer.invoke('diagnostics:record', entry),
   recordTitleOutcome: (url, kind, reason) =>
     ipcRenderer.invoke('api:recordTitleOutcome', url, kind, reason),
   loadMedia: (url) => ipcRenderer.invoke('api:loadMedia', url),
