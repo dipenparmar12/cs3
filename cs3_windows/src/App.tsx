@@ -8,7 +8,7 @@ import { ProviderInspector } from './components/ProviderInspector';
 import { ExtensionManagerUI } from './components/ExtensionManagerUI';
 import { BinarySetupModal } from './components/BinarySetupModal';
 import { HomeView } from './views/HomeView';
-import { SearchView } from './views/SearchView';
+import { SearchView, EMPTY_SEARCH_UI, type SearchUiState } from './views/SearchView';
 import {
   DetailView,
   type PlaybackRequest,
@@ -47,6 +47,15 @@ export const App: React.FC = () => {
   const [searchError, setSearchError] = useState<string | null>(null);
   /** The last query and options, so a scope change can re-run them. */
   const lastQuery = useRef<{ query: string; options?: SearchOptions } | null>(null);
+  /**
+   * The search view's filters and open groups, kept here because the view is
+   * unmounted while a title is open — the detail page replaces it inside the
+   * same scroll container.
+   */
+  const [searchUi, setSearchUi] = useState<SearchUiState>(EMPTY_SEARCH_UI);
+  /** The main scroller, so returning from a title lands where you left. */
+  const viewportRef = useRef<HTMLElement | null>(null);
+  const savedScroll = useRef(0);
 
   const [selectedMedia, setSelectedMedia] = useState<SearchResponse | null>(null);
   const [playback, setPlayback] = useState<PlaybackRequest | null>(null);
@@ -135,6 +144,10 @@ export const App: React.FC = () => {
     setSearchQuery(query);
     setSelectedMedia(null); // Instantly dismiss open DetailView overlay
     setSearch(null); // Instantly clear old search results
+    // A new query is a new question, so the previous answer's filters and
+    // disclosure state say nothing about it.
+    setSearchUi(EMPTY_SEARCH_UI);
+    savedScroll.current = 0;
     setActiveTab('search');
     setSearchError(null);
 
@@ -169,8 +182,27 @@ export const App: React.FC = () => {
   }, [handleSearch]);
 
   const handleSelectMedia = (item: SearchResponse) => {
+    savedScroll.current = viewportRef.current?.scrollTop ?? 0;
     setSelectedMedia(item);
   };
+
+  /**
+   * Back to the list, at the place it was left.
+   *
+   * Restored after paint rather than immediately: the results grid does not
+   * exist yet at the moment `selectedMedia` clears, so setting `scrollTop`
+   * before the browser has laid it out scrolls a shorter page and clamps to
+   * whatever fits.
+   */
+  const handleBackToResults = useCallback(() => {
+    setSelectedMedia(null);
+    const target = savedScroll.current;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (viewportRef.current) viewportRef.current.scrollTop = target;
+      });
+    });
+  }, []);
 
   /**
    * Tears down the stream that was playing before the current one.
@@ -398,7 +430,7 @@ export const App: React.FC = () => {
             bundled repositories install behind it. */}
         <FirstRunBanner />
 
-        <main className="view-viewport">
+        <main className="view-viewport" ref={viewportRef}>
           {/* Active Fullscreen Video Player Overlay.
               A session takes precedence: it renders the player from the first
               click, before a stream exists, and fills it in as one resolves. */}
@@ -496,7 +528,7 @@ export const App: React.FC = () => {
           {selectedMedia ? (
             <DetailView
               mediaItem={selectedMedia}
-              onBack={() => setSelectedMedia(null)}
+              onBack={handleBackToResults}
               onPlay={setPlayback}
               onStartSession={startSession}
               onEnqueueDownload={handleEnqueueDownload}
@@ -517,6 +549,8 @@ export const App: React.FC = () => {
                     onPlayDirectly={handleQuickPlay}
                     onCancel={handleCancelSearch}
                     error={searchError}
+                    ui={searchUi}
+                    onUiChange={setSearchUi}
                   />
                 </ErrorBoundary>
               )}

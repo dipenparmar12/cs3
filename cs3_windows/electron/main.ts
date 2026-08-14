@@ -186,10 +186,11 @@ app.whenReady().then(async () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('search:update', snapshot);
     }
-    // A finished search is what the history remembers, so a cancelled one — and
-    // the count it never reached — is deliberately not recorded.
+    // The query was recorded when the search opened; this only fills in how
+    // many results it turned out to have. A cancelled search never reached a
+    // meaningful count, so its entry keeps the one it already had.
     if (snapshot.done && !snapshot.cancelled && snapshot.query) {
-      searchHistory.record(snapshot.query, snapshot.results.length);
+      searchHistory.setResultCount(snapshot.query, snapshot.results.length);
     }
   });
 
@@ -251,7 +252,19 @@ ipcMain.handle('api:searchAll', async (_, query: string, options?: SearchOptions
  */
 ipcMain.handle('search:start', async (_, query: string, options?: SearchOptions) => {
   try {
-    return { ok: true, snapshot: contentService.startSearch(query, options ?? {}) };
+    const snapshot = contentService.startSearch(query, options ?? {});
+    /**
+     * Recorded now, not when the search finishes.
+     *
+     * History is an ordering of *when you searched*, and a streaming search
+     * finishes seconds later — long after the user has looked at the list and
+     * formed an opinion about whether it is in the right order. Recording on
+     * completion meant the newest query was missing from the list for as long
+     * as the slowest provider took, which reads as the order being random.
+     * The result count is filled in by the notifier once it is known.
+     */
+    searchHistory.record(query);
+    return { ok: true, snapshot };
   } catch (error) {
     return { ...fail(error), snapshot: null };
   }

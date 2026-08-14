@@ -82,12 +82,28 @@ export const Navbar: React.FC<NavbarProps> = ({
       setHighlightedIndex(-1);
       inputRef.current?.blur();
       onSearch(trimmed, exact ? { exact } : undefined);
-      // The main process records history as part of the search, so re-reading
-      // it afterwards is what keeps the list current without a second source.
-      window.setTimeout(refreshHistory, 300);
+      /**
+       * Re-read on the next tick, not after a guessed delay.
+       *
+       * This used to wait 300 ms and hope the main process had recorded the
+       * query by then. Once searches became streaming that stopped being true —
+       * recording happened on completion, seconds later — so the list the user
+       * opened was always missing the search they had just run, which looks
+       * exactly like the order being wrong. The query is now recorded when the
+       * search opens, so this only has to outlast the IPC round trip.
+       */
+      window.setTimeout(refreshHistory, 0);
     },
     [onSearch, refreshHistory]
   );
+
+  // The result counts arrive when each search finishes.
+  useEffect(() => {
+    const dispose = window.cloudstream?.onSearchUpdate?.((snapshot) => {
+      if (snapshot.done) refreshHistory();
+    });
+    return () => dispose?.();
+  }, [refreshHistory]);
 
   /**
    * Picking a row is a choice of *work*, not a shortcut for typing its name.
