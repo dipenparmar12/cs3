@@ -7,6 +7,7 @@ import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2,
 import { PosterCard } from '../components/PosterCard';
 import { FacetMenu, type FacetOption } from '../components/FacetMenu';
 import { CopyErrorButton } from '../components/CopyErrorButton';
+import { useTitleEnrichment } from '../components/useTitleEnrichment';
 
 interface SearchViewProps {
   query: string;
@@ -137,7 +138,17 @@ export const SearchView: React.FC<SearchViewProps> = ({
     [ui, onUiChange]
   );
 
-  const results = search?.results ?? [];
+  /**
+   * Results, with release names replaced by the titles they are about.
+   *
+   * Applied as a display transform over whatever the latest snapshot holds, so
+   * rows appear immediately under the provider's own name and are rewritten a
+   * moment later. Grouping, filtering and the type tabs all run on the enriched
+   * names, which is the point: `Avengers.Endgame.2019.1080p.BluRay` and
+   * `Avengers End Game 720p Hindi` cannot be grouped as one title until they
+   * are both called *Avengers: Endgame*.
+   */
+  const results = useTitleEnrichment(search?.results ?? []);
 
   /**
    * Tabs that would actually leave something, with counts.
