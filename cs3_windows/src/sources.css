@@ -3215,6 +3215,76 @@
 .copy-error:disabled { opacity: 0.6; cursor: default; }
 .copy-error--compact { padding: 0.18rem 0.55rem; font-size: 0.7rem; }
 
+/* A split button: the common action is one click, the full report is two.
+   Anchored so the menu can hang below without a portal. */
+.copy-error-group {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.copy-error-group .copy-error:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.copy-error--more {
+  border-left: none;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding-left: 0.3rem;
+  padding-right: 0.3rem;
+}
+
+.copy-error__menu {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  z-index: 60;
+  min-width: 16rem;
+  padding: 0.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--surface-raised, #1c1c1e);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.copy-error__menu button {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.45rem 0.5rem;
+  border: none;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--text-primary, #fff);
+  text-align: left;
+  cursor: pointer;
+}
+
+.copy-error__menu button:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.copy-error__menu strong {
+  display: block;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.copy-error__menu em {
+  display: block;
+  font-style: normal;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--text-subtle, rgba(255, 255, 255, 0.55));
+  margin-top: 0.1rem;
+}
+
 .detail-view__actions {
   display: flex;
   align-items: center;
