@@ -646,3 +646,153 @@ The Universal Media Compatibility and Adaptive Playback Engine is complete when 
 - [ ] **AC-COMPAT-10**: Player UI distinguishes between `Downloadable` and `DirectlyPlayable` capabilities across all detail and player views.
 - [ ] **AC-COMPAT-11**: Transport failures on remote CDNs trigger automatic byte-range stream resumption without crashing the player.
 - [ ] **AC-COMPAT-12**: Structured diagnostic telemetry records probe metrics, strategy choices, and encoder performance for every playback attempt.
+
+
+
+### Extra info and notes 
+
+**DRM must be treated as a distinct, first-class capability** in the desktop architecture.
+
+However, **"100% parity with Android" requires understanding how DRM works on Android vs. Electron Desktop**, because DRM behaves fundamentally differently across the two operating systems.
+
+---
+
+## 1. The Core Platform Difference (Android vs. Desktop)
+
+| Feature | Android (ExoPlayer) | Desktop (Electron / Chromium) |
+|---|---|---|
+| **OS DRM Subsystem** | Built into Android OS (`android.media.MediaDrm`) with Widevine L1/L3 hardware pre-installed on every certified phone/TV. | Chromium has EME (Encrypted Media Extensions), but **Electron does not bundle the Google Widevine CDM binary by default** due to Google licensing terms. |
+| **ClearKey DRM (KID:Key)** | Natively supported via ExoPlayer. | **100% natively supported** via W3C EME and `dash.js` / `hls.js`. No binary blob needed. |
+| **AES-128 / Sample-AES (HLS)** | Natively supported in ExoPlayer. | **100% natively supported** via `hls.js` and our local `MediaProxy`. |
+| **Widevine Modular DRM** | Works out-of-the-box (L1 hardware or L3 software). | **Requires Widevine CDM DLL** (from Chrome/Edge or provisioned) + EME integration. Limited to **L3 (720p/1080p software)**. |
+| **FFmpeg Transcoding Interaction** | ExoPlayer decodes through OS decoders after CDM decrypts. | **FFmpeg CANNOT probe or transcode Widevine DRM streams** (FFmpeg has no decryption keys). DRM streams must bypass FFmpeg and go straight to the EME player. |
+
+---
+
+## 2. The 3 Tiers of DRM in CloudStream
+
+In CloudStream community extensions (e.g. European TV, live sports, anime, Indian OTTs), streams fall into three distinct DRM tiers:
+
+```text
+                               [ Stream URL / Manifest ]
+                                           │
+         ┌─────────────────────────────────┼─────────────────────────────────┐
+         ▼                                 ▼                                 ▼
+   [ Tier 1: AES-128 ]           [ Tier 2: ClearKey ]             [ Tier 3: Widevine L3 ]
+   (#EXT-X-KEY URI)             (CENC / KID:KEY pairs)           (PSSH / License Server)
+         │                                 │                                 │
+   100% Supported                   100% Supported                   Supported via EME +
+ (hls.js / MediaProxy)              (dash.js / EME)                   Widevine CDM Plugin
+```
+
+---
+
+### Tier 1: HLS AES-128 & SAMPLE-AES (100% Supported)
+* **What it is**: The HLS playlist specifies `#EXT-X-KEY:METHOD=AES-128,URI="https://..."`.
+* **Where it's used**: Anime streams, IPTV providers, and token-gated community scrapers.
+* **Desktop Implementation**:
+  - `MediaProxy` fetches the decryption key with the required headers (`Referer`, `User-Agent`, `Cookie`).
+  - `hls.js` decrypts segments in WebAssembly/JavaScript natively.
+  - **Verdict**: **100% supported on Desktop today with zero external dependencies.**
+
+---
+
+### Tier 2: W3C ClearKey DRM (100% Supported)
+* **What it is**: MPEG-DASH / CENC or HLS encrypted streams where the provider supplies the decryption keys directly (as `{"kid": "...", "k": "..."}` or hex pairs).
+* **Where it's used**: Live TV, sports extensions (e.g. TataPlay, Canal+, SonyLIV scrapers).
+* **Desktop Implementation**:
+  - `dash.js` or `hls.js` configures the standard W3C EME API:
+    ```javascript
+    videoElement.setMediaKeys(clearKeySession);
+    ```
+  - **No Google Widevine license or proprietary binary required.**
+  - **Verdict**: **100% supported natively in Electron Chromium.**
+
+---
+
+### Tier 3: Google Widevine L3 DRM (Supported via CDM + EME)
+* **What it is**: Streams requiring a challenge/response license exchange with a Widevine DRM license server (`com.widevine.alpha`).
+* **Desktop Implementation**:
+  1. **The Challenge**: Open-source Electron does not bundle `widevinecdm.dll` due to Google's distribution terms.
+  2. **The Solution**: 
+     - **Path A (System CDM Discovery)**: Automatically locate the installed Widevine CDM from the user's existing Google Chrome, Microsoft Edge, or Brave installation on Windows (`%LOCALAPPDATA%\Google\Chrome\User Data\WidevineCdm\...`).
+     - **Path B (CastLabs Electron / CDM Provisioner)**: Download the official Widevine L3 CDM bundle on first use into the app's `bin/` directory and pass `--widevine-cdm-path` to Electron's startup switches:
+       ```typescript
+       app.commandLine.appendSwitch('widevine-cdm-path', path.join(binDir, 'widevinecdm.dll'));
+       app.commandLine.appendSwitch('widevine-cdm-version', '4.10.2830.0');
+       ```
+  3. **The Playback Rule**: The player uses `dash.js` or `video.js` with DRM license server configuration:
+     ```typescript
+     player.setProtectionData({
+       'com.widevine.alpha': {
+         serverURL: licenseUrl,
+         httpRequestHeaders: customHeaders
+       }
+     });
+     ```
+  - **Verdict**: **Supported for Widevine L3 (Standard/HD)**. (Note: Desktop browsers never support Widevine L1 4K for Netflix/Amazon due to lack of HDCP hardware enclaves in third-party desktop apps, which matches Android CloudStream).
+
+---
+
+## 3. How DRM Integrates with PRD 37 (Adaptive Playback Engine)
+
+DRM introduces two critical constraints to our Media Compatibility Engine:
+
+### Constraint 1: FFmpeg Cannot Transcode DRM Streams
+Because FFmpeg cannot decrypt Widevine or FairPlay streams, **the engine must never attempt to probe or transcode DRM-protected streams through FFmpeg**.
+
+### Constraint 2: DRM Bypass Pipeline
+When the engine detects a DRM-protected source, it marks `isDrmProtected: true` and routes the stream directly to the browser player's EME (Encrypted Media Extensions) pipeline:
+
+```text
+[ Resolved Source ]
+        │
+        ▼
+[ Manifest Parser ] ──► Contains PSSH / ClearKey / Widevine?
+        │
+        ├─► YES (DRM) ──► [ Bypass FFmpeg Transcoder ]
+        │                        │
+        │                        ▼
+        │                 [ EME / dash.js / hls.js Engine ]
+        │                        │
+        │                        ▼
+        │                 [ Decrypt via CDM / ClearKey ] ──► <video>
+        │
+        └─► NO (Clear) ──► [ Standard PRD 37 Adaptive Engine (Direct / Remux / Transcode) ]
+```
+
+---
+
+## 4. Recommended DRM Specification in Data Models
+
+Add explicit DRM fields to `SourceCapabilityModel` in `src/types/api.ts` and `electron/mediaTranscoder.ts`:
+
+```typescript
+export interface DrmConfiguration {
+  type: 'none' | 'aes-128' | 'clearkey' | 'widevine' | 'playready';
+  /** For ClearKey: KID to Key mapping */
+  clearKeys?: Record<string, string>;
+  /** For Widevine: DRM license acquisition endpoint */
+  licenseUrl?: string;
+  /** Custom headers required for license requests (tokens, auth) */
+  licenseHeaders?: Record<string, string>;
+}
+
+export interface SourceCapabilityModel {
+  // ... existing capabilities ...
+  drm: DrmConfiguration;
+  /** When true, FFmpeg probing & transcoding is bypassed in favor of EME */
+  requiresEmeDecryption: boolean;
+}
+```
+
+---
+
+## Summary
+
+| DRM Type | Can Desktop Match CloudStream 100%? | How it's delivered |
+|---|---|---|
+| **HLS AES-128** | **Yes (100%)** | Native `hls.js` + `MediaProxy` header injection. |
+| **ClearKey (KID:Key)** | **Yes (100%)** | Native Chromium W3C EME (`dash.js`). |
+| **Widevine L3** | **Yes (100% parity with Android L3)** | Load `widevinecdm.dll` into Electron + EME protection data. |
+| **Widevine L1 (4K Hardware)** | **No (Platform limitation)** | Neither Desktop nor rooted/unlocked Android devices support L1; both fall back to L3 1080p/720p. |
