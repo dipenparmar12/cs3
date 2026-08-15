@@ -56,6 +56,7 @@ export interface DetailHeroProvenance {
 
 interface DetailHeroProps {
   title: string;
+  originalTitle?: string;
   year?: number;
   type: string;
   posterUrl?: string;
@@ -100,6 +101,7 @@ interface DetailHeroProps {
 
 export const DetailHero: React.FC<DetailHeroProps> = ({
   title,
+  originalTitle,
   year,
   type,
   posterUrl,
@@ -229,6 +231,24 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
 
       <div className="detail-hero__body">
         <h1>{title}</h1>
+
+        {originalTitle && originalTitle.toLowerCase().trim() !== title.toLowerCase().trim() && (
+          <p
+            className="detail-hero__original-title"
+            style={{
+              fontSize: '0.82rem',
+              color: 'var(--text-subtle, #9ca3af)',
+              margin: '-0.25rem 0 0.5rem 0',
+              fontStyle: 'italic',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+            }}
+          >
+            <span style={{ opacity: 0.75 }}>Original release:</span>
+            <span style={{ color: 'var(--text-muted, #d1d5db)', fontWeight: 500 }}>"{originalTitle}"</span>
+          </p>
+        )}
 
         {fallbackNote && <p className="detail-hero__fallback">{fallbackNote}</p>}
 

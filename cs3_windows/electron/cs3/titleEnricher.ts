@@ -288,6 +288,7 @@ export class TitleEnricher {
           out[index] = {
             ...result,
             // The address is untouched. Only what the user reads changes.
+            originalTitle: result.originalTitle || (result.name !== metadata.title ? result.name : undefined),
             name: metadata.title,
             year: metadata.year ?? result.year,
             posterUrl: metadata.posterUrl ?? result.posterUrl,

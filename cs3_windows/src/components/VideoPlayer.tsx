@@ -30,7 +30,14 @@ interface VideoPlayerProps {
   streamUrl: string;
   mimeType: string;
   title: string;
+  originalTitle?: string;
   episodeTitle?: string;
+  providerProvenance?: {
+    provider?: string;
+    repositoryName?: string;
+    extensionName?: string;
+    indexerName?: string;
+  };
   /** Present for torrent-backed streams; drives the buffer/peer readout. */
   infoHash?: string;
   subtitles: Array<{ name: string; url: string }>;
@@ -186,11 +193,11 @@ export interface AudioTrackInfo {
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
-  streamUrl, mimeType, title, episodeTitle, infoHash, subtitles, onBack,
-  series, onSelectEpisode, switchingTo, switchError, progress, sourceSession,
-  subtitleContext, onDownloadCurrent, onOpenDownloads, hidden = false,
-  mini = false, onMinimize, onExpand, showAspectRatioControl, showPlaybackSpeedControl,
-  showSubtitlesControl: showSubtitlesControlProp,
+  streamUrl, mimeType, title, originalTitle, episodeTitle, providerProvenance,
+  infoHash, subtitles, onBack, series, onSelectEpisode, switchingTo, switchError,
+  progress, sourceSession, subtitleContext, onDownloadCurrent, onOpenDownloads,
+  hidden = false, mini = false, onMinimize, onExpand, showAspectRatioControl,
+  showPlaybackSpeedControl, showSubtitlesControl: showSubtitlesControlProp,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -219,6 +226,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false);
   const [downloadPanelOpen, setDownloadPanelOpen] = useState(false);
   const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>([]);
+
+  const activeSource = useMemo(() => {
+    if (!sourceSession) return null;
+    return (
+      sourceSession.sources.find((s) => s.infoHash === sourceSession.activeInfoHash) ??
+      sourceSession.sources[0] ??
+      null
+    );
+  }, [sourceSession]);
+
+  const [resolvedProvenance, setResolvedProvenance] = useState<{
+    provider?: string;
+    repositoryName?: string;
+    extensionName?: string;
+  } | null>(null);
+
+  const effectiveProvider =
+    providerProvenance?.provider || activeSource?.providerName || activeSource?.indexerName;
+
+  useEffect(() => {
+    let active = true;
+    const cs = window.cloudstream;
+    if (!effectiveProvider || !cs?.getProviderProvenance) return;
+    void (async () => {
+      const res = await cs.getProviderProvenance(effectiveProvider);
+      if (active && res?.ok && res.provenance) {
+        setResolvedProvenance(res.provenance);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [effectiveProvider]);
 
   useEffect(() => {
     let active = true;
@@ -1734,6 +1774,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         )}
         <div className="player__titles">
           <h2>{title}</h2>
+          {(originalTitle || (activeSource?.title && activeSource.title !== title)) && (
+            <span
+              className="player__original-title"
+              style={{
+                fontSize: '0.74rem',
+                color: 'rgba(255, 255, 255, 0.55)',
+                fontStyle: 'italic',
+                display: 'block',
+                marginTop: '0.1rem',
+                maxWidth: '520px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={`Original release: ${originalTitle || activeSource?.title}`}
+            >
+              Refined from: "{originalTitle || activeSource?.title}"
+            </span>
+          )}
           {(episodeTitle || currentEpisode) && (
             <p>
               {/* Where you are in the series belongs on screen, not one click
@@ -1750,6 +1809,85 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 </span>
               )}
             </p>
+          )}
+          {(effectiveProvider || resolvedProvenance?.repositoryName || activeSource?.parsed?.resolution) && (
+            <div
+              className="player__provenance-badge"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                fontSize: '0.7rem',
+                color: 'rgba(255, 255, 255, 0.75)',
+                marginTop: '0.2rem',
+                flexWrap: 'wrap',
+              }}
+            >
+              {effectiveProvider && (
+                <span
+                  style={{
+                    padding: '0.08rem 0.35rem',
+                    borderRadius: '4px',
+                    backgroundColor: 'rgba(59, 130, 246, 0.18)',
+                    color: '#93c5fd',
+                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                    fontWeight: 600,
+                  }}
+                >
+                  Provider: {effectiveProvider}
+                </span>
+              )}
+              {resolvedProvenance?.repositoryName && (
+                <span
+                  style={{
+                    padding: '0.08rem 0.35rem',
+                    borderRadius: '4px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                    color: 'rgba(255, 255, 255, 0.85)',
+                  }}
+                >
+                  Repo: {resolvedProvenance.repositoryName}
+                </span>
+              )}
+              {activeSource?.indexerName && activeSource.indexerName !== effectiveProvider && (
+                <span
+                  style={{
+                    padding: '0.08rem 0.35rem',
+                    borderRadius: '4px',
+                    backgroundColor: 'rgba(168, 85, 247, 0.15)',
+                    color: '#d8b4fe',
+                  }}
+                >
+                  Indexer: {activeSource.indexerName}
+                </span>
+              )}
+              {activeSource?.parsed?.resolution && (
+                <span
+                  style={{
+                    padding: '0.08rem 0.3rem',
+                    borderRadius: '3px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                    color: '#fff',
+                    fontWeight: 700,
+                  }}
+                >
+                  {activeSource.parsed.resolution}p
+                </span>
+              )}
+              {activeSource?.parsed?.videoCodec && (
+                <span
+                  style={{
+                    padding: '0.08rem 0.3rem',
+                    borderRadius: '3px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                    color: 'rgba(255, 255, 255, 0.7)',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  {activeSource.parsed.videoCodec}
+                </span>
+              )}
+            </div>
           )}
         </div>
         {stats && (

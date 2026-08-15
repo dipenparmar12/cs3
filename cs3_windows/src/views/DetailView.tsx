@@ -83,6 +83,13 @@ export interface PlaybackSessionRequest {
     titleOverride?: string;
   };
   title: string;
+  originalTitle?: string;
+  providerProvenance?: {
+    provider?: string;
+    repositoryName?: string;
+    extensionName?: string;
+    indexerName?: string;
+  };
   episodeTitle?: string;
   series?: SeriesContext;
   progress?: {
@@ -768,6 +775,12 @@ export const DetailView: React.FC<DetailViewProps> = ({
           episode: episode?.episode,
         },
         title: detail.name,
+        originalTitle: mediaItem.originalTitle || (detail as any)?.originalTitle || searchQuery,
+        providerProvenance: {
+          provider: provenance.provider,
+          repositoryName: provenance.repositoryName,
+          extensionName: provenance.extensionName,
+        },
         episodeTitle: episode?.name,
         series: seriesContextFor(episode, watchState),
         onRequestEpisode: (next) => playEpisodeDirectlyRef.current(next),
@@ -946,6 +959,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
       <DetailHero
         title={detail.name}
+        originalTitle={mediaItem.originalTitle || (detail as any)?.originalTitle}
         year={detail.year}
         type={detail.type}
         posterUrl={detail.posterUrl}

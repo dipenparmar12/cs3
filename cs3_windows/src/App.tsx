@@ -448,6 +448,8 @@ export const App: React.FC = () => {
             episode: first?.episode,
           },
           title: detail?.name ?? item.name,
+          originalTitle: item.originalTitle || (detail as any)?.originalTitle,
+          providerProvenance: item.apiName ? { provider: item.apiName } : undefined,
           episodeTitle: first?.name,
           progress: {
             mediaUrl: first?.url ?? item.url,
@@ -484,6 +486,13 @@ export const App: React.FC = () => {
             episode: item.episode,
           },
           title: item.title,
+          originalTitle: item.source?.sourceName !== item.title ? item.source?.sourceName : undefined,
+          providerProvenance: {
+            provider: item.source?.providerName,
+            repositoryName: item.source?.repository,
+            extensionName: item.source?.extension,
+            indexerName: item.source?.indexerName,
+          },
           episodeTitle: item.episodeTitle,
           progress: {
             mediaUrl: item.mediaUrl,
@@ -635,7 +644,9 @@ export const App: React.FC = () => {
               streamUrl={session.snapshot.handle?.streamUrl ?? ''}
               mimeType={session.snapshot.handle?.mimeType ?? ''}
               title={session.context.title}
+              originalTitle={session.context.originalTitle}
               episodeTitle={session.context.episodeTitle}
+              providerProvenance={session.context.providerProvenance}
               infoHash={session.snapshot.activeInfoHash}
               subtitles={session.snapshot.handle?.subtitleUrls ?? []}
               onBack={handleClosePlayer}
