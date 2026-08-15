@@ -7,6 +7,10 @@ import {
   Library as LibraryIcon,
   BookmarkCheck,
   Search,
+  RotateCw,
+  Database,
+  ExternalLink,
+  X,
 } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
 import { TvType } from '../types/api';
@@ -102,6 +106,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia, onSearc
     void refreshBookmarks();
   };
 
+  const [refreshingKey, setRefreshingKey] = useState<string | null>(null);
+  const [sourcesModalEntry, setSourcesModalEntry] = useState<LibraryEntry | null>(null);
+
   const shownBookmarks = providerFilter
     ? bookmarks.filter((bookmark) => bookmark.origin.provider === providerFilter)
     : bookmarks;
@@ -129,6 +136,22 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia, onSearc
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  const handleRefreshSources = async (entry: LibraryEntry, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!window.cloudstream || !entry.urls[0]) return;
+    setRefreshingKey(entry.key);
+    try {
+      await window.cloudstream.refreshLibrarySources?.(
+        entry.urls[0],
+        entry.title,
+        entry.year
+      );
+      await refresh();
+    } finally {
+      setRefreshingKey(null);
+    }
+  };
 
   const openEntry = (entry: LibraryEntry, e?: React.MouseEvent) => {
     if (e) (e.currentTarget as HTMLElement)?.blur();
@@ -280,6 +303,35 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia, onSearc
                     </div>
                   )}
 
+                  {entry.sources && entry.sources.length > 0 && (
+                    <div style={{ marginTop: '0.2rem' }}>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSourcesModalEntry(entry);
+                        }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.3rem',
+                          fontSize: '0.68rem',
+                          fontWeight: 600,
+                          padding: '0.15rem 0.45rem',
+                          borderRadius: '4px',
+                          backgroundColor: 'rgba(59, 130, 246, 0.12)',
+                          color: '#60a5fa',
+                          border: '1px solid rgba(59, 130, 246, 0.25)',
+                          cursor: 'pointer',
+                        }}
+                        title="View saved sources"
+                      >
+                        <Database size={10} />
+                        <span>{entry.sources.length} sources stored</span>
+                      </button>
+                    </div>
+                  )}
+
                   <div className="library-card__actions">
                     <select
                       value={entry.status}
@@ -293,6 +345,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia, onSearc
                         padding: '0.25rem 0.4rem',
                         fontSize: '0.75rem',
                         cursor: 'pointer',
+                        flex: 1,
                       }}
                     >
                       {BUCKETS.map(({ status, label }) => (
@@ -301,6 +354,18 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia, onSearc
                         </option>
                       ))}
                     </select>
+
+                    <button
+                      className="icon-button"
+                      onClick={(e) => handleRefreshSources(entry, e)}
+                      aria-label={`Refresh sources for ${entry.title}`}
+                      title="Refresh sources from enabled providers"
+                      disabled={refreshingKey === entry.key}
+                      style={{ color: '#60a5fa' }}
+                    >
+                      <RotateCw size={13} className={refreshingKey === entry.key ? 'animate-spin' : ''} />
+                    </button>
+
                     <button
                       className="icon-button"
                       onClick={() => remove(entry)}
@@ -317,6 +382,167 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia, onSearc
         </div>
       )}
         </>
+      )}
+
+      {/* Stored Sources Inspection Modal */}
+      {sourcesModalEntry && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(6px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1.5rem',
+          }}
+          onClick={() => setSourcesModalEntry(null)}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: '640px',
+              maxHeight: '85vh',
+              backgroundColor: '#161b26',
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid var(--border-color)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.85)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '1.1rem 1.4rem',
+                borderBottom: '1px solid var(--border-color)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <div
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '8px',
+                    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                    color: '#60a5fa',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Database size={16} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#fff' }}>
+                    Stored Sources — {sourcesModalEntry.title}
+                  </h3>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
+                    {sourcesModalEntry.sources?.length ?? 0} saved sources available
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleRefreshSources(sourcesModalEntry)}
+                  disabled={refreshingKey === sourcesModalEntry.key}
+                  title="Re-check enabled providers and discover newly available sources"
+                >
+                  <RotateCw size={13} className={refreshingKey === sourcesModalEntry.key ? 'animate-spin' : ''} />
+                  <span>Refresh Sources</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setSourcesModalEntry(null)}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            <div style={{ padding: '1.25rem 1.4rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+              {!sourcesModalEntry.sources || sourcesModalEntry.sources.length === 0 ? (
+                <div style={{ padding: '2rem 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                  No sources currently stored. Click "Refresh Sources" to search and save available streams.
+                </div>
+              ) : (
+                sourcesModalEntry.sources.map((src, idx) => (
+                  <div
+                    key={src.id || idx}
+                    style={{
+                      padding: '0.75rem 0.9rem',
+                      borderRadius: 'var(--radius-md)',
+                      backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                      border: '1px solid var(--border-color)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.35rem',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#fff', wordBreak: 'break-all' }}>
+                        {src.title || src.sourceName}
+                      </span>
+                      {src.quality && (
+                        <span
+                          style={{
+                            padding: '0.1rem 0.4rem',
+                            borderRadius: '4px',
+                            backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                            color: '#60a5fa',
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {src.quality}
+                        </span>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.74rem', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+                      <span>Provider: <strong style={{ color: 'var(--text-primary)' }}>{src.providerName || src.indexerName || 'Direct'}</strong></span>
+                      {src.videoCodec && <span>Codec: <strong style={{ color: 'var(--text-primary)' }}>{src.videoCodec}</strong></span>}
+                      {src.seeders !== undefined && <span>Seeders: <strong style={{ color: '#34d399' }}>{src.seeders}</strong></span>}
+                      <span>Status: <strong style={{ color: src.status === 'Available' ? '#34d399' : '#fb7185' }}>{src.status || 'Available'}</strong></span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div
+              style={{
+                padding: '0.9rem 1.4rem',
+                borderTop: '1px solid var(--border-color)',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                backgroundColor: 'rgba(0,0,0,0.2)',
+              }}
+            >
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => {
+                  openEntry(sourcesModalEntry);
+                  setSourcesModalEntry(null);
+                }}
+              >
+                <ExternalLink size={13} />
+                <span>Open Media Page</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

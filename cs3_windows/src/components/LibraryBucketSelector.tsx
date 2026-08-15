@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Bookmark, Check, ChevronDown, Trash2 } from 'lucide-react';
 import { BUCKET_LABELS, WatchStatus, type SearchResponse } from '../types/api';
+import type { TorrentResult } from '../types/torrent';
+import { torrentResultToStoredSource } from '../../electron/cs3/libraryStore';
 
 interface LibraryBucketSelectorProps {
   item: SearchResponse;
+  sources?: TorrentResult[];
   size?: 'sm' | 'md';
   onStatusChanged?: (newStatus: WatchStatus | null) => void;
   buttonClassName?: string;
@@ -20,6 +23,7 @@ const BUCKETS: Array<{ status: WatchStatus; label: string }> = [
 
 export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
   item,
+  sources,
   size = 'md',
   onStatusChanged,
   buttonClassName,
@@ -60,6 +64,10 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
     if (!window.cloudstream) return;
     setLoading(true);
     try {
+      const storedSources = sources?.length
+        ? sources.map(torrentResultToStoredSource)
+        : undefined;
+
       const updated = await window.cloudstream.upsertLibraryEntry({
         title: item.name,
         year: item.year,
@@ -67,7 +75,22 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
         posterUrl: item.posterUrl,
         mediaUrl: item.url,
         status,
+        sources: storedSources,
       });
+
+      // Record library added history event
+      await window.cloudstream.recordHistoryEvent?.({
+        title: item.name,
+        year: item.year,
+        type: item.type,
+        posterUrl: item.posterUrl,
+        mediaUrl: item.url,
+        action: 'library_added',
+        status: 'Unchecked',
+        sourcesDiscovered: storedSources,
+        metadata: { bucket: status },
+      });
+
       setCurrentStatus(status);
       setEntryKey(updated.key);
       onStatusChanged?.(status);
@@ -82,6 +105,15 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
     setLoading(true);
     try {
       await window.cloudstream.removeLibraryEntry(entryKey);
+      await window.cloudstream.recordHistoryEvent?.({
+        title: item.name,
+        year: item.year,
+        type: item.type,
+        posterUrl: item.posterUrl,
+        mediaUrl: item.url,
+        action: 'library_removed',
+        status: 'Unchecked',
+      });
       setCurrentStatus(null);
       setEntryKey(null);
       onStatusChanged?.(null);

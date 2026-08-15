@@ -541,10 +541,45 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         video.volume = volume;
         video.muted = isMuted;
         setIsPlaying(true);
+
+        // Record successful playback event in history
+        window.cloudstream?.recordHistoryEvent?.({
+          title,
+          year: progress?.year,
+          type: progress?.season !== undefined ? 'series' : 'movie',
+          posterUrl: progress?.posterUrl,
+          mediaUrl: progress?.mediaUrl || streamUrl,
+          episodeTitle,
+          season: progress?.season,
+          episode: progress?.episode,
+          action: 'playback_started',
+          status: 'Played',
+          durationSeconds: video.duration || undefined,
+          source: {
+            sourceName: title,
+            quality: undefined,
+            directUrl: streamUrl.startsWith('http') ? streamUrl : undefined,
+          },
+        });
       })
-      .catch(() => {
-        // Autoplay can be refused; the user can press play. Not an error state.
+      .catch((err) => {
         setIsPlaying(false);
+        // Autoplay may be blocked; user interaction will start it
+        if (err?.name !== 'NotAllowedError') {
+          window.cloudstream?.recordHistoryEvent?.({
+            title,
+            year: progress?.year,
+            type: progress?.season !== undefined ? 'series' : 'movie',
+            posterUrl: progress?.posterUrl,
+            mediaUrl: progress?.mediaUrl || streamUrl,
+            episodeTitle,
+            season: progress?.season,
+            episode: progress?.episode,
+            action: 'playback_failed',
+            status: 'Failed',
+            failureReason: err?.message || 'Video element playback rejected',
+          });
+        }
       });
 
     return () => {

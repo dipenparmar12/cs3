@@ -5,8 +5,6 @@ import type {
   HistoryFilter,
   HistoryListResponse,
   HistoryStats,
-  HistoryAction,
-  HistoryStatus,
 } from '../../src/types/history';
 import { canonicalKey } from './libraryStore';
 

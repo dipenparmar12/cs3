@@ -1,47 +1,11 @@
 import type { DatastoreManager } from '../datastore';
 import type { TvType } from '../../src/types/api';
+import { WatchStatus } from '../../src/types/api';
+import type { StoredSource, SourceStatus, LibraryEntry, LibraryItemMetadata } from '../../src/types/library';
+import type { TorrentResult } from '../../src/types/torrent';
+import { deadlineFromUrl } from '../sourceCache';
 
-/**
- * Watch state, library buckets, and the memory of what the user already chose.
- *
- * Three problems this solves, all of which the app had in some form:
- *
- * 1. **The library was fabricated.** It listed two hardcoded titles with stock
- *    photography. Nothing the user watched was ever recorded.
- * 2. **The same title appears many times.** A movie found through five providers
- *    is five cards. Progress recorded against one of them must be visible on all
- *    five, or "continue watching" misses the entry the user actually clicks.
- * 3. **Every playback re-resolved from scratch.** The source the user picked
- *    last night is knowable; making them search and choose again is wasted work.
- *
- * The identity that ties it together is a canonical key derived from the title
- * and year, not the provider URL — see {@link canonicalKey}.
- */
-
-export const WatchStatus = {
-  Watching: 'Watching',
-  Completed: 'Completed',
-  OnHold: 'OnHold',
-  PlanToWatch: 'PlanToWatch',
-  Dropped: 'Dropped',
-} as const;
-export type WatchStatus = (typeof WatchStatus)[keyof typeof WatchStatus];
-
-export interface LibraryEntry {
-  /** Stable identity across providers. */
-  key: string;
-  title: string;
-  year?: number;
-  type?: TvType;
-  posterUrl?: string;
-  /** Every provider URL seen for this title, so any card resolves to this entry. */
-  urls: string[];
-  status: WatchStatus;
-  /** User's own score, 0–10, independent of any external rating. */
-  userRating?: number;
-  addedAt: number;
-  updatedAt: number;
-}
+export { WatchStatus };
 
 export interface WatchProgress {
   key: string;
@@ -73,16 +37,14 @@ export interface SourceMemory {
   chosenAt: number;
 }
 
+export type { LibraryEntry, StoredSource, SourceStatus, LibraryItemMetadata };
+
 const ENTRIES_KEY = 'library_entries';
 const PROGRESS_KEY = 'watch_progress';
 const SOURCE_MEMORY_KEY = 'source_memory';
 
 /**
  * Fraction of the runtime past which an item counts as finished.
- *
- * 92% rather than 100%: end credits mean nobody watches to the last frame, and
- * an item stuck at "97% watched" in Continue Watching forever is worse than one
- * marked done slightly early.
  */
 const COMPLETION_THRESHOLD = 0.92;
 
@@ -94,16 +56,6 @@ const MAX_PROGRESS_ROWS = 500;
 
 /**
  * Derives a provider-independent identity for a title.
- *
- * Provider URLs cannot be the key: the same film has a different URL on every
- * site, so keying on URL would scatter one title across five library entries and
- * lose progress whenever the user picked a different card.
- *
- * Normalisation strips punctuation, articles and the year suffix providers like
- * to append, so "The Matrix (1999)", "Matrix, The" and "the matrix" converge.
- * It is deliberately conservative — collapsing two genuinely different titles is
- * worse than failing to merge two spellings of one, because a false merge shows
- * the user progress for something they never watched.
  */
 export function canonicalKey(title: string, year?: number): string {
   const normalised = title
@@ -118,6 +70,90 @@ export function canonicalKey(title: string, year?: number): string {
     .replace(/\s+/g, '-');
 
   return year ? `${normalised}:${year}` : normalised;
+}
+
+/**
+ * Converts a live TorrentResult into a durable StoredSource for Library persistence.
+ */
+export function torrentResultToStoredSource(res: TorrentResult): StoredSource {
+  const expiresAt = res.directUrl
+    ? deadlineFromUrl(res.directUrl) ?? Date.now() + 20 * 60 * 1000
+    : undefined;
+  const isExpired = expiresAt ? expiresAt < Date.now() : false;
+
+  return {
+    id: res.infoHash || `src-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    infoHash: res.infoHash,
+    title: res.title,
+    sourceName: res.indexerName || res.providerName || 'Unknown Source',
+    providerName: res.providerName,
+    indexerId: res.indexerId,
+    indexerName: res.indexerName,
+    directUrl: res.directUrl,
+    directHeaders: res.directHeaders,
+    isM3u8: res.isM3u8,
+    magnet: res.magnet,
+    torrentUrl: res.torrentUrl,
+    resolution: res.parsed?.resolution,
+    quality: res.parsed?.resolution ? `${res.parsed.resolution}p` : undefined,
+    videoCodec: res.parsed?.videoCodec,
+    audioCodecs: res.parsed?.audioCodecs,
+    languages: res.parsed?.languages,
+    sizeBytes: res.sizeBytes,
+    seeders: res.seeders,
+    leechers: res.leechers,
+    status: isExpired ? 'Expired' : 'Available',
+    capabilities: {
+      canPlay: true,
+      canDownload: Boolean(res.directUrl || res.magnet),
+    },
+    parsed: res.parsed,
+    score: res.score,
+    scoreReasons: res.scoreReasons,
+    discoveredAt: Date.now(),
+    expiresAt,
+  };
+}
+
+/**
+ * Converts a StoredSource back into a TorrentResult format for playback or download.
+ */
+export function storedSourceToTorrentResult(src: StoredSource): TorrentResult {
+  return {
+    infoHash: src.infoHash || src.id,
+    directUrl: src.directUrl,
+    directHeaders: src.directHeaders,
+    isM3u8: src.isM3u8,
+    title: src.title,
+    magnet: src.magnet || '',
+    torrentUrl: src.torrentUrl,
+    sizeBytes: src.sizeBytes || 0,
+    seeders: src.seeders || 1,
+    leechers: src.leechers || 0,
+    indexerId: src.indexerId || 'library',
+    indexerName: src.indexerName || src.sourceName || 'Stored source',
+    providerName: src.providerName,
+    parsed: src.parsed || {
+      cleanTitle: src.title,
+      resolution: (src.resolution as any) || 0,
+      source: 'Unknown' as any,
+      videoCodec: (src.videoCodec as any) || 'Unknown',
+      audioCodecs: src.audioCodecs || [],
+      hdr: [],
+      languages: src.languages || [],
+      isMultiAudio: (src.audioCodecs?.length ?? 0) > 1,
+      isDualAudio: (src.audioCodecs?.length ?? 0) === 2,
+      hasHardcodedSubs: false,
+      isRepack: false,
+      isProper: false,
+      isRemastered: false,
+      is3D: false,
+      isSeasonPack: false,
+      isCompleteSeries: false,
+    },
+    score: src.score || 0,
+    scoreReasons: src.scoreReasons || ['Restored from saved Library sources'],
+  };
 }
 
 export class LibraryStore {
@@ -147,8 +183,6 @@ export class LibraryStore {
   }
 
   private persistProgress(): void {
-    // Bounded: a heavy user watching a long-running series would otherwise grow
-    // this file without limit. Newest kept.
     const rows = [...this.progress.values()].sort((a, b) => b.updatedAt - a.updatedAt);
     if (rows.length > MAX_PROGRESS_ROWS) {
       const keep = rows.slice(0, MAX_PROGRESS_ROWS);
@@ -165,46 +199,62 @@ export class LibraryStore {
 
   // --- library entries -----------------------------------------------------
 
-  /**
-   * Records or updates a title, merging provider URLs into the existing entry.
-   *
-   * Called both when the user explicitly bookmarks something and implicitly when
-   * they start watching, so the library reflects real activity rather than only
-   * deliberate curation.
-   */
   public upsertEntry(input: {
     title: string;
+    originalTitle?: string;
     year?: number;
     type?: TvType;
     posterUrl?: string;
+    backdropUrl?: string;
+    plot?: string;
+    genres?: string[];
+    duration?: string;
     mediaUrl: string;
     status?: WatchStatus;
+    sources?: StoredSource[];
+    metadata?: LibraryItemMetadata;
   }): LibraryEntry {
     const key = canonicalKey(input.title, input.year);
     const now = Date.now();
     const existing = this.entries.get(key);
 
+    const mergedSources = input.sources && input.sources.length > 0
+      ? input.sources
+      : existing?.sources;
+
     const entry: LibraryEntry = existing
       ? {
           ...existing,
-          // A later sighting may carry a poster the first one lacked, but must
-          // not overwrite a good poster with an absent one.
+          originalTitle: input.originalTitle ?? existing.originalTitle,
           posterUrl: input.posterUrl ?? existing.posterUrl,
+          backdropUrl: input.backdropUrl ?? existing.backdropUrl,
+          plot: input.plot ?? existing.plot,
+          genres: input.genres ?? existing.genres,
+          duration: input.duration ?? existing.duration,
           type: input.type ?? existing.type,
           urls: existing.urls.includes(input.mediaUrl)
             ? existing.urls
             : [...existing.urls, input.mediaUrl],
           status: input.status ?? existing.status,
+          sources: mergedSources,
+          metadata: { ...existing.metadata, ...input.metadata },
           updatedAt: now,
         }
       : {
           key,
           title: input.title,
+          originalTitle: input.originalTitle,
           year: input.year,
           type: input.type,
           posterUrl: input.posterUrl,
+          backdropUrl: input.backdropUrl,
+          plot: input.plot,
+          genres: input.genres,
+          duration: input.duration,
           urls: [input.mediaUrl],
           status: input.status ?? WatchStatus.Watching,
+          sources: input.sources,
+          metadata: input.metadata,
           addedAt: now,
           updatedAt: now,
         };
@@ -248,6 +298,10 @@ export class LibraryStore {
     return filtered.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
+  public getEntry(key: string): LibraryEntry | null {
+    return this.entries.get(key) ?? null;
+  }
+
   public getEntryForUrl(mediaUrl: string): LibraryEntry | null {
     for (const entry of this.entries.values()) {
       if (entry.urls.includes(mediaUrl)) return entry;
@@ -255,15 +309,49 @@ export class LibraryStore {
     return null;
   }
 
+  // --- source persistence --------------------------------------------------
+
+  public setSources(key: string, sources: StoredSource[]): StoredSource[] {
+    const entry = this.entries.get(key);
+    if (!entry) return sources;
+    entry.sources = sources;
+    entry.lastSourcesRefreshedAt = Date.now();
+    entry.updatedAt = Date.now();
+    this.persistEntries();
+    return sources;
+  }
+
+  public getStoredSources(key: string): StoredSource[] {
+    const entry = this.entries.get(key);
+    return entry?.sources ?? [];
+  }
+
+  public updateSourceStatus(
+    key: string,
+    sourceId: string,
+    status: SourceStatus,
+    failureReason?: string
+  ): void {
+    const entry = this.entries.get(key);
+    if (!entry || !entry.sources) return;
+
+    let modified = false;
+    for (const s of entry.sources) {
+      if (s.id === sourceId || s.infoHash === sourceId) {
+        s.status = status;
+        s.lastCheckedAt = Date.now();
+        if (failureReason) s.failureReason = failureReason;
+        modified = true;
+      }
+    }
+    if (modified) {
+      entry.updatedAt = Date.now();
+      this.persistEntries();
+    }
+  }
+
   // --- watch progress ------------------------------------------------------
 
-  /**
-   * Records playback position.
-   *
-   * Called periodically during playback, so it must be cheap and must not
-   * regress state: a seek backwards is legitimate, but a stray zero from a
-   * reloading video element must not wipe a nearly-finished item.
-   */
   public recordProgress(input: {
     title: string;
     year?: number;
@@ -285,9 +373,11 @@ export class LibraryStore {
     const id = progressId({ key, season: input.season, episode: input.episode });
     const existing = this.progress.get(id);
 
-    // A reported position of ~0 on an item already in progress is almost always
-    // a source switch or an element reload, not the user seeking to the start.
-    if (existing && input.positionSeconds < RESUME_FLOOR_SECONDS && existing.positionSeconds > RESUME_FLOOR_SECONDS) {
+    if (
+      existing &&
+      input.positionSeconds < RESUME_FLOOR_SECONDS &&
+      existing.positionSeconds > RESUME_FLOOR_SECONDS
+    ) {
       return existing;
     }
 
@@ -310,8 +400,6 @@ export class LibraryStore {
     this.progress.set(id, row);
     this.persistProgress();
 
-    // Watching something is itself a statement about status; a title the user is
-    // partway through belongs in Watching without them filing it there.
     const entry = this.entries.get(key);
     if (!entry) {
       this.upsertEntry({
@@ -335,17 +423,10 @@ export class LibraryStore {
     return this.progress.get(progressId({ key, season, episode })) ?? null;
   }
 
-  /** Every recorded position for a title, for painting an episode list. */
   public getProgressForKey(key: string): WatchProgress[] {
     return [...this.progress.values()].filter((p) => p.key === key);
   }
 
-  /**
-   * The Continue Watching row: one entry per title, most recent first.
-   *
-   * Collapsed per title deliberately. A user three episodes into a series wants
-   * one card that resumes where they stopped, not three.
-   */
   public getContinueWatching(limit = 20): WatchProgress[] {
     const newestPerKey = new Map<string, WatchProgress>();
 
@@ -380,12 +461,6 @@ export class LibraryStore {
 
   // --- source memory -------------------------------------------------------
 
-  /**
-   * Remembers which source the user chose, so the next play can skip the search.
-   *
-   * Only the choice is stored, never a resolved stream URL: those expire, and a
-   * stale one produces a failure that looks like a broken provider.
-   */
   public rememberSource(input: Omit<SourceMemory, 'chosenAt'>): void {
     this.sources.set(progressId(input), { ...input, chosenAt: Date.now() });
     this.persistSources();
@@ -397,7 +472,6 @@ export class LibraryStore {
 
   // --- portability ---------------------------------------------------------
 
-  /** Everything this store owns, for a complete export. */
   public exportAll(): {
     entries: LibraryEntry[];
     progress: WatchProgress[];
@@ -410,13 +484,6 @@ export class LibraryStore {
     };
   }
 
-  /**
-   * Merges an exported payload into this store.
-   *
-   * Merge rather than replace, and newest-wins per record: importing a backup on
-   * a machine that has since been used should not silently discard the newer
-   * activity.
-   */
   public importAll(payload: {
     entries?: LibraryEntry[];
     progress?: WatchProgress[];
@@ -465,7 +532,6 @@ export class LibraryStore {
   }
 }
 
-/** Composite id for a specific episode of a title (or the title itself). */
 function progressId(row: { key: string; season?: number; episode?: number }): string {
   return `${row.key}|${row.season ?? ''}|${row.episode ?? ''}`;
 }

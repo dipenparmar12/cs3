@@ -16,6 +16,7 @@ import {
   type PlaybackSessionRequest,
 } from './views/DetailView';
 import { LibraryView } from './views/LibraryView';
+import { HistoryView } from './views/HistoryView';
 import { SettingsView } from './views/SettingsView';
 
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -876,6 +877,14 @@ export const App: React.FC = () => {
                   <LibraryView
                     onSelectMedia={handleSelectMedia}
                     onSearch={handleSearchFromDetail}
+                  />
+                </ErrorBoundary>
+              )}
+              {activeTab === 'history' && (
+                <ErrorBoundary>
+                  <HistoryView
+                    onSelectMedia={handleSelectMedia}
+                    onPlayDirect={handleQuickPlay}
                   />
                 </ErrorBoundary>
               )}

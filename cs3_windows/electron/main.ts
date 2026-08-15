@@ -32,7 +32,8 @@ import { ProviderAnalytics } from './cs3/providerAnalytics';
 import { ProviderRanking } from './cs3/providerRanking';
 import { ProviderRecommender } from './cs3/providerRecommendations';
 import { ExternalPlayerService, PLAYER_DOWNLOADS } from './externalPlayer';
-import { LibraryStore, type WatchStatus } from './cs3/libraryStore';
+import { LibraryStore, type WatchStatus, canonicalKey, torrentResultToStoredSource } from './cs3/libraryStore';
+import { HistoryStore } from './cs3/historyStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
 import { DiscoveryService } from './cs3/discovery';
 import { SourcePrefetcher } from './cs3/sourcePrefetcher';
@@ -41,6 +42,8 @@ import type { DownloadTask } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
 import type { IndexerConfig, SourcePreferences, TorrentResult } from '../src/types/torrent';
 import type { SearchOptions } from '../src/types/api';
+import type { HistoryEvent, HistoryFilter } from '../src/types/history';
+import type { StoredSource } from '../src/types/library';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,6 +62,7 @@ const contentService = new ContentService(datastore, pluginManager, torrentEngin
 const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
 const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
+const historyStore = new HistoryStore(datastore);
 const bookmarks = new BookmarkStore(datastore);
 const discovery = new DiscoveryService();
 const titleEnricher = new TitleEnricher();
@@ -2016,6 +2020,73 @@ ipcMain.handle('library:export', async () => libraryStore.exportAll());
 
 ipcMain.handle('library:import', async (_, payload: Parameters<LibraryStore['importAll']>[0]) =>
   libraryStore.importAll(payload)
+);
+
+ipcMain.handle('library:setSources', async (_, key: string, sources: StoredSource[]) =>
+  libraryStore.setSources(key, sources)
+);
+
+ipcMain.handle('library:getSources', async (_, key: string) =>
+  libraryStore.getStoredSources(key)
+);
+
+ipcMain.handle(
+  'library:refreshSources',
+  async (_, mediaUrl: string, title: string, year?: number, season?: number, episode?: number) => {
+    try {
+      const result = await contentService.getSources(
+        { mediaUrl, titleOverride: title, season, episode },
+        undefined,
+        { bypassCache: true }
+      );
+      const key = canonicalKey(title, year);
+      const stored = result.sources.map(torrentResultToStoredSource);
+      libraryStore.setSources(key, stored);
+      return { ok: true, sources: result.sources, storedSources: stored };
+    } catch (error: any) {
+      return {
+        ok: false,
+        error: error?.message || 'Failed to refresh sources',
+        sources: [],
+        storedSources: [],
+      };
+    }
+  }
+);
+
+// --- media history ----------------------------------------------------------
+
+ipcMain.handle('history:recordEvent', async (_, event: Parameters<HistoryStore['record']>[0]) =>
+  historyStore.record(event)
+);
+
+ipcMain.handle('history:updateEvent', async (_, id: string, updates: Partial<HistoryEvent>) =>
+  historyStore.update(id, updates)
+);
+
+ipcMain.handle('history:list', async (_, filter?: HistoryFilter) =>
+  historyStore.list(filter)
+);
+
+ipcMain.handle('history:get', async (_, id: string) =>
+  historyStore.get(id)
+);
+
+ipcMain.handle('history:deleteItem', async (_, id: string) =>
+  historyStore.delete(id)
+);
+
+ipcMain.handle('history:deleteItems', async (_, ids: string[]) =>
+  historyStore.deleteMany(ids)
+);
+
+ipcMain.handle('history:clearAll', async () => {
+  historyStore.clear();
+  return { ok: true };
+});
+
+ipcMain.handle('history:getStats', async () =>
+  historyStore.getStats()
 );
 
 // --- datastore -----------------------------------------------------------

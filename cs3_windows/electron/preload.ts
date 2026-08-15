@@ -48,6 +48,13 @@ import type {
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
 import type { BootstrapProgress } from './cs3/bootstrap';
 import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
+import type { StoredSource } from '../src/types/library';
+import type {
+  HistoryEvent,
+  HistoryFilter,
+  HistoryListResponse,
+  HistoryStats,
+} from '../src/types/history';
 import type { DiagnosticRecord, DiagnosticStage } from './cs3/diagnostics';
 import type { ExternalPlayer } from './externalPlayer';
 import type {
@@ -739,6 +746,7 @@ export interface CloudStreamElectronAPI {
     posterUrl?: string;
     mediaUrl: string;
     status?: WatchStatus;
+    sources?: StoredSource[];
   }) => Promise<LibraryEntry>;
   setLibraryStatus: (key: string, status: WatchStatus) => Promise<LibraryEntry | null>;
   setLibraryUserRating: (key: string, rating?: number) => Promise<LibraryEntry | null>;
@@ -771,6 +779,32 @@ export interface CloudStreamElectronAPI {
     progress?: WatchProgress[];
     sources?: SourceMemory[];
   }) => Promise<{ entries: number; progress: number; sources: number }>;
+
+  setLibrarySources: (key: string, sources: StoredSource[]) => Promise<StoredSource[]>;
+  getLibrarySources: (key: string) => Promise<StoredSource[]>;
+  refreshLibrarySources: (
+    mediaUrl: string,
+    title: string,
+    year?: number,
+    season?: number,
+    episode?: number
+  ) => Promise<Envelope & { sources: TorrentResult[]; storedSources: StoredSource[] }>;
+
+  // Media History
+  recordHistoryEvent: (
+    event: Omit<HistoryEvent, 'id' | 'timestamp' | 'mediaKey'> & {
+      id?: string;
+      timestamp?: number;
+      mediaKey?: string;
+    }
+  ) => Promise<HistoryEvent>;
+  updateHistoryEvent: (id: string, updates: Partial<HistoryEvent>) => Promise<HistoryEvent | null>;
+  listHistory: (filter?: HistoryFilter) => Promise<HistoryListResponse>;
+  getHistory: (id: string) => Promise<HistoryEvent | null>;
+  deleteHistoryItem: (id: string) => Promise<boolean>;
+  deleteHistoryItems: (ids: string[]) => Promise<number>;
+  clearHistory: () => Promise<Envelope>;
+  getHistoryStats: () => Promise<HistoryStats>;
 
   // Datastore
   getSetting: (key: string, defaultValue?: unknown) => Promise<string>;
@@ -1059,6 +1093,20 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('library:recallSource', key, season, episode),
   exportLibrary: () => ipcRenderer.invoke('library:export'),
   importLibrary: (payload) => ipcRenderer.invoke('library:import', payload),
+  setLibrarySources: (key, sources) => ipcRenderer.invoke('library:setSources', key, sources),
+  getLibrarySources: (key) => ipcRenderer.invoke('library:getSources', key),
+  refreshLibrarySources: (mediaUrl, title, year, season, episode) =>
+    ipcRenderer.invoke('library:refreshSources', mediaUrl, title, year, season, episode),
+
+  // Media History
+  recordHistoryEvent: (event) => ipcRenderer.invoke('history:recordEvent', event),
+  updateHistoryEvent: (id, updates) => ipcRenderer.invoke('history:updateEvent', id, updates),
+  listHistory: (filter) => ipcRenderer.invoke('history:list', filter),
+  getHistory: (id) => ipcRenderer.invoke('history:get', id),
+  deleteHistoryItem: (id) => ipcRenderer.invoke('history:deleteItem', id),
+  deleteHistoryItems: (ids) => ipcRenderer.invoke('history:deleteItems', ids),
+  clearHistory: () => ipcRenderer.invoke('history:clearAll'),
+  getHistoryStats: () => ipcRenderer.invoke('history:getStats'),
 
   getSetting: (key, defaultValue) => ipcRenderer.invoke('datastore:getSetting', key, defaultValue),
   setSetting: (key, value) => ipcRenderer.invoke('datastore:setSetting', key, value),

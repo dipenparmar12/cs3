@@ -1,7 +1,6 @@
-import React from 'react';
-import { Home, Search, Film, Download, Puzzle, Settings, ShieldCheck } from 'lucide-react';
+import { Home, Search, Film, History, Download, Puzzle, Settings, ShieldCheck } from 'lucide-react';
 
-export type ActiveTab = 'home' | 'search' | 'library' | 'downloads' | 'extensions' | 'settings';
+export type ActiveTab = 'home' | 'search' | 'library' | 'history' | 'downloads' | 'extensions' | 'settings';
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -20,6 +19,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'home' as ActiveTab, label: 'Home', icon: Home },
     { id: 'search' as ActiveTab, label: 'Search', icon: Search },
     { id: 'library' as ActiveTab, label: 'Library', icon: Film },
+    { id: 'history' as ActiveTab, label: 'History', icon: History },
     { id: 'downloads' as ActiveTab, label: 'Downloads', icon: Download, badge: downloadCount },
     { id: 'extensions' as ActiveTab, label: 'Extensions', icon: Puzzle },
     {

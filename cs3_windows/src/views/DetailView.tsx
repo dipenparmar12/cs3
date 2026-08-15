@@ -310,6 +310,19 @@ export const DetailView: React.FC<DetailViewProps> = ({
           const data = response.detail as DetailData;
           setDetail(data);
           window.cloudstream?.recordTitleOutcome?.(mediaItem.url, 'played');
+
+          // Record detail opened event in history (Unchecked until user plays/downloads)
+          window.cloudstream?.recordHistoryEvent?.({
+            title: data.name,
+            year: data.year,
+            type: data.type,
+            posterUrl: data.posterUrl,
+            mediaUrl: route,
+            action: 'detail_opened',
+            status: 'Unchecked',
+            metadata: { imdbId: data.imdbId, provider: mediaItem.apiName },
+          });
+
           // Only worth saying when it is not the route the row advertised.
           setFellBackTo(
             index > 0 ? (mediaItem.alternates?.[index - 1]?.apiName ?? 'another source') : null
@@ -975,7 +988,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
         libraryControl={
           // The selector keys off a search result; `detail` carries everything
           // except the provider name, which the originating item still has.
-          <LibraryBucketSelector item={{ ...detail, apiName: mediaItem.apiName }} size="sm" />
+          <LibraryBucketSelector
+            item={{ ...detail, apiName: mediaItem.apiName }}
+            sources={pickerData?.sources || undefined}
+            size="sm"
+          />
         }
       />
 
