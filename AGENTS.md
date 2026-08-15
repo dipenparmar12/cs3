@@ -40,13 +40,13 @@ cs3/
 ├── tools/dex-spike/  ← Throwaway-ish Maven harness that measured DEX→JVM translation across 392 real plugins.
 ├── docs/PRD/         ← 37 numbered specification documents. The reasoning behind everything.
 ├── docs/docs_cs3/    ← 9 documents describing the *Android* app's architecture (the source of truth being ported).
-├── cloudstream_ref_android/  ← git submodule: upstream Android source (commit a72f9e6c…, v4.8.0).
 └── repositories/     ← 26 git submodules: the vendored community extension corpus.
+    └── _cloudstream_ref_android/  ← git submodule: upstream Android source (commit a72f9e6c…, v4.8.0).
 ```
 
 ### Submodules are NOT checked out by default
 
-`git submodule status` shows every entry prefixed with `-`. `cloudstream_ref_android/` and
+`git submodule status` shows every entry prefixed with `-`. `_cloudstream_ref_android/` and
 `repositories/*` are **empty directories** in a fresh clone (including cloud/CI sessions).
 
 - Do **not** claim you verified something against Android source unless you actually

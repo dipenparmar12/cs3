@@ -68,7 +68,7 @@
     },
     "sourceOfTruth": {
       "repository": "https://github.com/recloudstream/cloudstream",
-      "localPath": "cloudstream_ref_android/",
+      "localPath": "repositories/_cloudstream_ref_android/",
       "analyzedCommit": "a72f9e6c3f2e25eb74ce0e7d6cc56dc33c130288",
       "commitDate": "2026-08-05",
       "appVersionName": "4.8.0",
