@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   History as HistoryIcon,
+  Play,
   Trash2,
   Search,
   RotateCw,
@@ -20,6 +21,11 @@ import {
   Copy,
   Check,
   X,
+  Code2,
+  Terminal,
+  Server,
+  Layers,
+  Sparkles,
 } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
 import { TvType } from '../types/api';
@@ -32,7 +38,7 @@ import type {
 
 interface HistoryViewProps {
   onSelectMedia: (item: SearchResponse) => void;
-  onPlayDirect?: (mediaItem: SearchResponse) => void;
+  onPlayDirect?: (mediaItem: HistoryEvent) => void;
 }
 
 const STATUS_CONFIG: Record<
@@ -113,7 +119,15 @@ function formatDuration(seconds?: number): string | null {
   return `${hrs}h ${remMins}m`;
 }
 
-export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayDirect: _onPlayDirect }) => {
+function formatSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return 'Unknown size';
+  const gb = bytes / (1024 * 1024 * 1024);
+  if (gb >= 1) return `${gb.toFixed(2)} GB`;
+  const mb = bytes / (1024 * 1024);
+  return `${mb.toFixed(1)} MB`;
+}
+
+export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayDirect }) => {
   const [events, setEvents] = useState<HistoryEvent[]>([]);
   const [stats, setStats] = useState<HistoryStats>({
     total: 0,
@@ -140,7 +154,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   const [inspectingItem, setInspectingItem] = useState<HistoryEvent | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [refreshingSourceId, setRefreshingSourceId] = useState<string | null>(null);
-  const [copiedDiag, setCopiedDiag] = useState(false);
+  const [refreshSuccessMessage, setRefreshSuccessMessage] = useState<{ id: string; text: string } | null>(null);
+  const [copiedText, setCopiedText] = useState<'report' | 'json' | 'url' | null>(null);
 
   const fetchHistory = useCallback(async () => {
     if (!window.cloudstream) {
@@ -221,7 +236,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
     }
   };
 
-  const openMedia = (item: HistoryEvent, e?: React.MouseEvent) => {
+  // Navigates to Metadata Details page (synopsis, cast, season picker)
+  const openMetadataPage = (item: HistoryEvent, e?: React.MouseEvent) => {
     e?.stopPropagation();
     onSelectMedia({
       name: item.title,
@@ -233,10 +249,22 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
     });
   };
 
+  // Starts direct stream playback from history without navigating to metadata
+  const handlePlayMedia = (item: HistoryEvent, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (onPlayDirect) {
+      onPlayDirect(item);
+    } else {
+      openMetadataPage(item, e);
+    }
+  };
+
+  // Re-checks enabled providers and updates sources
   const handleRefreshSource = async (item: HistoryEvent, e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (!window.cloudstream) return;
     setRefreshingSourceId(item.id);
+    setRefreshSuccessMessage(null);
     try {
       const res = await window.cloudstream.refreshLibrarySources?.(
         item.mediaUrl,
@@ -245,51 +273,90 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
         item.season,
         item.episode
       );
-      if (res?.ok && res.sources?.length) {
-        // Record refreshed history event
-        await window.cloudstream.recordHistoryEvent?.({
-          title: item.title,
-          year: item.year,
-          type: item.type,
-          posterUrl: item.posterUrl,
-          mediaUrl: item.mediaUrl,
-          season: item.season,
-          episode: item.episode,
-          action: 'source_selected',
-          status: 'Attempted',
-          source: {
-            providerName: res.sources[0].providerName || res.sources[0].indexerName,
-            sourceName: res.sources[0].title,
-            resolution: res.sources[0].parsed?.resolution,
-            quality: res.sources[0].parsed?.resolution ? `${res.sources[0].parsed.resolution}p` : undefined,
-          },
-          sourcesDiscovered: res.storedSources,
-        });
-        fetchHistory();
+      if (res?.ok && res.sources) {
+        const count = res.sources.length;
+        const msg = count > 0 ? `Found ${count} stream source${count === 1 ? '' : 's'}` : 'No sources currently found';
+        setRefreshSuccessMessage({ id: item.id, text: msg });
+
+        if (count > 0) {
+          const top = res.sources[0];
+          // Record/update refreshed history event
+          await window.cloudstream.recordHistoryEvent?.({
+            title: item.title,
+            year: item.year,
+            type: item.type,
+            posterUrl: item.posterUrl,
+            mediaUrl: item.mediaUrl,
+            season: item.season,
+            episode: item.episode,
+            action: 'source_selected',
+            status: 'Attempted',
+            source: {
+              providerName: top.providerName || top.indexerName,
+              sourceName: top.title,
+              resolution: top.parsed?.resolution,
+              quality: top.parsed?.resolution ? `${top.parsed.resolution}p` : undefined,
+              directUrl: top.directUrl,
+              videoCodec: top.parsed?.videoCodec,
+              audioCodecs: top.parsed?.audioCodecs,
+            },
+            sourcesDiscovered: res.storedSources,
+          });
+        }
+        await fetchHistory();
       }
     } finally {
       setRefreshingSourceId(null);
+      setTimeout(() => setRefreshSuccessMessage(null), 4000);
     }
   };
 
-  const copyDiagnostics = (item: HistoryEvent) => {
-    const text = JSON.stringify(
-      {
-        id: item.id,
-        title: item.title,
-        status: item.status,
-        action: item.action,
-        timestamp: new Date(item.timestamp).toISOString(),
-        source: item.source,
-        failureReason: item.failureReason,
-        diagnostics: item.diagnostics,
-      },
-      null,
-      2
-    );
-    navigator.clipboard.writeText(text);
-    setCopiedDiag(true);
-    setTimeout(() => setCopiedDiag(false), 2000);
+  // Human-readable reproduction report (matching Download Metadata format)
+  const copyReproductionReport = (item: HistoryEvent) => {
+    const isSeries = item.season !== undefined || item.episode !== undefined;
+    const itemText = isSeries
+      ? item.season !== undefined
+        ? `S${item.season} E${item.episode ?? 1}${item.episodeTitle ? ` — ${item.episodeTitle}` : ''}`
+        : `Episode ${item.episode}`
+      : 'Movie / Feature';
+
+    const source = item.source;
+    const lines = [
+      `CloudStream Desktop — Media & Provider Diagnostics`,
+      `Title:          ${item.title}${item.year ? ` (${item.year})` : ''}`,
+      `Item:           ${itemText}`,
+      `Provider:       ${source?.providerName || source?.indexerName || 'Extension / Built-in'}`,
+      source?.sourceName ? `Source Title:   ${source.sourceName}` : null,
+      `Action:         ${item.action}`,
+      `Status:         ${item.status}`,
+      `Quality:        ${source?.quality || (source?.resolution ? `${source.resolution}p` : 'Unknown')}`,
+      source?.videoCodec ? `Video Codec:    ${source.videoCodec}` : null,
+      source?.audioCodecs?.length ? `Audio Codecs:   ${source.audioCodecs.join(', ')}` : null,
+      source?.sizeBytes ? `File Size:      ${formatSize(source.sizeBytes)}` : null,
+      source?.seeders !== undefined ? `Seeders:        ${source.seeders}` : null,
+      item.durationSeconds ? `Watched / Dur:  ${formatDuration(item.durationSeconds)}` : null,
+      item.failureReason ? `Failure Reason: ${item.failureReason}` : null,
+      source?.directUrl ? `Source Link:    ${source.directUrl}` : null,
+      source?.magnet ? `Magnet Link:    ${source.magnet}` : null,
+      `Media URL:      ${item.mediaUrl}`,
+      source?.directHeaders && Object.keys(source.directHeaders).length > 0
+        ? `Headers:        ${JSON.stringify(source.directHeaders)}`
+        : null,
+      item.diagnostics?.details ? `Diagnostics:    ${item.diagnostics.details}` : null,
+      `Timestamp:      ${new Date(item.timestamp).toISOString()}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    navigator.clipboard.writeText(lines);
+    setCopiedText('report');
+    setTimeout(() => setCopiedText(null), 2000);
+  };
+
+  const copyRawJson = (item: HistoryEvent) => {
+    navigator.clipboard.writeText(JSON.stringify(item, null, 2));
+    setCopiedText('json');
+    setTimeout(() => setCopiedText(null), 2000);
   };
 
   const statusPills: Array<{ status: HistoryStatus | 'All'; label: string; count?: number }> = [
@@ -337,7 +404,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
               </h1>
             </div>
             <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              Complete record of your playback, download attempts, providers, and stream status.
+              Revisit and replay past media streams directly, refresh fresh sources, or inspect raw provider diagnostic reports.
             </p>
           </div>
 
@@ -517,7 +584,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
             <input
               type="text"
               className="input"
-              placeholder="Search history by title, provider, quality, error…"
+              placeholder="Search history by title, provider, quality, error, or release…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={{
@@ -684,11 +751,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
             const episodeLabel = isSeries
               ? `S${String(item.season ?? 1).padStart(2, '0')} E${String(item.episode ?? 1).padStart(2, '0')}`
               : null;
+            const isRefreshing = refreshingSourceId === item.id;
+            const refreshMsg = refreshSuccessMessage?.id === item.id ? refreshSuccessMessage.text : null;
 
             return (
               <div
                 key={item.id}
-                onClick={() => (selectMode ? toggleSelect(item.id) : setInspectingItem(item))}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -698,30 +766,25 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                   backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.1)' : 'var(--bg-card)',
                   border: '1px solid',
                   borderColor: isSelected ? 'var(--accent-primary)' : 'var(--border-color)',
-                  cursor: 'pointer',
                   gap: '1rem',
                   transition: 'all 0.15s ease',
                 }}
-                onMouseEnter={(e) => {
-                  if (!isSelected) e.currentTarget.style.backgroundColor = 'var(--bg-card-hover)';
-                }}
-                onMouseLeave={(e) => {
-                  if (!isSelected) e.currentTarget.style.backgroundColor = 'var(--bg-card)';
-                }}
               >
-                {/* Left: Checkbox (if selectMode) + Poster + Title + Badges */}
+                {/* Left: Checkbox (if selectMode) + Poster + Title (links to Metadata) + Badges */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', minWidth: 0, flex: 1 }}>
                   {selectMode && (
-                    <div onClick={(e) => toggleSelect(item.id, e)} style={{ color: isSelected ? '#60a5fa' : 'var(--text-subtle)' }}>
+                    <div onClick={(e) => toggleSelect(item.id, e)} style={{ color: isSelected ? '#60a5fa' : 'var(--text-subtle)', cursor: 'pointer' }}>
                       {isSelected ? <CheckSquare size={18} /> : <Square size={18} />}
                     </div>
                   )}
 
-                  {/* Thumbnail / Poster */}
+                  {/* Thumbnail / Poster (Clicks to Metadata) */}
                   <div
+                    onClick={(e) => openMetadataPage(item, e)}
+                    title="Click to view full media details & seasons"
                     style={{
-                      width: '42px',
-                      height: '60px',
+                      width: '44px',
+                      height: '62px',
                       borderRadius: '6px',
                       overflow: 'hidden',
                       backgroundColor: 'rgba(255, 255, 255, 0.05)',
@@ -730,6 +793,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                       alignItems: 'center',
                       justifyContent: 'center',
                       border: '1px solid rgba(255, 255, 255, 0.08)',
+                      cursor: 'pointer',
+                      position: 'relative',
                     }}
                   >
                     {item.posterUrl ? (
@@ -749,7 +814,24 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                   {/* Meta & Status */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: 0, flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      <span style={{ fontWeight: 700, fontSize: '0.92rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '350px' }}>
+                      {/* Clickable Title that navigates to media metadata */}
+                      <span
+                        onClick={(e) => openMetadataPage(item, e)}
+                        title="Click to view media metadata & episodes"
+                        style={{
+                          fontWeight: 700,
+                          fontSize: '0.92rem',
+                          color: '#fff',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          maxWidth: '350px',
+                          cursor: 'pointer',
+                          textDecoration: 'none',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.color = '#60a5fa')}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = '#fff')}
+                      >
                         {item.title}
                       </span>
 
@@ -795,7 +877,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                       </span>
                     </div>
 
-                    {/* Secondary row: Episode Title, Provider, Resolution, Failure Reason */}
+                    {/* Secondary row: Episode Title, Provider, Resolution, Failure Reason, or Refresh result */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.78rem', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
                       {item.episodeTitle && (
                         <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
@@ -825,7 +907,14 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                         </span>
                       )}
 
-                      {item.failureReason && (
+                      {refreshMsg && (
+                        <span style={{ color: '#34d399', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <Sparkles size={12} />
+                          <span>{refreshMsg}</span>
+                        </span>
+                      )}
+
+                      {!refreshMsg && item.failureReason && (
                         <span style={{ color: '#fb7185', fontSize: '0.75rem', fontStyle: 'italic', maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           — {item.failureReason}
                         </span>
@@ -834,9 +923,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                   </div>
                 </div>
 
-                {/* Right: Timestamp & Action Buttons */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.15rem', marginRight: '0.5rem' }}>
+                {/* Right: Timestamp & Explicit Action Buttons */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexShrink: 0 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.15rem', marginRight: '0.4rem' }}>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-subtle)' }}>
                       {formatRelativeTime(item.timestamp)}
                     </span>
@@ -847,35 +936,53 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                     ) : null}
                   </div>
 
-                  {/* Actions */}
+                  {/* 1. Direct Play Button: Stream immediately without metadata page */}
                   <button
                     type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={(e) => openMedia(item, e)}
-                    title="Open details"
-                    style={{ padding: '0.35rem 0.6rem', fontSize: '0.75rem' }}
+                    className="btn btn-primary btn-sm"
+                    onClick={(e) => handlePlayMedia(item, e)}
+                    title="Play stream directly from history"
+                    style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem', gap: '0.3rem' }}
                   >
-                    <ExternalLink size={13} />
-                    <span>Details</span>
+                    <Play size={13} fill="currentColor" />
+                    <span>Play</span>
                   </button>
 
+                  {/* 2. Refresh Sources Button: Re-check providers directly from history */}
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
                     onClick={(e) => handleRefreshSource(item, e)}
-                    disabled={refreshingSourceId === item.id}
-                    title="Refresh sources"
-                    style={{ padding: '0.35rem 0.5rem' }}
+                    disabled={isRefreshing}
+                    title="Re-check enabled providers and discover fresh sources"
+                    style={{ padding: '0.35rem 0.55rem', fontSize: '0.75rem', gap: '0.3rem' }}
                   >
-                    <RotateCw size={13} className={refreshingSourceId === item.id ? 'animate-spin' : ''} />
+                    <RotateCw size={13} className={isRefreshing ? 'animate-spin' : ''} />
+                    <span>Refresh</span>
                   </button>
 
+                  {/* 3. Provider Raw Info / Diagnostics Inspector Button */}
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setInspectingItem(item);
+                    }}
+                    title="Inspect raw provider metadata, direct source links, and diagnostics"
+                    style={{ padding: '0.35rem 0.55rem', fontSize: '0.75rem', gap: '0.3rem' }}
+                  >
+                    <Code2 size={13} />
+                    <span>Inspect</span>
+                  </button>
+
+                  {/* 4. Delete Record Button */}
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
                     onClick={(e) => handleDeleteItem(item.id, e)}
                     title="Delete record"
-                    style={{ padding: '0.35rem 0.5rem', color: 'var(--text-subtle)' }}
+                    style={{ padding: '0.35rem 0.45rem', color: 'var(--text-subtle)' }}
                   >
                     <Trash2 size={13} />
                   </button>
@@ -885,14 +992,14 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
           })}
       </div>
 
-      {/* Expandable Inspector Modal / Drawer */}
+      {/* Comprehensive Provider & Source Inspector Modal */}
       {inspectingItem && (
         <div
           style={{
             position: 'fixed',
             inset: 0,
             zIndex: 9999,
-            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+            backgroundColor: 'rgba(0, 0, 0, 0.78)',
             backdropFilter: 'blur(6px)',
             display: 'flex',
             alignItems: 'center',
@@ -904,9 +1011,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
           <div
             style={{
               width: '100%',
-              maxWidth: '680px',
+              maxWidth: '750px',
               maxHeight: '90vh',
-              backgroundColor: '#161b26',
+              backgroundColor: '#141822',
               borderRadius: 'var(--radius-lg)',
               border: '1px solid var(--border-color)',
               boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.85)',
@@ -922,45 +1029,59 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                padding: '1.25rem 1.5rem',
+                padding: '1.1rem 1.4rem',
                 borderBottom: '1px solid var(--border-color)',
+                backgroundColor: 'rgba(255, 255, 255, 0.02)',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
                 <div
                   style={{
-                    width: '32px',
-                    height: '32px',
+                    width: '34px',
+                    height: '34px',
                     borderRadius: '8px',
                     backgroundColor: 'rgba(59, 130, 246, 0.15)',
                     color: '#60a5fa',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
+                    border: '1px solid rgba(59, 130, 246, 0.25)',
                   }}
                 >
-                  <Info size={18} />
+                  <Terminal size={18} />
                 </div>
                 <div>
                   <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
-                    Activity & Source Diagnostics
+                    Provider Raw Data & Source Diagnostics
                   </h3>
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
-                    ID: {inspectingItem.id}
+                    Detailed technical metadata for reproduction & inspection
                   </span>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              {/* Copy Report & Copy JSON Actions */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
-                  onClick={() => copyDiagnostics(inspectingItem)}
-                  title="Copy diagnostics JSON"
+                  onClick={() => copyReproductionReport(inspectingItem)}
+                  title="Copy formatted reproduction text report (Markdown / plain text)"
                 >
-                  {copiedDiag ? <Check size={14} style={{ color: '#34d399' }} /> : <Copy size={14} />}
-                  <span>{copiedDiag ? 'Copied' : 'Copy JSON'}</span>
+                  {copiedText === 'report' ? <Check size={13} style={{ color: '#34d399' }} /> : <Copy size={13} />}
+                  <span>{copiedText === 'report' ? 'Report Copied' : 'Copy Report'}</span>
                 </button>
+
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => copyRawJson(inspectingItem)}
+                  title="Copy full raw JSON object"
+                >
+                  {copiedText === 'json' ? <Check size={13} style={{ color: '#34d399' }} /> : <Code2 size={13} />}
+                  <span>{copiedText === 'json' ? 'JSON Copied' : 'Raw JSON'}</span>
+                </button>
+
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
@@ -972,8 +1093,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
             </div>
 
             {/* Modal Body */}
-            <div style={{ padding: '1.5rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              {/* Media Summary Box */}
+            <div style={{ padding: '1.4rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.15rem' }}>
+              {/* Media & Action Banner */}
               <div style={{ display: 'flex', gap: '1rem', backgroundColor: 'rgba(255, 255, 255, 0.03)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                 {inspectingItem.posterUrl && (
                   <img
@@ -992,96 +1113,115 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                         ({inspectingItem.year})
                       </span>
                     )}
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.25rem',
+                        fontSize: '0.7rem',
+                        fontWeight: 700,
+                        padding: '0.12rem 0.45rem',
+                        borderRadius: '10px',
+                        backgroundColor: STATUS_CONFIG[inspectingItem.status]?.bg || 'rgba(255,255,255,0.05)',
+                        color: STATUS_CONFIG[inspectingItem.status]?.text || '#fff',
+                        border: `1px solid ${STATUS_CONFIG[inspectingItem.status]?.border || 'transparent'}`,
+                      }}
+                    >
+                      {inspectingItem.status}
+                    </span>
                   </div>
-                  {inspectingItem.originalTitle && inspectingItem.originalTitle !== inspectingItem.title && (
-                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                      Original: {inspectingItem.originalTitle}
-                    </div>
-                  )}
+
                   {inspectingItem.episodeTitle && (
                     <div style={{ fontSize: '0.82rem', color: '#a78bfa', fontWeight: 600 }}>
-                      {inspectingItem.season !== undefined ? `Season ${inspectingItem.season}, Episode ${inspectingItem.episode}: ` : ''}
+                      {inspectingItem.season !== undefined ? `Season ${inspectingItem.season}, Episode ${inspectingItem.episode ?? 1}: ` : ''}
                       "{inspectingItem.episodeTitle}"
                     </div>
                   )}
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-subtle)', marginTop: '0.25rem' }}>
-                    Media URL: <span style={{ color: 'var(--text-muted)', wordBreak: 'break-all' }}>{inspectingItem.mediaUrl}</span>
+
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-subtle)', display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.2rem', flexWrap: 'wrap' }}>
+                    <span>Action: <strong style={{ color: 'var(--text-primary)' }}>{inspectingItem.action}</strong></span>
+                    <span>Timestamp: <strong style={{ color: 'var(--text-primary)' }}>{new Date(inspectingItem.timestamp).toLocaleString()}</strong></span>
+                    {inspectingItem.durationSeconds ? (
+                      <span>Duration: <strong style={{ color: 'var(--text-primary)' }}>{formatDuration(inspectingItem.durationSeconds)}</strong></span>
+                    ) : null}
                   </div>
                 </div>
               </div>
 
-              {/* Activity Section */}
+              {/* Provider & Source Meta (The Raw Truth) */}
               <div>
-                <h5 style={{ margin: '0 0 0.5rem 0', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-subtle)', textTransform: 'uppercase' }}>
-                  Activity Record
-                </h5>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', fontSize: '0.8rem' }}>
-                  <div style={{ padding: '0.6rem', backgroundColor: 'rgba(255, 255, 255, 0.02)', borderRadius: '6px' }}>
-                    <span style={{ color: 'var(--text-subtle)' }}>Action:</span>{' '}
-                    <strong style={{ color: '#fff' }}>{inspectingItem.action}</strong>
-                  </div>
-                  <div style={{ padding: '0.6rem', backgroundColor: 'rgba(255, 255, 255, 0.02)', borderRadius: '6px' }}>
-                    <span style={{ color: 'var(--text-subtle)' }}>Status:</span>{' '}
-                    <strong style={{ color: STATUS_CONFIG[inspectingItem.status]?.text || '#fff' }}>
-                      {inspectingItem.status}
-                    </strong>
-                  </div>
-                  <div style={{ padding: '0.6rem', backgroundColor: 'rgba(255, 255, 255, 0.02)', borderRadius: '6px' }}>
-                    <span style={{ color: 'var(--text-subtle)' }}>Timestamp:</span>{' '}
-                    <span style={{ color: 'var(--text-primary)' }}>
-                      {new Date(inspectingItem.timestamp).toLocaleString()}
-                    </span>
-                  </div>
-                  {inspectingItem.durationSeconds ? (
-                    <div style={{ padding: '0.6rem', backgroundColor: 'rgba(255, 255, 255, 0.02)', borderRadius: '6px' }}>
-                      <span style={{ color: 'var(--text-subtle)' }}>Duration / Watched:</span>{' '}
-                      <span style={{ color: 'var(--text-primary)' }}>
-                        {formatDuration(inspectingItem.durationSeconds)}
-                      </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.5rem', color: '#60a5fa', fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase' }}>
+                  <Server size={14} />
+                  <span>Provider & Source Origin</span>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', backgroundColor: 'rgba(0, 0, 0, 0.25)', padding: '0.85rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', fontSize: '0.8rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                    <div>
+                      <span style={{ color: 'var(--text-subtle)' }}>Provider Name:</span>{' '}
+                      <strong style={{ color: '#fff' }}>{inspectingItem.source?.providerName || inspectingItem.source?.indexerName || 'Direct / Unknown'}</strong>
                     </div>
-                  ) : null}
+                    <div>
+                      <span style={{ color: 'var(--text-subtle)' }}>Resolution / Quality:</span>{' '}
+                      <span style={{ color: 'var(--text-primary)' }}>{inspectingItem.source?.quality || (inspectingItem.source?.resolution ? `${inspectingItem.source.resolution}p` : 'N/A')}</span>
+                    </div>
+                    <div>
+                      <span style={{ color: 'var(--text-subtle)' }}>Video Codec:</span>{' '}
+                      <span style={{ color: 'var(--text-primary)' }}>{inspectingItem.source?.videoCodec || 'N/A'}</span>
+                    </div>
+                    <div>
+                      <span style={{ color: 'var(--text-subtle)' }}>Audio Codecs:</span>{' '}
+                      <span style={{ color: 'var(--text-primary)' }}>{inspectingItem.source?.audioCodecs?.join(', ') || 'N/A'}</span>
+                    </div>
+                  </div>
+
+                  {inspectingItem.source?.sourceName && (
+                    <div style={{ paddingTop: '0.35rem', borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                      <span style={{ color: 'var(--text-subtle)' }}>Release Name:</span>{' '}
+                      <span style={{ color: '#fff', wordBreak: 'break-all' }}>{inspectingItem.source.sourceName}</span>
+                    </div>
+                  )}
+
+                  {inspectingItem.source?.directUrl && (
+                    <div style={{ paddingTop: '0.35rem', borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                      <span style={{ color: 'var(--text-subtle)' }}>Direct Source Link:</span>
+                      <div style={{ marginTop: '0.2rem', padding: '0.4rem 0.6rem', backgroundColor: 'rgba(0, 0, 0, 0.4)', borderRadius: '4px', wordBreak: 'break-all', fontSize: '0.74rem', color: '#93c5fd', fontFamily: 'monospace' }}>
+                        {inspectingItem.source.directUrl}
+                      </div>
+                    </div>
+                  )}
+
+                  {inspectingItem.source?.magnet && (
+                    <div style={{ paddingTop: '0.35rem', borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                      <span style={{ color: 'var(--text-subtle)' }}>Magnet URI:</span>
+                      <div style={{ marginTop: '0.2rem', padding: '0.4rem 0.6rem', backgroundColor: 'rgba(0, 0, 0, 0.4)', borderRadius: '4px', wordBreak: 'break-all', fontSize: '0.74rem', color: '#fbcfe8', fontFamily: 'monospace' }}>
+                        {inspectingItem.source.magnet}
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ paddingTop: '0.35rem', borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                    <span style={{ color: 'var(--text-subtle)' }}>Media URL:</span>{' '}
+                    <span style={{ color: 'var(--text-muted)', wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '0.74rem' }}>{inspectingItem.mediaUrl}</span>
+                  </div>
+
+                  {inspectingItem.source?.directHeaders && Object.keys(inspectingItem.source.directHeaders).length > 0 && (
+                    <div style={{ paddingTop: '0.35rem', borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                      <span style={{ color: 'var(--text-subtle)' }}>Request Headers:</span>
+                      <pre style={{ margin: '0.25rem 0 0 0', padding: '0.4rem', backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: '4px', fontSize: '0.72rem', color: '#d1d5db', overflowX: 'auto' }}>
+                        {JSON.stringify(inspectingItem.source.directHeaders, null, 2)}
+                      </pre>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* Source & Provider Section */}
-              {inspectingItem.source && (
-                <div>
-                  <h5 style={{ margin: '0 0 0.5rem 0', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-subtle)', textTransform: 'uppercase' }}>
-                    Source Metadata
-                  </h5>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', fontSize: '0.8rem' }}>
-                    <div style={{ padding: '0.6rem', backgroundColor: 'rgba(255, 255, 255, 0.02)', borderRadius: '6px' }}>
-                      <span style={{ color: 'var(--text-subtle)' }}>Provider:</span>{' '}
-                      <strong style={{ color: '#fff' }}>{inspectingItem.source.providerName || inspectingItem.source.indexerName || 'Unknown'}</strong>
-                    </div>
-                    <div style={{ padding: '0.6rem', backgroundColor: 'rgba(255, 255, 255, 0.02)', borderRadius: '6px' }}>
-                      <span style={{ color: 'var(--text-subtle)' }}>Quality / Resolution:</span>{' '}
-                      <span style={{ color: 'var(--text-primary)' }}>
-                        {inspectingItem.source.quality || (inspectingItem.source.resolution ? `${inspectingItem.source.resolution}p` : 'Unknown')}
-                      </span>
-                    </div>
-                    {inspectingItem.source.videoCodec && (
-                      <div style={{ padding: '0.6rem', backgroundColor: 'rgba(255, 255, 255, 0.02)', borderRadius: '6px' }}>
-                        <span style={{ color: 'var(--text-subtle)' }}>Video Codec:</span>{' '}
-                        <span style={{ color: 'var(--text-primary)' }}>{inspectingItem.source.videoCodec}</span>
-                      </div>
-                    )}
-                    {inspectingItem.source.sourceName && (
-                      <div style={{ gridColumn: '1 / -1', padding: '0.6rem', backgroundColor: 'rgba(255, 255, 255, 0.02)', borderRadius: '6px' }}>
-                        <span style={{ color: 'var(--text-subtle)' }}>Release Name:</span>{' '}
-                        <span style={{ color: 'var(--text-primary)', wordBreak: 'break-all' }}>{inspectingItem.source.sourceName}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Diagnostics & Error Details */}
+              {/* Failure Diagnostics (if failed) */}
               {inspectingItem.failureReason && (
                 <div style={{ padding: '1rem', backgroundColor: 'rgba(244, 63, 94, 0.08)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(244, 63, 94, 0.25)' }}>
                   <h5 style={{ margin: '0 0 0.4rem 0', fontSize: '0.8rem', fontWeight: 700, color: '#fb7185', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                     <AlertTriangle size={14} />
-                    <span>Failure Diagnosis</span>
+                    <span>Failure Diagnosis & Stack Trace</span>
                   </h5>
                   <p style={{ margin: 0, fontSize: '0.85rem', color: '#fff' }}>
                     {inspectingItem.failureReason}
@@ -1093,17 +1233,70 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                   )}
                 </div>
               )}
+
+              {/* Discovered Sources List */}
+              {inspectingItem.sourcesDiscovered && inspectingItem.sourcesDiscovered.length > 0 && (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.5rem', color: '#a78bfa', fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase' }}>
+                    <Layers size={14} />
+                    <span>Discovered Sources ({inspectingItem.sourcesDiscovered.length})</span>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '180px', overflowY: 'auto' }}>
+                    {inspectingItem.sourcesDiscovered.map((src, i) => (
+                      <div
+                        key={src.id || i}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '0.5rem 0.75rem',
+                          backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                          borderRadius: '4px',
+                          border: '1px solid rgba(255, 255, 255, 0.06)',
+                          fontSize: '0.75rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', minWidth: 0, flex: 1 }}>
+                          <span style={{ color: '#fff', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {src.title || src.sourceName}
+                          </span>
+                          <span style={{ color: 'var(--text-subtle)' }}>
+                            {src.providerName || src.indexerName} {src.quality ? `· ${src.quality}` : ''} {src.videoCodec ? `· ${src.videoCodec}` : ''}
+                          </span>
+                        </div>
+                        {src.directUrl && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => {
+                              navigator.clipboard.writeText(src.directUrl!);
+                              setCopiedText('url');
+                              setTimeout(() => setCopiedText(null), 1500);
+                            }}
+                            title="Copy link"
+                            style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }}
+                          >
+                            <Copy size={11} />
+                            <span>{copiedText === 'url' ? 'Copied' : 'Link'}</span>
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Modal Footer */}
+            {/* Modal Footer with Direct Actions */}
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                padding: '1rem 1.5rem',
+                padding: '1rem 1.4rem',
                 borderTop: '1px solid var(--border-color)',
-                backgroundColor: 'rgba(0,0,0,0.2)',
+                backgroundColor: 'rgba(0,0,0,0.25)',
               }}
             >
               <button
@@ -1116,14 +1309,25 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                 <span>Delete Record</span>
               </button>
 
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => openMetadataPage(inspectingItem)}
+                  title="Navigate to full media synopsis & seasons page"
+                >
+                  <ExternalLink size={13} />
+                  <span>Metadata Page</span>
+                </button>
+
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
                   onClick={() => handleRefreshSource(inspectingItem)}
                   disabled={refreshingSourceId === inspectingItem.id}
+                  title="Re-query enabled providers for fresh links"
                 >
-                  <RotateCw size={14} className={refreshingSourceId === inspectingItem.id ? 'animate-spin' : ''} />
+                  <RotateCw size={13} className={refreshingSourceId === inspectingItem.id ? 'animate-spin' : ''} />
                   <span>Refresh Sources</span>
                 </button>
 
@@ -1131,12 +1335,13 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                   type="button"
                   className="btn btn-primary btn-sm"
                   onClick={() => {
-                    openMedia(inspectingItem);
+                    handlePlayMedia(inspectingItem);
                     setInspectingItem(null);
                   }}
+                  title="Start streaming now"
                 >
-                  <ExternalLink size={14} />
-                  <span>Open Media Details</span>
+                  <Play size={13} fill="currentColor" />
+                  <span>Play Media Now</span>
                 </button>
               </div>
             </div>

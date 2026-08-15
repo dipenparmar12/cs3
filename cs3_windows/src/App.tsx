@@ -23,6 +23,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { FirstRunBanner } from './components/FirstRunBanner';
 
 import type { Episode, SearchOptions, SearchResponse } from './types/api';
+import type { HistoryEvent } from './types/history';
 import { type DownloadTask, DownloadState } from './types/download';
 import type { TorrentResult } from './types/torrent';
 import type { PlaybackSnapshot } from '../electron/playbackSession';
@@ -468,6 +469,41 @@ export const App: React.FC = () => {
     [startSession]
   );
 
+  const handlePlayFromHistory = useCallback(
+    async (item: HistoryEvent) => {
+      setSelectedMedia(null);
+      setPlayerHidden(false);
+      setPlayerMini(false);
+      setPreparing({ title: item.title });
+
+      try {
+        await startSession({
+          request: {
+            mediaUrl: item.mediaUrl,
+            season: item.season,
+            episode: item.episode,
+          },
+          title: item.title,
+          episodeTitle: item.episodeTitle,
+          progress: {
+            mediaUrl: item.mediaUrl,
+            year: item.year,
+            posterUrl: item.posterUrl,
+            season: item.season,
+            episode: item.episode,
+          },
+          subtitleContext: {
+            season: item.season,
+            episode: item.episode,
+          },
+        });
+      } finally {
+        setPreparing(null);
+      }
+    },
+    [startSession]
+  );
+
   /**
    * Tells the originating view which release actually started.
    *
@@ -884,7 +920,7 @@ export const App: React.FC = () => {
                 <ErrorBoundary>
                   <HistoryView
                     onSelectMedia={handleSelectMedia}
-                    onPlayDirect={handleQuickPlay}
+                    onPlayDirect={handlePlayFromHistory}
                   />
                 </ErrorBoundary>
               )}

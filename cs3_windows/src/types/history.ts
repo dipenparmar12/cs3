@@ -46,6 +46,8 @@ export interface HistorySourceInfo {
   isM3u8?: boolean;
   magnet?: string;
   sizeBytes?: number;
+  seeders?: number;
+  leechers?: number;
   status?: SourceStatus | string;
   failureReason?: string;
 }
