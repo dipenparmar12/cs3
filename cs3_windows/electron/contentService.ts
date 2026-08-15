@@ -625,45 +625,39 @@ export class ContentService {
     );
     const allowedProviders = new Set(providerScope.allowed);
 
-    let routes = (this.alternateRoutes.get(base) ?? []).filter((route) => {
+    const routes = (this.alternateRoutes.get(base) ?? []).filter((route) => {
       if (!providerScope.narrowed) return true;
       const ref = parseExtensionUrl(route);
       return ref ? allowedProviders.has(ref.provider) : false;
     });
 
-    // Fallback: If no alternate route was cached from a previous search step,
-    // query enabled extension providers for `title` directly so catalogue items
-    // (opened from HomeView/Trending) draw on active extension providers too.
-    // A narrowed scope that resolves to nothing asks nothing, which is the
-    // point of narrowing — `undefined` here would mean "every provider".
-    if (routes.length === 0 && title && !(providerScope.narrowed && allowedProviders.size === 0)) {
-      try {
-        const matches = await this.plugins.searchAll(
-          title,
-          providerScope.narrowed ? providerScope.allowed : undefined
-        );
-        routes = matches.map((m) => m.url).filter((url) => url.startsWith('cs3ext://'));
-      } catch (e) {
-        console.warn('Fallback extension provider search failed:', e);
-      }
-    }
+    const needProviderSearch =
+      routes.length === 0 && title && !(providerScope.narrowed && allowedProviders.size === 0);
+    const targetProviders = providerScope.narrowed ? providerScope.allowed : undefined;
+    const providerList = needProviderSearch
+      ? this.plugins.narrowToEnabled(targetProviders)
+      : [];
+    const totalExtensionsToAsk = routes.length + (needProviderSearch ? providerList.length : 0);
 
     const fromExtensions: TorrentResult[] = [];
     let extensionsSettled = 0;
+    let latestIndexerProgress: SearchProgress | null = null;
 
-    let latest: SearchProgress | null = null;
     const report = (progress: SearchProgress | null) => {
-      if (!onProgress || !progress) return;
-      // Cancelled: the viewer has stopped waiting, and pushing later arrivals
-      // into their list would undo the decision they just made.
+      if (!onProgress) return;
       if (options.signal?.aborted) return;
+      const indexerResults = progress?.results ?? [];
+      const indexerSettled = progress?.settled ?? 0;
+      const indexerTotal = progress?.totalRelevant ?? allowedIndexers.size;
+      const done =
+        (progress?.done ?? false) && extensionsSettled >= totalExtensionsToAsk;
+
       onProgress({
-        ...progress,
-        // Provider links lead: they are already resolved and start fastest.
-        results: [...fromExtensions, ...progress.results],
-        settled: progress.settled + extensionsSettled,
-        totalRelevant: progress.totalRelevant + routes.length,
-        done: progress.done && extensionsSettled >= routes.length,
+        results: [...fromExtensions, ...indexerResults],
+        settled: indexerSettled + extensionsSettled,
+        totalRelevant: indexerTotal + totalExtensionsToAsk,
+        lastIndexerName: progress?.lastIndexerName ?? 'Extension provider',
+        done,
       });
     };
 
@@ -680,28 +674,59 @@ export class ContentService {
         },
         onProgress &&
           ((progress) => {
-            latest = progress;
+            latestIndexerProgress = progress;
             report(progress);
           }),
         // Source discovery honours the same scope the search did, so narrowing
         // to one site does not quietly widen again the moment you press play.
-        // Resolved once, up front, against the whole enabled list: an indexer
-        // outside the scope is reported as skipped rather than simply absent.
         (id) => allowedIndexers.has(id)
       ),
       ...routes.map(async (route) => {
-        // Checked here rather than only at the top: these run concurrently, and
-        // a cancel part-way through means the ones that have not begun scraping
-        // yet never should.
         if (options.signal?.aborted) return;
         try {
-          fromExtensions.push(...(await this.extensionSources(route, season, episode)).sources);
+          const res = await this.extensionSources(route, season, episode);
+          if (res.sources.length > 0) {
+            fromExtensions.push(...res.sources);
+          }
         } catch {
           // One provider failing is not a search failure; the rest still answer.
+        } finally {
+          extensionsSettled += 1;
+          report(latestIndexerProgress);
         }
-        extensionsSettled += 1;
-        report(latest);
       }),
+      ...(needProviderSearch && providerList.length > 0
+        ? [
+            this.plugins.searchEach(
+              title,
+              targetProviders,
+              async (providerOutcome) => {
+                if (options.signal?.aborted) return;
+                try {
+                  const extMatches = (providerOutcome.results ?? []).filter((m) =>
+                    m.url && m.url.startsWith('cs3ext://')
+                  );
+                  if (extMatches.length > 0) {
+                    for (const match of extMatches.slice(0, 2)) {
+                      if (options.signal?.aborted) break;
+                      try {
+                        const res = await this.extensionSources(match.url, season, episode);
+                        if (res.sources.length > 0) {
+                          fromExtensions.push(...res.sources);
+                          report(latestIndexerProgress);
+                        }
+                      } catch {}
+                    }
+                  }
+                } finally {
+                  extensionsSettled += 1;
+                  report(latestIndexerProgress);
+                }
+              },
+              options.signal
+            ),
+          ]
+        : []),
     ]);
 
     const response: SourceResponse = {

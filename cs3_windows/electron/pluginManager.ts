@@ -1717,7 +1717,7 @@ export class PluginManager {
    * A named provider that is disabled is dropped rather than re-enabled, which
    * is what keeps the extensions screen authoritative over the scope picker.
    */
-  private narrowToEnabled(only?: string[]): string[] {
+  public narrowToEnabled(only?: string[]): string[] {
     const enabled = this.enabledProviderNames();
     if (!only) return enabled;
     const wanted = new Set(only);
