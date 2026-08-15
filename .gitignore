@@ -36,3 +36,5 @@ tools/toolchain/
 e2e-*.json
 e2e-*.log
 sidecar/plugin-data/
+
+.github/hooks/context-mode.json
