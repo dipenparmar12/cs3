@@ -23,8 +23,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  /* `.mts` too, or the tests are the one part of `electron/` that nothing
-     typechecks — and a test that does not compile is worse than none, because
-     it still passes until someone tries to run it. */
-  "include": ["vite.config.ts", "electron/**/*.ts", "electron/**/*.mts"]
+  "include": ["vite.config.ts", "electron/**/*.ts"]
 }

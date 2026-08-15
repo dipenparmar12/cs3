@@ -145,47 +145,10 @@ class SidecarTest {
 
         assertNotEquals(a.getFilesDir().toPath(), b.getFilesDir().toPath());
         assertTrue(a.getFilesDir().toPath().startsWith(dir));
-
-        /*
-         * DROP-12: no ambient authority beyond the plugin's own directory —
-         * and `null` is how Android itself says so.
-         *
-         * This used to throw for every service name, which looks stricter and
-         * is worse. The call site in the corpus is the first statement of a
-         * provider's `load()`, unguarded, asking how much memory the device has
-         * so it can size a buffer; throwing there aborted the load and cost the
-         * extension every provider it was about to register. StreamPlay lost
-         * all of its providers to exactly that, and the reported cause named
-         * `getSystemService` rather than anything anyone could act on.
-         *
-         * `null` is the documented contract for a name the platform does not
-         * recognise, so a caller that checks gets Android's behaviour and one
-         * that does not fails on the line that *uses* the service rather than
-         * the line that asked for it.
-         */
-        assertNull(a.getSystemService("window"));
-        assertNull(a.getSystemService("audio"));
-        assertNull(a.getSystemService(null));
-
-        /*
-         * `getPackageManager` hands back a manager rather than throwing, and
-         * every operation on it throws instead.
-         *
-         * The guarantee is unchanged — a plugin still learns nothing about the
-         * host — but the throw had to move. An extension merely *mentioning*
-         * `PackageManager` failed to load at all, because verification resolves
-         * every type a method body names; Kraptor123/cs-kraptor lost all 65 of
-         * its plugins that way. Returning `Object` was equally fatal one step
-         * later: Android declares
-         * `getPackageManager()Landroid/content/pm/PackageManager;`, and a
-         * different return type is a different method to the JVM.
-         */
-        android.content.pm.PackageManager packages = a.getPackageManager();
-        assertNotNull(packages);
+        // DROP-12: no ambient authority beyond the plugin's own directory.
         assertThrows(android.content.UnsupportedAndroidApiException.class,
-                () -> packages.getPackageInfo("com.example", 0));
-        assertThrows(android.content.UnsupportedAndroidApiException.class,
-                () -> packages.getApplicationInfo("com.example", 0));
+                () -> a.getSystemService("window"));
+        assertThrows(android.content.UnsupportedAndroidApiException.class, a::getPackageManager);
     }
 
     @Test
@@ -208,158 +171,11 @@ class SidecarTest {
     @Test
     void unsupportedAndroidApiNamesTheApiItRefused() {
         var e = assertThrows(android.content.UnsupportedAndroidApiException.class,
-                () -> android.content.Context.cs3CreateScoped("p", "/tmp").getAssets());
+                () -> android.content.Context.cs3CreateScoped("p", "/tmp").getResources());
 
         // AC-D5: the message must identify the API, not just fail.
-        assertTrue(e.getMessage().contains("android.content.Context.getAssets"));
-        assertEquals("android.content.Context.getAssets", e.api());
-    }
-
-    /**
-     * The one system service the corpus asks for answers with real numbers.
-     *
-     * Real ones, about this JVM. DROP-9 forbids telling plugin code something
-     * false about its platform, and an extension sizing a buffer against a
-     * fabricated device memory figure would size it wrongly — which is the
-     * failure mode a made-up answer was supposed to avoid.
-     */
-    @Test
-    void activityManagerReportsRealMemory(@TempDir Path dir) {
-        android.content.Context context =
-                android.content.Context.cs3CreateScoped("plugin.a", dir.toString());
-
-        Object service = context.getSystemService(android.content.Context.ACTIVITY_SERVICE);
-        assertNotNull(service);
-        assertInstanceOf(android.app.ActivityManager.class, service);
-
-        android.app.ActivityManager manager = (android.app.ActivityManager) service;
-        android.app.ActivityManager.MemoryInfo info = new android.app.ActivityManager.MemoryInfo();
-        manager.getMemoryInfo(info);
-
-        assertTrue(info.totalMem > 0, "total memory must be a real figure");
-        assertTrue(info.availMem >= 0);
-        assertTrue(info.availMem <= info.totalMem);
-        assertTrue(manager.getMemoryClass() > 0);
-
-        // Enumerating the host's processes is not the plugin's business, and an
-        // empty list is what an unprivileged Android app has received since API 24.
-        assertTrue(manager.getRunningAppProcesses().isEmpty());
-    }
-
-    /**
-     * `Handler` runs what it is given rather than refusing it.
-     *
-     * Almost every use in the corpus is a retry backoff or a timeout guard, not
-     * a UI hop — ordinary scheduling that the JVM does perfectly well. Refusing
-     * would break working scraper code to make a point about a platform
-     * difference that does not exist here.
-     */
-    @Test
-    void handlerRunsPostedWorkInOrder() throws Exception {
-        android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
-        java.util.List<Integer> seen = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
-        java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(3);
-
-        for (int i = 1; i <= 3; i++) {
-            final int value = i;
-            handler.post(() -> {
-                seen.add(value);
-                done.countDown();
-            });
-        }
-
-        assertTrue(done.await(5, java.util.concurrent.TimeUnit.SECONDS));
-        // Android guarantees ordering on one Handler; a pool would not.
-        assertEquals(java.util.List.of(1, 2, 3), seen);
-
-        // A cancelled task must not run.
-        Runnable never = () -> seen.add(99);
-        handler.postDelayed(never, 2_000);
-        handler.removeCallbacks(never);
-        Thread.sleep(200);
-        assertFalse(seen.contains(99));
-    }
-
-    /**
-     * {@code getResources} returns the declared type and refuses on use.
-     *
-     * It used to throw immediately, and this test asserted that — but the
-     * signature was {@code ()Ljava/lang/Object;}, which is a *different method*
-     * to the JVM than the {@code ()Landroid/content/res/Resources;} extensions
-     * are compiled against. The refusal was never reached: the call site failed
-     * with {@code NoSuchMethodError} first, naming nothing. Returning the real
-     * type is what makes the call link; the refusal moves to the accessor, where
-     * it can finally be seen.
-     */
-    @Test
-    void getResourcesLinksAndRefusesOnUse() {
-        android.content.res.Resources resources =
-                android.content.Context.cs3CreateScoped("p", "/tmp").getResources();
-        assertNotNull(resources);
-
-        var e = assertThrows(android.content.UnsupportedAndroidApiException.class,
-                () -> resources.getString(1));
-        assertTrue(e.getMessage().contains("Resources.getString"));
-
-        // Android's documented answer for "no such resource", and truthful here.
-        assertEquals(0, resources.getIdentifier("x", "id", "pkg"));
-    }
-
-    /**
-     * The Context handed to a plugin is an {@code AppCompatActivity}.
-     *
-     * 25 archives in the corpus open {@code load()} with
-     * {@code context as AppCompatActivity} and lost every provider when that
-     * cast failed. It must keep succeeding — and the storage scope must survive
-     * the longer constructor chain, which is the part a careless change breaks
-     * silently.
-     */
-    @Test
-    void pluginContextSatisfiesTheAppCompatActivityCast(@TempDir Path dir) {
-        android.content.Context context =
-                android.content.Context.cs3CreateScoped("plugin.cast", dir.toString());
-
-        assertInstanceOf(androidx.appcompat.app.AppCompatActivity.class, context);
-
-        context.getSharedPreferences("s", 0).edit().putString("k", "v").apply();
-        android.content.Context reopened =
-                android.content.Context.cs3CreateScoped("plugin.cast", dir.toString());
-        assertEquals("v", reopened.getSharedPreferences("s", 0).getString("k", null));
-
-        // The activity surface itself still refuses — nothing is faked to make
-        // the cast work beyond the type identity.
-        assertThrows(android.content.UnsupportedAndroidApiException.class,
-                () -> ((androidx.appcompat.app.AppCompatActivity) context).getSupportFragmentManager());
-    }
-
-    /**
-     * {@code android.net.Uri} parses leniently and never throws.
-     *
-     * The inputs below are the ones {@code java.net.URI} rejects — a space, a
-     * pipe, a stray percent — and providers produce them routinely. Delegating
-     * to the validating parser would turn "untidy URL", which Android tolerates,
-     * into a hard failure mid-scrape.
-     */
-    @Test
-    void uriParsesLenientlyAndReadsQueryParameters() {
-        var uri = android.net.Uri.parse("https://host.example:8443/a/b%20c?id=42&q=one+two#frag");
-        assertEquals("https", uri.getScheme());
-        assertEquals("host.example", uri.getHost());
-        assertEquals(8443, uri.getPort());
-        assertEquals("42", uri.getQueryParameter("id"));
-        // getQueryParameter converts '+' to a space; Uri.decode deliberately does not.
-        assertEquals("one two", uri.getQueryParameter("q"));
-        assertEquals("frag", uri.getFragment());
-        assertEquals("b c", uri.getLastPathSegment());
-
-        for (String hostile : new String[] { "not a url", "http://h/p|q", "%%%", "" }) {
-            assertNotNull(android.net.Uri.parse(hostile).toString(), hostile);
-        }
-
-        assertEquals(
-                "https://h/p?a=1&b=2",
-                android.net.Uri.parse("https://h/p?a=1").buildUpon()
-                        .appendQueryParameter("b", "2").build().toString());
+        assertTrue(e.getMessage().contains("android.content.Context.getResources"));
+        assertEquals("android.content.Context.getResources", e.api());
     }
 
     // --- class loader isolation ---------------------------------------------

@@ -49,12 +49,7 @@ public class Context {
      * {@code load(Context)} invoke fails on an argument type mismatch.
      */
     public static Context cs3CreateScoped(String pluginId, String scopedDir) {
-        // An AppCompatActivity subclass rather than a bare Context, because the
-        // corpus casts to one as the first statement of `load()` and drops every
-        // provider when that fails. See PluginHostContext for the measurement
-        // and for what is and is not conceded by it. Still a Context, so the
-        // reflective `load(Context)` invoke resolves unchanged.
-        return new PluginHostContext(pluginId, Paths.get(scopedDir, sanitize(pluginId)));
+        return new Context(pluginId, Paths.get(scopedDir, sanitize(pluginId)));
     }
 
     private static String sanitize(String id) {
@@ -66,7 +61,7 @@ public class Context {
     public SharedPreferences getSharedPreferences(String name, int mode) {
         String key = sanitize(name);
         return prefs.computeIfAbsent(key,
-                k -> new JsonSharedPreferences(scopedDir.resolve("prefs").resolve(k + ".json")));
+                k -> new SharedPreferences(scopedDir.resolve("prefs").resolve(k + ".json")));
     }
 
     public File getFilesDir() {
@@ -110,59 +105,14 @@ public class Context {
         return pluginId;
     }
 
-    /**
-     * Answers with a service when there is an honest one, and {@code null}
-     * otherwise — which is Android's own answer for a name it does not know.
-     *
-     * This used to throw for every name. That looks defensible until you notice
-     * where it is called from: the first statement of a provider's
-     * {@code load()}, guarded by nothing, asking how much memory the device has
-     * so it can size a buffer. Throwing there aborted the load and cost the
-     * extension every provider it was about to register, and the reported cause
-     * named {@code getSystemService} rather than anything the user could act
-     * on. StreamPlay lost all of its providers to exactly that.
-     *
-     * {@code null} is both the documented contract and the safer failure: a
-     * caller that checks gets the Android behaviour, and a caller that does not
-     * fails on the line that actually uses the service instead of on the line
-     * that asked for it.
-     */
-    public Object getSystemService(String name) {
-        if (name == null) return null;
-        return switch (name) {
-            case ACTIVITY_SERVICE -> new android.app.ActivityManager();
-            default -> null;
-        };
-    }
-
-    public static final String ACTIVITY_SERVICE = "activity";
-    public static final String LAYOUT_INFLATER_SERVICE = "layout_inflater";
-    public static final String CONNECTIVITY_SERVICE = "connectivity";
-    public static final String CLIPBOARD_SERVICE = "clipboard";
-    public static final String WINDOW_SERVICE = "window";
-    public static final String INPUT_METHOD_SERVICE = "input_method";
-    public static final String NOTIFICATION_SERVICE = "notification";
-    public static final String DOWNLOAD_SERVICE = "download";
-
     // --- deliberately unimplemented -----------------------------------------
 
-    /**
-     * Returns the real {@link android.content.res.Resources} type, not `Object`.
-     *
-     * Exactly the descriptor bug fixed below for {@code getPackageManager}, and
-     * it survived here because nothing in the corpus reached it until the
-     * androidx types landed and extensions started getting far enough into
-     * {@code load()} to ask. An extension compiled against Android calls
-     * {@code getResources()Landroid/content/res/Resources;}; a method returning
-     * {@code Object} is a different method to the JVM and fails at the call site
-     * with {@code NoSuchMethodError}, not with the {@code Resources} stub's own
-     * message.
-     *
-     * The instance still throws on every accessor, which is the honest answer —
-     * see {@link android.content.res.Resources}.
-     */
-    public android.content.res.Resources getResources() {
-        return new android.content.res.Resources();
+    public Object getSystemService(String name) {
+        throw new UnsupportedAndroidApiException("android.content.Context.getSystemService(" + name + ")");
+    }
+
+    public Object getResources() {
+        throw new UnsupportedAndroidApiException("android.content.Context.getResources");
     }
 
     public Object getAssets() {
@@ -173,18 +123,8 @@ public class Context {
         throw new UnsupportedAndroidApiException("android.content.Context.getContentResolver");
     }
 
-    /**
-     * Returns the real shim type, not `Object`.
-     *
-     * The descriptor is the whole point. An extension compiled against Android
-     * calls `getPackageManager()Landroid/content/pm/PackageManager;`, and a
-     * method returning `Object` is a *different* method as far as the JVM is
-     * concerned — it links against nothing and fails with `NoSuchMethodError` at
-     * the call site. Returning the declared type is what makes the call resolve;
-     * the object it hands back still throws on every operation.
-     */
-    public android.content.pm.PackageManager getPackageManager() {
-        return new android.content.pm.PackageManager();
+    public Object getPackageManager() {
+        throw new UnsupportedAndroidApiException("android.content.Context.getPackageManager");
     }
 
     public void startActivity(Object intent) {

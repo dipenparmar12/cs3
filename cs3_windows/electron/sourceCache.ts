@@ -185,36 +185,6 @@ export class SourceCache {
     return { fresh, expired, hit: true };
   }
 
-  /**
-   * The same split as {@link read}, without recording a use.
-   *
-   * `read` stamps `lastUsedAt` and writes the whole cache back, which is right
-   * when something is about to be played from it and wrong for a question asked
-   * speculatively. The prefetcher asks "would this be answered from cache?"
-   * before deciding whether to scrape at all, and that question must not itself
-   * cost a datastore write — nor should it promote an entry the user never
-   * actually opened.
-   */
-  public peek(mediaUrl: string, season?: number, episode?: number): CacheReadResult {
-    const key = SourceCache.keyFor(mediaUrl, season, episode);
-    const entry = this.load().find((e) => e.key === key);
-    if (!entry) return { fresh: [], expired: [], hit: false };
-
-    const now = Date.now();
-    const fresh: TorrentResult[] = [];
-    const expired: TorrentResult[] = [];
-    for (const source of entry.sources) {
-      if (isPermanent(source)) {
-        fresh.push(source);
-        continue;
-      }
-      const deadline = entry.expiresAt[source.infoHash];
-      if (deadline && deadline > now) fresh.push(source);
-      else expired.push(source);
-    }
-    return { fresh, expired, hit: true };
-  }
-
   /** Records the sources a discovery run produced. */
   public write(
     mediaUrl: string,

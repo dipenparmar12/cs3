@@ -112,16 +112,6 @@ export interface TorrentResult {
   leechers: number;
   indexerId: string;
   indexerName: string;
-  /**
-   * The extension provider that produced this source, when one did.
-   *
-   * Distinct from `indexerName`, which for an extension link is the *extractor*
-   * — "Voe", "Server 3", "Hblinks Pixeldrain". Those are file hosts chosen by
-   * the provider, not the provider itself, so attributing a playback failure to
-   * one of them would rank hosts rather than extensions and tell the user
-   * nothing about which of their sources to keep.
-   */
-  providerName?: string;
   publishedAt?: number;
   category?: string;
   /**

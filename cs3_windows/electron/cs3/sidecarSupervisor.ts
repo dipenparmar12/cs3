@@ -1,8 +1,29 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
-import { RuntimeProvisioner } from './runtimeProvisioner';
+
+/**
+ * Supervises the JVM sidecar that executes `.cs3` extensions.
+ *
+ * `.cs3` archives contain Android DEX bytecode built against a Kotlin provider
+ * API, so running them needs a JVM. It lives in a separate OS process for the
+ * reasons set out in docs/PRD/31 §3.2: a plugin that hangs, exhausts memory or
+ * calls `System.exit` must degrade to "provider unavailable" rather than taking
+ * the app with it (ARCH-3, DROP-26, AC-D4). Process boundaries deliver that
+ * unconditionally; in-process isolation does not.
+ *
+ * The supervisor never throws on a missing or broken sidecar. DROP-34 requires
+ * the app to launch and report reduced capability instead of failing, so every
+ * failure mode resolves to a {@link SidecarStatus} the UI can explain.
+ */
+
+/** One pending JSON-RPC call. */
+interface Pending {
+  resolve: (value: RpcResult) => void;
+  timer: NodeJS.Timeout;
+  method: string;
+}
 
 export interface RpcResult {
   ok: boolean;
@@ -29,12 +50,8 @@ const CALL_TIMEOUT_MS = 60_000;
 /** Beyond this many restarts in a session the sidecar is treated as unusable. */
 const MAX_RESTARTS = 3;
 
-/** One pending JSON-RPC call. */
-interface Pending {
-  resolve: (value: RpcResult) => void;
-  timer: NodeJS.Timeout;
-  method: string;
-}
+/** The sidecar is compiled to class file 65, which is Java 21. */
+const REQUIRED_JAVA_VERSION = 21;
 
 export class SidecarSupervisor {
   private proc: ChildProcessWithoutNullStreams | null = null;
@@ -45,42 +62,37 @@ export class SidecarSupervisor {
   private startFailure: string | null = null;
   private lastStatus: { canExecute: boolean; reason?: string; sandboxGaps: string[] } | null = null;
   private starting: Promise<boolean> | null = null;
-  private provisioner: RuntimeProvisioner;
 
   private readonly dataDir: string;
+  private readonly resourceDir: string;
 
-  constructor(dataDir?: string) {
-    this.provisioner = new RuntimeProvisioner();
+  constructor(dataDir?: string, resourceDir?: string) {
     this.dataDir =
       dataDir ??
       (app ? path.join(app.getPath('userData'), 'cs3-runtime') : path.join(process.cwd(), 'cs3-runtime'));
+    // Packaged builds ship the sidecar beside the app; a dev run picks it up
+    // from the Maven output so `mvn package` is all a contributor needs.
+    this.resourceDir =
+      resourceDir ??
+      (app?.isPackaged
+        ? path.join(process.resourcesPath, 'sidecar')
+        : path.join(process.cwd(), '..', 'sidecar', 'target'));
     fs.mkdirSync(this.dataDir, { recursive: true });
-  }
-
-  public getProvisioner(): RuntimeProvisioner {
-    return this.provisioner;
   }
 
   // --- lifecycle -----------------------------------------------------------
 
+  /**
+   * Starts the sidecar if it is not already running.
+   *
+   * Spawning is lazy — on first extension use, not at app start — so the JVM's
+   * startup cost stays out of the cold-start budget (DSK-57, DROP-9).
+   */
   public async ensureStarted(): Promise<boolean> {
     if (this.proc && !this.proc.killed) return true;
     if (this.restarts > MAX_RESTARTS) return false;
+    // Concurrent callers must not race two JVMs into existence.
     if (this.starting) return this.starting;
-
-    // Provision when components are missing, and re-provision when the
-    // app-managed copy has fallen behind the build it came from. The second
-    // case is not cosmetic: the copy under %APPDATA% is resolved ahead of every
-    // build location, so without this check an app keeps running the shim and
-    // bridge it was first installed with and reports NoClassDefFoundError for
-    // classes that shipped long ago.
-    const status = this.provisioner.getStatus();
-    if (!status.ready || status.stale) {
-      if (status.stale) {
-        console.warn(`[cs3-sidecar] refreshing the extension runtime: ${status.staleReason}`);
-      }
-      await this.provisioner.provisionRuntime();
-    }
 
     this.starting = this.start().finally(() => {
       this.starting = null;
@@ -89,23 +101,25 @@ export class SidecarSupervisor {
   }
 
   private async start(): Promise<boolean> {
-    const sidecarInfo = this.provisioner.findSidecarJar();
-    if (!sidecarInfo) {
+    const jarPath = path.join(this.resourceDir, 'cs3-sidecar.jar');
+    const libDir = path.join(this.resourceDir, 'lib');
+
+    if (!fs.existsSync(jarPath)) {
       this.startFailure =
-        'The extension runtime is not provisioned. Click "Install Required Components" in Settings to set up automatically.';
+        `The extension runtime is not installed (${jarPath} is missing). ` +
+        `Build it with "mvn -f sidecar/pom.xml package", or reinstall the app.`;
       return false;
     }
 
-    const javaInfo = this.provisioner.findJavaBinary();
-    if (!javaInfo) {
-      this.startFailure =
-        'No compatible Java 21+ runtime was found. Click "Install Required Components" in Settings to set up automatically.';
+    const java = this.resolveJava();
+    if (!java) {
+      // `resolveJava` sets a specific reason when it found a JVM and rejected
+      // it for being too old; that is far more useful than this general one.
+      this.startFailure ||=
+        `No Java runtime was found. The app ships a bundled JRE; if this build was ` +
+        `assembled without it, install a Java ${REQUIRED_JAVA_VERSION} runtime or reinstall the app.`;
       return false;
     }
-
-    const java = javaInfo.exePath;
-    const jarPath = sidecarInfo.jarPath;
-    const libDir = sidecarInfo.libDir;
 
     const classpath = [jarPath, path.join(libDir, '*')].join(path.delimiter);
     const runtimeClasspath = this.resolveRuntimeDir();
@@ -183,9 +197,96 @@ export class SidecarSupervisor {
    * cannot be diverted by a stray directory next to it.
    */
   private resolveRuntimeDir(): string {
-    const info = this.provisioner.findRuntimeDir();
-    if (info) return info.dir;
-    return path.join(this.provisioner.appDataRuntimeDir, 'runtime');
+    const candidates = [
+      path.join(this.resourceDir, 'runtime'),
+      path.join(this.resourceDir, '..', 'runtime'),
+    ];
+    for (const candidate of candidates) {
+      try {
+        // Matched by prefix: Maven resolves it under its version
+        // (`library-jvm-4.8.0.jar`), and pinning the exact name here would
+        // break on the next upgrade.
+        const found = fs
+          .readdirSync(candidate)
+          .some((entry) => entry.startsWith('library-jvm') && entry.endsWith('.jar'));
+        if (found) return candidate;
+      } catch {
+        // Missing directory; try the next candidate.
+      }
+    }
+    // Nothing found: hand back the packaged location so the sidecar's own
+    // "library-jvm.jar is not present in X" message names the expected place.
+    return candidates[0];
+  }
+
+  /**
+   * Reads a JVM's feature version, or null if it will not answer.
+   *
+   * `-version` prints to stderr, and has done since Java 1.0 — reading stdout
+   * finds nothing. Both are captured for that reason.
+   */
+  private static probeJavaVersion(exe: string): number | null {
+    try {
+      const probe = spawnSync(exe, ['-version'], {
+        encoding: 'utf8',
+        timeout: 8_000,
+        windowsHide: true,
+      });
+      const output = `${probe.stderr ?? ''}${probe.stdout ?? ''}`;
+      // `"21.0.12"`, `"17.0.9"`, and the legacy `"1.8.0_402"`.
+      const match = output.match(/version "(\d+)(?:\.(\d+))?/);
+      if (!match) return null;
+      const major = parseInt(match[1], 10);
+      return major === 1 ? parseInt(match[2] ?? '0', 10) : major;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Finds a JVM new enough to load the sidecar.
+   *
+   * Version checking is not defensive tidiness — an older JVM starts, gets as
+   * far as the main class, and dies with `UnsupportedClassVersionError: class
+   * file version 65.0 ... recognizes up to 61.0`, which the supervisor could
+   * only report as "the runtime crashed". Java 8, 11 and 17 are all common
+   * installs, and `JAVA_HOME` pointing at one of them was enough to make every
+   * extension permanently unavailable with no usable explanation. Observed on
+   * this machine: `JAVA_HOME` was a JDK 17 while a JDK 21 sat on `PATH`.
+   *
+   * Candidates are therefore tried in order of preference and the first one
+   * that is actually new enough wins, rather than the first one that exists.
+   */
+  private resolveJava(): string | null {
+    const exe = process.platform === 'win32' ? 'java.exe' : 'java';
+
+    const candidates: string[] = [path.join(this.resourceDir, 'jre', 'bin', exe)];
+    if (process.env.JAVA_HOME) {
+      candidates.push(path.join(process.env.JAVA_HOME, 'bin', exe));
+    }
+    // Falling back to PATH keeps a dev checkout working without a bundled JRE.
+    // DROP-31 requires shipped builds to carry their own, so this is a
+    // development convenience, not the supported configuration.
+    if (!app?.isPackaged) candidates.push(exe);
+
+    const rejected: string[] = [];
+    for (const candidate of candidates) {
+      const isPath = candidate === exe;
+      if (!isPath && !fs.existsSync(candidate)) continue;
+
+      const version = SidecarSupervisor.probeJavaVersion(candidate);
+      if (version === null) continue;
+      if (version >= REQUIRED_JAVA_VERSION) return candidate;
+
+      rejected.push(`${isPath ? 'the Java on PATH' : candidate} is Java ${version}`);
+    }
+
+    if (rejected.length > 0) {
+      this.startFailure =
+        `Extensions need Java ${REQUIRED_JAVA_VERSION} or newer, but ${rejected.join(', ')}. ` +
+        `Install a Java ${REQUIRED_JAVA_VERSION} runtime, or point JAVA_HOME at one.`;
+    }
+    return null;
   }
 
   private onExit(code: number | null, signal: string | null): void {

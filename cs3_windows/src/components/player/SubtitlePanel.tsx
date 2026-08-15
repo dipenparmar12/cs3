@@ -17,15 +17,8 @@ import type { SubtitleSearchResult } from '../../../electron/subtitleService';
 
 interface SubtitlePanelProps {
   open: boolean;
-  /** Absent when the title has no IMDb id, which OpenSubtitles is keyed on. */
+  /** Absent when the title has no IMDb id, which is what search is keyed on. */
   imdbId?: string;
-  /**
-   * The media URL being played. A `cs3ext://` one lets the extension provider be
-   * asked for its own subtitles — frequently the only ones that exist for a
-   * title no catalogue carries, and therefore the only ones for content with no
-   * IMDb id at all.
-   */
-  mediaUrl?: string;
   season?: number;
   episode?: number;
   /** Subtitles already embedded in the stream, offered alongside online ones. */
@@ -38,7 +31,6 @@ interface SubtitlePanelProps {
 export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   open,
   imdbId,
-  mediaUrl,
   season,
   episode,
   embedded,
@@ -51,21 +43,12 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState<string | null>(null);
 
-  const providerCanAnswer = Boolean(mediaUrl?.startsWith('cs3ext://'));
-
   const runSearch = useCallback(async () => {
-    // An extension-sourced stream is worth asking about even with no IMDb id;
-    // anything else without one has nothing to query.
-    if (!imdbId && !providerCanAnswer) return;
+    if (!imdbId) return;
     setLoading(true);
     setError(null);
 
-    const response = await window.cloudstream?.searchSubtitles(
-      imdbId ?? '',
-      season,
-      episode,
-      mediaUrl
-    );
+    const response = await window.cloudstream?.searchSubtitles(imdbId, season, episode);
     setLoading(false);
 
     if (!response?.ok) {
@@ -76,7 +59,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
     if (response.results.length === 0) {
       setError('No subtitles were found for this title.');
     }
-  }, [imdbId, mediaUrl, providerCanAnswer, season, episode]);
+  }, [imdbId, season, episode]);
 
   // Searching on open rather than behind a button: the viewer opened this panel
   // because they want subtitles, and an empty list with a button is a wasted step.

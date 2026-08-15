@@ -44,6 +44,7 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  user-select: none;
 }
 
 body {
@@ -234,7 +235,6 @@ body {
   justify-content: center;
   box-shadow: 0 3px 12px rgba(0, 0, 0, 0.55);
   cursor: pointer;
-  user-select: none;
   transition: transform 0.15s ease;
 }
 .play-button-overlay:hover {
@@ -292,7 +292,6 @@ body {
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   cursor: pointer;
-  user-select: none;
   transition: var(--transition);
 }
 
@@ -335,7 +334,6 @@ body {
   color: var(--text-muted);
   border: 1px solid var(--border-color);
   cursor: pointer;
-  user-select: none;
   transition: var(--transition);
 }
 
