@@ -585,6 +585,26 @@ export const App: React.FC = () => {
   const handleEnqueueDownload = async (task: DownloadTask) => {
     if (window.cloudstream) {
       await window.cloudstream.enqueueDownload(task);
+      try {
+        await window.cloudstream.recordHistoryEvent?.({
+          title: task.title,
+          mediaUrl: task.mediaUrl || task.link.url,
+          posterUrl: task.posterUrl,
+          season: task.seasonNumber,
+          episode: task.episodeNumber,
+          action: 'download_started',
+          status: 'Attempted',
+          source: {
+            providerName: task.providerName,
+            sourceName: task.link.name,
+            directUrl: task.link.url,
+            directHeaders: task.headers,
+            quality: task.quality ? `${task.quality}p` : undefined,
+            resolution: task.resolution,
+            sizeBytes: task.totalBytes,
+          },
+        });
+      } catch {}
       const queue = await window.cloudstream.getDownloadQueue();
       setDownloadQueue(queue);
     }
@@ -661,18 +681,19 @@ export const App: React.FC = () => {
               switchError={switchError}
               subtitleContext={session.context.subtitleContext}
               onDownloadCurrent={() => {
-                if (session.context.onDownloadSource) {
-                  const active =
-                    session.snapshot.sources.find(
-                      (s) => s.infoHash === session.snapshot.activeInfoHash
-                    ) ?? session.snapshot.sources[0];
-                  if (active) {
-                    session.context.onDownloadSource(active);
-                    return;
-                  }
+                const active =
+                  session.snapshot.sources.find(
+                    (s) => s.infoHash === session.snapshot.activeInfoHash
+                  ) ?? session.snapshot.sources[0];
+
+                if (session.context.onDownloadSource && active) {
+                  session.context.onDownloadSource(active);
+                  return;
                 }
+
                 const streamUrl = session.snapshot.handle?.streamUrl;
-                if (streamUrl) {
+                const downloadUrl = active?.directUrl || active?.magnet || active?.torrentUrl || streamUrl;
+                if (downloadUrl) {
                   const taskTitle =
                     session.context.title +
                     (session.context.episodeTitle ? ` - ${session.context.episodeTitle}` : '');
@@ -685,24 +706,25 @@ export const App: React.FC = () => {
                     title: taskTitle,
                     episodeNumber: session.context.subtitleContext?.episode,
                     seasonNumber: session.context.subtitleContext?.season,
-                    posterUrl: '',
+                    posterUrl: session.context.progress?.posterUrl || '',
                     targetFilePath: '',
                     link: {
-                      source: 'Player Stream',
-                      name: taskTitle,
-                      url: streamUrl,
-                      referer: '',
-                      quality: 1080,
+                      source: active?.indexerName || active?.providerName || 'Player Stream',
+                      name: active?.title || taskTitle,
+                      url: downloadUrl,
+                      referer: active?.directHeaders?.Referer || active?.directHeaders?.referer || '',
+                      quality: active?.parsed?.resolution || 1080,
                     },
-                    headers: {},
+                    headers: active?.directHeaders || {},
                     bytesDownloaded: 0,
-                    totalBytes: 0,
+                    totalBytes: active?.sizeBytes || 0,
                     downloadSpeed: 0,
                     etaSeconds: 0,
                     state: DownloadState.Queued,
-                    providerName: 'Current Stream',
+                    providerName: active?.indexerName || active?.providerName || 'Current Stream',
                     createdTime: Date.now(),
                     mediaUrl: session.context.progress?.mediaUrl || streamUrl,
+                    resolution: active?.parsed?.resolution,
                   };
                   void handleEnqueueDownload(task);
                 }

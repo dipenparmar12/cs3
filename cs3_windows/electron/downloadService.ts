@@ -11,6 +11,8 @@ import type { TorrentEngine } from './torrent/torrentEngine';
 import type { ContentService } from './contentService';
 import type { AnalyticsSink } from './pluginManager';
 import type { TorrentResult } from '../src/types/torrent';
+import type { HistoryStore } from './cs3/historyStore';
+import type { HistoryAction, HistoryStatus } from '../src/types/history';
 
 /**
  * The download queue, across every kind of source the app can play.
@@ -59,10 +61,48 @@ export class DownloadService {
   private onProgressCallback?: (tasks: DownloadTask[]) => void;
   /** Where download outcomes are counted, when the host supplies a store. */
   private analytics: AnalyticsSink | null = null;
+  /** Where user download events and history records are persisted. */
+  private historyStore: HistoryStore | null = null;
 
   /** Wired by `main.ts`; download outcomes are counted from here onwards. */
   public setAnalytics(sink: AnalyticsSink): void {
     this.analytics = sink;
+  }
+
+  public setHistoryStore(sink: HistoryStore): void {
+    this.historyStore = sink;
+  }
+
+  public recordHistory(
+    task: DownloadTask,
+    action: HistoryAction,
+    status: HistoryStatus,
+    failureReason?: string
+  ): void {
+    if (!this.historyStore) return;
+    try {
+      this.historyStore.record({
+        title: task.title,
+        mediaUrl: task.mediaUrl || task.link.url,
+        posterUrl: task.posterUrl,
+        season: task.seasonNumber,
+        episode: task.episodeNumber,
+        action,
+        status,
+        failureReason,
+        source: {
+          providerName: task.providerName,
+          sourceName: task.link.name,
+          directUrl: task.link.url,
+          directHeaders: task.headers,
+          quality: task.quality ? `${task.quality}p` : undefined,
+          resolution: task.resolution,
+          sizeBytes: task.totalBytes,
+        },
+      });
+    } catch (e) {
+      console.warn('[downloadService] Failed to record history event:', e);
+    }
   }
 
   constructor(datastore: DatastoreManager, aria2: Aria2Engine) {
@@ -277,6 +317,7 @@ export class DownloadService {
       task.targetFilePath = this.resolver.generateTargetFilePath(task);
     }
 
+    this.recordHistory(task, 'download_started', 'Attempted');
     this.queue.set(task.id, task);
     this.saveQueueToStorage();
     this.pump();
@@ -287,6 +328,7 @@ export class DownloadService {
   private async startTask(task: DownloadTask): Promise<void> {
     task.state = DownloadState.Downloading;
     task.errorMessage = undefined;
+    this.recordHistory(task, 'download_started', 'Downloaded');
     this.saveQueueToStorage();
 
     const outputDir = path.dirname(task.targetFilePath);
@@ -411,6 +453,7 @@ export class DownloadService {
     task.downloadSpeed = 0;
     task.etaSeconds = 0;
     task.errorMessage = undefined;
+    this.recordHistory(task, 'download_completed', 'Downloaded');
     this.saveQueueToStorage();
     this.pump();
   }
@@ -596,6 +639,7 @@ export class DownloadService {
     task.errorMessage = message;
     task.downloadSpeed = 0;
     task.etaSeconds = 0;
+    this.recordHistory(task, 'download_failed', 'Download Failed', message);
     this.saveQueueToStorage();
     this.pump();
   }

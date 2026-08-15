@@ -680,7 +680,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         downloadSpeed: 0,
         etaSeconds: 0,
         state: DownloadState.Queued,
-        providerName: source.indexerName,
+        providerName: source.providerName || source.indexerName,
         createdTime: Date.now(),
         mediaUrl: episode?.url || detail.url,
         resolution: source.parsed.resolution,

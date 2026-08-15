@@ -374,7 +374,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       title: taskTitle,
       episodeNumber: subtitleContext?.episode,
       seasonNumber: subtitleContext?.season,
-      posterUrl: '',
+      posterUrl: progress?.posterUrl || '',
       targetFilePath: '',
       link: {
         source: activeSource?.indexerName || 'Player Stream',
@@ -392,13 +392,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       downloadSpeed: 0,
       etaSeconds: 0,
       state: DownloadState.Queued,
-      providerName: activeSource?.indexerName || 'Current Stream',
+      providerName: activeSource?.providerName || activeSource?.indexerName || 'Current Stream',
       createdTime: Date.now(),
       mediaUrl: progress?.mediaUrl || streamUrl,
       resolution: activeSource?.parsed?.resolution,
     };
 
     await window.cloudstream?.enqueueDownload?.(task);
+    try {
+      await window.cloudstream?.recordHistoryEvent?.({
+        title: task.title,
+        mediaUrl: task.mediaUrl || task.link.url,
+        posterUrl: task.posterUrl,
+        season: task.seasonNumber,
+        episode: task.episodeNumber,
+        action: 'download_started',
+        status: 'Attempted',
+        source: {
+          providerName: task.providerName,
+          sourceName: task.link.name,
+          directUrl: task.link.url,
+          directHeaders: task.headers,
+          quality: task.quality ? `${task.quality}p` : undefined,
+          resolution: task.resolution,
+          sizeBytes: task.totalBytes,
+        },
+      });
+    } catch {}
     const queue = await window.cloudstream?.getDownloadQueue?.();
     if (queue) setDownloadQueue(queue);
   }, [

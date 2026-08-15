@@ -110,6 +110,7 @@ const network = new NetworkSettingsStore(datastore);
 
 downloadService.setTorrentEngine(torrentEngine);
 downloadService.setContentService(contentService);
+downloadService.setHistoryStore(historyStore);
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
