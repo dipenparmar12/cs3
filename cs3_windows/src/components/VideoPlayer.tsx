@@ -920,13 +920,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const toggleFullscreen = useCallback(async () => {
     const container = containerRef.current;
     if (!container) return;
-    if (document.fullscreenElement) {
-      await document.exitFullscreen();
-      setIsFullscreen(false);
-    } else {
-      await container.requestFullscreen();
-      setIsFullscreen(true);
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        setIsFullscreen(false);
+      } else {
+        await container.requestFullscreen();
+        setIsFullscreen(true);
+      }
+    } catch (err) {
+      console.warn('Failed to toggle fullscreen:', err);
     }
+  }, []);
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      const fs = Boolean(document.fullscreenElement);
+      setIsFullscreen(fs);
+      if (!fs) {
+        setControlsVisible(true);
+      }
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
   }, []);
 
   useEffect(() => {
@@ -1005,6 +1021,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * Conditions under which the controls must stay put. Held in a ref because
    * the hide timer is scheduled once and must read the value at fire time, not
    * the value captured when it was created.
+   *
+   * In windowed (non-fullscreen) mode, controls are kept visible. In fullscreen
+   * mode, controls auto-hide after inactivity and appear on mouse movement.
    */
   const keepControls =
     panelOpen ||
@@ -1013,7 +1032,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     downloadPanelOpen ||
     !isPlaying ||
     Boolean(error) ||
-    isHoveringControls;
+    isHoveringControls ||
+    (!isFullscreen && !mini);
   const keepControlsRef = useRef(keepControls);
   useEffect(() => {
     keepControlsRef.current = keepControls;
@@ -1025,11 +1045,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   /** Real movement reports a non-zero delta; a synthetic event reports zero. */
   const isRealMove = (native: MouseEvent): boolean => {
     if (typeof native.movementX === 'number' && typeof native.movementY === 'number') {
-      return native.movementX !== 0 || native.movementY !== 0;
+      if (native.movementX !== 0 || native.movementY !== 0) return true;
     }
     // Some event sources omit `movement*`; fall back to a position change.
     const last = lastPointer.current;
-    return !last || native.clientX !== last.x || native.clientY !== last.y;
+    if (!last) return true;
+    return native.clientX !== last.x || native.clientY !== last.y;
   };
 
   const revealControls = useCallback((event?: React.MouseEvent | MouseEvent) => {
@@ -1039,6 +1060,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       lastPointer.current = { x: native.clientX, y: native.clientY };
       if (!real) return;
     }
+    pointerInside.current = true;
     lastActivity.current = Date.now();
     setControlsVisible(true);
   }, []);
@@ -1069,6 +1091,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const handlePlayerLeave = useCallback(() => {
     pointerInside.current = false;
+    lastPointer.current = null;
+    setIsHoveringControls(false);
   }, []);
 
   // --- seek bar interaction ------------------------------------------------
@@ -1375,9 +1399,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [fetchedSubtitles]
   );
 
-  // Close any open side-panel when the user clicks outside it on the player.
+  // Close any open side-panel when the user clicks outside it on the player, and reveal controls.
   const handlePlayerPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
+      revealControls(e);
       if (!panelOpen && !sourcePanelOpen && !subtitlePanelOpen && !downloadPanelOpen) return;
       const target = e.target as HTMLElement;
       // If the click is inside a .player-panel element, leave it open.
@@ -1389,7 +1414,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setSubtitlePanelOpen(false);
       setDownloadPanelOpen(false);
     },
-    [panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen]
+    [panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen, revealControls]
   );
 
   const miniFrame = useMiniFrame(mini);
