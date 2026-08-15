@@ -3,21 +3,28 @@ import Hls from 'hls.js';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
-  SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio, Download,
+  SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
+  HardDriveDownload, FolderDown, GripHorizontal, Maximize2, Minimize2, X,
 } from 'lucide-react';
 import type { TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
 import { AspectRatioMode } from '../types/player';
 import type { TorrentResult } from '../types/torrent';
+import type { DownloadTask } from '../types/download';
+import { DownloadState } from '../types/download';
 import { HoverMenu } from './player/HoverMenu';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
 import { SubtitlePanel } from './player/SubtitlePanel';
-import type { MediaProbe } from '../../electron/audioTranscoder';
+import { PlayerDownloadPanel } from './player/PlayerDownloadPanel';
+import type { MediaProbe, ProbeFailure } from '../../electron/mediaTranscoder';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
+import { useMiniFrame } from './player/useMiniFrame';
+import { CopyErrorButton } from './CopyErrorButton';
+import { ExternalPlayerFallback } from './player/ExternalPlayerFallback';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -62,6 +69,41 @@ interface VideoPlayerProps {
   subtitleContext?: { imdbId?: string; season?: number; episode?: number };
   /** Downloads whatever is currently playing, without leaving the player. */
   onDownloadCurrent?: () => void;
+  /**
+   * Opens the full Downloads screen, leaving this player running behind it.
+   *
+   * The in-player panel is deliberately a summary — enough to see that a
+   * download is progressing and to pause it — and everything else (the whole
+   * queue, completed items, where files landed) lives on the Downloads screen.
+   * Without a way through, the only route there was to close the player.
+   */
+  onOpenDownloads?: () => void;
+  /**
+   * Rendered but not shown, because the viewer has stepped out to another
+   * screen.
+   *
+   * Not the same as unmounting. The `<video>` element *is* the playback: take it
+   * out of the tree and the stream stops, the position is lost, and returning
+   * means starting the whole discovery-and-buffer sequence again. Hiding keeps
+   * all of it, at the cost of having to disarm anything global — see the
+   * keyboard handler, which would otherwise let a stray space bar on the
+   * Downloads screen pause a film the viewer cannot see.
+   */
+  hidden?: boolean;
+  /**
+   * Shrunk to a floating window, still playing, while the rest of the app is used.
+   *
+   * The same element in the same place in the tree as the full-screen player —
+   * only its geometry changes. That is not an implementation detail: the
+   * `<video>` *is* the playback, so anything that unmounts and remounts it to
+   * change size would drop the buffer, lose the position, and re-negotiate the
+   * swarm. Minimising has to be free, or nobody will use it twice.
+   */
+  mini?: boolean;
+  /** Shrinks the player without ending the session. */
+  onMinimize?: () => void;
+  /** Returns the mini player to full size. */
+  onExpand?: () => void;
   sourceSession?: {
     phase: PlaybackPhase;
     sources: TorrentResult[];
@@ -70,13 +112,29 @@ interface VideoPlayerProps {
     totalIndexers: number;
     lastIndexerName?: string;
     searchDone: boolean;
+    /** True when the viewer stopped the search rather than it running out. */
+    searchCancelled?: boolean;
     error?: string;
     attempts: Array<{ title: string; indexerName: string; error: string }>;
     onPlayNow: () => void;
     onSelectSource: (source: TorrentResult) => void;
+    /**
+     * Abandons a source that started but will not play.
+     *
+     * Only the renderer can detect this: discovery already fails over when a
+     * stream will not *start*, but one that starts fine and then cannot be
+     * decoded looks like success from the main process.
+     */
+    onSourceUnplayable?: (reason: string) => void;
     onRefresh: () => void;
+    /** Stops waiting for the remaining providers, keeping what has arrived. */
+    onCancelSearch?: () => void;
     onDownloadSource?: (source: TorrentResult) => void;
   };
+  /** When provided, overrides the stored setting for showing aspect ratio control (default false) */
+  showAspectRatioControl?: boolean;
+  /** When provided, overrides the stored setting for showing playback speed control (default false) */
+  showPlaybackSpeedControl?: boolean;
 }
 
 export type PlaybackPhase = 'searching' | 'starting' | 'playing' | 'error';
@@ -84,6 +142,14 @@ export type PlaybackPhase = 'searching' | 'starting' | 'playing' | 'error';
 /** How often playback position is written. Frequent enough to be useful, rare
  *  enough not to write on every timeupdate tick (which fires ~4x/second). */
 const PROGRESS_SAVE_INTERVAL_MS = 5_000;
+
+/**
+ * How long the pointer may sit still inside the player before the controls go.
+ *
+ * Only genuine movement resets it — see `revealControls`. Leaving the player
+ * hides them without waiting for this at all.
+ */
+const CONTROLS_IDLE_MS = 3_000;
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const SKIP_SECONDS = 10;
@@ -120,13 +186,13 @@ export interface AudioTrackInfo {
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamUrl, mimeType, title, episodeTitle, infoHash, subtitles, onBack,
   series, onSelectEpisode, switchingTo, switchError, progress, sourceSession,
-  subtitleContext, onDownloadCurrent,
+  subtitleContext, onDownloadCurrent, onOpenDownloads, hidden = false,
+  mini = false, onMinimize, onExpand, showAspectRatioControl, showPlaybackSpeedControl,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const seekBarRef = useRef<HTMLDivElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
-  const hideControlsTimer = useRef<number | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -137,6 +203,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [speed, setSpeed] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [aspect, setAspect] = useState<AspectRatioMode>(AspectRatioMode.Fit);
+  const [showSpeedControl, setShowSpeedControl] = useState(showPlaybackSpeedControl ?? false);
+  const [showAspectControl, setShowAspectControl] = useState(showAspectRatioControl ?? false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isHoveringControls, setIsHoveringControls] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,6 +213,157 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [panelOpen, setPanelOpen] = useState(false);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
   const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false);
+  const [downloadPanelOpen, setDownloadPanelOpen] = useState(false);
+  const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    const loadPlayerControlsSettings = async () => {
+      if (!window.cloudstream) return;
+      try {
+        const [speedEnabled, resizeEnabled, customSpeed, customAspect, savedAspect, savedSpeed] =
+          await Promise.all([
+            window.cloudstream.getSetting('playback_speed_enabled_key', 'false'),
+            window.cloudstream.getSetting('player_resize_enabled_key', 'false'),
+            window.cloudstream.getSetting('player_show_playback_speed', 'false'),
+            window.cloudstream.getSetting('player_show_aspect_ratio', 'false'),
+            window.cloudstream.getSetting('default_aspect_ratio', ''),
+            window.cloudstream.getSetting('default_playback_speed', ''),
+          ]);
+        if (active) {
+          if (showPlaybackSpeedControl === undefined) {
+            setShowSpeedControl(speedEnabled === 'true' || customSpeed === 'true');
+          }
+          if (showAspectRatioControl === undefined) {
+            setShowAspectControl(resizeEnabled === 'true' || customAspect === 'true');
+          }
+          if (savedAspect && Object.values(AspectRatioMode).includes(savedAspect as AspectRatioMode)) {
+            setAspect(savedAspect as AspectRatioMode);
+          }
+          if (savedSpeed && !isNaN(Number(savedSpeed)) && Number(savedSpeed) > 0) {
+            setSpeed(Number(savedSpeed));
+          }
+        }
+      } catch {
+        // Defaults to false
+      }
+    };
+    void loadPlayerControlsSettings();
+    return () => {
+      active = false;
+    };
+  }, [showPlaybackSpeedControl, showAspectRatioControl]);
+
+  useEffect(() => {
+    let active = true;
+    window.cloudstream?.getDownloadQueue?.().then((tasks) => {
+      if (active && tasks) setDownloadQueue(tasks);
+    });
+
+    const unsub = window.cloudstream?.onDownloadProgress?.((tasks) => {
+      if (active && tasks) setDownloadQueue(tasks);
+    });
+
+    return () => {
+      active = false;
+      if (unsub) unsub();
+    };
+  }, []);
+
+  const currentDownload = useMemo(() => {
+    const norm = (s?: string) => s?.toLowerCase().trim() || '';
+    const normTitle = norm(title);
+    return downloadQueue.find(
+      (t) =>
+        (normTitle && (norm(t.title) === normTitle || norm(t.title).startsWith(normTitle))) ||
+        (t.mediaUrl && progress?.mediaUrl && t.mediaUrl === progress.mediaUrl) ||
+        (t.link?.url && streamUrl && t.link.url === streamUrl) ||
+        (infoHash && t.id.includes(infoHash))
+    );
+  }, [downloadQueue, title, progress?.mediaUrl, streamUrl, infoHash]);
+
+  const handleDownloadCurrentMedia = useCallback(async () => {
+    if (onDownloadCurrent) {
+      onDownloadCurrent();
+      return;
+    }
+
+    const activeSource =
+      sourceSession?.sources?.find(
+        (s) => s.infoHash === (sourceSession.activeInfoHash || infoHash)
+      ) ?? sourceSession?.sources?.[0];
+
+    if (activeSource && sourceSession?.onDownloadSource) {
+      sourceSession.onDownloadSource(activeSource);
+      return;
+    }
+
+    const downloadUrl =
+      activeSource?.directUrl ||
+      activeSource?.magnet ||
+      activeSource?.torrentUrl ||
+      streamUrl;
+    if (!downloadUrl) return;
+
+    const taskTitle = title + (episodeTitle ? ` - ${episodeTitle}` : '');
+    const taskId = `dl-${infoHash || Date.now()}-${taskTitle}`.replace(
+      /[^a-zA-Z0-9-_]/g,
+      '_'
+    );
+
+    const task: DownloadTask = {
+      id: taskId,
+      parentId: progress?.mediaUrl || '',
+      title: taskTitle,
+      episodeNumber: subtitleContext?.episode,
+      seasonNumber: subtitleContext?.season,
+      posterUrl: '',
+      targetFilePath: '',
+      link: {
+        source: activeSource?.indexerName || 'Player Stream',
+        name: activeSource?.title || taskTitle,
+        url: downloadUrl,
+        referer:
+          activeSource?.directHeaders?.Referer ||
+          activeSource?.directHeaders?.referer ||
+          '',
+        quality: activeSource?.parsed?.resolution || 1080,
+      },
+      headers: activeSource?.directHeaders || {},
+      bytesDownloaded: 0,
+      totalBytes: activeSource?.sizeBytes || 0,
+      downloadSpeed: 0,
+      etaSeconds: 0,
+      state: DownloadState.Queued,
+      providerName: activeSource?.indexerName || 'Current Stream',
+      createdTime: Date.now(),
+      mediaUrl: progress?.mediaUrl || streamUrl,
+      resolution: activeSource?.parsed?.resolution,
+    };
+
+    await window.cloudstream?.enqueueDownload?.(task);
+    const queue = await window.cloudstream?.getDownloadQueue?.();
+    if (queue) setDownloadQueue(queue);
+  }, [
+    onDownloadCurrent,
+    sourceSession,
+    infoHash,
+    streamUrl,
+    title,
+    episodeTitle,
+    progress?.mediaUrl,
+    subtitleContext,
+  ]);
+
+  const activeDownloadsCount = useMemo(() => {
+    return downloadQueue.filter(
+      (t) =>
+        t.state === DownloadState.Downloading ||
+        t.state === DownloadState.Queued ||
+        t.state === DownloadState.RefreshingSource ||
+        t.state === DownloadState.Retrying
+    ).length;
+  }, [downloadQueue]);
   /** Subtitles fetched from the online search, as blob-backed WebVTT tracks. */
   const [fetchedSubtitles, setFetchedSubtitles] = useState<
     Array<{ name: string; url: string }>
@@ -168,6 +387,49 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * through ffmpeg when its audio cannot be played.
    */
   const [audioProbe, setAudioProbe] = useState<MediaProbe | null>(null);
+  /**
+   * The probe, readable from the `error` listener.
+   *
+   * That listener is attached once per stream and would otherwise close over
+   * whatever the probe was at attach time — which is always `null`, because the
+   * probe finishes later than the element starts loading.
+   */
+  const audioProbeRef = useRef<MediaProbe | null>(null);
+  /**
+   * Why the probe came back empty, when it did.
+   *
+   * Separates "this link is a 404" from "this format cannot be decoded". They
+   * were being reported as one sentence offering both, and only one of them is
+   * worth opening another player for.
+   */
+  const [probeFailure, setProbeFailure] = useState<ProbeFailure | null>(null);
+  const probeFailureRef = useRef<ProbeFailure | null>(null);
+  /**
+   * Asks for the next source, at most once per stream.
+   *
+   * Held in a ref because the `error` listener is attached once per stream and
+   * would otherwise close over a stale callback. Latched because a failing
+   * element can fire `error` repeatedly, and each one would burn another
+   * candidate off a list that is not long.
+   */
+  const skipRef = useRef<((reason: string) => void) | null>(null);
+  const skippedFor = useRef<string | null>(null);
+  /**
+   * Forces a remux of the current URL, once, before giving up on it.
+   *
+   * A link that downloads at full speed is a good link — the reported case was
+   * an 860 MB file that fetched perfectly and would not play, because H.264 in
+   * Matroska is not something Chromium can demux. Abandoning it for a different
+   * source throws away a working URL to go looking for another one that may
+   * have exactly the same problem.
+   *
+   * So the ladder per source is: play it raw, and if that fails push it through
+   * ffmpeg unconditionally, and only if *that* fails rule the source out. The
+   * forced pass does not consult the probe — this runs precisely when the probe
+   * has already been wrong about something.
+   */
+  const forceTranscodeRef = useRef<(() => void) | null>(null);
+  const forcedFor = useRef<string | null>(null);
   const [transcode, setTranscode] = useState<{ url: string; token: string } | null>(null);
   const [transcodeOffset, setTranscodeOffset] = useState(0);
   const [audioNeedsComponents, setAudioNeedsComponents] = useState(false);
@@ -490,10 +752,48 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
-    const onError = () =>
-      setError(
-        'The browser could not decode this file. It may use a codec Chromium does not support (HEVC is common) — try another source.'
-      );
+    /**
+     * Names the codec rather than guessing at it.
+     *
+     * The old message said "HEVC is common", which is a hint and not a
+     * diagnosis — it was equally shown for a dead link, a truncated file and an
+     * MPEG-2 stream. The probe already knows what the video actually is, so it
+     * says so, and it distinguishes the case where a conversion is available
+     * from the one where nothing can be done.
+     */
+    const onError = () => {
+      // The source answering 404 outranks anything guessed about codecs.
+      const failure = probeFailureRef.current;
+      if (failure) {
+        // A dead source is not a conversion problem; remuxing a 404 is pointless.
+        setError(failure.reason);
+        skipRef.current?.(failure.reason);
+        return;
+      }
+      const codec = audioProbeRef.current?.videoCodec;
+      const convertible = Boolean(audioProbeRef.current?.needsVideoTranscode);
+      if (codec && convertible) {
+        setError(
+          `This file is ${codec.toUpperCase()}, which this build cannot decode directly. ` +
+            `Converting it now — if it does not start shortly, install the media components ` +
+            `in Settings → Advanced, or try another source.`
+        );
+        return;
+      }
+      const message = codec
+        ? `The player could not decode this ${codec.toUpperCase()} stream.`
+        : 'The player could not decode this file.';
+
+      // Convert first, abandon second. See `forceTranscodeRef`.
+      if (forcedFor.current !== streamUrl) {
+        setError(`${message} Converting it and trying again…`);
+        forceTranscodeRef.current?.();
+        return;
+      }
+
+      setError(message);
+      skipRef.current?.(message);
+    };
 
     video.addEventListener('timeupdate', onTime);
     video.addEventListener('progress', onTime);
@@ -630,6 +930,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, []);
 
   useEffect(() => {
+    // Still mounted, but the viewer is looking at another screen. Leaving this
+    // bound would make typing in a search box seek the film.
+    //
+    // The mini player is disarmed for the same reason and it matters more
+    // there: it is *visible*, so it looks like it has focus, and the whole
+    // point of it is that the viewer is typing somewhere else. A space bar in
+    // the search box must not pause the film.
+    if (hidden || mini) return;
+
     const onKey = (e: KeyboardEvent) => {
       switch (e.key) {
         case ' ': case 'k': e.preventDefault(); togglePlay(); break;
@@ -642,13 +951,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         case 'e': if (series) setPanelOpen((v) => !v); break;
         case 'n': if (nextEpisode && onSelectEpisode) onSelectEpisode(nextEpisode); break;
         case 'p': if (previousEpisode && onSelectEpisode) onSelectEpisode(previousEpisode); break;
-        case 'Escape': if (!document.fullscreenElement) onBack(); break;
+        case 'Escape':
+          if (panelOpen || sourcePanelOpen || subtitlePanelOpen || downloadPanelOpen) {
+            setPanelOpen(false);
+            setSourcePanelOpen(false);
+            setSubtitlePanelOpen(false);
+            setDownloadPanelOpen(false);
+          } else if (!document.fullscreenElement) {
+            onBack();
+          }
+          break;
         default: break;
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [togglePlay, seekBy, toggleFullscreen, onBack, series, nextEpisode, previousEpisode, onSelectEpisode]);
+  }, [
+    togglePlay, seekBy, toggleFullscreen, onBack, series, nextEpisode, previousEpisode,
+    onSelectEpisode, panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen,
+    hidden, mini,
+  ]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -659,22 +981,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [volume, isMuted, speed]);
 
   /**
-   * Shows the controls and schedules their hide.
+   * Controls visibility.
    *
-   * Two guards, both fixing observed flicker:
+   * Expressed as a state machine polled on a timer rather than as a chain of
+   * `setTimeout`s that each reveal and re-schedule. The old shape had a genuine
+   * feedback loop in it: hiding the controls changes what sits under a
+   * stationary cursor, Chromium synthesises a `mousemove` for that, the handler
+   * read the synthetic event as activity and revealed them again, and three
+   * seconds later it repeated — controls flashing on and off while the mouse
+   * was not moving at all. Toggling `cursor: none` on idle produces the same
+   * event, so the loop could also start itself.
    *
-   * 1. **Zero-movement `mousemove` is ignored.** Chromium synthesises one
-   *    whenever the element under a stationary cursor changes, and hiding the
-   *    controls changes exactly that. The result was a loop — hide fires,
-   *    layout under the cursor changes, a synthetic move reveals them again,
-   *    three seconds later it repeats — which reads as the controls flashing
-   *    on and off while the mouse is barely moving. `cursor: none` toggling
-   *    produces the same synthetic event.
-   * 2. **Nothing auto-hides while it would take the UI with it.** A viewer
-   *    reading the source list or a paused frame is not idle, and hiding the
-   *    chrome under their pointer is never what they meant.
+   * The rule that closes it: a `mousemove` with zero `movementX`/`movementY` is
+   * never activity, no matter when it arrives. Real mouse movement always
+   * reports a non-zero delta; every synthetic event reports zero. There is no
+   * time window to tune and no way for hiding to cause revealing.
    */
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  const lastActivity = useRef<number>(Date.now());
+  const pointerInside = useRef(false);
 
   /**
    * Conditions under which the controls must stay put. Held in a ref because
@@ -685,6 +1010,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     panelOpen ||
     sourcePanelOpen ||
     subtitlePanelOpen ||
+    downloadPanelOpen ||
     !isPlaying ||
     Boolean(error) ||
     isHoveringControls;
@@ -696,61 +1022,54 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (keepControls) setControlsVisible(true);
   }, [keepControls]);
 
-  const lastHideTimeRef = useRef<number>(0);
+  /** Real movement reports a non-zero delta; a synthetic event reports zero. */
+  const isRealMove = (native: MouseEvent): boolean => {
+    if (typeof native.movementX === 'number' && typeof native.movementY === 'number') {
+      return native.movementX !== 0 || native.movementY !== 0;
+    }
+    // Some event sources omit `movement*`; fall back to a position change.
+    const last = lastPointer.current;
+    return !last || native.clientX !== last.x || native.clientY !== last.y;
+  };
 
-  const hideControls = useCallback(() => {
-    if (keepControlsRef.current) return;
-    lastHideTimeRef.current = Date.now();
-    setControlsVisible(false);
+  const revealControls = useCallback((event?: React.MouseEvent | MouseEvent) => {
+    if (event) {
+      const native = ((event as React.MouseEvent).nativeEvent ?? event) as MouseEvent;
+      const real = isRealMove(native);
+      lastPointer.current = { x: native.clientX, y: native.clientY };
+      if (!real) return;
+    }
+    lastActivity.current = Date.now();
+    setControlsVisible(true);
   }, []);
 
-  const revealControls = useCallback(
-    (event?: React.MouseEvent | MouseEvent) => {
-      if (event) {
-        const native = (event as React.MouseEvent).nativeEvent || (event as MouseEvent);
-        const timeSinceHide = Date.now() - lastHideTimeRef.current;
-
-        // Ignore synthetic mousemove events generated by Chromium when controls hide
-        if (
-          timeSinceHide < 400 &&
-          typeof native.movementX === 'number' &&
-          native.movementX === 0 &&
-          native.movementY === 0
-        ) {
-          return;
-        }
-
-        const last = lastPointer.current;
-        const moved =
-          !last ||
-          Math.abs(event.clientX - last.x) > 2 ||
-          Math.abs(event.clientY - last.y) > 2 ||
-          (typeof native.movementX === 'number' &&
-            (Math.abs(native.movementX) > 0 || Math.abs(native.movementY) > 0));
-
-        lastPointer.current = { x: event.clientX, y: event.clientY };
-        if (!moved && !controlsVisible) return;
-      }
-
-      setControlsVisible(true);
-      if (hideControlsTimer.current) window.clearTimeout(hideControlsTimer.current);
-      hideControlsTimer.current = window.setTimeout(() => {
-        if (keepControlsRef.current) return;
-        hideControls();
-      }, 3000);
-    },
-    [controlsVisible, hideControls]
-  );
-
+  /**
+   * The single place the controls are allowed to hide.
+   *
+   * Polled rather than scheduled, so there is exactly one decision-maker and no
+   * pending timer can fire against state that has since changed. `keepControls`
+   * is read through a ref for the same reason.
+   */
   useEffect(() => {
-    const handleWindowMouseMove = (e: MouseEvent) => {
-      revealControls(e);
-    };
-    window.addEventListener('mousemove', handleWindowMouseMove);
-    return () => {
-      window.removeEventListener('mousemove', handleWindowMouseMove);
-    };
-  }, [revealControls]);
+    const timer = window.setInterval(() => {
+      if (keepControlsRef.current) return;
+      // Leaving the player hides immediately: the pointer is somewhere else and
+      // the chrome is just covering the picture.
+      const idle = Date.now() - lastActivity.current > CONTROLS_IDLE_MS;
+      if (!pointerInside.current || idle) setControlsVisible(false);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const handlePlayerEnter = useCallback(() => {
+    pointerInside.current = true;
+    lastActivity.current = Date.now();
+    setControlsVisible(true);
+  }, []);
+
+  const handlePlayerLeave = useCallback(() => {
+    pointerInside.current = false;
+  }, []);
 
   // --- seek bar interaction ------------------------------------------------
 
@@ -828,10 +1147,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let openedToken: string | null = null;
 
     (async () => {
-      const response = await window.cloudstream?.probeAudio(streamUrl);
+      const response = await window.cloudstream?.probeMedia(streamUrl);
       if (cancelled || !response) return;
 
       setAudioNeedsComponents(Boolean(response.needsComponents));
+      // A probe that produced nothing now says why, and the source's own HTTP
+      // status is the difference between "expired link" and "odd codec".
+      if (response.failure) setProbeFailure(response.failure);
       if (!response.ok || !response.probe) return;
 
       setAudioProbe(response.probe);
@@ -840,9 +1162,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       if (!response.probe.needsTranscode) return;
 
-      const session = await window.cloudstream?.openAudioTranscode(
+      /**
+       * Video is only re-encoded when the probe says it cannot be decoded.
+       *
+       * The audio case copies the video and is nearly free; this one is not, so
+       * the flag is passed through rather than transcoding both whenever either
+       * needs it.
+       */
+      const session = await window.cloudstream?.openMediaTranscode(
         streamUrl,
-        preferred?.index ?? 0
+        preferred?.index ?? 0,
+        response.probe.needsVideoTranscode,
+        // Container-only problems copy the audio; re-encoding a perfectly good
+        // track to reach a different wrapper is work for nothing.
+        response.probe.needsAudioTranscode
       );
       if (cancelled || !session?.ok || !session.url) return;
 
@@ -854,13 +1187,93 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       cancelled = true;
       // The ffmpeg process outlives the component otherwise.
-      if (openedToken) void window.cloudstream?.closeAudioTranscode(openedToken);
+      if (openedToken) void window.cloudstream?.closeMediaTranscode(openedToken);
     };
   }, [streamUrl, mimeType]);
+
+  useEffect(() => {
+    audioProbeRef.current = audioProbe;
+  }, [audioProbe]);
+
+  useEffect(() => {
+    probeFailureRef.current = probeFailure;
+  }, [probeFailure]);
+
+  /**
+   * The forced conversion pass.
+   *
+   * Deliberately ignores the probe: it runs only after the probe's verdict has
+   * already proved wrong. Video is copied unless the probe positively said it
+   * could not be decoded — the common case is a container problem, where a copy
+   * is nearly free, and re-encoding video on a guess would burn a CPU for
+   * nothing.
+   */
+  useEffect(() => {
+    forceTranscodeRef.current = () => {
+      if (forcedFor.current === streamUrl) return;
+      forcedFor.current = streamUrl;
+
+      void (async () => {
+        const previous = transcode?.token;
+        const at = transcodeOffset + (videoRef.current?.currentTime ?? 0);
+
+        // Fetch probe if not available yet (resolves race condition when video errors before probe finishes)
+        let probe = audioProbeRef.current;
+        if (!probe) {
+          const res = await window.cloudstream?.probeMedia(streamUrl);
+          if (res?.ok && res.probe) {
+            probe = res.probe;
+            setAudioProbe(probe);
+          }
+        }
+
+        const urlLower = streamUrl.toLowerCase();
+        const isHevc = Boolean(
+          probe?.needsVideoTranscode ||
+            probe?.videoCodec === 'hevc' ||
+            probe?.videoCodec === 'h265' ||
+            urlLower.includes('hevc') ||
+            urlLower.includes('x265') ||
+            urlLower.includes('10bit')
+        );
+        const isAudioTranscode = probe ? probe.needsAudioTranscode : true;
+
+        const session = await window.cloudstream?.openMediaTranscode(
+          streamUrl,
+          selectedAudioIndex ?? 0,
+          isHevc,
+          isAudioTranscode
+        );
+        if (!session?.ok || !session.url) {
+          // Conversion is unavailable; the source has had its chance.
+          skipRef.current?.('This file could not be converted for playback.');
+          return;
+        }
+        if (previous) void window.cloudstream?.closeMediaTranscode(previous);
+        setError(null);
+        setTranscodeOffset(at);
+        setTranscode({ url: session.url, token: session.url.split('/').pop() ?? '' });
+      })();
+    };
+  }, [streamUrl, transcode?.token, transcodeOffset, selectedAudioIndex]);
+
+  useEffect(() => {
+    const skip = sourceSession?.onSourceUnplayable;
+    skipRef.current = skip
+      ? (reason: string) => {
+          if (skippedFor.current === streamUrl) return;
+          skippedFor.current = streamUrl;
+          skip(reason);
+        }
+      : null;
+  }, [sourceSession?.onSourceUnplayable, streamUrl]);
 
   // A new stream invalidates everything learned about the previous one.
   useEffect(() => {
     setAudioProbe(null);
+    setProbeFailure(null);
+    forcedFor.current = null;
+    skippedFor.current = null;
     setTranscode(null);
     setTranscodeOffset(0);
     setAudioNeedsComponents(false);
@@ -878,14 +1291,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       const video = videoRef.current;
       const at = transcodeOffset + (video?.currentTime ?? 0);
-      const session = await window.cloudstream?.openAudioTranscode(streamUrl, index);
+      const session = await window.cloudstream?.openMediaTranscode(
+        streamUrl,
+        index,
+        audioProbe?.needsVideoTranscode ?? false,
+        audioProbe?.needsAudioTranscode ?? true
+      );
       if (!session?.ok || !session.url) return;
 
-      if (transcode.token) void window.cloudstream?.closeAudioTranscode(transcode.token);
+      if (transcode.token) void window.cloudstream?.closeMediaTranscode(transcode.token);
       setTranscodeOffset(at);
       setTranscode({ url: session.url, token: session.url.split('/').pop() ?? '' });
     },
-    [transcode, transcodeOffset, streamUrl]
+    [transcode, transcodeOffset, streamUrl, audioProbe]
   );
 
   /** Audio tracks as ffprobe reported them, labelled for the picker. */
@@ -960,7 +1378,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Close any open side-panel when the user clicks outside it on the player.
   const handlePlayerPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!panelOpen && !sourcePanelOpen && !subtitlePanelOpen) return;
+      if (!panelOpen && !sourcePanelOpen && !subtitlePanelOpen && !downloadPanelOpen) return;
       const target = e.target as HTMLElement;
       // If the click is inside a .player-panel element, leave it open.
       if (target.closest('.player-panel')) return;
@@ -969,17 +1387,98 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setPanelOpen(false);
       setSourcePanelOpen(false);
       setSubtitlePanelOpen(false);
+      setDownloadPanelOpen(false);
     },
-    [panelOpen, sourcePanelOpen, subtitlePanelOpen]
+    [panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen]
   );
+
+  const miniFrame = useMiniFrame(mini);
+
+  /**
+   * Geometry for the floating window.
+   *
+   * Applied as inline style on the same element the full-screen player uses.
+   * Swapping a class alone cannot express a position the user dragged to, and
+   * rendering a second player would mean a second `<video>` — which is the one
+   * thing this component must never do.
+   */
+  const miniStyle: React.CSSProperties | undefined = mini
+    ? {
+        left: miniFrame.frame.x,
+        top: miniFrame.frame.y,
+        width: miniFrame.frame.width,
+        height: miniFrame.height,
+      }
+    : undefined;
 
   return (
     <div
       ref={containerRef}
-      className={`player${controlsVisible || keepControls ? '' : ' player--idle'}`}
+      className={
+        `player${controlsVisible || keepControls ? '' : ' player--idle'}` +
+        (mini ? ' player--mini' : '')
+      }
+      // `display: none` rather than unmounting: see the `hidden` prop. The
+      // element keeps its buffer, its position and its decoder.
+      style={hidden ? { display: 'none' } : miniStyle}
+      aria-hidden={hidden || undefined}
       onMouseMove={revealControls}
+      onMouseEnter={handlePlayerEnter}
+      onMouseLeave={handlePlayerLeave}
       onPointerDown={handlePlayerPointerDown}
     >
+      {/*
+        The mini player's own chrome.
+
+        A separate, much smaller control set rather than the full one scaled
+        down: at 420px the real controls are unusable — a seek bar three hundred
+        pixels wide with eleven buttons on it — and the things wanted from a
+        window in the corner are only ever pause, expand, and close.
+      */}
+      {mini && (
+        <>
+          <div
+            className="player-mini__grip"
+            onPointerDown={miniFrame.startDrag}
+            title="Drag to move"
+            role="presentation"
+          >
+            <GripHorizontal size={13} />
+            <span className="player-mini__title">{episodeTitle || title}</span>
+          </div>
+
+          <div className="player-mini__bar">
+            <button onClick={togglePlay} title={isPlaying ? 'Pause' : 'Play'} aria-label={isPlaying ? 'Pause' : 'Play'}>
+              {isPlaying ? <Pause size={15} /> : <Play size={15} fill="currentColor" />}
+            </button>
+            <button
+              onClick={() => setIsMuted((value) => !value)}
+              title={isMuted ? 'Unmute' : 'Mute'}
+              aria-label={isMuted ? 'Unmute' : 'Mute'}
+            >
+              {isMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+            </button>
+            <div className="player-mini__spacer" />
+            {onExpand && (
+              <button onClick={onExpand} title="Back to the full player" aria-label="Expand player">
+                <Maximize2 size={15} />
+              </button>
+            )}
+            <button onClick={onBack} title="Stop and close" aria-label="Close player">
+              <X size={15} />
+            </button>
+          </div>
+
+          {/* Top-left rather than bottom-right: a window parked in the corner
+              of the screen has its bottom-right corner against the edge. */}
+          <div
+            className="player-mini__resize"
+            onPointerDown={miniFrame.startResize}
+            title="Drag to resize"
+            role="presentation"
+          />
+        </>
+      )}
       <video
         ref={videoRef}
         className={`player__video player__video--${aspect}`}
@@ -1051,7 +1550,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <>
               <AlertTriangle size={36} />
               <p>{error}</p>
-              <button className="btn" onClick={onBack}>Choose another source</button>
+              {/* Failover is silent otherwise, and a viewer watching a dead
+                  frame has no way to tell trying-the-next from given-up. */}
+              {sourceSession && sourceSession.attempts.length > 0 && (
+                <span className="muted">
+                  Tried {sourceSession.attempts.length} of {sourceSession.sources.length} source
+                  {sourceSession.sources.length === 1 ? '' : 's'}
+                  {sourceSession.attempts.length < sourceSession.sources.length
+                    ? ' — trying the next…'
+                    : ''}
+                </span>
+              )}
+              {/* Codecs and stream URL, because a playback failure is the least
+                  reproducible thing in the app: the stream is transient and the
+                  viewer has no way to describe it afterwards. */}
+              <div className="player__error-actions">
+                <button className="btn" onClick={onBack}>Choose another source</button>
+                <CopyErrorButton
+                  compact
+                  context={{
+                    title: episodeTitle ? `${title} — ${episodeTitle}` : title,
+                    url: streamUrl,
+                    source: audioProbe?.videoCodec
+                      ? `video=${audioProbe.videoCodec}` +
+                        (audioProbe.audio[0]?.codec ? ` audio=${audioProbe.audio[0].codec}` : '')
+                      : undefined,
+                    message: error ?? undefined,
+                  }}
+                />
+              </div>
+              {/*
+                Offered only when the source is actually there. A dead link
+                plays no better in VLC, and suggesting it would send the viewer
+                to fetch a player that cannot help.
+              */}
+              {!probeFailure?.dead && <ExternalPlayerFallback streamUrl={streamUrl} compact />}
             </>
           ) : (
             <>
@@ -1105,6 +1638,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <button className="icon-button" onClick={onBack} aria-label="Back">
           <ArrowLeft size={22} />
         </button>
+        {/*
+          Minimise, next to Back and deliberately not folded into it.
+
+          They are opposite intentions — "I am done with this" and "keep this
+          running while I do something else" — and a viewer who wants the second
+          and gets the first has lost their place and their buffer.
+        */}
+        {onMinimize && (
+          <button
+            className="icon-button"
+            onClick={onMinimize}
+            aria-label="Minimise the player"
+            title="Keep playing in a small window while you browse"
+          >
+            <Minimize2 size={19} />
+          </button>
+        )}
         <div className="player__titles">
           <h2>{title}</h2>
           {(episodeTitle || currentEpisode) && (
@@ -1164,6 +1714,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           searching={!sourceSession.searchDone}
           searched={sourceSession.searched}
           totalIndexers={sourceSession.totalIndexers}
+          cancelled={sourceSession.searchCancelled}
           switchingTo={pendingSourceHash}
           error={sourceSession.phase === 'error' ? sourceSession.error : undefined}
           onClose={() => setSourcePanelOpen(false)}
@@ -1176,6 +1727,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setSourcePanelOpen(false);
           }}
           onRefresh={sourceSession.onRefresh}
+          onCancelSearch={sourceSession.onCancelSearch}
           onDownload={sourceSession.onDownloadSource}
         />
       )}
@@ -1183,6 +1735,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       <SubtitlePanel
         open={subtitlePanelOpen}
         imdbId={subtitleContext?.imdbId}
+        // Lets the extension provider be asked for the subtitles it published
+        // with the stream, which is the only set that exists for a title no
+        // catalogue carries and so has no IMDb id to search by.
+        mediaUrl={progress?.mediaUrl}
         season={subtitleContext?.season}
         episode={subtitleContext?.episode}
         embedded={subtitles}
@@ -1194,6 +1750,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
           setActiveSubtitle(url);
         }}
+      />
+
+      <PlayerDownloadPanel
+        open={downloadPanelOpen}
+        tasks={downloadQueue}
+        onClose={() => setDownloadPanelOpen(false)}
+        onPause={(id) => window.cloudstream?.pauseDownload(id)}
+        onResume={(id) => window.cloudstream?.resumeDownload(id)}
+        onRemove={(id) => window.cloudstream?.removeDownload(id)}
+        onReveal={(filePath) => window.cloudstream?.revealInFolder(filePath)}
+        onOpenDownloads={
+          onOpenDownloads
+            ? () => {
+                setDownloadPanelOpen(false);
+                onOpenDownloads();
+              }
+            : undefined
+        }
       />
 
       <footer
@@ -1208,8 +1782,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onMouseLeave={onSeekLeave}
           onClick={onSeekClick}
         >
-          {/* Two stacked bars: browser-buffered ahead of the playhead, and the
-              torrent's downloaded fraction, which is what actually gates seeking. */}
+          {/* The full timeline, so the ungathered part of the film is still
+              represented on screen rather than simply absent. */}
+          <div className="player__seek-track" />
           {stats && (
             <div className="player__seek-torrent" style={{ width: `${stats.progress * 100}%` }} />
           )}
@@ -1363,16 +1938,112 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <Subtitles size={18} />
           </button>
 
-          {onDownloadCurrent && (
-            <button
-              className="icon-button"
-              onClick={onDownloadCurrent}
-              aria-label="Download"
-              title="Download what is playing"
+          {/* Button 1: Download Current Media Action Button */}
+          <button
+            className={`icon-button ${currentDownload ? 'active' : ''}`}
+            onClick={handleDownloadCurrentMedia}
+            aria-label="Download current media"
+            title={
+              currentDownload
+                ? `Downloading current media (${currentDownload.state})`
+                : 'Download current playing media'
+            }
+            disabled={Boolean(
+              currentDownload && currentDownload.state === DownloadState.Completed
+            )}
+          >
+            <HardDriveDownload size={18} />
+          </button>
+
+          {/* Active Download Status Badge for Currently Playing Media */}
+          {currentDownload && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+                padding: '0.2rem 0.6rem',
+                borderRadius: '16px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                color: '#60a5fa',
+              }}
             >
-              <Download size={18} />
-            </button>
+              <RotateCw
+                size={12}
+                className={
+                  currentDownload.state === DownloadState.Downloading ||
+                  currentDownload.state === DownloadState.RefreshingSource ||
+                  currentDownload.state === DownloadState.Retrying
+                    ? 'spin'
+                    : ''
+                }
+              />
+              <span>
+                {currentDownload.state === DownloadState.Downloading
+                  ? `${currentDownload.totalBytes > 0 ? `${Math.min(100, Math.floor((currentDownload.bytesDownloaded / currentDownload.totalBytes) * 100))}%` : 'Downloading'}`
+                  : currentDownload.state === DownloadState.RefreshingSource
+                  ? 'Refreshing...'
+                  : currentDownload.state === DownloadState.Retrying
+                  ? 'Retrying...'
+                  : currentDownload.state}
+              </span>
+              {currentDownload.state === DownloadState.Downloading && (
+                <button
+                  style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', display: 'flex', padding: 0 }}
+                  onClick={() => window.cloudstream?.pauseDownload(currentDownload.id)}
+                  title="Pause Download"
+                >
+                  <Pause size={12} />
+                </button>
+              )}
+              {(currentDownload.state === DownloadState.Paused || currentDownload.state === DownloadState.Failed) && (
+                <button
+                  style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', display: 'flex', padding: 0 }}
+                  onClick={() => window.cloudstream?.resumeDownload(currentDownload.id)}
+                  title="Resume / Retry Download"
+                >
+                  <Play size={12} />
+                </button>
+              )}
+            </div>
           )}
+
+          {/* Button 2: Downloads Manager Popover Panel Trigger */}
+          <button
+            className={`icon-button ${downloadPanelOpen ? 'active' : ''}`}
+            data-panel-toggle
+            onClick={() => setDownloadPanelOpen((v) => !v)}
+            aria-label="Downloads Manager Panel"
+            title={
+              activeDownloadsCount > 0
+                ? `Downloads Manager (${activeDownloadsCount} active)`
+                : 'Downloads Manager Panel'
+            }
+            style={{ position: 'relative' }}
+          >
+            <FolderDown size={18} />
+            {activeDownloadsCount > 0 && (
+              <span
+                style={{
+                  position: 'absolute',
+                  top: '-4px',
+                  right: '-4px',
+                  backgroundColor: '#ef4444',
+                  color: '#fff',
+                  fontSize: '0.65rem',
+                  fontWeight: 700,
+                  borderRadius: '10px',
+                  padding: '1px 5px',
+                  lineHeight: 1,
+                }}
+              >
+                {activeDownloadsCount}
+              </span>
+            )}
+          </button>
 
           {qualities.length > 1 && (
             <HoverMenu
@@ -1442,20 +2113,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )
           )}
 
-          <HoverMenu
-            label="Speed"
-            value={speed}
-            onChange={setSpeed}
-            options={SPEEDS.map((s) => ({ value: s, label: `${s}×` }))}
-            triggerText={`${speed}×`}
-          />
+          {showSpeedControl && (
+            <HoverMenu
+              label="Speed"
+              value={speed}
+              onChange={setSpeed}
+              options={SPEEDS.map((s) => ({ value: s, label: `${s}×` }))}
+              triggerText={`${speed}×`}
+            />
+          )}
 
-          <HoverMenu
-            label="Aspect ratio"
-            value={aspect}
-            onChange={setAspect}
-            options={Object.values(AspectRatioMode).map((mode) => ({ value: mode, label: mode }))}
-          />
+          {showAspectControl && (
+            <HoverMenu
+              label="Aspect ratio"
+              value={aspect}
+              onChange={setAspect}
+              options={Object.values(AspectRatioMode).map((mode) => ({ value: mode, label: mode }))}
+            />
+          )}
 
           <button className="icon-button" onClick={toggleFullscreen} aria-label="Fullscreen">
             {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}

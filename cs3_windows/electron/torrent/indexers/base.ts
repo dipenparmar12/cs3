@@ -41,8 +41,16 @@ export const DEFAULT_TRACKERS: readonly string[] = [
   'udp://exodus.desync.com:6969/announce',
   'udp://tracker.openbittorrent.com:6969/announce',
   'udp://explodie.org:6969/announce',
-  'udp://tracker.opentrackr.org:1337',
+  'udp://tracker.tiny-vps.com:6969/announce',
+  'udp://tracker.moeking.me:6969/announce',
+  'udp://p4p.arenabg.com:1337/announce',
+  'udp://movies.zsw.ca:6969/announce',
+  'udp://tracker.dler.org:6969/announce',
+  'udp://tracker.bitsearch.to:1337/announce',
+  'http://tracker.openbittorrent.com:80/announce',
   'wss://tracker.openwebtorrent.com',
+  'wss://tracker.btorrent.xyz',
+  'wss://tracker.webtorrent.dev',
 ];
 
 const INFOHASH_HEX_RE = /\b([a-f0-9]{40})\b/i;

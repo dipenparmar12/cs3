@@ -111,7 +111,9 @@ export class DatastoreManager {
 
   public getString(key: string, defaultValue = '', isSetting = false): string {
     const target = isSetting ? this.data.settings : this.data.datastore;
-    return target._String?.[key] ?? defaultValue;
+    if (target._String && target._String[key] !== undefined) return target._String[key];
+    if (target._Bool && target._Bool[key] !== undefined) return String(target._Bool[key]);
+    return defaultValue;
   }
 
   public setBool(key: string, value: boolean, isSetting = false): void {

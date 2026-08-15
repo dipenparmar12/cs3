@@ -1,240 +1,326 @@
-import React, { useEffect, useState } from 'react';
-import { Download, HardDrive, RefreshCw, Zap, Code, Tv, CheckCircle2 } from 'lucide-react';
-import { MediaComponentsCard } from '../components/MediaComponentsCard';
+import React, { useEffect, useState, useCallback } from 'react';
+import {
+  Cpu,
+  Download,
+  Globe,
+  HardDrive,
+  Layers,
+  RefreshCw,
+  Search,
+  ShieldAlert,
+  Sliders,
+  Zap,
+  Wrench,
+  AlertTriangle,
+  Play,
+} from 'lucide-react';
+import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
+import { PlayerSettings } from '../components/PlayerSettings';
+import { ProviderRankingPanel } from '../components/settings/ProviderRankingPanel';
 import { NetworkSettings } from '../components/NetworkSettings';
+import { AdultContentSetting } from '../components/AdultContentSetting';
+import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
+import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
+
+type TabId = 'general' | 'player' | 'components' | 'sources' | 'downloads' | 'network' | 'advanced';
 
 interface SettingsViewProps {
   hasBinaries?: boolean;
   onOpenBinarySetup?: () => void;
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = ({
-  hasBinaries = true,
-  onOpenBinarySetup
-}) => {
+export const SettingsView: React.FC<SettingsViewProps> = () => {
+  const [tab, setTab] = useState<TabId>('general');
   const [downloadDir, setDownloadDir] = useState('%USERPROFILE%\\Downloads\\CloudStream');
   const [useLiveStreams, setUseLiveStreams] = useState(true);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [missingComponentCount, setMissingComponentCount] = useState<number>(0);
+  const [concurrency, setConcurrency] = useState<{
+    value: number;
+    min: number;
+    max: number;
+    def: number;
+  } | null>(null);
+  const [prefetchSources, setPrefetchSources] = useState(true);
 
   useEffect(() => {
-    if (window.cloudstream) {
-      window.cloudstream
-        .getSetting('use_live_streaming_sources', 'true')
-        .then((value) => setUseLiveStreams(value !== 'false'));
+    void window.cloudstream?.getSourcePrefetchSetting?.().then((response) => {
+      if (response?.ok) setPrefetchSources(response.enabled);
+    });
+  }, []);
+
+  const checkComponentStatus = useCallback(async () => {
+    try {
+      const res = await window.cloudstream?.getComponentStatus?.();
+      if (res && typeof res.missingCount === 'number') {
+        setMissingComponentCount(res.missingCount);
+      }
+    } catch {
+      // Best effort
     }
   }, []);
 
+  useEffect(() => {
+    window.cloudstream
+      ?.getSetting('use_live_streaming_sources', 'true')
+      .then((value) => setUseLiveStreams(value !== 'false'));
+    window.cloudstream?.getSearchConcurrency?.().then(setConcurrency);
+    void checkComponentStatus();
+  }, [checkComponentStatus]);
+
+  const flash = (message: string) => {
+    setStatusMessage(message);
+    setTimeout(() => setStatusMessage(null), 3000);
+  };
+
   const handleToggleLiveStreams = async (enabled: boolean) => {
     setUseLiveStreams(enabled);
-    if (window.cloudstream) {
-      await window.cloudstream.setSetting('use_live_streaming_sources', enabled);
-      setStatusMessage(enabled ? '✓ Dev Mode: Live Content Streaming Mode Enabled!' : '✓ Dev Mode: Demo Fallback Streaming Mode Active');
-      setTimeout(() => setStatusMessage(null), 3000);
-    }
+    await window.cloudstream?.setSetting('use_live_streaming_sources', enabled);
+    flash(enabled ? 'Live streaming sources enabled.' : 'Demo fallback mode active.');
   };
 
   const handleSelectDirectory = async () => {
-    if (window.cloudstream) {
-      const path = await window.cloudstream.selectDirectory();
-      if (path) {
-        setDownloadDir(path);
-      }
+    const path = await window.cloudstream?.selectDirectory();
+    if (path) {
+      setDownloadDir(path);
+      flash('Download folder updated.');
     }
   };
 
   const handleImportBackup = async () => {
-    if (window.cloudstream) {
-      const selectedFile = await window.cloudstream.selectDirectory();
-      if (selectedFile) {
-        const success = await window.cloudstream.importBackup(selectedFile);
-        setStatusMessage(success ? '✓ CS3 Android Backup Imported Successfully!' : 'Failed to import backup.');
-        setTimeout(() => setStatusMessage(null), 3000);
-      }
-    }
+    const selectedFile = await window.cloudstream?.selectDirectory();
+    if (!selectedFile) return;
+    const success = await window.cloudstream?.importBackup(selectedFile);
+    flash(success ? 'Android backup imported.' : 'Could not import that backup.');
   };
 
+  const handleConcurrency = async (value: number) => {
+    const applied = await window.cloudstream?.setSearchConcurrency?.(value);
+    if (applied) setConcurrency(applied);
+  };
+
+  const tabs: Array<{ id: TabId; label: string; icon: React.ReactNode; badge?: React.ReactNode }> = [
+    { id: 'general', label: 'General', icon: <Sliders size={14} /> },
+    { id: 'player', label: 'Player', icon: <Play size={14} /> },
+    {
+      id: 'components',
+      label: 'Components & Binaries',
+      icon: <Cpu size={14} />,
+      badge: missingComponentCount > 0 ? (
+        <span
+          style={{
+            marginLeft: '0.4rem',
+            padding: '0.1rem 0.45rem',
+            borderRadius: '10px',
+            fontSize: '0.7rem',
+            fontWeight: 700,
+            backgroundColor: 'rgba(245, 158, 11, 0.2)',
+            color: '#f59e0b',
+            border: '1px solid rgba(245, 158, 11, 0.4)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.2rem',
+          }}
+        >
+          <AlertTriangle size={10} /> {missingComponentCount} missing
+        </span>
+      ) : undefined,
+    },
+    { id: 'sources', label: 'Sources', icon: <Layers size={14} /> },
+    { id: 'downloads', label: 'Downloads', icon: <Download size={14} /> },
+    { id: 'network', label: 'Connection', icon: <Globe size={14} /> },
+    { id: 'advanced', label: 'Advanced', icon: <Wrench size={14} /> },
+  ];
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem', maxWidth: '800px' }}>
-      <div>
-        <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>Application Settings</h2>
-        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-          Configure sources and ranking, download paths, downloader engines, and CS3 Android backup imports
-        </p>
-      </div>
+    <div className="settings">
+      <header className="settings__head">
+        <h2>Settings</h2>
+        <p>Components, repositories, storage, and networking. Everything has a sensible default.</p>
+      </header>
 
-      <MediaComponentsCard />
+      <nav className="settings__tabs" role="tablist">
+        {tabs.map((entry) => (
+          <button
+            key={entry.id}
+            role="tab"
+            aria-selected={tab === entry.id}
+            className={`settings__tab${tab === entry.id ? ' settings__tab--on' : ''}`}
+            onClick={() => {
+              setTab(entry.id);
+              if (entry.id === 'components') void checkComponentStatus();
+            }}
+          >
+            {entry.icon}
+            <span>{entry.label}</span>
+            {entry.badge}
+          </button>
+        ))}
+      </nav>
 
-      {/* Connection above sources: when an ISP blocks lookups every indexer
-          fails at once, so tuning source preferences is wasted effort until
-          this is ruled out. */}
-      <NetworkSettings />
+      {statusMessage && <div className="settings__flash">{statusMessage}</div>}
 
-      {/* Sources first: it is the only section that determines whether the app
-          can find anything at all, so it should not be buried below downloads. */}
-      <SourceSettings />
+      {tab === 'general' && (
+        <>
+          <SettingGroup title="Search" icon={<Search size={15} />}>
+            <SettingRow
+              label="Providers searched at once"
+              note={concurrency ? `${concurrency.value} in parallel` : undefined}
+              hint={
+                <>
+                  A search asks every enabled extension provider at the same time and shows
+                  results as each one answers. Raising this past your processor’s core count
+                  mostly moves the queue rather than removing it; lowering it helps on a slow
+                  connection, where many simultaneous scrapes compete for the same bandwidth.
+                  Default is {concurrency?.def ?? 8}.
+                </>
+              }
+            >
+              {concurrency && (
+                <div className="settings__slider">
+                  <input
+                    type="range"
+                    min={concurrency.min}
+                    max={concurrency.max}
+                    step={1}
+                    value={concurrency.value}
+                    onChange={(event) => handleConcurrency(Number(event.target.value))}
+                    aria-label="Providers searched at once"
+                  />
+                  <span>{concurrency.value}</span>
+                </div>
+              )}
+            </SettingRow>
 
-      {statusMessage && (
-        <div style={{
-          background: 'rgba(59, 130, 246, 0.15)',
-          border: '1px solid var(--accent-primary)',
-          padding: '0.75rem 1rem',
-          borderRadius: 'var(--radius-md)',
-          color: '#fff',
-          fontSize: '0.85rem'
-        }}>
-          {statusMessage}
-        </div>
+            {/*
+              Opt-out rather than opt-in: the default is what makes Play feel
+              instant, and it is the behaviour most people want. It is offered
+              at all because opening a detail page is not a commitment to watch
+              — someone on a metered connection should not have to discover
+              this by watching their allowance go.
+            */}
+            <SettingRow
+              label="Load sources while you read"
+              note={prefetchSources ? 'On' : 'Off'}
+              hint={
+                <>
+                  Starts looking for playable sources a moment after a title’s page opens, so
+                  pressing Play usually starts immediately instead of beginning the search
+                  then. Results are cached and reused until they expire, and pressing Play
+                  during the search joins it rather than starting a second one — so this never
+                  costs more than one search. Turning it off means every Play begins from cold.
+                </>
+              }
+            >
+              <label className="settings__switch">
+                <input
+                  type="checkbox"
+                  checked={prefetchSources}
+                  onChange={async (event) => {
+                    const response = await window.cloudstream?.setSourcePrefetchSetting?.(
+                      event.target.checked
+                    );
+                    if (response?.ok) setPrefetchSources(response.enabled);
+                  }}
+                />
+                <span>{prefetchSources ? 'Enabled' : 'Disabled'}</span>
+              </label>
+            </SettingRow>
+          </SettingGroup>
+
+          <AdultContentSetting />
+        </>
       )}
 
-      {/* Developer Options & Streaming Engine Toggle Section */}
-      <div style={{
-        background: 'var(--bg-card)',
-        borderRadius: 'var(--radius-md)',
-        border: '1px solid var(--accent-primary)',
-        padding: '1.25rem',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '1rem'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fff' }}>
-          <Code size={18} style={{ color: 'var(--accent-light)' }} />
-          <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>Developer Options & Media Streaming Engine</h3>
-        </div>
+      {tab === 'player' && <PlayerSettings />}
 
-        <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-          Toggle between <strong>Live Actual Content Mode</strong> (scrapes and streams real 1080p/4K master streams and open-source movies live) and <strong>Demo Fallback Mode</strong> for offline development testing.
-        </p>
+      {tab === 'components' && <UnifiedComponentManager />}
 
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          background: 'var(--bg-input)',
-          padding: '0.75rem 1rem',
-          borderRadius: 'var(--radius-sm)',
-          border: '1px solid var(--border-color)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <Tv size={20} style={{ color: useLiveStreams ? 'var(--status-success)' : 'var(--text-subtle)' }} />
-            <div>
-              <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#fff' }}>
-                {useLiveStreams ? 'Actual Content Streaming Mode (Live)' : 'Demo Content Streaming Mode (Demo)'}
-              </div>
-              <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
-                {useLiveStreams ? 'Streams real 1080p/4K media & live master playlists' : 'Uses offline demo streams for testing'}
-              </span>
-            </div>
-          </div>
+      {tab === 'sources' && (
+        <>
+          <SourceSettings />
+          {/* Which providers are worth asking, measured rather than assumed.
+              Lives under Sources because that is what it is about, and next to
+              the enable switches it explains. */}
+          <ProviderRankingPanel />
+        </>
+      )}
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={useLiveStreams}
-              onChange={(e) => handleToggleLiveStreams(e.target.checked)}
-              style={{ width: '18px', height: '18px', accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
-            />
-            <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#fff' }}>
-              {useLiveStreams ? 'ON' : 'OFF'}
-            </span>
-          </label>
-        </div>
-      </div>
+      {tab === 'downloads' && (
+        <>
+          <SettingGroup title="Storage" icon={<HardDrive size={15} />}>
+            <SettingRow
+              label="Download folder"
+              note={downloadDir}
+              stacked
+              hint="Where finished downloads are written. Existing downloads stay where they are; this only affects new ones."
+            >
+              <button onClick={handleSelectDirectory} className="btn btn-secondary">
+                Change folder
+              </button>
+            </SettingRow>
+          </SettingGroup>
 
-      {/* Downloader Engine Setup & Re-install Section */}
-      <div style={{
-        background: 'var(--bg-card)',
-        borderRadius: 'var(--radius-md)',
-        border: '1px solid var(--border-color)',
-        padding: '1.25rem',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '0.75rem'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fff' }}>
-            <Zap size={18} style={{ color: 'var(--accent-light)' }} />
-            <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>Downloader Engine Configuration</h3>
-          </div>
+          <SettingGroup title="Download engines" icon={<Zap size={15} />}>
+            <SettingRow
+              label="aria2c and yt-dlp"
+              note="Managed in Components & Binaries"
+              hint={
+                <>
+                  Downloads run through portable copies of <strong>aria2c</strong> (multi-connection
+                  downloader) and <strong>yt-dlp</strong> (used when a source needs extracting
+                  first). They are managed in the <strong>Components & Binaries</strong> tab.
+                </>
+              }
+            >
+              <button
+                onClick={() => setTab('components')}
+                className="btn btn-secondary"
+              >
+                <Cpu size={15} />
+                <span>Manage Components</span>
+              </button>
+            </SettingRow>
+          </SettingGroup>
+        </>
+      )}
 
-          {hasBinaries && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--status-success)', fontSize: '0.8rem', fontWeight: 600 }}>
-              <CheckCircle2 size={16} />
-              <span>Engines Configured & Ready</span>
-            </div>
-          )}
-        </div>
+      {tab === 'network' && <NetworkSettings />}
 
-        <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-          {hasBinaries
-            ? 'The portable aria2c (16-thread multi-connection stream downloader) and yt-dlp engines are configured and active.'
-            : 'Auto-configure portable aria2c and yt-dlp fallback engine automatically upon prompt confirmation.'}
-        </p>
+      {tab === 'advanced' && (
+        <>
+          <DiagnosticsPanel />
 
-        <button onClick={onOpenBinarySetup} className={`btn ${hasBinaries ? 'btn-secondary' : 'btn-primary'}`} style={{ width: 'fit-content', marginTop: '0.25rem' }}>
-          <Download size={16} />
-          <span>{hasBinaries ? 'Reinstall / Update Downloader Engines' : '⚡ 1-Click Auto Setup Engines'}</span>
-        </button>
-      </div>
+          <SettingGroup title="Migration" icon={<RefreshCw size={15} />}>
+            <SettingRow
+              label="Import an Android backup"
+              hint="Reads a CloudStream Android .txt backup and restores watch history, bookmarks and settings from it. Existing entries with the same key are overwritten; device-specific values such as tokens and cache paths are skipped."
+            >
+              <button onClick={handleImportBackup} className="btn btn-secondary">
+                Choose file…
+              </button>
+            </SettingRow>
+          </SettingGroup>
 
-      {/* Download Storage Settings */}
-      <div style={{
-        background: 'var(--bg-card)',
-        borderRadius: 'var(--radius-md)',
-        border: '1px solid var(--border-color)',
-        padding: '1.25rem',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '0.75rem'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fff' }}>
-          <HardDrive size={18} style={{ color: 'var(--accent-light)' }} />
-          <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>Download Storage Location</h3>
-        </div>
-
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <input
-            type="text"
-            readOnly
-            value={downloadDir}
-            style={{
-              flex: 1,
-              padding: '0.55rem 1rem',
-              backgroundColor: 'var(--bg-input)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-md)',
-              color: '#fff',
-              fontSize: '0.85rem'
-            }}
-          />
-          <button onClick={handleSelectDirectory} className="btn btn-secondary">
-            Change Folder
-          </button>
-        </div>
-      </div>
-
-      {/* CS3 Android Backup Migration */}
-      <div style={{
-        background: 'var(--bg-card)',
-        borderRadius: 'var(--radius-md)',
-        border: '1px solid var(--border-color)',
-        padding: '1.25rem',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '0.75rem'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fff' }}>
-          <RefreshCw size={18} style={{ color: 'var(--accent-light)' }} />
-          <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>Android CS3 Backup Migration (.txt)</h3>
-        </div>
-        <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-          Import your CloudStream Android `.txt` backup file to restore watch history, bookmarks, and custom settings.
-        </p>
-
-        <button onClick={handleImportBackup} className="btn btn-secondary" style={{ width: 'fit-content' }}>
-          Import CS3_Backup_File.txt
-        </button>
-      </div>
+          <SettingGroup title="Developer" icon={<ShieldAlert size={15} />}>
+            <SettingRow
+              label="Live streaming sources"
+              note={useLiveStreams ? 'Live' : 'Demo fallback'}
+              hint="Off replaces real source discovery with offline demo streams, for developing without hitting third-party sites. Leave this on unless you are working on the app itself."
+            >
+              <label className="settings__switch">
+                <input
+                  type="checkbox"
+                  checked={useLiveStreams}
+                  onChange={(event) => handleToggleLiveStreams(event.target.checked)}
+                />
+                <span>{useLiveStreams ? 'On' : 'Off'}</span>
+              </label>
+            </SettingRow>
+          </SettingGroup>
+        </>
+      )}
     </div>
   );
 };

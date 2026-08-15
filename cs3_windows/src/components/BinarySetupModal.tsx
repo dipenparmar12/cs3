@@ -16,18 +16,27 @@ export const BinarySetupModal: React.FC<BinarySetupModalProps> = ({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isDone, setIsDone] = useState(false);
 
+  const [progressPercent, setProgressPercent] = useState<number>(0);
+
   if (!isOpen) return null;
 
   const handleStartSetup = async () => {
     setIsInstalling(true);
-    setStatusMessage('Downloading & configuring portable aria2c engine...');
+    setProgressPercent(5);
+    setStatusMessage('Connecting to high-speed mirrors...');
+
+    const unsub = window.cloudstream?.onBinarySetupProgress?.((p: { component?: string; status: string; percent: number }) => {
+      setStatusMessage(p.status);
+      setProgressPercent(p.percent);
+    });
 
     if (window.cloudstream) {
       try {
         const res = await window.cloudstream.setupBinaries();
         if (res.success) {
           setIsDone(true);
-          setStatusMessage('✓ 1-Click Downloader Engine Configured Successfully!');
+          setProgressPercent(100);
+          setStatusMessage('✓ 1-Click Downloader Engines Configured Successfully!');
           setTimeout(() => {
             onSuccess();
             onClose();
@@ -37,6 +46,8 @@ export const BinarySetupModal: React.FC<BinarySetupModalProps> = ({
         }
       } catch (e: any) {
         setStatusMessage(`Notice: ${e.message} (HTTP fallback stream active)`);
+      } finally {
+        unsub?.();
       }
     }
     setIsInstalling(false);
@@ -101,21 +112,40 @@ export const BinarySetupModal: React.FC<BinarySetupModalProps> = ({
           Auto-configure the portable <strong>aria2c engine</strong> (16-thread multi-connection transfer engine) and <strong>yt-dlp fallback extraction adapter</strong> in 1 click.
         </p>
 
-        {/* Status Message */}
+        {/* Status Message & Progress Bar */}
         {statusMessage && (
-          <div style={{
-            fontSize: '0.82rem',
-            color: isDone ? 'var(--status-success)' : 'var(--accent-light)',
-            background: 'var(--bg-input)',
-            padding: '0.75rem 1rem',
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--border-color)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.6rem'
-          }}>
-            {isInstalling ? <RefreshCw size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle2 size={16} />}
-            <span>{statusMessage}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div style={{
+              fontSize: '0.82rem',
+              color: isDone ? 'var(--status-success)' : 'var(--accent-light)',
+              background: 'var(--bg-input)',
+              padding: '0.75rem 1rem',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-color)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.6rem'
+            }}>
+              {isInstalling ? <RefreshCw size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle2 size={16} />}
+              <span style={{ wordBreak: 'break-word', flex: 1 }}>{statusMessage}</span>
+            </div>
+            {isInstalling && (
+              <div style={{
+                height: '4px',
+                width: '100%',
+                background: 'rgba(255,255,255,0.08)',
+                borderRadius: '2px',
+                overflow: 'hidden',
+              }}>
+                <div style={{
+                  height: '100%',
+                  width: `${Math.max(5, Math.min(100, progressPercent))}%`,
+                  background: 'linear-gradient(90deg, #3b82f6, #60a5fa)',
+                  transition: 'width 0.3s ease',
+                  borderRadius: '2px',
+                }} />
+              </div>
+            )}
           </div>
         )}
 

@@ -10,7 +10,7 @@
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_RETRIES = 1;
 const USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) CloudStreamDesktop/1.0';
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36';
 
 export interface HttpOptions {
   timeoutMs?: number;
@@ -40,6 +40,20 @@ let activeFetch: FetchLike = (input, init) => fetch(input, init);
 
 export function setHttpFetch(implementation: FetchLike): void {
   activeFetch = implementation;
+}
+
+/**
+ * The configured fetch, unwrapped.
+ *
+ * `fetchJson` and friends add retries, timeouts and body parsing, all of which
+ * are wrong for streaming a film: the response has to stay a stream, the
+ * timeout is the length of the movie, and retrying a partial range would start
+ * it again. `MediaProxy` needs the transport and none of the policy — but it
+ * does need this indirection rather than global `fetch`, so proxied streams
+ * honour the DNS setting like everything else.
+ */
+export function rawFetch(input: string, init?: RequestInit): Promise<Response> {
+  return activeFetch(input, init);
 }
 
 export class HttpError extends Error {
@@ -152,7 +166,40 @@ export async function fetchText(url: string, options: HttpOptions = {}): Promise
   return await response.text();
 }
 
-export async function fetchBuffer(url: string, options: HttpOptions = {}): Promise<Buffer> {
+export async function fetchBuffer(
+  url: string,
+  options: HttpOptions = {},
+  onProgress?: (downloadedBytes: number, totalBytes: number, percent: number) => void
+): Promise<Buffer> {
   const response = await withRetry(url, options);
-  return Buffer.from(await response.arrayBuffer());
+  const totalBytes = parseInt(response.headers.get('content-length') || '0', 10);
+
+  if (!response.body || !onProgress) {
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let downloadedBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      downloadedBytes += value.length;
+      const percent =
+        totalBytes > 0 ? Math.min(100, Math.floor((downloadedBytes / totalBytes) * 100)) : 0;
+      onProgress(downloadedBytes, totalBytes, percent);
+    }
+  }
+
+  const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+  const combined = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return Buffer.from(combined);
 }

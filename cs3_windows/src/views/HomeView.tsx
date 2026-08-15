@@ -1,228 +1,231 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { SearchResponse } from '../types/api';
-import { Play, Sparkles, Film, Tv, History, Loader2 } from 'lucide-react';
+import { matchesTab, tabsFor } from '../utils/contentTypes';
+import { Play, History, Loader2, RefreshCw, Sparkles } from 'lucide-react';
 import type { WatchProgress } from '../../electron/cs3/libraryStore';
+import type { DiscoverySection } from '../../electron/cs3/discovery';
 import { TvType } from '../types/api';
 import { PosterCard } from '../components/PosterCard';
+
+/**
+ * The home screen, built from what is actually popular.
+ *
+ * It used to run three hardcoded searches — `Spider-Man`, `One Piece`,
+ * `Stranger Things` — against every installed extension provider, and label the
+ * results "Trending". Two things were wrong with that and the second is worse
+ * than the first. The obvious problem is that the front page never changed. The
+ * real one is that a site scraper has no opinion about what is popular: asking
+ * thirty providers for "Spider-Man" and calling the answer trending was a
+ * category error, and it cost the slowest scraper's timeout on every launch.
+ *
+ * Discovery now comes from catalogue services that do know — and that need no
+ * API key, which was the binding constraint. Sources are still resolved by the
+ * providers, but only once the user opens something. That separation is what
+ * lets this page be instant and current at the same time.
+ */
 
 interface HomeViewProps {
   onSelectMedia: (item: SearchResponse) => void;
   /** Quick-play from the card, bypassing the detail page. */
   onPlayDirectly?: (item: SearchResponse) => void;
+  /**
+   * Runs a search.
+   *
+   * Needed because not every catalogue item is addressable. AniList's trending
+   * anime carry no IMDb id, so their cards are addressed by title and open
+   * through search rather than straight into a detail page.
+   */
+  onSearch?: (query: string) => void;
 }
 
-export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia, onPlayDirectly }) => {
-  const [trendingMovies, setTrendingMovies] = useState<SearchResponse[]>([]);
-  const [trendingAnime, setTrendingAnime] = useState<SearchResponse[]>([]);
-  const [popularSeries, setPopularSeries] = useState<SearchResponse[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+export const HomeView: React.FC<HomeViewProps> = ({
+  onSelectMedia,
+  onPlayDirectly,
+  onSearch,
+}) => {
+  const [sections, setSections] = useState<DiscoverySection[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [continueWatching, setContinueWatching] = useState<WatchProgress[]>([]);
+  const [typeTab, setTypeTab] = useState<string>('all');
 
-  const [availableProviders, setAvailableProviders] = useState<Array<{ name: string; pluginName: string }>>([]);
-  const [selectedProvider, setSelectedProvider] = useState<string>('all');
-
-  useEffect(() => {
-    window.cloudstream?.getExtensionProviders().then((res) => {
-      if (res?.ok && Array.isArray(res.providers)) {
-        setAvailableProviders(res.providers.map((p) => ({ name: p.name, pluginName: p.pluginName })));
+  const loadSections = useCallback(async () => {
+    if (!window.cloudstream?.getDiscoverySections) {
+      setLoading(false);
+      return;
+    }
+    try {
+      const response = await window.cloudstream.getDiscoverySections();
+      if (response?.ok) {
+        setSections(response.sections ?? []);
+        setError(null);
+      } else {
+        setError(response?.error ?? 'Could not load the catalogue.');
       }
-    }).catch(() => {});
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    let isMounted = true;
+    void loadSections();
+  }, [loadSections]);
 
-    const fetchHomeContent = async () => {
-      setIsLoading(true);
-      if (window.cloudstream) {
-        const [movies, anime, series] = await Promise.all([
-          window.cloudstream.searchAll('Spider-Man'),
-          window.cloudstream.searchAll('One Piece'),
-          window.cloudstream.searchAll('Stranger Things')
-        ]);
-
-        const filterByProv = (items: SearchResponse[]) => {
-          if (selectedProvider === 'all') return items;
-          return items.filter((item) =>
-            item && (
-              item.apiName === selectedProvider ||
-              (Array.isArray(item.alternates) && item.alternates.some((a) => a.apiName === selectedProvider))
-            )
-          );
-        };
-
-        if (isMounted) {
-          setTrendingMovies(filterByProv(movies.results));
-          setTrendingAnime(filterByProv(anime.results));
-          setPopularSeries(filterByProv(series.results));
-        }
-      }
-      setIsLoading(false);
-    };
-
+  /**
+   * Continue watching is local and lands first.
+   *
+   * Loaded separately rather than as another discovery section, because it
+   * needs no network at all — putting it behind the same await would make the
+   * one row that is instantly available wait for the ones that are not.
+   */
+  useEffect(() => {
+    let mounted = true;
     window.cloudstream?.getContinueWatching(12).then((rows) => {
-      if (isMounted) setContinueWatching(rows);
+      if (mounted) setContinueWatching(rows);
     });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
-    fetchHomeContent();
-    return () => { isMounted = false; };
-  }, [selectedProvider]);
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    await window.cloudstream?.refreshDiscovery?.();
+    await loadSections();
+    setRefreshing(false);
+  }, [loadSections]);
 
-  if (isLoading) {
+  /** Opens a card, or searches for it when it has no addressable id. */
+  const open = useCallback(
+    (item: SearchResponse) => {
+      if (item.url.startsWith('search://')) {
+        onSearch?.(decodeURIComponent(item.url.slice('search://'.length)));
+        return;
+      }
+      onSelectMedia(item);
+    },
+    [onSelectMedia, onSearch]
+  );
+
+  const allItems = useMemo(
+    () => sections.flatMap((section) => section.items),
+    [sections]
+  );
+  const typeTabs = useMemo(() => tabsFor(allItems), [allItems]);
+  const activeTab = typeTabs.some((tab) => tab.id === typeTab) ? typeTab : 'all';
+
+  const visibleSections = useMemo(
+    () =>
+      sections
+        .map((section) => ({
+          ...section,
+          items: section.items.filter((item) => matchesTab(item, activeTab)),
+        }))
+        .filter((section) => section.items.length > 0),
+    [sections, activeTab]
+  );
+
+  const hero = sections[0]?.items[0];
+  const hasAnything = sections.length > 0 || continueWatching.length > 0;
+
+  if (loading && !hasAnything) {
     return (
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          minHeight: '350px',
-          gap: '1.25rem',
-          color: 'var(--text-muted)',
-        }}
-      >
-        <div
-          style={{
-            width: '56px',
-            height: '56px',
-            borderRadius: '50%',
-            background: 'var(--bg-card)',
-            border: '1px solid var(--border-color)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--accent-light)',
-            boxShadow: '0 4px 16px rgba(59, 130, 246, 0.2)',
-          }}
-        >
-          <Loader2 size={28} className="spin" />
-        </div>
-        <div style={{ textAlign: 'center' }}>
-          <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#fff', marginBottom: '0.4rem' }}>
-            Fetching live media catalog...
-          </h3>
-          <p style={{ fontSize: '0.82rem', color: 'var(--text-subtle)', margin: 0 }}>
-            Loading trending movies, anime, and TV series
-          </p>
-        </div>
+      <div className="home-loading">
+        <Loader2 size={28} className="spin" />
+        <h3>Loading what’s popular right now</h3>
+        <p>Trending films and series, refreshed a few times a day.</p>
       </div>
     );
   }
 
-  const renderSection = (title: string, icon: React.ReactNode, items: SearchResponse[]) => (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fff' }}>
-        {icon}
-        <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{title}</h3>
-      </div>
-
-      <div className="poster-grid">
-        {items.map((item, idx) => (
-          <PosterCard key={`${item.url}-${idx}`} item={item} onSelectMedia={onSelectMedia} onPlayDirectly={onPlayDirectly} />
-        ))}
-      </div>
-    </div>
-  );
-
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-      {/* Active Provider Catalogue Selector Bar */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        background: 'var(--bg-card)',
-        padding: '0.65rem 1.1rem',
-        borderRadius: 'var(--radius-md)',
-        border: '1px solid var(--border-color)',
-        flexWrap: 'wrap',
-        gap: '0.75rem'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
-          <Sparkles size={18} style={{ color: 'var(--accent-light)' }} />
-          <div>
-            <h3 style={{ fontSize: '0.92rem', fontWeight: 700, color: '#fff', margin: 0 }}>
-              Live Extension Provider Catalogue
-            </h3>
-            <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', margin: 0 }}>
-              Select an active extension provider to browse its live media catalog
-            </p>
-          </div>
-        </div>
+    <div className="home">
+      {/*
+        The hero is the top of the first section rather than a separate fetch.
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span style={{ fontSize: '0.76rem', color: 'var(--text-subtle)', fontWeight: 600 }}>Active Provider:</span>
-          <select
-            value={selectedProvider}
-            onChange={(e) => setSelectedProvider(e.target.value)}
-            style={{
-              background: 'var(--bg-input)',
-              border: '1px solid var(--border-color)',
-              color: '#fff',
-              padding: '0.35rem 0.75rem',
-              borderRadius: 'var(--radius-sm)',
-              fontSize: '0.78rem',
-              outline: 'none',
-              cursor: 'pointer'
-            }}
-          >
-            <option value="all">🌟 All Active Extension Providers</option>
-            {availableProviders.map((p) => (
-              <option key={p.name} value={p.name}>
-                🔌 {p.name} ({p.pluginName})
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* Featured Hero Banner */}
-      {trendingMovies.length > 0 && (
-        <div style={{
-          position: 'relative',
-          borderRadius: 'var(--radius-lg)',
-          overflow: 'hidden',
-          height: '280px',
-          background: `linear-gradient(90deg, rgba(12,15,23,0.95) 0%, rgba(12,15,23,0.5) 100%), url(${trendingMovies[0].posterUrl}) center/cover`,
-          display: 'flex',
-          alignItems: 'center',
-          padding: '2.5rem',
-          border: '1px solid var(--border-color)'
-        }}>
-          <div style={{ maxWidth: '550px', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Sparkles size={16} style={{ color: 'var(--accent-light)' }} />
-              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--accent-light)', textTransform: 'uppercase' }}>
-                Featured Live Title
-              </span>
-            </div>
-
-            <h2 style={{ fontSize: '1.8rem', fontWeight: 800, color: '#fff' }}>{trendingMovies[0].name}</h2>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-              Actual live stream media content powered by multi-provider community repositories.
-            </p>
-
-            <button
-              onClick={() => onSelectMedia(trendingMovies[0])}
-              className="btn btn-primary"
-              style={{ width: 'fit-content', padding: '0.65rem 1.4rem' }}
-            >
+        It used to describe itself as "Featured Live Title" with a sentence
+        about multi-provider community repositories — copy about the app's
+        architecture, on the largest element of its front page.
+      */}
+      {hero && (
+        <div
+          className="home-hero"
+          style={
+            hero.posterUrl
+              ? {
+                  backgroundImage: `linear-gradient(90deg, rgba(10,10,12,0.96) 0%, rgba(10,10,12,0.55) 60%, rgba(10,10,12,0.25) 100%), url(${hero.posterUrl})`,
+                }
+              : undefined
+          }
+        >
+          <div className="home-hero__body">
+            <span className="home-hero__eyebrow">
+              <Sparkles size={13} /> {sections[0].title}
+            </span>
+            <h2>{hero.name}</h2>
+            {hero.year && <p className="home-hero__meta">{hero.year}</p>}
+            <button className="btn btn-primary" onClick={() => open(hero)}>
               <Play size={16} fill="#fff" />
-              <span>Watch Now</span>
+              <span>Watch now</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* Continue watching — resumes without a search */}
-      {continueWatching.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fff' }}>
-            <History size={18} style={{ color: 'var(--accent-light)' }} />
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Continue watching</h3>
+      <div className="home-toolbar">
+        {typeTabs.length > 1 && (
+          <div className="type-tabs" role="tablist" aria-label="Filter by content type">
+            <button
+              role="tab"
+              aria-selected={activeTab === 'all'}
+              className={`type-tabs__tab${activeTab === 'all' ? ' type-tabs__tab--on' : ''}`}
+              onClick={() => setTypeTab('all')}
+            >
+              All <span>{allItems.length}</span>
+            </button>
+            {typeTabs.map((tab) => (
+              <button
+                key={tab.id}
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                className={`type-tabs__tab${activeTab === tab.id ? ' type-tabs__tab--on' : ''}`}
+                onClick={() => setTypeTab(tab.id)}
+              >
+                {tab.label} <span>{tab.count}</span>
+              </button>
+            ))}
           </div>
+        )}
 
-          <div className="poster-grid">
+        <button
+          className="home-refresh"
+          onClick={() => void refresh()}
+          disabled={refreshing}
+          title="Fetch the catalogues again now"
+        >
+          <RefreshCw size={13} className={refreshing ? 'spin' : undefined} />
+          {refreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+
+      {error && sections.length === 0 && (
+        <p className="home-error">
+          {error} — showing nothing rather than something stale. The rest of the app is
+          unaffected; search still works.
+        </p>
+      )}
+
+      {/* Local, so it lands before anything from the network. */}
+      {continueWatching.length > 0 && (
+        <section className="home-row">
+          <header>
+            <History size={17} />
+            <h3>Continue watching</h3>
+          </header>
+          <div className="home-rail">
             {continueWatching.map((row) => {
               const percent = row.durationSeconds
                 ? (row.positionSeconds / row.durationSeconds) * 100
@@ -235,8 +238,8 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia, onPlayDirectl
                 <div
                   key={`${row.key}-${row.season ?? ''}-${row.episode ?? ''}`}
                   className="poster-card"
-                  onClick={(e) => {
-                    (e.currentTarget as HTMLElement)?.blur();
+                  onClick={(event) => {
+                    (event.currentTarget as HTMLElement)?.blur();
                     (document.activeElement as HTMLElement)?.blur();
                     onSelectMedia({
                       name: row.title,
@@ -273,22 +276,41 @@ export const HomeView: React.FC<HomeViewProps> = ({ onSelectMedia, onPlayDirectl
                           ? `S${row.season}E${row.episode}`
                           : `${Math.round(percent)}% watched`}
                       </span>
-                      <span style={{ color: 'var(--accent-light)', fontSize: '0.72rem' }}>
-                        {minutesLeft} min left
-                      </span>
+                      <span className="poster-meta__accent">{minutesLeft} min left</span>
                     </div>
                   </div>
                 </div>
               );
             })}
           </div>
-        </div>
+        </section>
       )}
 
-      {/* Media Sections */}
-      {trendingMovies.length > 0 && renderSection('Trending Movies', <Film size={18} style={{ color: 'var(--accent-light)' }} />, trendingMovies)}
-      {trendingAnime.length > 0 && renderSection('Popular Anime Series', <Sparkles size={18} style={{ color: 'var(--accent-light)' }} />, trendingAnime)}
-      {popularSeries.length > 0 && renderSection('Top TV Series', <Tv size={18} style={{ color: 'var(--accent-light)' }} />, popularSeries)}
+      {visibleSections.map((section) => (
+        <section className="home-row" key={section.id}>
+          <header>
+            <h3>{section.title}</h3>
+            {section.subtitle && <span className="home-row__subtitle">{section.subtitle}</span>}
+            {section.refreshing && <Loader2 size={12} className="spin" />}
+          </header>
+          {/*
+            A rail rather than a grid. A grid of six rows each thirty items long
+            is a wall; a rail keeps every section's first few items visible so
+            the page can be scanned vertically before anything is scrolled
+            horizontally.
+          */}
+          <div className="home-rail">
+            {section.items.map((item, index) => (
+              <PosterCard
+                key={`${item.url}-${index}`}
+                item={item}
+                onSelectMedia={open}
+                onPlayDirectly={item.url.startsWith('search://') ? undefined : onPlayDirectly}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   );
 };

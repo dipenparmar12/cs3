@@ -29,3 +29,10 @@ cs3_windows/dist-electron/
 # Portable JDK 21 + Maven fetched to build the sidecar. Downloaded, never
 # vendored: ~250 MB of third-party binaries do not belong in git history.
 tools/toolchain/
+# Harness and packaging output. `provider-e2e.mjs --json` writes wherever you
+# point it, `build-runtime.mjs` assembles ~90 MB into sidecar/dist (already
+# covered by the `dist` rule above), and the sidecar writes a scratch data dir
+# when run directly rather than through Electron.
+e2e-*.json
+e2e-*.log
+sidecar/plugin-data/

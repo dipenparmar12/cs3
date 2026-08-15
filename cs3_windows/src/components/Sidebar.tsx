@@ -7,16 +7,27 @@ interface SidebarProps {
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
   downloadCount: number;
+  missingComponentCount?: number;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, downloadCount }) => {
+export const Sidebar: React.FC<SidebarProps> = ({
+  activeTab,
+  setActiveTab,
+  downloadCount,
+  missingComponentCount = 0,
+}) => {
   const navItems = [
     { id: 'home' as ActiveTab, label: 'Home', icon: Home },
     { id: 'search' as ActiveTab, label: 'Search', icon: Search },
     { id: 'library' as ActiveTab, label: 'Library', icon: Film },
     { id: 'downloads' as ActiveTab, label: 'Downloads', icon: Download, badge: downloadCount },
     { id: 'extensions' as ActiveTab, label: 'Extensions', icon: Puzzle },
-    { id: 'settings' as ActiveTab, label: 'Settings', icon: Settings },
+    {
+      id: 'settings' as ActiveTab,
+      label: 'Settings',
+      icon: Settings,
+      warnBadge: missingComponentCount > 0 ? `${missingComponentCount}` : undefined,
+    },
   ];
 
   return (
@@ -93,6 +104,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, downl
                   borderRadius: 'var(--radius-full)'
                 }}>
                   {item.badge}
+                </span>
+              )}
+              {item.warnBadge && (
+                <span style={{
+                  background: 'rgba(245, 158, 11, 0.2)',
+                  color: '#f59e0b',
+                  border: '1px solid rgba(245, 158, 11, 0.4)',
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  padding: '1px 6px',
+                  borderRadius: 'var(--radius-full)'
+                }} title={`${item.warnBadge} component(s) need setup`}>
+                  {item.warnBadge}
                 </span>
               )}
             </button>

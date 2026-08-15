@@ -9,6 +9,8 @@ import { YtDlpEngine } from './ytdlpEngine';
 import { startHttpDownload } from './httpDownloader';
 import type { TorrentEngine } from './torrent/torrentEngine';
 import type { ContentService } from './contentService';
+import type { AnalyticsSink } from './pluginManager';
+import type { TorrentResult } from '../src/types/torrent';
 
 /**
  * The download queue, across every kind of source the app can play.
@@ -55,6 +57,13 @@ export class DownloadService {
   private handles: Map<string, ActiveHandle> = new Map();
   private pollInterval: NodeJS.Timeout | null = null;
   private onProgressCallback?: (tasks: DownloadTask[]) => void;
+  /** Where download outcomes are counted, when the host supplies a store. */
+  private analytics: AnalyticsSink | null = null;
+
+  /** Wired by `main.ts`; download outcomes are counted from here onwards. */
+  public setAnalytics(sink: AnalyticsSink): void {
+    this.analytics = sink;
+  }
 
   constructor(datastore: DatastoreManager, aria2: Aria2Engine) {
     this.datastore = datastore;
@@ -170,6 +179,17 @@ export class DownloadService {
           task.etaSeconds = 0;
           this.gidToTaskId.delete(gid);
         } else if (status.status === 'error') {
+          const isRangeError =
+            status.errorMessage &&
+            /range|invalid range|416/i.test(status.errorMessage);
+          if (isRangeError) {
+            console.warn(
+              `[downloads] aria2 range error (${status.errorMessage}); falling back to HTTP downloader for task ${taskId}`
+            );
+            this.gidToTaskId.delete(gid);
+            this.startHttpTask(task);
+            return;
+          }
           task.state = DownloadState.Failed;
           task.errorMessage = status.errorMessage || 'aria2 transfer error';
           this.gidToTaskId.delete(gid);
@@ -375,6 +395,16 @@ export class DownloadService {
 
   private markCompleted(task: DownloadTask, totalBytes: number): void {
     this.handles.delete(task.id);
+    // Counted here rather than at the engine: a download that retried through a
+    // refreshed source still succeeded, and the provider that supplied the link
+    // that finally worked is the one that earned the credit.
+    this.analytics?.observe({
+      provider: task.providerName,
+      stage: 'download',
+      outcome: 'success',
+      produced: 1,
+      latencyMs: Date.now() - task.createdTime,
+    });
     task.state = DownloadState.Completed;
     task.totalBytes = totalBytes || task.totalBytes;
     task.bytesDownloaded = task.totalBytes;
@@ -385,23 +415,98 @@ export class DownloadService {
     this.pump();
   }
 
+  /**
+   * Classifies whether a download error is recoverable via smart source refresh.
+   */
+  private isRecoverableError(message: string): boolean {
+    if (!message) return true;
+    // Non-recoverable: User cancelled, bad target path, unsupported file, filesystem write error
+    if (/cancelled|user cancel|invalid path|unsupported format|permission denied|no space/i.test(message)) {
+      return false;
+    }
+    // Recoverable: expired token, 401, 403, 404, 410, connection reset, timeout, range header mismatch, 5xx
+    return true;
+  }
+
+  /**
+   * Intelligently matches a fresh direct source from provider against the download task's original metadata.
+   * Prioritises Tier 1 (Provider + Quality + Size), Tier 2 (Provider + Size), Tier 3 (Quality + Size), Tier 4 (Best Fallback).
+   */
+  private findMatchingSource(
+    task: DownloadTask,
+    sources: TorrentResult[]
+  ): TorrentResult | null {
+    const directSources = sources.filter((s) => Boolean(s.directUrl));
+    if (directSources.length === 0) return null;
+
+    const isSizeCompatible = (s: TorrentResult): boolean => {
+      if (!task.totalBytes || task.totalBytes <= 0 || !s.sizeBytes || s.sizeBytes <= 0) {
+        return true; // Size unknown; do not penalise
+      }
+      // Size matches within 10% tolerance
+      const diff = Math.abs(s.sizeBytes - task.totalBytes);
+      return diff / task.totalBytes <= 0.10;
+    };
+
+    // Tier 1: Exact match on providerName AND resolution AND size compatibility
+    let best = directSources.find((s) => {
+      const providerMatch =
+        s.indexerName === task.providerName ||
+        (s.title && s.title.toLowerCase().includes(task.providerName.toLowerCase()));
+      const resStr = s.parsed?.resolution ? String(s.parsed.resolution) : '';
+      const qualityMatch =
+        (task.quality && (resStr === String(task.quality) || resStr === `${task.quality}p`)) ||
+        (task.resolution && (resStr === String(task.resolution) || resStr === `${task.resolution}p`));
+      return providerMatch && qualityMatch && isSizeCompatible(s);
+    });
+    if (best) return best;
+
+    // Tier 2: Match on providerName AND size compatibility
+    best = directSources.find((s) => {
+      const providerMatch =
+        s.indexerName === task.providerName ||
+        (s.title && s.title.toLowerCase().includes(task.providerName.toLowerCase()));
+      return providerMatch && isSizeCompatible(s);
+    });
+    if (best) return best;
+
+    // Tier 3: Match on quality / resolution AND size compatibility
+    best = directSources.find((s) => {
+      const resStr = s.parsed?.resolution ? String(s.parsed.resolution) : '';
+      const qualityMatch =
+        (task.quality && (resStr === String(task.quality) || resStr === `${task.quality}p`)) ||
+        (task.resolution && (resStr === String(task.resolution) || resStr === `${task.resolution}p`));
+      return qualityMatch && isSizeCompatible(s);
+    });
+    if (best) return best;
+
+    // Tier 4: Any direct source matching size compatibility
+    best = directSources.find(isSizeCompatible);
+    if (best) return best;
+
+    // Fallback: Top direct source
+    return directSources[0];
+  }
+
   private async markFailed(task: DownloadTask, message: string): Promise<void> {
     this.handles.delete(task.id);
 
     const isDirectLink = task.link && task.link.url && !DownloadService.isMagnet(task.link.url);
-    const isExpiredOrHttpError =
-      /403|410|401|expired|forbidden|unauthorized|invalid|stale|timeout/i.test(message);
+    const maxRetries = 4;
+    const currentRetries = task.retryCount || 0;
+
     const canRecover =
       Boolean(task.mediaUrl) &&
       this.contentService !== null &&
-      (task.retryCount || 0) < 3 &&
       isDirectLink &&
-      isExpiredOrHttpError;
+      currentRetries < maxRetries &&
+      this.isRecoverableError(message);
 
     if (canRecover && this.contentService && task.mediaUrl) {
+      const attemptNum = currentRetries + 1;
+      task.retryCount = attemptNum;
       task.state = DownloadState.RefreshingSource;
-      task.errorMessage = 'Link expired — refreshing source from provider...';
-      task.retryCount = (task.retryCount || 0) + 1;
+      task.errorMessage = `Refreshing source from provider (attempt ${attemptNum}/${maxRetries})...`;
       this.saveQueueToStorage();
 
       try {
@@ -415,26 +520,78 @@ export class DownloadService {
           { bypassCache: true }
         );
 
-        const freshSource = response.sources.find((s) => Boolean(s.directUrl));
-        if (freshSource && freshSource.directUrl) {
-          task.link.url = freshSource.directUrl;
-          if (freshSource.directHeaders) {
-            task.headers = { ...task.headers, ...freshSource.directHeaders };
+        const matched = this.findMatchingSource(task, response.sources);
+        if (matched && matched.directUrl) {
+          // 1. Session & Engine Cleanup: Remove old aria2 GID mapping if present
+          for (const [gid, taskId] of this.gidToTaskId.entries()) {
+            if (taskId === task.id) {
+              await this.aria2.remove(gid).catch(() => {});
+              this.gidToTaskId.delete(gid);
+            }
           }
+
+          // 2. Data Integrity Check: If size changed dramatically (>20%), truncate partial file to avoid corruption
+          if (
+            task.bytesDownloaded > 0 &&
+            matched.sizeBytes &&
+            matched.sizeBytes > 0 &&
+            task.totalBytes > 0
+          ) {
+            const sizeDiff = Math.abs(matched.sizeBytes - task.totalBytes);
+            if (sizeDiff / task.totalBytes > 0.2) {
+              console.warn(
+                `[download] Refreshed source size (${matched.sizeBytes}) differs from original (${task.totalBytes}); restarting partial file`
+              );
+              try {
+                fs.rmSync(`${task.targetFilePath}.part`, { force: true });
+              } catch {}
+              task.bytesDownloaded = 0;
+            }
+          }
+
+          // 3. Update task link & headers
+          task.link.url = matched.directUrl;
+          if (matched.directHeaders) {
+            task.headers = { ...task.headers, ...matched.directHeaders };
+          }
+          if (matched.sizeBytes) task.totalBytes = matched.sizeBytes;
+
+          // 4. Update Source Cache so future requests reuse fresh valid link
+          try {
+            this.contentService
+              .getCache()
+              .write(task.mediaUrl, [matched], task.seasonNumber, task.episodeNumber);
+          } catch {}
+
           task.state = DownloadState.Retrying;
-          task.errorMessage = `Retrying download with fresh link (attempt ${task.retryCount}/3)...`;
+          const downloadedMb = task.bytesDownloaded > 0 ? (task.bytesDownloaded / 1e6).toFixed(0) : '0';
+          task.errorMessage = task.bytesDownloaded > 0
+            ? `Resuming download from ${downloadedMb} MB (attempt ${attemptNum}/${maxRetries})...`
+            : `Retrying download with fresh link (attempt ${attemptNum}/${maxRetries})...`;
           this.saveQueueToStorage();
 
+          // 5. Exponential Backoff (1s, 2s, 4s, 8s)
+          const delay = Math.min(1000 * Math.pow(2, currentRetries), 8000);
           setTimeout(() => {
             void this.startTask(task);
-          }, 1000);
+          }, delay);
           return;
         }
       } catch (err) {
-        console.warn('[download] Source refresh for expired download link failed:', err);
+        console.warn(`[download] Source refresh attempt ${attemptNum} failed:`, err);
       }
     }
 
+    // Only after every refresh and retry has been exhausted. Counting the first
+    // failed attempt would penalise a provider whose links simply expire
+    // quickly but always regenerate.
+    this.analytics?.observe({
+      provider: task.providerName,
+      stage: 'download',
+      outcome: 'failure',
+      latencyMs: Date.now() - task.createdTime,
+      error: message,
+    });
     task.state = DownloadState.Failed;
     task.errorMessage = message;
     task.downloadSpeed = 0;
@@ -478,6 +635,18 @@ export class DownloadService {
     const task = this.queue.get(id);
     if (!task) return;
     if (task.state !== DownloadState.Paused && task.state !== DownloadState.Failed) return;
+
+    // Reset retry count when manually retried by user to give a full retry budget
+    if (task.state === DownloadState.Failed) {
+      task.retryCount = 0;
+    }
+
+    // If it's a failed direct link download, auto-refresh source before restarting download
+    const isDirectLink = task.link && task.link.url && !DownloadService.isMagnet(task.link.url);
+    if (task.state === DownloadState.Failed && isDirectLink && task.mediaUrl && this.contentService) {
+      void this.markFailed(task, 'Manual user retry requested');
+      return;
+    }
 
     const infoHash = this.torrentTasks.get(id);
     if (infoHash && this.torrentEngine) {

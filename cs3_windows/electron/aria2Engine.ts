@@ -129,17 +129,26 @@ export class Aria2Engine {
       throw new Error('aria2c engine binary not running');
     }
 
+    const mergedHeaders: Record<string, string> = {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+      ...headers,
+    };
+
     const headerOption: string[] = [];
-    for (const [key, val] of Object.entries(headers)) {
-      headerOption.push(`${key}: ${val}`);
+    for (const [key, val] of Object.entries(mergedHeaders)) {
+      if (val) headerOption.push(`${key}: ${val}`);
     }
 
     const options: any = {
       dir: outputDir,
       out: filename,
       header: headerOption,
-      'max-connection-per-server': '16',
-      split: '16'
+      'max-connection-per-server': '4',
+      split: '4',
+      'min-split-size': '1M',
+      'allow-overwrite': 'true',
+      'auto-file-renaming': 'false',
     };
 
     return await this.sendRpc<string>('addUri', [[url], options]);
