@@ -206,6 +206,19 @@ export interface CloudStreamElectronAPI {
     episode?: number,
     mediaUrl?: string
   ) => Promise<Envelope & { results: SubtitleSearchResult[] }>;
+  /** Searches subtitles with a custom title or IMDb id query. */
+  searchSubtitlesByTitle: (
+    query: string,
+    season?: number,
+    episode?: number,
+    mediaUrl?: string
+  ) => Promise<
+    Envelope & {
+      results: SubtitleSearchResult[];
+      imdbId?: string;
+      matchedTitle?: string;
+    }
+  >;
   /** Downloads one subtitle, already converted from SubRip to WebVTT. */
   fetchSubtitle: (url: string) => Promise<Envelope & { vtt: string }>;
 
@@ -850,6 +863,8 @@ const api: CloudStreamElectronAPI = {
   suggestTitles: (query) => ipcRenderer.invoke('api:suggest', query),
   searchSubtitles: (imdbId, season, episode, mediaUrl) =>
     ipcRenderer.invoke('subtitles:search', imdbId, season, episode, mediaUrl),
+  searchSubtitlesByTitle: (query, season, episode, mediaUrl) =>
+    ipcRenderer.invoke('subtitles:searchByTitle', query, season, episode, mediaUrl),
   fetchSubtitle: (url) => ipcRenderer.invoke('subtitles:fetch', url),
 
   getSearchHistory: () => ipcRenderer.invoke('api:getSearchHistory'),

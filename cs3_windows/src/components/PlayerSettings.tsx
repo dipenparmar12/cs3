@@ -6,14 +6,13 @@ import { AspectRatioMode } from '../types/player';
 /**
  * Settings ▸ Player.
  *
- * Controls optional player toolbar buttons (Aspect Ratio and Playback Speed)
- * and default playback preferences. By default, Aspect Ratio and Playback Speed
- * controls are hidden from the player toolbar to keep the interface clean and
- * uncluttered. Users can enable them here if desired.
+ * Controls optional player toolbar buttons (Aspect Ratio, Playback Speed, and Subtitles)
+ * and default playback preferences.
  */
 export const PlayerSettings: React.FC = () => {
   const [showSpeedControl, setShowSpeedControl] = useState(false);
   const [showAspectControl, setShowAspectControl] = useState(false);
+  const [showSubtitlesControl, setShowSubtitlesControl] = useState(true);
   const [defaultAspect, setDefaultAspect] = useState<string>(AspectRatioMode.Fit);
   const [defaultSpeed, setDefaultSpeed] = useState<string>('1');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -28,23 +27,34 @@ export const PlayerSettings: React.FC = () => {
     const loadSettings = async () => {
       if (!window.cloudstream) return;
       try {
-        const [speedEnabled, resizeEnabled, customSpeed, customAspect, savedAspect, savedSpeed] =
-          await Promise.all([
-            window.cloudstream.getSetting('playback_speed_enabled_key', 'false'),
-            window.cloudstream.getSetting('player_resize_enabled_key', 'false'),
-            window.cloudstream.getSetting('player_show_playback_speed', 'false'),
-            window.cloudstream.getSetting('player_show_aspect_ratio', 'false'),
-            window.cloudstream.getSetting('default_aspect_ratio', AspectRatioMode.Fit),
-            window.cloudstream.getSetting('default_playback_speed', '1'),
-          ]);
+        const [
+          speedEnabled,
+          resizeEnabled,
+          customSpeed,
+          customAspect,
+          savedAspect,
+          savedSpeed,
+          subsEnabled,
+          customSubs,
+        ] = await Promise.all([
+          window.cloudstream.getSetting('playback_speed_enabled_key', 'false'),
+          window.cloudstream.getSetting('player_resize_enabled_key', 'false'),
+          window.cloudstream.getSetting('player_show_playback_speed', 'false'),
+          window.cloudstream.getSetting('player_show_aspect_ratio', 'false'),
+          window.cloudstream.getSetting('default_aspect_ratio', AspectRatioMode.Fit),
+          window.cloudstream.getSetting('default_playback_speed', '1'),
+          window.cloudstream.getSetting('player_subtitles_enabled_key', 'true'),
+          window.cloudstream.getSetting('player_show_subtitles', 'true'),
+        ]);
         if (active) {
           setShowSpeedControl(speedEnabled === 'true' || customSpeed === 'true');
           setShowAspectControl(resizeEnabled === 'true' || customAspect === 'true');
+          setShowSubtitlesControl(subsEnabled !== 'false' && customSubs !== 'false');
           if (savedAspect) setDefaultAspect(savedAspect);
           if (savedSpeed) setDefaultSpeed(savedSpeed);
         }
       } catch {
-        // Defaults to false
+        // Defaults
       }
     };
     void loadSettings();
@@ -75,6 +85,17 @@ export const PlayerSettings: React.FC = () => {
     flash(enabled ? 'Aspect ratio control enabled in player.' : 'Aspect ratio control hidden.');
   };
 
+  const handleToggleSubtitles = async (enabled: boolean) => {
+    setShowSubtitlesControl(enabled);
+    if (window.cloudstream) {
+      await Promise.all([
+        window.cloudstream.setSetting('player_subtitles_enabled_key', enabled),
+        window.cloudstream.setSetting('player_show_subtitles', enabled),
+      ]);
+    }
+    flash(enabled ? 'Subtitles control enabled in player.' : 'Subtitles control hidden from player.');
+  };
+
   const handleChangeDefaultAspect = async (val: string) => {
     setDefaultAspect(val);
     await window.cloudstream?.setSetting('default_aspect_ratio', val);
@@ -92,6 +113,27 @@ export const PlayerSettings: React.FC = () => {
       {statusMessage && <div className="settings__flash">{statusMessage}</div>}
 
       <SettingGroup title="Optional Player Controls" icon={<Tv size={15} />}>
+        <SettingRow
+          label="Subtitles selector"
+          note={showSubtitlesControl ? 'Visible' : 'Hidden'}
+          hint={
+            <>
+              Adds a subtitle search and selector button to the bottom toolbar in the video player.
+              Enabled by default; can be disabled to keep player controls clean and uncluttered.
+            </>
+          }
+        >
+          <label className="settings__switch">
+            <input
+              type="checkbox"
+              checked={showSubtitlesControl}
+              onChange={(e) => handleToggleSubtitles(e.target.checked)}
+              aria-label="Toggle subtitles control"
+            />
+            <span>{showSubtitlesControl ? 'Enabled' : 'Disabled'}</span>
+          </label>
+        </SettingRow>
+
         <SettingRow
           label="Aspect ratio selector"
           note={showAspectControl ? 'Visible' : 'Hidden'}

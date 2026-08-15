@@ -506,13 +506,18 @@ ipcMain.handle('api:suggest', async (_, query: string) => {
  */
 ipcMain.handle(
   'subtitles:search',
-  async (_, imdbId: string, season?: number, episode?: number, mediaUrl?: string) => {
+  async (_, imdbIdOrQuery: string, season?: number, episode?: number, mediaUrl?: string) => {
     try {
+      const trimmed = imdbIdOrQuery?.trim() ?? '';
       const [fromProvider, fromCatalogue] = await Promise.all([
         mediaUrl?.startsWith('cs3ext://')
           ? pluginManager.loadSubtitles(mediaUrl).catch(() => [])
           : Promise.resolve([]),
-        imdbId ? subtitles.search(imdbId, season, episode).catch(() => []) : Promise.resolve([]),
+        trimmed
+          ? (/^tt\d+$/i.test(trimmed)
+              ? subtitles.search(trimmed, season, episode).catch(() => [])
+              : subtitles.searchByTitle(trimmed, season, episode).then((r) => r.results).catch(() => []))
+          : Promise.resolve([]),
       ]);
 
       const providerResults = fromProvider.map((entry) => ({
@@ -525,6 +530,48 @@ ipcMain.handle(
       return { ok: true, results: [...providerResults, ...fromCatalogue] };
     } catch (error) {
       return { ...fail(error), results: [] };
+    }
+  }
+);
+
+/**
+ * Searches subtitles by custom movie/series title or IMDb id, returning the matched title and IMDb id.
+ */
+ipcMain.handle(
+  'subtitles:searchByTitle',
+  async (_, query: string, season?: number, episode?: number, mediaUrl?: string) => {
+    try {
+      const trimmed = query?.trim() ?? '';
+      if (!trimmed && !mediaUrl?.startsWith('cs3ext://')) {
+        return { ok: true, results: [], imdbId: undefined, matchedTitle: undefined };
+      }
+
+      const [fromProvider, titleResult] = await Promise.all([
+        mediaUrl?.startsWith('cs3ext://')
+          ? pluginManager.loadSubtitles(mediaUrl).catch(() => [])
+          : Promise.resolve([]),
+        trimmed
+          ? subtitles
+              .searchByTitle(trimmed, season, episode)
+              .catch(() => ({ results: [], imdbId: undefined, matchedTitle: undefined }))
+          : Promise.resolve({ results: [], imdbId: undefined, matchedTitle: undefined }),
+      ]);
+
+      const providerResults = fromProvider.map((entry) => ({
+        id: `provider:${entry.url}`,
+        lang: entry.lang,
+        langName: `${entry.lang} (from this provider)`,
+        url: entry.url,
+      }));
+
+      return {
+        ok: true,
+        imdbId: titleResult.imdbId,
+        matchedTitle: titleResult.matchedTitle,
+        results: [...providerResults, ...titleResult.results],
+      };
+    } catch (error) {
+      return { ...fail(error), results: [], imdbId: undefined, matchedTitle: undefined };
     }
   }
 );

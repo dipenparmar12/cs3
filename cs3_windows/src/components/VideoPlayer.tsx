@@ -135,6 +135,8 @@ interface VideoPlayerProps {
   showAspectRatioControl?: boolean;
   /** When provided, overrides the stored setting for showing playback speed control (default false) */
   showPlaybackSpeedControl?: boolean;
+  /** When provided, overrides the stored setting for showing subtitles control (default true) */
+  showSubtitlesControl?: boolean;
 }
 
 export type PlaybackPhase = 'searching' | 'starting' | 'playing' | 'error';
@@ -188,6 +190,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   series, onSelectEpisode, switchingTo, switchError, progress, sourceSession,
   subtitleContext, onDownloadCurrent, onOpenDownloads, hidden = false,
   mini = false, onMinimize, onExpand, showAspectRatioControl, showPlaybackSpeedControl,
+  showSubtitlesControl: showSubtitlesControlProp,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -205,6 +208,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [aspect, setAspect] = useState<AspectRatioMode>(AspectRatioMode.Fit);
   const [showSpeedControl, setShowSpeedControl] = useState(showPlaybackSpeedControl ?? false);
   const [showAspectControl, setShowAspectControl] = useState(showAspectRatioControl ?? false);
+  const [showSubtitlesControl, setShowSubtitlesControl] = useState(showSubtitlesControlProp ?? true);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isHoveringControls, setIsHoveringControls] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -221,21 +225,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const loadPlayerControlsSettings = async () => {
       if (!window.cloudstream) return;
       try {
-        const [speedEnabled, resizeEnabled, customSpeed, customAspect, savedAspect, savedSpeed] =
-          await Promise.all([
-            window.cloudstream.getSetting('playback_speed_enabled_key', 'false'),
-            window.cloudstream.getSetting('player_resize_enabled_key', 'false'),
-            window.cloudstream.getSetting('player_show_playback_speed', 'false'),
-            window.cloudstream.getSetting('player_show_aspect_ratio', 'false'),
-            window.cloudstream.getSetting('default_aspect_ratio', ''),
-            window.cloudstream.getSetting('default_playback_speed', ''),
-          ]);
+        const [
+          speedEnabled,
+          resizeEnabled,
+          customSpeed,
+          customAspect,
+          savedAspect,
+          savedSpeed,
+          subsEnabled,
+          customSubs,
+        ] = await Promise.all([
+          window.cloudstream.getSetting('playback_speed_enabled_key', 'false'),
+          window.cloudstream.getSetting('player_resize_enabled_key', 'false'),
+          window.cloudstream.getSetting('player_show_playback_speed', 'false'),
+          window.cloudstream.getSetting('player_show_aspect_ratio', 'false'),
+          window.cloudstream.getSetting('default_aspect_ratio', ''),
+          window.cloudstream.getSetting('default_playback_speed', ''),
+          window.cloudstream.getSetting('player_subtitles_enabled_key', 'true'),
+          window.cloudstream.getSetting('player_show_subtitles', 'true'),
+        ]);
         if (active) {
           if (showPlaybackSpeedControl === undefined) {
             setShowSpeedControl(speedEnabled === 'true' || customSpeed === 'true');
           }
           if (showAspectRatioControl === undefined) {
             setShowAspectControl(resizeEnabled === 'true' || customAspect === 'true');
+          }
+          if (showSubtitlesControlProp === undefined) {
+            setShowSubtitlesControl(subsEnabled !== 'false' && customSubs !== 'false');
           }
           if (savedAspect && Object.values(AspectRatioMode).includes(savedAspect as AspectRatioMode)) {
             setAspect(savedAspect as AspectRatioMode);
@@ -252,7 +269,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       active = false;
     };
-  }, [showPlaybackSpeedControl, showAspectRatioControl]);
+  }, [showPlaybackSpeedControl, showAspectRatioControl, showSubtitlesControlProp]);
 
   useEffect(() => {
     let active = true;
@@ -1795,6 +1812,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       <SubtitlePanel
         open={subtitlePanelOpen}
         imdbId={subtitleContext?.imdbId}
+        title={title}
+        episodeTitle={episodeTitle}
         // Lets the extension provider be asked for the subtitles it published
         // with the stream, which is the only set that exists for a title no
         // catalogue carries and so has no IMDb id to search by.
@@ -1987,16 +2006,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           {/* Subtitle search sits next to the track picker rather than inside
               it: finding a subtitle and choosing one are different actions, and
-              a hover menu is the wrong shape for a search result list. */}
-          <button
-            className="icon-button"
-            data-panel-toggle
-            onClick={() => setSubtitlePanelOpen((v) => !v)}
-            aria-label="Search subtitles"
-            title="Search subtitles online"
-          >
-            <Subtitles size={18} />
-          </button>
+              a hover menu is the wrong shape for a search result list.
+              Optional control: enabled by default, can be hidden via Player Settings. */}
+          {showSubtitlesControl && (
+            <button
+              className="icon-button"
+              data-panel-toggle
+              onClick={() => setSubtitlePanelOpen((v) => !v)}
+              aria-label="Search subtitles"
+              title="Search subtitles online"
+            >
+              <Subtitles size={18} />
+            </button>
+          )}
 
           {/* Button 1: Download Current Media Action Button */}
           <button

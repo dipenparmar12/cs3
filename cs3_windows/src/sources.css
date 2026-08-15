@@ -2176,6 +2176,130 @@
 
 /* --- Subtitle panel: online search inside the player --------------------- */
 
+.subtitle-panel__search-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.subtitle-panel__search-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.55rem;
+  background: var(--bg-input, rgba(15, 20, 30, 0.7));
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  color: var(--text-subtle);
+  transition: border-color 0.15s ease;
+}
+
+.subtitle-panel__search-bar:focus-within {
+  border-color: var(--accent-primary, #3b82f6);
+}
+
+.subtitle-panel__search-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-main, #fff);
+  font-size: 0.8rem;
+}
+
+.subtitle-panel__search-input::placeholder {
+  color: var(--text-subtle, rgba(255, 255, 255, 0.4));
+}
+
+.subtitle-panel__search-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s ease;
+}
+
+.subtitle-panel__search-btn:hover:not(:disabled) {
+  color: var(--text-main, #fff);
+}
+
+.subtitle-panel__search-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.subtitle-panel__ep-inputs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.subtitle-panel__ep-field {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.subtitle-panel__ep-input {
+  width: 50px;
+  padding: 0.2rem 0.35rem;
+  background: var(--bg-input, rgba(15, 20, 30, 0.7));
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  border-radius: 4px;
+  color: var(--text-main, #fff);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.subtitle-panel__search-submit-btn {
+  margin-left: auto;
+  padding: 0.22rem 0.65rem;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-main, #fff);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.subtitle-panel__search-submit-btn:hover:not(:disabled) {
+  background: var(--accent-primary, #3b82f6);
+  border-color: transparent;
+}
+
+.subtitle-panel__search-submit-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.subtitle-panel__matched {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 4px;
+  font-size: 0.72rem;
+  color: #93c5fd;
+  margin-bottom: 0.35rem;
+}
+
+.subtitle-panel__matched strong {
+  color: #fff;
+}
+
 .player-panel__subs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.15rem; }
 .player-panel__sub {
   display: flex;

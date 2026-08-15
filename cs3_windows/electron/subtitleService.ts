@@ -21,6 +21,7 @@ import { fetchJson, fetchText } from './torrent/http';
  */
 
 const ADDON_BASE = 'https://opensubtitles-v3.strem.io';
+const CINEMETA_BASE = 'https://v3-cinemeta.strem.io';
 
 /** Subtitle search is a foreground action in the player; it must not hang. */
 const SEARCH_TIMEOUT_MS = 15_000;
@@ -161,6 +162,132 @@ export class SubtitleService {
       if (aEnglish !== bEnglish) return aEnglish ? -1 : 1;
       return a.langName.localeCompare(b.langName);
     });
+  }
+
+  /**
+   * Resolves a free-text movie/series title or IMDb id into an IMDb ID and matched title
+   * using Cinemeta with a TVmaze fallback.
+   */
+  public async resolveTitleToImdb(
+    query: string,
+    isSeries = false
+  ): Promise<{ imdbId: string; matchedTitle: string } | null> {
+    const trimmed = query.trim();
+    if (!trimmed) return null;
+
+    // Direct IMDb id match (tt1234567)
+    if (/^tt\d+$/i.test(trimmed)) {
+      return { imdbId: trimmed.toLowerCase(), matchedTitle: trimmed };
+    }
+
+    const encoded = encodeURIComponent(trimmed);
+
+    try {
+      // Query Cinemeta movie & series catalogues concurrently
+      const [moviesSettled, seriesSettled] = await Promise.allSettled([
+        fetchJson<{ metas?: Array<{ id?: string; imdb_id?: string; name?: string; releaseInfo?: string }> }>(
+          `${CINEMETA_BASE}/catalog/movie/top/search=${encoded}.json`,
+          { timeoutMs: 8000 }
+        ),
+        fetchJson<{ metas?: Array<{ id?: string; imdb_id?: string; name?: string; releaseInfo?: string }> }>(
+          `${CINEMETA_BASE}/catalog/series/top/search=${encoded}.json`,
+          { timeoutMs: 8000 }
+        ),
+      ]);
+
+      const candidates: Array<{ meta: { id?: string; imdb_id?: string; name?: string; releaseInfo?: string }; score: number }> = [];
+      const lowerQuery = trimmed.toLowerCase();
+
+      const processCatalog = (
+        settled: PromiseSettledResult<{ metas?: Array<{ id?: string; imdb_id?: string; name?: string; releaseInfo?: string }> }>,
+        type: 'movie' | 'series'
+      ) => {
+        if (settled.status !== 'fulfilled' || !Array.isArray(settled.value.metas)) return;
+        for (const meta of settled.value.metas) {
+          const imdb = meta.imdb_id || meta.id;
+          if (!imdb?.startsWith('tt') || !meta.name) continue;
+
+          const metaLower = meta.name.toLowerCase();
+          let score = 0;
+          if (metaLower === lowerQuery) score += 100;
+          else if (metaLower.startsWith(lowerQuery)) score += 50;
+          else if (metaLower.includes(lowerQuery)) score += 25;
+
+          // Prefer series if isSeries was specified
+          if (isSeries && type === 'series') score += 10;
+          if (!isSeries && type === 'movie') score += 10;
+
+          candidates.push({ meta, score });
+        }
+      };
+
+      if (isSeries) {
+        processCatalog(seriesSettled, 'series');
+        processCatalog(moviesSettled, 'movie');
+      } else {
+        processCatalog(moviesSettled, 'movie');
+        processCatalog(seriesSettled, 'series');
+      }
+
+      candidates.sort((a, b) => b.score - a.score);
+
+      if (candidates.length > 0) {
+        const best = candidates[0].meta;
+        const imdbId = best.imdb_id || best.id;
+        if (imdbId) {
+          const matchedTitle = best.name
+            ? `${best.name}${best.releaseInfo ? ` (${best.releaseInfo})` : ''}`
+            : imdbId;
+          return { imdbId, matchedTitle };
+        }
+      }
+    } catch {
+      // Ignore Cinemeta failure and try TVmaze fallback
+    }
+
+    // Fallback: TVmaze for series/shows
+    try {
+      const raw = await fetchText(
+        `https://api.tvmaze.com/singlesearch/shows?q=${encoded}`,
+        { timeoutMs: 6000 }
+      );
+      const show = JSON.parse(raw) as { name?: string; externals?: { imdb?: string } };
+      if (show?.externals?.imdb && show.externals.imdb.startsWith('tt')) {
+        return {
+          imdbId: show.externals.imdb,
+          matchedTitle: show.name || show.externals.imdb,
+        };
+      }
+    } catch {
+      // Ignored
+    }
+
+    return null;
+  }
+
+  /**
+   * Finds subtitles by custom title query or IMDb ID.
+   */
+  public async searchByTitle(
+    query: string,
+    season?: number,
+    episode?: number
+  ): Promise<{ imdbId?: string; matchedTitle?: string; results: SubtitleSearchResult[] }> {
+    const trimmed = query.trim();
+    if (!trimmed) return { results: [] };
+
+    const isSeries = season !== undefined || episode !== undefined;
+    const resolved = await this.resolveTitleToImdb(trimmed, isSeries);
+    if (!resolved) {
+      return { results: [] };
+    }
+
+    const results = await this.search(resolved.imdbId, season, episode);
+    return {
+      imdbId: resolved.imdbId,
+      matchedTitle: resolved.matchedTitle,
+      results,
+    };
   }
 
   /** Downloads one subtitle and returns it as WebVTT text. */
