@@ -10,8 +10,7 @@
     "language": "Multilingual",
     "iconUrl": "https://raw.githubusercontent.com/recloudstream/cloudstream/master/app/src/main/res/drawable/ic_splash_logo.png",
     "verified": true,
-    "documentKind": "repository",
-    "bundled": true
+    "documentKind": "repository"
   },
   {
     "id": "extensions",
@@ -47,8 +46,7 @@
     "category": "Regional",
     "language": "German (DE)",
     "verified": true,
-    "documentKind": "repository",
-    "bundled": true
+    "documentKind": "repository"
   },
   {
     "id": "italia_in_streaming",
@@ -168,8 +166,7 @@
     "category": "Movies & Shows",
     "language": "English",
     "verified": true,
-    "documentKind": "repository",
-    "bundled": true
+    "documentKind": "repository"
   },
   {
     "id": "redowan",
@@ -247,13 +244,13 @@
     "id": "cs_kraptor",
     "name": "Kraptor Repo",
     "internalName": "cs-kraptor",
-    "description": "Large Turkish provider collection. Not bundled: as of 2026-08-13 its plugin list is published but every .cs3 archive it references returns 404, so installing it produces only failures. Re-verify with tools/e2e/provider-e2e.mjs before marking bundled again.",
+    "description": "Kraptor media extractors.",
     "url": "https://github.com/Kraptor123/cs-kraptor",
-    "rawRepoUrl": "https://raw.githubusercontent.com/Kraptor123/cs-kraptor/builds/plugins.json",
+    "rawRepoUrl": "https://raw.githubusercontent.com/Kraptor123/cs-kraptor/master/repo.json",
     "category": "Community",
     "language": "English",
-    "verified": false,
-    "documentKind": "pluginList"
+    "verified": true,
+    "documentKind": "repository"
   },
   {
     "id": "dogiors",
@@ -277,8 +274,7 @@
     "category": "Community",
     "language": "English",
     "verified": true,
-    "documentKind": "repository",
-    "bundled": true
+    "documentKind": "repository"
   },
   {
     "id": "skillshare",
@@ -315,18 +311,5 @@
     "language": "Italian (IT)",
     "verified": true,
     "documentKind": "repository"
-  },
-  {
-    "id": "cloudstream_18plus",
-    "name": "18+ Extensions",
-    "internalName": "cloudstream-18plus-Extensions",
-    "description": "Adult providers. Hidden unless adult content is enabled in Settings, never installed automatically, and its providers are withdrawn from search the moment the setting is turned back off.",
-    "url": "https://github.com/punpunsx/cloudstream-18plus-Extensions",
-    "rawRepoUrl": "https://raw.githubusercontent.com/punpunsx/cloudstream-18plus-Extensions/builds/repo.json",
-    "category": "Adult",
-    "language": "Multilingual",
-    "verified": true,
-    "documentKind": "repository",
-    "adult": true
   }
 ]

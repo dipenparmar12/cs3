@@ -1,17 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  Trash2,
-  Star,
-  Clock,
-  Play,
-  Library as LibraryIcon,
-  BookmarkCheck,
-  Search,
-} from 'lucide-react';
+import { Trash2, Star, Clock, Play, Library as LibraryIcon } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
 import { TvType } from '../types/api';
 import type { LibraryEntry, WatchProgress, WatchStatus } from '../../electron/cs3/libraryStore';
-import type { Bookmark } from '../../electron/cs3/bookmarkStore';
 
 /**
  * The user's own library, built from what they actually watched.
@@ -23,20 +14,7 @@ import type { Bookmark } from '../../electron/cs3/bookmarkStore';
 
 interface LibraryViewProps {
   onSelectMedia: (item: SearchResponse) => void;
-  /** Re-runs the search a saved page was originally found by. */
-  onSearch?: (query: string) => void;
 }
-
-/**
- * Two different questions, so two views.
- *
- * The buckets answer "what am I watching" and collapse every provider's copy of
- * a title into one entry — deliberately, since watch progress belongs to the
- * film and not to whoever served it. Saved pages answer "take me back to the
- * exact page I was on", which needs the opposite: the specific address, from
- * the specific provider. Neither can be expressed as a bucket of the other.
- */
-type LibraryMode = 'watching' | 'saved';
 
 const BUCKETS: Array<{ status: WatchStatus; label: string }> = [
   { status: 'Watching', label: 'Watching' },
@@ -54,57 +32,12 @@ function formatWatched(progress: WatchProgress | undefined): string | null {
   return `${percent}% · ${minutes} min left`;
 }
 
-export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia, onSearch }) => {
-  const [mode, setMode] = useState<LibraryMode>('watching');
+export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia }) => {
   const [activeStatus, setActiveStatus] = useState<WatchStatus>('Watching');
   const [entries, setEntries] = useState<LibraryEntry[]>([]);
   const [progressByKey, setProgressByKey] = useState<Map<string, WatchProgress>>(new Map());
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
-
-  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
-  /** Narrows saved pages to one provider — the "only this source" the brief asks for. */
-  const [providerFilter, setProviderFilter] = useState<string | null>(null);
-  const [bookmarkFacets, setBookmarkFacets] = useState<{ providers: string[] }>({ providers: [] });
-
-  const refreshBookmarks = useCallback(async () => {
-    const response = await window.cloudstream?.listBookmarks?.();
-    if (!response?.ok) return;
-    setBookmarks(response.bookmarks ?? []);
-    setBookmarkFacets({ providers: response.facets?.providers ?? [] });
-  }, []);
-
-  useEffect(() => {
-    void refreshBookmarks();
-  }, [refreshBookmarks]);
-
-  /**
-   * Reopens a saved page at the exact address it was saved from.
-   *
-   * `apiName` carries the original provider rather than a placeholder, so the
-   * detail page resolves through the same extension it did the first time —
-   * which is the whole point of having saved the page rather than the title.
-   */
-  const openBookmark = (bookmark: Bookmark) => {
-    (document.activeElement as HTMLElement)?.blur();
-    onSelectMedia({
-      name: bookmark.title,
-      url: bookmark.mediaUrl,
-      apiName: bookmark.origin.provider ?? 'Saved',
-      type: (bookmark.type as TvType) ?? TvType.Movie,
-      posterUrl: bookmark.posterUrl,
-      year: bookmark.year,
-    });
-  };
-
-  const removeBookmark = async (bookmark: Bookmark) => {
-    await window.cloudstream?.removeBookmark?.(bookmark.mediaUrl);
-    void refreshBookmarks();
-  };
-
-  const shownBookmarks = providerFilter
-    ? bookmarks.filter((bookmark) => bookmark.origin.provider === providerFilter)
-    : bookmarks;
 
   const refresh = useCallback(async () => {
     if (!window.cloudstream) {
@@ -166,37 +99,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia, onSearc
         </p>
       </div>
 
-      <div className="library-modes" role="tablist">
-        <button
-          role="tab"
-          aria-selected={mode === 'watching'}
-          className={`chip ${mode === 'watching' ? 'active' : ''}`}
-          onClick={() => setMode('watching')}
-        >
-          <LibraryIcon size={13} /> Watching
-        </button>
-        <button
-          role="tab"
-          aria-selected={mode === 'saved'}
-          className={`chip ${mode === 'saved' ? 'active' : ''}`}
-          onClick={() => setMode('saved')}
-        >
-          <BookmarkCheck size={13} /> Saved pages{bookmarks.length ? ` (${bookmarks.length})` : ''}
-        </button>
-      </div>
-
-      {mode === 'saved' ? (
-        <SavedPages
-          bookmarks={shownBookmarks}
-          providers={bookmarkFacets.providers}
-          providerFilter={providerFilter}
-          onProviderFilter={setProviderFilter}
-          onOpen={openBookmark}
-          onRemove={removeBookmark}
-          onSearch={onSearch}
-        />
-      ) : (
-        <>
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
         {BUCKETS.map(({ status, label }) => (
           <button
@@ -316,148 +218,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia, onSearc
           })}
         </div>
       )}
-        </>
-      )}
     </div>
-  );
-};
-
-/**
- * The saved pages list.
- *
- * A list rather than a poster grid: what distinguishes two saved pages is often
- * *where they came from* rather than their artwork — the same film saved from
- * two providers is two entries, and a grid of identical posters would make that
- * look like a bug. The origin chain is therefore on the row, not behind a hover.
- */
-const SavedPages: React.FC<{
-  bookmarks: Bookmark[];
-  providers: string[];
-  providerFilter: string | null;
-  onProviderFilter: (provider: string | null) => void;
-  onOpen: (bookmark: Bookmark) => void;
-  onRemove: (bookmark: Bookmark) => void;
-  onSearch?: (query: string) => void;
-}> = ({ bookmarks, providers, providerFilter, onProviderFilter, onOpen, onRemove, onSearch }) => {
-  if (bookmarks.length === 0 && !providerFilter) {
-    return (
-      <div className="library-empty">
-        <BookmarkCheck size={30} />
-        <p>No saved pages yet</p>
-        <span>
-          Press <strong>Save</strong> on any title’s page and it will appear here — with the
-          provider, extension and repository it came from, so you can reopen exactly that page
-          without searching for it again.
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <>
-      {providers.length > 1 && (
-        <div className="saved-filters">
-          <button
-            className={`chip ${providerFilter === null ? 'active' : ''}`}
-            onClick={() => onProviderFilter(null)}
-          >
-            All sources
-          </button>
-          {providers.map((provider) => (
-            <button
-              key={provider}
-              className={`chip ${providerFilter === provider ? 'active' : ''}`}
-              onClick={() => onProviderFilter(provider === providerFilter ? null : provider)}
-            >
-              {provider}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {bookmarks.length === 0 ? (
-        <p className="muted">Nothing saved from {providerFilter}.</p>
-      ) : (
-        <ul className="saved-list">
-          {bookmarks.map((bookmark) => {
-            const chain = [
-              bookmark.origin.repositoryName,
-              bookmark.origin.extensionName,
-              bookmark.origin.provider,
-            ].filter(Boolean) as string[];
-
-            return (
-              <li key={bookmark.id} className="saved-row">
-                <button
-                  className="saved-row__art"
-                  onClick={() => onOpen(bookmark)}
-                  aria-label={`Open ${bookmark.title}`}
-                >
-                  {bookmark.posterUrl ? (
-                    <img src={bookmark.posterUrl} alt="" loading="lazy" />
-                  ) : (
-                    <span>{bookmark.title.slice(0, 1)}</span>
-                  )}
-                </button>
-
-                <div className="saved-row__body">
-                  <button className="saved-row__title" onClick={() => onOpen(bookmark)}>
-                    {bookmark.title}
-                    {bookmark.year ? <span className="muted"> ({bookmark.year})</span> : null}
-                  </button>
-
-                  <p className="saved-row__origin">
-                    {chain.length > 0 ? chain.join(' ▸ ') : 'Origin not recorded'}
-                    {bookmark.origin.metadataSource && ` · metadata: ${bookmark.origin.metadataSource}`}
-                    {bookmark.origin.imdbId && ` · ${bookmark.origin.imdbId}`}
-                  </p>
-
-                  {bookmark.plot && <p className="saved-row__plot">{bookmark.plot}</p>}
-
-                  {bookmark.genres && bookmark.genres.length > 0 && (
-                    <div className="saved-row__tags">
-                      {bookmark.genres.slice(0, 5).map((genre) => (
-                        <span key={genre} className="badge badge--muted">
-                          {genre}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="saved-row__actions">
-                  <button
-                    className="icon-button"
-                    onClick={() => onOpen(bookmark)}
-                    title="Open this page again"
-                    aria-label={`Open ${bookmark.title}`}
-                  >
-                    <Play size={14} />
-                  </button>
-                  {onSearch && bookmark.origin.searchQuery && (
-                    <button
-                      className="icon-button"
-                      onClick={() => onSearch(bookmark.origin.searchQuery!)}
-                      title={`Search “${bookmark.origin.searchQuery}” again`}
-                      aria-label="Run the original search again"
-                    >
-                      <Search size={14} />
-                    </button>
-                  )}
-                  <button
-                    className="icon-button"
-                    onClick={() => onRemove(bookmark)}
-                    title="Remove from saved pages"
-                    aria-label={`Remove ${bookmark.title}`}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </>
   );
 };

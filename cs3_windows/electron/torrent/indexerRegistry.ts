@@ -8,21 +8,11 @@ import type {
 import { DEFAULT_SOURCE_PREFERENCES, IndexerKind } from '../../src/types/torrent';
 import { TvType } from '../../src/types/api';
 import { finaliseResult, type TorrentIndexer } from './indexers/base';
-import {
-  AnimeToshoIndexer,
-  EztvIndexer,
-  LimeTorrentsIndexer,
-  NyaaIndexer,
-  SubsPleaseIndexer,
-  YtsIndexer,
-} from './indexers/builtins';
+import { AnimeToshoIndexer, EztvIndexer, NyaaIndexer, YtsIndexer } from './indexers/builtins';
 import {
   ApiBayIndexer,
-  CometIndexer,
   KnabenIndexer,
-  KnightCrawlerIndexer,
   MediaFusionIndexer,
-  SolidTorrentsIndexer,
   StremioAddonIndexer,
   TorrentioIndexer,
   TorrentsCsvIndexer,
@@ -59,36 +49,32 @@ const ANIME_TYPES = [TvType.Anime, TvType.AnimeMovie, TvType.OVA];
 /**
  * Defaults are ordered by how reliably they work in practice.
  *
- * Enabled by default are high-availability aggregators and multi-mirror scrapers:
- *  - Torrentio, KnightCrawler, Comet aggregate dozens of trackers server-side
- *    keyed by IMDb id with direct file stream pointers.
- *  - SolidTorrents, Knaben, apibay, LimeTorrents, Torrents-CSV take free text
- *    and provide fast keyword coverage.
- *  - YTS and EZTV cover Movies and TV with exact IMDb id and text matching.
- *  - AnimeTosho, Nyaa, and SubsPlease provide comprehensive anime coverage.
+ * **Enabled by default** are the sources that answer on a single stable host and
+ * survive the ISP DNS blocking which takes out per-site indexers:
+ *  - Torrentio aggregates dozens of trackers server-side and is keyed by IMDb
+ *    id, so it covers anything with catalogue metadata.
+ *  - Knaben, apibay and Torrents-CSV take free text, so they cover the titles
+ *    for which no IMDb id could be resolved — the case that used to return
+ *    nothing at all.
+ *  - AnimeTosho covers anime, where absolute episode numbering means the
+ *    IMDb-keyed addons frequently miss.
+ *
+ * **Disabled by default** are the per-site scrapers (YTS, EZTV, Nyaa, 1337x,
+ * BitSearch, TheRARBG). Their domains rotate constantly and are blocked on many
+ * networks, so leaving them on mostly buys timeouts and empty results. Users on
+ * unfiltered connections can enable them in Settings → Sources, and users behind
+ * a block are better served by a Torznab (Jackett/Prowlarr) entry.
  */
 export const DEFAULT_INDEXER_CONFIGS: IndexerConfig[] = [
   { id: 'torrentio', name: 'Torrentio', kind: IndexerKind.Builtin, enabled: true },
-  { id: 'knightcrawler', name: 'KnightCrawler', kind: IndexerKind.Builtin, enabled: true },
-  { id: 'comet', name: 'Comet', kind: IndexerKind.Builtin, enabled: true },
-  { id: 'solidtorrents', name: 'SolidTorrents', kind: IndexerKind.Builtin, enabled: true },
+  // Disabled by default: the public MediaFusion instance expects a per-user
+  // configured URL (tracker selection, optional debrid), so the bare host is
+  // unlikely to answer usefully. Users who have one should paste it as a
+  // Stremio addon instead, which is what this entry is a shortcut for.
+  { id: 'mediafusion', name: 'MediaFusion', kind: IndexerKind.Builtin, enabled: false },
   { id: 'knaben', name: 'Knaben', kind: IndexerKind.Builtin, enabled: true },
   { id: 'apibay', name: 'The Pirate Bay', kind: IndexerKind.Builtin, enabled: true },
   { id: 'torrentscsv', name: 'Torrents-CSV', kind: IndexerKind.Builtin, enabled: true },
-  {
-    id: 'yts',
-    name: 'YTS',
-    kind: IndexerKind.Builtin,
-    enabled: true,
-    supportedTypes: [TvType.Movie],
-  },
-  {
-    id: 'eztv',
-    name: 'EZTV',
-    kind: IndexerKind.Builtin,
-    enabled: true,
-    supportedTypes: [TvType.TvSeries],
-  },
   {
     id: 'animetosho',
     name: 'AnimeTosho',
@@ -96,29 +82,34 @@ export const DEFAULT_INDEXER_CONFIGS: IndexerConfig[] = [
     enabled: true,
     supportedTypes: ANIME_TYPES,
   },
+  { id: '1337x', name: '1337x', kind: IndexerKind.Builtin, enabled: false },
+  { id: 'bitsearch', name: 'BitSearch', kind: IndexerKind.Builtin, enabled: false },
+  { id: 'therarbg', name: 'TheRARBG', kind: IndexerKind.Builtin, enabled: false },
+  {
+    id: 'yts',
+    name: 'YTS',
+    kind: IndexerKind.Builtin,
+    enabled: false,
+    supportedTypes: [TvType.Movie],
+  },
+  {
+    id: 'eztv',
+    name: 'EZTV',
+    kind: IndexerKind.Builtin,
+    enabled: false,
+    supportedTypes: [TvType.TvSeries],
+  },
   {
     id: 'nyaa',
     name: 'Nyaa',
     kind: IndexerKind.Builtin,
-    enabled: true,
+    enabled: false,
     supportedTypes: ANIME_TYPES,
   },
-  {
-    id: 'subsplease',
-    name: 'SubsPlease',
-    kind: IndexerKind.Builtin,
-    enabled: true,
-    supportedTypes: ANIME_TYPES,
-  },
-  { id: 'limetorrents', name: 'LimeTorrents', kind: IndexerKind.Builtin, enabled: true },
-  { id: '1337x', name: '1337x', kind: IndexerKind.Builtin, enabled: true },
-  { id: 'bitsearch', name: 'BitSearch', kind: IndexerKind.Builtin, enabled: true },
-  { id: 'therarbg', name: 'TheRARBG', kind: IndexerKind.Builtin, enabled: true },
-  { id: 'mediafusion', name: 'MediaFusion', kind: IndexerKind.Builtin, enabled: false },
 ];
 
 /** Schema version for the stored indexer list, so defaults can be re-seeded. */
-const INDEXER_CONFIG_VERSION = 4;
+const INDEXER_CONFIG_VERSION = 3;
 
 interface CircuitState {
   consecutiveFailures: number;
@@ -247,14 +238,8 @@ export class IndexerRegistry {
     switch (config.id) {
       case 'torrentio':
         return new TorrentioIndexer();
-      case 'knightcrawler':
-        return new KnightCrawlerIndexer();
-      case 'comet':
-        return new CometIndexer();
       case 'mediafusion':
         return new MediaFusionIndexer();
-      case 'solidtorrents':
-        return new SolidTorrentsIndexer();
       case 'knaben':
         return new KnabenIndexer();
       case 'apibay':
@@ -263,12 +248,7 @@ export class IndexerRegistry {
         return new TorrentsCsvIndexer();
       case 'animetosho':
         return new AnimeToshoIndexer();
-      case 'subsplease':
-        return new SubsPleaseIndexer();
-      case 'limetorrents':
-        return new LimeTorrentsIndexer();
       case '1337x':
-      case 'x1337':
         return new X1337Indexer();
       case 'bitsearch':
         return new BitSearchIndexer();
@@ -354,55 +334,6 @@ export class IndexerRegistry {
     if (state.consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD && !state.openedAt) {
       state.openedAt = Date.now();
     }
-  }
-
-  /**
-   * One reachable URL per configured indexer, for the connection test.
-   *
-   * The test used to probe five hardcoded hosts, which meant it answered a
-   * question nobody asked: whether *those* five were reachable, rather than
-   * whether the indexers this user actually has enabled are. Someone running
-   * Jackett behind a blocked ISP resolver got a clean bill of health from five
-   * sites they do not use.
-   *
-   * Built-in adapters keep their mirror lists private, so one representative
-   * host each is named here. Kept beside the id list it mirrors, and a missing
-   * entry simply means that indexer is not probed rather than a crash.
-   */
-  public probeTargets(): Array<{ id: string; name: string; url: string; enabled: boolean }> {
-    const BUILTIN_HOSTS: Record<string, string> = {
-      torrentio: 'https://torrentio.strem.fun/manifest.json',
-      knightcrawler: 'https://knightcrawler.elfhosted.com/manifest.json',
-      comet: 'https://comet.elfhosted.com/manifest.json',
-      mediafusion: 'https://mediafusion.elfhosted.com/manifest.json',
-      solidtorrents: 'https://solidtorrents.to/',
-      knaben: 'https://knaben.eu/',
-      apibay: 'https://apibay.org/precompiled/data_top100_recent.json',
-      torrentscsv: 'https://torrents-csv.com/service/search?q=test',
-      animetosho: 'https://feed.animetosho.org/',
-      subsplease: 'https://subsplease.org/',
-      limetorrents: 'https://www.limetorrents.lol/',
-      yts: 'https://yts.mx/',
-      eztv: 'https://eztvx.to/',
-      nyaa: 'https://nyaa.si/',
-      '1337x': 'https://1337x.to/',
-      x1337: 'https://1337x.to/',
-      bitsearch: 'https://bitsearch.to/',
-      therarbg: 'https://therarbg.com/',
-    };
-
-    const out: Array<{ id: string; name: string; url: string; enabled: boolean }> = [];
-    for (const config of this.configs) {
-      // A user-configured endpoint is the only URL worth probing for these —
-      // the whole point of a Torznab or Stremio entry is that it is theirs.
-      const url =
-        config.kind === IndexerKind.Torznab || config.kind === IndexerKind.Stremio
-          ? config.baseUrl
-          : BUILTIN_HOSTS[config.id];
-      if (!url) continue;
-      out.push({ id: config.id, name: config.name, url, enabled: config.enabled });
-    }
-    return out;
   }
 
   public getHealth(): IndexerHealth[] {

@@ -12,23 +12,7 @@ import { SearchSuggestions } from './SearchSuggestions';
 interface NavbarProps {
   onSearch: (query: string, options?: SearchOptions) => void;
   isSearching?: boolean;
-  /** Fired when the scope picker closes having changed the scope. */
-  onScopeChange?: () => void;
   onOpenInspector: () => void;
-  /**
-   * The query the app believes is running, when it was not typed here.
-   *
-   * The box used to hold its own text and nothing else, so a search started
-   * anywhere else left it showing the previous one: pressing "Search title" on
-   * *Avengers: Age of Ultron* ran the right search and the bar still read
-   * "Avengers". The results were right and the one visible statement of what
-   * had been asked was wrong — which is worse than either alone, because it is
-   * the thing a user checks when the results surprise them.
-   *
-   * Not fully controlled: typing must stay local so every keystroke does not
-   * re-render the app. This is the app *telling* the box what it just ran.
-   */
-  externalQuery?: string;
 }
 
 /** Long enough that typing a word costs one request, short enough to feel live. */
@@ -37,26 +21,9 @@ const SUGGEST_DEBOUNCE_MS = 250;
 export const Navbar: React.FC<NavbarProps> = ({
   onSearch,
   isSearching = false,
-  onScopeChange,
   onOpenInspector,
-  externalQuery,
 }) => {
   const [query, setQuery] = useState('');
-
-  /**
-   * Adopts a query the app started elsewhere.
-   *
-   * Guarded on the previous *external* value rather than on `query`, so a user
-   * who edits the box after such a search keeps their edit — re-syncing on
-   * every render would fight their typing.
-   */
-  const lastExternal = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (externalQuery === undefined) return;
-    if (externalQuery === lastExternal.current) return;
-    lastExternal.current = externalQuery;
-    setQuery(externalQuery);
-  }, [externalQuery]);
 
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
   const [history, setHistory] = useState<SearchHistoryEntry[]>([]);
@@ -112,28 +79,12 @@ export const Navbar: React.FC<NavbarProps> = ({
       setHighlightedIndex(-1);
       inputRef.current?.blur();
       onSearch(trimmed, exact ? { exact } : undefined);
-      /**
-       * Re-read on the next tick, not after a guessed delay.
-       *
-       * This used to wait 300 ms and hope the main process had recorded the
-       * query by then. Once searches became streaming that stopped being true —
-       * recording happened on completion, seconds later — so the list the user
-       * opened was always missing the search they had just run, which looks
-       * exactly like the order being wrong. The query is now recorded when the
-       * search opens, so this only has to outlast the IPC round trip.
-       */
-      window.setTimeout(refreshHistory, 0);
+      // The main process records history as part of the search, so re-reading
+      // it afterwards is what keeps the list current without a second source.
+      window.setTimeout(refreshHistory, 300);
     },
     [onSearch, refreshHistory]
   );
-
-  // The result counts arrive when each search finishes.
-  useEffect(() => {
-    const dispose = window.cloudstream?.onSearchUpdate?.((snapshot) => {
-      if (snapshot.done) refreshHistory();
-    });
-    return () => dispose?.();
-  }, [refreshHistory]);
 
   /**
    * Picking a row is a choice of *work*, not a shortcut for typing its name.
@@ -258,7 +209,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', position: 'relative' }}>
-        <SearchScopePicker onScopeChange={onScopeChange} />
+        <SearchScopePicker />
 
         {/* F12 Provider Inspector Button */}
         <button

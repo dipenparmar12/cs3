@@ -1,5 +1,11 @@
 package android.content;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -7,80 +13,135 @@ import java.util.Set;
  * {@code android.content.SharedPreferences} shim — referenced by 112 of 392
  * surveyed plugins, with {@code Editor} referenced by 101.
  *
- * <p><b>An interface, because Android's is.</b> This was a concrete class, and
- * that is a shape mismatch the compiler cannot warn about but the JVM enforces
- * absolutely: a plugin compiled against Android emits {@code invokeinterface}
- * for every call on it, and {@code invokeinterface} against a class fails with
+ * Backed by a per-plugin JSON file inside the plugin's scoped directory, so one
+ * plugin can neither read nor overwrite another's settings (DROP-12).
  *
- * <pre>
- *   IncompatibleClassChangeError: Found class android.content.SharedPreferences,
- *   but interface was expected
- * </pre>
- *
- * The error arrives at the first *use*, not at load, so an extension would
- * register its providers, answer a search, and then die the moment it tried to
- * read a setting. With 112 of the corpus touching this type, that is a large
- * class of "works until it suddenly doesn't" failures with one cause.
- *
- * {@code Editor} and {@code OnSharedPreferenceChangeListener} are nested
- * interfaces for the same reason. The implementation lives in
- * {@link JsonSharedPreferences}.
+ * <p>{@code apply()} and {@code commit()} both write. Android distinguishes them
+ * by whether the caller waits for the write, not by whether it happens, and a
+ * plugin that calls {@code apply()} and is then unloaded must not lose settings.
  */
-public interface SharedPreferences {
+public class SharedPreferences {
 
-    Map<String, ?> getAll();
+    private final Path file;
+    private final Map<String, Object> values = new LinkedHashMap<>();
 
-    String getString(String key, String defValue);
+    SharedPreferences(Path file) {
+        this.file = file;
+        load();
+    }
 
-    Set<String> getStringSet(String key, Set<String> defValues);
+    private void load() {
+        if (!Files.isRegularFile(file)) return;
+        try {
+            String json = Files.readString(file, StandardCharsets.UTF_8);
+            Object parsed = MiniJson.parse(json);
+            if (parsed instanceof Map<?, ?> m) {
+                for (Map.Entry<?, ?> e : m.entrySet()) {
+                    values.put(String.valueOf(e.getKey()), e.getValue());
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            // A corrupt preferences file must not stop the plugin loading; it
+            // starts from defaults, exactly as Android does.
+        }
+    }
 
-    int getInt(String key, int defValue);
+    private synchronized void persist() {
+        try {
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, MiniJson.write(values), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            // Best effort: a plugin cannot usefully recover from this.
+        }
+    }
 
-    long getLong(String key, long defValue);
+    public synchronized Map<String, ?> getAll() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(values));
+    }
 
-    float getFloat(String key, float defValue);
+    public synchronized String getString(String key, String def) {
+        Object v = values.get(key);
+        return v instanceof String s ? s : def;
+    }
 
-    boolean getBoolean(String key, boolean defValue);
+    @SuppressWarnings("unchecked")
+    public synchronized Set<String> getStringSet(String key, Set<String> def) {
+        Object v = values.get(key);
+        if (v instanceof Iterable<?> it) {
+            Set<String> out = new java.util.LinkedHashSet<>();
+            for (Object o : it) out.add(String.valueOf(o));
+            return out;
+        }
+        return def;
+    }
 
-    boolean contains(String key);
+    public synchronized int getInt(String key, int def) {
+        Object v = values.get(key);
+        return v instanceof Number n ? n.intValue() : def;
+    }
 
-    Editor edit();
+    public synchronized long getLong(String key, long def) {
+        Object v = values.get(key);
+        return v instanceof Number n ? n.longValue() : def;
+    }
 
-    void registerOnSharedPreferenceChangeListener(OnSharedPreferenceChangeListener listener);
+    public synchronized float getFloat(String key, float def) {
+        Object v = values.get(key);
+        return v instanceof Number n ? n.floatValue() : def;
+    }
 
-    void unregisterOnSharedPreferenceChangeListener(OnSharedPreferenceChangeListener listener);
+    public synchronized boolean getBoolean(String key, boolean def) {
+        Object v = values.get(key);
+        return v instanceof Boolean b ? b : def;
+    }
+
+    public synchronized boolean contains(String key) {
+        return values.containsKey(key);
+    }
+
+    public Editor edit() {
+        return new Editor();
+    }
+
+    public void registerOnSharedPreferenceChangeListener(OnSharedPreferenceChangeListener l) { }
+
+    public void unregisterOnSharedPreferenceChangeListener(OnSharedPreferenceChangeListener l) { }
 
     /** Android's listener interface; referenced by 3 surveyed plugins. */
-    interface OnSharedPreferenceChangeListener {
+    public interface OnSharedPreferenceChangeListener {
         void onSharedPreferenceChanged(SharedPreferences prefs, String key);
     }
 
-    /**
-     * The staged-write builder.
-     *
-     * Every mutator returns {@code Editor} rather than a concrete type, matching
-     * Android — extensions chain these calls and the JVM resolves the chain by
-     * exact descriptor.
-     */
-    interface Editor {
-        Editor putString(String key, String value);
+    public final class Editor {
+        private final Map<String, Object> staged = new LinkedHashMap<>();
+        private boolean clear;
 
-        Editor putStringSet(String key, Set<String> values);
+        public Editor putString(String key, String value) { staged.put(key, value); return this; }
+        public Editor putStringSet(String key, Set<String> value) { staged.put(key, value); return this; }
+        public Editor putInt(String key, int value) { staged.put(key, value); return this; }
+        public Editor putLong(String key, long value) { staged.put(key, value); return this; }
+        public Editor putFloat(String key, float value) { staged.put(key, value); return this; }
+        public Editor putBoolean(String key, boolean value) { staged.put(key, value); return this; }
 
-        Editor putInt(String key, int value);
+        public Editor remove(String key) { staged.put(key, REMOVE); return this; }
 
-        Editor putLong(String key, long value);
+        public Editor clear() { clear = true; return this; }
 
-        Editor putFloat(String key, float value);
+        public boolean commit() { write(); return true; }
 
-        Editor putBoolean(String key, boolean value);
+        public void apply() { write(); }
 
-        Editor remove(String key);
-
-        Editor clear();
-
-        boolean commit();
-
-        void apply();
+        private void write() {
+            synchronized (SharedPreferences.this) {
+                if (clear) values.clear();
+                for (Map.Entry<String, Object> e : staged.entrySet()) {
+                    if (e.getValue() == REMOVE) values.remove(e.getKey());
+                    else values.put(e.getKey(), e.getValue());
+                }
+            }
+            persist();
+        }
     }
+
+    private static final Object REMOVE = new Object();
 }

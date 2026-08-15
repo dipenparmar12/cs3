@@ -154,6 +154,7 @@ final class KotlinNameRepair {
         String resolved = hyphenated.contains(candidate + descriptor) ? candidate : name;
 
         decisions.put(key, resolved);
+        if (!resolved.equals(name)) rewrites++;
         return resolved;
     }
 
@@ -210,25 +211,11 @@ final class KotlinNameRepair {
         }
     }
 
-    /**
-     * Returns rewritten bytes, or null when the class needed no change.
-     *
-     * <p>"Changed" is tracked per class, by the visitor, and deliberately not
-     * inferred from the global rewrite counter. It was, and that was wrong in a
-     * way that made the whole repair look like it worked: {@link #repairedName}
-     * memoises its decisions, so the <em>second</em> class referencing
-     * {@code kotlin.Result.constructor_impl} took the cache path, bumped no
-     * counter, and had its correctly-rewritten bytes thrown away. Exactly one
-     * class per distinct broken reference was ever repaired, and every other one
-     * still failed at {@code loadLinks} — the "provider works until you press
-     * play" symptom, still present with the fix supposedly in place.
-     */
+    /** Returns rewritten bytes, or null when the class needed no change. */
     private byte[] rewriteClass(byte[] original) {
-        boolean[] changed = { false };
+        int before = rewrites;
 
         ClassReader reader = new ClassReader(original);
-        // Not `new ClassWriter(reader, 0)`: constant-pool copying would preserve
-        // the original method reference verbatim and undo the rewrite.
         ClassWriter writer = new ClassWriter(0);
 
         reader.accept(new ClassVisitor(Opcodes.ASM9, writer) {
@@ -242,17 +229,14 @@ final class KotlinNameRepair {
                     @Override
                     public void visitMethodInsn(int opcode, String owner, String methodName,
                                                 String methodDescriptor, boolean isInterface) {
-                        String repaired = repairedName(owner, methodName, methodDescriptor);
-                        if (!repaired.equals(methodName)) {
-                            changed[0] = true;
-                            rewrites++;
-                        }
-                        super.visitMethodInsn(opcode, owner, repaired, methodDescriptor, isInterface);
+                        super.visitMethodInsn(opcode, owner,
+                                repairedName(owner, methodName, methodDescriptor),
+                                methodDescriptor, isInterface);
                     }
                 };
             }
         }, 0);
 
-        return changed[0] ? writer.toByteArray() : null;
+        return rewrites > before ? writer.toByteArray() : null;
     }
 }

@@ -124,19 +124,6 @@
         </executions>
         <configuration>
           <jvmTarget>21</jvmTarget>
-          <args>
-            <!--
-              `AppUtils.parseJson` and `toJsonLiteral` are annotated
-              `@InternalAPI`, which upstream applies to keep *extensions* off
-              them. This module is not an extension: it supplies `DataStore`,
-              whose upstream implementation calls both, and it lives inside the
-              app boundary the annotation is drawn around. Reimplementing the
-              JSON handling instead would be the actual hazard — extension data
-              already written by the Android app has to round-trip through the
-              same mapper configuration, and a second one would diverge silently.
-            -->
-            <arg>-opt-in=com.lagradost.cloudstream3.InternalAPI</arg>
-          </args>
         </configuration>
       </plugin>
 

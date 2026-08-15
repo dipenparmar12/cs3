@@ -141,12 +141,7 @@ public final class Main {
                 Throwable cause = e.getCause() == null ? e : e.getCause();
                 reply.put("ok", false);
                 reply.put("errorKind", errorKind(cause));
-                reply.put("error", describe(cause));
-                // The stack is the only way to find out *which* plugin class was
-                // loading when a linkage error hit. stdout carries RPC frames and
-                // nothing else, so it goes to stderr, where the supervisor
-                // surfaces it.
-                cause.printStackTrace();
+                reply.put("error", cause.getClass().getSimpleName() + ": " + cause.getMessage());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 reply.put("ok", false);
@@ -155,38 +150,6 @@ public final class Main {
             }
             emit(reply);
         });
-    }
-
-    /**
-     * Renders a failure as something a human can act on.
-     *
-     * <p>Reflection wrappers are the problem this solves. {@code load} reaches a
-     * plugin through {@code Method.invoke}, so anything it throws arrives inside
-     * an {@link java.lang.reflect.InvocationTargetException} — whose own message
-     * is <em>always</em> null. Reporting the outermost cause verbatim produced
-     * exactly {@code "InvocationTargetException: null"}, which names the
-     * reflection layer and says nothing about the failure. An entire repository
-     * (Kraptor123/cs-kraptor, 65 plugins) failed that way and could not be
-     * diagnosed from the message at all, while {@link #errorKind} — which does
-     * walk the chain — had correctly classified it as a linkage failure the
-     * whole time.
-     *
-     * <p>So: the first cause, working inwards, that actually says something. That
-     * keeps a deliberate {@code RuntimeException("could not parse the page")}
-     * as the headline while unwrapping the wrappers that have nothing to say.
-     */
-    static String describe(Throwable t) {
-        for (Throwable c = t; c != null; c = c.getCause()) {
-            String message = c.getMessage();
-            if (message != null && !message.isBlank()) {
-                return c.getClass().getSimpleName() + ": " + message;
-            }
-        }
-        // Nothing in the chain carries a message; the innermost type is still
-        // more informative than the wrapper that caught it.
-        Throwable deepest = t;
-        while (deepest.getCause() != null) deepest = deepest.getCause();
-        return deepest.getClass().getSimpleName();
     }
 
     /**

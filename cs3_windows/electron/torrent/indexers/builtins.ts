@@ -2,7 +2,6 @@ import { XMLParser } from 'fast-xml-parser';
 import { fetchJson, fetchText } from '../http';
 import {
   buildMagnet,
-  infoHashFromMagnet,
   parseIntSafe,
   parseSize,
   type RawTorrent,
@@ -85,9 +84,6 @@ export class YtsIndexer implements TorrentIndexer {
     'https://yts.rs',
     'https://yts.lt',
     'https://yts.am',
-    'https://yts.do',
-    'https://yts.nz',
-    'https://yts.torrentbay.to',
   ] as const;
 
   canHandle(query: IndexerQuery): boolean {
@@ -99,33 +95,13 @@ export class YtsIndexer implements TorrentIndexer {
     const limit = Math.min(query.limit ?? 30, 50);
 
     return tryMirrors(YtsIndexer.MIRRORS, async (base) => {
-      let movies: YtsMovie[] = [];
+      const url =
+        `${base}/api/v2/list_movies.json` +
+        `?query_term=${encodeURIComponent(query.query)}` +
+        `&limit=${limit}&sort_by=seeds&order_by=desc`;
 
-      // If an IMDb id is provided, query by IMDb id first for exact matching
-      if (query.imdbId) {
-        try {
-          const imdb = query.imdbId.startsWith('tt') ? query.imdbId : `tt${query.imdbId}`;
-          const url =
-            `${base}/api/v2/list_movies.json` +
-            `?query_term=${encodeURIComponent(imdb)}` +
-            `&limit=${limit}&sort_by=seeds&order_by=desc`;
-          const response = await fetchJson<YtsResponse>(url, { signal, timeoutMs: 12_000 });
-          movies = response.data?.movies ?? [];
-        } catch {
-          // Fallback to text query below
-        }
-      }
-
-      if (movies.length === 0 && query.query) {
-        const url =
-          `${base}/api/v2/list_movies.json` +
-          `?query_term=${encodeURIComponent(query.query)}` +
-          `&limit=${limit}&sort_by=seeds&order_by=desc`;
-
-        const response = await fetchJson<YtsResponse>(url, { signal, timeoutMs: 20_000 });
-        movies = response.data?.movies ?? [];
-      }
-
+      const response = await fetchJson<YtsResponse>(url, { signal });
+      const movies = response.data?.movies ?? [];
       const out: RawTorrent[] = [];
 
       for (const movie of movies) {
@@ -166,7 +142,7 @@ export class YtsIndexer implements TorrentIndexer {
 }
 
 // ---------------------------------------------------------------------------
-// EZTV — TV only; queries by IMDb id or query text with multi-mirror fallback
+// EZTV — TV only; the API is keyed on IMDb id
 // ---------------------------------------------------------------------------
 
 interface EztvTorrent {
@@ -194,76 +170,24 @@ export class EztvIndexer implements TorrentIndexer {
     'https://eztv.re',
     'https://eztv.wf',
     'https://eztv.tf',
-    'https://eztv.li',
-    'https://eztv.yt',
-    'https://eztv.unblockit.click',
   ] as const;
 
   canHandle(query: IndexerQuery): boolean {
-    return Boolean(query.imdbId || query.query);
+    // The EZTV API only supports IMDb-id lookup — there is no free-text search.
+    return Boolean(query.imdbId);
   }
 
   async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
     const imdb = (query.imdbId ?? '').replace(/^tt/i, '');
+    if (!imdb) return [];
+
     const limit = Math.min(query.limit ?? 50, 100);
 
-    const terms = [query.query];
-    if (query.season !== undefined && query.episode !== undefined) {
-      terms.push(
-        `S${String(query.season).padStart(2, '0')}E${String(query.episode).padStart(2, '0')}`
-      );
-    } else if (query.season !== undefined) {
-      terms.push(`S${String(query.season).padStart(2, '0')}`);
-    }
-
     return tryMirrors(EztvIndexer.MIRRORS, async (base) => {
-      let torrents: EztvTorrent[] = [];
+      const url = `${base}/api/get-torrents?imdb_id=${encodeURIComponent(imdb)}&limit=${limit}`;
+      const response = await fetchJson<EztvResponse>(url, { signal });
 
-      if (imdb) {
-        try {
-          const url = `${base}/api/get-torrents?imdb_id=${encodeURIComponent(imdb)}&limit=${limit}`;
-          const response = await fetchJson<EztvResponse>(url, { signal, timeoutMs: 12_000 });
-          torrents = response.torrents ?? [];
-        } catch {
-          // Fallback to text query below
-        }
-      }
-
-      // If no torrents found via IMDb or no IMDb id, attempt EZTV ezrss search
-      if (torrents.length === 0 && terms.join(' ').trim()) {
-        try {
-          const rssUrl = `${base}/ezrss.xml?search=${encodeURIComponent(terms.join(' '))}`;
-          const body = await fetchText(rssUrl, { signal, timeoutMs: 15_000 });
-          const doc = xml.parse(body);
-          const items = asArray<Record<string, unknown>>(doc?.rss?.channel?.item);
-
-          return items
-            .map((item): RawTorrent | null => {
-              const title = String(item.title ?? '').trim();
-              const magnet = typeof item.link === 'string' && item.link.startsWith('magnet:') ? item.link : (item['torrent:magnetURI'] as string | undefined);
-              const torrentUrl = typeof item.link === 'string' && !item.link.startsWith('magnet:') ? item.link : (item['torrent:fileName'] as string | undefined);
-              const infoHash = item['torrent:infoHash'] ? String(item['torrent:infoHash']).toLowerCase() : (magnet ? infoHashFromMagnet(magnet) : undefined);
-              if (!title || (!magnet && !infoHash)) return null;
-
-              return {
-                title,
-                infoHash,
-                magnet: magnet || (infoHash ? buildMagnet(infoHash, title) : undefined),
-                torrentUrl,
-                sizeBytes: parseSize(String(item['torrent:contentLength'] ?? '')),
-                seeders: parseIntSafe(item['torrent:seeds']),
-                leechers: parseIntSafe(item['torrent:peers']),
-                publishedAt: item.pubDate ? Date.parse(String(item.pubDate)) : undefined,
-                category: 'TV',
-              };
-            })
-            .filter((r): r is RawTorrent => r !== null);
-        } catch {
-          // Fallback to JSON get-torrents return below
-        }
-      }
-
-      return torrents
+      return (response.torrents ?? [])
         .filter((t: EztvTorrent) => t.title && (t.hash || t.magnet_url))
         .map<RawTorrent>((t: EztvTorrent) => ({
           title: t.title as string,
@@ -281,9 +205,17 @@ export class EztvIndexer implements TorrentIndexer {
 }
 
 // ---------------------------------------------------------------------------
-// AnimeTosho — anime, JSON API mirroring Nyaa/AniDex with richer metadata
+// Nyaa — anime, RSS only
 // ---------------------------------------------------------------------------
 
+/**
+ * AnimeTosho — anime, JSON API mirroring Nyaa/AniDex with richer metadata.
+ *
+ * Worth having alongside Nyaa for two reasons: it answers on a single stable
+ * host rather than a rotating one, and it exposes `num_files`, which lets the
+ * ranker tell a batch release apart from a single episode without guessing from
+ * the title.
+ */
 interface AnimeToshoItem {
   id?: number;
   title?: string;
@@ -303,16 +235,15 @@ export class AnimeToshoIndexer implements TorrentIndexer {
   readonly name = 'AnimeTosho';
   readonly specialises = 'anime' as const;
 
-  private static readonly MIRRORS = [
-    'https://feed.animetosho.org',
-    'https://animetosho.org',
-  ] as const;
+  private static readonly MIRRORS = ['https://feed.animetosho.org'] as const;
 
   canHandle(query: IndexerQuery): boolean {
     return Boolean(query.query);
   }
 
   async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
+    // Anime is numbered absolutely far more often than by season, so the plain
+    // zero-padded episode number matches more releases than S01E05 would.
     const terms = [query.query];
     if (query.episode !== undefined) terms.push(String(query.episode).padStart(2, '0'));
 
@@ -347,28 +278,20 @@ export class AnimeToshoIndexer implements TorrentIndexer {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Nyaa — anime, RSS with multi-mirror fallback
-// ---------------------------------------------------------------------------
-
 export class NyaaIndexer implements TorrentIndexer {
   readonly id = 'nyaa';
   readonly name = 'Nyaa';
   readonly specialises = 'anime' as const;
 
-  private static readonly MIRRORS = [
-    'https://nyaa.si',
-    'https://nyaa.iss.one',
-    'https://nyaa.land',
-    'https://nyaa.net',
-    'https://nyaa.moe',
-  ] as const;
+  private static readonly MIRRORS = ['https://nyaa.si', 'https://nyaa.iss.one'] as const;
 
   canHandle(): boolean {
     return true;
   }
 
   async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
+    // Build a query that includes the episode number when one was requested;
+    // Nyaa has no structured season/episode filter.
     const terms = [query.query];
     if (query.episode !== undefined) {
       terms.push(String(query.episode).padStart(2, '0'));
@@ -378,7 +301,7 @@ export class NyaaIndexer implements TorrentIndexer {
     return tryMirrors(NyaaIndexer.MIRRORS, async (base) => {
       // c=1_2 restricts to "Anime - English-translated".
       const url = `${base}/?page=rss&q=${search}&c=1_2&f=0`;
-      const body = await fetchText(url, { signal, timeoutMs: 20_000 });
+      const body = await fetchText(url, { signal });
       const doc = xml.parse(body);
       const items = asArray<Record<string, unknown>>(doc?.rss?.channel?.item);
 
@@ -407,142 +330,3 @@ export class NyaaIndexer implements TorrentIndexer {
     });
   }
 }
-
-// ---------------------------------------------------------------------------
-// SubsPlease — direct anime release group JSON API
-// ---------------------------------------------------------------------------
-
-interface SubsPleaseDownload {
-  res?: string;
-  magnet?: string;
-}
-
-interface SubsPleaseEpisode {
-  time?: string;
-  release_date?: string;
-  show?: string;
-  episode?: string;
-  downloads?: SubsPleaseDownload[];
-}
-
-export class SubsPleaseIndexer implements TorrentIndexer {
-  readonly id = 'subsplease';
-  readonly name = 'SubsPlease';
-  readonly specialises = 'anime' as const;
-
-  private static readonly MIRRORS = ['https://subsplease.org'] as const;
-
-  canHandle(query: IndexerQuery): boolean {
-    return Boolean(query.query);
-  }
-
-  async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
-    return tryMirrors(SubsPleaseIndexer.MIRRORS, async (base) => {
-      const url = `${base}/api/?f=search&tz=UTC&s=${encodeURIComponent(query.query)}`;
-      const data = await fetchJson<Record<string, SubsPleaseEpisode | unknown>>(url, { signal, timeoutMs: 20_000 });
-      if (!data || typeof data !== 'object') return [];
-
-      const out: RawTorrent[] = [];
-
-      for (const [key, value] of Object.entries(data)) {
-        if (!value || typeof value !== 'object') continue;
-        const entry = value as SubsPleaseEpisode;
-        const downloads = Array.isArray(entry.downloads) ? entry.downloads : [];
-        const show = entry.show ?? key;
-        const ep = entry.episode ? ` - ${entry.episode}` : '';
-
-        for (const dl of downloads) {
-          if (!dl.magnet) continue;
-          const infoHash = infoHashFromMagnet(dl.magnet);
-          const resStr = dl.res ? ` [${dl.res}p]` : '';
-          const title = `[SubsPlease] ${show}${ep}${resStr}`;
-
-          out.push({
-            title,
-            infoHash,
-            magnet: dl.magnet,
-            seeders: 15,
-            leechers: 2,
-            category: 'Anime',
-          });
-        }
-      }
-
-      return out;
-    });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// LimeTorrents — public RSS search across movies, TV, anime & general
-// ---------------------------------------------------------------------------
-
-export class LimeTorrentsIndexer implements TorrentIndexer {
-  readonly id = 'limetorrents';
-  readonly name = 'LimeTorrents';
-  readonly specialises = 'any' as const;
-
-  private static readonly MIRRORS = [
-    'https://www.limetorrents.lol',
-    'https://www.limetorrents.co',
-    'https://www.limetorrents.info',
-    'https://www.limetorrents.cc',
-    'https://limetorrents.pro',
-  ] as const;
-
-  canHandle(query: IndexerQuery): boolean {
-    return Boolean(query.query);
-  }
-
-  async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
-    const terms = [query.query];
-    if (query.season !== undefined && query.episode !== undefined) {
-      terms.push(
-        `S${String(query.season).padStart(2, '0')}E${String(query.episode).padStart(2, '0')}`
-      );
-    } else if (query.season !== undefined) {
-      terms.push(`S${String(query.season).padStart(2, '0')}`);
-    }
-
-    return tryMirrors(LimeTorrentsIndexer.MIRRORS, async (base) => {
-      const url = `${base}/search/rss/${encodeURIComponent(terms.join(' '))}/`;
-      const body = await fetchText(url, { signal, timeoutMs: 20_000 });
-      const doc = xml.parse(body);
-      const items = asArray<Record<string, unknown>>(doc?.rss?.channel?.item);
-
-      return items
-        .map((item): RawTorrent | null => {
-          const title = String(item.title ?? '').trim();
-          if (!title) return null;
-
-          const enclosure = item.enclosure as { '@_url'?: string; '@_length'?: string | number } | undefined;
-          const torrentUrl = enclosure?.['@_url'] || (typeof item.link === 'string' ? item.link : undefined);
-          const desc = String(item.description ?? '');
-
-          const seedsMatch = desc.match(/Seeds\s*:\s*([\d,]+)/i);
-          const leechsMatch = desc.match(/Leechs?\s*:\s*([\d,]+)/i);
-          const sizeMatch = desc.match(/Size\s*:\s*([\d.,]+\s*[KMGT]i?B)/i);
-
-          const hashMatch = torrentUrl?.match(/\b([a-f0-9]{40})\b/i);
-          const infoHash = hashMatch ? hashMatch[1].toLowerCase() : undefined;
-          const magnet = infoHash ? buildMagnet(infoHash, title) : undefined;
-
-          if (!infoHash && !torrentUrl) return null;
-
-          return {
-            title,
-            infoHash,
-            magnet,
-            torrentUrl,
-            sizeBytes: parseSize(sizeMatch?.[1] || enclosure?.['@_length']),
-            seeders: parseIntSafe(seedsMatch?.[1]?.replace(/,/g, '')),
-            leechers: parseIntSafe(leechsMatch?.[1]?.replace(/,/g, '')),
-            publishedAt: item.pubDate ? Date.parse(String(item.pubDate)) : undefined,
-            category: 'LimeTorrents',
-          };
-        })
-        .filter((r): r is RawTorrent => r !== null);
-    });
-  }
-}
-

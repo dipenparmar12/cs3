@@ -45,26 +45,11 @@ export interface DnsPreset {
   name: string;
   description: string;
   servers: string[];
-  /**
-   * Resolvers that deliberately filter. Useful to some people and actively
-   * counterproductive here — a family or malware filter can be the very thing
-   * blocking the sites the user is trying to reach, so the UI groups them apart
-   * rather than listing them beside the unfiltered ones.
-   */
-  filtered?: boolean;
 }
 
 /**
  * Resolvers offered by name, so the common case is one click rather than a
  * URI template the user has to find and type correctly.
- *
- * Every entry is free, public, and needs no account, no client certificate and
- * no manual step — anything requiring registration would be a dead end at the
- * exact moment the user is trying to get the app working again.
- *
- * Unfiltered ones come first, and that ordering is the advice: this setting
- * exists because an ISP resolver is blocking sites, and a filtering resolver
- * can reproduce the same symptom for a different reason.
  */
 export const DNS_PRESETS: DnsPreset[] = [
   {
@@ -80,61 +65,16 @@ export const DNS_PRESETS: DnsPreset[] = [
     servers: ['https://dns.google/dns-query'],
   },
   {
-    id: 'quad9-unsecured',
-    name: 'Quad9 (unfiltered)',
-    description: 'Quad9 without its malware blocklist, so nothing is withheld.',
-    servers: ['https://dns10.quad9.net/dns-query'],
-  },
-  {
-    id: 'mullvad',
-    name: 'Mullvad',
-    description: 'Run by a privacy provider, no logging, no account needed.',
-    servers: ['https://dns.mullvad.net/dns-query'],
-  },
-  {
-    id: 'dnssb',
-    name: 'DNS.SB',
-    description: 'Unfiltered and anycast, with no query logging.',
-    servers: ['https://doh.sb/dns-query'],
-  },
-  {
-    id: 'opendns',
-    name: 'OpenDNS',
-    description: 'Cisco’s public resolver. Long-established and stable.',
-    servers: ['https://doh.opendns.com/dns-query'],
-  },
-  {
-    id: 'controld-unfiltered',
-    name: 'Control D (unfiltered)',
-    description: 'Free unfiltered endpoint, no sign-up.',
-    servers: ['https://freedns.controld.com/p0'],
-  },
-  {
-    id: 'njalla',
-    name: 'Njalla',
-    description: 'Privacy-focused resolver, no filtering and no logs.',
-    servers: ['https://dns.njal.la/dns-query'],
-  },
-  {
     id: 'quad9',
-    name: 'Quad9 (malware filter)',
+    name: 'Quad9',
     description: 'Blocks known-malicious domains as well as resolving.',
     servers: ['https://dns.quad9.net/dns-query'],
-    filtered: true,
   },
   {
     id: 'adguard',
     name: 'AdGuard',
     description: 'Filters advertising and tracking domains.',
     servers: ['https://dns.adguard-dns.com/dns-query'],
-    filtered: true,
-  },
-  {
-    id: 'cloudflare-security',
-    name: 'Cloudflare (malware filter)',
-    description: 'Cloudflare with malware blocking added.',
-    servers: ['https://security.cloudflare-dns.com/dns-query'],
-    filtered: true,
   },
 ];
 

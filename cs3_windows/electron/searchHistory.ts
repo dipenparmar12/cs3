@@ -62,23 +62,6 @@ export class SearchHistoryStore {
     return next;
   }
 
-  /**
-   * Fills in how many results a query turned out to have.
-   *
-   * Deliberately does not re-order: the entry's position records when the
-   * search was *started*, and a slow search finishing should not jump ahead of
-   * a faster one the user ran afterwards.
-   */
-  public setResultCount(query: string, resultCount: number): SearchHistoryEntry[] {
-    const trimmed = query.trim().toLowerCase();
-    const entries = this.list(MAX_ENTRIES);
-    const next = entries.map((entry) =>
-      entry.query.toLowerCase() === trimmed ? { ...entry, resultCount } : entry
-    );
-    this.datastore.setObject(KEY, next);
-    return next;
-  }
-
   public remove(query: string): SearchHistoryEntry[] {
     const next = this.list(MAX_ENTRIES).filter(
       (entry) => entry.query.toLowerCase() !== query.trim().toLowerCase()

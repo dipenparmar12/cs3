@@ -24,8 +24,6 @@ interface DnsPreset {
   name: string;
   description: string;
   servers: string[];
-  /** Blocks some domains as well as resolving; shown apart from the rest. */
-  filtered?: boolean;
 }
 
 interface Settings {
@@ -35,10 +33,6 @@ interface Settings {
 
 interface TestResult {
   name: string;
-  /** `indexer` rows come from the user's own source configuration. */
-  kind: 'catalogue' | 'indexer';
-  /** False for an indexer switched off in Settings → Sources. */
-  enabled: boolean;
   ok: boolean;
   status?: number;
   latencyMs: number;
@@ -120,31 +114,20 @@ export const NetworkSettings: React.FC = () => {
             </p>
           )}
 
-          {/* Unreachable first: a list of green ticks buries the one red line
-              that is the entire reason someone opened this. */}
           <ul className="netset__results">
-            {[...results]
-              .sort((a, b) => Number(a.ok) - Number(b.ok))
-              .map((result) => (
-                <li key={result.name}>
-                  {result.ok ? (
-                    <CheckCircle2 size={12} className="netset__ok" />
-                  ) : (
-                    <XCircle size={12} className="netset__bad" />
-                  )}
-                  <span className="netset__host">
-                    {result.name}
-                    {result.kind === 'indexer' && !result.enabled && (
-                      <span className="netset__off" title="Switched off in Settings → Sources">
-                        off
-                      </span>
-                    )}
-                  </span>
-                  <span className="netset__detail">
-                    {result.ok ? `${result.status} · ${result.latencyMs} ms` : result.error}
-                  </span>
-                </li>
-              ))}
+            {results.map((result) => (
+              <li key={result.name}>
+                {result.ok ? (
+                  <CheckCircle2 size={12} className="netset__ok" />
+                ) : (
+                  <XCircle size={12} className="netset__bad" />
+                )}
+                <span className="netset__host">{result.name}</span>
+                <span className="netset__detail">
+                  {result.ok ? `${result.status} · ${result.latencyMs} ms` : result.error}
+                </span>
+              </li>
+            ))}
           </ul>
         </div>
       )}
@@ -161,64 +144,23 @@ export const NetworkSettings: React.FC = () => {
           </span>
         </button>
 
-        {presets
-          .filter((preset) => !preset.filtered)
-          .map((preset) => {
-            const on = usingPrivate && activeServer === preset.servers[0];
-            return (
-              <button
-                key={preset.id}
-                className={`netset__choice${on ? ' netset__choice--on' : ''}`}
-                onClick={() => save({ dnsMode: 'automatic', dnsServers: preset.servers })}
-              >
-                <span className="netset__radio">{on && <Check size={11} strokeWidth={3} />}</span>
-                <span>
-                  <strong>{preset.name}</strong>
-                  <em>{preset.description}</em>
-                </span>
-              </button>
-            );
-          })}
+        {presets.map((preset) => {
+          const on = usingPrivate && activeServer === preset.servers[0];
+          return (
+            <button
+              key={preset.id}
+              className={`netset__choice${on ? ' netset__choice--on' : ''}`}
+              onClick={() => save({ dnsMode: 'automatic', dnsServers: preset.servers })}
+            >
+              <span className="netset__radio">{on && <Check size={11} strokeWidth={3} />}</span>
+              <span>
+                <strong>{preset.name}</strong>
+                <em>{preset.description}</em>
+              </span>
+            </button>
+          );
+        })}
       </div>
-
-      {/*
-        Filtering resolvers are kept behind a fold, not mixed in above.
-        This setting exists because something is blocking sites; offering a
-        resolver that blocks sites as an equal-weight fix would be a good way to
-        turn one problem into two that look identical.
-      */}
-      {presets.some((preset) => preset.filtered) && (
-        <details className="netset__advanced">
-          <summary>Filtering resolvers</summary>
-          <p className="netset__note">
-            These block malware or advertising domains as well as resolving. Useful
-            in their own right — but if a site is unreachable, a filter is one of the
-            things that could be causing it.
-          </p>
-          <div className="netset__choices">
-            {presets
-              .filter((preset) => preset.filtered)
-              .map((preset) => {
-                const on = usingPrivate && activeServer === preset.servers[0];
-                return (
-                  <button
-                    key={preset.id}
-                    className={`netset__choice${on ? ' netset__choice--on' : ''}`}
-                    onClick={() => save({ dnsMode: 'automatic', dnsServers: preset.servers })}
-                  >
-                    <span className="netset__radio">
-                      {on && <Check size={11} strokeWidth={3} />}
-                    </span>
-                    <span>
-                      <strong>{preset.name}</strong>
-                      <em>{preset.description}</em>
-                    </span>
-                  </button>
-                );
-              })}
-          </div>
-        </details>
-      )}
 
       <details className="netset__advanced">
         <summary>Advanced</summary>

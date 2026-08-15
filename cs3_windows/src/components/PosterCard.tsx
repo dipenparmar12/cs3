@@ -11,15 +11,6 @@ interface PosterCardProps {
   progressPercent?: number;
   watchedText?: string | null;
   showBucketButton?: boolean;
-  /**
-   * What happened last time this title was opened.
-   *
-   * `no-sources` is a property of the source and worth showing on the row —
-   * it stops someone clicking the same dead entry twice. `app-error` is ours,
-   * and says so, because marking a title unavailable for our own bug is how one
-   * broken translation pass came to look like a hundred broken providers.
-   */
-  outcome?: { kind: 'played' | 'no-sources' | 'app-error'; reason?: string };
 }
 
 /** Feature flag to control hover preview popups on cards. Set to true to enable. */
@@ -32,7 +23,6 @@ export const PosterCard: React.FC<PosterCardProps> = ({
   progressPercent,
   watchedText,
   showBucketButton = true,
-  outcome,
 }) => {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [hoverCardOpen, setHoverCardOpen] = useState(false);
@@ -106,19 +96,6 @@ export const PosterCard: React.FC<PosterCardProps> = ({
           </span>
         ) : (
           <span className="poster-badge">{item?.type || 'Movie'}</span>
-        )}
-
-        {/* Only failures are marked. A tick on everything that ever worked
-            would be decoration on every card the viewer has ever opened. */}
-        {outcome && outcome.kind !== 'played' && (
-          <span
-            className={`poster-outcome poster-outcome--${
-              outcome.kind === 'app-error' ? 'app' : 'empty'
-            }`}
-            title={outcome.reason ?? undefined}
-          >
-            {outcome.kind === 'app-error' ? 'app error last time' : 'no sources last time'}
-          </span>
         )}
 
         {/* Two intents on one card: the poster opens details, this opens the

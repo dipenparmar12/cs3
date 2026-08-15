@@ -1,6 +1,5 @@
-import React, { useMemo } from 'react';
-import { ArrowUpDown, Languages, MonitorPlay, Radio, RotateCcw, Search, X } from 'lucide-react';
-import type { TorrentResult } from '../types/torrent';
+import React from 'react';
+import { Search, X, Filter, ArrowUpDown } from 'lucide-react';
 import type {
   SourceFilterState,
   ResolutionFilterValue,
@@ -8,45 +7,20 @@ import type {
   LanguageFilterValue,
   SortOption,
 } from '../utils/sourceFilter';
-import { buildFacet, DEFAULT_FILTER_STATE, isFilterActive } from '../utils/sourceFilter';
-import { FacetMenu, type FacetOption } from './FacetMenu';
-
-/**
- * The filter strip above a list of playable sources.
- *
- * Rendered in two very different places: the source picker on the detail page,
- * and the source panel inside the player's sidebar — a narrow column laid over
- * the video. It used to be three stacked rows (a full-width text box, four
- * labelled selects, a status line), which in the sidebar consumed most of the
- * panel and pushed the sources themselves out of view.
- *
- * It is one row now. Each dimension is a chip that reads as its current value,
- * and its options — with the count each would leave — open on click. Nothing is
- * hidden; it is just not all shouted at once. Options that would match nothing
- * are not offered, so the menus stay short even with a dozen indexers and
- * several extension providers answering the same query.
- */
-
-const SORT_OPTIONS: FacetOption[] = [
-  { value: 'seeders', label: 'Most seeders' },
-  { value: 'res_desc', label: 'Best quality' },
-  { value: 'size_desc', label: 'Largest first' },
-  { value: 'size_asc', label: 'Smallest first' },
-];
+import { isFilterActive } from '../utils/sourceFilter';
 
 interface SourceFilterBarProps {
-  /** The unfiltered set, needed to count what each option would leave. */
-  sources: TorrentResult[];
   filterState: SourceFilterState;
   onChange: (newState: SourceFilterState) => void;
+  totalCount: number;
   filteredCount: number;
   compact?: boolean;
 }
 
 export const SourceFilterBar: React.FC<SourceFilterBarProps> = ({
-  sources,
   filterState,
   onChange,
+  totalCount,
   filteredCount,
   compact = false,
 }) => {
@@ -56,104 +30,130 @@ export const SourceFilterBar: React.FC<SourceFilterBarProps> = ({
     onChange({ ...filterState, [key]: val });
   };
 
-  const facets = useMemo(
-    () => ({
-      resolution: buildFacet(sources, filterState, 'resolution'),
-      size: buildFacet(sources, filterState, 'size'),
-      language: buildFacet(sources, filterState, 'language'),
-      source: buildFacet(sources, filterState, 'source'),
-    }),
-    [sources, filterState]
-  );
+  const handleReset = () => {
+    onChange({
+      searchQuery: '',
+      resolution: 'all',
+      size: 'all',
+      language: 'all',
+      sortBy: 'score',
+    });
+  };
 
   return (
-    <div className={`source-filter${compact ? ' source-filter--compact' : ''}`}>
-      <div className="source-filter__search">
-        <Search size={13} />
+    <div className={`source-filter-bar${compact ? ' source-filter-bar--compact' : ''}`}>
+      {/* Search Box */}
+      <div className="source-filter-bar__search">
+        <Search size={14} className="source-filter-bar__search-icon" />
         <input
           type="text"
-          placeholder="Filter by title, codec, group…"
+          placeholder="Filter sources (title, codec, group...)"
           value={filterState.searchQuery}
-          onChange={(event) => setField('searchQuery', event.target.value)}
-          aria-label="Filter sources by text"
+          onChange={(e) => setField('searchQuery', e.target.value)}
         />
         {filterState.searchQuery && (
           <button
             type="button"
+            className="source-filter-bar__clear-btn"
             onClick={() => setField('searchQuery', '')}
             title="Clear search text"
-            aria-label="Clear search text"
           >
             <X size={12} />
           </button>
         )}
       </div>
 
-      {facets.resolution.length > 1 && (
-        <FacetMenu
-          label="Quality"
-          icon={<MonitorPlay size={12} />}
-          value={filterState.resolution}
-          options={facets.resolution}
-          onChange={(value) => setField('resolution', value as ResolutionFilterValue)}
-        />
-      )}
+      {/* Select Controls Row */}
+      <div className="source-filter-bar__controls">
+        {/* Resolution Dropdown */}
+        <div className="source-filter-bar__select-wrapper" title="Filter by resolution">
+          <label htmlFor="filter-resolution">Res:</label>
+          <select
+            id="filter-resolution"
+            value={filterState.resolution}
+            onChange={(e) => setField('resolution', e.target.value as ResolutionFilterValue)}
+          >
+            <option value="all">All Res</option>
+            <option value="4k">4K (2160p)</option>
+            <option value="1440p">1440p (QHD)</option>
+            <option value="1080p">1080p (FHD)</option>
+            <option value="720p">720p (HD)</option>
+            <option value="480p">480p / SD</option>
+          </select>
+        </div>
 
-      {facets.size.length > 1 && (
-        <FacetMenu
-          label="Size"
-          value={filterState.size}
-          options={facets.size}
-          onChange={(value) => setField('size', value as SizeFilterValue)}
-        />
-      )}
+        {/* Size Dropdown */}
+        <div className="source-filter-bar__select-wrapper" title="Filter by file size">
+          <label htmlFor="filter-size">Size:</label>
+          <select
+            id="filter-size"
+            value={filterState.size}
+            onChange={(e) => setField('size', e.target.value as SizeFilterValue)}
+          >
+            <option value="all">All Sizes</option>
+            <option value="under1gb">&lt; 1 GB</option>
+            <option value="1to3gb">1 – 3 GB</option>
+            <option value="3to8gb">3 – 8 GB</option>
+            <option value="over8gb">&gt; 8 GB</option>
+          </select>
+        </div>
 
-      {facets.language.length > 1 && (
-        <FacetMenu
-          label="Language"
-          icon={<Languages size={12} />}
-          value={filterState.language}
-          options={facets.language}
-          onChange={(value) => setField('language', value as LanguageFilterValue)}
-        />
-      )}
+        {/* Language Dropdown */}
+        <div className="source-filter-bar__select-wrapper" title="Filter by language / audio">
+          <label htmlFor="filter-language">Lang:</label>
+          <select
+            id="filter-language"
+            value={filterState.language}
+            onChange={(e) => setField('language', e.target.value as LanguageFilterValue)}
+          >
+            <option value="all">All Langs</option>
+            <option value="en">English</option>
+            <option value="dual_multi">Dual/Multi Audio</option>
+            <option value="de">German</option>
+            <option value="fr">French</option>
+            <option value="es">Spanish</option>
+            <option value="ja">Japanese</option>
+            <option value="hi">Hindi</option>
+            <option value="other">Other Foreign</option>
+          </select>
+        </div>
 
-      {facets.source.length > 1 && (
-        <FacetMenu
-          label="Source"
-          title="Show only sources from one indexer or provider"
-          icon={<Radio size={12} />}
-          value={filterState.source}
-          options={facets.source}
-          onChange={(value) => setField('source', value)}
-        />
-      )}
+        {/* Sort By Dropdown */}
+        <div className="source-filter-bar__select-wrapper" title="Sort sources by">
+          <ArrowUpDown size={12} style={{ color: 'var(--text-subtle)' }} />
+          <select
+            id="filter-sort"
+            value={filterState.sortBy}
+            onChange={(e) => setField('sortBy', e.target.value as SortOption)}
+          >
+            <option value="score">Sort: Rank</option>
+            <option value="seeders">Sort: Seeders</option>
+            <option value="res_desc">Sort: Quality</option>
+            <option value="size_desc">Sort: Size ↓</option>
+            <option value="size_asc">Sort: Size ↑</option>
+          </select>
+        </div>
 
-      <FacetMenu
-        label="Rank"
-        icon={<ArrowUpDown size={12} />}
-        value={filterState.sortBy}
-        options={SORT_OPTIONS}
-        allValue="score"
-        allLabel="Best match"
-        title="Sort sources"
-        onChange={(value) => setField('sortBy', value as SortOption)}
-      />
+        {/* Clear Filters Button if active */}
+        {active && (
+          <button
+            type="button"
+            className="source-filter-bar__reset-btn"
+            onClick={handleReset}
+            title="Reset all filters"
+          >
+            <Filter size={12} /> Reset
+          </button>
+        )}
+      </div>
 
-      <span className="source-filter__count">
-        {active ? `${filteredCount} of ${sources.length}` : `${sources.length}`}
-      </span>
-
+      {/* Filter Status summary */}
       {active && (
-        <button
-          type="button"
-          className="source-filter__reset"
-          onClick={() => onChange({ ...DEFAULT_FILTER_STATE })}
-          title="Reset all filters"
-          aria-label="Reset all filters"
-        >
-          <RotateCcw size={12} />
-        </button>
+        <div className="source-filter-bar__summary">
+          <span>
+            Showing <strong>{filteredCount}</strong> of <strong>{totalCount}</strong> sources
+          </span>
+        </div>
       )}
     </div>
   );
