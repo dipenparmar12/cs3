@@ -1,32 +1,48 @@
-# React + TypeScript + Vite
+# CloudStream 3 Desktop — Windows Client (`cs3_windows`)
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+This directory contains the desktop frontend and Electron main process for **CloudStream 3 Desktop**.
 
-Currently, two official plugins are available:
+For the complete project overview, end-to-end architecture, JVM sidecar explanation, and contribution guidelines, see the root [**README.md**](../README.md).
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+---
 
-## React Compiler
+## 🛠 Tech Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Desktop Shell:** [Electron](https://www.electronjs.org/) (v43+) with isolated context bridge (`electron/preload.ts`)
+- **Frontend:** [React 19](https://react.dev/), [TypeScript](https://www.typescriptlang.org/), [Vite 8](https://vitejs.dev/)
+- **Streaming & Media:** [hls.js](https://github.com/video-dev/hls.js/), [WebTorrent](https://webtorrent.io/), custom FFmpeg / ffprobe adaptive transcode engine
+- **UI Icons & Styling:** [Lucide React](https://lucide.dev/), Modular Vanilla CSS design tokens
 
-## Expanding the Oxlint configuration
+---
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+## 🚀 Quick Development Scripts
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
+Run all commands from within `cs3_windows/`:
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+| Command | Action |
+|---|---|
+| `bun install` | Install all dependencies |
+| `bun run dev` | Start Vite dev server + Electron with HMR and live reload |
+| `bun run typecheck` | Typecheck entire project via `tsc -b` |
+| `bun run test:electron` | Run Electron main process and media decision tests |
+| `bun run test:media` | Run codec decision engine tests (no FFmpeg required) |
+| `bun run test:pipeline` | Run full media transcode pipeline tests (requires FFmpeg) |
+| `bun run electron:build` | Build production installer and portable `.exe` into `release/` |
+
+---
+
+## 📂 Directory Layout
+
+- [`electron/`](./electron/): Node.js main process services
+  - `main.ts`: Electron window lifecycle, background services, IPC routing
+  - `preload.ts`: Type-safe context bridge (`window.electronAPI`)
+  - `contentService.ts`: Search, metadata, and link resolution pipeline
+  - `playbackSession.ts`: Live streaming sessions and source switching
+  - `media/`: Media inspection, capability probing, and adaptive transcoding
+  - `cs3/`: JVM sidecar supervision, plugin management, and title enrichment
+  - `torrent/`: WebTorrent streaming engine and indexer integration
+  - `datastore.ts`: Android-compatible SharedPreferences JSON persistence
+- [`src/`](./src/): React 19 Renderer application
+  - `views/`: Home, Search, Detail, Library, History, Settings
+  - `components/`: Video player, extensions manager, search scope picker, download center
+  - `types/`: Shared IPC and domain type definitions
