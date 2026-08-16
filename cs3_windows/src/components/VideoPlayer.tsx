@@ -354,6 +354,49 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     );
   }, [downloadQueue, title, progress?.mediaUrl, streamUrl, infoHash]);
 
+  const [showNativePlayerBtn, setShowNativePlayerBtn] = useState(true);
+  const [externalPlayers, setExternalPlayers] = useState<Array<{ id: string; name: string }>>([]);
+  const [extPlayerStatus, setExtPlayerStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void window.cloudstream?.listExternalPlayers?.().then((res) => {
+      if (active && res?.players) {
+        setExternalPlayers(res.players);
+      }
+    });
+    void window.cloudstream?.getSetting?.('player_show_native_player_btn', 'true').then((val) => {
+      if (active) setShowNativePlayerBtn(val !== 'false');
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleOpenExternalPlayer = useCallback(
+    async (playerId: string) => {
+      if (!streamUrl) return;
+      const target = externalPlayers.find((p) => p.id === playerId);
+      const playerName = target?.name ?? playerId;
+
+      // Pause HTML5 video playback to avoid duplicate audio
+      if (videoRef.current && !videoRef.current.paused) {
+        videoRef.current.pause();
+        setIsPlaying(false);
+      }
+
+      setExtPlayerStatus(`Launching in ${playerName}…`);
+      const res = await window.cloudstream?.openInExternalPlayer?.(playerId, streamUrl);
+      if (res?.ok) {
+        setExtPlayerStatus(`Playing in ${playerName}`);
+      } else {
+        setExtPlayerStatus(res?.error ?? `Could not launch ${playerName}`);
+      }
+      setTimeout(() => setExtPlayerStatus(null), 4000);
+    },
+    [streamUrl, externalPlayers]
+  );
+
   const handleDownloadCurrentMedia = useCallback(async () => {
     if (onDownloadCurrent) {
       onDownloadCurrent();
@@ -2520,11 +2563,54 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             />
           )}
 
+          {showNativePlayerBtn && externalPlayers.length > 0 && streamUrl && (
+            <HoverMenu
+              icon={<MonitorPlay size={16} />}
+              label="Native Player"
+              value=""
+              onChange={(val) => void handleOpenExternalPlayer(String(val))}
+              options={externalPlayers.map((p) => ({
+                value: p.id,
+                label: p.name,
+                detail: p.id === 'system-default' ? 'OS Default' : 'Desktop App',
+              }))}
+              triggerText="Native"
+            />
+          )}
+
           <button className="icon-button" onClick={toggleFullscreen} aria-label="Fullscreen">
             {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
           </button>
         </div>
       </footer>
+
+      {extPlayerStatus && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '4.5rem',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: 'rgba(15, 23, 42, 0.95)',
+            border: '1px solid rgba(59, 130, 246, 0.4)',
+            color: '#60a5fa',
+            padding: '0.45rem 1.1rem',
+            borderRadius: '20px',
+            fontSize: '0.82rem',
+            fontWeight: 600,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+            zIndex: 70,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            backdropFilter: 'blur(10px)',
+            pointerEvents: 'none',
+          }}
+        >
+          <MonitorPlay size={16} />
+          <span>{extPlayerStatus}</span>
+        </div>
+      )}
     </div>
   );
 };

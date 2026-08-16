@@ -36,7 +36,7 @@ import { DiagnosticsLog } from './cs3/diagnostics';
 import { ProviderAnalytics } from './cs3/providerAnalytics';
 import { ProviderRanking } from './cs3/providerRanking';
 import { ProviderRecommender } from './cs3/providerRecommendations';
-import { ExternalPlayerService, PLAYER_DOWNLOADS } from './externalPlayer';
+import { ExternalPlayerService } from './externalPlayer';
 import { LibraryStore, type WatchStatus, canonicalKey, torrentResultToStoredSource } from './cs3/libraryStore';
 import { HistoryStore } from './cs3/historyStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
@@ -1386,7 +1386,7 @@ ipcMain.handle('shell:openExternal', async (_, url: string) => {
 ipcMain.handle('player:listExternal', async (_, refresh?: boolean) => ({
   ok: true,
   players: refresh ? externalPlayers.refresh() : externalPlayers.list(),
-  downloads: PLAYER_DOWNLOADS,
+  downloads: externalPlayers.getDownloads(),
 }));
 
 ipcMain.handle('player:openExternal', async (_, playerId: string, url: string) => {

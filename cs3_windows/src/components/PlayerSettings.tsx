@@ -214,6 +214,131 @@ export const PlayerSettings: React.FC = () => {
           </select>
         </SettingRow>
       </SettingGroup>
+
+      <NativePlayerSettingsGroup flash={flash} />
     </div>
+  );
+};
+
+const NativePlayerSettingsGroup: React.FC<{ flash: (msg: string) => void }> = ({ flash }) => {
+  const [players, setPlayers] = useState<Array<{ id: string; name: string; path?: string }>>([]);
+  const [downloads, setDownloads] = useState<
+    Array<{ id: string; name: string; url: string; note: string }>
+  >([]);
+  const [loading, setLoading] = useState(false);
+  const [showNativeButton, setShowNativeButton] = useState(true);
+
+  const loadPlayers = async (refresh = false) => {
+    setLoading(true);
+    try {
+      const res = await window.cloudstream?.listExternalPlayers?.(refresh);
+      setPlayers(res?.players ?? []);
+      setDownloads(res?.downloads ?? []);
+      const btnEnabled = await window.cloudstream?.getSetting('player_show_native_player_btn', 'true');
+      setShowNativeButton(btnEnabled !== 'false');
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadPlayers(false);
+  }, []);
+
+  const handleToggleNativeButton = async (enabled: boolean) => {
+    setShowNativeButton(enabled);
+    await window.cloudstream?.setSetting('player_show_native_player_btn', enabled);
+    flash(
+      enabled
+        ? 'Native Player button enabled in player toolbar.'
+        : 'Native Player button hidden from player toolbar.'
+    );
+  };
+
+  return (
+    <SettingGroup title="Platform Native & External Players" icon={<Tv size={15} />}>
+      <SettingRow
+        label="Native player toolbar button"
+        note={showNativeButton ? 'Visible' : 'Hidden'}
+        hint={
+          <>
+            Shows a quick one-click button in the player controls to launch streams into platform native
+            players (VLC, mpv, IINA, or OS Default). Recommended for 4K 10-bit HEVC, DTS:X, and TrueHD.
+          </>
+        }
+      >
+        <label className="settings__switch">
+          <input
+            type="checkbox"
+            checked={showNativeButton}
+            onChange={(e) => handleToggleNativeButton(e.target.checked)}
+            aria-label="Toggle native player button"
+          />
+          <span>{showNativeButton ? 'Enabled' : 'Disabled'}</span>
+        </label>
+      </SettingRow>
+
+      <SettingRow
+        label="Detected native players"
+        note={`${players.length} available`}
+        hint="Desktop players detected on your system (Windows, macOS, Linux)."
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {players.map((p) => (
+              <span
+                key={p.id}
+                style={{
+                  fontSize: '0.75rem',
+                  padding: '0.2rem 0.5rem',
+                  borderRadius: '4px',
+                  backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                  border: '1px solid rgba(59, 130, 246, 0.3)',
+                  color: '#60a5fa',
+                  fontWeight: 600,
+                }}
+              >
+                {p.name}
+              </span>
+            ))}
+          </div>
+          <button
+            className="btn btn-secondary"
+            style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
+            onClick={() => {
+              void loadPlayers(true);
+              flash('Rescanned installed native players.');
+            }}
+            disabled={loading}
+          >
+            {loading ? 'Scanning…' : 'Rescan Players'}
+          </button>
+        </div>
+      </SettingRow>
+
+      {downloads.length > 0 && (
+        <SettingRow
+          label="Recommended native players"
+          note="Free / Open-Source"
+          hint="Install any of these players for 100% native decoding of 4K 10-bit HEVC and surround audio codecs."
+        >
+          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {downloads.map((d) => (
+              <button
+                key={d.id}
+                className="btn btn-secondary"
+                style={{ fontSize: '0.75rem' }}
+                title={d.note}
+                onClick={() => window.cloudstream?.openExternalLink?.(d.url)}
+              >
+                Get {d.name}
+              </button>
+            ))}
+          </div>
+        </SettingRow>
+      )}
+    </SettingGroup>
   );
 };
