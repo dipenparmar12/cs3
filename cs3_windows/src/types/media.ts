@@ -197,6 +197,47 @@ export interface HostEncodeCapability {
   logicalCores: number;
 }
 
+export interface EmbeddedSubtitleTrack {
+  index: number;
+  label: string;
+  language?: string;
+  /** Loopback WebVTT URL. Extraction runs on first fetch, not on inspection. */
+  url: string;
+}
+
+export interface PlaybackStreamRequest {
+  /** The provider's URL, before proxying. */
+  url: string;
+  /** Headers the provider supplied — usually a `Referer` a browser cannot send. */
+  headers?: Record<string, string>;
+  isM3u8?: boolean;
+  /** Skips the cached capability record. Used by the failover ladder. */
+  refresh?: boolean;
+  /**
+   * Ignore the inspection and re-encode unconditionally.
+   *
+   * The last rung of the ladder: the inspection said this would play and it did
+   * not, so its verdict has been disproved and re-encoding is the only thing
+   * left that is guaranteed to produce something decodable.
+   */
+  force?: boolean;
+  /** Attributed in telemetry; the provider is what a failure belongs to. */
+  provider?: string;
+}
+
+export interface PlaybackStreamResponse {
+  ok: boolean;
+  error?: string;
+  /** True when ffmpeg/ffprobe are missing, which the UI offers to fix. */
+  needsComponents?: boolean;
+  /** What the `<video>` element (or hls.js) should be given. */
+  playbackUrl: string;
+  /** Token for `closePlaybackStream` / `switchAudioTrack`; empty for DIRECT. */
+  sessionId: string;
+  capability: SourceCapabilityModel;
+  subtitles: EmbeddedSubtitleTrack[];
+}
+
 export interface PlaybackDiagnosticEvent {
   timestamp: string;
   sessionId: string;
