@@ -4322,6 +4322,32 @@
   color: var(--text-subtle, #6b7280);
 }
 
+.download-sort-select {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--bg-card, #161b26);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  padding: 0.35rem 0.65rem;
+  color: var(--text-muted, #9ca3af);
+  font-size: 0.8rem;
+}
+
+.download-sort-select select {
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 0.8rem;
+  outline: none;
+  cursor: pointer;
+}
+
+.download-sort-select select option {
+  background: #161b26;
+  color: #fff;
+}
+
 .download-actions-row {
   display: flex;
   align-items: center;

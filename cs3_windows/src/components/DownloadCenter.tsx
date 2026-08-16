@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   PauseCircle,
   AlertCircle,
+  ArrowUpDown,
 } from 'lucide-react';
 
 interface DownloadCenterProps {
@@ -320,7 +321,8 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
   );
 };
 
-export type DownloadFilterTab = 'all' | 'downloading' | 'completed' | 'paused' | 'failed';
+export type DownloadFilterTab = 'all' | 'downloading' | 'paused' | 'failed' | 'completed';
+export type DownloadSortMode = 'recent' | 'oldest' | 'name' | 'size';
 
 export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   tasks,
@@ -335,6 +337,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [activeFilter, setActiveFilter] = useState<DownloadFilterTab>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortMode, setSortMode] = useState<DownloadSortMode>('recent');
 
   const toggleGroupCollapse = (groupKey: string) => {
     setCollapsedGroups((prev) => ({
@@ -384,9 +387,9 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
     return {
       all: tasks.length,
       downloading,
-      completed,
       paused,
       failed,
+      completed,
     };
   }, [tasks]);
 
@@ -441,9 +444,9 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
     }
   };
 
-  // Filter tasks based on selected tab and search query
+  // Filter and sort tasks (recently downloaded items come 1st by default)
   const filteredTasks = useMemo(() => {
-    return tasks.filter((t) => {
+    const list = tasks.filter((t) => {
       if (activeFilter === 'downloading') {
         const isActive =
           t.state === DownloadState.Downloading ||
@@ -451,12 +454,12 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
           t.state === DownloadState.Retrying ||
           t.state === DownloadState.RefreshingSource;
         if (!isActive) return false;
-      } else if (activeFilter === 'completed') {
-        if (t.state !== DownloadState.Completed) return false;
       } else if (activeFilter === 'paused') {
         if (t.state !== DownloadState.Paused) return false;
       } else if (activeFilter === 'failed') {
         if (t.state !== DownloadState.Failed) return false;
+      } else if (activeFilter === 'completed') {
+        if (t.state !== DownloadState.Completed) return false;
       }
 
       if (searchQuery.trim()) {
@@ -469,9 +472,28 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
 
       return true;
     });
-  }, [tasks, activeFilter, searchQuery]);
 
-  // Group filtered tasks by series / session
+    // Apply sorting: recent (newest first) by default
+    list.sort((a, b) => {
+      if (sortMode === 'recent') {
+        return (b.createdTime || 0) - (a.createdTime || 0);
+      }
+      if (sortMode === 'oldest') {
+        return (a.createdTime || 0) - (b.createdTime || 0);
+      }
+      if (sortMode === 'name') {
+        return (a.title || '').localeCompare(b.title || '');
+      }
+      if (sortMode === 'size') {
+        return (b.totalBytes || 0) - (a.totalBytes || 0);
+      }
+      return 0;
+    });
+
+    return list;
+  }, [tasks, activeFilter, searchQuery, sortMode]);
+
+  // Group filtered tasks by series / session and sort groups
   const groups: TaskGroup[] = useMemo(() => {
     const map = new Map<string, TaskGroup>();
 
@@ -502,8 +524,31 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
       }
     }
 
-    return Array.from(map.values());
-  }, [filteredTasks]);
+    const groupList = Array.from(map.values());
+    groupList.sort((a, b) => {
+      if (sortMode === 'recent') {
+        const aMax = Math.max(...a.tasks.map((t) => t.createdTime || 0));
+        const bMax = Math.max(...b.tasks.map((t) => t.createdTime || 0));
+        return bMax - aMax;
+      }
+      if (sortMode === 'oldest') {
+        const aMin = Math.min(...a.tasks.map((t) => t.createdTime || 0));
+        const bMin = Math.min(...b.tasks.map((t) => t.createdTime || 0));
+        return aMin - bMin;
+      }
+      if (sortMode === 'name') {
+        return a.title.localeCompare(b.title);
+      }
+      if (sortMode === 'size') {
+        const aSize = a.tasks.reduce((sum, t) => sum + (t.totalBytes || 0), 0);
+        const bSize = b.tasks.reduce((sum, t) => sum + (t.totalBytes || 0), 0);
+        return bSize - aSize;
+      }
+      return 0;
+    });
+
+    return groupList;
+  }, [filteredTasks, sortMode]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -547,7 +592,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
       {/* Filter Tabs & Management Toolbar */}
       {tasks.length > 0 && (
         <div className="download-manager__toolbar">
-          {/* Filter Tabs */}
+          {/* Filter Tabs in requested order: ALL, Downloading, Paused, Failed, Completed */}
           <div className="download-tabs">
             <button
               type="button"
@@ -575,16 +620,6 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
 
             <button
               type="button"
-              className={`download-tab ${activeFilter === 'completed' ? 'download-tab--active' : ''}`}
-              onClick={() => setActiveFilter('completed')}
-            >
-              <CheckCircle2 size={14} style={{ color: counts.completed > 0 ? 'var(--status-success)' : undefined }} />
-              <span>Completed</span>
-              <span className="download-tab__badge">{counts.completed}</span>
-            </button>
-
-            <button
-              type="button"
               className={`download-tab ${activeFilter === 'paused' ? 'download-tab--active' : ''}`}
               onClick={() => setActiveFilter('paused')}
             >
@@ -606,9 +641,19 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                 {counts.failed}
               </span>
             </button>
+
+            <button
+              type="button"
+              className={`download-tab ${activeFilter === 'completed' ? 'download-tab--active' : ''}`}
+              onClick={() => setActiveFilter('completed')}
+            >
+              <CheckCircle2 size={14} style={{ color: counts.completed > 0 ? 'var(--status-success)' : undefined }} />
+              <span>Completed</span>
+              <span className="download-tab__badge">{counts.completed}</span>
+            </button>
           </div>
 
-          {/* Search Filter & Quick Actions */}
+          {/* Search Filter, Sort Order & Quick Actions */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
             <div className="download-search-input">
               <Search size={14} style={{ color: 'var(--text-subtle)' }} />
@@ -635,6 +680,21 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                   <X size={13} />
                 </button>
               )}
+            </div>
+
+            {/* Sort Selector Dropdown */}
+            <div className="download-sort-select" title="Sort download list">
+              <ArrowUpDown size={13} style={{ color: 'var(--text-subtle)' }} />
+              <select
+                value={sortMode}
+                onChange={(e) => setSortMode(e.target.value as DownloadSortMode)}
+                aria-label="Sort downloads"
+              >
+                <option value="recent">Recent First</option>
+                <option value="oldest">Oldest First</option>
+                <option value="name">Title (A-Z)</option>
+                <option value="size">Size (Largest)</option>
+              </select>
             </div>
 
             <div className="download-actions-row">

@@ -13,7 +13,7 @@ import { DownloadState } from '../../types/download';
  * controls without needing to leave playback.
  */
 
-export type DownloadFilterTab = 'all' | 'downloading' | 'completed' | 'paused' | 'failed';
+export type DownloadFilterTab = 'all' | 'downloading' | 'paused' | 'failed' | 'completed';
 
 interface PlayerDownloadPanelProps {
   open: boolean;
@@ -66,14 +66,14 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
     return {
       all: tasks.length,
       downloading,
-      completed,
       paused,
       failed,
+      completed,
     };
   }, [tasks]);
 
   const filteredTasks = useMemo(() => {
-    return tasks.filter((t) => {
+    const list = tasks.filter((t) => {
       if (activeFilter === 'downloading') {
         return (
           t.state === DownloadState.Downloading ||
@@ -82,11 +82,16 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
           t.state === DownloadState.RefreshingSource
         );
       }
-      if (activeFilter === 'completed') return t.state === DownloadState.Completed;
       if (activeFilter === 'paused') return t.state === DownloadState.Paused;
       if (activeFilter === 'failed') return t.state === DownloadState.Failed;
+      if (activeFilter === 'completed') return t.state === DownloadState.Completed;
       return true;
     });
+
+    // Recently downloaded items come 1st
+    list.sort((a, b) => (b.createdTime || 0) - (a.createdTime || 0));
+
+    return list;
   }, [tasks, activeFilter]);
 
   const handlePauseAll = () => {
@@ -203,7 +208,7 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
         </button>
       </div>
 
-      {/* Filter Tabs Header */}
+      {/* Filter Tabs Header in requested order: ALL, Active, Paused, Failed, Done */}
       <div className="player-dl-tabs">
         <button
           type="button"
@@ -231,16 +236,6 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
 
         <button
           type="button"
-          className={`player-dl-tab ${activeFilter === 'completed' ? 'player-dl-tab--active' : ''}`}
-          onClick={() => setActiveFilter('completed')}
-        >
-          <CheckCircle2 size={12} style={{ color: counts.completed > 0 ? '#10b981' : undefined }} />
-          <span>Done</span>
-          <span className="player-dl-tab__count">({counts.completed})</span>
-        </button>
-
-        <button
-          type="button"
           className={`player-dl-tab ${activeFilter === 'paused' ? 'player-dl-tab--active' : ''}`}
           onClick={() => setActiveFilter('paused')}
         >
@@ -259,6 +254,16 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
           <span className="player-dl-tab__count" style={{ color: counts.failed > 0 ? '#f87171' : undefined }}>
             ({counts.failed})
           </span>
+        </button>
+
+        <button
+          type="button"
+          className={`player-dl-tab ${activeFilter === 'completed' ? 'player-dl-tab--active' : ''}`}
+          onClick={() => setActiveFilter('completed')}
+        >
+          <CheckCircle2 size={12} style={{ color: counts.completed > 0 ? '#10b981' : undefined }} />
+          <span>Done</span>
+          <span className="player-dl-tab__count">({counts.completed})</span>
         </button>
       </div>
 
