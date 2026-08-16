@@ -66,7 +66,13 @@ import type {
 import type { StreamHandle } from './torrent/torrentEngine';
 import type { PlaybackSnapshot } from './playbackSession';
 import type { SubtitleSearchResult } from './subtitleService';
-import type { MediaProbe, ProbeFailure, RendererCapabilities } from './mediaTranscoder';
+import type {
+  PlaybackDiagnosticEvent,
+  PlaybackStreamRequest,
+  PlaybackStreamResponse,
+  RendererCapabilities,
+  SourceCapabilityModel,
+} from '../src/types/media';
 
 /**
  * Typed, allow-listed IPC surface (ARCH-2 / SEC-9).
@@ -408,16 +414,36 @@ export interface CloudStreamElectronAPI {
    * sound and one whose AC-3 track was silently dropped — nor between a broken
    * source and an HEVC one.
    */
-  probeMedia: (
-    url: string
-  ) => Promise<
-    Envelope & {
-      probe: MediaProbe | null;
-      needsComponents: boolean;
-      /** Present when `probe` is null: why, including the source's HTTP status. */
-      failure: ProbeFailure | null;
-    }
-  >;
+  inspectMediaSource: (
+    request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'refresh'>
+  ) => Promise<Envelope & { capability: SourceCapabilityModel | null }>;
+  /**
+   * Inspects, decides and opens a playable stream in one call.
+   *
+   * The whole contract with the player: ask, wait, attach. There is deliberately
+   * no way to obtain a URL that has not been classified — that shape is what
+   * created the race PRD-37 §4.1 describes, where the element failed on an
+   * unsupported bitstream before the probe it was racing had returned.
+   */
+  preparePlaybackStream: (request: PlaybackStreamRequest) => Promise<PlaybackStreamResponse>;
+  /**
+   * Maps a different audio track and resumes at the current position.
+   *
+   * The element only ever receives the one track selected for it, so switching
+   * restarts the conversion with a different `-map`. The returned URL carries
+   * the seek, which is the difference between changing track and losing your
+   * place in the film.
+   */
+  switchAudioTrack: (
+    sessionId: string,
+    audioIndex: number,
+    positionSeconds: number
+  ) => Promise<Envelope & { url?: string }>;
+  closePlaybackStream: (sessionId: string) => Promise<Envelope>;
+  /** Strategy, codecs and encoder timings for every playback attempt. */
+  getPlaybackDiagnostics: (
+    sessionId?: string
+  ) => Promise<Envelope & { events: PlaybackDiagnosticEvent[] }>;
   /** Codec strings to hand `canPlayType`, keyed by ffprobe's name for each. */
   getCodecProbes: () => Promise<Record<string, string>>;
   /**
@@ -428,21 +454,6 @@ export interface CloudStreamElectronAPI {
    * can answer for the machine in front of the user.
    */
   setMediaCapabilities: (capabilities: RendererCapabilities) => Promise<Envelope>;
-  /**
-   * Opens a remuxing session and returns a loopback URL that plays.
-   *
-   * `transcodeVideo` is the expensive half and is only worth passing when the
-   * probe said the video cannot be decoded — audio-only remuxing copies the
-   * video untouched and costs almost nothing.
-   */
-  openMediaTranscode: (
-    url: string,
-    audioIndex: number,
-    transcodeVideo?: boolean,
-    /** False copies the audio stream, for the container-only case. */
-    transcodeAudio?: boolean
-  ) => Promise<Envelope & { url: string | null }>;
-  closeMediaTranscode: (token: string) => Promise<Envelope>;
 
   /**
    * Media players installed on this machine, and where to get one.
@@ -936,13 +947,16 @@ const api: CloudStreamElectronAPI = {
     return () => ipcRenderer.removeListener('extension:providerLoadProgress', listener);
   },
 
-  probeMedia: (url) => ipcRenderer.invoke('media:probe', url),
+  inspectMediaSource: (request) => ipcRenderer.invoke('media:inspect', request),
+  preparePlaybackStream: (request) => ipcRenderer.invoke('media:prepare', request),
+  switchAudioTrack: (sessionId, audioIndex, positionSeconds) =>
+    ipcRenderer.invoke('media:switchAudio', sessionId, audioIndex, positionSeconds),
+  closePlaybackStream: (sessionId) => ipcRenderer.invoke('media:closeStream', sessionId),
+  getPlaybackDiagnostics: (sessionId) =>
+    ipcRenderer.invoke('media:getPlaybackDiagnostics', sessionId),
   getCodecProbes: () => ipcRenderer.invoke('media:getCodecProbes'),
   setMediaCapabilities: (capabilities) =>
     ipcRenderer.invoke('media:setCapabilities', capabilities),
-  openMediaTranscode: (url, audioIndex, transcodeVideo, transcodeAudio) =>
-    ipcRenderer.invoke('media:openTranscode', url, audioIndex, transcodeVideo, transcodeAudio),
-  closeMediaTranscode: (token) => ipcRenderer.invoke('media:closeTranscode', token),
   listExternalPlayers: (refresh) => ipcRenderer.invoke('player:listExternal', refresh),
   openInExternalPlayer: (playerId, url) =>
     ipcRenderer.invoke('player:openExternal', playerId, url),

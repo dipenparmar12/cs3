@@ -6,8 +6,8 @@ import type {
   SubtitleStreamMetadata,
   VideoStreamMetadata,
 } from '../../src/types/media';
-import { isPlayableAudioCodec } from './decisionEngine';
-import { runTool } from './runTool';
+import { isPlayableAudioCodec } from './decisionEngine.ts';
+import { runTool } from './runTool.ts';
 
 /**
  * Reads what is actually inside a stream, before anything tries to play it.
@@ -301,12 +301,20 @@ export interface InspectionResult {
 }
 
 export class MediaInspector {
+  private resolveFfprobe: () => string | null;
+  /**
+   * Reads the first few KB of a URL, for manifest sniffing. Injected so this
+   * file has no opinion about which HTTP stack the app uses.
+   */
+  private fetchHead: (url: string) => Promise<string | null>;
+
   constructor(
-    private resolveFfprobe: () => string | null,
-    /** Reads the first few KB of a URL, for manifest sniffing. Injected so this
-     *  file has no opinion about which HTTP stack the app uses. */
-    private fetchHead: (url: string) => Promise<string | null>
-  ) {}
+    resolveFfprobe: () => string | null,
+    fetchHead: (url: string) => Promise<string | null>
+  ) {
+    this.resolveFfprobe = resolveFfprobe;
+    this.fetchHead = fetchHead;
+  }
 
   /**
    * Inspects a stream and reports what is in it.

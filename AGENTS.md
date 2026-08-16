@@ -72,7 +72,9 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (10 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (58 tests, Node type-stripping — no framework) |
+| Media decisions only | `cs3_windows/` | `bun run test:media` (35 cases, no ffmpeg needed) |
+| Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (13 cases, real ffmpeg; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
 | Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
@@ -100,13 +102,25 @@ carry a reason with it.
 Toolchain present in the cloud environment: Java 21, Maven, Bun, Node 22.
 
 There is **almost no automated test suite for the Electron/React side** and no CI workflow
-(`.github/` does not exist). The exception is `electron/sharedDiscovery.test.mts`, run by
-`bun run test:electron`: Node strips the types itself — possible only because
-`erasableSyntaxOnly` is set — so there is no framework, no transform and no config to keep
-working. That module earns tests where the rest of `electron/` has none because its failure
-modes are invisible: a doubled scrape reads as a slow provider and a wrongly-cancelled run
-reads as a flaky site, and neither would ever be traced back to it from a bug report. `.mts`
-is in `tsconfig.node.json`'s `include`, so the tests are typechecked too.
+(`.github/` does not exist). The exceptions are `electron/sharedDiscovery.test.mts` and the two
+media suites under `electron/media/`, all run by `bun run test:electron`: Node strips the types
+itself — possible only because `erasableSyntaxOnly` is set — so there is no framework, no
+transform and no config to keep working. `.mts` is in `tsconfig.node.json`'s `include`, so the
+tests are typechecked too.
+
+Those modules earn tests where the rest of `electron/` has none, for two different reasons.
+`sharedDiscovery` because its failure modes are invisible: a doubled scrape reads as a slow
+provider and a wrongly-cancelled run reads as a flaky site, and neither would ever be traced
+back to it from a bug report. The media suites because their inputs are **expensive to
+reproduce and cheap to encode** — every row of the compatibility matrix was measured against a
+real 25 GB file behind a provider link that has since expired, and a regression there is silent
+in the worst way: choosing `-c:v copy` for a 10-bit HEVC file produces an MP4 that downloads
+perfectly and plays nothing, which is indistinguishable from a bad provider.
+
+Note the `.ts` extensions on imports inside `electron/media/`. They are load-bearing: Node's
+type stripping is an ESM loader and will not resolve an extensionless specifier, so without
+them the tests cannot import the modules they test. `allowImportingTsExtensions` is already set
+in both tsconfigs and the Rollup build is indifferent.
 
 **The `tsc` in `bun run build` typechecks nothing.** The root `tsconfig.json` is
 solution-style (`"files": []` plus two `references`), and plain `tsc` on such a config is a
@@ -206,8 +220,15 @@ sidecar dispatches each onto a bounded pool sized to the core count.
 
 Also namespaced: `analytics:*` (provider measurement, ranking weights, recommendations,
 and the erase control), `bookmarks:*` (saved detail pages), `discover:*` (home-screen
-catalogues and title enrichment), `subtitles:*` (online search, SubRip→WebVTT), `audio:*` (ffprobe
-inspection and remux sessions), `sources:getCacheStats` / `sources:clearCache`.
+catalogues and title enrichment), `subtitles:*` (online search, SubRip→WebVTT), `sources:getCacheStats` /
+`sources:clearCache`.
+
+`media:*` is the compatibility engine's surface: `media:inspect` classifies a source without
+starting anything, `media:prepare` inspects-decides-opens and returns the URL to attach,
+`media:switchAudio` / `media:closeStream` drive a live session, `media:setCapabilities` /
+`media:getCodecProbes` carry what the renderer measured about its own decoders, and
+`media:getPlaybackDiagnostics` returns the per-attempt telemetry. There is deliberately **no**
+channel that hands back an unclassified playback URL.
 
 Fallible handlers return an **envelope**, `{ ok: boolean; error?: string; …payload }`,
 instead of rejecting. `main.ts` has a `fail()` helper for this. A transport failure must
@@ -238,7 +259,10 @@ not a layering mistake.
 | `searchHistory.ts` | Past search *queries* (not results — a cached result set goes stale silently), stored via the datastore so backups carry it. |
 | `sourceCache.ts` | Resolved sources, with expiry tracked **per source**: magnets never expire, provider links carry a deadline read from the URL (`Expires`/`exp`/JWT claim, case-insensitively) or a short TTL. A cache hit can be partially stale — good magnets beside dead links — and `read()` reports that split. |
 | `subtitleService.ts` | Online subtitle search via the keyless OpenSubtitles v3 Stremio addon, keyed by IMDb id. Converts SubRip to WebVTT, which is **not optional**: `<track>` rejects `.srt` silently. |
-| `mediaTranscoder.ts` | ffprobe/ffmpeg audio *and* video compatibility. See the codec section below — the fix for both the "no sound" bug and undecodable HEVC. |
+| `media/mediaInspector.ts` | ffprobe → `MediaMetadata`; transport and DRM classified from the manifest body, never the URL. |
+| `media/decisionEngine.ts` | Pure decision: metadata + host capability → `TransformationPlan`. Tested exhaustively; see the codec section. |
+| `media/playbackEngine.ts` | Inspect → decide → open, and the only way to obtain a URL to attach. Owns playback telemetry. |
+| `mediaTranscoder.ts` | Executes a plan as a live fragmented-MP4 stream on loopback, plus embedded-subtitle extraction. |
 | `metadataProvider.ts` | TVmaze + AniList. **Catalogue metadata only, never streams.** Its key output is the IMDb id, which indexers match on far better than free text. |
 | `cinemeta.ts` | Stremio Cinemeta metadata provider, prioritised in search. |
 | `pluginManager.ts` | `.cs3` repository discovery, plugin-list parsing (mirrors upstream `RepositoryManager.kt`), download + SHA-256 verification, Android-style install paths, then hands archives to the sidecar. Also owns the enable/disable cascade — see the extensions-screen section. |
@@ -285,13 +309,98 @@ so "the browser could not decode this file" was a growing dead end. Android does
 not have this problem — ExoPlayer hands the stream to the device's hardware
 decoders.
 
-`mediaTranscoder.ts` (was `audioTranscoder.ts`) probes with ffprobe and remuxes
-through ffmpeg to a loopback URL. Audio goes to AAC downmixed to stereo; video is
-**copied unless it genuinely cannot be decoded**, because copying is free and
-re-encoding is not. Verified end to end: an HEVC + AC-3 file comes back as H.264
-High/yuv420p + AAC stereo.
+#### The engine: inspect, decide, execute — in that order
 
-Two things about that path are load-bearing:
+Rebuilt 2026-08-16 against PRD-37 and PRD-38. It was one file that decided *and*
+executed, with the decision made from whatever happened to be known at the moment
+the `<video>` element failed. It is now four, and the split is the fix rather than
+tidying:
+
+| File | Role |
+|---|---|
+| `media/mediaInspector.ts` | ffprobe → `MediaMetadata`. Also classifies the transport (progressive / HLS / DASH) from the **manifest body**, and reads DRM out of it. |
+| `media/decisionEngine.ts` | Pure. `(metadata, transport, rendererCaps, hostEncoder) → TransformationPlan`. No I/O, no URLs, no clock. |
+| `mediaTranscoder.ts` | Executes a plan as a live fragmented-MP4 stream on loopback. Builds ffmpeg arguments and nothing else. |
+| `media/playbackEngine.ts` | Assembles them, caches capability records per URL, and owns the telemetry. |
+
+Shared types are in `src/types/media.ts` — `MediaMetadata`, `SourceCapabilityModel`,
+`TransformationPlan`, `PlaybackStrategyType`, `DrmConfiguration`.
+
+**The decision is pure so that it can be tested, and it is tested because the
+measurements behind it are expensive to reproduce.** Every row of the matrix came
+from a real 25 GB file behind a provider link that has since expired.
+`media/decisionEngine.test.mts` (35 cases) pins the decisions;
+`media/pipeline.test.mts` (13 cases) runs real ffmpeg over synthesised fixtures and
+asserts what comes *out* is 8-bit H.264 + stereo AAC. Both run under
+`bun run test:electron`, and the pipeline suite skips itself when ffmpeg is absent.
+
+**The ordering is the whole bug fix.** Playback used to be attached on mount while
+a probe ran beside it. Chromium's parser failed on an unsupported bitstream within
+~150 ms, its `error` handler fired with the probe still in flight, and the fallback
+therefore ran `-c:v copy` on video it knew nothing about — re-wrapping an
+undecodable HEVC bitstream into MP4 and failing a second time in exactly the same
+way, which is why the bug looked like it had no fix. `media:prepare` now returns
+the URL to attach and there is no other way to obtain one. **If you add a code path
+that assigns `video.src` from anything but a prepared response, you have
+reintroduced it.**
+
+Four invariants, from PRD-37 §4.2, and where each lives:
+
+| ID | Rule | Enforced in |
+|---|---|---|
+| INV-RACE-1 | Nothing is attached before inspection completes | `VideoPlayer` — no `?? streamUrl` fallback exists |
+| INV-RACE-2 | The gate is visible ("Inspecting media…") | `VideoPlayer`, `isInspecting` |
+| INV-RACE-3 | `-c:v copy` never runs on unverified codec info | `blindFallbackPlan` re-encodes |
+| INV-RACE-4 | Renderer capabilities registered before playback | `App.tsx` on mount → `media:setCapabilities` |
+
+**Nothing is decided from the URL.** The implementation this replaced searched the
+link for `hevc`, `x265` and `10bit`, which is a guess about a filename some scraper
+produced — wrong in both directions: releases mislabelled by whoever named them,
+and bare `?id=…` Drive links carrying 10-bit HEVC with nothing to match on. The
+same rule covers transports: an `.m3u8` served from a `.php` URL and an `.mpd`
+served as `application/octet-stream` are both routine, so the first 64 KB of the
+body classifies it (`#EXTM3U` / `<MPD`).
+
+Three things about the plan are load-bearing:
+
+- **The software 4K guard is the fix for the "plays for 3–5 seconds then freezes"
+  report, and it is arithmetic rather than a heuristic.** Measured on a 3840x2160
+  10-bit HEVC source: libx264 `veryfast` at native resolution encodes 11–13 FPS —
+  0.47x realtime — so Chromium drains the buffer it was handed in about three
+  seconds and buffers forever. The same encode at `scale=-2:1080` runs 26–28 FPS,
+  above realtime, and plays. So a software-only host downscales anything over
+  1080p; a host with a working GPU encoder keeps full resolution, and so does a
+  16-thread machine, which clears realtime at 4K without help.
+- **A track switch re-derives the plan, it does not re-index it.** Caught by
+  `pipeline.test.mts` rather than reasoned about: pointing a copy-the-audio plan at
+  a 6-channel AC-3 track makes ffmpeg refuse outright with `Cannot write moov atom
+  before AC3 packets`, because AC-3 in MP4 takes its extradata from the first
+  packet and a fragmented output writes its header before one exists. The
+  user-visible form is the worst kind — the viewer picks the Hindi dub and playback
+  stops, blamed on the source. `planForAudioTrack` is the only correct way to
+  change tracks.
+- **An unplayable default audio track is swapped only for one in the same
+  language.** PRD-38 measured Movies4u shipping three E-AC-3 5.1 tracks beside an
+  AAC stereo of the same film, and copying the AAC is free where transcoding the
+  E-AC-3 is not. Silently swapping an English default for a Hindi AAC track because
+  it was cheaper would be a far worse bug than a few percent of one CPU core.
+
+Two more, further from the hot path:
+
+- **`-allowed_extensions ALL`** is passed for HLS and DASH. `Hdmovie2` serves its
+  MPEG-TS segments from `.png` URLs to get past CDN filters, and ffmpeg's HLS
+  demuxer refuses unknown extensions by default. There is no way to enumerate what
+  a provider will pick next, so the extension allow-list is opened while the
+  protocol whitelist stays closed — that is the boundary that actually matters.
+- **DASH is remuxed by ffmpeg rather than played by dash.js.** Handed an `.mpd`
+  directly, Chromium reports `Unable to parse XML declaration` — an XML document
+  arriving at a binary demuxer. ffmpeg's `dash` demuxer reads it properly and the
+  output joins the same fragmented-MP4 path as everything else, which avoids a
+  second player library. The cost is honest and worth knowing: it collapses the
+  adaptive ladder to one rendition. A Widevine or ClearKey DASH stream is
+  *detected* and reported, not played — see below.
+
+Two things about the surrounding path are load-bearing:
 
 - **What is decodable is measured in the renderer, not tabled in main.** Chromium's
   HEVC support varies by build and platform, so `App.tsx` runs `canPlayType` over
@@ -321,6 +430,26 @@ Things that will bite if you change it:
 - **The probe is also what makes multi-audio selection work.** A `<video>`
   element does not expose tracks it cannot decode, so without ffprobe the app
   cannot even tell the user a Japanese AC-3 dub exists.
+- **Embedded text subtitles are extracted on demand, and that is deliberate.**
+  `<track>` rejects SubRip and ASS silently, so a release carrying its own
+  forced-narrative track had none in the app — and the online search cannot help
+  an extension-sourced film with no IMDb id. Extraction reads the *whole* file,
+  because subtitle packets are interleaved through it, so a 25 GB remote MKV
+  cannot be subtitled quickly. It runs when the viewer picks the track, is bounded
+  at three minutes, and is cached. Bitmap tracks (PGS, DVB, VOBSUB) are listed as
+  present and never offered: an empty WebVTT named "English" reads as broken
+  subtitles rather than absent ones.
+
+**DRM is classified, and the classification is the point.** HLS AES-128 and
+SAMPLE-AES are *not* DRM as far as this engine is concerned — hls.js fetches the
+key over HTTP and decrypts in JavaScript, and routing those to an EME path they do
+not need would break streams that work today. ClearKey, Widevine and PlayReady need
+a CDM, so they are marked `requiresEmeDecryption` and FFmpeg is bypassed entirely:
+it holds no keys, so probing one spends twenty seconds on encrypted noise and
+remuxing one produces an unplayable file with a codec error about content it never
+decrypted. **What is not built:** Widevine CDM discovery/loading and dash.js. Such a
+stream is detected and reported by name instead of failing as a corrupt file, which
+is the honest state, not the finished one.
 
 Two behaviours in `torrentEngine.ts` are load-bearing and easy to break:
 **file selection inside season packs** (deselect all, select one, or swarm bandwidth is
@@ -977,6 +1106,21 @@ are covered: bare URI lines and quoted `URI="…"` attributes (`EXT-X-KEY`,
 URL so a playlist reached via redirect still resolves correctly.
 
 Bound to loopback only: it forwards arbitrary URLs with caller-supplied headers.
+
+**A loopback URL is returned from `wrap` untouched.** Everything that serves media
+locally — the torrent engine, this proxy, the transcoder — hands back
+`http://127.0.0.1:…`, which matches the scheme test. Without the guard the
+compatibility engine wraps a torrent stream in a second proxy hop that copies every
+byte for nothing, and re-wrapping this proxy's own output builds a chain that grows
+by one hop per call. There is nothing to gain either way: header injection exists to
+satisfy a third-party CDN's hotlink check, and our own servers set what they need.
+
+**A source that answers 4xx is failed over immediately, not converted.** Expired
+signed URLs from Cloudflare Workers and Googleusercontent are the routine case, and
+opening ffmpeg on one costs its startup plus the wait for the element to give up
+before the next mirror gets a turn. `PlaybackEngine.prepare` returns the failure as
+soon as `describeUnreadableSource` reports it dead, and the player asks the session
+for the next candidate.
 
 ### Diagnosability: a message is not a report
 

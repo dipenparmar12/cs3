@@ -207,6 +207,34 @@ export function selectAudioTrack(audio: AudioStreamMetadata[]): AudioStreamMetad
   return sameLanguage ?? preferred;
 }
 
+/**
+ * Re-derives the audio half of a plan for a different track.
+ *
+ * A plan is built for the track it selected, and switching to another one is not
+ * a matter of changing an index: the new track may need transcoding where the
+ * old one was copied. Caught by the pipeline test rather than reasoned about —
+ * switching to a 6-channel AC-3 track under a plan that copied stereo AAC made
+ * ffmpeg refuse outright with `Cannot write moov atom before AC3 packets`,
+ * because AC-3 in MP4 takes its extradata from the first packet and the
+ * fragmented output writes its header before one exists.
+ *
+ * The user-visible form of that bug is the worst kind: the viewer picks the
+ * Hindi dub and playback stops, with the failure attributed to the source.
+ */
+export function planForAudioTrack(
+  plan: TransformationPlan,
+  track: AudioStreamMetadata | undefined
+): TransformationPlan {
+  if (!track) return { ...plan, selectedAudioIndex: -1, audioAction: 'none' };
+  const playable = track.playable && track.channels <= MAX_DIRECT_CHANNELS;
+  return {
+    ...plan,
+    selectedAudioIndex: track.index,
+    audioAction: playable ? 'copy' : 'transcode',
+    targetAudioCodec: playable ? undefined : 'aac',
+  };
+}
+
 function describeResolution(width: number, height: number): string {
   if (!width || !height) return 'unknown resolution';
   return `${width}x${height}`;

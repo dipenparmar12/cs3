@@ -22,7 +22,12 @@ import { PlaybackSessionManager } from './playbackSession';
 import { SearchSuggestionService } from './searchSuggestions';
 import { SearchHistoryStore } from './searchHistory';
 import { SubtitleService } from './subtitleService';
-import { MediaTranscoder, VIDEO_CODEC_PROBES, type RendererCapabilities } from './mediaTranscoder';
+import { MediaTranscoder, VIDEO_CODEC_PROBES } from './mediaTranscoder';
+import { PlaybackEngine } from './media/playbackEngine';
+import type {
+  PlaybackStreamRequest,
+  RendererCapabilities,
+} from '../src/types/media';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { BootstrapService } from './cs3/bootstrap';
@@ -129,6 +134,37 @@ const resilientFetch = new ResilientFetch({
   diagnostics,
 });
 setHttpFetch((input, init) => resilientFetch.fetch(input, init));
+
+/**
+ * The Universal Media Compatibility Engine (PRD-37).
+ *
+ * Constructed here rather than beside the transcoder because it needs
+ * `resilientFetch` to sniff manifests: an `.m3u8` served from a `.php` URL and an
+ * `.mpd` served as `application/octet-stream` are both routine, and the only
+ * reliable classifier is the first few bytes of the body.
+ */
+const playbackEngine = new PlaybackEngine({
+  proxy: contentService.getProxy(),
+  transcoder: mediaTranscoder,
+  fetchText: async (url, bytes) => {
+    try {
+      const response = await resilientFetch.fetch(
+        url,
+        { headers: { Range: `bytes=0-${bytes - 1}` }, signal: AbortSignal.timeout(12_000) },
+        { operation: 'manifest-sniff' }
+      );
+      if (!response.ok && response.status !== 206) return null;
+      const text = await response.text();
+      return text.slice(0, bytes);
+    } catch {
+      // A manifest that cannot be read is classified by its URL instead, which
+      // is what happened before this existed and is still a usable answer.
+      return null;
+    }
+  },
+  describeUnreadable: (url) => describeUnreadableSource(url),
+  diagnostics,
+});
 
 /**
  * The last line of defence for the main process.
@@ -1316,7 +1352,8 @@ ipcMain.handle('playback:stop', async (_, sessionId: string, keepFiles?: boolean
  * strings live beside the codec table they correct.
  */
 ipcMain.handle('media:setCapabilities', async (_, capabilities: RendererCapabilities) => {
-  mediaTranscoder.setCapabilities(capabilities);
+  // INV-RACE-4: registered during bootstrap, before any playback session opens.
+  playbackEngine.setCapabilities(capabilities);
   return { ok: true };
 });
 
@@ -1430,71 +1467,59 @@ async function describeUnreadableSource(url: string): Promise<{
   }
 }
 
-ipcMain.handle('media:probe', async (_, url: string) => {
-  try {
-    const wrappedUrl = await contentService.getProxy().wrap(url);
-    if (!mediaTranscoder.isAvailable()) {
-      return {
-        ok: false,
-        probe: null,
-        error:
-          'Media components are not installed, so audio tracks cannot be inspected. ' +
-          'Install them from Settings to enable audio for all formats.',
-        needsComponents: true,
-      };
-    }
-    const probe = await mediaTranscoder.probe(wrappedUrl);
-    if (probe) return { ok: true, probe, needsComponents: false, failure: null };
-
-    /**
-     * A probe that returns nothing has not said why, and the two reasons need
-     * different responses from the viewer.
-     *
-     * A dead link is one click — try another source. An undecodable codec is
-     * not, and may be worth an external player. The player was reporting both
-     * as "unsupported codec, or the source may be dead", which is two guesses
-     * where one HTTP request gives the answer: a reported link turned out to be
-     * a plain 404, and nothing on screen said so.
-     */
-    const failure = await describeUnreadableSource(wrappedUrl);
-    diagnostics.record({
-      level: 'error',
-      stage: 'playback',
-      url,
-      message: failure.reason,
-      detail: failure.status ? `HTTP ${failure.status}` : undefined,
-    });
-    return { ok: true, probe: null, needsComponents: false, failure };
-  } catch (error) {
-    return { ...fail(error), probe: null, needsComponents: false, failure: null };
-  }
-});
-
+/**
+ * Classifies a source without starting anything.
+ *
+ * Used by the detail screen and by anything that wants to say what a source *is*
+ * before committing to it — AC-COMPAT-10, which asks the UI to distinguish
+ * downloadable from directly playable. A 25 GB HEVC 10-bit MKV downloads at full
+ * speed and decodes nothing, and conflating the two is the root of PRD-37 §2.
+ */
 ipcMain.handle(
-  'media:openTranscode',
-  async (_, url: string, audioIndex: number, transcodeVideo?: boolean, transcodeAudio?: boolean) => {
+  'media:inspect',
+  async (_, request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'refresh'>) => {
     try {
-      const wrappedUrl = await contentService.getProxy().wrap(url);
-      const streamUrl = await mediaTranscoder.createSession(
-        wrappedUrl,
-        audioIndex,
-        Boolean(transcodeVideo),
-        transcodeAudio !== false
-      );
-      if (!streamUrl) {
-        return { ok: false, url: null, error: 'Media components are not installed.' };
-      }
-      return { ok: true, url: streamUrl };
+      return { ok: true, capability: await playbackEngine.inspect(request) };
     } catch (error) {
-      return { ...fail(error), url: null };
+      return { ...fail(error), capability: null };
     }
   }
 );
 
-ipcMain.handle('media:closeTranscode', async (_, token: string) => {
-  mediaTranscoder.closeSession(token);
+/**
+ * Inspect, decide, open — and only then hand back a URL to attach.
+ *
+ * This replaces a probe that ran *beside* playback. The renderer used to assign
+ * `video.src` on mount and start an inspection in parallel; Chromium's parser
+ * failed on an unsupported bitstream within ~150 ms, its `error` handler fired
+ * while the probe was still in flight, and the fallback therefore ran `-c:v copy`
+ * on video it knew nothing about — re-wrapping an undecodable HEVC stream into
+ * MP4 and failing identically a second time. There is no longer a code path that
+ * attaches an unclassified URL.
+ */
+ipcMain.handle('media:prepare', async (_, request: PlaybackStreamRequest) => {
+  try {
+    return await playbackEngine.prepare(request);
+  } catch (error) {
+    return { ...fail(error), playbackUrl: request?.url ?? '', sessionId: '', subtitles: [] };
+  }
+});
+
+ipcMain.handle(
+  'media:switchAudio',
+  async (_, sessionId: string, audioIndex: number, positionSeconds: number) =>
+    playbackEngine.switchAudio(sessionId, audioIndex, positionSeconds)
+);
+
+ipcMain.handle('media:closeStream', async (_, sessionId: string) => {
+  playbackEngine.close(sessionId);
   return { ok: true };
 });
+
+ipcMain.handle('media:getPlaybackDiagnostics', async (_, sessionId?: string) => ({
+  ok: true,
+  events: playbackEngine.getDiagnostics(sessionId),
+}));
 
 ipcMain.handle('sources:getCacheStats', async () => contentService.getCache().stats());
 

@@ -18,7 +18,7 @@ import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
 import { SubtitlePanel } from './player/SubtitlePanel';
 import { PlayerDownloadPanel } from './player/PlayerDownloadPanel';
-import type { MediaProbe, ProbeFailure } from '../../electron/mediaTranscoder';
+import type { PlaybackStreamResponse, SourceCapabilityModel } from '../types/media';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
@@ -163,6 +163,19 @@ const CONTROLS_IDLE_MS = 3_000;
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const SKIP_SECONDS = 10;
 
+/**
+ * Points a conversion URL at a timestamp, replacing any it already carries.
+ *
+ * A live fragmented MP4 has no index, so seeking is a re-request with `?t=`. The
+ * URL therefore already has one after any seek or audio-track switch, and naive
+ * concatenation produces `…?t=5?t=90`, which parses as `t=5` — so the second seek
+ * silently jumps back to where the first one went.
+ */
+function atTime(url: string, seconds: number): string {
+  const [base] = url.split('?');
+  return seconds > 0 ? `${base}?t=${Math.floor(seconds)}` : base;
+}
+
 /** Sentinel for HLS automatic level selection, which hls.js represents as -1. */
 const AUTO_QUALITY = -1;
 
@@ -209,6 +222,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [duration, setDuration] = useState(0);
   const [buffered, setBuffered] = useState(0);
   const [volume, setVolume] = useState(1);
+  /** Current volume/mute, readable from effects that must not depend on them. */
+  const audioSettings = useRef({ volume: 1, muted: false });
   const [isMuted, setIsMuted] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -455,32 +470,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [activeAudioTrack, setActiveAudioTrack] = useState<string | number>('default');
 
   /**
-   * Audio compatibility state.
+   * The prepared stream, and the gate that stops playback racing inspection.
    *
-   * Chromium ships no AC-3, E-AC-3 or DTS decoder, and the failure is silent —
-   * the container opens, video decodes, and the audio track is dropped with no
-   * error. Measured on this build: an H.264 + AC-3 file decodes 65 KB of video
-   * and exactly 0 bytes of audio. So the stream is probed up front and remuxed
-   * through ffmpeg when its audio cannot be played.
+   * Nothing is attached to the `<video>` element until this exists (INV-RACE-1).
+   * That ordering is the whole fix for PRD-37 §4.1: the element used to receive
+   * the raw URL on mount while a probe ran beside it, Chromium's parser failed
+   * on an unsupported bitstream within ~150 ms, and its `error` handler fired
+   * with `needsVideoTranscode` still `false` because the probe had not returned
+   * — so the fallback stream-copied an undecodable HEVC bitstream into MP4 and
+   * failed a second time in exactly the same way.
+   *
+   * `null` means "still inspecting", which the overlay says out loud rather than
+   * showing a frozen black frame.
    */
-  const [audioProbe, setAudioProbe] = useState<MediaProbe | null>(null);
+  const [prepared, setPrepared] = useState<PlaybackStreamResponse | null>(null);
   /**
-   * The probe, readable from the `error` listener.
+   * The prepared stream, readable from the `error` listener.
    *
-   * That listener is attached once per stream and would otherwise close over
-   * whatever the probe was at attach time — which is always `null`, because the
-   * probe finishes later than the element starts loading.
+   * That listener is attached once and would otherwise close over whatever the
+   * state was at attach time.
    */
-  const audioProbeRef = useRef<MediaProbe | null>(null);
-  /**
-   * Why the probe came back empty, when it did.
-   *
-   * Separates "this link is a 404" from "this format cannot be decoded". They
-   * were being reported as one sentence offering both, and only one of them is
-   * worth opening another player for.
-   */
-  const [probeFailure, setProbeFailure] = useState<ProbeFailure | null>(null);
-  const probeFailureRef = useRef<ProbeFailure | null>(null);
+  const preparedRef = useRef<PlaybackStreamResponse | null>(null);
+  /** What the engine decided, for the track list, the messages and the report. */
+  const capability: SourceCapabilityModel | null = prepared?.capability ?? null;
+  const probeFailure = capability?.failure ?? null;
+  const probeFailureRef = useRef<typeof probeFailure>(null);
   /**
    * Asks for the next source, at most once per stream.
    *
@@ -507,8 +521,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const forceTranscodeRef = useRef<(() => void) | null>(null);
   const forcedFor = useRef<string | null>(null);
-  const [transcode, setTranscode] = useState<{ url: string; token: string } | null>(null);
-  const [transcodeOffset, setTranscodeOffset] = useState(0);
+  /**
+   * Where in the film the current ffmpeg process was started.
+   *
+   * A live fragmented MP4 has no index, so `currentTime` counts from the seek
+   * point rather than from the start of the film. Every position the UI shows or
+   * saves is this plus the element's own clock.
+   */
+  const [playbackOffset, setPlaybackOffset] = useState(0);
   const [audioNeedsComponents, setAudioNeedsComponents] = useState(false);
   const [selectedAudioIndex, setSelectedAudioIndex] = useState(0);
 
@@ -561,19 +581,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !streamUrl) return;
+    // INV-RACE-1: no source is attached until the engine has classified it.
+    // There is deliberately no `?? streamUrl` fallback here — that expression is
+    // precisely what attached unclassified URLs and created the race.
+    if (!video || !streamUrl || !prepared?.ok || !prepared.playbackUrl) return;
 
     setError(null);
     setQualities([]);
     setQuality(AUTO_QUALITY);
     let hls: Hls | null = null;
 
-    const isHls = /\.m3u8(\?|$)/i.test(streamUrl) || mimeType === 'application/x-mpegURL';
+    const playbackUrl = prepared.playbackUrl;
+    // Decided by the engine from the manifest body, not by matching `.m3u8` on
+    // the URL: providers serve playlists from `.php` and from URLs with no
+    // extension at all, and an HLS ladder carrying HEVC is routed to ffmpeg
+    // instead because hls.js cannot invent decoders either.
+    const isHls = prepared.capability.requiredStrategy === 'HLS_NATIVE';
 
     if (isHls && Hls.isSupported()) {
       hls = new Hls({ enableWorker: true, lowLatencyMode: true });
       hlsRef.current = hls;
-      hls.loadSource(streamUrl);
+      hls.loadSource(playbackUrl);
       hls.attachMedia(video);
 
       // Renditions are only known once the manifest is parsed, so the quality
@@ -592,13 +620,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (data.fatal) setError(`Playback error: ${data.details}`);
       });
     } else {
-      // When the audio needed remuxing, the loopback URL is what plays; the
-      // original is left untouched and is still what everything else refers to.
-      video.src = transcode?.url ?? streamUrl;
+      // Either the source itself (DIRECT) or the conversion's loopback URL. The
+      // original `streamUrl` is left untouched and is still what everything else
+      // — downloads, the external player, the error report — refers to.
+      video.src = playbackUrl;
     }
 
-    video.volume = volume;
-    video.muted = isMuted;
+    video.volume = audioSettings.current.volume;
+    video.muted = audioSettings.current.muted;
 
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -615,8 +644,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video
       .play()
       .then(() => {
-        video.volume = volume;
-        video.muted = isMuted;
+        video.volume = audioSettings.current.volume;
+        video.muted = audioSettings.current.muted;
         setIsPlaying(true);
 
         // Record successful playback event in history
@@ -665,7 +694,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.removeAttribute('src');
       video.load();
     };
-  }, [streamUrl, mimeType, volume, isMuted, transcode?.url]);
+    /**
+     * Volume is deliberately **not** a dependency.
+     *
+     * This effect tears the element's `src` down in its cleanup, so listing it
+     * meant every movement of the volume slider detached the source, called
+     * `load()` and restarted playback from zero — and on a converted stream, killed
+     * the ffmpeg process and restarted the encode. Volume is applied by its own
+     * effect below, which is where it belongs; the reads above are only the
+     * initial value for a freshly attached element, taken from a ref so they
+     * cannot go stale.
+     */
+  }, [streamUrl, prepared]);
 
   useEffect(() => {
     const hls = hlsRef.current;
@@ -762,9 +802,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video) return;
 
     const onMediaReady = () => {
-      // Re-assert volume & mute settings on video load to prevent muted autoplay
-      video.volume = volume;
-      video.muted = isMuted;
+      // Re-assert volume & mute on load, or autoplay policy can leave the element
+      // muted after a source change. Read from the ref for the same reason the
+      // attach effect does: depending on them would rebuild these listeners on
+      // every movement of the volume slider.
+      video.volume = audioSettings.current.volume;
+      video.muted = audioSettings.current.muted;
       detectAudioTracks();
     };
 
@@ -801,7 +844,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         } catch {}
       }
     };
-  }, [streamUrl, volume, isMuted, detectAudioTracks]);
+  }, [streamUrl, detectAudioTracks]);
 
   // --- torrent stats -------------------------------------------------------
 
@@ -837,12 +880,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Read inside listeners registered once, so they must not close over state.
   const offsetRef = useRef(0);
   const probedDurationRef = useRef<number | undefined>(undefined);
+  /** A converted stream is the only one whose clock starts at the seek point. */
+  const isConverted = Boolean(prepared?.sessionId);
   useEffect(() => {
-    offsetRef.current = transcode ? transcodeOffset : 0;
-  }, [transcode, transcodeOffset]);
+    offsetRef.current = isConverted ? playbackOffset : 0;
+  }, [isConverted, playbackOffset]);
   useEffect(() => {
-    probedDurationRef.current = transcode ? audioProbe?.durationSeconds : undefined;
-  }, [transcode, audioProbe]);
+    // ffmpeg reports the remaining duration from the seek point, not the whole
+    // file; the inspection knows the real length.
+    probedDurationRef.current = isConverted
+      ? capability?.metadata?.durationSeconds
+      : undefined;
+  }, [isConverted, capability]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -882,18 +931,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         skipRef.current?.(failure.reason);
         return;
       }
-      const codec = audioProbeRef.current?.videoCodec;
-      const convertible = Boolean(audioProbeRef.current?.needsVideoTranscode);
-      if (codec && convertible) {
-        setError(
-          `This file is ${codec.toUpperCase()}, which this build cannot decode directly. ` +
-            `Converting it now — if it does not start shortly, install the media components ` +
-            `in Settings → Advanced, or try another source.`
-        );
-        return;
-      }
+      const model = preparedRef.current?.capability;
+      const codec = model?.metadata?.video?.codec;
+      const depth = model?.metadata?.video?.bitDepth ?? 8;
       const message = codec
-        ? `The player could not decode this ${codec.toUpperCase()} stream.`
+        ? `The player could not decode this ${codec.toUpperCase()}${
+            depth > 8 ? ` ${depth}-bit` : ''
+          } stream.`
         : 'The player could not decode this file.';
 
       // Convert first, abandon second. See `forceTranscodeRef`.
@@ -1007,26 +1051,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (!video) return;
       const target = Math.max(0, time);
 
-      if (transcode) {
-        setTranscodeOffset(target);
+      if (isConverted && prepared) {
+        setPlaybackOffset(target);
         const wasPlaying = !video.paused;
-        video.src = `${transcode.url}?t=${Math.floor(target)}`;
+        video.src = atTime(prepared.playbackUrl, target);
         video.load();
         if (wasPlaying) void video.play().catch(() => undefined);
         return;
       }
       video.currentTime = target;
     },
-    [transcode]
+    [isConverted, prepared]
   );
 
   const seekBy = useCallback(
     (delta: number) => {
       const video = videoRef.current;
       if (!video) return;
-      seekTo((transcode ? transcodeOffset : 0) + video.currentTime + delta);
+      seekTo((isConverted ? playbackOffset : 0) + video.currentTime + delta);
     },
-    [seekTo, transcode, transcodeOffset]
+    [seekTo, isConverted, playbackOffset]
   );
 
   const toggleFullscreen = useCallback(async () => {
@@ -1101,6 +1145,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   ]);
 
   useEffect(() => {
+    // Also the single place the ref is kept current, so a newly attached element
+    // starts at the volume the viewer last chose rather than at 1.0.
+    audioSettings.current = { volume, muted: isMuted };
     const video = videoRef.current;
     if (!video) return;
     video.volume = volume;
@@ -1257,6 +1304,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const isResolving = Boolean(sourceSession && sourceSession.phase !== 'playing');
 
+  /**
+   * True between having a URL and knowing what is inside it.
+   *
+   * Ranked below `isResolving`: a session that has not produced a source yet has
+   * nothing to inspect, and saying "inspecting media" over a running search
+   * would describe the wrong step.
+   */
+  const isInspecting = Boolean(streamUrl) && !prepared && !isResolving && !switchingTo;
+
+  /**
+   * Whether to say what the engine is doing to this stream.
+   *
+   * Only while nothing is on screen yet: once frames are decoding the viewer can
+   * see it working, and a caption explaining a remux over a playing film is
+   * noise.
+   */
+  const showStrategyNote =
+    Boolean(prepared?.sessionId) && !error && currentTime === 0 && !isResolving;
+
   // A switch that has landed clears the row spinner; comparing against the
   // session's active hash avoids leaving it spinning when the start failed.
   useEffect(() => {
@@ -1269,80 +1335,78 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const progressPercent = duration ? (currentTime / duration) * 100 : 0;
 
   /**
-   * Probes the stream's audio and remuxes it when Chromium cannot decode it.
+   * Inspects the stream and opens whatever it needs, before anything plays.
    *
-   * Runs on every new stream. HLS is excluded: hls.js handles its own
-   * demuxing and its segments are already in a browser-friendly codec set.
+   * One call, one answer, and the answer is what gets attached. The version this
+   * replaced probed *beside* playback and had four ways to lose the race; the
+   * ordering is now structural rather than something every code path has to
+   * remember.
    */
   useEffect(() => {
     if (!streamUrl) return;
-    const isHls = /\.m3u8(\?|$)/i.test(streamUrl) || mimeType === 'application/x-mpegURL';
-    if (isHls) return;
 
     let cancelled = false;
-    let openedToken: string | null = null;
+    let openedSession: string | null = null;
+    setPrepared(null);
 
-    (async () => {
-      const response = await window.cloudstream?.probeMedia(streamUrl);
+    void (async () => {
+      const response = await window.cloudstream?.preparePlaybackStream({
+        url: streamUrl,
+        isM3u8: mimeType === 'application/x-mpegURL',
+        provider: providerProvenance?.provider,
+      });
       if (cancelled || !response) return;
 
       setAudioNeedsComponents(Boolean(response.needsComponents));
-      // A probe that produced nothing now says why, and the source's own HTTP
-      // status is the difference between "expired link" and "odd codec".
-      if (response.failure) setProbeFailure(response.failure);
-      if (!response.ok || !response.probe) return;
+      if (response.sessionId) openedSession = response.sessionId;
 
-      setAudioProbe(response.probe);
-      const preferred = response.probe.audio.find((a) => a.isDefault) ?? response.probe.audio[0];
-      if (preferred) setSelectedAudioIndex(preferred.index);
+      const preferred = response.capability?.transformationPlan.selectedAudioIndex ?? -1;
+      if (preferred >= 0) setSelectedAudioIndex(preferred);
 
-      if (!response.probe.needsTranscode) return;
+      setPlaybackOffset(0);
+      setPrepared(response);
+      if (!response.ok && response.error) setError(response.error);
 
       /**
-       * Video is only re-encoded when the probe says it cannot be decoded.
+       * A source that is gone gets the next mirror, not a conversion attempt.
        *
-       * The audio case copies the video and is nearly free; this one is not, so
-       * the flag is passed through rather than transcoding both whenever either
-       * needs it.
+       * Waiting for ffmpeg to rediscover a 404 costs several seconds on a link
+       * that no decoder could have helped with, and the source list usually has
+       * a live mirror one row down.
        */
-      const session = await window.cloudstream?.openMediaTranscode(
-        streamUrl,
-        preferred?.index ?? 0,
-        response.probe.needsVideoTranscode,
-        // Container-only problems copy the audio; re-encoding a perfectly good
-        // track to reach a different wrapper is work for nothing.
-        response.probe.needsAudioTranscode
-      );
-      if (cancelled || !session?.ok || !session.url) return;
-
-      openedToken = session.url.split('/').pop() ?? null;
-      setTranscodeOffset(0);
-      setTranscode({ url: session.url, token: openedToken ?? '' });
+      if (response.capability?.failure?.dead) {
+        skipRef.current?.(response.capability.failure.reason);
+      }
     })();
 
     return () => {
       cancelled = true;
       // The ffmpeg process outlives the component otherwise.
-      if (openedToken) void window.cloudstream?.closeMediaTranscode(openedToken);
+      if (openedSession) void window.cloudstream?.closePlaybackStream(openedSession);
     };
-  }, [streamUrl, mimeType]);
+  }, [streamUrl, mimeType, providerProvenance?.provider]);
 
   useEffect(() => {
-    audioProbeRef.current = audioProbe;
-  }, [audioProbe]);
+    preparedRef.current = prepared;
+  }, [prepared]);
 
   useEffect(() => {
     probeFailureRef.current = probeFailure;
   }, [probeFailure]);
 
   /**
-   * The forced conversion pass.
+   * The forced conversion pass — the last rung of the failover ladder.
    *
-   * Deliberately ignores the probe: it runs only after the probe's verdict has
-   * already proved wrong. Video is copied unless the probe positively said it
-   * could not be decoded — the common case is a container problem, where a copy
-   * is nearly free, and re-encoding video on a guess would burn a CPU for
-   * nothing.
+   * Runs only when the engine's verdict has already been disproved: it said this
+   * would play, the element disagreed. So the decision is re-made with `force`,
+   * which re-encodes unconditionally rather than trusting an inspection that has
+   * just been shown to be wrong about this file.
+   *
+   * The implementation this replaces guessed here from the URL — searching the
+   * link for `hevc`, `x265` and `10bit` — which is a guess about a filename some
+   * scraper produced, and it was wrong in both directions: releases mislabelled
+   * by whoever named them, and bare `?id=…` Drive URLs carrying 10-bit HEVC with
+   * nothing in them to match on.
    */
   useEffect(() => {
     forceTranscodeRef.current = () => {
@@ -1350,48 +1414,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       forcedFor.current = streamUrl;
 
       void (async () => {
-        const previous = transcode?.token;
-        const at = transcodeOffset + (videoRef.current?.currentTime ?? 0);
+        const previous = prepared?.sessionId;
+        const at = (isConverted ? playbackOffset : 0) + (videoRef.current?.currentTime ?? 0);
 
-        // Fetch probe if not available yet (resolves race condition when video errors before probe finishes)
-        let probe = audioProbeRef.current;
-        if (!probe) {
-          const res = await window.cloudstream?.probeMedia(streamUrl);
-          if (res?.ok && res.probe) {
-            probe = res.probe;
-            setAudioProbe(probe);
-          }
-        }
-
-        const urlLower = streamUrl.toLowerCase();
-        const isHevc = Boolean(
-          probe?.needsVideoTranscode ||
-            probe?.videoCodec === 'hevc' ||
-            probe?.videoCodec === 'h265' ||
-            urlLower.includes('hevc') ||
-            urlLower.includes('x265') ||
-            urlLower.includes('10bit')
-        );
-        const isAudioTranscode = probe ? probe.needsAudioTranscode : true;
-
-        const session = await window.cloudstream?.openMediaTranscode(
-          streamUrl,
-          selectedAudioIndex ?? 0,
-          isHevc,
-          isAudioTranscode
-        );
-        if (!session?.ok || !session.url) {
+        const response = await window.cloudstream?.preparePlaybackStream({
+          url: streamUrl,
+          isM3u8: mimeType === 'application/x-mpegURL',
+          provider: providerProvenance?.provider,
+          // The cached verdict is the one that was wrong; measure again and then
+          // override it anyway.
+          refresh: true,
+          force: true,
+        });
+        if (!response?.ok || !response.playbackUrl) {
           // Conversion is unavailable; the source has had its chance.
-          skipRef.current?.('This file could not be converted for playback.');
+          skipRef.current?.(
+            response?.error ?? 'This file could not be converted for playback.'
+          );
           return;
         }
-        if (previous) void window.cloudstream?.closeMediaTranscode(previous);
+        if (previous) void window.cloudstream?.closePlaybackStream(previous);
         setError(null);
-        setTranscodeOffset(at);
-        setTranscode({ url: session.url, token: session.url.split('/').pop() ?? '' });
+        setPlaybackOffset(at);
+        setPrepared({ ...response, playbackUrl: atTime(response.playbackUrl, at) });
       })();
     };
-  }, [streamUrl, transcode?.token, transcodeOffset, selectedAudioIndex]);
+  }, [streamUrl, mimeType, prepared, isConverted, playbackOffset, providerProvenance?.provider]);
 
   useEffect(() => {
     const skip = sourceSession?.onSourceUnplayable;
@@ -1406,64 +1454,76 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // A new stream invalidates everything learned about the previous one.
   useEffect(() => {
-    setAudioProbe(null);
-    setProbeFailure(null);
     forcedFor.current = null;
     skippedFor.current = null;
-    setTranscode(null);
-    setTranscodeOffset(0);
+    setPlaybackOffset(0);
     setAudioNeedsComponents(false);
   }, [streamUrl]);
 
   /**
-   * Switches audio track. On a remuxed stream this restarts ffmpeg mapping the
-   * chosen track, because the element only ever receives the one stereo track
-   * that was selected for it.
+   * Switches audio track, keeping the viewer's place.
+   *
+   * On a converted stream the element only ever receives the one track mapped
+   * for it, so this restarts ffmpeg with a different `-map` at the current
+   * position. On a direct stream there is nothing to restart — the element's own
+   * `audioTracks` handles it, which the effect above already wires up.
    */
   const selectProbedAudio = useCallback(
     async (index: number) => {
       setSelectedAudioIndex(index);
-      if (!transcode) return;
+      if (!prepared?.sessionId) return;
 
       const video = videoRef.current;
-      const at = transcodeOffset + (video?.currentTime ?? 0);
-      const session = await window.cloudstream?.openMediaTranscode(
-        streamUrl,
-        index,
-        audioProbe?.needsVideoTranscode ?? false,
-        audioProbe?.needsAudioTranscode ?? true
-      );
-      if (!session?.ok || !session.url) return;
+      const at = playbackOffset + (video?.currentTime ?? 0);
+      const result = await window.cloudstream?.switchAudioTrack(prepared.sessionId, index, at);
+      if (!result?.ok || !result.url) return;
 
-      if (transcode.token) void window.cloudstream?.closeMediaTranscode(transcode.token);
-      setTranscodeOffset(at);
-      setTranscode({ url: session.url, token: session.url.split('/').pop() ?? '' });
+      setPlaybackOffset(at);
+      setPrepared({ ...prepared, playbackUrl: result.url });
     },
-    [transcode, transcodeOffset, streamUrl, audioProbe]
+    [prepared, playbackOffset]
   );
 
-  /** Audio tracks as ffprobe reported them, labelled for the picker. */
+  /** Audio tracks as the inspection reported them, labelled for the picker. */
   const probedAudioTracks = useMemo(
     () =>
-      (audioProbe?.audio ?? []).map((track) => {
+      (capability?.metadata?.audio ?? []).map((track) => {
         const language = track.language && track.language !== 'und'
           ? track.language.toUpperCase()
           : null;
         const name = track.title || language || `Track ${track.index + 1}`;
+        const layout =
+          track.channels === 8 ? '7.1'
+          : track.channels === 6 ? '5.1'
+          : track.channels === 2 ? 'Stereo'
+          : track.channels === 1 ? 'Mono'
+          : undefined;
         const facts = [
           track.codec.toUpperCase(),
-          track.channels === 6 ? '5.1' : track.channels === 2 ? 'Stereo' : undefined,
+          layout,
           // Worth saying: it is why this track sounds different from the file.
-          track.playable ? undefined : 'converted',
+          track.playable && track.channels <= 2 ? undefined : 'converted',
         ].filter(Boolean);
         return { index: track.index, label: name, detail: facts.join(' · ') };
       }),
-    [audioProbe]
+    [capability]
   );
 
-  /** Subtitles shipped with the stream, plus any fetched from online search. */
+  /**
+   * Subtitles shipped with the stream, embedded inside it, and searched online.
+   *
+   * The embedded ones are new and matter most where the online search cannot
+   * help at all: an extension-sourced film with no IMDb id has nothing for
+   * OpenSubtitles to match on, while the release itself routinely carries its
+   * own forced-narrative track. `<track>` rejects SubRip and ASS silently, so
+   * these are served as WebVTT from loopback and extracted on first fetch.
+   */
   const allSubtitles = useMemo(() => {
-    const combined = [...subtitles, ...fetchedSubtitles];
+    const embedded = (prepared?.subtitles ?? []).map((track) => ({
+      name: track.label,
+      url: track.url,
+    }));
+    const combined = [...subtitles, ...embedded, ...fetchedSubtitles];
     const englishFirst = combined.sort((a, b) => {
       const aIsEnglish = /english|eng/i.test(a.name);
       const bIsEnglish = /english|eng/i.test(b.name);
@@ -1472,7 +1532,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       return 0;
     });
     return englishFirst;
-  }, [subtitles, fetchedSubtitles]);
+  }, [subtitles, fetchedSubtitles, prepared?.subtitles]);
 
   /**
    * Applies the selected subtitle by driving `TextTrack.mode` directly.
@@ -1681,7 +1741,37 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         />
       )}
 
-      {(isBuffering || error) && !switchingTo && !switchError && !isResolving && (
+      {/*
+        INV-RACE-2: the probe gate is visible.
+
+        Between "a source was chosen" and "it is safe to attach", nothing is
+        playing and nothing has failed — and a frozen black frame reads as both.
+        Inspection is 250 ms on a nearby CDN and a few seconds on a distant one,
+        which is exactly long enough for silence to look like a bug.
+      */}
+      {isInspecting && (
+        <div className="player__overlay">
+          <Loader2 className="spin" size={36} />
+          <p>Inspecting media…</p>
+          <span className="muted">
+            Checking the container and codecs so this plays first time.
+          </span>
+        </div>
+      )}
+
+      {/*
+        What the engine decided, when it decided to do work.
+
+        Silent conversion is indistinguishable from a slow stream, and this is
+        the difference between "nothing is happening" and "the audio is being
+        converted because Chromium has no Dolby decoder". It clears itself once
+        the picture is up.
+      */}
+      {showStrategyNote && capability && (
+        <div className="player__strategy-note">{capability.explanation}</div>
+      )}
+
+      {(isBuffering || error) && !switchingTo && !switchError && !isResolving && !isInspecting && (
         <div className="player__overlay">
           {error ? (
             <>
@@ -1708,9 +1798,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   context={{
                     title: episodeTitle ? `${title} — ${episodeTitle}` : title,
                     url: streamUrl,
-                    source: audioProbe?.videoCodec
-                      ? `video=${audioProbe.videoCodec}` +
-                        (audioProbe.audio[0]?.codec ? ` audio=${audioProbe.audio[0].codec}` : '')
+                    source: capability
+                      ? [
+                          `strategy=${capability.requiredStrategy}`,
+                          `container=${capability.metadata?.formatName ?? capability.transport}`,
+                          capability.metadata?.video
+                            ? `video=${capability.metadata.video.codec}/${capability.metadata.video.bitDepth}bit@${capability.metadata.video.width}x${capability.metadata.video.height}`
+                            : null,
+                          capability.metadata?.audio[0]
+                            ? `audio=${capability.metadata.audio[0].codec}/${capability.metadata.audio[0].channels}ch`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' ')
                       : undefined,
                     message: error ?? undefined,
                   }}
@@ -1757,12 +1857,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           control works, the video plays, and nothing says why. If the audio
           cannot be decoded and the components that would fix it are missing,
           say so on screen. */}
-      {audioNeedsComponents && audioProbe?.needsTranscode && (
+      {audioNeedsComponents && (
         <div className="player__audio-notice">
           <AlertTriangle size={14} />
           <span>
-            This file&rsquo;s audio uses a format Windows cannot play here. Install
-            the media components in Settings to enable it.
+            This stream needs conversion to play here, and the media components are
+            missing. Install them in Settings to enable Matroska, HEVC and Dolby audio.
           </span>
         </div>
       )}

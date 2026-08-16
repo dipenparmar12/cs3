@@ -1,4 +1,5 @@
 import type {
+  AudioStreamMetadata,
   EmbeddedSubtitleTrack,
   HostEncodeCapability,
   MediaTransport,
@@ -11,8 +12,13 @@ import type {
 } from '../../src/types/media';
 import type { MediaProxy } from '../mediaProxy';
 import type { MediaTranscoder } from '../mediaTranscoder';
-import { blindFallbackPlan, decideStrategy, isTextSubtitle } from './decisionEngine';
-import { MediaInspector, drmRequiresEme, transportFromUrl } from './mediaInspector';
+import {
+  blindFallbackPlan,
+  decideStrategy,
+  isTextSubtitle,
+  planForAudioTrack,
+} from './decisionEngine.ts';
+import { MediaInspector, drmRequiresEme, transportFromUrl } from './mediaInspector.ts';
 
 /**
  * The Universal Media Compatibility Engine (PRD-37), assembled.
@@ -75,9 +81,21 @@ export class PlaybackEngine {
   private host: HostEncodeCapability | null = null;
   /** Ring buffer of playback telemetry; see `PlaybackDiagnosticEvent`. */
   private events: PlaybackDiagnosticEvent[] = [];
+  /**
+   * The audio tracks each open session was built from.
+   *
+   * Held here rather than looked up from the capability cache, which is keyed by
+   * URL and evicted on a ten-minute TTL: a session outlives its cache entry on
+   * any film longer than that, and losing the tracks mid-playback would turn
+   * track switching into a no-op halfway through.
+   */
+  private sessionTracks = new Map<string, AudioStreamMetadata[]>();
   private nextSession = 1;
 
-  constructor(private deps: PlaybackEngineDeps) {
+  private deps: PlaybackEngineDeps;
+
+  constructor(deps: PlaybackEngineDeps) {
+    this.deps = deps;
     this.inspector = new MediaInspector(
       () => deps.transcoder.resolveFfprobe(),
       (url) => deps.fetchText(url, MANIFEST_SNIFF_BYTES)
@@ -311,6 +329,32 @@ export class PlaybackEngine {
       : capability.transformationPlan;
     const strategy = request.force ? 'FULL_TRANSCODE' : capability.requiredStrategy;
 
+    /**
+     * A dead link is reported now rather than discovered by ffmpeg.
+     *
+     * The source answered 404 or 403 to a one-byte range request, so there is
+     * nothing to convert and no decoder that would help. Opening a conversion
+     * anyway costs the ffmpeg startup, the pipe, and the wait for the element to
+     * give up — and PRD-38's acceptance criterion for the mirror ladder is that
+     * the next candidate starts within 1.5 seconds. Expired signed URLs from
+     * Cloudflare Workers and Googleusercontent are the routine case here, and
+     * the session above this one still holds the query that can regenerate one.
+     */
+    if (capability.failure?.dead) {
+      this.record(request, capability, strategy, startedAt, {
+        stage: 'proxy',
+        message: capability.failure.reason,
+      });
+      return {
+        ok: false,
+        error: capability.failure.reason,
+        playbackUrl: '',
+        sessionId: '',
+        capability,
+        subtitles: [],
+      };
+    }
+
     if (strategy === 'DIRECT' || strategy === 'HLS_NATIVE' || strategy === 'EME_NATIVE') {
       this.record(request, capability, strategy, startedAt);
       return {
@@ -361,6 +405,7 @@ export class PlaybackEngine {
     }
 
     const sessionId = streamUrl.split('/').pop() ?? '';
+    this.sessionTracks.set(sessionId, capability.metadata?.audio ?? []);
     this.record(request, capability, strategy, startedAt);
     return {
       ok: true,
@@ -416,22 +461,32 @@ export class PlaybackEngine {
     audioIndex: number,
     positionSeconds: number
   ): { ok: boolean; url?: string; error?: string } {
-    if (!this.deps.transcoder.setAudioIndex(sessionId, audioIndex)) {
-      return { ok: false, error: 'That playback session is no longer open.' };
-    }
-    const at = Math.max(0, Math.floor(positionSeconds));
-    return { ok: true, url: `${this.streamUrlFor(sessionId)}?t=${at}` };
-  }
+    const plan = this.deps.transcoder.planFor(sessionId);
+    if (!plan) return { ok: false, error: 'That playback session is no longer open.' };
 
-  private streamUrlFor(sessionId: string): string {
-    // Rebuilt from the subtitle URL rather than stored twice: both are served by
-    // the same server and drift between two copies of a port is a real bug class.
-    const subtitle = this.deps.transcoder.subtitleUrl(sessionId, 0) ?? '';
-    return subtitle.replace(/\/subtitle\/(\d+)\/\d+$/, '/media/$1');
+    /**
+     * The plan is re-derived, not just re-indexed.
+     *
+     * The new track may need transcoding where the old one was copied — picking
+     * a 6-channel AC-3 dub under a plan built for stereo AAC makes ffmpeg refuse
+     * to write the header at all. See `planForAudioTrack`.
+     */
+    const track = this.sessionTracks
+      .get(sessionId)
+      ?.find((candidate) => candidate.index === audioIndex);
+    this.deps.transcoder.updatePlan(sessionId, planForAudioTrack(plan, track));
+
+    const url = this.deps.transcoder.streamUrl(sessionId);
+    if (!url) return { ok: false, error: 'That playback session is no longer open.' };
+
+    const at = Math.max(0, Math.floor(positionSeconds));
+    return { ok: true, url: `${url}?t=${at}` };
   }
 
   public close(sessionId: string): void {
-    if (sessionId) this.deps.transcoder.closeSession(sessionId);
+    if (!sessionId) return;
+    this.sessionTracks.delete(sessionId);
+    this.deps.transcoder.closeSession(sessionId);
   }
 
   // --- telemetry -----------------------------------------------------------
