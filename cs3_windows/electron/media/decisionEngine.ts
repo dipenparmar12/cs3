@@ -27,7 +27,11 @@ import type {
 
 /** Codecs Chromium ships no decoder for. Measured with `canPlayType`, not looked up. */
 const UNSUPPORTED_AUDIO = new Set([
-  'ac3', 'eac3', 'ec-3', 'dts', 'dtshd', 'dca', 'truehd', 'mlp', 'pcm_bluray', 'pcm_dvd',
+  'ac3', 'eac3', 'ec-3', 'dts', 'dtshd', 'dca', 'dts-hd ma', 'dts-hd hra', 'dts:x', 'dts_express', 'truehd', 'mlp',
+  'pcm_bluray', 'pcm_dvd', 'pcm_s16le', 'pcm_s24le', 'pcm_s32le', 'pcm_s16be', 'pcm_s24be', 'pcm_f32le', 'pcm_f64le', 'pcm_u8', 'pcm_alaw', 'pcm_mulaw',
+  'wma', 'wmav1', 'wmav2', 'wmapro', 'wmalossless', 'wmavoice',
+  'cook', 'ra_144', 'ra_288', 'atrac3', 'atrac3p', 'sipr',
+  'mp2', 'mp1', 'ape', 'tta', 'wavpack', 'shorten', 'tak', 'amr_nb', 'amr_wb', 'speex', 'g729', 'g723_1', 'g726',
 ]);
 
 /**
@@ -39,9 +43,11 @@ const UNSUPPORTED_AUDIO = new Set([
  * corrected at runtime — some builds decode it through platform decoders.
  */
 const UNSUPPORTED_VIDEO = new Set([
-  'hevc', 'h265', 'mpeg2video', 'vc1', 'wmv1', 'wmv2', 'wmv3',
-  'msmpeg4v1', 'msmpeg4v2', 'msmpeg4v3', 'mpeg4', 'msvideo1',
-  'prores', 'dnxhd', 'cinepak', 'rv40', 'vp6f', 'flv1', 'theora',
+  'hevc', 'h265', 'mpeg2video', 'mpeg1video', 'vc1', 'wmv1', 'wmv2', 'wmv3', 'wvc1',
+  'msmpeg4v1', 'msmpeg4v2', 'msmpeg4v3', 'mpeg4', 'msvideo1', 'divx',
+  'prores', 'dnxhd', 'cinepak', 'rv10', 'rv20', 'rv30', 'rv40', 'vp6', 'vp6f', 'vp6a', 'vp7', 'flv1', 'theora',
+  'h263', 'h263p', 'h263i', 'svq1', 'svq3', 'indeo3', 'indeo4', 'indeo5', 'mjpeg', 'mjpegb', 'dvvideo',
+  'qtrle', 'rawvideo', 'vvc', 'h266',
 ]);
 
 /**
@@ -120,16 +126,17 @@ export function isTextSubtitle(codec: string): boolean {
 }
 
 export function isPlayableAudioCodec(codec: string): boolean {
-  return !UNSUPPORTED_AUDIO.has(codec.toLowerCase());
+  const c = codec.toLowerCase();
+  if (c.startsWith('adpcm_') || c.startsWith('pcm_')) return false;
+  return !UNSUPPORTED_AUDIO.has(c);
 }
 
 /**
- * Whether this build can decode this video stream **at this bit depth**.
+ * Whether this build can decode this video stream **at this bit depth and chroma format**.
  *
- * Bit depth is asked about separately because it is supported separately: a
- * build that decodes 8-bit HEVC Main answers "yes" to a plain HEVC probe and
- * then fails on Main 10. A measured 1280x536 HEVC `yuv420p10le` file was
- * therefore stream-copied into MP4 as "playable" and still would not play.
+ * Bit depth and chroma subsampling are validated strictly: Chromium's built-in
+ * H.264 engine only supports 8-bit YUV 4:2:0. High chroma subsampling (4:2:2, 4:4:4,
+ * RGB) and 10/12-bit profiles (Hi10P, Main 10) require hardware/transcoder mapping.
  *
  * Where the renderer has given no 10-bit-specific answer, the assumption is that
  * it cannot be played. Converting something that would have worked costs CPU;
@@ -142,6 +149,11 @@ export function canPlayVideo(
 ): boolean {
   if (!codec) return true;
   const name = codec.toLowerCase();
+
+  // High chroma subsampling (4:2:2, 4:4:4, RGB) is never decodable by Chromium's video pipeline
+  if (pixelFormat && (/422|444|gbr|rgb/i.test(pixelFormat))) {
+    return false;
+  }
 
   if (isTenBitOrDeeper(pixelFormat)) {
     return capabilities?.video?.[`${name}10`] === true;

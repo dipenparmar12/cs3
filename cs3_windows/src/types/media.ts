@@ -127,7 +127,7 @@ export interface TransformationPlan {
    * libx264 encodes 4K at 0.5x realtime, which stalls after the first buffer.
    */
   targetHeight?: number;
-  hardwareAccelerator?: 'nvenc' | 'qsv' | 'amf' | 'videotoolbox' | 'cpu';
+  hardwareAccelerator?: 'nvenc' | 'qsv' | 'amf' | 'mf' | 'videotoolbox' | 'cpu';
 
   audioAction: 'copy' | 'transcode' | 'none';
   targetAudioCodec?: 'aac';
@@ -193,7 +193,7 @@ export interface RendererCapabilities {
 export interface HostEncodeCapability {
   /** False when only libx264 is available, which is what triggers the guard. */
   hardware: boolean;
-  accelerator: 'nvenc' | 'qsv' | 'amf' | 'videotoolbox' | 'cpu';
+  accelerator: 'nvenc' | 'qsv' | 'amf' | 'mf' | 'videotoolbox' | 'cpu';
   logicalCores: number;
 }
 

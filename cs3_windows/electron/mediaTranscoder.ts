@@ -61,14 +61,15 @@ const ENCODER_CANDIDATES: VideoEncoder[] = [
   { name: 'h264_nvenc', args: ['-preset', 'p4', '-tune', 'll'], accelerator: 'nvenc' },
   { name: 'h264_qsv', args: ['-preset', 'fast'], accelerator: 'qsv' },
   { name: 'h264_amf', args: ['-quality', 'speed'], accelerator: 'amf' },
+  { name: 'h264_mf', args: [], accelerator: 'mf' },
   { name: 'h264_videotoolbox', args: [], accelerator: 'videotoolbox' },
   // Watched once and discarded: latency matters, file size does not.
-  { name: 'libx264', args: ['-preset', 'veryfast', '-crf', '22'], accelerator: 'cpu' },
+  { name: 'libx264', args: ['-preset', 'veryfast', '-tune', 'zerolatency', '-crf', '22'], accelerator: 'cpu' },
 ];
 
 const SOFTWARE_ENCODER: VideoEncoder = {
   name: 'libx264',
-  args: ['-preset', 'veryfast', '-crf', '22'],
+  args: ['-preset', 'veryfast', '-tune', 'zerolatency', '-crf', '22'],
   accelerator: 'cpu',
 };
 
@@ -338,7 +339,9 @@ export class MediaTranscoder {
        * has just asked for; 48 frames is about two.
        */
       videoArgs.push('-g', '48', '-keyint_min', '48');
-      if (encoder.accelerator === 'cpu') videoArgs.push('-threads', '0');
+      if (encoder.accelerator === 'cpu') {
+        videoArgs.push('-threads', '0', '-maxrate', '25M', '-bufsize', '50M');
+      }
     } else {
       videoArgs.push('-c:v', 'copy');
     }
@@ -375,7 +378,8 @@ export class MediaTranscoder {
       // Timestamps from a scraped stream are routinely broken; without this an
       // MPEG-TS remux produces "Application provided invalid, non monotonically
       // increasing dts" and drops frames.
-      '-fflags', '+genpts',
+      '-fflags', '+genpts+discardcorrupt',
+      '-avoid_negative_ts', 'make_zero',
       '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
       '-f', 'mp4',
       'pipe:1',

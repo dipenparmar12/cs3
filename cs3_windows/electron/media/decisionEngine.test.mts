@@ -31,6 +31,7 @@ import {
   canPlayContainer,
   canPlayVideo,
   decideStrategy,
+  isPlayableAudioCodec,
   isTenBitOrDeeper,
   selectAudioTrack,
 } from './decisionEngine.ts';
@@ -64,7 +65,7 @@ function audio(overrides: Partial<AudioStreamMetadata> = {}): AudioStreamMetadat
     channels: 2,
     isDefault: true,
     isForced: false,
-    playable: !['ac3', 'eac3', 'dts', 'truehd'].includes(codec),
+    playable: isPlayableAudioCodec(codec),
     ...overrides,
   };
 }
@@ -451,6 +452,42 @@ test('the blind fallback never copies video', () => {
   assert.equal(blindFallbackPlan(CPU).videoAction, 'downscale');
   assert.equal(blindFallbackPlan(CPU).targetHeight, 1080);
   assert.equal(blindFallbackPlan(GPU).audioAction, 'transcode');
+});
+
+// --- extended format & codec test suite ------------------------------------
+
+test('10-bit H.264 (Hi10P) and 4:2:2 chroma formats trigger video transcode', () => {
+  const hi10p = decide(media({ video: video({ codec: 'h264', pixelFormat: 'yuv420p10le' }) }));
+  assert.equal(hi10p.strategy, 'VIDEO_TRANSCODE');
+  assert.equal(hi10p.plan.targetVideoCodec, 'h264');
+
+  const chroma422 = decide(media({ video: video({ codec: 'h264', pixelFormat: 'yuv422p' }) }));
+  assert.equal(chroma422.strategy, 'VIDEO_TRANSCODE');
+});
+
+test('uncompressed PCM, WMA, ADPCM and RealAudio trigger audio transcode to AAC', () => {
+  const pcm = decide(media({ audio: [audio({ codec: 'pcm_s16le' })] }));
+  assert.equal(pcm.strategy, 'AUDIO_TRANSCODE');
+  assert.equal(pcm.plan.targetAudioCodec, 'aac');
+
+  const wma = decide(media({ audio: [audio({ codec: 'wmapro' })] }));
+  assert.equal(wma.strategy, 'AUDIO_TRANSCODE');
+  assert.equal(wma.plan.targetAudioCodec, 'aac');
+
+  const adpcm = decide(media({ audio: [audio({ codec: 'adpcm_ms' })] }));
+  assert.equal(adpcm.strategy, 'AUDIO_TRANSCODE');
+  assert.equal(adpcm.plan.targetAudioCodec, 'aac');
+});
+
+test('DivX, XviD, MPEG-4 Part 2, WMV and RealVideo trigger video transcode', () => {
+  const mpeg4 = decide(media({ video: video({ codec: 'mpeg4' }) }));
+  assert.equal(mpeg4.strategy, 'VIDEO_TRANSCODE');
+
+  const wmv = decide(media({ video: video({ codec: 'wmv3' }) }));
+  assert.equal(wmv.strategy, 'VIDEO_TRANSCODE');
+
+  const rv40 = decide(media({ video: video({ codec: 'rv40' }) }));
+  assert.equal(rv40.strategy, 'VIDEO_TRANSCODE');
 });
 
 // --- runner ----------------------------------------------------------------
