@@ -1613,7 +1613,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       ref={containerRef}
       className={
         `player${controlsVisible || keepControls ? '' : ' player--idle'}` +
-        (mini ? ' player--mini' : '')
+        (mini ? ' player--mini' : '') +
+        (mini && miniFrame.isDragging ? ' player--dragging' : '')
       }
       // `display: none` rather than unmounting: see the `hidden` prop. The
       // element keeps its buffer, its position and its decoder.
@@ -1622,7 +1623,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       onMouseMove={revealControls}
       onMouseEnter={handlePlayerEnter}
       onMouseLeave={handlePlayerLeave}
-      onPointerDown={handlePlayerPointerDown}
+      onPointerDown={mini ? miniFrame.startDrag : handlePlayerPointerDown}
     >
       {/*
         The mini player's own chrome.
@@ -1634,39 +1635,86 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       */}
       {mini && (
         <>
-          <div
-            className="player-mini__grip"
-            onPointerDown={miniFrame.startDrag}
-            title="Drag to move"
-            role="presentation"
-          >
-            <GripHorizontal size={13} />
-            <span className="player-mini__title">{episodeTitle || title}</span>
+          {/* Top Window Bar: Title, Grip indicator, and Windows-style Top-Right Window Controls */}
+          <div className="player-mini__top" role="presentation">
+            <div className="player-mini__title-wrap" title={episodeTitle || title}>
+              <GripHorizontal size={13} className="player-mini__grip-icon" />
+              <span className="player-mini__title">{episodeTitle || title}</span>
+            </div>
+            <div className="player-mini__top-actions">
+              {onExpand && (
+                <button
+                  type="button"
+                  className="player-mini__btn player-mini__btn--expand"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onExpand();
+                  }}
+                  title="Expand to full player"
+                  aria-label="Expand player"
+                >
+                  <Maximize2 size={13} />
+                </button>
+              )}
+              <button
+                type="button"
+                className="player-mini__btn player-mini__btn--close"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onBack();
+                }}
+                title="Close player"
+                aria-label="Close player"
+              >
+                <X size={14} />
+              </button>
+            </div>
           </div>
 
+          {/* Bottom Controls Bar: Playback controls, Volume, Time and Expand */}
           <div className="player-mini__bar">
-            <button onClick={togglePlay} title={isPlaying ? 'Pause' : 'Play'} aria-label={isPlaying ? 'Pause' : 'Play'}>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePlay();
+              }}
+              title={isPlaying ? 'Pause' : 'Play'}
+              aria-label={isPlaying ? 'Pause' : 'Play'}
+            >
               {isPlaying ? <Pause size={15} /> : <Play size={15} fill="currentColor" />}
             </button>
             <button
-              onClick={() => setIsMuted((value) => !value)}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsMuted((value) => !value);
+              }}
               title={isMuted ? 'Unmute' : 'Mute'}
               aria-label={isMuted ? 'Unmute' : 'Mute'}
             >
               {isMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
             </button>
+            <span className="player-mini__time">
+              {formatTime(currentTime)} / {formatTime(duration)}
+            </span>
             <div className="player-mini__spacer" />
             {onExpand && (
-              <button onClick={onExpand} title="Back to the full player" aria-label="Expand player">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onExpand();
+                }}
+                title="Back to full player"
+                aria-label="Expand player"
+              >
                 <Maximize2 size={15} />
               </button>
             )}
-            <button onClick={onBack} title="Stop and close" aria-label="Close player">
-              <X size={15} />
-            </button>
           </div>
 
-          {/* Top-left rather than bottom-right: a window parked in the corner
+          {/* Top-left resize handle: a window parked in the corner
               of the screen has its bottom-right corner against the edge. */}
           <div
             className="player-mini__resize"

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   X, Play, Pause, RotateCw, Trash2, Check, Copy, Download, FolderOpen, ArrowUpRight,
+  Layers, CheckCircle2, PauseCircle, AlertCircle,
 } from 'lucide-react';
 import type { DownloadTask } from '../../types/download';
 import { DownloadState } from '../../types/download';
@@ -8,12 +9,11 @@ import { DownloadState } from '../../types/download';
 /**
  * The download summary shown over the player.
  *
- * Deliberately partial: it answers "is this downloading, and how fast", which is
- * what someone watching a film wants to know without leaving it. The whole queue,
- * completed items, retry history and file locations live on the Downloads
- * screen — and until `onOpenDownloads` existed, the only way to reach that was
- * to close the player, which ended the stream you were checking on.
+ * Provides instant filtering (Active, Done, Paused, Failed, All) and quick management
+ * controls without needing to leave playback.
  */
+
+export type DownloadFilterTab = 'all' | 'downloading' | 'completed' | 'paused' | 'failed';
 
 interface PlayerDownloadPanelProps {
   open: boolean;
@@ -38,11 +38,87 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
   onOpenDownloads,
 }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [activeFilter, setActiveFilter] = useState<DownloadFilterTab>('all');
+
+  const counts = useMemo(() => {
+    let downloading = 0;
+    let completed = 0;
+    let paused = 0;
+    let failed = 0;
+
+    for (const t of tasks) {
+      if (
+        t.state === DownloadState.Downloading ||
+        t.state === DownloadState.Queued ||
+        t.state === DownloadState.Retrying ||
+        t.state === DownloadState.RefreshingSource
+      ) {
+        downloading++;
+      } else if (t.state === DownloadState.Completed) {
+        completed++;
+      } else if (t.state === DownloadState.Paused) {
+        paused++;
+      } else if (t.state === DownloadState.Failed) {
+        failed++;
+      }
+    }
+
+    return {
+      all: tasks.length,
+      downloading,
+      completed,
+      paused,
+      failed,
+    };
+  }, [tasks]);
+
+  const filteredTasks = useMemo(() => {
+    return tasks.filter((t) => {
+      if (activeFilter === 'downloading') {
+        return (
+          t.state === DownloadState.Downloading ||
+          t.state === DownloadState.Queued ||
+          t.state === DownloadState.Retrying ||
+          t.state === DownloadState.RefreshingSource
+        );
+      }
+      if (activeFilter === 'completed') return t.state === DownloadState.Completed;
+      if (activeFilter === 'paused') return t.state === DownloadState.Paused;
+      if (activeFilter === 'failed') return t.state === DownloadState.Failed;
+      return true;
+    });
+  }, [tasks, activeFilter]);
+
+  const handlePauseAll = () => {
+    for (const t of tasks) {
+      if (
+        t.state === DownloadState.Downloading ||
+        t.state === DownloadState.Queued ||
+        t.state === DownloadState.Retrying ||
+        t.state === DownloadState.RefreshingSource
+      ) {
+        onPause(t.id);
+      }
+    }
+  };
+
+  const handleResumeAll = () => {
+    for (const t of tasks) {
+      if (t.state === DownloadState.Paused || t.state === DownloadState.Failed) {
+        onResume(t.id);
+      }
+    }
+  };
+
+  const handleClearCompleted = () => {
+    for (const t of tasks) {
+      if (t.state === DownloadState.Completed) {
+        onRemove(t.id);
+      }
+    }
+  };
 
   if (!open) return null;
-
-  const activeTasks = tasks.filter((t) => t.state !== DownloadState.Completed);
-  const displayTasks = activeTasks.length > 0 ? activeTasks : tasks;
 
   const formatSize = (bytes: number): string => {
     if (bytes <= 0) return '0 MB';
@@ -90,7 +166,7 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
         top: 0,
         right: 0,
         bottom: 0,
-        width: '360px',
+        width: '380px',
         backgroundColor: 'rgba(12, 15, 23, 0.96)',
         backdropFilter: 'blur(12px)',
         zIndex: 60,
@@ -104,7 +180,7 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
       {/* Panel Header */}
       <div
         style={{
-          padding: '1.2rem 1.25rem',
+          padding: '1.1rem 1.25rem',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
@@ -112,9 +188,9 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-          <Download size={20} style={{ color: 'var(--accent-light, #60a5fa)' }} />
-          <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>
-            Active Downloads ({activeTasks.length})
+          <Download size={19} style={{ color: 'var(--accent-light, #60a5fa)' }} />
+          <h3 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 600 }}>
+            Downloads ({tasks.length})
           </h3>
         </div>
         <button
@@ -123,25 +199,153 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
           aria-label="Close download panel"
           style={{ background: 'transparent', border: 'none', color: '#aaa', cursor: 'pointer' }}
         >
-          <X size={20} />
+          <X size={19} />
         </button>
       </div>
 
-      {/* Panel Content */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        {displayTasks.length === 0 ? (
+      {/* Filter Tabs Header */}
+      <div className="player-dl-tabs">
+        <button
+          type="button"
+          className={`player-dl-tab ${activeFilter === 'all' ? 'player-dl-tab--active' : ''}`}
+          onClick={() => setActiveFilter('all')}
+        >
+          <Layers size={13} />
+          <span>All</span>
+          <span className="player-dl-tab__count">({counts.all})</span>
+        </button>
+
+        <button
+          type="button"
+          className={`player-dl-tab ${activeFilter === 'downloading' ? 'player-dl-tab--active' : ''}`}
+          onClick={() => setActiveFilter('downloading')}
+        >
+          <RotateCw
+            size={12}
+            className={counts.downloading > 0 ? 'spin' : ''}
+            style={{ color: counts.downloading > 0 ? '#60a5fa' : undefined }}
+          />
+          <span>Active</span>
+          <span className="player-dl-tab__count">({counts.downloading})</span>
+        </button>
+
+        <button
+          type="button"
+          className={`player-dl-tab ${activeFilter === 'completed' ? 'player-dl-tab--active' : ''}`}
+          onClick={() => setActiveFilter('completed')}
+        >
+          <CheckCircle2 size={12} style={{ color: counts.completed > 0 ? '#10b981' : undefined }} />
+          <span>Done</span>
+          <span className="player-dl-tab__count">({counts.completed})</span>
+        </button>
+
+        <button
+          type="button"
+          className={`player-dl-tab ${activeFilter === 'paused' ? 'player-dl-tab--active' : ''}`}
+          onClick={() => setActiveFilter('paused')}
+        >
+          <PauseCircle size={12} />
+          <span>Paused</span>
+          <span className="player-dl-tab__count">({counts.paused})</span>
+        </button>
+
+        <button
+          type="button"
+          className={`player-dl-tab ${activeFilter === 'failed' ? 'player-dl-tab--active' : ''}`}
+          onClick={() => setActiveFilter('failed')}
+        >
+          <AlertCircle size={12} style={{ color: counts.failed > 0 ? '#f87171' : undefined }} />
+          <span>Failed</span>
+          <span className="player-dl-tab__count" style={{ color: counts.failed > 0 ? '#f87171' : undefined }}>
+            ({counts.failed})
+          </span>
+        </button>
+      </div>
+
+      {/* Quick Action Controls Subheader */}
+      {tasks.length > 0 && (
+        <div className="player-dl-actions">
+          <span>
+            {counts.downloading > 0 ? `${counts.downloading} downloading` : 'Idle'} • {counts.completed} done
+          </span>
+          <div className="player-dl-actions__btns">
+            {counts.downloading > 0 && (
+              <button
+                type="button"
+                className="player-dl-action-btn"
+                onClick={handlePauseAll}
+                title="Pause active downloads"
+              >
+                <Pause size={11} /> Pause All
+              </button>
+            )}
+            {(counts.paused > 0 || counts.failed > 0) && (
+              <button
+                type="button"
+                className="player-dl-action-btn"
+                onClick={handleResumeAll}
+                title="Resume paused / retry failed"
+              >
+                <Play size={11} /> Resume
+              </button>
+            )}
+            {counts.completed > 0 && (
+              <button
+                type="button"
+                className="player-dl-action-btn"
+                onClick={handleClearCompleted}
+                title="Clear completed downloads from queue"
+              >
+                <Trash2 size={11} /> Clear Done
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Panel Content List */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+        {tasks.length === 0 ? (
           <div
             style={{
-              padding: '2rem 1rem',
+              padding: '2.5rem 1rem',
               textAlign: 'center',
               color: 'var(--text-subtle, #888)',
               fontSize: '0.88rem',
             }}
           >
-            No active downloads.
+            No downloads in queue.
+          </div>
+        ) : filteredTasks.length === 0 ? (
+          <div
+            style={{
+              padding: '2.5rem 1rem',
+              textAlign: 'center',
+              color: 'var(--text-subtle, #888)',
+              fontSize: '0.86rem',
+            }}
+          >
+            {activeFilter === 'downloading'
+              ? 'No active downloads in progress.'
+              : activeFilter === 'completed'
+              ? 'No completed downloads.'
+              : activeFilter === 'paused'
+              ? 'No paused downloads.'
+              : activeFilter === 'failed'
+              ? 'No failed downloads.'
+              : 'No downloads found in this filter.'}
+            <div style={{ marginTop: '0.6rem' }}>
+              <button
+                type="button"
+                className="player-dl-action-btn"
+                onClick={() => setActiveFilter('all')}
+              >
+                Show All ({tasks.length})
+              </button>
+            </div>
           </div>
         ) : (
-          displayTasks.map((task) => {
+          filteredTasks.map((task) => {
             const percent =
               task.totalBytes > 0
                 ? Math.min(100, Math.floor((task.bytesDownloaded / task.totalBytes) * 100))

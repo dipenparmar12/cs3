@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
 import {
@@ -15,6 +15,11 @@ import {
   Layers,
   Copy,
   Check,
+  Search,
+  X,
+  CheckCircle2,
+  PauseCircle,
+  AlertCircle,
 } from 'lucide-react';
 
 interface DownloadCenterProps {
@@ -315,6 +320,8 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
   );
 };
 
+export type DownloadFilterTab = 'all' | 'downloading' | 'completed' | 'paused' | 'failed';
+
 export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   tasks,
   hasBinaries = true,
@@ -326,6 +333,8 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   onOpenTitle,
 }) => {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [activeFilter, setActiveFilter] = useState<DownloadFilterTab>('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const toggleGroupCollapse = (groupKey: string) => {
     setCollapsedGroups((prev) => ({
@@ -348,11 +357,125 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
     return `${mb.toFixed(0)} MB`;
   };
 
-  // Group tasks by series session
-  const groups: TaskGroup[] = React.useMemo(() => {
+  // Status counts for tabs
+  const counts = useMemo(() => {
+    let downloading = 0;
+    let completed = 0;
+    let paused = 0;
+    let failed = 0;
+
+    for (const t of tasks) {
+      if (
+        t.state === DownloadState.Downloading ||
+        t.state === DownloadState.Queued ||
+        t.state === DownloadState.Retrying ||
+        t.state === DownloadState.RefreshingSource
+      ) {
+        downloading++;
+      } else if (t.state === DownloadState.Completed) {
+        completed++;
+      } else if (t.state === DownloadState.Paused) {
+        paused++;
+      } else if (t.state === DownloadState.Failed) {
+        failed++;
+      }
+    }
+
+    return {
+      all: tasks.length,
+      downloading,
+      completed,
+      paused,
+      failed,
+    };
+  }, [tasks]);
+
+  // Aggregate download speed and progress stats
+  const totalActiveSpeed = useMemo(() => {
+    return tasks.reduce((sum, t) => sum + (t.downloadSpeed || 0), 0);
+  }, [tasks]);
+
+  const totalBytes = useMemo(() => {
+    return tasks.reduce((sum, t) => sum + (t.totalBytes || 0), 0);
+  }, [tasks]);
+
+  const totalDownloaded = useMemo(() => {
+    return tasks.reduce((sum, t) => sum + (t.bytesDownloaded || 0), 0);
+  }, [tasks]);
+
+  // Batch action handlers
+  const handlePauseAll = () => {
+    for (const t of tasks) {
+      if (
+        t.state === DownloadState.Downloading ||
+        t.state === DownloadState.Queued ||
+        t.state === DownloadState.Retrying ||
+        t.state === DownloadState.RefreshingSource
+      ) {
+        onPause(t.id);
+      }
+    }
+  };
+
+  const handleResumeAll = () => {
+    for (const t of tasks) {
+      if (t.state === DownloadState.Paused || t.state === DownloadState.Failed) {
+        onResume(t.id);
+      }
+    }
+  };
+
+  const handleRetryFailed = () => {
+    for (const t of tasks) {
+      if (t.state === DownloadState.Failed) {
+        onResume(t.id);
+      }
+    }
+  };
+
+  const handleClearCompleted = () => {
+    for (const t of tasks) {
+      if (t.state === DownloadState.Completed) {
+        onRemove(t.id);
+      }
+    }
+  };
+
+  // Filter tasks based on selected tab and search query
+  const filteredTasks = useMemo(() => {
+    return tasks.filter((t) => {
+      if (activeFilter === 'downloading') {
+        const isActive =
+          t.state === DownloadState.Downloading ||
+          t.state === DownloadState.Queued ||
+          t.state === DownloadState.Retrying ||
+          t.state === DownloadState.RefreshingSource;
+        if (!isActive) return false;
+      } else if (activeFilter === 'completed') {
+        if (t.state !== DownloadState.Completed) return false;
+      } else if (activeFilter === 'paused') {
+        if (t.state !== DownloadState.Paused) return false;
+      } else if (activeFilter === 'failed') {
+        if (t.state !== DownloadState.Failed) return false;
+      }
+
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchTitle = t.title?.toLowerCase().includes(q);
+        const matchProvider = t.providerName?.toLowerCase().includes(q);
+        const matchFile = t.targetFilePath?.toLowerCase().includes(q);
+        if (!matchTitle && !matchProvider && !matchFile) return false;
+      }
+
+      return true;
+    });
+  }, [tasks, activeFilter, searchQuery]);
+
+  // Group filtered tasks by series / session
+  const groups: TaskGroup[] = useMemo(() => {
     const map = new Map<string, TaskGroup>();
 
-    for (const task of tasks) {
+    for (const task of filteredTasks) {
       const isEpisode = task.episodeNumber !== undefined || task.seasonNumber !== undefined;
       const groupKey = isEpisode
         ? `${task.parentId || task.title}-s${task.seasonNumber ?? 0}`
@@ -380,15 +503,17 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
     }
 
     return Array.from(map.values());
-  }, [tasks]);
+  }, [filteredTasks]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
       {/* Top Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="download-manager__header-row">
         <div>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>Download Manager</h2>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+            Download Manager
+          </h2>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
             High-speed multi-threaded downloads via aria2c daemon engine
           </p>
         </div>
@@ -419,6 +544,188 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
         </div>
       </div>
 
+      {/* Filter Tabs & Management Toolbar */}
+      {tasks.length > 0 && (
+        <div className="download-manager__toolbar">
+          {/* Filter Tabs */}
+          <div className="download-tabs">
+            <button
+              type="button"
+              className={`download-tab ${activeFilter === 'all' ? 'download-tab--active' : ''}`}
+              onClick={() => setActiveFilter('all')}
+            >
+              <Layers size={14} />
+              <span>All</span>
+              <span className="download-tab__badge">{counts.all}</span>
+            </button>
+
+            <button
+              type="button"
+              className={`download-tab ${activeFilter === 'downloading' ? 'download-tab--active' : ''}`}
+              onClick={() => setActiveFilter('downloading')}
+            >
+              <RotateCw
+                size={14}
+                className={counts.downloading > 0 ? 'spin' : ''}
+                style={{ color: counts.downloading > 0 ? 'var(--accent-light)' : undefined }}
+              />
+              <span>Downloading</span>
+              <span className="download-tab__badge">{counts.downloading}</span>
+            </button>
+
+            <button
+              type="button"
+              className={`download-tab ${activeFilter === 'completed' ? 'download-tab--active' : ''}`}
+              onClick={() => setActiveFilter('completed')}
+            >
+              <CheckCircle2 size={14} style={{ color: counts.completed > 0 ? 'var(--status-success)' : undefined }} />
+              <span>Completed</span>
+              <span className="download-tab__badge">{counts.completed}</span>
+            </button>
+
+            <button
+              type="button"
+              className={`download-tab ${activeFilter === 'paused' ? 'download-tab--active' : ''}`}
+              onClick={() => setActiveFilter('paused')}
+            >
+              <PauseCircle size={14} />
+              <span>Paused</span>
+              <span className="download-tab__badge">{counts.paused}</span>
+            </button>
+
+            <button
+              type="button"
+              className={`download-tab ${activeFilter === 'failed' ? 'download-tab--active' : ''}`}
+              onClick={() => setActiveFilter('failed')}
+            >
+              <AlertCircle size={14} style={{ color: counts.failed > 0 ? 'var(--status-error)' : undefined }} />
+              <span>Failed</span>
+              <span
+                className={`download-tab__badge ${counts.failed > 0 ? 'download-tab__badge--error' : ''}`}
+              >
+                {counts.failed}
+              </span>
+            </button>
+          </div>
+
+          {/* Search Filter & Quick Actions */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <div className="download-search-input">
+              <Search size={14} style={{ color: 'var(--text-subtle)' }} />
+              <input
+                type="text"
+                placeholder="Search downloads..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                  }}
+                  title="Clear search"
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+
+            <div className="download-actions-row">
+              {counts.downloading > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handlePauseAll}
+                  style={{ fontSize: '0.76rem', padding: '0.35rem 0.65rem' }}
+                  title="Pause all active downloads"
+                >
+                  <Pause size={13} />
+                  <span>Pause All</span>
+                </button>
+              )}
+
+              {(counts.paused > 0 || counts.failed > 0) && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleResumeAll}
+                  style={{ fontSize: '0.76rem', padding: '0.35rem 0.65rem' }}
+                  title="Resume all paused downloads"
+                >
+                  <Play size={13} />
+                  <span>Resume All</span>
+                </button>
+              )}
+
+              {counts.failed > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleRetryFailed}
+                  style={{ fontSize: '0.76rem', padding: '0.35rem 0.65rem', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+                  title="Retry all failed downloads"
+                >
+                  <RotateCw size={13} style={{ color: 'var(--status-error)' }} />
+                  <span>Retry Failed</span>
+                </button>
+              )}
+
+              {counts.completed > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleClearCompleted}
+                  style={{ fontSize: '0.76rem', padding: '0.35rem 0.65rem' }}
+                  title="Clear finished downloads from list"
+                >
+                  <Trash2 size={13} />
+                  <span>Clear Completed</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Aggregate Stats Bar */}
+      {tasks.length > 0 && (
+        <div className="download-stats-bar">
+          <div className="download-stats-bar__item">
+            <span style={{ fontWeight: 600, color: '#fff' }}>
+              {counts.downloading > 0 ? (
+                <span style={{ color: 'var(--accent-light)', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <RotateCw size={12} className="spin" /> Total Speed: {formatSpeed(totalActiveSpeed)}
+                </span>
+              ) : (
+                'Queue Idle'
+              )}
+            </span>
+            <span>•</span>
+            <span>{counts.downloading} active</span>
+            <span>•</span>
+            <span>{counts.completed} completed</span>
+            {counts.failed > 0 && (
+              <>
+                <span>•</span>
+                <span style={{ color: 'var(--status-error)' }}>{counts.failed} failed</span>
+              </>
+            )}
+          </div>
+          <div className="download-stats-bar__item">
+            <span>
+              {formatSize(totalDownloaded)} {totalBytes > 0 ? `/ ${formatSize(totalBytes)}` : 'downloaded'}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Downloads List */}
       {tasks.length === 0 ? (
         <div
@@ -438,6 +745,44 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
           <p style={{ fontSize: '0.8rem' }}>
             Browse media titles and click "1-Click Download" to start high-speed stream downloads.
           </p>
+        </div>
+      ) : filteredTasks.length === 0 ? (
+        <div
+          style={{
+            padding: '3rem 2rem',
+            textAlign: 'center',
+            background: 'var(--bg-card)',
+            borderRadius: 'var(--radius-lg)',
+            border: '1px dashed var(--border-color)',
+            color: 'var(--text-muted)',
+          }}
+        >
+          <p style={{ fontSize: '0.9rem', color: '#fff', marginBottom: '0.4rem' }}>
+            {searchQuery
+              ? `No downloads match "${searchQuery}" in this filter.`
+              : activeFilter === 'downloading'
+              ? 'No active downloads in progress.'
+              : activeFilter === 'completed'
+              ? 'No completed downloads yet.'
+              : activeFilter === 'paused'
+              ? 'No paused downloads.'
+              : activeFilter === 'failed'
+              ? 'No failed downloads.'
+              : 'No downloads found.'}
+          </p>
+          {(searchQuery || activeFilter !== 'all') && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setSearchQuery('');
+                setActiveFilter('all');
+              }}
+              style={{ fontSize: '0.78rem', marginTop: '0.5rem' }}
+            >
+              Reset Filters
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -617,6 +962,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                     >
                       {isAnyDownloading && (
                         <button
+                          type="button"
                           onClick={() =>
                             group.tasks.forEach(
                               (t) => t.state === DownloadState.Downloading && onPause(t.id)
@@ -630,6 +976,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                       )}
                       {isResumableGroup && (
                         <button
+                          type="button"
                           onClick={() =>
                             group.tasks.forEach(
                               (t) =>
@@ -645,6 +992,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                         </button>
                       )}
                       <button
+                        type="button"
                         onClick={() => group.tasks.forEach((t) => onRemove(t.id))}
                         className="btn btn-secondary btn-icon"
                         title="Cancel & Remove Batch"
@@ -686,7 +1034,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                 onResume={onResume}
                 onRemove={onRemove}
                 onReveal={onReveal}
-                          onOpenTitle={onOpenTitle}
+                onOpenTitle={onOpenTitle}
                 formatSpeed={formatSpeed}
                 formatSize={formatSize}
               />
@@ -697,3 +1045,4 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
     </div>
   );
 };
+

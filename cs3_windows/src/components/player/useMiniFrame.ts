@@ -86,6 +86,7 @@ function restore(): MiniFrame {
 export function useMiniFrame(active: boolean): {
   frame: MiniFrame;
   height: number;
+  isDragging: boolean;
   startDrag: (event: React.PointerEvent) => void;
   startResize: (event: React.PointerEvent) => void;
   reset: () => void;
@@ -93,6 +94,7 @@ export function useMiniFrame(active: boolean): {
   const [frame, setFrame] = useState<MiniFrame>(() =>
     typeof window === 'undefined' ? { x: 24, y: 24, width: 420 } : restore()
   );
+  const [isDragging, setIsDragging] = useState(false);
   const gesture = useRef<{
     kind: 'drag' | 'resize';
     pointerId: number;
@@ -113,33 +115,37 @@ export function useMiniFrame(active: boolean): {
 
   // The viewport changing can put the window out of reach — see the header.
   useEffect(() => {
-    if (!active) return;
+    if (!active) {
+      gesture.current = null;
+      setIsDragging(false);
+      return;
+    }
     const onResize = () => setFrame((current) => clampFrame(current));
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [active]);
 
   const onPointerMove = useCallback((event: React.PointerEvent | PointerEvent) => {
-    const active = gesture.current;
-    if (!active || event.pointerId !== active.pointerId) return;
-    const dx = event.clientX - active.startX;
-    const dy = event.clientY - active.startY;
+    const activeGesture = gesture.current;
+    if (!activeGesture || event.pointerId !== activeGesture.pointerId) return;
+    const dx = event.clientX - activeGesture.startX;
+    const dy = event.clientY - activeGesture.startY;
 
-    if (active.kind === 'drag') {
-      setFrame(clampFrame({ ...active.origin, x: active.origin.x + dx, y: active.origin.y + dy }));
+    if (activeGesture.kind === 'drag') {
+      setFrame(clampFrame({ ...activeGesture.origin, x: activeGesture.origin.x + dx, y: activeGesture.origin.y + dy }));
       return;
     }
 
     // Resizing from the top-left corner: the bottom-right stays put, which is
     // what keeps a window parked in the corner of the screen from walking off
     // it as it grows.
-    const width = active.origin.width - dx;
+    const width = activeGesture.origin.width - dx;
     const clamped = clampFrame({
       width,
-      x: active.origin.x + (active.origin.width - Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width))),
+      x: activeGesture.origin.x + (activeGesture.origin.width - Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width))),
       y:
-        active.origin.y +
-        (active.origin.width - Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width))) / ASPECT,
+        activeGesture.origin.y +
+        (activeGesture.origin.width - Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width))) / ASPECT,
     });
     setFrame(clamped);
   }, []);
@@ -147,6 +153,7 @@ export function useMiniFrame(active: boolean): {
   const endGesture = useCallback((event: React.PointerEvent | PointerEvent) => {
     if (gesture.current && event.pointerId === gesture.current.pointerId) {
       gesture.current = null;
+      setIsDragging(false);
     }
   }, []);
 
@@ -165,8 +172,20 @@ export function useMiniFrame(active: boolean): {
   }, [active, onPointerMove, endGesture]);
 
   const begin = (kind: 'drag' | 'resize') => (event: React.PointerEvent) => {
-    // Only the primary button, and never a gesture that started on a control.
+    // Only the primary button, and never a gesture that started on an interactive control.
     if (event.button !== 0) return;
+
+    if (kind === 'drag') {
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.closest(
+          'button, input, textarea, a, select, .player-mini__resize, [data-interactive], [data-no-drag]'
+        )
+      ) {
+        return;
+      }
+    }
+
     event.preventDefault();
     event.stopPropagation();
     (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
@@ -177,11 +196,15 @@ export function useMiniFrame(active: boolean): {
       startY: event.clientY,
       origin: frame,
     };
+    if (kind === 'drag') {
+      setIsDragging(true);
+    }
   };
 
   return {
     frame,
     height: frame.width / ASPECT,
+    isDragging,
     startDrag: begin('drag'),
     startResize: begin('resize'),
     reset: () => setFrame(defaultFrame()),
