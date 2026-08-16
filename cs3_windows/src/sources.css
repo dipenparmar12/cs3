@@ -2486,6 +2486,30 @@
   line-height: 1.4;
 }
 
+/* --- Player: what the compatibility engine decided ----------------------- */
+
+/* Sits below the audio notice rather than beside it: they can both be true —
+   a stream needing conversion on a machine whose media components are missing
+   — and overlapping them would leave one unreadable. Pointer events are off
+   because it covers the picture, and nothing here is clickable. */
+.player__strategy-note {
+  position: absolute;
+  bottom: 5.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  pointer-events: none;
+  max-width: min(620px, 88vw);
+  padding: 0.45rem 0.8rem;
+  border-radius: var(--radius-md);
+  background: rgba(8, 10, 16, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.74rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
 /* --- Source panel: sticky header, separated play/download --------------- */
 
 /* The panel scrolls; its header must not go with it. Search and refresh stay
