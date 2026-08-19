@@ -547,7 +547,19 @@ export interface CloudStreamElectronAPI {
   enqueueDownload: (task: DownloadTask) => Promise<string>;
   pauseDownload: (id: string) => Promise<void>;
   resumeDownload: (id: string) => Promise<void>;
-  removeDownload: (id: string) => Promise<void>;
+  /**
+   * Removes a download from the list, and its file when `deleteFile` is true.
+   *
+   * The flag is required rather than inferred: on a finished film the two are
+   * unrecoverably different actions, and the destructive one cannot be undone.
+   */
+  removeDownload: (id: string, deleteFile?: boolean) => Promise<void>;
+  getDeleteDownloadPreference: () => Promise<
+    Envelope & { preference: 'ask' | 'list-only' | 'list-and-file' }
+  >;
+  setDeleteDownloadPreference: (
+    preference: 'ask' | 'list-only' | 'list-and-file'
+  ) => Promise<Envelope & { preference?: string }>;
   getDownloadQueue: () => Promise<DownloadTask[]>;
   revealInFolder: (filePath?: string) => Promise<void>;
   onDownloadProgress: (callback: (tasks: DownloadTask[]) => void) => () => void;
@@ -1053,7 +1065,10 @@ const api: CloudStreamElectronAPI = {
   enqueueDownload: (task) => ipcRenderer.invoke('download:enqueue', task),
   pauseDownload: (id) => ipcRenderer.invoke('download:pause', id),
   resumeDownload: (id) => ipcRenderer.invoke('download:resume', id),
-  removeDownload: (id) => ipcRenderer.invoke('download:remove', id),
+  removeDownload: (id, deleteFile) => ipcRenderer.invoke('download:remove', id, deleteFile),
+  getDeleteDownloadPreference: () => ipcRenderer.invoke('download:getDeletePreference'),
+  setDeleteDownloadPreference: (preference) =>
+    ipcRenderer.invoke('download:setDeletePreference', preference),
   getDownloadQueue: () => ipcRenderer.invoke('download:getQueue'),
   revealInFolder: (filePath) => ipcRenderer.invoke('download:revealInFolder', filePath),
   onDownloadProgress: (callback) => {

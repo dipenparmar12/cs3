@@ -1737,7 +1737,37 @@ ipcMain.handle('sources:savePreferences', async (_, prefs: Partial<SourcePrefere
 ipcMain.handle('download:enqueue', async (_, task: DownloadTask) => downloadService.enqueue(task));
 ipcMain.handle('download:pause', async (_, id: string) => downloadService.pause(id));
 ipcMain.handle('download:resume', async (_, id: string) => downloadService.resume(id));
-ipcMain.handle('download:remove', async (_, id: string) => downloadService.remove(id));
+ipcMain.handle('download:remove', async (_, id: string, deleteFile?: boolean) =>
+  downloadService.remove(id, deleteFile === true)
+);
+
+/**
+ * How "Delete" should behave, remembered.
+ *
+ * Three values rather than a boolean, because "ask me" is a real answer and the
+ * only safe default: removing a finished film from the list and deleting a
+ * finished film off the disk are unrecoverably different, and guessing wrong in
+ * the destructive direction cannot be undone. The prompt is where the user opts
+ * out of being asked, and Settings is where they opt back in — a preference that
+ * can only be set from a confirmation dialog is one nobody can reverse.
+ */
+const DELETE_PREFERENCE_KEY = 'download_delete_behavior';
+type DeletePreference = 'ask' | 'list-only' | 'list-and-file';
+
+ipcMain.handle('download:getDeletePreference', async () => {
+  const stored = datastore.getString(DELETE_PREFERENCE_KEY, 'ask', true);
+  const preference: DeletePreference =
+    stored === 'list-only' || stored === 'list-and-file' ? stored : 'ask';
+  return { ok: true, preference };
+});
+
+ipcMain.handle('download:setDeletePreference', async (_, preference: DeletePreference) => {
+  if (preference !== 'ask' && preference !== 'list-only' && preference !== 'list-and-file') {
+    return { ok: false, error: `Unknown delete preference: ${preference}` };
+  }
+  datastore.setString(DELETE_PREFERENCE_KEY, preference, true);
+  return { ok: true, preference };
+});
 ipcMain.handle('download:getQueue', async () => downloadService.getTasks());
 
 // Season and series downloads. Resolution runs here rather than in the
