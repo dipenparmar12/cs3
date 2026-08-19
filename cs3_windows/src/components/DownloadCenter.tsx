@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
+import { DeleteDownloadDialog, type DeletePreference } from './DeleteDownloadDialog';
 import {
   Play,
   Pause,
@@ -28,7 +29,7 @@ interface DownloadCenterProps {
   hasBinaries?: boolean;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
-  onRemove: (id: string) => void;
+  onRemove: (id: string, deleteFile?: boolean) => void;
   onReveal?: (filePath?: string) => void;
   onOpenBinarySetup?: () => void;
   /**
@@ -55,7 +56,7 @@ interface SingleTaskRowProps {
   task: DownloadTask;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
-  onRemove: (id: string) => void;
+  onRemove: (id: string, deleteFile?: boolean) => void;
   onReveal?: (filePath: string) => void;
   onOpenTitle?: (task: DownloadTask) => void;
   formatSpeed: (bytesPerSec: number) => string;
@@ -436,12 +437,67 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
     }
   };
 
-  const handleClearCompleted = () => {
-    for (const t of tasks) {
-      if (t.state === DownloadState.Completed) {
-        onRemove(t.id);
+  /**
+   * Every delete on this screen funnels through here.
+   *
+   * There are three affordances that remove something — a row, a batch header,
+   * and "Clear Completed" — and asking in each of them would be three chances
+   * for one to forget and silently destroy a file. The pending set is held here
+   * and the dialog is rendered once.
+   */
+  const [pendingDelete, setPendingDelete] = useState<{
+    ids: string[];
+    title: string;
+    hasFile: boolean;
+  } | null>(null);
+  const [deletePreference, setDeletePreference] = useState<DeletePreference>('ask');
+
+  useEffect(() => {
+    void window.cloudstream?.getDeleteDownloadPreference().then((response) => {
+      if (response?.ok) setDeletePreference(response.preference);
+    });
+  }, []);
+
+  const requestDelete = useCallback(
+    (ids: string[], title: string) => {
+      if (ids.length === 0) return;
+      // Only a finished download has a file worth warning about, so the prompt
+      // says which case this is rather than threatening something that is not there.
+      const hasFile = tasks.some((t) => ids.includes(t.id) && t.state === DownloadState.Completed);
+
+      if (deletePreference === 'list-only') {
+        ids.forEach((id) => onRemove(id, false));
+        return;
       }
-    }
+      if (deletePreference === 'list-and-file') {
+        ids.forEach((id) => onRemove(id, true));
+        return;
+      }
+      setPendingDelete({ ids, title, hasFile });
+    },
+    [deletePreference, onRemove, tasks]
+  );
+
+  const confirmDelete = useCallback(
+    (deleteFile: boolean, remember: boolean) => {
+      const pending = pendingDelete;
+      setPendingDelete(null);
+      if (!pending) return;
+      pending.ids.forEach((id) => onRemove(id, deleteFile));
+      if (remember) {
+        const preference: DeletePreference = deleteFile ? 'list-and-file' : 'list-only';
+        setDeletePreference(preference);
+        void window.cloudstream?.setDeleteDownloadPreference(preference);
+      }
+    },
+    [pendingDelete, onRemove]
+  );
+
+  const handleClearCompleted = () => {
+    requestDelete(
+      tasks.filter((t) => t.state === DownloadState.Completed).map((t) => t.id),
+      'the finished downloads'
+    );
   };
 
   // Filter and sort tasks (recently downloaded items come 1st by default)
@@ -1053,7 +1109,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                       )}
                       <button
                         type="button"
-                        onClick={() => group.tasks.forEach((t) => onRemove(t.id))}
+                        onClick={() => requestDelete(group.tasks.map((t) => t.id), group.title)}
                         className="btn btn-secondary btn-icon"
                         title="Cancel & Remove Batch"
                       >
@@ -1071,7 +1127,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                           task={task}
                           onPause={onPause}
                           onResume={onResume}
-                          onRemove={onRemove}
+                          onRemove={(id) => requestDelete([id], group.title)}
                           onReveal={onReveal}
                           onOpenTitle={onOpenTitle}
                           formatSpeed={formatSpeed}
@@ -1092,7 +1148,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                 task={group.tasks[0]}
                 onPause={onPause}
                 onResume={onResume}
-                onRemove={onRemove}
+                onRemove={(id) => requestDelete([id], group.title)}
                 onReveal={onReveal}
                 onOpenTitle={onOpenTitle}
                 formatSpeed={formatSpeed}
@@ -1101,6 +1157,16 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
             );
           })}
         </div>
+      )}
+
+      {pendingDelete && (
+        <DeleteDownloadDialog
+          title={pendingDelete.title}
+          count={pendingDelete.ids.length}
+          hasFile={pendingDelete.hasFile}
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
       )}
     </div>
   );

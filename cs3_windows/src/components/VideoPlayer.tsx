@@ -6,6 +6,7 @@ import {
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
   SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
   HardDriveDownload, FolderDown, GripHorizontal, Maximize2, Minimize2, X,
+  Search,
 } from 'lucide-react';
 import type { TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
@@ -25,6 +26,7 @@ import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
 import { useMiniFrame } from './player/useMiniFrame';
 import { CopyErrorButton } from './CopyErrorButton';
+import { PlayerCopyMenu } from './player/PlayerCopyMenu';
 import { ExternalPlayerFallback } from './player/ExternalPlayerFallback';
 
 interface VideoPlayerProps {
@@ -139,6 +141,15 @@ interface VideoPlayerProps {
     onCancelSearch?: () => void;
     onDownloadSource?: (source: TorrentResult) => void;
   };
+  /**
+   * Searches the app for this title, from inside the player.
+   *
+   * The viewer is already looking at the name of the thing they want more of —
+   * another release, a different provider, the next season — and the only route
+   * was to close the player, go to Search, and retype it. The title is right
+   * there; this makes it a target.
+   */
+  onSearchTitle?: (query: string) => void;
   /** When provided, overrides the stored setting for showing aspect ratio control (default false) */
   showAspectRatioControl?: boolean;
   /** When provided, overrides the stored setting for showing playback speed control (default false) */
@@ -211,7 +222,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   infoHash, subtitles, onBack, series, onSelectEpisode, switchingTo, switchError,
   progress, sourceSession, subtitleContext, onDownloadCurrent, onOpenDownloads,
   hidden = false, mini = false, onMinimize, onExpand, showAspectRatioControl,
-  showPlaybackSpeedControl, showSubtitlesControl: showSubtitlesControlProp,
+  showPlaybackSpeedControl, showSubtitlesControl: showSubtitlesControlProp, onSearchTitle,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -355,6 +366,55 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     );
   }, [downloadQueue, title, progress?.mediaUrl, streamUrl, infoHash]);
 
+  /**
+   * Lightweight acknowledgement for actions taken during playback.
+   *
+   * The reported problem: pressing Download started a background transfer with
+   * nothing on screen to say so, and people pressed it again — and again —
+   * because silence is indistinguishable from a dead button. The fix is not a
+   * dialog: a modal over a playing film to confirm a background download is a
+   * worse interruption than the silence it replaces. A toast says it happened
+   * and gets out of the way.
+   */
+  const [toasts, setToasts] = useState<Array<{ id: number; text: string; tone: 'info' | 'good' | 'bad' }>>(
+    []
+  );
+  const toastId = useRef(0);
+
+  const notify = useCallback((text: string, tone: 'info' | 'good' | 'bad' = 'info') => {
+    const id = ++toastId.current;
+    setToasts((current) => [...current.slice(-2), { id, text, tone }]);
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((toast) => toast.id !== id));
+    }, 4000);
+  }, []);
+
+  /**
+   * Download state changes, announced once each.
+   *
+   * Driven off the queue rather than off the click, so a transfer that fails
+   * twenty minutes later still says so — and so a state reached without the
+   * viewer touching anything (a source expiring, a retry succeeding) is reported
+   * the same way. The previous state is held in a ref because this must fire on
+   * the *transition*, not on every poll that repeats the same value.
+   */
+  const lastDownloadState = useRef<string | null>(null);
+  useEffect(() => {
+    const state = currentDownload?.state ?? null;
+    const previous = lastDownloadState.current;
+    lastDownloadState.current = state;
+    if (!state || previous === null || previous === state) return;
+
+    if (state === DownloadState.Completed) notify('Download completed', 'good');
+    else if (state === DownloadState.Failed) notify('Download failed', 'bad');
+    else if (state === DownloadState.Paused) notify('Download paused');
+    else if (state === DownloadState.Downloading && previous === DownloadState.Paused) {
+      notify('Download resumed');
+    } else if (state === DownloadState.RefreshingSource) {
+      notify('Link expired — finding the source again');
+    }
+  }, [currentDownload?.state, notify]);
+
   const [showNativePlayerBtn, setShowNativePlayerBtn] = useState(true);
   const [externalPlayers, setExternalPlayers] = useState<Array<{ id: string; name: string }>>([]);
   const [extPlayerStatus, setExtPlayerStatus] = useState<string | null>(null);
@@ -399,6 +459,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   );
 
   const handleDownloadCurrentMedia = useCallback(async () => {
+    /**
+     * A second press on something already downloading is not a second download.
+     *
+     * This is the other half of the silence problem: without feedback people
+     * pressed again, and every press enqueued another copy of the same file.
+     * Saying what is already happening is both the acknowledgement and the
+     * guard — and "Completed" is called out separately, because "already
+     * downloading" would be a lie about a file that is sitting on disk.
+     */
+    if (currentDownload) {
+      if (currentDownload.state === DownloadState.Completed) {
+        notify('Already downloaded — open Downloads to find it', 'good');
+      } else if (currentDownload.state === DownloadState.Failed) {
+        notify('That download failed. Retry it from the download panel.', 'bad');
+      } else {
+        notify(`Already downloading — ${title}`);
+      }
+      return;
+    }
+
+    notify(`Download started — ${episodeTitle || title}`, 'good');
+
     if (onDownloadCurrent) {
       onDownloadCurrent();
       return;
@@ -1204,6 +1286,71 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     hidden, mini,
   ]);
 
+  /**
+   * Volume, mute and speed, remembered across media and across restarts.
+   *
+   * These are properties of the *viewer*, not of the film — someone who watches
+   * at 40% because the flat is quiet expects that to hold when the next episode
+   * starts, and re-dragging the slider on every title is the kind of small
+   * friction that makes an app feel unfinished. So they are loaded once on mount
+   * and written back when they change.
+   *
+   * Two details that would otherwise bite:
+   *
+   * - The load is **applied through the same ref the attach effect reads**, so a
+   *   source that attaches before the preference arrives still gets it. Setting
+   *   only the React state would leave the first few seconds at full volume,
+   *   which is the one moment a remembered volume most needs to be right.
+   * - Writes are debounced. Dragging the volume slider fires a change per pixel,
+   *   and each one is a datastore write behind an IPC round trip.
+   */
+  const preferencesLoaded = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const stored = await window.cloudstream?.getPlayerPreferences();
+      if (cancelled || !stored?.ok) {
+        preferencesLoaded.current = true;
+        return;
+      }
+      const preferences = stored.preferences;
+      audioSettings.current = { volume: preferences.volume, muted: preferences.muted };
+      setVolume(preferences.volume);
+      setIsMuted(preferences.muted);
+      setSpeed(preferences.speed);
+      if (preferences.subtitleLanguage) preferredSubtitleLanguage.current = preferences.subtitleLanguage;
+      if (preferences.audioLanguage) preferredAudioLanguage.current = preferences.audioLanguage;
+      preferencesLoaded.current = true;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    // Never write before the load has landed, or the defaults this component
+    // starts with would overwrite the stored values on every mount.
+    if (!preferencesLoaded.current) return;
+    const timer = window.setTimeout(() => {
+      void window.cloudstream?.setPlayerPreferences({ volume, muted: isMuted, speed });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [volume, isMuted, speed]);
+
+  /**
+   * The languages the viewer keeps choosing, remembered as a *preference*
+   * rather than as a track number.
+   *
+   * A track index means nothing across files — audio track 2 is the Hindi dub on
+   * one release and the director's commentary on another — so restoring the
+   * index would confidently select the wrong thing. The language is the part
+   * that carries over, and it is matched against whatever the next file happens
+   * to contain.
+   */
+  const preferredAudioLanguage = useRef<string | null>(null);
+  const preferredSubtitleLanguage = useRef<string | null>(null);
+
   useEffect(() => {
     // Also the single place the ref is kept current, so a newly attached element
     // starts at the volume the viewer last chose rather than at 1.0.
@@ -1421,7 +1568,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setAudioNeedsComponents(Boolean(response.needsComponents));
       if (response.sessionId) openedSession = response.sessionId;
 
-      const preferred = response.capability?.transformationPlan.selectedAudioIndex ?? -1;
+      /**
+       * The engine's pick, overridden by the language the viewer keeps choosing.
+       *
+       * `decideStrategy` selects from the file's own default, which is right
+       * for a first play and wrong for someone who has said "Hindi" on the last
+       * six episodes. The remembered *language* is matched against this file's
+       * tracks, so it degrades to the engine's choice whenever the release does
+       * not carry it — which is the correct outcome, not a failure.
+       */
+      const tracks = response.capability?.metadata?.audio ?? [];
+      const remembered = preferredAudioLanguage.current
+        ? tracks.find((track) => track.language === preferredAudioLanguage.current)
+        : undefined;
+      const preferred =
+        remembered?.index ?? response.capability?.transformationPlan.selectedAudioIndex ?? -1;
       if (preferred >= 0) setSelectedAudioIndex(preferred);
 
       setPlaybackOffset(0);
@@ -1533,6 +1694,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const selectProbedAudio = useCallback(
     async (index: number) => {
       setSelectedAudioIndex(index);
+
+      /**
+       * Remembered by language, never by index.
+       *
+       * A viewer who picks the Hindi dub means "Hindi", not "track 2" — the next
+       * release may order its tracks differently or carry a commentary there.
+       * Storing the index would confidently select the wrong audio on the next
+       * file, which is worse than not remembering at all.
+       */
+      const language = preparedRef.current?.capability?.metadata?.audio.find(
+        (track) => track.index === index
+      )?.language;
+      if (language && language !== 'und') {
+        preferredAudioLanguage.current = language;
+        void window.cloudstream?.setPlayerPreferences({ audioLanguage: language });
+      }
       if (!prepared?.sessionId) return;
 
       const video = videoRef.current;
@@ -1801,6 +1978,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         ))}
       </video>
 
+      {/* Above the controls, clear of the seek bar, gone in four seconds. */}
+      {toasts.length > 0 && (
+        <div className="player__toasts" role="status" aria-live="polite">
+          {toasts.map((toast) => (
+            <div key={toast.id} className={`player__toast player__toast--${toast.tone}`}>
+              {toast.text}
+            </div>
+          ))}
+        </div>
+      )}
+
       {isNativeEngine && capability && prepared?.playbackUrl && (
         <NativeEngineStage
           url={prepared.playbackUrl}
@@ -2028,7 +2216,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </button>
         )}
         <div className="player__titles">
-          <h2>{title}</h2>
+          <div className="player__title-row">
+            <h2>{title}</h2>
+            {onSearchTitle && (
+              <button
+                type="button"
+                className="player__title-search"
+                /* The clean title, not the release name: "Avengers Age of Ultron"
+                   finds the film, while "Avengers.Age.of.Ultron.2015.1080p.WEB-DL"
+                   finds nothing on any catalogue. */
+                onClick={() => onSearchTitle(title)}
+                title={`Search for "${title}"`}
+                aria-label={`Search for ${title}`}
+              >
+                <Search size={15} />
+              </button>
+            )}
+          </div>
           {(originalTitle || (activeSource?.title && activeSource.title !== title)) && (
             <span
               className="player__original-title"
@@ -2221,6 +2425,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setFetchedSubtitles((prev) => [...prev, { name: label, url }]);
           }
           setActiveSubtitle(url);
+
+          /**
+           * The label carries the language; the URL is per-file and worthless
+           * to remember. Turning subtitles *off* is remembered too — an explicit
+           * choice, and the one most likely to be undone by a default.
+           */
+          const language = url ? label?.split(/[^A-Za-z]+/)[0] ?? '' : '';
+          void window.cloudstream?.setPlayerPreferences({ subtitleLanguage: language });
+          preferredSubtitleLanguage.current = language || null;
         }}
       />
 
@@ -2621,6 +2834,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               triggerText="Native"
             />
           )}
+
+          {/* Everything technical lives behind one affordance, so the control
+              bar stays about watching — see PlayerCopyMenu. */}
+          <PlayerCopyMenu
+            title={title}
+            episodeTitle={episodeTitle}
+            streamUrl={streamUrl}
+            capability={capability}
+            provenance={providerProvenance}
+            activeSource={activeSource}
+            allSources={sourceSession?.sources}
+            download={currentDownload ?? null}
+            playerState={() => ({
+              position: `${Math.floor(currentTime)}s`,
+              duration: duration ? `${Math.floor(duration)}s` : undefined,
+              paused: !isPlaying,
+              volume,
+              muted: isMuted,
+              speed,
+              engine: isNativeEngine ? 'native (mpv)' : isConverted ? 'ffmpeg conversion' : 'browser',
+              buffering: isBuffering,
+              error: error ?? undefined,
+            })}
+            onCopyDiagnostics={async (mode) => {
+              const response = await window.cloudstream?.reportDiagnostics?.({
+                mode,
+                context: {
+                  title: episodeTitle ? `${title} — ${episodeTitle}` : title,
+                  url: streamUrl,
+                  source: providerProvenance?.provider,
+                },
+              });
+              return response?.text ?? null;
+            }}
+          />
 
           <button className="icon-button" onClick={toggleFullscreen} aria-label="Fullscreen">
             {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}

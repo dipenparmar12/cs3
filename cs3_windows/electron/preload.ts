@@ -554,6 +554,28 @@ export interface CloudStreamElectronAPI {
    * unrecoverably different actions, and the destructive one cannot be undone.
    */
   removeDownload: (id: string, deleteFile?: boolean) => Promise<void>;
+  /**
+   * Player preferences that outlive one film: volume, mute, speed, and the
+   * track *languages* the viewer keeps choosing.
+   */
+  getPlayerPreferences: () => Promise<
+    Envelope & {
+      preferences: {
+        volume: number;
+        muted: boolean;
+        speed: number;
+        audioLanguage?: string;
+        subtitleLanguage?: string;
+      };
+    }
+  >;
+  setPlayerPreferences: (patch: {
+    volume?: number;
+    muted?: boolean;
+    speed?: number;
+    audioLanguage?: string;
+    subtitleLanguage?: string;
+  }) => Promise<Envelope>;
   getDeleteDownloadPreference: () => Promise<
     Envelope & { preference: 'ask' | 'list-only' | 'list-and-file' }
   >;
@@ -1066,6 +1088,8 @@ const api: CloudStreamElectronAPI = {
   pauseDownload: (id) => ipcRenderer.invoke('download:pause', id),
   resumeDownload: (id) => ipcRenderer.invoke('download:resume', id),
   removeDownload: (id, deleteFile) => ipcRenderer.invoke('download:remove', id, deleteFile),
+  getPlayerPreferences: () => ipcRenderer.invoke('player:getPreferences'),
+  setPlayerPreferences: (patch) => ipcRenderer.invoke('player:setPreferences', patch),
   getDeleteDownloadPreference: () => ipcRenderer.invoke('download:getDeletePreference'),
   setDeleteDownloadPreference: (preference) =>
     ipcRenderer.invoke('download:setDeletePreference', preference),

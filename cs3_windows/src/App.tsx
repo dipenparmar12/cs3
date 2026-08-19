@@ -125,6 +125,8 @@ export const App: React.FC = () => {
   // `startSession` is handed down into the detail view and must not close over
   // `session`, or it would go stale between episode switches.
   const sessionRef = useRef<ActiveSession | null>(null);
+  /** Mirrors `playback` so the refresh handler below is stable across renders. */
+  const playbackRef = useRef<PlaybackRequest | null>(null);
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
@@ -252,6 +254,25 @@ export const App: React.FC = () => {
     const previous = lastQuery.current;
     if (previous?.query) void handleSearch(previous.query, previous.options);
   }, [handleSearch]);
+
+  /**
+   * Search from inside the player.
+   *
+   * Closes the player first. Leaving the film running behind the results is a
+   * second thing happening that nobody asked for, and the audio underneath a
+   * search screen reads as a bug rather than a feature.
+   */
+  const handleSearchFromPlayer = useCallback(
+    (query: string) => {
+      void handleClosePlayer();
+      setSelectedMedia(null);
+      setActiveTab('search');
+      setSearchQuery(query);
+      void handleSearch(query);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [handleSearch]
+  );
 
   const handleSearchFromDetail = useCallback(
     (query: string) => {
@@ -577,6 +598,112 @@ export const App: React.FC = () => {
     window.cloudstream?.playbackCancelSourceSearch(sessionRef.current.id);
   }, []);
 
+  useEffect(() => {
+    playbackRef.current = playback;
+  }, [playback]);
+
+  /**
+   * "Search again" on a player that was opened from the detail page's source list.
+   *
+   * This path had `onRefresh: () => {}` — a button rendered, styled and wired to
+   * nothing, which is the worst of the three possible states because it looks
+   * like the search simply found nothing new. There are three ways into the
+   * player and only one of them (a live `PlaybackSession`) had a working
+   * refresh; the other two are reached by picking a source yourself, which is
+   * exactly when you are most likely to want a different one.
+   *
+   * It runs a real discovery rather than re-reading the cache — a refresh is the
+   * viewer saying the cached answer is wrong, and serving it back is what made
+   * the equivalent button on the detail screen look broken. Results stream in,
+   * so the list grows while the search runs instead of appearing all at once.
+   */
+  const [playbackRefresh, setPlaybackRefresh] = useState<{
+    sessionId: string;
+    searched: number;
+    total: number;
+    done: boolean;
+    error?: string;
+  } | null>(null);
+  const playbackRefreshRef = useRef<string | null>(null);
+
+  const handleRefreshPlaybackSources = useCallback(async () => {
+    const current = playbackRef.current;
+    if (!current || !window.cloudstream) return;
+
+    setPlaybackRefresh({ sessionId: '', searched: 0, total: 0, done: false });
+
+    const response = await window.cloudstream.startSourceDiscovery(
+      {
+        mediaUrl: current.progress?.mediaUrl ?? current.streamUrl,
+        season: current.progress?.season,
+        episode: current.progress?.episode,
+      },
+      current.title,
+      current.episodeTitle,
+      { bypassCache: true }
+    );
+
+    /**
+     * A refresh that cannot start says so. The requirement this satisfies is
+     * "the action must never silently fail" — and the previous no-op failed
+     * that twice over, by neither acting nor reporting.
+     */
+    if (!response?.ok || !response.snapshot) {
+      setPlaybackRefresh({
+        sessionId: '',
+        searched: 0,
+        total: 0,
+        done: true,
+        error: response?.error ?? 'A new source search could not be started.',
+      });
+      return;
+    }
+
+    playbackRefreshRef.current = response.snapshot.sessionId;
+    setPlaybackRefresh({
+      sessionId: response.snapshot.sessionId,
+      searched: 0,
+      total: response.snapshot.totalIndexers ?? 0,
+      done: false,
+    });
+  }, []);
+
+  /**
+   * Streams the refreshed list into the open player.
+   *
+   * Filtered by session id: a discovery that has just been superseded can still
+   * emit once more, and those results answer a different question — the previous
+   * episode, or the search the viewer just replaced.
+   */
+  useEffect(() => {
+    if (!playbackRefresh || !playbackRefresh.sessionId) return;
+
+    const dispose = window.cloudstream?.onPlaybackUpdate((snapshot) => {
+      if (snapshot.sessionId !== playbackRefreshRef.current) return;
+
+      setPlaybackRefresh((state) =>
+        state && state.sessionId === snapshot.sessionId
+          ? {
+              ...state,
+              searched: snapshot.searched,
+              total: snapshot.totalIndexers,
+              done: snapshot.searchDone,
+            }
+          : state
+      );
+
+      // The active source is preserved across a refresh: the viewer asked for
+      // more choices, not for their film to be restarted from a new link.
+      setPlayback((request) =>
+        request?.sources
+          ? { ...request, sources: { ...request.sources, list: snapshot.sources } }
+          : request
+      );
+    });
+
+    return dispose;
+  }, [playbackRefresh?.sessionId]);
+
   const handlePlayNow = useCallback(() => {
     if (!sessionRef.current) return;
     window.cloudstream?.playbackPlayNow(sessionRef.current.id);
@@ -670,6 +797,7 @@ export const App: React.FC = () => {
               infoHash={session.snapshot.activeInfoHash}
               subtitles={session.snapshot.handle?.subtitleUrls ?? []}
               onBack={handleClosePlayer}
+              onSearchTitle={handleSearchFromPlayer}
               hidden={playerHidden}
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
@@ -763,6 +891,7 @@ export const App: React.FC = () => {
               title={preparing.title}
               subtitles={[]}
               onBack={handleClosePlayer}
+              onSearchTitle={handleSearchFromPlayer}
               hidden={playerHidden}
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
@@ -789,6 +918,7 @@ export const App: React.FC = () => {
               infoHash={playback.infoHash}
               subtitles={playback.subtitles}
               onBack={handleClosePlayer}
+              onSearchTitle={handleSearchFromPlayer}
               hidden={playerHidden}
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
@@ -860,16 +990,20 @@ export const App: React.FC = () => {
                       // Discovery is already finished on this path — the viewer
                       // picked from its results — so the panel opens straight
                       // onto the list rather than a progress bar.
-                      phase: 'playing',
+                      // A refresh in flight is shown as one: the panel's own
+                      // progress row is what tells the viewer the button did
+                      // something, which is the whole complaint it fixes.
+                      phase: playbackRefresh && !playbackRefresh.done ? 'searching' : 'playing',
                       sources: playback.sources.list,
                       activeInfoHash: playback.sources.activeInfoHash,
-                      searched: 0,
-                      totalIndexers: 0,
-                      searchDone: true,
+                      searched: playbackRefresh?.searched ?? 0,
+                      totalIndexers: playbackRefresh?.total ?? 0,
+                      searchDone: playbackRefresh ? playbackRefresh.done : true,
+                      error: playbackRefresh?.error,
                       attempts: [],
                       onPlayNow: () => {},
                       onSelectSource: playback.sources.onSelect,
-                      onRefresh: () => {},
+                      onRefresh: handleRefreshPlaybackSources,
                       onSourceUnplayable: playback.sources.onUnplayable,
                       onDownloadSource: playback.sources.onDownload,
                     }

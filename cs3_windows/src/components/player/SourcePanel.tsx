@@ -217,13 +217,30 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
         the text block between them.
       */}
       <ul className="player-panel__sources">
-        {displayedSources.map((source) => {
-          const isActive = source.infoHash === activeInfoHash;
+        {displayedSources.map((source, rowIndex) => {
+          /**
+           * Exactly one row may be marked as playing — the invariant, enforced
+           * where it is actually visible rather than assumed upstream.
+           *
+           * `infoHash` is a *synthetic* identity for a provider stream: the
+           * SHA-1 of its URL. Two extensions that scrape the same file host hand
+           * back the same URL and therefore the same identity, so a plain
+           * equality test lit up every copy at once — the reported
+           * "[x] Source A [x] Source B". Matching the first occurrence keeps the
+           * display truthful about the one stream that is really open, and the
+           * key below is disambiguated so React does not collapse the duplicates
+           * into one row either.
+           */
+          const isActive =
+            Boolean(activeInfoHash) &&
+            source.infoHash === activeInfoHash &&
+            displayedSources.findIndex((candidate) => candidate.infoHash === activeInfoHash) ===
+              rowIndex;
           const isSwitching = switchingTo === source.infoHash;
 
           return (
             <li
-              key={source.infoHash}
+              key={`${source.infoHash}-${rowIndex}`}
               className={`player-panel__source-row${
                 isActive ? ' player-panel__source-row--current' : ''
               }`}

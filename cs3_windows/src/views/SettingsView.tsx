@@ -13,6 +13,7 @@ import {
   Wrench,
   AlertTriangle,
   Play,
+  Trash2,
 } from 'lucide-react';
 import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
@@ -33,6 +34,16 @@ interface SettingsViewProps {
 export const SettingsView: React.FC<SettingsViewProps> = () => {
   const [tab, setTab] = useState<TabId>('general');
   const [downloadDir, setDownloadDir] = useState('%USERPROFILE%\\Downloads\\CloudStream');
+  /**
+   * The delete-behaviour preference, resettable here.
+   *
+   * This is the only way back to being asked once "remember my choice" has been
+   * ticked — a preference that can only be set from inside a dialog the user has
+   * opted out of seeing is one they cannot undo.
+   */
+  const [deletePreference, setDeletePreference] = useState<'ask' | 'list-only' | 'list-and-file'>(
+    'ask'
+  );
   const [useLiveStreams, setUseLiveStreams] = useState(true);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [missingComponentCount, setMissingComponentCount] = useState<number>(0);
@@ -78,6 +89,26 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
     setUseLiveStreams(enabled);
     await window.cloudstream?.setSetting('use_live_streaming_sources', enabled);
     flash(enabled ? 'Live streaming sources enabled.' : 'Demo fallback mode active.');
+  };
+
+  useEffect(() => {
+    void window.cloudstream?.getDeleteDownloadPreference().then((response) => {
+      if (response?.ok) setDeletePreference(response.preference);
+    });
+  }, []);
+
+  const handleChangeDeletePreference = async (
+    preference: 'ask' | 'list-only' | 'list-and-file'
+  ) => {
+    setDeletePreference(preference);
+    await window.cloudstream?.setDeleteDownloadPreference(preference);
+    flash(
+      preference === 'ask'
+        ? 'You will be asked each time a download is deleted.'
+        : preference === 'list-only'
+          ? 'Deleting a download now removes it from the list and keeps the file.'
+          : 'Deleting a download now removes it from the list and deletes the file.'
+    );
   };
 
   const handleSelectDirectory = async () => {
@@ -259,6 +290,41 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
               <button onClick={handleSelectDirectory} className="btn btn-secondary">
                 Change folder
               </button>
+            </SettingRow>
+          </SettingGroup>
+
+          <SettingGroup title="Removing downloads" icon={<Trash2 size={15} />}>
+            <SettingRow
+              label="When you delete a download"
+              note={
+                deletePreference === 'ask'
+                  ? 'Ask every time'
+                  : deletePreference === 'list-only'
+                    ? 'Remove from list, keep the file'
+                    : 'Remove from list and delete the file'
+              }
+              hint={
+                <>
+                  Removing a download from the list and deleting the file it produced are
+                  different actions, and the second cannot be undone — so by default you are
+                  asked which one you meant. If you ticked "remember my choice" in that prompt,
+                  this is where you turn it back on.
+                </>
+              }
+            >
+              <select
+                value={deletePreference}
+                onChange={(e) =>
+                  handleChangeDeletePreference(
+                    e.target.value as 'ask' | 'list-only' | 'list-and-file'
+                  )
+                }
+                aria-label="Delete behaviour"
+              >
+                <option value="ask">Ask every time</option>
+                <option value="list-only">Remove from list only</option>
+                <option value="list-and-file">Remove from list and delete file</option>
+              </select>
             </SettingRow>
           </SettingGroup>
 

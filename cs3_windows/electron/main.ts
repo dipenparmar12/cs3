@@ -1754,6 +1754,62 @@ ipcMain.handle('download:remove', async (_, id: string, deleteFile?: boolean) =>
 const DELETE_PREFERENCE_KEY = 'download_delete_behavior';
 type DeletePreference = 'ask' | 'list-only' | 'list-and-file';
 
+/**
+ * Player preferences that belong to the viewer rather than to a film.
+ *
+ * Volume, mute and speed persist across media and across restarts because they
+ * describe the room, not the title. Track *languages* persist for the same
+ * reason; track **indices** deliberately do not — audio track 2 is the Hindi dub
+ * on one release and the director's commentary on the next, so restoring an
+ * index would confidently select the wrong thing on every file.
+ */
+const PLAYER_PREFERENCES_KEY = 'player_preferences';
+
+interface StoredPlayerPreferences {
+  volume: number;
+  muted: boolean;
+  speed: number;
+  audioLanguage?: string;
+  subtitleLanguage?: string;
+}
+
+const DEFAULT_PLAYER_PREFERENCES: StoredPlayerPreferences = {
+  volume: 1,
+  muted: false,
+  speed: 1,
+};
+
+ipcMain.handle('player:getPreferences', async () => {
+  const stored = datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null);
+  /**
+   * Clamped on read, not just on write. A datastore edited by hand — or carried
+   * in from an Android backup — can hold a volume of 40 or -1, and either one
+   * makes the element throw `IndexSizeError` the moment it is assigned.
+   */
+  const preferences: StoredPlayerPreferences = {
+    ...DEFAULT_PLAYER_PREFERENCES,
+    ...(stored ?? {}),
+  };
+  preferences.volume = Math.min(1, Math.max(0, Number(preferences.volume) || 0));
+  preferences.speed = Math.min(4, Math.max(0.25, Number(preferences.speed) || 1));
+  preferences.muted = preferences.muted === true;
+  return { ok: true, preferences };
+});
+
+ipcMain.handle(
+  'player:setPreferences',
+  async (_, patch: Partial<StoredPlayerPreferences>) => {
+    const current =
+      datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null) ??
+      DEFAULT_PLAYER_PREFERENCES;
+    // Merged rather than replaced: the player writes volume/mute/speed while the
+    // track panels write languages, and a whole-record write from either would
+    // erase the other's choice.
+    datastore.setObject(PLAYER_PREFERENCES_KEY, { ...current, ...patch }, true);
+    return { ok: true };
+  }
+);
+
 ipcMain.handle('download:getDeletePreference', async () => {
   const stored = datastore.getString(DELETE_PREFERENCE_KEY, 'ask', true);
   const preference: DeletePreference =

@@ -390,6 +390,27 @@ export class PlaybackSessionManager {
           error: reason,
         });
       }
+
+      /**
+       * The cache learns from this too, not just the session.
+       *
+       * `unplayable` is forgotten when the player closes, so without this the
+       * same dead link is served first again on the next play — the cache
+       * having no idea it was just rejected. Whether the source is *dropped*
+       * or merely counted against is `recordFailure`'s decision: a definitive
+       * 404 goes now, an ambiguous failure needs to repeat before it counts,
+       * because a passing network fault must not empty the cache.
+       */
+      const status = /(d{3})/.exec(reason);
+      this.content
+        .getCache()
+        .recordFailure(
+          session.request.mediaUrl,
+          current,
+          { status: status ? Number(status[1]) : undefined, reason },
+          session.request.season,
+          session.request.episode
+        );
     }
 
     const remaining = session.sources.filter(
@@ -519,6 +540,23 @@ export class PlaybackSessionManager {
       session.attempts = result.attempts;
       session.phase = 'playing';
       this.emit(session);
+
+      /**
+       * A source that started is a source that works, and the cache is told so.
+       *
+       * This clears any failures it had accumulated. Without it a source that
+       * failed twice on a bad afternoon carries those two strikes forever and
+       * is dropped by the next unrelated blip, even though it has since played
+       * perfectly a dozen times.
+       */
+      this.content
+        .getCache()
+        .recordSuccess(
+          session.request.mediaUrl,
+          result.handle.infoHash,
+          session.request.season,
+          session.request.episode
+        );
 
       // Files are kept: the viewer may promote this stream to a download.
       if (previousInfoHash && previousInfoHash !== result.handle.infoHash) {
