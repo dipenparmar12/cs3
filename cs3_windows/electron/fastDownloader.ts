@@ -550,9 +550,17 @@ export class FastChunkDownloader {
   ): Promise<ProbeResult> {
     let currentUrl = initialUrl;
     let redirects = 0;
+    const seenUrls = new Set<string>();
 
     while (redirects < MAX_REDIRECTS) {
       if (signal?.aborted) throw new Error('Probe aborted');
+
+      if (seenUrls.has(currentUrl)) {
+        throw new Error(
+          `Redirect loop detected: host redirected back to an already visited location (${currentUrl}). The stream token, IP, or session may be blocked or expired.`
+        );
+      }
+      seenUrls.add(currentUrl);
 
       const client = currentUrl.startsWith('https:') ? https : http;
       const headers: Record<string, string> = {

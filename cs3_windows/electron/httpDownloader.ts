@@ -91,8 +91,16 @@ export function startHttpDownload(options: HttpDownloadOptions): HttpDownloadHan
     }, delay);
   };
 
-  const attempt = (url: string, redirectCount: number) => {
+  const attempt = (url: string, redirectCount: number, seenUrls = new Set<string>()) => {
     if (cancelled) return;
+
+    if (seenUrls.has(url)) {
+      options.onError(
+        `Redirect loop detected: host redirected back to an already visited location (${url}). The stream token or IP may be blocked or expired.`
+      );
+      return;
+    }
+    seenUrls.add(url);
 
     if (redirectCount > MAX_REDIRECTS) {
       options.onError('Too many redirects — the source URL does not resolve to a file.');
@@ -113,7 +121,7 @@ export function startHttpDownload(options: HttpDownloadOptions): HttpDownloadHan
     let request: ReturnType<typeof http.get>;
     try {
       request = client.get(url, { headers }, (response) => {
-        handleResponse(url, redirectCount, resumeFrom, response);
+        handleResponse(url, redirectCount, resumeFrom, response, seenUrls);
       });
     } catch (error) {
       failOrRetry(error instanceof Error ? error.message : String(error));
@@ -131,7 +139,8 @@ export function startHttpDownload(options: HttpDownloadOptions): HttpDownloadHan
     url: string,
     redirectCount: number,
     resumeFrom: number,
-    response: IncomingMessage
+    response: IncomingMessage,
+    seenUrls: Set<string>
   ) => {
     const status = response.statusCode ?? 0;
 
@@ -142,7 +151,7 @@ export function startHttpDownload(options: HttpDownloadOptions): HttpDownloadHan
         options.onError(`Redirect ${status} without a location header.`);
         return;
       }
-      attempt(new URL(location, url).toString(), redirectCount + 1);
+      attempt(new URL(location, url).toString(), redirectCount + 1, seenUrls);
       return;
     }
 

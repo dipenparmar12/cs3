@@ -1324,6 +1324,41 @@ links with empty URLs. The empty list still goes back; what changed is that a
 `SourceDiagnosis` travels beside it, carrying the summary for the screen, a hint
 for the user, and the facts for the clipboard.
 
+### The range probe was downloading the whole file
+
+Reported as a stalled download: `Babe Beach`, 4K HDHUB, **2 MB of 5.75 GB at 0 KB/s**. The
+link was alive and the source was fine.
+
+`FastChunkDownloader.probeUrl` asks for `bytes=0-0`, reads the headers, and called
+`res.resume()` before resolving. `resume()` discards the data — it does not stop the
+transfer. Against a server that honours Range that is harmless, because the body is one
+byte. Against a server that **ignores** Range it is not, and
+`video-downloads.googleusercontent.com` ignores it: measured on the reported link, it
+answers `200` with no `Accept-Ranges` and `Content-Length: 6,175,245,105`, so the probe kept
+pulling the file after it had already returned its answer — **5.6 MB in the five seconds
+after resolving, and still going.** The real download then ran beside it, competing for the
+same throttled signed URL. A few megabytes, then nothing.
+
+The probe now destroys the response and the request once it has the headers. Verified
+against the same URL: 0 bytes after resolving, where the old code reached 5.6 MB.
+
+Two things worth keeping straight while you are in there:
+
+- **`supportsRange` was never wrong.** It reads `206` or `Accept-Ranges: bytes`, and this
+  host offers neither, so `canParallelize` was already false and the sequential path was
+  already chosen. The bug was entirely in the abandoned probe connection — which is why it
+  looked like a network problem rather than a downloader one.
+- **A chunk worker used to accept `200`.** If a host changes its mind between the probe and
+  the transfer — signed-URL CDNs do this under load — a ranged request answered with `200`
+  is the whole file from byte zero, and writing it at that chunk's offset corrupts the
+  output while every worker downloads the entire file. It now fails the chunk with a reason.
+  A corrupt file that finishes is worse than a download that says why it stopped.
+
+Unrelated but reported alongside it: a `RefreshingSource` retry on a
+`googleusercontent.com` link is usually **correct behaviour, not a bug**. Those URLs are
+signed and short-lived; the second reported link answered `HTTP 400` outright, and
+re-resolving it from the provider is the only thing that can help.
+
 ### Shipping: the box has to contain everything
 
 The target user has used Netflix and has not used a plugin manager. They install

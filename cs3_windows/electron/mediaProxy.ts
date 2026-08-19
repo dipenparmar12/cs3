@@ -139,7 +139,13 @@ function looksLikeHls(url: string, contentType: string | null): boolean {
     const type = contentType.toLowerCase();
     if (type.includes('mpegurl') || type.includes('m3u8')) return true;
   }
-  return /\.m3u8(\?|$)/i.test(url);
+  const clean = url.split(/[?#]/)[0].toLowerCase();
+  return (
+    clean.endsWith('.m3u8') ||
+    clean.endsWith('.m3u') ||
+    /\/(getm3u8|m3u8|hls)\b/i.test(clean) ||
+    /[?&]format=m3u8/i.test(url)
+  );
 }
 
 export class MediaProxy {

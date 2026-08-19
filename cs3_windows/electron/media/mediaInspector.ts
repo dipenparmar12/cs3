@@ -159,8 +159,13 @@ export function inputOptionsFor(url: string, transport: MediaTransport): string[
 export function transportFromUrl(url: string, isM3u8?: boolean): MediaTransport {
   if (isM3u8) return 'hls';
   const path = url.split(/[?#]/)[0].toLowerCase();
-  if (path.endsWith('.m3u8') || path.endsWith('.m3u')) return 'hls';
-  if (path.endsWith('.mpd')) return 'dash';
+  if (
+    path.endsWith('.m3u8') ||
+    path.endsWith('.m3u') ||
+    /\/(getm3u8|m3u8|hls)\b/i.test(path) ||
+    /[?&]format=m3u8/i.test(url)
+  ) return 'hls';
+  if (path.endsWith('.mpd') || /\/(dash|mpd)\b/i.test(path)) return 'dash';
   return 'progressive';
 }
 

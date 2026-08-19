@@ -2159,8 +2159,16 @@ export class PluginManager {
       url: String(link.url ?? ''),
       referer: link.referer ? String(link.referer) : '',
       quality: typeof link.quality === 'number' ? link.quality : 0,
-      isM3u8: Boolean(link.isM3u8) || link.type === 'M3U8',
-      isDash: link.type === 'DASH',
+      isM3u8:
+        Boolean(link.isM3u8) ||
+        /^(m3u8|hls)$/i.test(String(link.type ?? '')) ||
+        /\.(m3u8|m3u)(\?|$)/i.test(String(link.url ?? '')) ||
+        /\/(getm3u8|m3u8|hls)\b/i.test(String(link.url ?? '')) ||
+        /[?&]format=m3u8/i.test(String(link.url ?? '')),
+      isDash:
+        /^(dash|mpd)$/i.test(String(link.type ?? '')) ||
+        /\.mpd(\?|$)/i.test(String(link.url ?? '')) ||
+        /\/(dash|mpd)\b/i.test(String(link.url ?? '')),
       headers: (link.headers as Record<string, string> | undefined) ?? {},
     }));
 

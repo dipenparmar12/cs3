@@ -132,10 +132,16 @@ export class DownloadService {
   }
 
   private static isSegmented(task: DownloadTask): boolean {
+    const url = task.link?.url ?? '';
+    const clean = url.split(/[?#]/)[0].toLowerCase();
     return (
-      Boolean(task.link.isM3u8) ||
-      Boolean(task.link.isDash) ||
-      /\.(m3u8|mpd)(\?|$)/i.test(task.link.url)
+      Boolean(task.link?.isM3u8) ||
+      Boolean(task.link?.isDash) ||
+      clean.endsWith('.m3u8') ||
+      clean.endsWith('.m3u') ||
+      clean.endsWith('.mpd') ||
+      /\/(getm3u8|m3u8|hls|dash|mpd)\b/i.test(clean) ||
+      /[?&]format=(m3u8|hls|dash)/i.test(url)
     );
   }
 
