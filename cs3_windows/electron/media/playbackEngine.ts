@@ -20,6 +20,7 @@ import {
   planForAudioTrack,
 } from './decisionEngine.ts';
 import { MediaInspector, drmRequiresEme, transportFromUrl } from './mediaInspector.ts';
+import type { InspectionStore } from './inspectionStore.ts';
 
 /**
  * The Universal Media Compatibility Engine (PRD-37), assembled.
@@ -71,6 +72,13 @@ export interface PlaybackEngineDeps {
    * same reason `setCapabilities` does.
    */
   nativeEngine: () => NativeEngineCapability;
+  /**
+   * Remembers what previous probes found, across restarts.
+   *
+   * Optional so the engine still works without one — every test constructs it
+   * bare, and a missing store costs a probe rather than correctness.
+   */
+  inspections?: InspectionStore;
   fetchText: (url: string, bytes: number) => Promise<string | null>;
   /** Asks the source itself why it could not be read. See `main.ts`. */
   describeUnreadable: (url: string) => Promise<ProbeFailure>;
@@ -207,7 +215,28 @@ export class PlaybackEngine {
       );
     }
 
-    const inspection = await this.inspector.inspect(resolvedUrl, isM3u8);
+    /**
+     * A measurement we already have is not taken again.
+     *
+     * Keyed on the *origin* URL rather than the proxied one, because the
+     * loopback address is minted per session. The verdict is still computed
+     * below from this machine's current capabilities — only the ffprobe round
+     * trip is skipped, which is the 1.6-second part.
+     */
+    const remembered = this.deps.inspections?.read(originUrl);
+    const inspection = remembered
+      ? { ...remembered, error: undefined, timedOut: false, latencyMs: 0 }
+      : await this.inspector.inspect(resolvedUrl, isM3u8);
+
+    if (!remembered && inspection.metadata) {
+      this.deps.inspections?.write(
+        originUrl,
+        inspection.metadata,
+        inspection.transport,
+        inspection.drm
+      );
+    }
+
     const requiresEme = drmRequiresEme(inspection.drm);
 
     if (!inspection.metadata) {

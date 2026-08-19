@@ -25,6 +25,7 @@ import { SearchHistoryStore } from './searchHistory';
 import { SubtitleService } from './subtitleService';
 import { MediaTranscoder, VIDEO_CODEC_PROBES } from './mediaTranscoder';
 import { PlaybackEngine } from './media/playbackEngine';
+import { InspectionStore } from './media/inspectionStore';
 import { detectExtensionPicky } from './media/mediaInspector';
 import { runTool } from './media/runTool';
 import type {
@@ -179,6 +180,7 @@ const playbackEngine = new PlaybackEngine({
   proxy: contentService.getProxy(),
   transcoder: mediaTranscoder,
   nativeEngine: () => ({ available: mpvEngine.isAvailable(), policy: nativeEnginePolicy() }),
+  inspections: new InspectionStore(datastore),
   fetchText: async (url, bytes) => {
     try {
       const response = await resilientFetch.fetch(
