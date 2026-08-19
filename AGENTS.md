@@ -72,10 +72,12 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (58 tests, Node type-stripping — no framework) |
-| Media decisions only | `cs3_windows/` | `bun run test:media` (35 cases, no ffmpeg needed) |
-| Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (13 cases, real ffmpeg; skips itself without it) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (87 tests, Node type-stripping — no framework) |
+| Media decisions only | `cs3_windows/` | `bun run test:media` (51 cases, no ffmpeg needed) |
+| Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
+| Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
+| Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
 | Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
 
@@ -230,6 +232,10 @@ starting anything, `media:prepare` inspects-decides-opens and returns the URL to
 `media:getPlaybackDiagnostics` returns the per-attempt telemetry. There is deliberately **no**
 channel that hands back an unclassified playback URL.
 
+`mpv:*` drives the native engine — `mpv:open` (a *prepared* URL only), transport and track
+controls, `mpv:update` snapshots pushed like `playback:*`, and `mpv:getPolicy`/`mpv:setPolicy`
+for how eagerly it is used. It has no channel that takes a raw link either, for the same reason.
+
 Fallible handlers return an **envelope**, `{ ok: boolean; error?: string; …payload }`,
 instead of rejecting. `main.ts` has a `fail()` helper for this. A transport failure must
 surface as UI text the user can act on, never an unhandled rejection in the renderer.
@@ -262,6 +268,7 @@ not a layering mistake.
 | `media/mediaInspector.ts` | ffprobe → `MediaMetadata`; transport and DRM classified from the manifest body, never the URL. |
 | `media/decisionEngine.ts` | Pure decision: metadata + host capability → `TransformationPlan`. Tested exhaustively; see the codec section. |
 | `media/playbackEngine.ts` | Inspect → decide → open, and the only way to obtain a URL to attach. Owns playback telemetry. |
+| `media/mpvEngine.ts` | The native engine. Spawns mpv, drives it over JSON-RPC, and reports snapshots. For the streams Chromium will never decode — see below. |
 | `mediaTranscoder.ts` | Executes a plan as a live fragmented-MP4 stream on loopback, plus embedded-subtitle extraction. |
 | `metadataProvider.ts` | TVmaze + AniList. **Catalogue metadata only, never streams.** Its key output is the IMDb id, which indexers match on far better than free text. |
 | `cinemeta.ts` | Stremio Cinemeta metadata provider, prioritised in search. |
@@ -1049,6 +1056,149 @@ The settings panel shows every number, every criterion's sample count, and the e
 because a system that reorders results on evidence nobody can see is one users learn to
 distrust the first time it is wrong — and with hundreds of third-party scrapers it will
 sometimes be wrong.
+
+### The native engine: mpv, for the streams Chromium will never decode
+
+Added 2026-08-19 against `docs/roadmap/support_libmpv.md`. Everything in the codec
+section above is still true and still the fallback; what changed is that the transcoding
+ladder is no longer the *only* answer, and it stopped being the answer for the case where
+it was worst.
+
+The arithmetic that motivates it. A 4K HEVC 10-bit release — routine on GDFlix, Google
+Drive links and any decent torrent — has exactly one browser-side path: re-encode to 8-bit
+H.264. That costs a whole CPU core, throws away the HDR metadata, flattens 5.1 to stereo,
+and on a software-only host under 16 threads it downscales to 1080p because libx264 cannot
+hold realtime at 4K. mpv carries its own FFmpeg and hands the bitstream to D3D11VA, NVDEC,
+Vulkan or VideoToolbox. **Measured here: `d3d11va`, full resolution, nothing re-encoded.**
+
+| File | Role |
+|---|---|
+| `media/mpvEngine.ts` | Spawns and supervises mpv; line-delimited JSON-RPC over a named pipe (Windows) or unix socket. Property observation, track lists, seek, tracks, subtitles. |
+| `src/types/mpv.ts` | The contract, imported by both sides. `MpvSnapshot` is what the player renders from. |
+| `src/components/player/NativeEngineStage.tsx` | The player surface for a routed stream: our controls, mpv's playback. |
+| `binaryDownloader.setupMpv` | Fetches a portable build on demand. |
+
+**Routing is a decision, not a mode.** `shouldRouteToNativeEngine` runs *after* the
+browser-side decision rather than instead of it, so removing mpv from the machine reverts
+every verdict to exactly what it was — there is no second code path to keep correct. Three
+policies, stored in the datastore under `native_engine_policy`:
+
+- `off` — the ladder does everything, as before.
+- `auto` (default) — mpv takes any stream the browser path would have **re-encoded**, plus
+  lossless and object-based audio (TrueHD, DTS-HD MA, DTS:X, FLAC, PCM).
+- `aggressive` — mpv takes everything that is not already playing natively, including the
+  cheap remux, which preserves 5.1/7.1 everywhere.
+
+**AC-3 and E-AC-3 5.1 deliberately do *not* route under `auto`**, and that is the line
+worth understanding. The distinction is recoverability: a stereo downmix of AC-3 loses a
+speaker layout and the 5.1 is still in the file next time, while re-encoding TrueHD to
+192 kbit stereo destroys the thing the release exists for. Routing AC-3 would also send
+most television releases out of the in-app player to save a few percent of one core —
+`aggressive` is there for anyone who wants that trade, and it is not the default.
+
+**A stream never reaches mpv without being inspected first.** There is no `mpv:play(url)`
+that takes a raw link; `media:prepare` remains the only way to obtain a playable URL, and
+it returns `requiredStrategy: 'NATIVE_MPV'` with the proxied loopback address. INV-RACE-1
+applies to this engine exactly as it applies to the `<video>` element — a second entry
+point that skipped inspection would reintroduce PRD-37's original bug in a new decoder.
+`VideoPlayer` also refuses to assign a `NATIVE_MPV` URL to the element: Chromium would take
+it, fail, fire `error`, and the failover ladder would skip a source that is playing fine.
+
+Things that will bite:
+
+- **The URL handed over is the proxied one**, same rule as `externalPlayer`. Headers are
+  also passed per-file through `loadfile`'s option map rather than as process arguments,
+  because one long-lived mpv process serves a whole series and episode 2's `Referer` is not
+  episode 1's.
+- **`--no-config` is not tidiness.** Someone who uses mpv has configured it for mpv — key
+  bindings, an OSC, a profile forcing software decoding, `--save-position-on-quit`. Any of
+  those silently changes what this engine does, and the bug is invisible on every machine
+  but theirs.
+- **`--ytdl=no`.** Link resolution is the extensions' job and it is already done. Left on,
+  every failed load spends seconds shelling out to a downloader that cannot help — measured
+  at ~8s added to a failure mpv had already diagnosed as HTTP 522.
+- **`video-params/pixelformat` lies once hardware decoding is running.** It reports the GPU
+  surface type (`d3d11`, `cuda`), and the real format moves to `hw-pixelformat`. Reading
+  only the first makes every hardware-decoded file look like it has no bit depth — which is
+  the fact that put it on this path.
+- **`mpv.com` ships beside `mpv.exe`.** `mpv.exe` is a GUI-subsystem binary whose stdout
+  goes nowhere, so without the console front-end `--version` and `--hwdec=help` return
+  empty and every diagnostic about the engine is blank.
+- **The 7z archive needs bsdtar.** Windows' own `tar.exe` is libarchive and reads 7z;
+  PowerShell's `Expand-Archive` does not, so `extractZip`'s fallback cannot rescue this one.
+- **mpv is a child process with its own window** and is wired into `before-quit`. Without
+  that it outlives the app and keeps playing with nothing left on screen to stop it.
+
+**What is not built: embedding.** mpv renders in its own window, driven over IPC — the
+roadmap's Option A, which it calls the recommended first step. Putting the video surface
+inside the Electron window needs libmpv's render API through a native addon (Option B).
+`MpvOpenRequest.windowHandle` exists and is passed to `--wid` for when that lands; nothing
+sets it today.
+
+`electron/media/mpvEngine.test.mts` (12 cases, `bun run test:native`) drives a real mpv
+process against a synthesised HEVC 10-bit / AC-3 5.1 Matroska fixture. It is not pure and
+should not be: every failure worth catching lives in the seam between two processes — the
+JSON framing, `request_id` correlation, the property observations that drive the timeline,
+`end-file` telling a dead link apart from the credits — and a mock would only ever assert
+what we assumed mpv does.
+
+### FFmpeg 7.1 silently broke the image-segment fix
+
+`-allowed_extensions ALL` — the documented answer to `Hdmovie2` serving MPEG-TS from `.png`
+URLs — **stopped working, and nothing in this repository changed on the day it did.**
+FFmpeg 7.1 added `-extension_picky`, defaulted it to *true*, and evaluates it before the
+allow-list. On the bundled build (n8.0) the old flag is inert and every provider serving
+extensionless or image-named segments fails with the exact message the fix was written
+against.
+
+Measured against a local HLS fixture with `.png` segments served as `image/png`:
+
+| Flags | Result |
+|---|---|
+| `-allowed_extensions ALL` | refused |
+| `-allowed_segment_extensions ALL` | refused |
+| `-extension_picky 0` | **probes cleanly** |
+
+The flag cannot simply be added: passing an option a binary does not know is fatal to the
+whole command line (`Option extension_picky not found`), and FFmpeg 7.0 is still in the
+download mirrors. So `detectExtensionPicky` asks the binary via `-h demuxer=hls` once at
+startup and again after any ffmpeg install, and `hlsDemuxerOptions()` includes the flag
+only where it exists. Pinned by `pipeline.test.mts`.
+
+Found by `tools/e2e/native-engine-matrix.mjs` on a real provider playlist, on its first
+run — which is the argument for that harness existing.
+
+### 5.2 The vendor coverage matrix — `tools/e2e/native-engine-matrix.mjs`
+
+```
+node --experimental-strip-types tools/e2e/native-engine-matrix.mjs
+node --experimental-strip-types tools/e2e/native-engine-matrix.mjs --plugins 12 --links 2
+node --experimental-strip-types tools/e2e/native-engine-matrix.mjs --only Cinefreak,HDhub4u
+node --experimental-strip-types tools/e2e/native-engine-matrix.mjs --titles hindi-movie,english-series
+```
+
+`provider-e2e.mjs` answers "does the extension corpus still run?". This answers the question
+after it: **given what those extensions hand back, can this app put it on screen?** Those are
+different failures with different owners — a provider resolving five links to 10-bit HEVC is
+working perfectly and is still, without the native engine, five links we could not play.
+
+It imports the shipping `MediaInspector` and `decideStrategy` rather than reimplementing
+them, so the strategy in the report is literally the one the app will choose for that URL;
+a harness with its own copy of the decision agrees with the product right until it matters.
+Every candidate stream is then **played for real by mpv for a few seconds**, headless
+(`--vo=null --ao=null`, which still runs the full demux and decode path), and the report
+carries how far the playhead got and how many frames dropped. `--untimed` is deliberately
+not passed — decoding as fast as the CPU allows would hide the exact failure being looked
+for, a stream that cannot sustain realtime.
+
+Each row records **both** verdicts: what the strategy would have been without the engine and
+what it is with it. A row where they differ is a stream that used to be re-encoded and now
+is not, which is the only honest way to state what the engine bought.
+
+Language coverage is deliberate rather than decorative. Hindi releases are where the hard
+cases cluster — dual-audio Matroska with per-language 5.1 AC-3/E-AC-3, 10-bit HEVC encodes,
+the multi-track files the audio-selection logic exists for — so a matrix of English titles
+alone reports a compatibility story that is true for half the catalogue.
 
 ### When we cannot play it, hand it to something that can
 

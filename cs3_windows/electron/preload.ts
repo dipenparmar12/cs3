@@ -73,6 +73,12 @@ import type {
   RendererCapabilities,
   SourceCapabilityModel,
 } from '../src/types/media';
+import type {
+  MpvCommandResult,
+  MpvEngineStatus,
+  MpvOpenRequest,
+  MpvSnapshot,
+} from '../src/types/mpv';
 
 /**
  * Typed, allow-listed IPC surface (ARCH-2 / SEC-9).
@@ -482,6 +488,42 @@ export interface CloudStreamElectronAPI {
   /** Opens an http(s) link in the system browser. Other schemes are refused. */
   openExternalLink: (url: string) => Promise<Envelope>;
 
+  // --- native playback engine (mpv) ---
+  /**
+   * The engine's controls, mirroring what a `<video>` element would have offered.
+   *
+   * A stream routed to mpv produces no `timeupdate`, no `buffered` ranges and no
+   * track list in the DOM, so the player renders from {@link onMpvUpdate}
+   * snapshots and drives playback through these instead. There is deliberately
+   * no method that takes a raw URL: everything playable still comes out of
+   * `preparePlaybackStream`, which inspects the source first.
+   */
+  getMpvStatus: () => Promise<Envelope & { status: MpvEngineStatus }>;
+  openInNativeEngine: (request: MpvOpenRequest) => Promise<MpvCommandResult>;
+  mpvSetPaused: (paused: boolean) => Promise<MpvCommandResult>;
+  mpvSeek: (seconds: number) => Promise<MpvCommandResult>;
+  mpvSetVolume: (volume: number) => Promise<MpvCommandResult>;
+  mpvSetMuted: (muted: boolean) => Promise<MpvCommandResult>;
+  mpvSetSpeed: (speed: number) => Promise<MpvCommandResult>;
+  mpvSetFullscreen: (fullscreen: boolean) => Promise<MpvCommandResult>;
+  /** mpv track ids, which are 1-based and per type — not ffprobe ordinals. */
+  mpvSetAudioTrack: (id: number | null) => Promise<MpvCommandResult>;
+  mpvSetSubtitleTrack: (id: number | null) => Promise<MpvCommandResult>;
+  mpvAddSubtitle: (url: string, title?: string, language?: string) => Promise<MpvCommandResult>;
+  mpvSetSubtitleDelay: (seconds: number) => Promise<MpvCommandResult>;
+  mpvStop: () => Promise<MpvCommandResult>;
+  /** A pull, for a player that mounted while something was already playing. */
+  getMpvSnapshot: () => Promise<Envelope & { snapshot: MpvSnapshot }>;
+  onMpvUpdate: (callback: (snapshot: MpvSnapshot) => void) => () => void;
+  getNativeEnginePolicy: () => Promise<
+    Envelope & { policy: 'off' | 'auto' | 'aggressive'; available: boolean }
+  >;
+  setNativeEnginePolicy: (
+    policy: 'off' | 'auto' | 'aggressive'
+  ) => Promise<Envelope & { policy?: string }>;
+  /** Fetches mpv. Not part of `setupAllBinaries` — it is the biggest download. */
+  setupMpv: () => Promise<Envelope & { status: MpvEngineStatus }>;
+
   getSourceCacheStats: () => Promise<{ entries: number; sources: number }>;
   clearSourceCache: () => Promise<Envelope>;
 
@@ -523,7 +565,7 @@ export interface CloudStreamElectronAPI {
     allReady: boolean;
     missingCount: number;
     runtime: SystemRuntimeStatus;
-    binaries: { aria2: boolean; ytdlp: boolean; ffmpeg: boolean; ffprobe: boolean };
+    binaries: { aria2: boolean; ytdlp: boolean; ffmpeg: boolean; ffprobe: boolean; mpv: boolean };
     suites: { runtime: boolean; downloads: boolean; media: boolean };
   }>;
   checkBinaries: () => Promise<{
@@ -531,6 +573,8 @@ export interface CloudStreamElectronAPI {
     ytdlp: boolean;
     ffmpeg: boolean;
     ffprobe: boolean;
+    /** The native engine is optional: absent is a normal, working state. */
+    mpv: boolean;
   }>;
   testAllBinaries: () => Promise<{
     aria2: { ok: boolean; version?: string; path?: string; error?: string };
@@ -539,7 +583,7 @@ export interface CloudStreamElectronAPI {
     ffprobe: { ok: boolean; version?: string; path?: string; error?: string };
   }>;
   testBinary: (
-    name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe'
+    name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'mpv'
   ) => Promise<{ ok: boolean; version?: string; path?: string; error?: string }>;
   removeBinary: (
     name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'media' | 'downloads' | 'all'
@@ -961,6 +1005,30 @@ const api: CloudStreamElectronAPI = {
   openInExternalPlayer: (playerId, url) =>
     ipcRenderer.invoke('player:openExternal', playerId, url),
   openExternalLink: (url) => ipcRenderer.invoke('shell:openExternal', url),
+
+  getMpvStatus: () => ipcRenderer.invoke('mpv:status'),
+  openInNativeEngine: (request) => ipcRenderer.invoke('mpv:open', request),
+  mpvSetPaused: (paused) => ipcRenderer.invoke('mpv:setPaused', paused),
+  mpvSeek: (seconds) => ipcRenderer.invoke('mpv:seek', seconds),
+  mpvSetVolume: (volume) => ipcRenderer.invoke('mpv:setVolume', volume),
+  mpvSetMuted: (muted) => ipcRenderer.invoke('mpv:setMuted', muted),
+  mpvSetSpeed: (speed) => ipcRenderer.invoke('mpv:setSpeed', speed),
+  mpvSetFullscreen: (fullscreen) => ipcRenderer.invoke('mpv:setFullscreen', fullscreen),
+  mpvSetAudioTrack: (id) => ipcRenderer.invoke('mpv:setAudioTrack', id),
+  mpvSetSubtitleTrack: (id) => ipcRenderer.invoke('mpv:setSubtitleTrack', id),
+  mpvAddSubtitle: (url, title, language) =>
+    ipcRenderer.invoke('mpv:addSubtitle', url, title, language),
+  mpvSetSubtitleDelay: (seconds) => ipcRenderer.invoke('mpv:setSubtitleDelay', seconds),
+  mpvStop: () => ipcRenderer.invoke('mpv:stop'),
+  getMpvSnapshot: () => ipcRenderer.invoke('mpv:snapshot'),
+  onMpvUpdate: (callback) => {
+    const listener = (_: unknown, snapshot: MpvSnapshot) => callback(snapshot);
+    ipcRenderer.on('mpv:update', listener);
+    return () => ipcRenderer.removeListener('mpv:update', listener);
+  },
+  getNativeEnginePolicy: () => ipcRenderer.invoke('mpv:getPolicy'),
+  setNativeEnginePolicy: (policy) => ipcRenderer.invoke('mpv:setPolicy', policy),
+  setupMpv: () => ipcRenderer.invoke('binary:setupMpv'),
 
   getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
   clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),

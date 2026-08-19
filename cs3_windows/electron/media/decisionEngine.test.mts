@@ -22,6 +22,7 @@ import type {
   HostEncodeCapability,
   MediaMetadata,
   MediaTransport,
+  NativeEngineCapability,
   RendererCapabilities,
   SubtitleStreamMetadata,
   VideoStreamMetadata,
@@ -488,6 +489,164 @@ test('DivX, XviD, MPEG-4 Part 2, WMV and RealVideo trigger video transcode', () 
 
   const rv40 = decide(media({ video: video({ codec: 'rv40' }) }));
   assert.equal(rv40.strategy, 'VIDEO_TRANSCODE');
+});
+
+// --- native engine routing -------------------------------------------------
+
+/**
+ * These rows are the answer to "when is mpv worth leaving the in-app player
+ * for?", and they are asserted rather than reasoned about because the failure
+ * mode is invisible in both directions. Route too little and a 4K HEVC release
+ * still gets downscaled to 1080p on a machine that could have played it
+ * untouched. Route too much and every television episode with AC-3 audio opens a
+ * second window, which reads as the app being broken rather than as a policy.
+ */
+
+const MPV_OFF: NativeEngineCapability = { available: true, policy: 'off' };
+const MPV_AUTO: NativeEngineCapability = { available: true, policy: 'auto' };
+const MPV_AGGRESSIVE: NativeEngineCapability = { available: true, policy: 'aggressive' };
+const MPV_MISSING: NativeEngineCapability = { available: false, policy: 'aggressive' };
+
+const decideNative = (
+  metadata: MediaMetadata,
+  native: NativeEngineCapability,
+  transport: MediaTransport = 'progressive',
+  caps: RendererCapabilities | null = PLAIN,
+  host: HostEncodeCapability = GPU
+) => decideStrategy(metadata, transport, caps, host, false, native);
+
+const HEVC_10BIT_4K = media({
+  formatName: 'matroska,webm',
+  video: video({ codec: 'hevc', pixelFormat: 'yuv420p10le', bitDepth: 10, width: 3840, height: 2160 }),
+  audio: [audio({ codec: 'eac3', channels: 6, playable: false })],
+});
+
+test('an uninstalled engine changes nothing at all', () => {
+  // The transcoding ladder has to remain a complete answer on its own: it is
+  // what runs on every machine without mpv, and the fallback when mpv fails.
+  assert.equal(decideNative(HEVC_10BIT_4K, MPV_MISSING).strategy, 'FULL_TRANSCODE');
+  assert.equal(decideNative(HEVC_10BIT_4K, MPV_OFF).strategy, 'FULL_TRANSCODE');
+});
+
+test('4K HEVC 10-bit routes to the native engine instead of being re-encoded', () => {
+  const decision = decideNative(HEVC_10BIT_4K, MPV_AUTO);
+  assert.equal(decision.strategy, 'NATIVE_MPV');
+  // Nothing is left in the plan for `mediaTranscoder` to act on.
+  assert.equal(decision.plan.videoAction, 'none');
+  assert.equal(decision.plan.audioAction, 'none');
+  assert.equal(decision.plan.containerAction, 'passthrough');
+});
+
+test('the software 4K downscale is what the engine exists to avoid', () => {
+  // Same file, no GPU encoder: the browser path would hand back 1080p.
+  const browser = decideNative(HEVC_10BIT_4K, MPV_OFF, 'progressive', PLAIN, CPU);
+  assert.equal(browser.plan.videoAction, 'downscale');
+  assert.equal(browser.plan.targetHeight, 1080);
+
+  const native = decideNative(HEVC_10BIT_4K, MPV_AUTO, 'progressive', PLAIN, CPU);
+  assert.equal(native.strategy, 'NATIVE_MPV');
+  assert.equal(native.plan.targetHeight, undefined);
+});
+
+test('a stream that already plays natively is never taken away from the in-app player', () => {
+  // Routing this would trade a working single-window experience for CPU that
+  // was never being spent.
+  assert.equal(decideNative(media(), MPV_AGGRESSIVE).strategy, 'DIRECT');
+  assert.equal(
+    decideNative(media({ formatName: 'hls' }), MPV_AGGRESSIVE, 'hls').strategy,
+    'HLS_NATIVE'
+  );
+});
+
+test('encrypted streams stay with EME, which is the only thing holding keys', () => {
+  const decision = decideStrategy(media(), 'hls', PLAIN, GPU, true, MPV_AGGRESSIVE);
+  assert.equal(decision.strategy, 'EME_NATIVE');
+});
+
+test('under `auto` a plain MKV remux stays in the app', () => {
+  // H.264 + AAC in Matroska: the wrapper is wrong and nothing else. The remux
+  // runs at ~27x realtime and loses nothing, so there is no case for a window.
+  const mkv = media({ formatName: 'matroska,webm' });
+  assert.equal(decideNative(mkv, MPV_AUTO).strategy, 'REMUX_CONTAINER');
+  assert.equal(decideNative(mkv, MPV_AGGRESSIVE).strategy, 'NATIVE_MPV');
+});
+
+test('under `auto` AC-3 5.1 is still downmixed in the app, not routed', () => {
+  // The loss is a speaker layout and it is recoverable — the 5.1 is still in the
+  // file next time. Routing every broadcast TV release would be the larger bug.
+  const ac3 = media({ audio: [audio({ codec: 'ac3', channels: 6, playable: false })] });
+  assert.equal(decideNative(ac3, MPV_AUTO).strategy, 'AUDIO_TRANSCODE');
+});
+
+test('under `auto` lossless and object-based audio routes, because that loss is permanent', () => {
+  for (const codec of ['truehd', 'dtshd', 'dts-hd ma', 'flac', 'pcm_s24le']) {
+    const decision = decideNative(
+      media({ audio: [audio({ codec, channels: 8, playable: false })] }),
+      MPV_AUTO
+    );
+    assert.equal(decision.strategy, 'NATIVE_MPV', `${codec} should route to the native engine`);
+  }
+});
+
+test('the routing decision reads the selected track, not the first one', () => {
+  // An English TrueHD default beside a Hindi TrueHD track: whichever is chosen,
+  // the answer is the same — but the lookup must find *a* track. A plan whose
+  // selected index matches nothing must not silently decide "no lossless audio".
+  const decision = decideNative(
+    media({
+      audio: [
+        audio({ index: 0, codec: 'truehd', channels: 8, language: 'eng', playable: false, isDefault: true }),
+        audio({ index: 1, codec: 'truehd', channels: 8, language: 'hin', playable: false }),
+      ],
+    }),
+    MPV_AUTO
+  );
+  assert.equal(decision.strategy, 'NATIVE_MPV');
+  assert.equal(decision.plan.selectedAudioIndex, 0);
+});
+
+test('a build with HEVC decoders keeps its remux rather than routing under `auto`', () => {
+  // The renderer's measurement wins here exactly as it does everywhere else: if
+  // this machine decodes HEVC, there is no re-encode to escape from.
+  const decision = decideNative(
+    media({
+      formatName: 'matroska,webm',
+      video: video({ codec: 'hevc', pixelFormat: 'yuv420p10le', bitDepth: 10 }),
+    }),
+    MPV_AUTO,
+    'progressive',
+    HEVC_CAPABLE
+  );
+  assert.equal(decision.strategy, 'REMUX_CONTAINER');
+});
+
+test('HLS carrying HEVC routes, because hls.js cannot invent a decoder either', () => {
+  const decision = decideNative(
+    media({ formatName: 'hls', video: video({ codec: 'hevc' }) }),
+    MPV_AUTO,
+    'hls'
+  );
+  assert.equal(decision.strategy, 'NATIVE_MPV');
+});
+
+test('DASH routes only when the browser path would have re-encoded it', () => {
+  // A remux of a playable DASH ladder is cheap and keeps the in-app player.
+  const plain = decideNative(media({ formatName: 'dash' }), MPV_AUTO, 'dash');
+  assert.equal(plain.strategy, 'DASH_REMUX');
+
+  const hevc = decideNative(
+    media({ formatName: 'dash', video: video({ codec: 'hevc' }) }),
+    MPV_AGGRESSIVE,
+    'dash'
+  );
+  assert.equal(hevc.strategy, 'NATIVE_MPV');
+});
+
+test('the explanation keeps the browser-side reason and says what changed', () => {
+  const decision = decideNative(HEVC_10BIT_4K, MPV_AUTO);
+  assert.match(decision.explanation, /native engine \(mpv\)/);
+  assert.match(decision.explanation, /HEVC/);
+  assert.match(decision.explanation, /HDR/);
 });
 
 // --- runner ----------------------------------------------------------------

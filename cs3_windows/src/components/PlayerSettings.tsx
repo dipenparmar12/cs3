@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Tv, Play } from 'lucide-react';
+import { Tv, Play, Cpu, Download, Loader2 } from 'lucide-react';
 import { SettingGroup, SettingRow } from './settings/SettingRow';
 import { AspectRatioMode } from '../types/player';
 
@@ -9,6 +9,8 @@ import { AspectRatioMode } from '../types/player';
  * Controls optional player toolbar buttons (Aspect Ratio, Playback Speed, and Subtitles)
  * and default playback preferences.
  */
+type NativePolicy = 'off' | 'auto' | 'aggressive';
+
 export const PlayerSettings: React.FC = () => {
   const [showSpeedControl, setShowSpeedControl] = useState(false);
   const [showAspectControl, setShowAspectControl] = useState(false);
@@ -16,6 +18,19 @@ export const PlayerSettings: React.FC = () => {
   const [defaultAspect, setDefaultAspect] = useState<string>(AspectRatioMode.Fit);
   const [defaultSpeed, setDefaultSpeed] = useState<string>('1');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  /**
+   * `null` while the answer is unknown, which is different from "not installed".
+   *
+   * Rendering "Not installed" during the round trip puts an install button in
+   * front of someone who already has the engine, and they click it.
+   */
+  const [nativeAvailable, setNativeAvailable] = useState<boolean | null>(null);
+  const [nativeVersion, setNativeVersion] = useState<string | null>(null);
+  const [nativeDecoders, setNativeDecoders] = useState<string[]>([]);
+  const [nativePolicy, setNativePolicy] = useState<NativePolicy>('auto');
+  const [installingNative, setInstallingNative] = useState(false);
+  const [nativeProgress, setNativeProgress] = useState<string | null>(null);
 
   const flash = (message: string) => {
     setStatusMessage(message);
@@ -58,10 +73,68 @@ export const PlayerSettings: React.FC = () => {
       }
     };
     void loadSettings();
+
+    const loadNative = async () => {
+      const [status, policy] = await Promise.all([
+        window.cloudstream?.getMpvStatus(),
+        window.cloudstream?.getNativeEnginePolicy(),
+      ]);
+      if (!active) return;
+      if (status?.ok) {
+        setNativeAvailable(status.status.available);
+        setNativeVersion(status.status.version);
+        setNativeDecoders(status.status.hardwareDecoders);
+      } else {
+        setNativeAvailable(false);
+      }
+      if (policy?.ok) setNativePolicy(policy.policy);
+    };
+    void loadNative();
+
     return () => {
       active = false;
     };
   }, []);
+
+  const handleChangeNativePolicy = async (policy: NativePolicy) => {
+    setNativePolicy(policy);
+    await window.cloudstream?.setNativeEnginePolicy(policy);
+    flash(
+      policy === 'off'
+        ? 'The native engine is off: everything plays in the built-in player.'
+        : policy === 'aggressive'
+          ? 'The native engine will take every stream the browser cannot play.'
+          : 'The native engine will take the streams the built-in player handles badly.'
+    );
+  };
+
+  const handleInstallNative = async () => {
+    setInstallingNative(true);
+    setNativeProgress('Starting…');
+    /**
+     * Progress arrives on the shared binary channel, so it is filtered by
+     * component: the ffmpeg install can be running at the same time from the
+     * components screen, and showing its percentage here would be a lie.
+     */
+    const stop = window.cloudstream?.onBinarySetupProgress?.((update) => {
+      if (update.component === 'mpv') setNativeProgress(update.status);
+    });
+    try {
+      const result = await window.cloudstream?.setupMpv();
+      if (result?.ok) {
+        setNativeAvailable(true);
+        setNativeVersion(result.status?.version ?? null);
+        setNativeDecoders(result.status?.hardwareDecoders ?? []);
+        flash('The native playback engine is installed and ready.');
+      } else {
+        flash(result?.error ?? 'The native playback engine could not be installed.');
+      }
+    } finally {
+      stop?.();
+      setInstallingNative(false);
+      setNativeProgress(null);
+    }
+  };
 
   const handleToggleSpeed = async (enabled: boolean) => {
     setShowSpeedControl(enabled);
@@ -175,6 +248,103 @@ export const PlayerSettings: React.FC = () => {
             <span>{showSpeedControl ? 'Enabled' : 'Disabled'}</span>
           </label>
         </SettingRow>
+      </SettingGroup>
+
+      <SettingGroup title="Native Playback Engine" icon={<Cpu size={15} />}>
+        {/**
+         * The setting exists because the trade-off is real in both directions,
+         * not because there was no defensible default.
+         *
+         * Routing a stream to mpv buys hardware decoding, full resolution, HDR
+         * and the original channel layout — and costs the in-app player: the
+         * video renders in the engine's own window, driven from here. That is
+         * clearly worth it for a 4K HEVC release the app would otherwise
+         * downscale to 1080p at 100% CPU. It is clearly not worth it for a
+         * 720p H.264 web-rip that plays perfectly in place. `auto` draws that
+         * line; the other two let someone who disagrees say so.
+         */}
+        <SettingRow
+          label="Use the native engine"
+          note={
+            nativeAvailable === null
+              ? 'Checking…'
+              : nativeAvailable
+                ? nativeVersion ?? 'Installed'
+                : 'Not installed'
+          }
+          hint={
+            <>
+              Streams the browser cannot decode — 4K and HEVC, 10-bit, HDR, VC-1, MPEG-2,
+              DTS-HD and TrueHD — are otherwise re-encoded by FFmpeg, which costs a whole
+              CPU core, drops HDR and flattens surround sound to stereo. The native engine
+              (mpv) decodes them on the GPU untouched instead, in its own window, driven by
+              the controls in the player.
+              <br />
+              <br />
+              <strong>Automatic</strong> hands over only what the built-in player handles
+              badly: anything it would have re-encoded, plus lossless and object-based audio.
+              <br />
+              <strong>Always</strong> also hands over the cheap cases — container remuxes and
+              surround downmixes — which preserves 5.1 and 7.1 everywhere at the cost of
+              leaving the in-app window more often.
+              <br />
+              <strong>Never</strong> keeps everything in the built-in player and its FFmpeg
+              conversion path, exactly as before this engine existed.
+            </>
+          }
+        >
+          <select
+            value={nativePolicy}
+            onChange={(event) => handleChangeNativePolicy(event.target.value as NativePolicy)}
+            aria-label="Native engine policy"
+            disabled={nativeAvailable === false}
+          >
+            <option value="auto">Automatic (recommended)</option>
+            <option value="aggressive">Always, when the browser cannot play it</option>
+            <option value="off">Never</option>
+          </select>
+        </SettingRow>
+
+        {nativeAvailable === false && (
+          <SettingRow
+            label="Install the native engine"
+            note={nativeProgress ?? '~32 MB download'}
+            hint={
+              <>
+                Fetches a portable build of mpv into this app's own folder. Nothing is
+                installed system-wide and no existing mpv configuration is used or changed.
+                This is deliberately not part of "install all components": someone who only
+                watches H.264 web releases never needs it.
+              </>
+            }
+          >
+            <button
+              type="button"
+              className="btn"
+              onClick={handleInstallNative}
+              disabled={installingNative}
+            >
+              {installingNative ? <Loader2 size={14} className="spin" /> : <Download size={14} />}
+              {installingNative ? 'Installing…' : 'Install'}
+            </button>
+          </SettingRow>
+        )}
+
+        {nativeAvailable && nativeDecoders.length > 0 && (
+          <SettingRow
+            label="Hardware decoders available"
+            hint={
+              <>
+                What this build can offer, as reported by mpv. Which one is actually used is
+                chosen per stream and shown in the player while it is running — a decoder
+                that fails to open falls back to software silently, so the two are not the
+                same claim.
+              </>
+            }
+          >
+            <span className="setting-row__note">{nativeDecoders.join(', ')}</span>
+          </SettingRow>
+        )}
       </SettingGroup>
 
       <SettingGroup title="Playback Defaults" icon={<Play size={15} />}>

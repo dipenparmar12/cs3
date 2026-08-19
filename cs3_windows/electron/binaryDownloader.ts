@@ -75,25 +75,35 @@ export class BinaryDownloader {
     return null;
   }
 
-  public checkBinaries(): { aria2: boolean; ytdlp: boolean; ffmpeg: boolean; ffprobe: boolean } {
+  public checkBinaries(): {
+    aria2: boolean;
+    ytdlp: boolean;
+    ffmpeg: boolean;
+    ffprobe: boolean;
+    mpv: boolean;
+  } {
     return {
       aria2: this.resolveBinary('aria2c') !== null,
       ytdlp: this.resolveBinary('yt-dlp') !== null,
       ffmpeg: this.resolveBinary('ffmpeg') !== null,
       ffprobe: this.resolveBinary('ffprobe') !== null,
+      mpv: this.resolveBinary('mpv') !== null,
     };
   }
 
   /**
    * Tests an existing binary by executing it with a version flag.
    */
-  public async testBinary(name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe'): Promise<BinaryTestResult> {
+  public async testBinary(
+    name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'mpv'
+  ): Promise<BinaryTestResult> {
     const binPath = this.resolveBinary(name);
     if (!binPath) {
       return { ok: false, error: `${name} is not installed` };
     }
 
-    const flag = name === 'yt-dlp' ? '--version' : name === 'aria2c' ? '-v' : '-version';
+    const flag =
+      name === 'yt-dlp' || name === 'mpv' ? '--version' : name === 'aria2c' ? '-v' : '-version';
 
     return new Promise((resolve) => {
       child_process.execFile(binPath, [flag], { timeout: 8000, windowsHide: true }, (err, stdout, stderr) => {
@@ -130,7 +140,9 @@ export class BinaryDownloader {
   /**
    * Removes installed binaries so the user can perform a fresh install.
    */
-  public removeBinary(name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'media' | 'downloads' | 'all'): boolean {
+  public removeBinary(
+    name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'mpv' | 'media' | 'downloads' | 'all'
+  ): boolean {
     const targets: string[] = [];
     if (name === 'aria2c' || name === 'downloads' || name === 'all') {
       targets.push('aria2c.exe', 'aria2c');
@@ -143,6 +155,14 @@ export class BinaryDownloader {
     }
     if (name === 'ffprobe' || name === 'media' || name === 'all') {
       targets.push('ffprobe.exe', 'ffprobe');
+    }
+    /**
+     * `media` deliberately does not include mpv. Removing the ffmpeg pair is how
+     * a user repairs a broken probe; taking the native engine with it would
+     * silently undo a 32 MB download they made on purpose.
+     */
+    if (name === 'mpv' || name === 'all') {
+      targets.push('mpv.exe', 'mpv.com', 'mpv');
     }
 
     let anyRemoved = false;
@@ -442,6 +462,185 @@ export class BinaryDownloader {
   /**
    * Sets up all missing binaries concurrently with status updates.
    */
+  /**
+   * Where to get mpv, and why this list is resolved rather than hardcoded.
+   *
+   * mpv publishes no "latest" URL for Windows. Every official-adjacent build is
+   * tagged by date and commit — `mpv-x86_64-20260818-git-e7191f2a65.7z` — so a
+   * constant would rot into a 404 on a schedule nobody is watching. The release
+   * API is asked for the current asset first, and these remain as the answer for
+   * a machine that cannot reach api.github.com but can reach the CDN.
+   */
+  private static readonly MPV_RELEASE_API =
+    'https://api.github.com/repos/zhongfly/mpv-winbuild/releases/latest';
+  private static readonly MIRRORS_MPV_FALLBACK = [
+    'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-08-18-e7191f2a65/mpv-x86_64-20260818-git-e7191f2a65.7z',
+    'https://ghproxy.net/https://github.com/zhongfly/mpv-winbuild/releases/download/2026-08-18-e7191f2a65/mpv-x86_64-20260818-git-e7191f2a65.7z',
+  ];
+
+  private inFlightMpv: Promise<boolean> | null = null;
+
+  /**
+   * Asks the release feed which archive is current.
+   *
+   * `x86_64` rather than `x86_64-v3`: the v3 build requires AVX2 and simply
+   * crashes on anything older, which is a failure mode with no diagnostic — the
+   * process dies before it can say why. A few percent of decode throughput is
+   * not worth an app that will not start on a 2013 laptop.
+   */
+  private async resolveMpvMirrors(): Promise<string[]> {
+    try {
+      const response = await fetch(BinaryDownloader.MPV_RELEASE_API, {
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'cloudstream-desktop' },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (response.ok) {
+        const release = (await response.json()) as {
+          assets?: Array<{ name?: string; browser_download_url?: string }>;
+        };
+        const asset = (release.assets ?? []).find(
+          (candidate) => /^mpv-x86_64-\d/.test(candidate.name ?? '') && !/debug|dev/.test(candidate.name ?? '')
+        );
+        if (asset?.browser_download_url) {
+          return [asset.browser_download_url, `https://ghproxy.net/${asset.browser_download_url}`];
+        }
+      }
+    } catch {
+      /* the fallbacks below are exactly for this */
+    }
+    return BinaryDownloader.MIRRORS_MPV_FALLBACK;
+  }
+
+  /**
+   * Installs the native playback engine.
+   *
+   * One 119 MB statically-linked executable, and no DLLs beside it — which is
+   * why this can be a single file copy where ffmpeg needed a directory. It is
+   * the largest thing the app fetches, so it is deliberately **not** part of
+   * `setupAll`: someone who only ever watches H.264 web releases never needs it,
+   * and spending 32 MB of their bandwidth to prove that would be rude.
+   *
+   * The archive is 7-Zip, which is not a passing detail. Windows' own `tar.exe`
+   * is bsdtar/libarchive and reads 7z fine; PowerShell's `Expand-Archive` does
+   * not, so the fallback path in {@link extractZip} cannot rescue this one. On a
+   * system where bsdtar is missing the honest outcome is a named failure rather
+   * than a half-extracted directory.
+   */
+  public async setupMpv(onStatus?: (status: string, percent: number) => void): Promise<boolean> {
+    if (this.inFlightMpv) return this.inFlightMpv;
+
+    this.inFlightMpv = (async () => {
+      const existing = await this.testBinary('mpv');
+      if (existing.ok) {
+        if (onStatus) onStatus(`Native engine ready (${existing.version || 'mpv'}).`, 100);
+        return true;
+      }
+
+      /**
+       * mpv is packaged everywhere but Windows, and the packaged build is the
+       * one with the platform's own hardware decoding wired up. Downloading a
+       * binary over the distribution's is how you end up with a player that
+       * cannot open VA-API.
+       */
+      if (process.platform !== 'win32') {
+        if (onStatus) {
+          onStatus(
+            process.platform === 'darwin'
+              ? 'Install mpv with `brew install mpv`, then reopen this panel.'
+              : 'Install mpv with your package manager (e.g. `apt install mpv`), then reopen this panel.',
+            100
+          );
+        }
+        return false;
+      }
+
+      if (onStatus) onStatus('Locating the current native engine build...', 4);
+      const mirrors = await this.resolveMpvMirrors();
+
+      const archivePath = path.join(this.binDir, 'mpv.7z');
+      if (onStatus) onStatus('Downloading the native playback engine (~32 MB)...', 8);
+
+      try {
+        await FastChunkDownloader.download({
+          mirrors,
+          targetPath: archivePath,
+          maxConnections: 8,
+          onProgress: (progress: DownloadProgress, statusText: string) => {
+            if (onStatus) onStatus(statusText, Math.min(85, Math.floor(8 + progress.percent * 0.77)));
+          },
+        });
+      } catch (error: any) {
+        console.error('[BinaryDownloader] mpv download failed:', error);
+        if (onStatus) onStatus(`Download failed: ${error?.message || 'Network error'}`, 0);
+        return false;
+      }
+
+      if (!fs.existsSync(archivePath)) {
+        if (onStatus) onStatus('Download failed. Please check your internet connection.', 0);
+        return false;
+      }
+
+      if (onStatus) onStatus('Extracting the native playback engine...', 88);
+      const extractDir = path.join(this.binDir, 'mpv-tmp');
+      try {
+        if (!this.extractZip(archivePath, extractDir)) {
+          if (onStatus) {
+            onStatus('Could not extract the engine: this system has no 7-Zip-capable tar.', 0);
+          }
+          return false;
+        }
+        /**
+         * `mpv.com` is copied alongside `mpv.exe` deliberately. It is the
+         * console front-end, and it is what makes `--version` and `--hwdec=help`
+         * answer on stdout at all — `mpv.exe` is a GUI subsystem binary whose
+         * output goes nowhere. Without it the engine works and every diagnostic
+         * about it comes back empty.
+         */
+        for (const tool of ['mpv.exe', 'mpv.com']) {
+          const found = this.findFile(extractDir, tool);
+          if (!found) continue;
+          const destination = path.join(this.binDir, tool);
+          try {
+            if (fs.existsSync(destination)) fs.unlinkSync(destination);
+          } catch {
+            /* replaced below regardless */
+          }
+          fs.copyFileSync(found, destination);
+        }
+      } catch (error) {
+        console.warn('[BinaryDownloader] mpv extraction failed:', error);
+        if (onStatus) onStatus('Could not extract the native playback engine.', 0);
+        return false;
+      } finally {
+        try {
+          fs.rmSync(extractDir, { recursive: true, force: true });
+        } catch {
+          /* best effort */
+        }
+        try {
+          fs.unlinkSync(archivePath);
+        } catch {
+          /* best effort */
+        }
+      }
+
+      const verified = await this.testBinary('mpv');
+      if (onStatus) {
+        onStatus(
+          verified.ok
+            ? `Native engine ready (${verified.version || 'mpv'}).`
+            : 'Installation incomplete.',
+          verified.ok ? 100 : 0
+        );
+      }
+      return verified.ok;
+    })().finally(() => {
+      this.inFlightMpv = null;
+    });
+
+    return this.inFlightMpv;
+  }
+
   public async setupAll(
     onProgress?: (component: string, status: string, percent: number) => void
   ): Promise<{ ok: boolean; message: string }> {

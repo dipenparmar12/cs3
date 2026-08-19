@@ -3,6 +3,7 @@ import type {
   HostEncodeCapability,
   MediaMetadata,
   MediaTransport,
+  NativeEngineCapability,
   PlaybackStrategyType,
   RendererCapabilities,
   TransformationPlan,
@@ -101,6 +102,28 @@ const SOFTWARE_ENCODE_MAX_HEIGHT = 1080;
  * a visible compromise and stalling is not playback at all.
  */
 const SOFTWARE_4K_CORE_THRESHOLD = 16;
+
+/**
+ * Audio a stereo AAC downmix destroys rather than merely shrinks.
+ *
+ * The line drawn here is recoverability, not channel count. AC-3 5.1 downmixed
+ * to stereo loses a speaker layout, which is a real loss and a reversible
+ * decision — play it again through the native engine and the 5.1 is still in the
+ * file. TrueHD, DTS-HD Master Audio and DTS:X are *lossless or object-based*:
+ * the mix is the thing people bought the release for, and re-encoding it to
+ * 192 kbit stereo is the one conversion in the ladder with nothing to say for
+ * itself. Those go to mpv under the default policy; AC-3 and E-AC-3 do not,
+ * because routing them would send most television releases out of the in-app
+ * player to save a few percent of one core.
+ */
+const LOSSLESS_OR_OBJECT_AUDIO = new Set([
+  'truehd', 'mlp', 'dtshd', 'dts-hd ma', 'dts-hd hra', 'dts:x',
+  'pcm_bluray', 'pcm_dvd', 'pcm_s16le', 'pcm_s24le', 'pcm_s32le', 'pcm_s16be', 'pcm_s24be',
+  'flac', 'alac', 'ape', 'tta', 'wavpack',
+]);
+
+/** The engine is absent unless a caller says otherwise, which keeps every existing decision intact. */
+const NO_NATIVE_ENGINE: NativeEngineCapability = { available: false, policy: 'off' };
 
 export interface StrategyDecision {
   directPlayable: boolean;
@@ -296,21 +319,18 @@ function videoTranscodeAction(
 }
 
 /**
- * The decision, from measured metadata alone.
+ * What the *browser* side would do with this stream, ignoring mpv entirely.
  *
- * Never consults the URL. AC-COMPAT-2 exists because the previous implementation
- * did: it searched the link for the strings `hevc`, `x265` and `10bit`, which is
- * a guess about a filename a scraper produced, and it was wrong in both
- * directions — a `2160p.HEVC` release that was actually H.264, and a bare
- * `?id=…` Google Drive URL carrying 10-bit HEVC with nothing in it to match.
+ * Kept separate from {@link decideStrategy} so the transcoding ladder stays a
+ * complete, testable answer on its own: it is what runs on every machine with no
+ * native engine installed, and it is the fallback when mpv fails to start.
  */
-export function decideStrategy(
+function decideBrowserStrategy(
   metadata: MediaMetadata,
   transport: MediaTransport,
   capabilities: RendererCapabilities | null,
   host: HostEncodeCapability,
-  /** True for ClearKey/Widevine/PlayReady. AES-128 HLS is *not* one of these. */
-  requiresEme = false
+  requiresEme: boolean
 ): StrategyDecision {
   const video = metadata.video;
   const track = selectAudioTrack(metadata.audio);
@@ -508,6 +528,111 @@ export function decideStrategy(
     explanation: `Video re-encoded to H.264 via ${host.accelerator.toUpperCase()}: ${reasons.join(
       '; '
     )}.${guardNote}`,
+  };
+}
+
+/**
+ * Whether the native engine should take this stream off ffmpeg's hands.
+ *
+ * Applied *after* the browser-side decision rather than instead of it, and that
+ * ordering is deliberate: the transcoding ladder stays the thing that decides
+ * what a stream needs, and this only answers "and is that worth doing here?".
+ * Remove mpv from the machine and every decision reverts exactly to what it was,
+ * with no second code path to keep correct.
+ *
+ * The rules, and what each is protecting:
+ *
+ * - **Encrypted streams never route.** mpv holds no CDM. Handing it a Widevine
+ *   stream produces the same undecryptable noise ffmpeg would, minus the EME
+ *   pipeline that could actually have played it.
+ * - **Streams that already play natively never route.** The in-app player is the
+ *   better experience — one window, our controls, our subtitles — and spending
+ *   that to avoid CPU which was never being spent is a straight loss.
+ * - **Under `auto`, any re-encode of the video routes.** This is the case the
+ *   engine exists for: the only strategy that is both expensive and lossy, and
+ *   the one that on a software-only host downscales 4K to 1080p or fails to hold
+ *   realtime at all.
+ * - **Under `auto`, lossless and object-based audio routes.** See
+ *   {@link LOSSLESS_OR_OBJECT_AUDIO}.
+ * - **Under `aggressive`, anything not already playing natively routes** —
+ *   including the cheap remux, which still flattens 5.1 to stereo.
+ */
+export function shouldRouteToNativeEngine(
+  decision: StrategyDecision,
+  metadata: MediaMetadata,
+  native: NativeEngineCapability
+): boolean {
+  if (!native.available || native.policy === 'off') return false;
+  if (decision.strategy === 'EME_NATIVE') return false;
+  if (decision.strategy === 'DIRECT' || decision.strategy === 'HLS_NATIVE') return false;
+
+  if (native.policy === 'aggressive') return true;
+
+  if (decision.strategy === 'VIDEO_TRANSCODE' || decision.strategy === 'FULL_TRANSCODE') {
+    return true;
+  }
+
+  /**
+   * The plan names the track it selected; asking about any other one would
+   * reason about audio nobody is going to hear.
+   */
+  const selected = metadata.audio.find(
+    (track) => track.index === decision.plan.selectedAudioIndex
+  );
+  return Boolean(
+    selected &&
+      decision.plan.audioAction === 'transcode' &&
+      LOSSLESS_OR_OBJECT_AUDIO.has(selected.codec.toLowerCase())
+  );
+}
+
+/**
+ * The decision, from measured metadata alone.
+ *
+ * Never consults the URL. AC-COMPAT-2 exists because the previous implementation
+ * did: it searched the link for the strings `hevc`, `x265` and `10bit`, which is
+ * a guess about a filename a scraper produced, and it was wrong in both
+ * directions — a `2160p.HEVC` release that was actually H.264, and a bare
+ * `?id=…` Google Drive URL carrying 10-bit HEVC with nothing in it to match.
+ */
+export function decideStrategy(
+  metadata: MediaMetadata,
+  transport: MediaTransport,
+  capabilities: RendererCapabilities | null,
+  host: HostEncodeCapability,
+  /** True for ClearKey/Widevine/PlayReady. AES-128 HLS is *not* one of these. */
+  requiresEme = false,
+  native: NativeEngineCapability = NO_NATIVE_ENGINE
+): StrategyDecision {
+  const decision = decideBrowserStrategy(metadata, transport, capabilities, host, requiresEme);
+  if (!shouldRouteToNativeEngine(decision, metadata, native)) return decision;
+
+  /**
+   * The plan is emptied rather than carried over.
+   *
+   * mpv demuxes, decodes and renders the whole thing itself, so every field here
+   * would describe work nobody is going to do. Leaving a `transcode` in it is a
+   * live trap for the next reader of `mediaTranscoder`, which takes a plan and
+   * builds ffmpeg arguments from it without asking which strategy produced it.
+   */
+  return {
+    directPlayable: false,
+    strategy: 'NATIVE_MPV',
+    plan: {
+      videoAction: 'none',
+      audioAction: 'none',
+      selectedAudioIndex: decision.plan.selectedAudioIndex,
+      containerAction: 'passthrough',
+      subtitleAction: 'ignore',
+    },
+    /**
+     * The browser-side reason is kept, because it is still the answer to "why
+     * can this not just play?". What changes is what is done about it.
+     */
+    explanation:
+      'Played by the native engine (mpv) with hardware decoding, untouched: ' +
+      `${decision.explanation.replace(/\.$/, '')}. Nothing is re-encoded, so the ` +
+      'resolution, HDR and full channel layout are preserved.',
   };
 }
 

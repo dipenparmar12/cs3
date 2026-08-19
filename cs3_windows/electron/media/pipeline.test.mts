@@ -25,7 +25,9 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MediaInspector } from './mediaInspector.ts';
+import http from 'node:http';
+import { MediaInspector, detectExtensionPicky } from './mediaInspector.ts';
+import { runTool } from './runTool.ts';
 import { MediaTranscoder } from '../mediaTranscoder.ts';
 import type { BinaryDownloader } from '../binaryDownloader.ts';
 import { decideStrategy, planForAudioTrack } from './decisionEngine.ts';
@@ -400,6 +402,74 @@ test('seeking restarts the conversion at the requested time', async () => {
   // interval, so the assertion is generous on purpose.
   const duration = Number((probeJson(out).format as { duration?: string })?.duration ?? 0);
   assert.ok(duration > 0.5 && duration < 3.5, `expected ~2s of output, got ${duration}s`);
+});
+
+/**
+ * The image-named-segment case, end to end against the installed ffmpeg.
+ *
+ * This one earns a real fixture rather than a decision assertion because the
+ * thing that broke was neither our decision nor our arguments — it was FFmpeg
+ * changing what its own flag means. 7.1 added `-extension_picky`, defaulted it
+ * to on, and it is evaluated *before* the allow-list, so `-allowed_extensions
+ * ALL` became a no-op and every provider serving segments from `.png` or from
+ * extensionless URLs failed again with the exact message the original fix was
+ * written against. Nothing in this repository changed on the day that started
+ * happening, which is why only a test that actually runs the binary can catch it.
+ *
+ * `Hdmovie2` is the provider that does this in the wild; the fixture reproduces
+ * it locally so the assertion does not depend on a third-party CDN.
+ */
+test('HLS segments served as .png are probed, not refused', async () => {
+  const dir = path.join(WORK, 'hls-png');
+  fs.mkdirSync(dir, { recursive: true });
+  const playlist = path.join(dir, 'index.m3u8');
+
+  execFileSync(
+    FFMPEG!,
+    [
+      '-y', '-loglevel', 'error',
+      '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=15:duration=6',
+      '-f', 'lavfi', '-i', 'sine=duration=6',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac',
+      '-f', 'hls', '-hls_time', '2', '-hls_list_size', '0',
+      // The whole point: segments that do not look like video.
+      '-hls_segment_filename', path.join(dir, 'seg%d.png'),
+      playlist,
+    ],
+    { stdio: 'ignore' }
+  );
+
+  /**
+   * Served over HTTP rather than probed from disk. The refusal lives in the HLS
+   * demuxer's URL handling, and a local path takes a different route through it
+   * — a file-based fixture passes while the shipping path stays broken.
+   */
+  const server = http.createServer((request, response) => {
+    const file = path.join(dir, path.basename((request.url ?? '/').split('?')[0]));
+    if (!fs.existsSync(file)) {
+      response.writeHead(404);
+      return response.end();
+    }
+    // Deliberately not `video/*`: a CDN disguising segments as images says so.
+    response.writeHead(200, { 'Content-Type': 'image/png' });
+    fs.createReadStream(file).pipe(response);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as { port: number }).port;
+
+  try {
+    await detectExtensionPicky(FFPROBE!, (command, args, timeoutMs) =>
+      runTool(command, args, timeoutMs)
+    );
+
+    const result = await inspector.inspect(`http://127.0.0.1:${port}/index.m3u8`);
+    assert.equal(result.transport, 'hls');
+    assert.ok(result.metadata, `probe failed: ${result.error}`);
+    assert.equal(result.metadata?.video?.codec, 'h264');
+    assert.equal(result.metadata?.audio[0]?.codec, 'aac');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 // --- runner ----------------------------------------------------------------

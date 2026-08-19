@@ -263,7 +263,16 @@ export class MpvEngine {
 
     if (!this.process) {
       const started = await this.launch(binary, request);
-      if (!started.ok) return started;
+      if (!started.ok) {
+        /**
+         * The caller gets the error back, but anything reading `mpv:snapshot`
+         * would otherwise sit on `loading` forever — a spinner over a process
+         * that was never going to start. Same rule as the sidecar's
+         * `T4_BLOCKED`: a component that cannot start has to say so.
+         */
+        this.fail(started.error ?? 'The native engine could not be started.');
+        return started;
+      }
     }
 
     this.sessionId = String(this.nextSession++);
@@ -336,6 +345,20 @@ export class MpvEngine {
         return attempt;
       }
       lastError = attempt.error ?? lastError;
+      /**
+       * Kill before tearing down, or the failed attempt leaks.
+       *
+       * `teardown` only drops our references. A process that started but never
+       * opened its control channel is still running — with a window, holding a
+       * GPU context — and walking the video-output list would leave one behind
+       * per attempt, three per failed launch, invisible until someone looks at
+       * the task list.
+       */
+      try {
+        this.process?.kill();
+      } catch {
+        /* already gone */
+      }
       this.teardown();
     }
 
@@ -413,7 +436,17 @@ export class MpvEngine {
        */
       '--idle=yes',
       `--input-ipc-server=${ipcPath}`,
-      '--no-terminal',
+      /**
+       * Not `--no-terminal`, which is the obvious choice and the wrong one.
+       *
+       * It disables *all* use of stdin/stdout/stderr — measured: an unreachable
+       * URL produces literally no output — so `readStderr` becomes dead code and
+       * every failure arrives as a bare state change with no reason attached.
+       * Terminal *input* is what we actually want gone, since the engine takes
+       * its orders over IPC; the error stream is the diagnosis.
+       */
+      '--input-terminal=no',
+      '--msg-level=all=error',
       /**
        * The user's own `mpv.conf` is deliberately not read.
        *

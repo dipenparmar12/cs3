@@ -47,11 +47,75 @@ const PROBE_SIZE_BYTES = 8_000_000;
  * no way to enumerate what a provider might pick next, so the allow-list is
  * opened rather than extended. The protocol whitelist is the security boundary
  * that matters here and it stays closed: file, http, https, tcp, tls, crypto.
+ *
+ * **`-allowed_extensions ALL` stopped being enough, and it failed silently.**
+ * FFmpeg 7.1 added `-extension_picky`, defaulting to *true*, and it is checked
+ * before the allow-list — so on the bundled build (n8.0) the documented fix was
+ * inert and every extensionless or image-named segment failed exactly as it did
+ * before the fix existed. Measured against a local HLS fixture with `.png`
+ * segments: `-allowed_extensions ALL` fails, `-allowed_segment_extensions ALL`
+ * fails, `-extension_picky 0` succeeds. Found by the vendor matrix harness on a
+ * real provider playlist, not by reading release notes.
+ *
+ * The flag cannot simply be added, because passing an option a binary does not
+ * know is fatal — `Option extension_picky not found`, and the probe dies on
+ * every stream rather than the ones it was meant to rescue. FFmpeg 7.0 is still
+ * in the download mirrors and on plenty of machines' PATH. So it is *detected*
+ * once per binary and passed only where it exists.
  */
-const HLS_DEMUXER_OPTIONS = [
+const HLS_BASE_OPTIONS = [
   '-allowed_extensions', 'ALL',
   '-protocol_whitelist', 'file,http,https,tcp,tls,crypto,data',
 ];
+
+/**
+ * Whether the resolved ffmpeg/ffprobe understands `-extension_picky`.
+ *
+ * `null` until something has asked. Unknown is treated as absent: omitting the
+ * flag loses image-named segments, while passing one that does not exist loses
+ * *every* stream, and those are not the same size of mistake.
+ */
+let extensionPickySupported: boolean | null = null;
+
+/**
+ * Records what the probe binary supports. Called once at startup by `main.ts`.
+ *
+ * Deliberately a module-level fact rather than a parameter threaded through
+ * `inputOptionsFor`: the answer is a property of the binary on this machine,
+ * every caller would pass the same value, and three call sites each doing their
+ * own detection is three chances to forget.
+ */
+export function setFfmpegExtensionPicky(supported: boolean): void {
+  extensionPickySupported = supported;
+}
+
+export function hlsDemuxerOptions(): string[] {
+  return extensionPickySupported
+    ? [...HLS_BASE_OPTIONS, '-extension_picky', '0']
+    : HLS_BASE_OPTIONS;
+}
+
+/**
+ * Detects the option by asking the binary to describe its own HLS demuxer.
+ *
+ * `-h demuxer=hls` lists every option the demuxer accepts, which is the same
+ * source of truth the parser uses. Cheap, exact, and it costs one process
+ * launch at startup rather than a failed probe per stream.
+ */
+export async function detectExtensionPicky(
+  ffprobePath: string,
+  run: (path: string, args: string[], timeoutMs: number) => Promise<{ stdout: string; stderr: string }>
+): Promise<boolean> {
+  try {
+    const result = await run(ffprobePath, ['-hide_banner', '-h', 'demuxer=hls'], 8000);
+    const supported = /-extension_picky\b/.test(`${result.stdout}${result.stderr}`);
+    setFfmpegExtensionPicky(supported);
+    return supported;
+  } catch {
+    setFfmpegExtensionPicky(false);
+    return false;
+  }
+}
 
 const BITMAP_SUBTITLE_CODECS = new Set([
   'hdmv_pgs_subtitle', 'pgssub', 'dvd_subtitle', 'dvdsub', 'dvb_subtitle', 'dvbsub', 'xsub',
@@ -70,7 +134,7 @@ const BROWSER_USER_AGENT =
  */
 export function inputOptionsFor(url: string, transport: MediaTransport): string[] {
   const options: string[] = [];
-  if (transport === 'hls' || transport === 'dash') options.push(...HLS_DEMUXER_OPTIONS);
+  if (transport === 'hls' || transport === 'dash') options.push(...hlsDemuxerOptions());
   if (!/^https?:\/\//i.test(url)) return options;
   return [
     ...options,

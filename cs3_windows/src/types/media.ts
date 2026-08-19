@@ -110,6 +110,21 @@ export type PlaybackStrategyType =
   /** A DASH manifest, remuxed by ffmpeg into fragmented MP4. */
   | 'DASH_REMUX'
   /**
+   * Handed to the bundled mpv engine, which decodes it natively on the GPU.
+   *
+   * The escape hatch from the whole transcoding ladder. Chromium's decoder set
+   * is a subset of what people stream, and closing the gap with ffmpeg costs a
+   * re-encode: 4K HEVC 10-bit becomes 1080p 8-bit H.264 at 100% of a CPU, HDR
+   * metadata is thrown away, and 5.1 AC-3 is flattened to stereo. mpv carries
+   * its own FFmpeg and talks to D3D11VA/NVDEC/Vulkan directly, so the same file
+   * plays untouched at 1–2% CPU with its HDR and its channel layout intact.
+   *
+   * Chosen by {@link decideStrategy} only when the native engine is actually
+   * present and the routing policy allows it — never as a guess, and never when
+   * the in-app path would have played the stream perfectly well.
+   */
+  | 'NATIVE_MPV'
+  /**
    * Encrypted: handed to the renderer's EME pipeline untouched.
    *
    * FFmpeg holds no decryption keys, so probing or remuxing a Widevine or
@@ -195,6 +210,33 @@ export interface HostEncodeCapability {
   hardware: boolean;
   accelerator: 'nvenc' | 'qsv' | 'amf' | 'mf' | 'videotoolbox' | 'cpu';
   logicalCores: number;
+}
+
+/**
+ * Whether a native media engine is available to take a stream off ffmpeg's hands.
+ *
+ * Passed into the decision the same way {@link HostEncodeCapability} is: a fact
+ * about this machine that changes the plan rather than the diagnosis. When the
+ * engine is absent every decision is exactly what it was before mpv existed,
+ * which is what keeps the transcoding ladder the honest fallback rather than
+ * dead code.
+ */
+export interface NativeEngineCapability {
+  /** False when mpv is not installed. Every routing rule below is then inert. */
+  available: boolean;
+  /**
+   * How eagerly to hand streams over.
+   *
+   * - `off` — never. The in-app `<video>` element and the transcoder do everything.
+   * - `auto` — only where the in-app path is expensive or lossy: any re-encode of
+   *   the video, and lossless/immersive audio that a stereo AAC downmix destroys.
+   * - `aggressive` — anything that is not already playing natively in Chromium.
+   *
+   * `auto` is the default because routing is not free: the native engine renders
+   * in its own surface, so sending it a stream the built-in player handles well
+   * trades a working in-app experience for CPU that was never being spent.
+   */
+  policy: 'off' | 'auto' | 'aggressive';
 }
 
 export interface EmbeddedSubtitleTrack {

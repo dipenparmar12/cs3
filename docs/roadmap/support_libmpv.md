@@ -1,4 +1,77 @@
-#
+# Native media playback via mpv
+
+> **Status: implemented 2026-08-19.** Option A (portable `mpv` driven over JSON IPC) is
+> built, wired into the compatibility engine, and covered by tests that spawn a real mpv
+> process. Option B (libmpv embedded via a native addon, video surface inside the Electron
+> window) is **not** built — see "What is not built" below. The rest of this document is
+> the original design discussion and is kept because the reasoning still holds.
+
+## What was built
+
+| Piece | Where |
+|---|---|
+| Engine: process supervision, JSON-RPC over named pipe / unix socket, property observation, tracks, seek, subtitles | `cs3_windows/electron/media/mpvEngine.ts` |
+| Shared contract (`MpvSnapshot`, `MpvOpenRequest`, `MpvTrack`, `MpvEngineStatus`) | `cs3_windows/src/types/mpv.ts` |
+| Routing decision (`NATIVE_MPV` strategy, `shouldRouteToNativeEngine`) | `cs3_windows/electron/media/decisionEngine.ts` |
+| Pipeline integration — no ffmpeg session is opened for a routed stream | `cs3_windows/electron/media/playbackEngine.ts` |
+| On-demand provisioning of a portable Windows build | `cs3_windows/electron/binaryDownloader.ts` (`setupMpv`) |
+| IPC surface (`mpv:*`), policy persistence, shutdown wiring | `cs3_windows/electron/main.ts`, `preload.ts` |
+| Player surface — our controls, mpv's playback | `cs3_windows/src/components/player/NativeEngineStage.tsx` |
+| Settings: policy selector, install button, decoder listing | `cs3_windows/src/components/PlayerSettings.tsx` |
+| Tests against a real mpv process (12 cases) | `cs3_windows/electron/media/mpvEngine.test.mts` |
+| Routing rows in the decision matrix (13 new cases) | `cs3_windows/electron/media/decisionEngine.test.mts` |
+| Vendor coverage harness — real providers, real streams, real playback | `tools/e2e/native-engine-matrix.mjs` |
+
+## The one decision this document did not make
+
+The document above proposes routing on a capability hierarchy and leaves the *policy* open.
+What shipped is three policies, defaulting to `auto`:
+
+- `off` — the FFmpeg ladder does everything, exactly as before.
+- `auto` — mpv takes any stream the browser path would have **re-encoded**, plus lossless
+  and object-based audio (TrueHD, DTS-HD MA, DTS:X, FLAC, PCM).
+- `aggressive` — mpv takes everything not already playing natively, including the cheap
+  container remux, which preserves 5.1/7.1 everywhere.
+
+**AC-3 and E-AC-3 5.1 do not route under `auto`,** and the table in §1 of this document
+would have routed them. The reason for departing from it is recoverability: a stereo
+downmix of AC-3 loses a speaker layout, and the 5.1 is still in the file next time; a
+re-encode of TrueHD to 192 kbit stereo destroys the thing the release exists for. Since the
+engine renders in its own window today, routing AC-3 would push most television releases
+out of the in-app player to save a few percent of one core. `aggressive` exists for anyone
+who wants that trade, and it is not the default.
+
+## What is not built
+
+**Embedding.** mpv renders in its own window. Putting the video surface inside the Electron
+window needs libmpv's render API through a native addon — Option B above — and a
+three-window compositing scheme built on `--wid` plus a transparent overlay was rejected
+rather than attempted: it could not be verified visually in this environment, and shipping
+a half-working one is worse than a separate surface that behaves predictably.
+`MpvOpenRequest.windowHandle` exists and is passed through as `--wid`; nothing sets it yet,
+so that is the single seam Option B has to fill.
+
+**DRM.** Unchanged, and unchanged for the reason §"One major Electron consideration" gives:
+mpv holds no CDM. Widevine, PlayReady and ClearKey streams are classified and reported by
+name, and `shouldRouteToNativeEngine` explicitly refuses to send them to the engine —
+handing an encrypted stream to mpv produces the same undecryptable noise FFmpeg would,
+minus the EME pipeline that could actually have played it.
+
+## Measured, on this machine
+
+- HEVC 10-bit + 5.1 AC-3 in Matroska — three separate reasons Chromium refuses it —
+  decoded by mpv at full resolution with `hwdec-current: d3d11va`, zero dropped frames.
+- The same file through the FFmpeg ladder: `FULL_TRANSCODE`, and on a software-only host
+  under 16 threads it is downscaled to 1080p by the encoder guard.
+- Found while building the vendor harness, unrelated to mpv but fixed alongside it:
+  FFmpeg 7.1's `-extension_picky` (default *on*, evaluated before the allow-list) had
+  silently killed the `-allowed_extensions ALL` fix for providers serving HLS segments from
+  `.png` and extensionless URLs. See `CLAUDE.md`.
+
+---
+
+# Original design discussion
+
 Yes. The important distinction is that your Electron app is not limited to Chromium's `<video>` pipeline.
 
 For your architecture, where you receive arbitrary streaming URLs from third party platforms and have no control over the source media, I would not try to force everything through the browser video element. Instead, use a native media engine inside the Electron application.

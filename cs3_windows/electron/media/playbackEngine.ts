@@ -3,6 +3,7 @@ import type {
   EmbeddedSubtitleTrack,
   HostEncodeCapability,
   MediaTransport,
+  NativeEngineCapability,
   PlaybackDiagnosticEvent,
   PlaybackStreamRequest,
   PlaybackStreamResponse,
@@ -59,6 +60,17 @@ interface CachedCapability {
 export interface PlaybackEngineDeps {
   proxy: MediaProxy;
   transcoder: MediaTranscoder;
+  /**
+   * Whether mpv is installed and how eagerly the user wants it used.
+   *
+   * A function rather than a value because both halves move while the app is
+   * running: mpv can be provisioned mid-session, and the policy is a setting.
+   * Reading it per decision is what lets a viewer install the engine and have
+   * the very next source routed to it, with no restart and no stale cache — the
+   * capability cache is keyed on the URL, so `setNativeEngine` clears it for the
+   * same reason `setCapabilities` does.
+   */
+  nativeEngine: () => NativeEngineCapability;
   fetchText: (url: string, bytes: number) => Promise<string | null>;
   /** Asks the source itself why it could not be read. See `main.ts`. */
   describeUnreadable: (url: string) => Promise<ProbeFailure>;
@@ -115,6 +127,19 @@ export class PlaybackEngine {
     this.capabilities = capabilities;
     // Every cached verdict was reached without this and may now be wrong in the
     // expensive direction — a source marked "transcode" that plays natively.
+    this.cache.clear();
+  }
+
+  /**
+   * Drops every cached verdict after the native engine appears or the policy moves.
+   *
+   * Same reasoning as {@link setCapabilities}: a capability record decided
+   * without mpv says `FULL_TRANSCODE` for a file that would now play untouched,
+   * and it would keep saying so for the ten minutes of its TTL. Provisioning the
+   * engine and then watching the next film re-encode anyway is exactly the kind
+   * of "it did not take effect" that makes a setting look broken.
+   */
+  public invalidateCapabilityCache(): void {
     this.cache.clear();
   }
 
@@ -192,7 +217,8 @@ export class PlaybackEngine {
           inspection.transport,
           this.capabilities,
           host,
-          true
+          true,
+          this.deps.nativeEngine()
         );
         return {
           resolvedUrl,
@@ -253,7 +279,8 @@ export class PlaybackEngine {
       inspection.transport,
       this.capabilities,
       host,
-      requiresEme
+      requiresEme,
+      this.deps.nativeEngine()
     );
 
     return {
@@ -355,7 +382,21 @@ export class PlaybackEngine {
       };
     }
 
-    if (strategy === 'DIRECT' || strategy === 'HLS_NATIVE' || strategy === 'EME_NATIVE') {
+    /**
+     * Nothing is opened for the native engine either.
+     *
+     * mpv demuxes and decodes the source itself, so there is no transcode
+     * session and no loopback stream to create — only the proxied URL, which
+     * already carries the provider's `Referer`. The renderer sees
+     * `requiredStrategy === 'NATIVE_MPV'` and hands that URL to `mpv:open`
+     * instead of assigning it to the `<video>` element.
+     */
+    if (
+      strategy === 'DIRECT' ||
+      strategy === 'HLS_NATIVE' ||
+      strategy === 'EME_NATIVE' ||
+      strategy === 'NATIVE_MPV'
+    ) {
       this.record(request, capability, strategy, startedAt);
       return {
         ok: true,

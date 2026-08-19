@@ -16,6 +16,7 @@ import {
 import { setHttpFetch } from './torrent/http';
 import { ResilientFetch, classifyNetworkError } from './networkResilience';
 import { BinaryDownloader } from './binaryDownloader';
+import { MpvEngine } from './media/mpvEngine';
 import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
 import { PlaybackSessionManager } from './playbackSession';
@@ -24,10 +25,14 @@ import { SearchHistoryStore } from './searchHistory';
 import { SubtitleService } from './subtitleService';
 import { MediaTranscoder, VIDEO_CODEC_PROBES } from './mediaTranscoder';
 import { PlaybackEngine } from './media/playbackEngine';
+import { detectExtensionPicky } from './media/mediaInspector';
+import { runTool } from './media/runTool';
 import type {
+  NativeEngineCapability,
   PlaybackStreamRequest,
   RendererCapabilities,
 } from '../src/types/media';
+import type { MpvOpenRequest } from '../src/types/mpv';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { BootstrapService } from './cs3/bootstrap';
@@ -111,6 +116,30 @@ const searchHistory = new SearchHistoryStore(datastore);
 const subtitles = new SubtitleService();
 const mediaTranscoder = new MediaTranscoder(binaryDownloader);
 mediaTranscoder.setDiagnostics(diagnostics);
+
+/**
+ * The native playback engine, and how eagerly it is used.
+ *
+ * `auto` by default: mpv takes the streams the in-app player handles badly — any
+ * video re-encode, and lossless or object-based audio — and leaves everything
+ * else alone. See `shouldRouteToNativeEngine` for what each policy costs.
+ *
+ * The policy is read from the datastore per decision rather than captured once,
+ * because both halves of the answer move while the app runs: the setting is a
+ * setting, and mpv itself can be installed mid-session.
+ */
+const NATIVE_ENGINE_POLICY_KEY = 'native_engine_policy';
+
+const mpvEngine = new MpvEngine({
+  resolveBinary: (name) => binaryDownloader.resolveBinary(name),
+  onUpdate: (snapshot) => mainWindow?.webContents.send('mpv:update', snapshot),
+  diagnostics,
+});
+
+function nativeEnginePolicy(): NativeEngineCapability['policy'] {
+  const stored = datastore.getString(NATIVE_ENGINE_POLICY_KEY, 'auto', true);
+  return stored === 'off' || stored === 'aggressive' ? stored : 'auto';
+}
 const network = new NetworkSettingsStore(datastore);
 
 downloadService.setTorrentEngine(torrentEngine);
@@ -146,6 +175,7 @@ setHttpFetch((input, init) => resilientFetch.fetch(input, init));
 const playbackEngine = new PlaybackEngine({
   proxy: contentService.getProxy(),
   transcoder: mediaTranscoder,
+  nativeEngine: () => ({ available: mpvEngine.isAvailable(), policy: nativeEnginePolicy() }),
   fetchText: async (url, bytes) => {
     try {
       const response = await resilientFetch.fetch(
@@ -165,6 +195,26 @@ const playbackEngine = new PlaybackEngine({
   describeUnreadable: (url) => describeUnreadableSource(url),
   diagnostics,
 });
+
+/**
+ * Asks the probe binary which HLS options it understands.
+ *
+ * FFmpeg 7.1 introduced `-extension_picky` and defaulted it to *on*, which made
+ * the long-standing `-allowed_extensions ALL` fix inert — every provider serving
+ * segments from `.png` or extensionless URLs started failing again, with the
+ * very message that fix was written against. The flag cannot be passed blindly:
+ * an older binary rejects the entire command line and every probe dies, not just
+ * the ones this was meant to rescue. So it is detected once, and again whenever
+ * ffmpeg is installed or replaced.
+ */
+function refreshFfmpegOptionSupport(): void {
+  const ffprobe = mediaTranscoder.resolveFfprobe();
+  if (!ffprobe) return;
+  void detectExtensionPicky(ffprobe, (command, args, timeoutMs) =>
+    runTool(command, args, timeoutMs)
+  );
+}
+refreshFfmpegOptionSupport();
 
 /**
  * The last line of defence for the main process.
@@ -452,6 +502,9 @@ app.on('before-quit', async (event) => {
     diagnostics.flush();
     providerAnalytics.flush();
     mediaTranscoder.shutdown();
+    // A child process with its own window: without this it survives the app and
+    // keeps playing, with nothing left on screen to stop it.
+    await mpvEngine.shutdown();
     contentService.shutdown();
     await torrentEngine.destroy();
   } catch {
@@ -1129,6 +1182,15 @@ ipcMain.handle('components:getStatus', async () => {
     const downloadReady = Boolean(binaries.aria2 && binaries.ytdlp);
     const runtimeReady = Boolean(runtime.ready);
 
+    /**
+     * The native engine is deliberately not counted here.
+     *
+     * `missingCount` drives a "components missing" prompt, and mpv is optional
+     * by design — someone who only watches H.264 web releases never needs it,
+     * and nagging them into a 32 MB download to clear a warning badge would be
+     * asking for bandwidth to fix a problem they do not have. `binaries.mpv` is
+     * still reported so a screen that wants to show its state can.
+     */
     let missingCount = 0;
     if (!runtimeReady) missingCount++;
     if (!downloadReady) missingCount++;
@@ -1521,6 +1583,98 @@ ipcMain.handle('media:getPlaybackDiagnostics', async (_, sessionId?: string) => 
   events: playbackEngine.getDiagnostics(sessionId),
 }));
 
+// --- native playback engine (mpv) -----------------------------------------
+
+/**
+ * The native engine's surface, and the one thing it does not have.
+ *
+ * There is deliberately **no** `mpv:play(url)` that takes a raw link. Everything
+ * playable still comes out of `media:prepare`, which inspects first — the same
+ * gate INV-RACE-1 puts in front of the `<video>` element. A second entry point
+ * that skipped inspection would reintroduce the original bug in a new engine:
+ * playback started against unclassified content, with the diagnosis arriving
+ * afterwards if at all.
+ */
+ipcMain.handle('mpv:status', async () => ({ ok: true, status: await mpvEngine.status() }));
+
+ipcMain.handle('mpv:open', async (_, request: MpvOpenRequest) => {
+  const result = await mpvEngine.open(request);
+  if (!result.ok) {
+    diagnostics.record({
+      level: 'error',
+      stage: 'playback',
+      url: request?.url,
+      source: 'mpv',
+      message: result.error ?? 'The native engine could not open this source.',
+    });
+  }
+  return result;
+});
+
+ipcMain.handle('mpv:setPaused', async (_, paused: boolean) => mpvEngine.setPaused(paused));
+ipcMain.handle('mpv:seek', async (_, seconds: number) => mpvEngine.seek(seconds));
+ipcMain.handle('mpv:setVolume', async (_, volume: number) => mpvEngine.setVolume(volume));
+ipcMain.handle('mpv:setMuted', async (_, muted: boolean) => mpvEngine.setMuted(muted));
+ipcMain.handle('mpv:setSpeed', async (_, speed: number) => mpvEngine.setSpeed(speed));
+ipcMain.handle('mpv:setFullscreen', async (_, on: boolean) => mpvEngine.setFullscreen(on));
+ipcMain.handle('mpv:setAudioTrack', async (_, id: number | null) => mpvEngine.setAudioTrack(id));
+ipcMain.handle('mpv:setSubtitleTrack', async (_, id: number | null) =>
+  mpvEngine.setSubtitleTrack(id)
+);
+ipcMain.handle('mpv:addSubtitle', async (_, url: string, title?: string, language?: string) =>
+  mpvEngine.addSubtitle(url, title, language)
+);
+ipcMain.handle('mpv:setSubtitleDelay', async (_, seconds: number) =>
+  mpvEngine.setSubtitleDelay(seconds)
+);
+ipcMain.handle('mpv:stop', async () => mpvEngine.stop());
+
+/** A pull for the current state, for a player that mounted mid-playback. */
+ipcMain.handle('mpv:snapshot', async () => ({ ok: true, snapshot: mpvEngine.snapshot() }));
+
+ipcMain.handle('mpv:getPolicy', async () => ({
+  ok: true,
+  policy: nativeEnginePolicy(),
+  available: mpvEngine.isAvailable(),
+}));
+
+ipcMain.handle('mpv:setPolicy', async (_, policy: NativeEngineCapability['policy']) => {
+  if (policy !== 'off' && policy !== 'auto' && policy !== 'aggressive') {
+    return { ok: false, error: `Unknown native engine policy: ${policy}` };
+  }
+  datastore.setString(NATIVE_ENGINE_POLICY_KEY, policy, true);
+  /**
+   * Every cached verdict was reached under the old policy and is now wrong in
+   * whichever direction the policy moved. Without this, changing the setting
+   * appears to do nothing for the next ten minutes on any source already seen.
+   */
+  playbackEngine.invalidateCapabilityCache();
+  return { ok: true, policy };
+});
+
+/**
+ * Installs mpv on demand.
+ *
+ * Kept out of `binary:setupAll` on purpose — see `setupMpv`. It is the largest
+ * download the app makes and it is only worth making for someone who actually
+ * meets the streams that need it.
+ */
+ipcMain.handle('binary:setupMpv', async () => {
+  try {
+    const ok = await binaryDownloader.setupMpv((status, percent) => {
+      mainWindow?.webContents.send('binary:setupProgress', { component: 'mpv', status, percent });
+    });
+    /**
+     * The engine that was absent a moment ago now exists, and every capability
+     * record in the cache was decided on the assumption that it did not.
+     */
+    if (ok) playbackEngine.invalidateCapabilityCache();
+    return { ok, status: await mpvEngine.status() };
+  } catch (error) {
+    return { ...fail(error), status: await mpvEngine.status() };
+  }
+});
+
 ipcMain.handle('sources:getCacheStats', async () => contentService.getCache().stats());
 
 ipcMain.handle('sources:clearCache', async () => {
@@ -1641,11 +1795,11 @@ ipcMain.handle('binary:checkBinaries', async () => binaryDownloader.checkBinarie
 
 ipcMain.handle('binary:testAll', async () => binaryDownloader.testAllBinaries());
 
-ipcMain.handle('binary:testOne', async (_, name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe') => {
+ipcMain.handle('binary:testOne', async (_, name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'mpv') => {
   return await binaryDownloader.testBinary(name);
 });
 
-ipcMain.handle('binary:remove', async (_, name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'media' | 'downloads' | 'all') => {
+ipcMain.handle('binary:remove', async (_, name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'mpv' | 'media' | 'downloads' | 'all') => {
   const removed = binaryDownloader.removeBinary(name);
   return { ok: removed };
 });
@@ -1684,6 +1838,8 @@ ipcMain.handle('binary:setupFfmpeg', async () => {
         mainWindow.webContents.send('binary:setupProgress', { component: 'ffmpeg', status, percent });
       }
     });
+    // A different binary may have arrived with a different option set.
+    if (ok) refreshFfmpegOptionSupport();
     return {
       ok,
       message: ok

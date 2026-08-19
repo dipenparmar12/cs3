@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
+import { NativeEngineStage } from './player/NativeEngineStage';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
@@ -536,6 +537,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const preparedRef = useRef<PlaybackStreamResponse | null>(null);
   /** What the engine decided, for the track list, the messages and the report. */
   const capability: SourceCapabilityModel | null = prepared?.capability ?? null;
+  /**
+   * This stream is not going to the `<video>` element at all.
+   *
+   * The engine decided the browser cannot decode it and that re-encoding it
+   * would cost more than it is worth — see `shouldRouteToNativeEngine`. mpv has
+   * it instead, and everything below that reads from the element has to know
+   * that the element is empty rather than broken.
+   */
+  const isNativeEngine = prepared?.ok === true && capability?.requiredStrategy === 'NATIVE_MPV';
   const probeFailure = capability?.failure ?? null;
   const probeFailureRef = useRef<typeof probeFailure>(null);
   /**
@@ -628,6 +638,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     // There is deliberately no `?? streamUrl` fallback here — that expression is
     // precisely what attached unclassified URLs and created the race.
     if (!video || !streamUrl || !prepared?.ok || !prepared.playbackUrl) return;
+    /**
+     * A native-engine stream must not also be assigned here. Chromium would
+     * take the URL, fail to decode it, fire `error`, and trip the failover
+     * ladder — so the source that is playing perfectly well in mpv would be
+     * reported as unplayable and skipped.
+     */
+    if (prepared.capability.requiredStrategy === 'NATIVE_MPV') return;
 
     setError(null);
     setQualities([]);
@@ -1781,6 +1798,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <track key={sub.url} kind="subtitles" label={sub.name} src={sub.url} />
         ))}
       </video>
+
+      {isNativeEngine && capability && prepared?.playbackUrl && (
+        <NativeEngineStage
+          url={prepared.playbackUrl}
+          title={episodeTitle ? `${title} — ${episodeTitle}` : title}
+          capability={capability}
+          startSeconds={progress?.resumeAt}
+          initialVolume={audioSettings.current.volume}
+          initialMuted={audioSettings.current.muted}
+          externalSubtitles={allSubtitles.map((sub) => ({ name: sub.name, url: sub.url }))}
+          onProgress={(position, total) => {
+            // Feeds the same state the `<video>` path writes, so the existing
+            // save interval, the resume point and the up-next card all work
+            // without knowing which engine produced the numbers.
+            setCurrentTime(position);
+            if (total > 0) setDuration(total);
+          }}
+          onEnded={() => {
+            if (nextEpisode && onSelectEpisode && !upNextDismissed) onSelectEpisode(nextEpisode);
+          }}
+          onFallbackToBuiltIn={() => forceTranscodeRef.current?.()}
+          onError={(message) => setError(message)}
+        />
+      )}
 
       {/* Resolving a source for another episode happens over the live player, so
           it needs its own overlay — the buffering one belongs to the stream that
