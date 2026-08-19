@@ -72,7 +72,8 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (89 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (99 tests, Node type-stripping — no framework) |
+| Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Media decisions only | `cs3_windows/` | `bun run test:media` (53 cases, no ffmpeg needed) |
 | Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
 | Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
@@ -232,6 +233,12 @@ starting anything, `media:prepare` inspects-decides-opens and returns the URL to
 `media:getPlaybackDiagnostics` returns the per-attempt telemetry. There is deliberately **no**
 channel that hands back an unclassified playback URL.
 
+`external:*` drives a handed-off player and pushes `external:update` snapshots back, with a
+`capability` that says whether those controls reach anything. `player:getPreferences` /
+`player:setPreferences` hold volume, mute, speed and track languages.
+`download:getDeletePreference` / `download:setDeletePreference` hold the delete behaviour, and
+`extension:rollback` puts back the archive an update replaced.
+
 `mpv:*` drives the native engine — `mpv:open` (a *prepared* URL only), transport and track
 controls, `mpv:update` snapshots pushed like `playback:*`, and `mpv:getPolicy`/`mpv:setPolicy`
 for how eagerly it is used. It has no channel that takes a raw link either, for the same reason.
@@ -291,6 +298,8 @@ not a layering mistake.
 | `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. |
 | `torrent/indexerRegistry.ts`, `indexers/*` | 7 built-in public indexers, Torznab (Jackett/Prowlarr), and aggregators (Torrentio, apibay). |
 | `torrent/ranker.ts`, `releaseParser.ts` | Release-name parsing (quality/codec/group/season/episode) and result ranking. |
+| `externalPlayerControl.ts` | Two-way control of VLC over its HTTP interface. Capability is declared per player, never assumed — see below. |
+| `media/inspectionStore.ts` | Persists what a probe found, keyed on the origin URL. The measurement only; the verdict is recomputed. |
 | `downloadService.ts`, `aria2Engine.ts`, `ytdlpEngine.ts`, `binaryDownloader.ts` | Downloads via aria2c RPC with an HTTP fallback; portable `aria2c`/`yt-dlp` binaries are fetched on first use. |
 
 ### Codecs: Chromium cannot decode a lot of what people actually stream
@@ -780,6 +789,63 @@ from everything above — Ultima is a host-UI replacement rather than a scraper,
 it means shimming the Android app itself. Left alone deliberately; one extension is not worth
 a fake `MainActivity`.
 
+### Android vs Windows: where the two actually diverge now (2026-08-19)
+
+The recurring report is "this provider works in the Android app and fails here". Measured
+rather than assumed, with `provider-e2e.mjs --plugins 30` across all five bundled
+repositories:
+
+```
+providers loaded    66
+providers answering 24
+links resolved      18
+streams with bytes  16
+PASS — extensions load, scrape and stream
+```
+
+**`NoClassDefFoundError` occurrences across the whole run: 3, all of one class —
+`com.lagradost.cloudstream3.CloudStreamApp`.** That is Ultima, and it is the one deliberate
+exclusion on record: a host-UI replacement rather than a scraper, whose dependency chain runs
+through `MainActivity`, `CommonActivity` and `HomeViewModel`. Shimming it means shimming the
+Android app itself.
+
+So the answer to "what is the translation layer still missing?" is: for the corpus we can
+see, **nothing**. The four rounds of shim work documented above closed it. A provider that
+works on Android and fails here is now failing for a reason that is *not* a missing class,
+and looking for one is looking in the wrong place.
+
+The divergences that remain are runtime and platform, not translation:
+
+1. **TLS strictness.** `SSLHandshakeException: Received fatal alert: unrecognized_name`
+   appears in sidecar stderr against some provider hosts. This is a real Android/JVM
+   difference and not a provider bug: a server that does not recognise the SNI name sends a
+   *warning*-level `unrecognized_name` alert, Android's Conscrypt ignores it, and the stock
+   JVM treats it as fatal. The documented JVM workaround, `-Djsse.enableSNIExtension=false`,
+   is **not** applied here and should not be applied casually — it disables SNI for every
+   connection, and virtually every CDN in the corpus needs SNI to serve the right
+   certificate. Trading a handful of hosts for most of them is the wrong direction. A
+   correct fix is per-connection and belongs in the bridge's HTTP client; it is not built.
+   **The frequency is not yet measured** — the harness prints only the last 15 lines of
+   sidecar stderr, so the occurrences seen are a signal, not a rate. Count it properly before
+   spending effort on it.
+
+2. **No WebView.** Still doc 36 step 7, still the largest single gap, and now the dominant
+   one. Android providers get a real browser for Cloudflare challenges and for extractors
+   that need JavaScript to run; `CloudflareKiller` here forwards rather than bypasses.
+   Aniworld's Google 403 and the Voe/Vidsonic extractor failures are all this. This is the
+   thing to build next if the goal is parity — not more shims.
+
+3. **Host-side reality, which is not a divergence at all.** Expired signed URLs, hotlink
+   403s, dead swarms and slow sites fail identically on both platforms. The vendor matrix
+   (§5.2) counted these: of 72 non-playing streams, every one was a host refusing or
+   expiring a link, or a provider with nothing for that title. Attributing those to the
+   compatibility layer is the mistake that sends people looking for translation bugs that
+   are not there.
+
+**Count before fixing.** That rule produced the six-classes finding in the third round and it
+applies here in the other direction: the counting now says the class problem is solved, so
+the next unit of effort belongs in the WebView bridge.
+
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 
 Run it before believing anything about extension health:
@@ -1056,6 +1122,135 @@ The settings panel shows every number, every criterion's sample count, and the e
 because a system that reorders results on evidence nobody can see is one users learn to
 distrust the first time it is wrong — and with hundreds of third-party scrapers it will
 sometimes be wrong.
+
+### Downloads: the state machine, and why 100% was not "done"
+
+**aria2 says `complete`, not `completed`.** `Aria2Progress.status` declared the latter and
+`getStatus` passes `raw.status` straight through, so the comparison in `pollAria2Tasks`
+could never be true. Every finished aria2 transfer sat at 100% in `Downloading` for the life
+of the session, and its gid was never released, so the poller kept asking about it forever.
+Verified against a live aria2 daemon: `tellStatus` answers `"active"`, then `"complete"`.
+`removed` and `paused` were unhandled too — each a second way for a task to stick with no
+poll left that could change it.
+
+**Completion is now verified rather than reported.** All three engines route through
+`finalizeCompletion`, because "the engine finished" and "there is a playable file" are
+different claims and a download list that reports the second knowing only the first is
+worthless. It requires: the target exists, no unfinalised `.part` remains beside it, and the
+size agrees with expectations where any exist — 1% tolerance, since plenty of sources send
+no `Content-Length` and a strict test would fail every one of them. Anything else is
+`Failed` **with the reason**, which is retryable.
+
+**Delete is two actions.** `remove(id, deleteFile)` — removing a finished film from the list
+and erasing it from disk are unrecoverably different, so the caller decides and
+`DeleteDownloadDialog` asks. The "remember my choice" box is off by default (a preference
+learned from one click is one nobody knows they set) and Settings → Downloads can put the
+prompt back, because a preference settable only inside a dialog you opted out of seeing
+cannot otherwise be undone.
+
+### The player: three bugs that all looked like "nothing happened"
+
+**`onRefresh` was `() => {}` on two of three player mount points.** Only the live
+`PlaybackSession` path had a working "Search again"; the path taken after picking a source
+from the detail page rendered the button and wired it to nothing — which reads as "the
+search found nothing new" rather than as a dead control. It now runs a real cache-bypassing
+discovery whose results stream into the open list, and reports when one cannot start.
+
+**Two sources could both show "Playing".** `isActive` compared `infoHash`, which for a
+provider stream is *synthetic* — the SHA-1 of its URL. Two extensions scraping the same file
+host produce the same id, so every copy lit up. Only the first match is marked now, and the
+React key is disambiguated so duplicates do not collapse into one row either.
+
+**Volume, mute, speed and track languages persist**, across media and restarts. Languages,
+never indices: audio track 2 is the Hindi dub on one release and the director's commentary
+on the next, so restoring an index would confidently select the wrong thing. The load is
+applied through the same ref the attach effect reads, or a source that attaches before the
+preference arrives spends its first seconds at full volume.
+
+### External players are driven, where driving them is possible
+
+The requirement is that transport controls keep working after a handoff. What is actually
+possible is not uniform, and `externalPlayerControl.ts` declares it per player rather than
+pretending:
+
+| Player | Channel | Capability |
+|---|---|---|
+| mpv | JSON IPC — routed through `MpvEngine` | `full` |
+| VLC | its built-in HTTP interface | `full` |
+| MPC-HC/BE | web UI, **off unless the user enabled it**, no launch switch | `none` |
+| PotPlayer, IINA, Celluloid, SMPlayer | none | `none` |
+
+VLC is launched with `--extraintf http` on an OS-assigned loopback port behind a
+per-session password — that interface is unauthenticated by default, and binding it without
+one would hand playback control to anything else on the machine.
+
+**Capability can downgrade at runtime.** A VLC built without its HTTP module launches, plays
+perfectly, and answers no request; after a grace period the snapshot reports `none` and the
+UI stops offering controls that cannot work. A seek bar that silently does nothing is worse
+than one the viewer was told about — that is the whole reason this is declared rather than
+assumed.
+
+`transport` in `VideoPlayer` is the single derived answer to "who is holding this stream?" —
+element, native engine, or external — and every control reads it. Volume/mute/speed are
+applied to *all* engines rather than only the active one, so a handoff to VLC and back does
+not restore the volume to 100%.
+
+### Probes are remembered; verdicts are not
+
+`media/inspectionStore.ts` persists what ffprobe found, keyed on the **origin** URL — never
+the proxied one, whose port and token are minted per session and would miss on every restart
+while looking like they should hit.
+
+The split is the point. A **measurement** (container, codecs, bit depth, track list) is a
+fact about the file and never changes. A **verdict** is a function of that measurement *and*
+this machine: the renderer's decoders, whether a GPU encoder exists, whether mpv is
+installed, which routing policy is set. So only the measurement is stored and
+`decideStrategy` runs again every time. Caching the verdict would be the stale-cache bug in
+its most expensive form — install mpv, and every previously-played title keeps re-encoding
+because a record from last week says so.
+
+Query strings are deliberately **not** stripped to normalise signed URLs: two films behind
+one path template would then be served each other's codec lists. A signed URL simply misses
+and is re-probed.
+
+Measured: 97 ms saved on a local multi-track MKV, and the probe was 1.6–1.7 s per source
+against real provider streams in the vendor matrix — which is where it actually pays.
+
+### The source cache learns from playback
+
+It was already persistent with per-source expiry. What it lacked was any memory of a source
+having *failed*: `unplayable` lived on the session and died with the player, so the same
+dead link was served first again next time.
+
+`recordFailure` now decides between two responses, and the distinction is the whole policy.
+A **definitive** answer — 404, 410, or the host saying the file is gone — drops the source
+immediately, because no amount of retrying changes it. Anything else is **counted**: a
+timeout, a reset, a 5xx, or a 403 is the network or the host having a moment, and a cache
+that forgets everything on the first bad minute is worse than no cache. Three such failures
+drop it. `recordSuccess` clears the count, so a source that failed twice on a bad afternoon
+is not dropped by an unrelated blip a week later.
+
+403 is specifically **not** definitive: expired signed URLs and hotlink protection both
+answer 403 and both are recovered by re-resolving, which the expiry machinery already does.
+
+Pinned by `sourceCache.test.mts` (10 cases), including that removing the last source removes
+the entry rather than leaving an empty shell — `hit: true` with nothing in it makes the
+caller skip the discovery it needs.
+
+### An extension update that breaks itself is put back
+
+`updatePlugin` now copies the working archive aside, installs, **loads the new one**, and
+restores the old one when it will not link. An update can download cleanly, verify its hash
+and write successfully while being built against a provider API this runtime does not have —
+and the first anyone knows is that every provider from that extension has silently vanished.
+
+`T4_BLOCKED` is the only verdict that counts as failure. `T3_DEGRADED` is the normal state of
+a large part of the corpus and refusing an update over it would block most of the ecosystem.
+A **null** report — the sidecar being unreachable — is explicitly not a failure either
+(DROP-34): rolling an update back because the JVM had not started yet would be its own bug.
+
+One generation is kept. `extension:rollback` exposes it manually, for the case the load check
+cannot see: an extension that links fine and then scrapes nothing.
 
 ### The native engine: mpv, for the streams Chromium will never decode
 
