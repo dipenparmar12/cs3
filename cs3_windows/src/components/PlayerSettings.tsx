@@ -281,12 +281,13 @@ export const PlayerSettings: React.FC = () => {
               the controls in the player.
               <br />
               <br />
-              <strong>Automatic</strong> hands over only what the built-in player handles
-              badly: anything it would have re-encoded, plus lossless and object-based audio.
+              <strong>Automatic</strong> hands over what the built-in player would have
+              re-encoded or downmixed: 4K, HEVC, 10-bit and HDR video, and any soundtrack with
+              more than two channels — which is most 1080p WEB-DL releases, where E-AC-3 5.1
+              would otherwise be flattened to stereo.
               <br />
-              <strong>Always</strong> also hands over the cheap cases — container remuxes and
-              surround downmixes — which preserves 5.1 and 7.1 everywhere at the cost of
-              leaving the in-app window more often.
+              <strong>Always</strong> also hands over the cases that lose nothing, such as a
+              stereo container remux, at the cost of leaving the in-app window more often.
               <br />
               <strong>Never</strong> keeps everything in the built-in player and its FFmpeg
               conversion path, exactly as before this engine existed.

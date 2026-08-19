@@ -571,14 +571,42 @@ test('under `auto` a plain MKV remux stays in the app', () => {
   assert.equal(decideNative(mkv, MPV_AGGRESSIVE).strategy, 'NATIVE_MPV');
 });
 
-test('under `auto` AC-3 5.1 is still downmixed in the app, not routed', () => {
-  // The loss is a speaker layout and it is recoverable — the 5.1 is still in the
-  // file next time. Routing every broadcast TV release would be the larger bug.
-  const ac3 = media({ audio: [audio({ codec: 'ac3', channels: 6, playable: false })] });
-  assert.equal(decideNative(ac3, MPV_AUTO).strategy, 'AUDIO_TRANSCODE');
+test('under `auto` surround audio routes rather than being flattened to stereo', () => {
+  /**
+   * The row a user's own catalogue produced. `1080p WEB-DL … EAC3 5.1` in
+   * Matroska is the modal provider release, not an edge case, and the earlier
+   * rule sent every one of them through a stereo downmix — reported as
+   * "Audio re-encoded, video copied untouched … EAC3 audio has no decoder here"
+   * on title after title. The 5.1 is decodable on the GPU for free.
+   */
+  for (const codec of ['eac3', 'ac3', 'dts']) {
+    const decision = decideNative(
+      media({
+        formatName: 'matroska,webm',
+        audio: [audio({ codec, channels: 6, playable: false })],
+      }),
+      MPV_AUTO
+    );
+    assert.equal(decision.strategy, 'NATIVE_MPV', `${codec} 5.1 should route`);
+  }
 });
 
-test('under `auto` lossless and object-based audio routes, because that loss is permanent', () => {
+test('under `auto` a stereo track is left in the app, whatever its codec', () => {
+  // Nothing is thrown away here: the codec swap is cheap and stereo is stereo
+  // on the other side. Routing it would cost a window to buy nothing.
+  const stereoAc3 = media({ audio: [audio({ codec: 'ac3', channels: 2, playable: false })] });
+  assert.equal(decideNative(stereoAc3, MPV_AUTO).strategy, 'AUDIO_TRANSCODE');
+});
+
+test('under `auto` lossless stereo still routes, because that loss is permanent', () => {
+  // Two channels of TrueHD re-encoded to 192 kbit AAC is not recoverable, so
+  // the codec rule survives underneath the channel rule rather than being
+  // replaced by it.
+  const truehd = media({ audio: [audio({ codec: 'truehd', channels: 2, playable: false })] });
+  assert.equal(decideNative(truehd, MPV_AUTO).strategy, 'NATIVE_MPV');
+});
+
+test('under `auto` lossless and object-based audio routes at any channel count', () => {
   for (const codec of ['truehd', 'dtshd', 'dts-hd ma', 'flac', 'pcm_s24le']) {
     const decision = decideNative(
       media({ audio: [audio({ codec, channels: 8, playable: false })] }),

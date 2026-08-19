@@ -28,18 +28,18 @@ The document above proposes routing on a capability hierarchy and leaves the *po
 What shipped is three policies, defaulting to `auto`:
 
 - `off` — the FFmpeg ladder does everything, exactly as before.
-- `auto` — mpv takes any stream the browser path would have **re-encoded**, plus lossless
-  and object-based audio (TrueHD, DTS-HD MA, DTS:X, FLAC, PCM).
-- `aggressive` — mpv takes everything not already playing natively, including the cheap
-  container remux, which preserves 5.1/7.1 everywhere.
+- `auto` — mpv takes any stream the browser path would have **re-encoded** or
+  **downmixed**: anything above stereo, plus lossless and object-based audio (TrueHD,
+  DTS-HD MA, DTS:X, FLAC, PCM) at any channel count.
+- `aggressive` — mpv takes everything not already playing natively, including a stereo
+  container remux that loses nothing.
 
-**AC-3 and E-AC-3 5.1 do not route under `auto`,** and the table in §1 of this document
-would have routed them. The reason for departing from it is recoverability: a stereo
-downmix of AC-3 loses a speaker layout, and the 5.1 is still in the file next time; a
-re-encode of TrueHD to 192 kbit stereo destroys the thing the release exists for. Since the
-engine renders in its own window today, routing AC-3 would push most television releases
-out of the in-app player to save a few percent of one core. `aggressive` exists for anyone
-who wants that trade, and it is not the default.
+This ends up agreeing with the table in §1 of this document, but it did not start there. The
+first implementation routed only *lossless* audio and deliberately left AC-3/E-AC-3 5.1 in
+the app, on the reasoning that a downmix is recoverable and that routing it would push most
+television out of the in-app player. Testing against a real catalogue disproved the premise:
+E-AC-3 5.1 in Matroska is the modal release, so that rule flattened nearly everything to
+stereo. The line is channels, not codec.
 
 ## What is not built
 

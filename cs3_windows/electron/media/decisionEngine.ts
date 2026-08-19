@@ -104,17 +104,25 @@ const SOFTWARE_ENCODE_MAX_HEIGHT = 1080;
 const SOFTWARE_4K_CORE_THRESHOLD = 16;
 
 /**
- * Audio a stereo AAC downmix destroys rather than merely shrinks.
+ * Multichannel: more than stereo, and therefore something a downmix throws away.
  *
- * The line drawn here is recoverability, not channel count. AC-3 5.1 downmixed
- * to stereo loses a speaker layout, which is a real loss and a reversible
- * decision — play it again through the native engine and the 5.1 is still in the
- * file. TrueHD, DTS-HD Master Audio and DTS:X are *lossless or object-based*:
- * the mix is the thing people bought the release for, and re-encoding it to
- * 192 kbit stereo is the one conversion in the ladder with nothing to say for
- * itself. Those go to mpv under the default policy; AC-3 and E-AC-3 do not,
- * because routing them would send most television releases out of the in-app
- * player to save a few percent of one core.
+ * The first version of this rule routed only *lossless* audio — TrueHD, DTS-HD
+ * MA, DTS:X — on the theory that AC-3 and E-AC-3 5.1 were a recoverable loss and
+ * that routing them would push most television releases out of the in-app player
+ * for a few percent of one core.
+ *
+ * **A user's own catalogue disproved the premise.** The report was "this happens
+ * on most of the content", with `Audio re-encoded, video copied untouched:
+ * matroska,webm cannot be demuxed by the browser; EAC3 audio has no decoder
+ * here` on title after title — a 1080p WEB-DL with E-AC-3 5.1 in Matroska is not
+ * an edge case, it is the modal release. So the rule the old comment described
+ * as protecting the common case was in fact degrading it: nearly every film and
+ * episode played back as stereo, permanently, while the 5.1 sat unused in a file
+ * the machine could decode on its GPU for free.
+ *
+ * The line is now channels rather than codec. Anything above stereo that would
+ * be downmixed goes to the native engine; genuine stereo stays in the app, where
+ * a container remux costs nothing and loses nothing.
  */
 const LOSSLESS_OR_OBJECT_AUDIO = new Set([
   'truehd', 'mlp', 'dtshd', 'dts-hd ma', 'dts-hd hra', 'dts:x',
@@ -552,8 +560,9 @@ function decideBrowserStrategy(
  *   engine exists for: the only strategy that is both expensive and lossy, and
  *   the one that on a software-only host downscales 4K to 1080p or fails to hold
  *   realtime at all.
- * - **Under `auto`, lossless and object-based audio routes.** See
- *   {@link LOSSLESS_OR_OBJECT_AUDIO}.
+ * - **Under `auto`, audio that would be downmixed routes.** Anything above
+ *   stereo, plus lossless and object-based formats at any channel count. See
+ *   {@link LOSSLESS_OR_OBJECT_AUDIO} for why this is channels rather than codec.
  * - **Under `aggressive`, anything not already playing natively routes** —
  *   including the cheap remux, which still flattens 5.1 to stereo.
  */
@@ -579,11 +588,19 @@ export function shouldRouteToNativeEngine(
   const selected = metadata.audio.find(
     (track) => track.index === decision.plan.selectedAudioIndex
   );
-  return Boolean(
-    selected &&
-      decision.plan.audioAction === 'transcode' &&
-      LOSSLESS_OR_OBJECT_AUDIO.has(selected.codec.toLowerCase())
-  );
+  if (!selected || decision.plan.audioAction !== 'transcode') return false;
+
+  /**
+   * A downmix is the loss worth a window; a codec swap on stereo is not.
+   *
+   * `MAX_DIRECT_CHANNELS` is the same constant the browser path uses to decide
+   * it must flatten the track, so this asks exactly the question "is the app
+   * about to throw away speakers?" — the answer that made E-AC-3 5.1, the modal
+   * provider release, play back in stereo on every title.
+   */
+  if (selected.channels > MAX_DIRECT_CHANNELS) return true;
+
+  return LOSSLESS_OR_OBJECT_AUDIO.has(selected.codec.toLowerCase());
 }
 
 /**

@@ -1084,17 +1084,22 @@ every verdict to exactly what it was — there is no second code path to keep co
 policies, stored in the datastore under `native_engine_policy`:
 
 - `off` — the ladder does everything, as before.
-- `auto` (default) — mpv takes any stream the browser path would have **re-encoded**, plus
-  lossless and object-based audio (TrueHD, DTS-HD MA, DTS:X, FLAC, PCM).
-- `aggressive` — mpv takes everything that is not already playing natively, including the
-  cheap remux, which preserves 5.1/7.1 everywhere.
+- `auto` (default) — mpv takes any stream the browser path would have **re-encoded** or
+  **downmixed**: that is anything above stereo, plus lossless and object-based audio
+  (TrueHD, DTS-HD MA, DTS:X, FLAC, PCM) at any channel count.
+- `aggressive` — mpv takes everything that is not already playing natively, including a
+  stereo container remux that loses nothing.
 
-**AC-3 and E-AC-3 5.1 deliberately do *not* route under `auto`**, and that is the line
-worth understanding. The distinction is recoverability: a stereo downmix of AC-3 loses a
-speaker layout and the 5.1 is still in the file next time, while re-encoding TrueHD to
-192 kbit stereo destroys the thing the release exists for. Routing AC-3 would also send
-most television releases out of the in-app player to save a few percent of one core —
-`aggressive` is there for anyone who wants that trade, and it is not the default.
+**The channel rule replaced a codec rule, and a user's catalogue is what settled it.** The
+first version routed only *lossless* audio, reasoning that AC-3/E-AC-3 5.1 was a recoverable
+loss and that routing it would push most television out of the in-app player. The report
+back was "this happens on most of the content", with `Audio re-encoded, video copied
+untouched: matroska,webm cannot be demuxed by the browser; EAC3 audio has no decoder here`
+on title after title. A 1080p WEB-DL carrying E-AC-3 5.1 in Matroska is the **modal**
+provider release, so the rule meant to protect the common case was degrading it: nearly
+every film and episode played as stereo while the 5.1 sat in a file the GPU decodes for
+free. The line is now channels, not codec — genuine stereo still stays in the app, where a
+remux costs nothing and loses nothing.
 
 **A stream never reaches mpv without being inspected first.** There is no `mpv:play(url)`
 that takes a raw link; `media:prepare` remains the only way to obtain a playable URL, and

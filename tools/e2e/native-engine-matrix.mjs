@@ -325,6 +325,14 @@ function playInMpv(url, seconds) {
         `--length=${seconds}`,
         '--msg-level=all=status',
         '--term-status-msg=CS3 ${=time-pos} ${frame-drop-count} ${hwdec-current} ${video-codec} ${audio-codec-name} ${width}x${height}',
+        /**
+         * The stream itself.
+         *
+         * Without it mpv prints its usage text and exits **zero**, which parses
+         * as a file that decoded no frames — a green process and a red result,
+         * on every row, indistinguishable from a corpus-wide playback failure.
+         */
+        url,
       ],
       { windowsHide: true }
     );
@@ -356,9 +364,8 @@ function playInMpv(url, seconds) {
 
     const killer = setTimeout(() => child.kill('SIGKILL'), (seconds + 25) * 1000);
 
-    child.on('close', (code) => {
+    child.on('close', () => {
       clearTimeout(killer);
-      if (process.env.CS3_DEBUG_MPV) console.error(`[dbg] exit=${code} rawLen=${stderr.length} pos=${position} raw=${JSON.stringify(stderr.slice(0,600))}`);
       resolve({
         // "It played" means the playhead moved past the first second, not that
         // the process exited zero: mpv exits zero for a file it opened and could
