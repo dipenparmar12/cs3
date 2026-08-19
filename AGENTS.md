@@ -72,7 +72,7 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (99 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (111 tests, Node type-stripping — no framework) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Media decisions only | `cs3_windows/` | `bun run test:media` (53 cases, no ffmpeg needed) |
 | Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
@@ -287,7 +287,8 @@ not a layering mistake.
 | `cs3/diagnostics.ts` | Provider failures with the context that makes them reproducible. See below. |
 | `cs3/titleOutcomes.ts` | How each title last behaved, so a dead row is not clicked twice. |
 | `cs3/batchDownloader.ts` | Season/series batch download orchestration. |
-| `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, and remembered source choices. |
+| `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, remembered source choices, and the source that actually played. |
+| `cs3/playedSource.ts` | Re-finding a saved source after its link expires. Pure and tested — a provider source has no durable id. |
 | `cs3/bookmarkStore.ts` | Saved *detail pages*, with the provider, extension, repository and query that produced them. Deliberately **not** the library: that keys on a normalised title so one film from five providers is one entry, which is right for watch tracking and useless for "reopen the page I was on". Identity and origin are stored; resolved links are not, because they expire. |
 | `cs3/providerAnalytics.ts` | How every provider has actually behaved, counted. Aggregates only — no queries, no titles, no viewing history — because provider quality does not depend on any of them and this file is meant to be shareable. `empty` is tracked separately from `failure`: a provider with nothing for this title is working, and folding the two together would rank providers by catalogue breadth. |
 | `cs3/providerRanking.ts` | Weighted scoring over those counts. Criteria are **rows in a table**, not a formula: an id, a weight, a sample floor and a function to `0..1` or `null`. A `null` is excluded from the denominator rather than scored zero — a provider nobody has downloaded from must not rank below one whose downloads always fail. Rates are smoothed toward a neutral prior so a new extension starts mid-table and can never be permanently buried by one unlucky first call. |
@@ -1215,6 +1216,62 @@ and is re-probed.
 
 Measured: 97 ms saved on a local multi-track MKV, and the probe was 1.6–1.7 s per source
 against real provider streams in the vendor matrix — which is where it actually pays.
+
+### The library remembers which source actually played
+
+The library remembered *what* was watched and `bookmarkStore` remembered *which page* it
+came from. Neither remembered **which of thirty sources delivered it**, so returning to a
+title meant picking from the list again with nothing recording that the fourth row down is
+the only one that ever produced a frame.
+
+`PlayedSource` (in `src/types/library.ts`, stored by `libraryStore`) is one slot per
+(title, season, episode) — per episode, because keying on the title alone would have episode
+6 overwrite what played episode 5. It holds the full `StoredSource` (provider, repository,
+extension, quality, capabilities, the link and its deadline) plus an `origin` query.
+
+**The link is stored but is never the identity.** A provider URL is a signed address on
+someone else's CDN, good for minutes; the durable half is `origin`, which is replayed to get
+a fresh link for the same release. That is why both are there.
+
+**It is recorded on playback, not on selection.** `SourceMemory` already covers "what the
+viewer picked", and the two are different claims — a release chosen and then abandoned
+because it would not start is not one that works. `VideoPlayer` records after **10 seconds**
+of real playback, which is past every failure that presents as "it started and then stopped".
+
+`library:resolvePlayedSource` returns one of three outcomes, and the caller is told which
+because they mean different things:
+
+- `reused` — the stored link still holds; no provider contacted.
+- `refreshed` — it had expired, so the same release was re-resolved and the record updated
+  in place. Surfaced in the UI, because it explains the pause the viewer just sat through.
+- `unavailable` — the provider no longer offers it. The record is **marked, not deleted**
+  ("the one that used to work is gone" beats an entry that silently vanishes) and the
+  alternatives come back so it is a choice rather than a dead end.
+
+#### Matching a saved source after its link dies
+
+`cs3/playedSource.ts`, and the reason it is its own tested module: **a provider source has
+no durable id.** Torrents do — an infohash addresses content. A provider stream's
+`infoHash` is *synthesised* by `ContentService` as the SHA-1 of its URL, purely so the
+ranker and the dedupe key have something to work with. Re-resolve that release an hour later,
+get a freshly signed URL, and the id is different for the identical file. **Matching on it
+alone can never re-find a provider source, which is the case this feature exists for.**
+
+So: torrents match on infohash; everything else matches on the durable triple — provider,
+normalised release name, resolution. Strict on purpose, because returning the wrong release
+is worse than returning nothing: the viewer asked to resume *this* stream, and quietly
+starting a different cut, dub or a 480p rip is a failure they will attribute to the app
+losing their place. The one concession is containment in either direction, since providers
+append and drop decorations (a size, a mirror name, `[Dual Audio]`) between refreshes.
+
+A direct link with **no recorded deadline is treated as expired**, deliberately. The costs
+are asymmetric: guessing "still good" spends the ffmpeg startup and the player's timeout
+before failing over, while guessing "expired" costs one provider call and produces a stream
+that works.
+
+Pinned by `cs3/playedSource.test.mts` (12 cases), including that a provider source is
+re-found despite its synthetic id changing, and that nothing matching returns null rather
+than a nearby release.
 
 ### The source cache learns from playback
 

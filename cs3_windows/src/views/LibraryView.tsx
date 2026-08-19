@@ -1,4 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { PlayedSourcePanel } from '../components/library/PlayedSourcePanel';
+import type { PlayedSource } from '../types/library';
+import type { TorrentResult } from '../types/torrent';
 import {
   Trash2,
   Star,
@@ -27,6 +30,14 @@ import type { Bookmark } from '../../electron/cs3/bookmarkStore';
 
 interface LibraryViewProps {
   onSelectMedia: (item: SearchResponse) => void;
+  /**
+   * Plays a source the library had saved as working.
+   *
+   * The panel resolves it — reusing the stored link or re-resolving a dead one —
+   * and hands back a live source; playing it is App's job because that is where
+   * the player lives.
+   */
+  onPlaySavedSource?: (source: TorrentResult, record: PlayedSource) => void;
   /** Re-runs the search a saved page was originally found by. */
   onSearch?: (query: string) => void;
 }
@@ -58,7 +69,11 @@ function formatWatched(progress: WatchProgress | undefined): string | null {
   return `${percent}% · ${minutes} min left`;
 }
 
-export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia, onSearch }) => {
+export const LibraryView: React.FC<LibraryViewProps> = ({
+  onSelectMedia,
+  onSearch,
+  onPlaySavedSource,
+}) => {
   const [mode, setMode] = useState<LibraryMode>('watching');
   const [activeStatus, setActiveStatus] = useState<WatchStatus>('Watching');
   const [entries, setEntries] = useState<LibraryEntry[]>([]);
@@ -471,6 +486,20 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onSelectMedia, onSearc
             </div>
 
             <div style={{ padding: '1.25rem 1.4rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+              {/* What actually played comes first: it is the answer to the
+                  question the list below can only guess at. */}
+              <div className="played-source__section">
+                <h4>The source that played</h4>
+                <PlayedSourcePanel
+                  libraryKey={sourcesModalEntry.key}
+                  onPlay={(source, record) => {
+                    setSourcesModalEntry(null);
+                    onPlaySavedSource?.(source, record);
+                  }}
+                />
+              </div>
+
+              <h4 className="played-source__section-heading">Everything discovery found</h4>
               {!sourcesModalEntry.sources || sourcesModalEntry.sources.length === 0 ? (
                 <div style={{ padding: '2rem 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                   No sources currently stored. Click "Refresh Sources" to search and save available streams.

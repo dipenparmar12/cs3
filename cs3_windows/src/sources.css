@@ -4966,3 +4966,57 @@
 .player__external-banner strong { font-size: .88rem; color: #fff; }
 .player__external-banner span { font-size: .78rem; color: var(--text-muted); }
 .player--mini .player__external-banner { display: none; }
+
+/* --- the source that played ----------------------------------------------
+   Shown above the discovered list, because "which one actually worked" is the
+   answer that list can only guess at. */
+.played-source { display: flex; flex-direction: column; gap: .5rem; }
+
+.played-source__section { display: flex; flex-direction: column; gap: .5rem; }
+.played-source__section h4,
+.played-source__section-heading {
+  margin: 0;
+  font-size: .72rem;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--text-subtle, #8b95a5);
+}
+.played-source__section-heading { margin-top: .9rem; }
+
+.played-source__empty { margin: 0; font-size: .82rem; color: var(--text-muted); display: flex; align-items: center; gap: .4rem; }
+
+.played-source__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .8rem .9rem;
+  border-radius: 8px;
+  /* Green rather than the list's blue: this row is a fact, not a candidate. */
+  border: 1px solid rgba(74, 222, 128, .28);
+  background: rgba(74, 222, 128, .07);
+}
+.played-source__row--gone {
+  border-color: rgba(229, 83, 75, .3);
+  background: rgba(229, 83, 75, .07);
+}
+
+.played-source__what { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.played-source__what strong { font-size: .86rem; color: #fff; word-break: break-word; }
+.played-source__episode {
+  display: inline-flex; align-items: center; gap: .3rem;
+  font-size: .68rem; font-weight: 700; letter-spacing: .04em;
+  color: var(--text-subtle);
+}
+.played-source__detail { font-size: .76rem; color: var(--text-muted); }
+.played-source__origin { font-size: .72rem; color: var(--text-subtle); }
+.played-source__when { font-size: .72rem; color: var(--text-subtle); }
+
+.played-source__actions { display: flex; align-items: center; gap: .4rem; flex: none; }
+
+.played-source__message {
+  display: flex; align-items: center; gap: .4rem;
+  margin: 0; font-size: .78rem;
+  color: var(--text-muted);
+}
+.played-source__message--bad { color: var(--status-error, #e5534b); }
