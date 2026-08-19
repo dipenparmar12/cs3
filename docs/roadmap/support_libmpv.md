@@ -19,7 +19,7 @@
 | Player surface — our controls, mpv's playback | `cs3_windows/src/components/player/NativeEngineStage.tsx` |
 | Settings: policy selector, install button, decoder listing | `cs3_windows/src/components/PlayerSettings.tsx` |
 | Tests against a real mpv process (12 cases) | `cs3_windows/electron/media/mpvEngine.test.mts` |
-| Routing rows in the decision matrix (13 new cases) | `cs3_windows/electron/media/decisionEngine.test.mts` |
+| Routing rows in the decision matrix (15 new cases) | `cs3_windows/electron/media/decisionEngine.test.mts` |
 | Vendor coverage harness — real providers, real streams, real playback | `tools/e2e/native-engine-matrix.mjs` |
 
 ## The one decision this document did not make

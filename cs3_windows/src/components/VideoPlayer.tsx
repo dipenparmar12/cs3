@@ -1412,6 +1412,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     void (async () => {
       const response = await window.cloudstream?.preparePlaybackStream({
         url: streamUrl,
+        headers: activeSource?.directHeaders,
         isM3u8: mimeType === 'application/x-mpegURL',
         provider: providerProvenance?.provider,
       });
@@ -1479,6 +1480,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         const response = await window.cloudstream?.preparePlaybackStream({
           url: streamUrl,
+          headers: activeSource?.directHeaders,
           isM3u8: mimeType === 'application/x-mpegURL',
           provider: providerProvenance?.provider,
           // The cached verdict is the one that was wrong; measure again and then
@@ -1802,6 +1804,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {isNativeEngine && capability && prepared?.playbackUrl && (
         <NativeEngineStage
           url={prepared.playbackUrl}
+          headers={activeSource?.directHeaders}
           title={episodeTitle ? `${title} — ${episodeTitle}` : title}
           capability={capability}
           startSeconds={progress?.resumeAt}

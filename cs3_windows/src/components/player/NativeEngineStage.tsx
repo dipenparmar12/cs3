@@ -37,6 +37,7 @@ import type { SourceCapabilityModel } from '../../types/media';
 interface NativeEngineStageProps {
   /** The prepared playback URL — proxied, inspected, and never a raw provider link. */
   url: string;
+  headers?: Record<string, string>;
   title: string;
   capability: SourceCapabilityModel;
   /** Resume point, applied at load so the first frame is already in place. */
@@ -76,6 +77,7 @@ function trackLabel(track: MpvTrack, index: number): string {
 
 export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
   url,
+  headers,
   title,
   capability,
   startSeconds,
@@ -117,6 +119,7 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
     void (async () => {
       const result = await window.cloudstream?.openInNativeEngine({
         url,
+        headers,
         title,
         startSeconds,
         volume: initialMuted ? 0 : Math.round(initialVolume * 100),
