@@ -7,7 +7,18 @@ import { app } from 'electron';
 
 export interface Aria2Progress {
   gid: string;
-  status: 'active' | 'waiting' | 'paused' | 'completed' | 'error' | 'removed';
+  /**
+   * aria2's own vocabulary, passed through untouched — and `complete` is the
+   * word, not `completed`.
+   *
+   * This union used to say `completed`, which is not a value aria2 ever sends.
+   * `getStatus` copies `raw.status` straight through, so the comparison in
+   * `DownloadService.pollAria2Tasks` could never be true: a finished download
+   * sat at 100% in the `Downloading` state forever, its gid never released, and
+   * the poller kept asking about it for the life of the session. Verified
+   * against a live aria2 RPC: `tellStatus` answers `"active"` then `"complete"`.
+   */
+  status: 'active' | 'waiting' | 'paused' | 'complete' | 'error' | 'removed';
   totalLength: number;
   completedLength: number;
   downloadSpeed: number;
@@ -129,17 +140,26 @@ export class Aria2Engine {
       throw new Error('aria2c engine binary not running');
     }
 
+    const mergedHeaders: Record<string, string> = {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+      ...headers,
+    };
+
     const headerOption: string[] = [];
-    for (const [key, val] of Object.entries(headers)) {
-      headerOption.push(`${key}: ${val}`);
+    for (const [key, val] of Object.entries(mergedHeaders)) {
+      if (val) headerOption.push(`${key}: ${val}`);
     }
 
     const options: any = {
       dir: outputDir,
       out: filename,
       header: headerOption,
-      'max-connection-per-server': '16',
-      split: '16'
+      'max-connection-per-server': '4',
+      split: '4',
+      'min-split-size': '1M',
+      'allow-overwrite': 'true',
+      'auto-file-renaming': 'false',
     };
 
     return await this.sendRpc<string>('addUri', [[url], options]);

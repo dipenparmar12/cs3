@@ -1,10 +1,14 @@
 import { builtinModules } from 'node:module';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import electron from 'vite-plugin-electron';
 import renderer from 'vite-plugin-electron-renderer';
+import electronBin from 'electron';
 
 import pkg from './package.json' with { type: 'json' };
+
+let electronProcess: ChildProcess | null = null;
 
 /**
  * Main-process externals.
@@ -43,6 +47,37 @@ export default defineConfig({
       {
         // Main-process entry point
         entry: 'electron/main.ts',
+        async onstart(options) {
+          if (electronProcess) {
+            electronProcess.kill();
+            electronProcess = null;
+          }
+          // `spawn UNKNOWN` (errno -4094) is a known flaky Windows failure: it
+          // happens when the OS/antivirus has electron.exe locked for scanning
+          // at the exact moment child_process.spawn() opens it. It is transient,
+          // not a real problem with the binary, so retry a few times before
+          // falling back to a shell-mediated spawn.
+          const maxAttempts = 3;
+          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+              await options.startup();
+              return;
+            } catch (err) {
+              console.warn(
+                `[vite-plugin-electron] startup attempt ${attempt}/${maxAttempts} failed: ${(err as Error).message}`,
+              );
+              if (attempt === maxAttempts) {
+                console.warn('[vite-plugin-electron] falling back to shell spawn...');
+                electronProcess = spawn(electronBin as unknown as string, ['.'], {
+                  stdio: 'inherit',
+                  shell: true,
+                });
+              } else {
+                await new Promise((resolve) => setTimeout(resolve, 300));
+              }
+            }
+          }
+        },
         vite: {
           build: {
             outDir: 'dist-electron',

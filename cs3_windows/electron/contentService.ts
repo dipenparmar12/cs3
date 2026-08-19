@@ -17,10 +17,16 @@ import { TorrentEngine, type StreamHandle } from './torrent/torrentEngine';
 import { infoHashFromMagnet } from './torrent/indexers/base';
 import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
-import { parseExtensionUrl, type PluginManager } from './pluginManager';
+import { parseExtensionUrl, type AnalyticsSink, type PluginManager } from './pluginManager';
 import { SourceCache } from './sourceCache';
-import { mergeSearchResults, restrictToExact } from './searchMerge';
+import { MediaProxy } from './mediaProxy';
+import { DetailCache } from './detailCache';
+import { mergeSearchResults } from './searchMerge';
+import { rawFetch } from './torrent/http';
 import { SearchScopeStore } from './searchScope';
+import { SearchSessionManager, type SearchSnapshot } from './searchSession';
+import type { SourceDiagnosis } from '../src/types/diagnostics';
+import { SharedDiscovery } from './sharedDiscovery';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -53,6 +59,8 @@ export interface StreamAttempt {
   title: string;
   indexerName: string;
   error: string;
+  /** The extension provider behind this source, when it came from one. */
+  providerName?: string;
 }
 
 export interface AutoStreamResult {
@@ -77,6 +85,15 @@ export interface SourceResponse {
   indexerOutcomes: AggregateSearchResult['indexerOutcomes'];
   /** Present when zero sources were produced; explains why, for the UI. */
   emptyReason?: string;
+  /**
+   * The structured form of `emptyReason`.
+   *
+   * Both, because they serve different readers: the sentence goes on screen and
+   * the facts go on the clipboard. Collapsing them would either put a stack of
+   * addresses and HTTP statuses in front of a viewer or leave the person
+   * helping them with one sentence, which is where this started.
+   */
+  diagnosis?: SourceDiagnosis;
   query: { title: string; season?: number; episode?: number; imdbId?: string };
 }
 
@@ -93,6 +110,30 @@ function parseEpisodeParams(url: string): { season?: number; episode?: number } 
   };
 }
 
+/**
+ * A truthful content type for a direct link.
+ *
+ * This claimed `video/mp4` for every non-HLS URL, `.mkv` included. The element
+ * sniffs the bytes so it did not break playback on its own, but the lie
+ * propagated: anything downstream reasoning about the type — an external
+ * player, a download's suggested filename, the HLS check itself — was told
+ * something false about the stream.
+ */
+function mimeForStreamUrl(url: string, isM3u8?: boolean): string {
+  if (isM3u8 || /\.m3u8(\?|$)/i.test(url)) return 'application/x-mpegURL';
+  const path = url.split('?')[0].toLowerCase();
+  if (path.endsWith('.webm')) return 'video/webm';
+  if (path.endsWith('.mkv')) return 'video/x-matroska';
+  if (path.endsWith('.avi')) return 'video/x-msvideo';
+  if (path.endsWith('.mov')) return 'video/quicktime';
+  if (path.endsWith('.ts')) return 'video/mp2t';
+  if (path.endsWith('.flv')) return 'video/x-flv';
+  if (path.endsWith('.ogv')) return 'video/ogg';
+  // Unknown extensions are far more often MP4 than anything else, and a
+  // download link commonly has no extension at all.
+  return 'video/mp4';
+}
+
 function stripQuery(url: string): string {
   const index = url.indexOf('?');
   return index >= 0 ? url.slice(0, index) : url;
@@ -106,7 +147,34 @@ export class ContentService {
   private plugins: PluginManager;
   private cache: SourceCache;
   private scope: SearchScopeStore;
-  private detailCache = new Map<string, MetadataDetail>();
+  private searches: SearchSessionManager;
+  /**
+   * Applies a provider's `Referer`/`User-Agent` to the stream it handed us.
+   *
+   * A browser cannot send `Referer` itself — it is a forbidden header — so a
+   * provider link that requires one can only be played through this.
+   */
+  private proxy = new MediaProxy((input, init) => rawFetch(input, init));
+  private details = new DetailCache();
+  /** Base URLs with a background refresh already running. */
+  private revalidating = new Set<string>();
+  /** Notified when a background refresh produced new metadata. */
+  private onDetailRefreshed: ((url: string, detail: MetadataDetail) => void) | null = null;
+
+  /**
+   * Where playback outcomes are counted.
+   *
+   * Recorded here rather than in the renderer because this is the layer that
+   * knows *which source* started and which ones were tried and discarded first
+   * — by the time a stream reaches the `<video>` element the failed candidates
+   * are gone.
+   */
+  private analytics: AnalyticsSink | null = null;
+
+  /** Wired by `main.ts`; playback outcomes are counted from here onwards. */
+  public setAnalytics(sink: AnalyticsSink): void {
+    this.analytics = sink;
+  }
 
   constructor(datastore: DatastoreManager, plugins: PluginManager, engine: TorrentEngine) {
     this.registry = new IndexerRegistry(datastore);
@@ -114,10 +182,22 @@ export class ContentService {
     this.engine = engine;
     this.cache = new SourceCache(datastore);
     this.scope = new SearchScopeStore(datastore);
+    this.searches = new SearchSessionManager({
+      plugins: this.plugins,
+      registry: this.registry,
+      cinemeta: this.cinemeta,
+      metadata: this.metadata,
+      scope: this.scope,
+      onResults: (results) => this.rememberRoutes(results),
+    });
   }
 
   public getScope(): SearchScopeStore {
     return this.scope;
+  }
+
+  public getSearches(): SearchSessionManager {
+    return this.searches;
   }
 
   public getCache(): SourceCache {
@@ -132,94 +212,149 @@ export class ContentService {
     return this.engine;
   }
 
+  /** Wired by `main.ts` so a refreshed title reaches whoever is viewing it. */
+  public setDetailListener(listener: (url: string, detail: MetadataDetail) => void): void {
+    this.onDetailRefreshed = listener;
+  }
+
+  public getProxy(): MediaProxy {
+    return this.proxy;
+  }
+
+  /** Owns a socket, so it is wired into app shutdown like the other services. */
+  public shutdown(): void {
+    this.proxy.shutdown();
+    this.details.flush();
+  }
+
   // --- search --------------------------------------------------------------
 
-  public async search(
-    query: string,
-    options: SearchOptions = {}
-  ): Promise<SearchResponse[]> {
+  /**
+   * Opens a search and returns immediately.
+   *
+   * Everything after this point arrives as `search:update` snapshots — the
+   * scope it resolved to, each source as it answers, and the merged results so
+   * far. See `searchSession.ts` for why a search is push-shaped.
+   */
+  public startSearch(query: string, options: SearchOptions = {}): SearchSnapshot {
+    return this.searches.start(query, options);
+  }
+
+  public cancelSearch(id: string): SearchSnapshot | null {
+    return this.searches.cancel(id);
+  }
+
+  /** Runs a search to completion. For callers that cannot use a partial answer. */
+  public async search(query: string, options: SearchOptions = {}): Promise<SearchResponse[]> {
+    if (!query.trim()) return [];
+    return (await this.searches.runToCompletion(query, options)).results;
+  }
+
+  /**
+   * A catalogue row, for browsing rather than searching.
+   *
+   * The home screen used to build its rows with the full search — every enabled
+   * extension provider, waited on to completion, three times over in parallel.
+   * That made opening the app cost as much as the slowest scraper on the slowest
+   * of three queries, and the whole screen sat behind a spinner while it
+   * happened. It is also the wrong question: a row titled "Trending" wants a
+   * catalogue's idea of a popular film, and a site scraper has no view on that.
+   *
+   * So: catalogues only, which answer in a few hundred milliseconds. Asking one
+   * named provider stays possible, because browsing a specific provider's own
+   * library is a real thing the home screen offers — and one provider is fast
+   * for the same reason thirty are not.
+   */
+  public async browse(query: string, provider?: string): Promise<SearchResponse[]> {
     const trimmed = query.trim();
     if (!trimmed) return [];
 
-    // A pasted magnet is directly playable — surface it as its own result
-    // rather than sending it to a catalogue search that cannot understand it.
-    if (trimmed.startsWith('magnet:')) {
-      const infoHash = infoHashFromMagnet(trimmed);
-      const name = decodeURIComponent(trimmed.match(/dn=([^&]+)/)?.[1] ?? 'Magnet link');
-      return [
-        {
-          name,
-          url: trimmed,
-          apiName: 'Magnet',
-          type: TvType.Torrent,
-          quality: infoHash ? infoHash.slice(0, 8) : undefined,
-        },
-      ];
+    if (provider) {
+      const results = await this.plugins.searchAll(trimmed, [provider]);
+      return mergeSearchResults(results);
     }
 
-    const results: SearchResponse[] = [];
-
-    // Runnable extension providers get first refusal, matching Android's ordering.
-    const pluginResults = await this.plugins.searchAll(
-      trimmed,
-      this.scope.applyToProviders(await this.plugins.listEnabledProviders())
-    );
-    results.push(...pluginResults);
-
-    // Cinemeta is primary: it is the only source that yields an IMDb id for
-    // movies, and the strongest indexer (Torrentio) is addressed solely by IMDb id.
     const [cinemeta, legacy] = await Promise.allSettled([
       this.cinemeta.search(trimmed),
-      // TVmaze/AniList stay as a fallback so a Cinemeta outage is not fatal,
-      // and because AniList resolves anime titles Cinemeta indexes poorly.
       this.metadata.search(trimmed),
     ]);
 
-    if (cinemeta.status === 'fulfilled') results.push(...cinemeta.value);
-    if (legacy.status === 'fulfilled') results.push(...legacy.value);
-
-    if (results.length === 0 && cinemeta.status === 'rejected' && legacy.status === 'rejected') {
-      throw cinemeta.reason instanceof Error
-        ? cinemeta.reason
-        : new Error(String(cinemeta.reason));
-    }
-
-    /**
-     * One row per work, not one row per catalogue that happened to know it.
-     *
-     * The previous pass compared lowercased titles exactly and only checked the
-     * fallback catalogues against Cinemeta, so extension providers were never
-     * deduplicated at all and "Spider-Man" vs "Spider Man" stayed two rows.
-     * Merging on identity also collects the losing URLs as alternates, which is
-     * what lets one title draw sources from both ecosystems.
-     */
-    const merged = mergeSearchResults(results);
-
-    /**
-     * A picked suggestion names one work, so the results show that work.
-     *
-     * Filtering after the fan-out rather than before it is forced by the
-     * providers: an extension takes text and nothing else, so it cannot be
-     * asked for an IMDb id. It answers with everything its site matched, and
-     * this is where that becomes the specific answer requested.
-     */
-    const scoped = options.exact ? restrictToExact(merged, options.exact) : merged;
-    this.rememberRoutes(scoped);
-    return scoped;
+    const results = [
+      ...(cinemeta.status === 'fulfilled' ? cinemeta.value : []),
+      ...(legacy.status === 'fulfilled' ? legacy.value : []),
+    ];
+    return mergeSearchResults(results);
   }
 
+  /**
+   * Title metadata, served from cache the moment there is one.
+   *
+   * Stale-while-revalidate: a cached answer goes back immediately whatever its
+   * age, and a stale one starts a refresh behind it whose result is pushed to
+   * whoever is looking. Revisiting a title is then instant, and still correct
+   * within a few seconds if anything changed.
+   *
+   * The alternative — refetching on every visit — meant a blank screen and a
+   * network round trip for a plot and a poster the app had displayed minutes
+   * earlier, and for extension-sourced titles it meant re-scraping a web page.
+   */
   public async load(url: string): Promise<MetadataDetail | null> {
     const base = stripQuery(url);
 
-    const cached = this.detailCache.get(base);
-    if (cached) return cached;
+    const cached = this.details.read(base);
+    if (cached) {
+      if (cached.stale) this.revalidateDetail(base);
+      return cached.detail;
+    }
 
+    const detail = await this.fetchDetail(base);
+    this.details.write(base, detail);
+    return detail;
+  }
+
+  /**
+   * Refreshes a stale entry without making anyone wait for it.
+   *
+   * Deduplicated: opening the same title twice in quick succession, or a list
+   * that renders several cards for one work, must not start several scrapes of
+   * the same page. Failures are deliberately swallowed — the viewer already has
+   * a usable answer on screen, and replacing it with an error because a
+   * *background* refresh failed would be a strictly worse outcome than saying
+   * nothing.
+   */
+  private revalidateDetail(base: string): void {
+    if (this.revalidating.has(base)) return;
+    this.revalidating.add(base);
+
+    void (async () => {
+      try {
+        const fresh = await this.fetchDetail(base);
+        this.details.write(base, fresh);
+        this.onDetailRefreshed?.(base, fresh);
+      } catch {
+        // Keep the stale entry: it is better than nothing, and the next visit
+        // will try again.
+      } finally {
+        this.revalidating.delete(base);
+      }
+    })();
+  }
+
+  /** The actual fetch, by address type. Throws with a reason on every failure. */
+  private async fetchDetail(base: string): Promise<MetadataDetail> {
     const cinemetaRef = parseCinemetaUrl(base);
     if (cinemetaRef) {
       const detail = await this.cinemeta.load(cinemetaRef.type, cinemetaRef.imdbId);
-      if (!detail) return null;
+      // Named, like the provider path: "the catalogue has no entry" and "the
+      // catalogue is unreachable" need different reactions from the user, and
+      // a null told them neither.
+      if (!detail) {
+        throw new Error(
+          `The catalogue has no entry for ${cinemetaRef.imdbId}. It may have been removed, or Cinemeta may be unreachable from this network — Settings → Connection can test that.`
+        );
+      }
 
-      const mapped: MetadataDetail = {
+      return {
         name: detail.name,
         url: base,
         apiName: 'Catalogue',
@@ -236,34 +371,104 @@ export class ContentService {
         imdbId: detail.imdbId,
         episodes: detail.episodes,
       };
-      this.detailCache.set(base, mapped);
-      return mapped;
     }
 
     if (parseMetadataUrl(base)) {
       const detail = await this.metadata.load(base);
-      if (detail) {
-        // Backfill an IMDb id when the catalogue did not supply one; it
-        // materially improves indexer precision.
-        if (!detail.imdbId) {
-          detail.imdbId = await this.metadata.resolveImdbId(detail.name, detail.year);
-        }
-        this.detailCache.set(base, detail);
+      if (!detail) {
+        throw new Error(
+          'TVmaze/AniList returned no details for this title. It may have been withdrawn, or the catalogue may be unreachable from this network.'
+        );
+      }
+      // Backfill an IMDb id when the catalogue did not supply one; it
+      // materially improves indexer precision.
+      if (!detail.imdbId) {
+        detail.imdbId = await this.metadata.resolveImdbId(detail.name, detail.year);
       }
       return detail;
     }
 
-    return this.plugins.loadMedia(base);
+    const fromProvider = await this.plugins.loadMedia(base);
+    if (!fromProvider) {
+      // `loadMedia` throws with a reason for every failure it can name; a null
+      // here means the URL was not addressed to a provider at all.
+      throw new Error(`Nothing knows how to open this address: ${base.slice(0, 120)}`);
+    }
+    // Cached like the catalogue paths, which it previously was not — and it is
+    // the expensive one, because it is a scrape rather than an API call.
+    return fromProvider as MetadataDetail;
   }
 
   // --- sources -------------------------------------------------------------
+
+  /**
+   * Whether this query could be answered from cache right now.
+   *
+   * Asked speculatively — by the prefetcher, before deciding whether a scrape is
+   * warranted at all — so it uses `peek` rather than `read` and never writes.
+   */
+  public hasFreshSources(request: SourceQuery): boolean {
+    const fromUrl = parseEpisodeParams(request.mediaUrl);
+    const base = stripQuery(request.mediaUrl);
+    // A magnet is its own source; there is nothing to discover or cache.
+    if (base.startsWith('magnet:')) return true;
+    return (
+      this.cache.peek(
+        base,
+        request.season ?? fromUrl.season,
+        request.episode ?? fromUrl.episode
+      ).fresh.length > 0
+    );
+  }
+
+  /** Identity of a discovery run, so two callers asking the same thing share one. */
+  private sourceKey(request: SourceQuery): string {
+    const fromUrl = parseEpisodeParams(request.mediaUrl);
+    return [
+      stripQuery(request.mediaUrl),
+      request.season ?? fromUrl.season ?? '',
+      request.episode ?? fromUrl.episode ?? '',
+    ].join('|');
+  }
+
+  /**
+   * Discovery runs currently in flight, so a second caller joins rather than
+   * starting an identical scrape.
+   *
+   * This is what makes background prefetching worth doing instead of harmful —
+   * see {@link SharedDiscovery}, which owns the refcounted cancellation.
+   */
+  private inFlightSources = new SharedDiscovery<SourceResponse, SearchProgress>();
 
   public async getSources(
     request: SourceQuery,
     /** Fires as each indexer answers, so a caller can act on partial results. */
     onProgress?: (progress: SearchProgress) => void,
     /** Set by an explicit refresh, which must not be answered from cache. */
-    options: { bypassCache?: boolean } = {}
+    options: { bypassCache?: boolean; signal?: AbortSignal } = {}
+  ): Promise<SourceResponse> {
+    const bypass = Boolean(options.bypassCache);
+    return this.inFlightSources.run(
+      this.sourceKey(request),
+      bypass ? 'bypass' : 'cached',
+      // A plain caller joins any run. A refresh joins only a run that also
+      // bypassed the cache — the point of a refresh is that it must not be
+      // served by something that may have answered from cache.
+      (existingTag) => !bypass || existingTag === 'bypass',
+      (emit, signal) => this.runDiscovery(request, emit, { bypassCache: bypass, signal }),
+      { onProgress, signal: options.signal }
+    );
+  }
+
+  /** True while a discovery for this exact query is already running. */
+  public isDiscovering(request: SourceQuery): boolean {
+    return this.inFlightSources.has(this.sourceKey(request));
+  }
+
+  private async runDiscovery(
+    request: SourceQuery,
+    onProgress?: (progress: SearchProgress) => void,
+    options: { bypassCache?: boolean; signal?: AbortSignal } = {}
   ): Promise<SourceResponse> {
     const fromUrl = parseEpisodeParams(request.mediaUrl);
     const season = request.season ?? fromUrl.season;
@@ -339,7 +544,7 @@ export class ContentService {
       // Season and episode are forwarded because the URL may address the show
       // rather than the episode — the detail view hands over an episode handle,
       // but a quick-play straight from a search row does not.
-      const sources = await this.extensionSources(base, season, episode);
+      const { sources, diagnosis } = await this.extensionSources(base, season, episode);
       onProgress?.({
         results: sources,
         settled: 1,
@@ -352,10 +557,15 @@ export class ContentService {
         sources,
         filtered: [],
         indexerOutcomes: [],
+        // The specific reason when there is one. The generic sentence remains
+        // only as the fallback for a path that produced no verdict at all —
+        // it was previously the answer for six distinct situations.
         emptyReason:
           sources.length === 0
-            ? 'The extension provider returned no playable links for this item.'
+            ? (diagnosis?.summary ??
+              'The extension provider returned no playable links for this item.')
             : undefined,
+        diagnosis: sources.length === 0 ? diagnosis : undefined,
         query: { title: request.titleOverride ?? '', season, episode },
       };
     }
@@ -405,47 +615,49 @@ export class ContentService {
      * find peers first — so they are streamed into progress as they land rather
      * than appended once the indexers finish.
      */
-    const allowedIndexers = new Set(
-      this.scope.applyToIndexers(
-        this.registry.getConfigs().filter((c) => c.enabled).map((c) => c.id)
-      )
+    const indexerScope = this.scope.resolveIndexers(
+      this.registry.getConfigs().filter((c) => c.enabled).map((c) => c.id)
     );
+    const allowedIndexers = new Set(indexerScope.allowed);
 
-    const scopedProviders = this.scope.get().providers;
-    let routes = (this.alternateRoutes.get(base) ?? []).filter((route) => {
-      if (scopedProviders.length === 0) return true;
+    const providerScope = this.scope.resolveProviders(
+      await this.plugins.listEnabledProviders()
+    );
+    const allowedProviders = new Set(providerScope.allowed);
+
+    const routes = (this.alternateRoutes.get(base) ?? []).filter((route) => {
+      if (!providerScope.narrowed) return true;
       const ref = parseExtensionUrl(route);
-      return ref ? scopedProviders.includes(ref.provider) : true;
+      return ref ? allowedProviders.has(ref.provider) : false;
     });
 
-    // Fallback: If no alternate route was cached from a previous search step,
-    // query enabled extension providers for `title` directly so catalogue items
-    // (opened from HomeView/Trending) draw on active extension providers too.
-    if (routes.length === 0 && title) {
-      try {
-        const matches = await this.plugins.searchAll(
-          title,
-          scopedProviders.length > 0 ? scopedProviders : undefined
-        );
-        routes = matches.map((m) => m.url).filter((url) => url.startsWith('cs3ext://'));
-      } catch (e) {
-        console.warn('Fallback extension provider search failed:', e);
-      }
-    }
+    const needProviderSearch =
+      routes.length === 0 && title && !(providerScope.narrowed && allowedProviders.size === 0);
+    const targetProviders = providerScope.narrowed ? providerScope.allowed : undefined;
+    const providerList = needProviderSearch
+      ? this.plugins.narrowToEnabled(targetProviders)
+      : [];
+    const totalExtensionsToAsk = routes.length + (needProviderSearch ? providerList.length : 0);
 
     const fromExtensions: TorrentResult[] = [];
     let extensionsSettled = 0;
+    let latestIndexerProgress: SearchProgress | null = null;
 
-    let latest: SearchProgress | null = null;
     const report = (progress: SearchProgress | null) => {
-      if (!onProgress || !progress) return;
+      if (!onProgress) return;
+      if (options.signal?.aborted) return;
+      const indexerResults = progress?.results ?? [];
+      const indexerSettled = progress?.settled ?? 0;
+      const indexerTotal = progress?.totalRelevant ?? allowedIndexers.size;
+      const done =
+        (progress?.done ?? false) && extensionsSettled >= totalExtensionsToAsk;
+
       onProgress({
-        ...progress,
-        // Provider links lead: they are already resolved and start fastest.
-        results: [...fromExtensions, ...progress.results],
-        settled: progress.settled + extensionsSettled,
-        totalRelevant: progress.totalRelevant + routes.length,
-        done: progress.done && extensionsSettled >= routes.length,
+        results: [...fromExtensions, ...indexerResults],
+        settled: indexerSettled + extensionsSettled,
+        totalRelevant: indexerTotal + totalExtensionsToAsk,
+        lastIndexerName: progress?.lastIndexerName ?? 'Extension provider',
+        done,
       });
     };
 
@@ -462,25 +674,59 @@ export class ContentService {
         },
         onProgress &&
           ((progress) => {
-            latest = progress;
+            latestIndexerProgress = progress;
             report(progress);
           }),
         // Source discovery honours the same scope the search did, so narrowing
         // to one site does not quietly widen again the moment you press play.
-        // The allowed set is resolved once, up front: `applyToIndexers` falls
-        // back to everything when the scope names nothing that still exists,
-        // and that rule only means anything against the whole candidate list.
         (id) => allowedIndexers.has(id)
       ),
       ...routes.map(async (route) => {
+        if (options.signal?.aborted) return;
         try {
-          fromExtensions.push(...(await this.extensionSources(route, season, episode)));
+          const res = await this.extensionSources(route, season, episode);
+          if (res.sources.length > 0) {
+            fromExtensions.push(...res.sources);
+          }
         } catch {
           // One provider failing is not a search failure; the rest still answer.
+        } finally {
+          extensionsSettled += 1;
+          report(latestIndexerProgress);
         }
-        extensionsSettled += 1;
-        report(latest);
       }),
+      ...(needProviderSearch && providerList.length > 0
+        ? [
+            this.plugins.searchEach(
+              title,
+              targetProviders,
+              async (providerOutcome) => {
+                if (options.signal?.aborted) return;
+                try {
+                  const extMatches = (providerOutcome.results ?? []).filter((m) =>
+                    m.url && m.url.startsWith('cs3ext://')
+                  );
+                  if (extMatches.length > 0) {
+                    for (const match of extMatches.slice(0, 2)) {
+                      if (options.signal?.aborted) break;
+                      try {
+                        const res = await this.extensionSources(match.url, season, episode);
+                        if (res.sources.length > 0) {
+                          fromExtensions.push(...res.sources);
+                          report(latestIndexerProgress);
+                        }
+                      } catch {}
+                    }
+                  }
+                } finally {
+                  extensionsSettled += 1;
+                  report(latestIndexerProgress);
+                }
+              },
+              options.signal
+            ),
+          ]
+        : []),
     ]);
 
     const response: SourceResponse = {
@@ -513,9 +759,16 @@ export class ContentService {
     url: string,
     season?: number,
     episode?: number
-  ): Promise<TorrentResult[]> {
+  ): Promise<{ sources: TorrentResult[]; diagnosis?: SourceDiagnosis }> {
     const target = await this.resolveExtensionTarget(url, season, episode);
-    let links = await this.plugins.loadLinks(target);
+    // `cs3ext://<provider>/<handle>` — the provider is the part worth
+    // attributing outcomes to, and the only place it is still available.
+    const providerName = target.startsWith('cs3ext://')
+      ? decodeURIComponent(target.slice('cs3ext://'.length).split('/')[0] ?? '') || undefined
+      : undefined;
+    let attempt = await this.plugins.loadLinksDetailed(target);
+    let links = attempt.links;
+    let diagnosis = attempt.diagnosis;
 
     // An episode's URL already *is* the provider's playable handle, but a
     // film's is its detail page — and those differ (Internet Archive answers
@@ -527,11 +780,15 @@ export class ContentService {
         | (MetadataDetail & { dataUrl?: string })
         | null;
       if (detail?.dataUrl && detail.dataUrl !== target) {
-        links = await this.plugins.loadLinks(detail.dataUrl);
+        // The retry's verdict replaces the first one: the first address was
+        // never the playable handle, so its failure describes the wrong thing.
+        attempt = await this.plugins.loadLinksDetailed(detail.dataUrl);
+        links = attempt.links;
+        diagnosis = attempt.diagnosis;
       }
     }
 
-    return links
+    const sources = links
       .filter((link) => link.url)
       .map((link, index) => {
         const parsed = parseReleaseName(link.name || link.source || 'Stream');
@@ -552,6 +809,7 @@ export class ContentService {
           leechers: 0,
           indexerId: 'extension',
           indexerName: link.source || 'Extension provider',
+          providerName,
           parsed: {
             ...parsed,
             resolution: (link.quality || parsed.resolution) as ParsedRelease['resolution'],
@@ -566,6 +824,8 @@ export class ContentService {
         } satisfies TorrentResult;
       })
       .sort((a, b) => b.score - a.score);
+
+    return { sources, diagnosis: sources.length === 0 ? diagnosis : undefined };
   }
 
   /**
@@ -677,24 +937,35 @@ export class ContentService {
       | 'fileIndex'
       | 'expectedFileName'
       | 'directUrl'
+      | 'directHeaders'
       | 'isM3u8'
       | 'title'
     >,
     season?: number,
     episode?: number
   ): Promise<StreamHandle> {
-    // A provider stream is already an addressable URL. There is no swarm to
-    // join and nothing to download first, so it is handed to the player as-is.
+    /**
+     * A provider stream is already an addressable URL — but usually not one the
+     * player can fetch unaided.
+     *
+     * Most extension links only answer when accompanied by the `Referer` the
+     * provider supplied, and a `<video>` element cannot send one. Routing
+     * through the proxy is what makes the difference between a 403 and a
+     * stream, and it covers hls.js and ffprobe at the same time because they
+     * are handed the same URL. A link with no headers is passed through
+     * untouched.
+     */
     if (source.directUrl) {
+      const streamUrl = await this.proxy.wrap(source.directUrl, source.directHeaders);
       return {
         infoHash: source.infoHash,
-        streamUrl: source.directUrl,
+        streamUrl,
         fileName: source.title ?? 'Stream',
         fileSize: 0,
         diskPath: '',
         files: [],
         subtitleUrls: [],
-        mimeType: source.isM3u8 ? 'application/x-mpegURL' : 'video/mp4',
+        mimeType: mimeForStreamUrl(source.directUrl, source.isM3u8),
       };
     }
 
@@ -751,10 +1022,54 @@ export class ContentService {
     const perSourceMs = options.perSourceMs ?? DEFAULT_SOURCE_BUDGET_MS;
     const signal = options.signal;
     const attempts: StreamAttempt[] = [];
+    const startedAt = Date.now();
 
     const abortError = () => Object.assign(new Error('Superseded by a newer selection.'), {
       name: 'AbortError',
     });
+
+    /**
+     * Records the outcome and hands back the result.
+     *
+     * Wrapped because there are four ways out of the loop below that all count
+     * as "this source started" — a direct URL, an explicit choice, a torrent
+     * that reached playability, and one that is merely slow but making
+     * progress. Recording at each `return` by hand is how one of them ends up
+     * uncounted and a provider looks worse than it is.
+     */
+    const succeed = (
+      handle: StreamHandle,
+      source: TorrentResult
+    ): AutoStreamResult => {
+      if (source.providerName) {
+        this.analytics?.observe({
+          provider: source.providerName,
+          stage: 'playback',
+          outcome: 'success',
+          produced: 1,
+          latencyMs: Date.now() - startedAt,
+        });
+      }
+      return { handle, source, attempts };
+    };
+
+    const failed = (source: TorrentResult, error: string): void => {
+      attempts.push({
+        title: source.title,
+        indexerName: source.indexerName,
+        providerName: source.providerName,
+        error,
+      });
+      if (source.providerName) {
+        this.analytics?.observe({
+          provider: source.providerName,
+          stage: 'playback',
+          outcome: 'failure',
+          latencyMs: Date.now() - startedAt,
+          error,
+        });
+      }
+    };
 
     const usable = candidates.filter(
       (c) => c.directUrl || c.magnet || c.torrentUrl || c.infoHash
@@ -770,11 +1085,7 @@ export class ContentService {
       try {
         handle = await this.startStream(source, season, episode);
       } catch (error) {
-        attempts.push({
-          title: source.title,
-          indexerName: source.indexerName,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        failed(source, error instanceof Error ? error.message : String(error));
         continue;
       }
 
@@ -789,14 +1100,14 @@ export class ContentService {
       // bytes or the player reports the failure. Waiting on torrent readiness
       // here would block forever on a source that is already ready.
       if (source.directUrl) {
-        return { handle, source, attempts };
+        return succeed(handle, source);
       }
 
       // An explicit choice starts now. Readiness is the player's problem from
       // here — it already renders buffer progress, peers and speed, which is
       // strictly more informative than a blank wait.
       if (options.returnImmediately) {
-        return { handle, source, attempts };
+        return succeed(handle, source);
       }
 
       const verdict = await this.engine.waitUntilPlayable(
@@ -810,7 +1121,7 @@ export class ContentService {
         throw abortError();
       }
       if (verdict.playable) {
-        return { handle, source, attempts };
+        return succeed(handle, source);
       }
 
       // Not playable inside the budget. A source that is merely slow — bytes are
@@ -819,14 +1130,10 @@ export class ContentService {
       const stats = await this.engine.getStats(handle.infoHash);
       const makingProgress = Boolean(stats && stats.downloaded > 0 && stats.peers > 0);
       if (makingProgress) {
-        return { handle, source, attempts };
+        return succeed(handle, source);
       }
 
-      attempts.push({
-        title: source.title,
-        indexerName: source.indexerName,
-        error: verdict.reason ?? 'No data arrived within the time budget.',
-      });
+      failed(source, verdict.reason ?? 'No data arrived within the time budget.');
       // Discard the cache too: a swarm that produced nothing has nothing worth keeping.
       await this.engine.stopStream(handle.infoHash, false);
     }

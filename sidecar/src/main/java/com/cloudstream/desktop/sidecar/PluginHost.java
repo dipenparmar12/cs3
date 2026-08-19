@@ -419,7 +419,22 @@ public final class PluginHost {
 
         for (int i = start; i < all.size(); i++) {
             Object provider = all.get(i);
-            Map<String, Object> described = describeProvider(provider);
+
+            // One provider that cannot be described must not cost the others.
+            // They are siblings registered by the same extension, and an
+            // archive commonly registers a dozen ExtractorApis beside its
+            // MainAPI; letting one failure escape here discarded every provider
+            // the plugin had already registered.
+            Map<String, Object> described;
+            try {
+                described = describeProvider(provider);
+            } catch (RuntimeException | LinkageError e) {
+                described = new LinkedHashMap<>();
+                described.put("className", provider.getClass().getName());
+                described.put("unavailableReason", Main.describe(e));
+                out.add(described);
+                continue;
+            }
             out.add(described);
 
             // Retaining the instance is what makes the provider callable later.
@@ -475,12 +490,31 @@ public final class PluginHost {
         return v instanceof Boolean b ? b : null;
     }
 
+    /**
+     * Reads one no-argument getter, tolerating a provider whose class references
+     * types this runtime does not have.
+     *
+     * {@code getMethod} does not merely look up one method — it resolves the
+     * parameter and return types of <em>every</em> public method on the class, so
+     * a single unresolvable type anywhere on the provider throws
+     * {@link NoClassDefFoundError} here even when the getter being asked for is a
+     * plain {@code String}. That is a {@link LinkageError}, not a
+     * {@link ReflectiveOperationException}, so catching only the latter let it
+     * escape {@code describeProvider} and abort the whole plugin load.
+     *
+     * <p>The measured case was {@code CloudflareKiller}: providers that merely
+     * declare an interceptor field failed to load entirely, having already
+     * registered successfully, and the reported cause named a class they never
+     * called. Degrading to a null field keeps the provider usable on every path
+     * that does not touch the missing type — which is what {@code T3_DEGRADED}
+     * exists to describe.
+     */
     private static Object call(Object o, String getter) {
         try {
             Method m = o.getClass().getMethod(getter);
             m.setAccessible(true);
             return m.invoke(o);
-        } catch (ReflectiveOperationException e) {
+        } catch (ReflectiveOperationException | LinkageError e) {
             return null;
         }
     }

@@ -10,8 +10,18 @@
     "postinstall": "node --experimental-require-module node_modules/electron/install.js",
     "dev": "vite",
     "build": "tsc && vite build",
+    "typecheck": "tsc -b",
+    "test:electron": "node --experimental-strip-types electron/sharedDiscovery.test.mts && node --experimental-strip-types electron/sourceCache.test.mts && node --experimental-strip-types electron/media/decisionEngine.test.mts && node --experimental-strip-types electron/media/pipeline.test.mts && node --experimental-strip-types electron/media/mpvEngine.test.mts",
+    "test:media": "node --experimental-strip-types electron/media/decisionEngine.test.mts",
+    "test:pipeline": "node --experimental-strip-types electron/media/pipeline.test.mts",
     "preview": "vite preview",
-    "electron:build": "vite build && electron-builder"
+    "build:runtime": "node ../tools/package/build-runtime.mjs --verify",
+    "electron:build": "npm run build:runtime && vite build && electron-builder",
+    "e2e:providers": "node ../tools/e2e/provider-e2e.mjs",
+    "e2e:network": "node ../tools/e2e/network-resilience.mjs",
+    "e2e:sources": "node ../tools/e2e/source-discovery.mjs",
+    "test:native": "node --experimental-strip-types electron/media/mpvEngine.test.mts",
+    "test:cache": "node --experimental-strip-types electron/sourceCache.test.mts"
   },
   "build": {
     "appId": "com.lagradost.cloudstream3.desktop",
@@ -23,6 +33,13 @@
       "dist/**/*",
       "dist-electron/**/*",
       "node_modules/**/*"
+    ],
+    "//extraResources": "The end user installs one thing and streams. That means the JVM, the sidecar and the whole provider classpath ship inside the app — SidecarSupervisor looks for exactly these paths under resources/sidecar when app.isPackaged. Build them first with: node ../tools/package/build-runtime.mjs",
+    "extraResources": [
+      {
+        "from": "../sidecar/dist",
+        "to": "sidecar"
+      }
     ],
     "//asarUnpack": "Native .node binaries cannot be loaded from inside an asar archive, and webtorrent's transitive native deps must be unpacked or the app fails at startup exactly as it does when they are bundled.",
     "asarUnpack": [

@@ -241,13 +241,20 @@ bun run typecheck   # Runs 'tsc -b' across app and electron configs
 # 1. JVM Sidecar Unit Tests (20 tests: translation, linkage, shims)
 mvn -f sidecar/pom.xml test
 
-# 2. Main Process & Media Decision Engine Tests (58 tests)
+# 2. Main Process, Media Decision, Source Cache & Native Engine Tests (99 tests)
+# The native-engine suite spawns a real mpv; the pipeline suite runs real ffmpeg.
+# Both skip themselves when the binary is absent.
 cd cs3_windows
 bun run test:electron
 
 # 3. Real-world Provider End-to-End Test Harness
 # Tests real download, DEX translation, link scraping, and 2MB range stream from live hosts
 node tools/e2e/provider-e2e.mjs --repo phisher --plugins 3
+
+# 4. Vendor Coverage Matrix — can we actually play what the providers return?
+# Probes every resolved link with the shipping inspector, runs the shipping decision
+# engine over it, then plays each stream for real in mpv for a few seconds.
+node --experimental-strip-types tools/e2e/native-engine-matrix.mjs --plugins 12
 ```
 
 ---
@@ -339,7 +346,8 @@ graph TD
 ```
 
 - **Audio Track Selection & Downmixing:** Automatically handles multi-audio releases. Incompatible 5.1/7.1 surround streams are downmixed to 2-channel stereo AAC to prevent center-channel voice dropouts on desktop speakers.
-- **DASH & HLS Handling:** Live remuxing with `-allowed_extensions ALL` ensures non-standard segment extensions (e.g. obfuscated `.png` TS segments) play seamlessly.
+- **DASH & HLS Handling:** Live remuxing lets non-standard segment extensions (e.g. obfuscated `.png` TS segments) play seamlessly. Note that `-allowed_extensions ALL` alone stopped being sufficient in FFmpeg 7.1, which added `-extension_picky` and defaults it *on*; the flag is detected per binary because an older ffmpeg rejects the whole command line.
+- **Native Engine (mpv) for what Chromium will never decode:** 4K/8K HEVC, 10-bit, HDR, VC-1, MPEG-2, DTS-HD and TrueHD are handed to a bundled mpv, which decodes them on the GPU (`d3d11va` / NVDEC / Vulkan / VideoToolbox) untouched — no re-encode, no downscale, no HDR loss, and the original channel layout preserved. Routing is a decision made from measured metadata, not a mode: by default mpv takes only what the in-app player would have re-encoded or downmixed. Measured across 26 providers, that is 17 of every 30 probeable streams.
 - **On-Demand Subtitle Extraction:** SubRip (`.srt`) and ASS tracks embedded in remote MKV containers are extracted on demand and converted to WebVTT (`<track>` standard).
 
 ---

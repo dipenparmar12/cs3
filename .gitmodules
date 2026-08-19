@@ -1,5 +1,5 @@
-[submodule "cloudstream_ref_android"]
-	path = cloudstream_ref_android
+[submodule "repositories/_cloudstream_ref_android"]
+	path = repositories/_cloudstream_ref_android
 	url = git@github.com:recloudstream/cloudstream.git
 
 [submodule "repositories/extensions"]
@@ -105,3 +105,9 @@
 [submodule "repositories/ReflexRepo"]
 	path = repositories/ReflexRepo
 	url = git@github.com:Reflex755/ReflexRepo.git
+[submodule "repositories/cloudstream-18plus-Extensions"]
+	path = repositories/cloudstream-18plus-Extensions
+	url = git@github.com:punpunsx/cloudstream-18plus-Extensions.git
+[submodule "repositories/Cs-GizliKeyif"]
+	path = repositories/Cs-GizliKeyif
+	url = git@github.com:Kraptor123/Cs-GizliKeyif.git

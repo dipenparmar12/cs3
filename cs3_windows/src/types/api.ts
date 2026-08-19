@@ -57,6 +57,7 @@ export interface SearchAlternate {
 
 export interface SearchResponse {
   name: string;
+  originalTitle?: string;
   url: string;
   apiName: string;
   type?: TvType;

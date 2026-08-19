@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Play, Download, Star, ArrowLeft, Loader2, AlertTriangle, Calendar, Layers, ListVideo,
+  Play, ArrowLeft, Loader2, AlertTriangle, ListVideo,
 } from 'lucide-react';
 import type { SearchResponse, Episode } from '../types/api';
 import { TvType } from '../types/api';
@@ -15,6 +15,9 @@ import {
 } from '../components/player/seriesContext';
 import { SeasonDownloadDialog } from '../components/SeasonDownloadDialog';
 import { LibraryBucketSelector } from '../components/LibraryBucketSelector';
+import { CopyErrorButton } from '../components/CopyErrorButton';
+import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
+import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
 
 export interface PlaybackRequest {
   streamUrl: string;
@@ -45,6 +48,23 @@ export interface PlaybackRequest {
    * instead of leaving the player on a frozen frame.
    */
   onRequestEpisode?: (episode: Episode) => Promise<void>;
+  /**
+   * The other sources for this item, so a manually chosen one keeps everything
+   * a quick-played one gets.
+   *
+   * Choosing a source explicitly used to hand the player a bare stream URL: no
+   * source list, no download button, and no way to move on when it would not
+   * play. The instant-play path had all three, so the *more* deliberate action
+   * produced the *less* capable player — which is exactly backwards.
+   */
+  sources?: {
+    list: TorrentResult[];
+    activeInfoHash: string;
+    onSelect: (source: TorrentResult) => void;
+    onDownload: (source: TorrentResult) => void;
+    /** Called when the chosen source starts but cannot be decoded. */
+    onUnplayable: (reason: string) => void;
+  };
 }
 
 /**
@@ -63,6 +83,13 @@ export interface PlaybackSessionRequest {
     titleOverride?: string;
   };
   title: string;
+  originalTitle?: string;
+  providerProvenance?: {
+    provider?: string;
+    repositoryName?: string;
+    extensionName?: string;
+    indexerName?: string;
+  };
   episodeTitle?: string;
   series?: SeriesContext;
   progress?: {
@@ -89,6 +116,9 @@ interface DetailViewProps {
   /** Opens the player immediately and resolves a source into it. */
   onStartSession: (context: PlaybackSessionRequest) => void;
   onEnqueueDownload: (task: DownloadTask) => void;
+  onSearch?: (query: string) => void;
+  /** The query that produced this item, recorded on a bookmark so it can be re-run. */
+  searchQuery?: string;
 }
 
 interface DetailData {
@@ -162,22 +192,80 @@ export const DetailView: React.FC<DetailViewProps> = ({
   onPlay,
   onStartSession,
   onEnqueueDownload,
+  onSearch,
+  searchQuery,
 }) => {
   const [detail, setDetail] = useState<DetailData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  /** Whether this page is in the user's saved list, and where it came from. */
+  const [saved, setSaved] = useState(false);
+  const [provenance, setProvenance] = useState<DetailHeroProvenance>({});
+
+  /** How the background source search for this page is getting on. */
+  const [prefetch, setPrefetch] = useState<PrefetchState | null>(null);
+
   const [activeSeason, setActiveSeason] = useState<number>(1);
   const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
 
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickerLoading, setPickerLoading] = useState(false);
   const [pickerData, setPickerData] = useState<SourcePickerData | null>(null);
   const [pickerError, setPickerError] = useState<string | undefined>();
+
+  /**
+   * The running cross-provider search behind the picker.
+   *
+   * The picker used to `await` one blocking `getSources` call: a spinner for as
+   * long as the slowest indexer took, no way to see what had already answered,
+   * and no way to stop. The player, asking the identical question of the
+   * identical providers, streamed its answers in — so the screen whose entire
+   * purpose is comparing sources had the worse view of them.
+   *
+   * It now runs the same discovery session the player does and renders from its
+   * snapshots, which is also why there is only one definition of how sources are
+   * found rather than two that can disagree.
+   */
+  const [discovery, setDiscovery] = useState<{
+    id: string;
+    searched: number;
+    total: number;
+    done: boolean;
+    cancelled: boolean;
+  } | null>(null);
+  const discoveryRef = useRef<string | null>(null);
   const [pendingEpisode, setPendingEpisode] = useState<Episode | null>(null);
   const [startingStream, setStartingStream] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [seasonDownloadOpen, setSeasonDownloadOpen] = useState(false);
+  /**
+   * Set when a fallback route answered rather than the row's own.
+   *
+   * Everything downstream keys off `detail.url`, which is whichever route
+   * worked, so nothing else needs to know — but the viewer does, because the
+   * episode list they are looking at came from a different site than the row
+   * said it would.
+   */
+  const [fellBackTo, setFellBackTo] = useState<string | null>(null);
+  /**
+   * Sources ruled out on this page, by infoHash.
+   *
+   * The manual-play path has no playback session to hold this, so it lives
+   * here. Same rule as the session's: keyed on infoHash, because two releases
+   * of one film share a title and are not the same source.
+   */
+  const unplayableSources = useRef<Set<string>>(new Set());
+  /**
+   * Stable handles to the play and download actions.
+   *
+   * The player is handed these inside `handlePlaySource`, which is itself one
+   * of them — a direct reference would be circular, and capturing the value
+   * would freeze it at the first call.
+   */
+  const playSourceRef = useRef<(source: TorrentResult) => void>(() => {});
+  const downloadSourceRef = useRef<(source: TorrentResult, episode: Episode | null) => void>(
+    () => {}
+  );
 
   // --- load detail ---------------------------------------------------------
 
@@ -185,9 +273,18 @@ export const DetailView: React.FC<DetailViewProps> = ({
     let cancelled = false;
 
     (async () => {
+      /**
+       * The previous title's data is cleared; this one's is not blanked.
+       *
+       * `loadMedia` answers from cache on a revisit, so the fetch is usually
+       * instant — but setting `detail` to null first still flashed the loading
+       * state on the way through, which is the exact wait the cache exists to
+       * remove.
+       */
       setIsLoading(true);
       setLoadError(null);
       setDetail(null);
+      setFellBackTo(null);
 
       if (!window.cloudstream) {
         setLoadError('Desktop bridge unavailable.');
@@ -195,25 +292,102 @@ export const DetailView: React.FC<DetailViewProps> = ({
         return;
       }
 
-      const response = await window.cloudstream.loadMedia(mediaItem.url);
-      if (cancelled) return;
+      /**
+       * The winning row is not the only way in.
+       *
+       * A merged result carries `alternates` — the other providers and
+       * catalogues that returned the same work — and the merge picked one to
+       * show. When that one cannot open the title, the others are still there
+       * and usually still work: a scraper whose page shape changed this morning
+       * sits beside two that are fine. Giving up on the first failure threw all
+       * of them away and reported "could not load details", which is why so
+       * many titles looked dead when only their top route was.
+       *
+       * Tried in merge order, which puts the routes carrying the strongest
+       * identity first.
+       */
+      const routes = [mediaItem.url, ...(mediaItem.alternates ?? []).map((a) => a.url)];
+      const reasons: string[] = [];
 
-      if (!response.ok || !response.detail) {
-        setLoadError(response.error ?? 'Could not load details for this title.');
-      } else {
-        const data = response.detail as DetailData;
-        setDetail(data);
-        const seasons = groupBySeason(data.episodes ?? []);
-        const first = [...seasons.keys()].sort((a, b) => a - b)[0];
-        if (first !== undefined) setActiveSeason(first);
+      for (const [index, route] of routes.entries()) {
+        const response = await window.cloudstream.loadMedia(route);
+        if (cancelled) return;
+
+        if (response.ok && response.detail) {
+          const data = response.detail as DetailData;
+          setDetail(data);
+          window.cloudstream?.recordTitleOutcome?.(mediaItem.url, 'played');
+
+          // Record detail opened event in history (Unchecked until user plays/downloads)
+          window.cloudstream?.recordHistoryEvent?.({
+            title: data.name,
+            year: data.year,
+            type: data.type,
+            posterUrl: data.posterUrl,
+            mediaUrl: route,
+            action: 'detail_opened',
+            status: 'Unchecked',
+            metadata: { imdbId: data.imdbId, provider: mediaItem.apiName },
+          });
+
+          // Only worth saying when it is not the route the row advertised.
+          setFellBackTo(
+            index > 0 ? (mediaItem.alternates?.[index - 1]?.apiName ?? 'another source') : null
+          );
+          const seasons = groupBySeason(data.episodes ?? []);
+          const first = [...seasons.keys()].sort((a, b) => a - b)[0];
+          if (first !== undefined) setActiveSeason(first);
+          setIsLoading(false);
+          return;
+        }
+
+        if (response.error) reasons.push(response.error);
       }
+
+      // Every route failed. Report what each one said rather than a summary:
+      // "Voe returned no links" and "the catalogue is unreachable" call for
+      // completely different responses from the user.
+      const combined =
+        reasons.length > 0 ? [...new Set(reasons)].join(' · ') : 'No source could open this title.';
+      setLoadError(combined);
+
+      /**
+       * Remembered, and attributed.
+       *
+       * A message naming a Java or transport failure is our problem, not the
+       * title's, and marking the row "unavailable" for it would blame the
+       * content for our bug — which is precisely how one broken translation
+       * pass came to look like a hundred broken providers.
+       */
+      const ours = /NoSuchMethodError|NoClassDefFoundError|IncompatibleClassChange|runtime|sidecar/i.test(
+        combined
+      );
+      window.cloudstream?.recordTitleOutcome?.(
+        mediaItem.url,
+        ours ? 'app-error' : 'no-sources',
+        combined.slice(0, 300)
+      );
       setIsLoading(false);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [mediaItem.url]);
+  }, [mediaItem.url, mediaItem.alternates]);
+
+  /**
+   * A background refresh landing while this title is open.
+   *
+   * Matched on the URL that actually opened rather than the row's, because a
+   * fallback route may have answered and that is the address the cache is
+   * keyed by. Ignored when it is for something else the user is not looking at.
+   */
+  useEffect(() => {
+    const dispose = window.cloudstream?.onDetailUpdate?.(({ url, detail: fresh }) => {
+      setDetail((current) => (current && current.url === url ? (fresh as DetailData) : current));
+    });
+    return () => dispose?.();
+  }, []);
 
   const seasons = useMemo(() => groupBySeason(detail?.episodes ?? []), [detail]);
   const seasonNumbers = useMemo(
@@ -224,42 +398,260 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
   // --- sources -------------------------------------------------------------
 
+  /**
+   * Ends the running discovery, if any.
+   *
+   * Closing the picker has to stop the search behind it, or a dozen scrapers
+   * keep working for a list nobody is looking at — and the session would go on
+   * pushing snapshots into a picker that has moved on to a different episode.
+   */
+  const stopDiscovery = useCallback(() => {
+    const id = discoveryRef.current;
+    if (!id) return;
+    discoveryRef.current = null;
+    void window.cloudstream?.stopPlayback(id, true);
+  }, []);
+
   const openSources = useCallback(
-    async (episode: Episode | null) => {
+    async (episode: Episode | null, options: { refresh?: boolean } = {}) => {
       if (!window.cloudstream || !detail) return;
+
+      stopDiscovery();
 
       setPendingEpisode(episode);
       setPickerOpen(true);
-      setPickerLoading(true);
       setPickerError(undefined);
       setPickerData(null);
+      setDiscovery(null);
 
-      const response = await window.cloudstream.getSources({
-        mediaUrl: episode?.url ?? detail.url,
-        season: episode?.season,
-        episode: episode?.episode,
-      });
+      const response = await window.cloudstream.startSourceDiscovery(
+        {
+          mediaUrl: episode?.url ?? detail.url,
+          season: episode?.season,
+          episode: episode?.episode,
+        },
+        detail.name,
+        episode?.name,
+        // A refresh is the viewer saying the cached answer is wrong; serving it
+        // back is what makes the button look broken.
+        { bypassCache: options.refresh }
+      );
 
-      setPickerLoading(false);
-      if (!response.ok && response.error) {
-        setPickerError(response.error);
+      if (!response.ok || !response.snapshot) {
+        setPickerError(response.error ?? 'Could not start a source search.');
         return;
       }
-      setPickerData({
-        sources: response.sources,
-        filtered: response.filtered,
-        indexerOutcomes: response.indexerOutcomes,
-        emptyReason: response.emptyReason,
-        query: response.query,
+
+      discoveryRef.current = response.snapshot.sessionId;
+      setDiscovery({
+        id: response.snapshot.sessionId,
+        searched: 0,
+        total: 0,
+        done: false,
+        cancelled: false,
       });
     },
-    [detail]
+    [detail, stopDiscovery]
   );
+
+  /**
+   * Feeds the picker from the running session.
+   *
+   * Snapshots are filtered by id because a session that has just been replaced —
+   * the viewer switched episodes, or pressed refresh — can still emit once more
+   * before it notices, and those results belong to a different question.
+   */
+  useEffect(() => {
+    if (!discovery) return;
+
+    const dispose = window.cloudstream?.onPlaybackUpdate((snapshot) => {
+      if (snapshot.sessionId !== discoveryRef.current) return;
+
+      setDiscovery((current) =>
+        current && current.id === snapshot.sessionId
+          ? {
+              ...current,
+              searched: snapshot.searched,
+              total: snapshot.totalIndexers,
+              done: snapshot.searchDone,
+              cancelled: snapshot.searchCancelled,
+            }
+          : current
+      );
+
+      setPickerData({
+        sources: snapshot.sources,
+        // Neither is reported by the session: `filtered` and `indexerOutcomes`
+        // are batch summaries produced after everything settles, and this list
+        // is deliberately being shown before that point.
+        filtered: [],
+        indexerOutcomes: [],
+        emptyReason: snapshot.searchDone ? snapshot.emptyReason : undefined,
+        diagnosis: snapshot.searchDone ? snapshot.diagnosis : undefined,
+        query: {
+          title: snapshot.title,
+          season: pendingEpisode?.season,
+          episode: pendingEpisode?.episode,
+        },
+      });
+    });
+
+    return dispose;
+  }, [discovery?.id, pendingEpisode]);
+
+  // A picker left open when the view goes away would leave its session running.
+  useEffect(() => stopDiscovery, [stopDiscovery]);
 
   const flash = useCallback((message: string) => {
     setToast(message);
     setTimeout(() => setToast(null), 5000);
   }, []);
+
+  /**
+   * Saved state and origin, resolved once per item.
+   *
+   * `apiName` is the provider that served this result and the only ancestry the
+   * item itself carries; the extension and repository behind it live in the
+   * main process, which is the only side holding that mapping.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    const url = mediaItem.url;
+    if (!url) return;
+
+    void (async () => {
+      const [bookmark, origin] = await Promise.all([
+        window.cloudstream?.getBookmark?.(url),
+        mediaItem.apiName
+          ? window.cloudstream?.getProviderProvenance?.(mediaItem.apiName)
+          : Promise.resolve(undefined),
+      ]);
+      if (cancelled) return;
+
+      setSaved(Boolean(bookmark?.bookmark));
+      setProvenance({
+        provider: origin?.provenance?.provider ?? mediaItem.apiName,
+        extensionName: origin?.provenance?.extensionName,
+        repositoryName: origin?.provenance?.repositoryName,
+        // A catalogue result has no extension behind it; naming the catalogue
+        // is what stops the origin line reading as "unknown" for half the app.
+        metadataSource: origin?.provenance?.extensionName ? undefined : mediaItem.apiName,
+        searchQuery,
+      });
+
+      // Reopening from the saved list is what makes "most used" meaningful.
+      if (bookmark?.bookmark) void window.cloudstream?.markBookmarkOpened?.(url);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mediaItem.url, mediaItem.apiName, searchQuery]);
+
+  /**
+   * Saves or unsaves this page.
+   *
+   * Everything needed to reopen it goes in — the exact address, the provider,
+   * the extension, the repository and the query that found it — plus a display
+   * copy of the metadata so the saved list can be drawn without asking thirty
+   * providers. Resolved links deliberately do not: they expire, and a saved
+   * page that opens and cannot play is worse than one that re-resolves.
+   */
+  const toggleSaved = useCallback(async () => {
+    if (!detail) return;
+    const response = await window.cloudstream?.toggleBookmark?.({
+      mediaUrl: mediaItem.url,
+      title: detail.name,
+      year: detail.year,
+      type: detail.type,
+      posterUrl: detail.posterUrl,
+      plot: detail.plot,
+      genres: detail.tags,
+      rating: detail.rating,
+      duration: detail.duration,
+      origin: {
+        provider: provenance.provider,
+        extensionName: provenance.extensionName,
+        repositoryName: provenance.repositoryName,
+        metadataSource: provenance.metadataSource,
+        searchQuery,
+        imdbId: detail.imdbId,
+      },
+    });
+    if (!response?.ok) return;
+    setSaved(response.saved);
+    flash(
+      response.saved
+        ? 'Saved. You can reopen this page from your library without searching again.'
+        : 'Removed from your saved pages.'
+    );
+  }, [detail, mediaItem.url, provenance, searchQuery, flash]);
+
+  /**
+   * What pressing Play on this page would ask for.
+   *
+   * Must match `playEpisodeDirectly` exactly — the same media URL, season and
+   * episode — because the whole benefit comes from the cache being keyed on
+   * that tuple. Prefetching the show's own URL while Play asks for episode 1
+   * would warm an entry nothing ever reads and cost a scrape for nothing.
+   */
+  const playTarget = useMemo(() => {
+    if (!detail) return null;
+    if (!isSeries) return { mediaUrl: detail.url };
+    const episode = selectedEpisode ?? (seasons.get(activeSeason) ?? [])[0];
+    if (!episode) return { mediaUrl: detail.url };
+    return { mediaUrl: episode.url, season: episode.season, episode: episode.episode };
+  }, [detail, isSeries, selectedEpisode, seasons, activeSeason]);
+
+  /**
+   * Looks for sources while the viewer is still reading the page.
+   *
+   * The window between a detail page opening and Play being pressed is several
+   * seconds of doing nothing, and discovery is the slowest thing in the app —
+   * so it runs there instead. The main process holds the policy: it waits to
+   * see whether the page is actually being read, skips entirely when the cache
+   * can already answer, and runs one at a time. Nothing here waits on it.
+   *
+   * Cancelled on unmount, which is safe: the abort only reaches the underlying
+   * run if nobody else has joined it, so leaving the page after pressing Play
+   * cannot cancel the discovery the player is now waiting on.
+   */
+  /*
+   * Depended on as primitives, not as the object.
+   *
+   * `playTarget` is rebuilt whenever any of its inputs change identity —
+   * `setSelectedEpisode` on the episode already showing produces an equal but
+   * new object — and an effect keyed on the object would then cancel and
+   * re-schedule the prefetch for a target that had not actually changed.
+   */
+  const playMediaUrl = playTarget?.mediaUrl;
+  const playSeason = playTarget?.season;
+  const playEpisode = playTarget?.episode;
+
+  useEffect(() => {
+    if (!playMediaUrl) return;
+    void window.cloudstream?.prefetchSources?.({
+      mediaUrl: playMediaUrl,
+      season: playSeason,
+      episode: playEpisode,
+    });
+    return () => {
+      void window.cloudstream?.cancelSourcePrefetch?.();
+    };
+  }, [playMediaUrl, playSeason, playEpisode]);
+
+  useEffect(() => {
+    setPrefetch(null);
+    const dispose = window.cloudstream?.onSourcePrefetch?.((state) => {
+      // Snapshots for a target this page is no longer showing would make the
+      // badge describe something else — a different episode, or the title the
+      // viewer just navigated away from.
+      if (!playMediaUrl || state.mediaUrl !== playMediaUrl) return;
+      if (state.season !== playSeason || state.episode !== playEpisode) return;
+      setPrefetch(state);
+    });
+    return () => dispose?.();
+  }, [playMediaUrl, playSeason, playEpisode]);
 
   /** Queues one release for download, from either the picker or the player. */
   const downloadSource = useCallback(
@@ -288,7 +680,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         downloadSpeed: 0,
         etaSeconds: 0,
         state: DownloadState.Queued,
-        providerName: source.indexerName,
+        providerName: source.providerName || source.indexerName,
         createdTime: Date.now(),
         mediaUrl: episode?.url || detail.url,
         resolution: source.parsed.resolution,
@@ -383,6 +775,12 @@ export const DetailView: React.FC<DetailViewProps> = ({
           episode: episode?.episode,
         },
         title: detail.name,
+        originalTitle: mediaItem.originalTitle || (detail as any)?.originalTitle || searchQuery,
+        providerProvenance: {
+          provider: provenance.provider,
+          repositoryName: provenance.repositoryName,
+          extensionName: provenance.extensionName,
+        },
         episodeTitle: episode?.name,
         series: seriesContextFor(episode, watchState),
         onRequestEpisode: (next) => playEpisodeDirectlyRef.current(next),
@@ -457,6 +855,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
       const watchState = await loadWatchState(detail.url);
 
+      const others = pickerData?.sources ?? [];
+
       onPlay({
         streamUrl: response.handle.streamUrl,
         mimeType: response.handle.mimeType,
@@ -466,6 +866,19 @@ export const DetailView: React.FC<DetailViewProps> = ({
         subtitles: response.handle.subtitleUrls,
         series: seriesContextFor(pendingEpisode, watchState),
         onRequestEpisode: (episode) => playEpisodeDirectlyRef.current(episode),
+        sources: {
+          list: others,
+          activeInfoHash: response.handle.infoHash,
+          onSelect: (next) => void playSourceRef.current(next),
+          onDownload: (next) => downloadSourceRef.current(next, pendingEpisode),
+          onUnplayable: () => {
+            unplayableSources.current.add(source.infoHash);
+            const next = others.find(
+              (candidate) => !unplayableSources.current.has(candidate.infoHash)
+            );
+            if (next) void playSourceRef.current(next);
+          },
+        },
         progress: {
           mediaUrl: pendingEpisode?.url ?? detail.url,
           year: detail.year,
@@ -476,8 +889,18 @@ export const DetailView: React.FC<DetailViewProps> = ({
         },
       });
     },
-    [detail, pendingEpisode, onPlay, rememberChoice, seriesContextFor]
+    [detail, pendingEpisode, onPlay, rememberChoice, seriesContextFor, pickerData]
   );
+
+  // Assigned after definition: `handlePlaySource` hands these to the player and
+  // is itself one of them.
+  useEffect(() => {
+    playSourceRef.current = (source: TorrentResult) => void handlePlaySource(source);
+  }, [handlePlaySource]);
+
+  useEffect(() => {
+    downloadSourceRef.current = downloadSource;
+  }, [downloadSource]);
 
   const handleDownloadSource = useCallback(
     (source: TorrentResult) => {
@@ -502,10 +925,26 @@ export const DetailView: React.FC<DetailViewProps> = ({
     return (
       <div className="detail-view detail-view--state">
         <AlertTriangle size={32} />
+        {/* Every route's own reason, not a summary of them. */}
         <p>{loadError ?? 'No details available.'}</p>
-        <button className="btn" onClick={onBack}>
-          <ArrowLeft size={16} /> Back
-        </button>
+        {(mediaItem.alternates?.length ?? 0) > 0 && (
+          <p className="detail-view__tried">
+            Tried {(mediaItem.alternates?.length ?? 0) + 1} sources for “{mediaItem.name}”.
+          </p>
+        )}
+        <div className="detail-view__actions">
+          <button className="btn" onClick={onBack}>
+            <ArrowLeft size={16} /> Back
+          </button>
+          <CopyErrorButton
+            context={{
+              title: mediaItem.name,
+              url: mediaItem.url,
+              source: mediaItem.apiName,
+              message: loadError ?? undefined,
+            }}
+          />
+        </div>
       </div>
     );
   }
@@ -518,69 +957,58 @@ export const DetailView: React.FC<DetailViewProps> = ({
         <ArrowLeft size={16} /> Back
       </button>
 
-      <header className="detail-hero">
-        {detail.posterUrl && (
-          <img className="detail-hero__poster" src={detail.posterUrl} alt="" loading="lazy" />
-        )}
-        <div className="detail-hero__body">
-          <h1>{detail.name}</h1>
-
-          <div className="detail-hero__meta">
-            {detail.year && (
-              <span><Calendar size={14} /> {detail.year}</span>
-            )}
-            {detail.rating !== undefined && (
-              <span><Star size={14} /> {detail.rating.toFixed(1)}</span>
-            )}
-            {detail.duration && <span>{detail.duration}</span>}
-            <span className="badge badge--muted">{detail.type}</span>
-          </div>
-
-          {detail.tags && detail.tags.length > 0 && (
-            <div className="detail-hero__tags">
-              {detail.tags.slice(0, 6).map((tag) => (
-                <span key={tag} className="badge badge--muted">{tag}</span>
-              ))}
-            </div>
-          )}
-
-          {detail.plot && <p className="detail-hero__plot">{detail.plot}</p>}
-
-          <div className="detail-hero__actions">
-            <button
-              className="btn btn-primary"
-              onClick={() => playNow(isSeries ? episodesInSeason[0] ?? null : null)}
-              disabled={startingStream}
-            >
-              <Play size={16} />
-              {isSeries ? 'Play first episode' : 'Play'}
-            </button>
-            {/* The selector keys off a search result; `detail` carries everything
-                except the provider name, which the originating item still has. */}
-            <LibraryBucketSelector
-              item={{ ...detail, apiName: mediaItem.apiName }}
-              size="md"
-            />
-            <button
-              className="btn"
-              onClick={() => openSources(isSeries ? episodesInSeason[0] ?? null : null)}
-            >
-              <ListVideo size={16} /> Choose source
-            </button>
-            <button
-              className="btn"
-              onClick={() => openSources(isSeries ? episodesInSeason[0] ?? null : null)}
-            >
-              <Download size={16} /> {isSeries ? 'Download episode' : 'Download'}
-            </button>
-            {isSeries && (
-              <button className="btn" onClick={() => setSeasonDownloadOpen(true)}>
-                <Layers size={16} /> Download season
-              </button>
-            )}
-          </div>
-        </div>
-      </header>
+      <DetailHero
+        title={detail.name}
+        originalTitle={mediaItem.originalTitle || (detail as any)?.originalTitle}
+        year={detail.year}
+        type={detail.type}
+        posterUrl={detail.posterUrl}
+        plot={detail.plot}
+        rating={detail.rating}
+        duration={detail.duration}
+        tags={detail.tags}
+        fallbackNote={
+          fellBackTo
+            ? `The listed source could not open this, so these details came from ${fellBackTo}.`
+            : undefined
+        }
+        isSeries={isSeries}
+        provenance={{ ...provenance, imdbId: detail.imdbId }}
+        saved={saved}
+        busy={startingStream}
+        sourceReadiness={prefetch}
+        onPlay={() => playNow(isSeries ? (episodesInSeason[0] ?? null) : null)}
+        onToggleSave={() => void toggleSaved()}
+        onChooseSource={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
+        onDownload={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
+        // "Find more" and "Refresh" are the same search with the cache bypassed,
+        // and they stay two entries because they answer two questions people
+        // actually ask: "is there anything else?" and "these links are dead".
+        onFindMoreSources={() =>
+          openSources(isSeries ? (episodesInSeason[0] ?? null) : null, { refresh: true })
+        }
+        onRefreshSources={() =>
+          openSources(isSeries ? (episodesInSeason[0] ?? null) : null, { refresh: true })
+        }
+        onSearchTitle={
+          onSearch
+            ? // The *full* title, not whatever is still sitting in the search
+              // box. Searching "Avengers" from the Age of Ultron page was the
+              // reported behaviour, and it came from the box owning its own text.
+              () => onSearch(`${detail.name}${detail.year ? ` ${detail.year}` : ''}`)
+            : undefined
+        }
+        onDownloadSeason={isSeries ? () => setSeasonDownloadOpen(true) : undefined}
+        libraryControl={
+          // The selector keys off a search result; `detail` carries everything
+          // except the provider name, which the originating item still has.
+          <LibraryBucketSelector
+            item={{ ...detail, apiName: mediaItem.apiName }}
+            sources={pickerData?.sources || undefined}
+            size="sm"
+          />
+        }
+      />
 
       {isSeries && (
         <section className="episode-section">
@@ -643,7 +1071,9 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
       <SourcePicker
         isOpen={pickerOpen}
-        isLoading={pickerLoading || startingStream}
+        // Only a stream actually starting is a blocking wait; discovery is not,
+        // and conflating them is what hid the results until the search was over.
+        isLoading={startingStream}
         data={pickerData}
         error={pickerError}
         contextLabel={
@@ -651,10 +1081,22 @@ export const DetailView: React.FC<DetailViewProps> = ({
             ? `${detail.name} — ${pendingEpisode.name}`
             : `${detail.name}${detail.year ? ` (${detail.year})` : ''}`
         }
-        onClose={() => setPickerOpen(false)}
+        searching={Boolean(discovery && !discovery.done)}
+        searched={discovery?.searched ?? 0}
+        totalSources={discovery?.total ?? 0}
+        cancelled={discovery?.cancelled ?? false}
+        onClose={() => {
+          stopDiscovery();
+          setPickerOpen(false);
+        }}
         onPlay={handlePlaySource}
         onDownload={handleDownloadSource}
-        onRetry={() => openSources(pendingEpisode)}
+        onRetry={() => openSources(pendingEpisode, { refresh: true })}
+        onCancelSearch={() => {
+          if (discoveryRef.current) {
+            void window.cloudstream?.playbackCancelSourceSearch(discoveryRef.current);
+          }
+        }}
       />
 
       {isSeries && (

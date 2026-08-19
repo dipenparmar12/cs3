@@ -11,6 +11,16 @@ export interface SourceFilterState {
   resolution: ResolutionFilterValue;
   size: SizeFilterValue;
   language: LanguageFilterValue;
+  /**
+   * Which source produced the row — a torrent indexer, or the host an extension
+   * provider resolved a link from. `'all'` means no restriction.
+   *
+   * The dimension the filter bar was missing. With a dozen indexers and several
+   * extension providers answering the same query, "only show me results from the
+   * one that actually plays" was not expressible, and the whole list had to be
+   * read to find them.
+   */
+  source: string;
   sortBy: SortOption;
 }
 
@@ -19,6 +29,7 @@ export const DEFAULT_FILTER_STATE: SourceFilterState = {
   resolution: 'all',
   size: 'all',
   language: 'all',
+  source: 'all',
   sortBy: 'score',
 };
 
@@ -147,26 +158,122 @@ export function sortSources(sources: TorrentResult[], sortBy: SortOption): Torre
   });
 }
 
+export function sourceNameOf(source: TorrentResult): string {
+  return source.indexerName || 'Unknown source';
+}
+
+/** The dimensions that offer a list of choices, as opposed to free text. */
+export type FacetDimension = 'resolution' | 'size' | 'language' | 'source';
+
+/** Does one source match one value of one dimension? */
+function matchesDimension(source: TorrentResult, dimension: FacetDimension, value: string): boolean {
+  switch (dimension) {
+    case 'resolution':
+      return detectResolutionCategory(source) === value;
+    case 'size':
+      return matchesSize(source, value as SizeFilterValue);
+    case 'language':
+      return matchesLanguage(source, value as LanguageFilterValue);
+    case 'source':
+      return sourceNameOf(source) === value;
+  }
+}
+
+/**
+ * Applies every active filter, optionally holding one dimension out.
+ *
+ * The hold-out is what makes the counts on the facet menus mean something: a
+ * facet has to be counted against the *other* filters, not against itself, or
+ * picking "1080p" would report every other resolution as having zero results.
+ */
+function passes(
+  source: TorrentResult,
+  state: SourceFilterState,
+  except?: FacetDimension
+): boolean {
+  if (state.searchQuery && !matchesSearchText(source, state.searchQuery)) return false;
+  for (const dimension of ['resolution', 'size', 'language', 'source'] as const) {
+    if (dimension === except) continue;
+    const value = state[dimension];
+    if (value !== 'all' && !matchesDimension(source, dimension, value)) return false;
+  }
+  return true;
+}
+
 export function filterAndSortSources(
   sources: TorrentResult[],
   filterState: SourceFilterState
 ): TorrentResult[] {
-  const filtered = sources.filter((s) => {
-    if (filterState.searchQuery && !matchesSearchText(s, filterState.searchQuery)) return false;
+  return sortSources(
+    sources.filter((source) => passes(source, filterState)),
+    filterState.sortBy
+  );
+}
 
-    if (filterState.resolution !== 'all') {
-      const detected = detectResolutionCategory(s);
-      if (detected !== filterState.resolution) return false;
+export interface FacetCount {
+  value: string;
+  label: string;
+  count: number;
+}
+
+const FIXED_OPTIONS: Record<Exclude<FacetDimension, 'source'>, Array<[string, string]>> = {
+  resolution: [
+    ['4k', '4K (2160p)'],
+    ['1440p', '1440p'],
+    ['1080p', '1080p'],
+    ['720p', '720p'],
+    ['480p', '480p / SD'],
+  ],
+  size: [
+    ['under1gb', 'Under 1 GB'],
+    ['1to3gb', '1 – 3 GB'],
+    ['3to8gb', '3 – 8 GB'],
+    ['over8gb', 'Over 8 GB'],
+  ],
+  language: [
+    ['en', 'English'],
+    ['dual_multi', 'Dual / multi audio'],
+    ['de', 'German'],
+    ['fr', 'French'],
+    ['es', 'Spanish'],
+    ['ja', 'Japanese'],
+    ['hi', 'Hindi'],
+    ['other', 'Other foreign'],
+  ],
+};
+
+/**
+ * The options worth offering for one dimension, with live counts.
+ *
+ * Options that would leave nothing are dropped. A menu of forty providers where
+ * thirty-eight lead to an empty list is not information, it is a maze — and the
+ * two that matter are exactly what the user is looking for.
+ */
+export function buildFacet(
+  sources: TorrentResult[],
+  state: SourceFilterState,
+  dimension: FacetDimension
+): FacetCount[] {
+  const base = sources.filter((source) => passes(source, state, dimension));
+
+  if (dimension === 'source') {
+    const counts = new Map<string, number>();
+    for (const source of base) {
+      const name = sourceNameOf(source);
+      counts.set(name, (counts.get(name) ?? 0) + 1);
     }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([value, count]) => ({ value, label: value, count }));
+  }
 
-    if (filterState.size !== 'all' && !matchesSize(s, filterState.size)) return false;
-
-    if (filterState.language !== 'all' && !matchesLanguage(s, filterState.language)) return false;
-
-    return true;
-  });
-
-  return sortSources(filtered, filterState.sortBy);
+  return FIXED_OPTIONS[dimension]
+    .map(([value, label]) => ({
+      value,
+      label,
+      count: base.filter((source) => matchesDimension(source, dimension, value)).length,
+    }))
+    .filter((option) => option.count > 0);
 }
 
 export function isFilterActive(state: SourceFilterState): boolean {
@@ -175,6 +282,7 @@ export function isFilterActive(state: SourceFilterState): boolean {
     state.resolution !== 'all' ||
     state.size !== 'all' ||
     state.language !== 'all' ||
+    state.source !== 'all' ||
     state.sortBy !== 'score'
   );
 }

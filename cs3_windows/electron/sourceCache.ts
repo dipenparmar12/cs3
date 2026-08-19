@@ -41,6 +41,40 @@ const ENTRY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
  */
 const DEFAULT_LINK_TTL_MS = 20 * 60 * 1000;
 
+/**
+ * How many ambiguous failures a source survives before it is dropped.
+ *
+ * Three, and the number matters in both directions. A source removed on its
+ * first failure would be removed by any passing network blip — and the cache
+ * exists precisely to survive those. A source never removed accumulates
+ * permanently dead links that get tried first on every play, which is the
+ * failure mode a cache is supposed to prevent.
+ */
+const MAX_VALIDATION_FAILURES = 3;
+
+/**
+ * Whether a failure means the source is *gone*, or merely that this attempt
+ * did not work.
+ *
+ * The distinction is the whole invalidation policy: a definitive answer removes
+ * the source immediately, while anything else only counts against it. Getting
+ * this wrong in the eager direction empties the cache every time the wifi drops;
+ * getting it wrong in the lazy direction keeps serving 404s forever.
+ *
+ * `410 Gone` and `404 Not Found` are the server saying so outright. `403` is
+ * deliberately **not** here: expired signed URLs and hotlink protection both
+ * answer 403, and both are recoverable by re-resolving the same query — the
+ * expiry machinery already handles them. Timeouts, resets, DNS failures and 5xx
+ * are the server or the network having a bad moment, and none of them are
+ * evidence about whether the file exists.
+ */
+export function isDefinitiveFailure(status: number | undefined, reason?: string): boolean {
+  if (status === 404 || status === 410) return true;
+  return /\b(410 gone|404 not found|no longer (exists|available)|file (was )?(deleted|removed))\b/i.test(
+    reason ?? ''
+  );
+}
+
 /** Entries are small, but an unbounded cache in a JSON datastore is not free. */
 const MAX_ENTRIES = 300;
 
@@ -51,6 +85,17 @@ interface CacheEntry {
   sources: TorrentResult[];
   /** Epoch millis per source infohash, for links that carry a deadline. */
   expiresAt: Record<string, number>;
+  /**
+   * When each source was last confirmed to work, and how many times running it
+   * has failed for a reason that was not conclusive.
+   *
+   * Kept per source rather than per entry because they age independently — the
+   * whole reason `read` splits fresh from expired. A source that plays resets
+   * its own counter; one that keeps failing is dropped without taking its
+   * neighbours with it.
+   */
+  validatedAt?: Record<string, number>;
+  failures?: Record<string, number>;
   createdAt: number;
   lastUsedAt: number;
 }
@@ -185,6 +230,36 @@ export class SourceCache {
     return { fresh, expired, hit: true };
   }
 
+  /**
+   * The same split as {@link read}, without recording a use.
+   *
+   * `read` stamps `lastUsedAt` and writes the whole cache back, which is right
+   * when something is about to be played from it and wrong for a question asked
+   * speculatively. The prefetcher asks "would this be answered from cache?"
+   * before deciding whether to scrape at all, and that question must not itself
+   * cost a datastore write — nor should it promote an entry the user never
+   * actually opened.
+   */
+  public peek(mediaUrl: string, season?: number, episode?: number): CacheReadResult {
+    const key = SourceCache.keyFor(mediaUrl, season, episode);
+    const entry = this.load().find((e) => e.key === key);
+    if (!entry) return { fresh: [], expired: [], hit: false };
+
+    const now = Date.now();
+    const fresh: TorrentResult[] = [];
+    const expired: TorrentResult[] = [];
+    for (const source of entry.sources) {
+      if (isPermanent(source)) {
+        fresh.push(source);
+        continue;
+      }
+      const deadline = entry.expiresAt[source.infoHash];
+      if (deadline && deadline > now) fresh.push(source);
+      else expired.push(source);
+    }
+    return { fresh, expired, hit: true };
+  }
+
   /** Records the sources a discovery run produced. */
   public write(
     mediaUrl: string,
@@ -214,6 +289,85 @@ export class SourceCache {
       lastUsedAt: now,
     });
     this.save(entries);
+  }
+
+  /**
+   * Records that a source was just proved to work.
+   *
+   * Clears its failure count as well as stamping the time: a source that plays
+   * has demonstrably recovered, and carrying two old failures forward would
+   * have it dropped by the next unrelated blip.
+   */
+  public recordSuccess(
+    mediaUrl: string,
+    infoHash: string,
+    season?: number,
+    episode?: number
+  ): void {
+    const key = SourceCache.keyFor(mediaUrl, season, episode);
+    const entries = this.load();
+    const entry = entries.find((e) => e.key === key);
+    if (!entry) return;
+
+    entry.validatedAt = { ...(entry.validatedAt ?? {}), [infoHash]: Date.now() };
+    if (entry.failures?.[infoHash]) {
+      const failures = { ...entry.failures };
+      delete failures[infoHash];
+      entry.failures = failures;
+    }
+    this.save(entries);
+  }
+
+  /**
+   * Records that a source failed, and drops it when that verdict is final.
+   *
+   * The two paths are the policy §2 asks for. A definitive answer — the server
+   * saying the file is not there — removes the source now, because no amount of
+   * retrying changes a 404. Anything else is counted: a timeout, a reset, a 5xx
+   * or a 403 is the network or the host having a moment, and a cache that
+   * forgets everything on the first bad minute is worse than no cache. Only
+   * after {@link MAX_VALIDATION_FAILURES} such failures is the source dropped.
+   *
+   * Returns whether the source was removed, so the caller can say so.
+   */
+  public recordFailure(
+    mediaUrl: string,
+    infoHash: string,
+    failure: { status?: number; reason?: string },
+    season?: number,
+    episode?: number
+  ): boolean {
+    const key = SourceCache.keyFor(mediaUrl, season, episode);
+    const entries = this.load();
+    const entry = entries.find((e) => e.key === key);
+    if (!entry) return false;
+
+    const definitive = isDefinitiveFailure(failure.status, failure.reason);
+    const failures = { ...(entry.failures ?? {}) };
+    failures[infoHash] = (failures[infoHash] ?? 0) + 1;
+
+    if (definitive || failures[infoHash] >= MAX_VALIDATION_FAILURES) {
+      entry.sources = entry.sources.filter((source) => source.infoHash !== infoHash);
+      delete failures[infoHash];
+      const expiresAt = { ...entry.expiresAt };
+      delete expiresAt[infoHash];
+      entry.expiresAt = expiresAt;
+      entry.failures = failures;
+
+      /**
+       * An entry with nothing left in it is removed rather than kept as an
+       * empty shell — otherwise `hit: true` reports a cache hit that can never
+       * answer anything, and the caller skips the discovery it needs.
+       */
+      this.save(
+        entry.sources.length === 0 ? entries.filter((e) => e.key !== key) : entries
+      );
+      return true;
+    }
+
+    entry.failures = failures;
+    this.save(entries);
+    return false;
   }
 
   /** Drops one entry, for when its sources turn out to be permanently dead. */

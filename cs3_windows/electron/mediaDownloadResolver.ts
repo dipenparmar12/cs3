@@ -33,7 +33,16 @@ export class MediaDownloadResolver {
    */
   private extensionFor(task: Partial<DownloadTask>): string {
     const url = task.link?.url ?? '';
-    if (task.link?.isM3u8 || task.link?.isDash || /\.(m3u8|mpd)(\?|$)/i.test(url)) {
+    const clean = url.split(/[?#]/)[0].toLowerCase();
+    if (
+      task.link?.isM3u8 ||
+      task.link?.isDash ||
+      clean.endsWith('.m3u8') ||
+      clean.endsWith('.m3u') ||
+      clean.endsWith('.mpd') ||
+      /\/(getm3u8|m3u8|hls|dash|mpd)\b/i.test(clean) ||
+      /[?&]format=(m3u8|hls|dash)/i.test(url)
+    ) {
       return '.mp4';
     }
 
@@ -41,9 +50,7 @@ export class MediaDownloadResolver {
     // overwrites this path at that point.
     if (url.startsWith('magnet:') || /^[a-f0-9]{40}$/i.test(url)) return '.mp4';
 
-    const match = url
-      .split('?')[0]
-      .match(/\.(mp4|mkv|avi|mov|m4v|webm|ts|m2ts|flv|wmv|mpg|mpeg)$/i);
+    const match = clean.match(/\.(mp4|mkv|avi|mov|m4v|webm|ts|m2ts|flv|wmv|mpg|mpeg)$/i);
     return match ? `.${match[1].toLowerCase()}` : '.mp4';
   }
 

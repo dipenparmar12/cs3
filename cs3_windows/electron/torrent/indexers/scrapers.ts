@@ -71,7 +71,12 @@ export class X1337Indexer implements TorrentIndexer {
   private static readonly MIRRORS = [
     'https://1337x.to',
     'https://1337x.st',
-    'https://x1337x.ws',
+    'https://1337x.ws',
+    'https://1337x.eu',
+    'https://1337x.so',
+    'https://1337xx.to',
+    'https://1337x.tw',
+    'https://1337x.is',
     'https://1337x.unblockit.click',
   ] as const;
 
@@ -83,10 +88,18 @@ export class X1337Indexer implements TorrentIndexer {
     const search = encodeURIComponent(withEpisodeTerms(query));
 
     return tryMirrors(X1337Indexer.MIRRORS, async (base) => {
-      const listing = await fetchText(
-        `${base}/sort-search/${search}/seeders/desc/1/`,
-        { signal, timeoutMs: 20_000 }
-      );
+      let listing = '';
+      try {
+        listing = await fetchText(
+          `${base}/sort-search/${search}/seeders/desc/1/`,
+          { signal, timeoutMs: 20_000 }
+        );
+      } catch {
+        listing = await fetchText(
+          `${base}/search/${search}/1/`,
+          { signal, timeoutMs: 20_000 }
+        );
+      }
 
       const $ = cheerio.load(listing);
       const rows: Array<{ title: string; detailUrl: string; seeders: number; leechers: number; sizeBytes: number; publishedAt?: number }> = [];
@@ -167,7 +180,11 @@ export class BitSearchIndexer implements TorrentIndexer {
   readonly name = 'BitSearch';
   readonly specialises = 'any' as const;
 
-  private static readonly MIRRORS = ['https://bitsearch.to'] as const;
+  private static readonly MIRRORS = [
+    'https://bitsearch.to',
+    'https://bitsearch.unblockit.click',
+    'https://bitsearch.org',
+  ] as const;
 
   canHandle(query: IndexerQuery): boolean {
     return Boolean(query.query);
@@ -245,7 +262,12 @@ export class TheRarbgIndexer implements TorrentIndexer {
   readonly name = 'TheRARBG';
   readonly specialises = 'any' as const;
 
-  private static readonly MIRRORS = ['https://therarbg.to', 'https://therarbg.com'] as const;
+  private static readonly MIRRORS = [
+    'https://therarbg.to',
+    'https://therarbg.com',
+    'https://therarbg.org',
+    'https://therarbg.me',
+  ] as const;
 
   canHandle(query: IndexerQuery): boolean {
     return Boolean(query.query);
