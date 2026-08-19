@@ -57,6 +57,7 @@ import type {
 } from '../src/types/history';
 import type { DiagnosticRecord, DiagnosticStage } from './cs3/diagnostics';
 import type { ExternalPlayer } from './externalPlayer';
+import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import type {
   LibraryEntry,
   SourceMemory,
@@ -485,6 +486,32 @@ export interface CloudStreamElectronAPI {
    * URL has the provider's headers already applied.
    */
   openInExternalPlayer: (playerId: string, url: string) => Promise<Envelope>;
+  // --- external playback, with a control channel where one exists ---
+  /**
+   * Hands the stream over **and** reports whether we can drive that player.
+   *
+   * `capability: 'full'` means the controls below reach it and its position
+   * comes back; `'none'` means it is playing and we have no channel to it. The
+   * player UI must respect the difference rather than showing controls that
+   * cannot work.
+   */
+  openControlledExternal: (
+    playerId: string,
+    url: string
+  ) => Promise<Envelope & { capability: 'full' | 'none'; engine?: string }>;
+  getExternalCapability: (
+    playerId: string
+  ) => Promise<Envelope & { capability: 'full' | 'none' }>;
+  getExternalSnapshot: () => Promise<Envelope & { snapshot: ExternalPlaybackSnapshot | null }>;
+  onExternalUpdate: (callback: (snapshot: ExternalPlaybackSnapshot) => void) => () => void;
+  externalSetPaused: (paused: boolean) => Promise<Envelope>;
+  externalSeek: (seconds: number) => Promise<Envelope>;
+  externalSetVolume: (percent: number) => Promise<Envelope>;
+  externalSetMuted: (muted: boolean) => Promise<Envelope>;
+  externalSetSpeed: (rate: number) => Promise<Envelope>;
+  externalSetFullscreen: () => Promise<Envelope>;
+  externalStop: () => Promise<Envelope>;
+
   /** Opens an http(s) link in the system browser. Other schemes are refused. */
   openExternalLink: (url: string) => Promise<Envelope>;
 
@@ -1038,6 +1065,21 @@ const api: CloudStreamElectronAPI = {
   listExternalPlayers: (refresh) => ipcRenderer.invoke('player:listExternal', refresh),
   openInExternalPlayer: (playerId, url) =>
     ipcRenderer.invoke('player:openExternal', playerId, url),
+  openControlledExternal: (playerId, url) => ipcRenderer.invoke('external:open', playerId, url),
+  getExternalCapability: (playerId) => ipcRenderer.invoke('external:capability', playerId),
+  getExternalSnapshot: () => ipcRenderer.invoke('external:snapshot'),
+  onExternalUpdate: (callback) => {
+    const listener = (_: unknown, snapshot: ExternalPlaybackSnapshot) => callback(snapshot);
+    ipcRenderer.on('external:update', listener);
+    return () => ipcRenderer.removeListener('external:update', listener);
+  },
+  externalSetPaused: (paused) => ipcRenderer.invoke('external:setPaused', paused),
+  externalSeek: (seconds) => ipcRenderer.invoke('external:seek', seconds),
+  externalSetVolume: (percent) => ipcRenderer.invoke('external:setVolume', percent),
+  externalSetMuted: (muted) => ipcRenderer.invoke('external:setMuted', muted),
+  externalSetSpeed: (rate) => ipcRenderer.invoke('external:setSpeed', rate),
+  externalSetFullscreen: () => ipcRenderer.invoke('external:setFullscreen'),
+  externalStop: () => ipcRenderer.invoke('external:stop'),
   openExternalLink: (url) => ipcRenderer.invoke('shell:openExternal', url),
 
   getMpvStatus: () => ipcRenderer.invoke('mpv:status'),

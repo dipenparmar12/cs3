@@ -11,6 +11,7 @@ import {
 import type { TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
 import { AspectRatioMode } from '../types/player';
+import type { ExternalPlaybackSnapshot } from '../types/player';
 import type { TorrentResult } from '../types/torrent';
 import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
@@ -415,6 +416,53 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [currentDownload?.state, notify]);
 
+  /**
+   * The external player currently holding this stream, and how far we can reach it.
+   *
+   * `null` while playback is ours. Set on a handoff, cleared when the viewer
+   * closes that player — a window that is gone while our timeline still runs is
+   * the same lie as a seek bar that does nothing, in the other direction.
+   */
+  const [externalControl, setExternalControl] = useState<{
+    playerId: string;
+    playerName: string;
+    capability: 'full' | 'none';
+  } | null>(null);
+  const [externalSnapshot, setExternalSnapshot] = useState<ExternalPlaybackSnapshot | null>(null);
+
+  useEffect(() => {
+    if (!externalControl) return;
+    const dispose = window.cloudstream?.onExternalUpdate((snapshot) => {
+      setExternalSnapshot(snapshot);
+      // A capability that downgrades mid-session is reported, not hidden: VLC
+      // without its HTTP module plays perfectly and answers nothing.
+      if (snapshot.capability !== externalControl.capability) {
+        setExternalControl((current) =>
+          current ? { ...current, capability: snapshot.capability } : current
+        );
+      }
+      if (snapshot.state === 'closed' || snapshot.state === 'ended') {
+        setExternalControl(null);
+        setExternalSnapshot(null);
+      }
+    });
+    return dispose;
+  }, [externalControl?.playerId, externalControl?.capability]);
+
+  /**
+   * Mirrors the external player's position into the app's own timeline.
+   *
+   * The requirement is that "50% there" reads as "50% here". Feeding the same
+   * state the `<video>` path writes means watch progress, the resume point and
+   * the up-next card all keep working without knowing which engine is playing.
+   */
+  useEffect(() => {
+    if (!externalSnapshot || externalControl?.capability !== 'full') return;
+    if (externalSnapshot.positionSeconds > 0) setCurrentTime(externalSnapshot.positionSeconds);
+    if (externalSnapshot.durationSeconds > 0) setDuration(externalSnapshot.durationSeconds);
+    setIsPlaying(!externalSnapshot.paused);
+  }, [externalSnapshot, externalControl?.capability]);
+
   const [showNativePlayerBtn, setShowNativePlayerBtn] = useState(true);
   const [externalPlayers, setExternalPlayers] = useState<Array<{ id: string; name: string }>>([]);
   const [extPlayerStatus, setExtPlayerStatus] = useState<string | null>(null);
@@ -447,13 +495,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
 
       setExtPlayerStatus(`Launching in ${playerName}…`);
-      const res = await window.cloudstream?.openInExternalPlayer?.(playerId, streamUrl);
+
+      /**
+       * Handed over through the controlled path, which keeps a channel open
+       * where the player has one.
+       *
+       * The capability that comes back decides what the app may claim. mpv and
+       * VLC answer `full`, so our transport controls become a real remote and
+       * their position drives our timeline. Everything else answers `none`, and
+       * the honest response is to say the stream is playing elsewhere rather
+       * than to render controls that cannot reach it.
+       */
+      const res = await window.cloudstream?.openControlledExternal?.(playerId, streamUrl);
       if (res?.ok) {
-        setExtPlayerStatus(`Playing in ${playerName}`);
+        setExternalControl({ playerId, playerName, capability: res.capability });
+        setExtPlayerStatus(
+          res.capability === 'full'
+            ? `Playing in ${playerName} — controls here are connected to it`
+            : `Playing in ${playerName} — this player cannot be controlled from here`
+        );
       } else {
+        setExternalControl(null);
         setExtPlayerStatus(res?.error ?? `Could not launch ${playerName}`);
       }
-      setTimeout(() => setExtPlayerStatus(null), 4000);
+      setTimeout(() => setExtPlayerStatus(null), 5000);
     },
     [streamUrl, externalPlayers]
   );
@@ -1172,12 +1237,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // --- controls ------------------------------------------------------------
 
+  /**
+   * Where a transport command should go.
+   *
+   * Three engines can hold the stream — the `<video>` element, mpv, or a
+   * controlled external player — and every control has to ask the same question
+   * or they disagree. Derived rather than stored, so it can never drift from
+   * the state that actually decides it.
+   */
   const togglePlay = useCallback(() => {
+    if (externalControl?.capability === 'full') {
+      void window.cloudstream?.externalSetPaused(externalSnapshot?.paused === false);
+      return;
+    }
+    if (isNativeEngine) {
+      void window.cloudstream?.getMpvSnapshot().then((response) => {
+        if (response?.ok) void window.cloudstream?.mpvSetPaused(!response.snapshot.paused);
+      });
+      return;
+    }
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) video.play().catch(() => undefined);
     else video.pause();
-  }, []);
+  }, [externalControl?.capability, externalSnapshot?.paused, isNativeEngine]);
 
   /**
    * Seeks, accounting for a remuxed stream having no seekable range.
@@ -1189,9 +1272,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const seekTo = useCallback(
     (time: number) => {
+      const target = Math.max(0, time);
+
+      // The external player owns the playhead; seeking the empty local element
+      // would move a timeline nobody is watching.
+      if (externalControl?.capability === 'full') {
+        void window.cloudstream?.externalSeek(target);
+        return;
+      }
+      if (isNativeEngine) {
+        void window.cloudstream?.mpvSeek(target);
+        return;
+      }
+
       const video = videoRef.current;
       if (!video) return;
-      const target = Math.max(0, time);
 
       if (isConverted && prepared) {
         setPlaybackOffset(target);
@@ -1203,7 +1298,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
       video.currentTime = target;
     },
-    [isConverted, prepared]
+    [isConverted, prepared, externalControl?.capability, isNativeEngine]
   );
 
   const seekBy = useCallback(
@@ -1355,12 +1450,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     // Also the single place the ref is kept current, so a newly attached element
     // starts at the volume the viewer last chose rather than at 1.0.
     audioSettings.current = { volume, muted: isMuted };
+
+    /**
+     * Volume, mute and speed follow the stream wherever it is playing.
+     *
+     * Applied to *every* engine rather than to whichever is active, because the
+     * element keeps its own value for when playback comes back to it — a
+     * handoff to VLC and back should not restore the volume to 100%.
+     */
+    if (externalControl?.capability === 'full') {
+      void window.cloudstream?.externalSetVolume(Math.round(volume * 100));
+      void window.cloudstream?.externalSetMuted(isMuted);
+      void window.cloudstream?.externalSetSpeed(speed);
+    } else if (isNativeEngine) {
+      void window.cloudstream?.mpvSetVolume(Math.round(volume * 100));
+      void window.cloudstream?.mpvSetMuted(isMuted);
+      void window.cloudstream?.mpvSetSpeed(speed);
+    }
+
     const video = videoRef.current;
     if (!video) return;
     video.volume = volume;
     video.muted = isMuted;
     video.playbackRate = speed;
-  }, [volume, isMuted, speed]);
+  }, [volume, isMuted, speed, externalControl?.capability, isNativeEngine]);
 
   /**
    * Controls visibility.
@@ -1977,6 +2090,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <track key={sub.url} kind="subtitles" label={sub.name} src={sub.url} />
         ))}
       </video>
+
+      {externalControl && (
+        <div className="player__external-banner">
+          <MonitorPlay size={18} />
+          <div>
+            <strong>Playing in {externalControl.playerName}</strong>
+            <span>
+              {externalControl.capability === 'full'
+                ? 'The controls below are connected to it.'
+                : 'This player cannot be controlled from here — use its own window.'}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              void window.cloudstream?.externalStop();
+              setExternalControl(null);
+              setExternalSnapshot(null);
+            }}
+          >
+            Bring playback back here
+          </button>
+        </div>
+      )}
 
       {/* Above the controls, clear of the seek bar, gone in four seconds. */}
       {toasts.length > 0 && (

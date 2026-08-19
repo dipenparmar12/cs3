@@ -87,6 +87,9 @@ const bootstrap = new BootstrapService(datastore, pluginManager);
 const titleOutcomes = new TitleOutcomeStore(datastore);
 const diagnostics = new DiagnosticsLog();
 const externalPlayers = new ExternalPlayerService();
+externalPlayers.setSnapshotListener((snapshot) =>
+  mainWindow?.webContents.send('external:update', snapshot)
+);
 pluginManager.setDiagnostics(diagnostics);
 
 /**
@@ -505,6 +508,8 @@ app.on('before-quit', async (event) => {
     // A child process with its own window: without this it survives the app and
     // keeps playing, with nothing left on screen to stop it.
     await mpvEngine.shutdown();
+    // A controlled VLC is our child process; without this it outlives the app.
+    await externalPlayers.shutdown();
     contentService.shutdown();
     await torrentEngine.destroy();
   } catch {
@@ -1450,6 +1455,70 @@ ipcMain.handle('player:listExternal', async (_, refresh?: boolean) => ({
   players: refresh ? externalPlayers.refresh() : externalPlayers.list(),
   downloads: externalPlayers.getDownloads(),
 }));
+
+/**
+ * Hands a stream to an external player **and keeps a channel to it** where one
+ * exists.
+ *
+ * The capability comes back with the result so the renderer knows which player
+ * it got: one it can drive, or one it can only report as running. A UI that
+ * offers a seek bar it cannot honour is worse than one that says so.
+ */
+ipcMain.handle('external:open', async (_, playerId: string, url: string) => {
+  if (playerId === 'mpv') {
+    /**
+     * mpv is ours already. Routing it through `MpvEngine` instead of spawning a
+     * second, dumber client gets the full contract — track lists, property
+     * observation, seek that reports back — from code that is already tested.
+     */
+    const result = await mpvEngine.open({ url, title: 'CloudStream' });
+    return { ...result, capability: result.ok ? 'full' : 'none', engine: 'mpv' };
+  }
+  const result = await externalPlayers.openControlled(playerId, url);
+  if (!result.ok) {
+    diagnostics.record({
+      level: 'error',
+      stage: 'playback',
+      source: playerId,
+      url,
+      message: result.error ?? 'The external player could not be started.',
+    });
+  }
+  return { ...result, engine: 'external' };
+});
+
+ipcMain.handle('external:capability', async (_, playerId: string) => ({
+  ok: true,
+  capability: playerId === 'mpv' ? (mpvEngine.isAvailable() ? 'full' : 'none') : externalPlayers.capabilityFor(playerId),
+}));
+
+ipcMain.handle('external:snapshot', async () => ({
+  ok: true,
+  snapshot: externalPlayers.controller()?.current() ?? null,
+}));
+
+ipcMain.handle('external:setPaused', async (_, paused: boolean) => ({
+  ok: (await externalPlayers.controller()?.setPaused(paused)) ?? false,
+}));
+ipcMain.handle('external:seek', async (_, seconds: number) => ({
+  ok: (await externalPlayers.controller()?.seek(seconds)) ?? false,
+}));
+ipcMain.handle('external:setVolume', async (_, percent: number) => ({
+  ok: (await externalPlayers.controller()?.setVolume(percent)) ?? false,
+}));
+ipcMain.handle('external:setMuted', async (_, muted: boolean) => ({
+  ok: (await externalPlayers.controller()?.setMuted(muted)) ?? false,
+}));
+ipcMain.handle('external:setSpeed', async (_, rate: number) => ({
+  ok: (await externalPlayers.controller()?.setSpeed(rate)) ?? false,
+}));
+ipcMain.handle('external:setFullscreen', async () => ({
+  ok: (await externalPlayers.controller()?.setFullscreen()) ?? false,
+}));
+ipcMain.handle('external:stop', async () => {
+  await externalPlayers.shutdown();
+  return { ok: true };
+});
 
 ipcMain.handle('player:openExternal', async (_, playerId: string, url: string) => {
   const result = externalPlayers.open(playerId, url);

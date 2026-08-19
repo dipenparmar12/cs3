@@ -30,3 +30,35 @@ export interface PlaybackState {
   subtitleOffset: number; // in seconds (+/-)
   backend: PlaybackBackend;
 }
+
+/**
+ * How much of an external player we can actually drive.
+ *
+ * `full` means commands reach it and its position comes back — our controls are
+ * a real remote. `none` means the file is playing and we have no channel to it:
+ * the app tracks that a handoff happened and stops there.
+ *
+ * Declared rather than assumed because the alternative is a seek bar that does
+ * nothing. A viewer who drags it, sees no response, and concludes the app is
+ * broken is worse off than one who was told plainly that this player cannot be
+ * controlled from here.
+ */
+export type ExternalControlCapability = 'full' | 'none';
+
+export interface ExternalPlaybackSnapshot {
+  playerId: string;
+  /**
+   * May *downgrade* at runtime from `full` to `none` — VLC without its HTTP
+   * module launches and plays perfectly while never answering a request, and
+   * that is only discoverable by asking.
+   */
+  capability: ExternalControlCapability;
+  state: 'idle' | 'loading' | 'playing' | 'paused' | 'ended' | 'closed' | 'error';
+  positionSeconds: number;
+  durationSeconds: number;
+  paused: boolean;
+  /** 0–100, normalised from whatever scale the player reports natively. */
+  volume: number;
+  muted: boolean;
+  error: string | null;
+}

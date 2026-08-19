@@ -1,4 +1,6 @@
 import { spawn } from 'child_process';
+import { VlcController, controlCapabilityFor } from './externalPlayerControl';
+import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -162,6 +164,66 @@ export const PLAYER_DOWNLOADS: PlayerDownloadInfo[] = [
 
 export class ExternalPlayerService {
   private cache: ExternalPlayer[] | null = null;
+
+  /**
+   * The control channel for the player currently holding a stream, if any.
+   *
+   * One at a time on purpose: "play this elsewhere" replaces the previous
+   * handoff rather than accumulating windows, which matches what pressing it
+   * twice obviously means.
+   */
+  private vlc: VlcController | null = null;
+  private onSnapshot: ((snapshot: ExternalPlaybackSnapshot) => void) | null = null;
+
+  /** Snapshots are forwarded to the renderer by `main.ts`. */
+  public setSnapshotListener(listener: (snapshot: ExternalPlaybackSnapshot) => void): void {
+    this.onSnapshot = listener;
+  }
+
+  /** What the app will be able to do once this player has the stream. */
+  public capabilityFor(playerId: string): 'full' | 'none' {
+    return controlCapabilityFor(playerId);
+  }
+
+  /**
+   * Opens a stream in a player we can also drive.
+   *
+   * Distinct from {@link open}, which is fire-and-forget. Only VLC comes through
+   * here: mpv is handled by `MpvEngine`, which already speaks its IPC properly,
+   * and every other detected player has no control surface worth claiming.
+   */
+  public async openControlled(
+    playerId: string,
+    url: string
+  ): Promise<{ ok: boolean; error?: string; capability: 'full' | 'none' }> {
+    if (playerId !== 'vlc') {
+      const result = this.open(playerId, url);
+      return { ...result, capability: 'none' };
+    }
+
+    const player = this.list().find((entry) => entry.id === 'vlc');
+    if (!player) return { ok: false, error: 'VLC is not installed.', capability: 'none' };
+
+    if (!this.vlc) {
+      this.vlc = new VlcController({
+        onUpdate: (snapshot) => this.onSnapshot?.(snapshot),
+      });
+    }
+
+    const definition = ALL_PLAYERS.find((entry) => entry.id === 'vlc');
+    const started = await this.vlc.start(player.path, url, definition?.args ?? []);
+    return { ...started, capability: started.ok ? 'full' : 'none' };
+  }
+
+  public controller(): VlcController | null {
+    return this.vlc;
+  }
+
+  /** Ends any controlled handoff. Wired into `before-quit`. */
+  public async shutdown(): Promise<void> {
+    await this.vlc?.stop();
+    this.vlc = null;
+  }
 
   /** Resolves executable name in system PATH */
   private findInPath(execName: string): string | null {
