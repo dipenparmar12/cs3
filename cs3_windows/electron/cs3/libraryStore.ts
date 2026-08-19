@@ -1,7 +1,13 @@
 import type { DatastoreManager } from '../datastore';
 import type { TvType } from '../../src/types/api';
 import { WatchStatus } from '../../src/types/api';
-import type { StoredSource, SourceStatus, LibraryEntry, LibraryItemMetadata } from '../../src/types/library';
+import type {
+  StoredSource,
+  SourceStatus,
+  LibraryEntry,
+  LibraryItemMetadata,
+  PlayedSource,
+} from '../../src/types/library';
 import type { TorrentResult } from '../../src/types/torrent';
 import { deadlineFromUrl } from '../sourceCache';
 
@@ -37,11 +43,21 @@ export interface SourceMemory {
   chosenAt: number;
 }
 
-export type { LibraryEntry, StoredSource, SourceStatus, LibraryItemMetadata };
+export type { LibraryEntry, StoredSource, SourceStatus, LibraryItemMetadata, PlayedSource };
 
 const ENTRIES_KEY = 'library_entries';
 const PROGRESS_KEY = 'watch_progress';
 const SOURCE_MEMORY_KEY = 'source_memory';
+/** The source that actually played, per title/season/episode. See `PlayedSource`. */
+const PLAYED_SOURCE_KEY = 'played_sources';
+
+/**
+ * Cap on remembered played sources, oldest evicted first.
+ *
+ * These live in the datastore that Android backups round-trip through, so an
+ * unbounded list grows someone's backup file without limit.
+ */
+const MAX_PLAYED_SOURCES = 400;
 
 /**
  * Fraction of the runtime past which an item counts as finished.
@@ -348,6 +364,184 @@ export class LibraryStore {
       entry.updatedAt = Date.now();
       this.persistEntries();
     }
+  }
+
+  // --- the source that actually played ------------------------------------
+
+  /**
+   * Records that this exact source delivered playback.
+   *
+   * Called once a stream has genuinely started, never when one is merely
+   * selected — {@link SourceMemory} already covers "what the viewer picked",
+   * and the two are different claims. A release that is chosen and then fails
+   * to start is not a release that works, and saving it as one sends the viewer
+   * straight back to a stream that already failed them.
+   *
+   * Re-recording the same source updates it in place and bumps `playCount`
+   * rather than appending: this is one slot per (title, season, episode), which
+   * is the question it answers — "what played this, last time?".
+   */
+  public recordPlayedSource(input: {
+    key: string;
+    season?: number;
+    episode?: number;
+    source: StoredSource;
+    origin: PlayedSource['origin'];
+    positionSeconds?: number;
+    durationSeconds?: number;
+  }): PlayedSource {
+    const played = this.loadPlayedSources();
+    const slot = LibraryStore.playedSlot(input.key, input.season, input.episode);
+    const existing = played.get(slot);
+
+    /**
+     * The link is refreshed on every play, the identity is not.
+     *
+     * A source re-resolved through a new provider call carries a new signed URL
+     * for the same release, and that is the value worth keeping — while
+     * `playCount` and the original discovery time describe the release across
+     * all of them.
+     */
+    const record: PlayedSource = {
+      key: input.key,
+      season: input.season,
+      episode: input.episode,
+      source: {
+        ...input.source,
+        status: 'Played',
+        lastCheckedAt: Date.now(),
+        failureReason: undefined,
+      },
+      origin: input.origin,
+      playedAt: Date.now(),
+      positionSeconds: input.positionSeconds,
+      durationSeconds: input.durationSeconds,
+      playCount: (existing?.playCount ?? 0) + 1,
+    };
+
+    played.set(slot, record);
+    this.persistPlayedSources(played);
+    return record;
+  }
+
+  public getPlayedSource(key: string, season?: number, episode?: number): PlayedSource | null {
+    return this.loadPlayedSources().get(LibraryStore.playedSlot(key, season, episode)) ?? null;
+  }
+
+  /**
+   * Every remembered source, newest first.
+   *
+   * The library screen's answer to "which of my titles have I actually got a
+   * working stream for, and where did it come from?".
+   */
+  public listPlayedSources(limit = 200): PlayedSource[] {
+    return [...this.loadPlayedSources().values()]
+      .sort((a, b) => b.playedAt - a.playedAt)
+      .slice(0, limit);
+  }
+
+  /** Every remembered source for one title, across its episodes. */
+  public getPlayedSourcesForKey(key: string): PlayedSource[] {
+    return [...this.loadPlayedSources().values()]
+      .filter((record) => record.key === key)
+      .sort((a, b) => (a.season ?? 0) - (b.season ?? 0) || (a.episode ?? 0) - (b.episode ?? 0));
+  }
+
+  /**
+   * Replaces the stored link after a re-resolve, keeping everything else.
+   *
+   * The release did not change — its provider, quality and identity are the
+   * same — so overwriting the whole record would throw away `playCount` and the
+   * original `playedAt` to save one URL.
+   */
+  public updatePlayedSourceLink(
+    key: string,
+    source: Pick<StoredSource, 'directUrl' | 'directHeaders' | 'magnet' | 'expiresAt' | 'isM3u8'>,
+    season?: number,
+    episode?: number
+  ): PlayedSource | null {
+    const played = this.loadPlayedSources();
+    const slot = LibraryStore.playedSlot(key, season, episode);
+    const record = played.get(slot);
+    if (!record) return null;
+
+    record.source = {
+      ...record.source,
+      ...source,
+      status: 'Played',
+      lastCheckedAt: Date.now(),
+      failureReason: undefined,
+    };
+    played.set(slot, record);
+    this.persistPlayedSources(played);
+    return record;
+  }
+
+  /**
+   * Marks a saved source as no longer obtainable.
+   *
+   * Kept rather than deleted, and that is deliberate. "This is the release that
+   * used to work and the provider no longer has it" is more useful than the
+   * entry silently vanishing, which reads as the app having forgotten. The UI
+   * can offer to find something else from the same title.
+   */
+  public markPlayedSourceUnavailable(
+    key: string,
+    reason: string,
+    season?: number,
+    episode?: number
+  ): void {
+    const played = this.loadPlayedSources();
+    const slot = LibraryStore.playedSlot(key, season, episode);
+    const record = played.get(slot);
+    if (!record) return;
+
+    record.source = {
+      ...record.source,
+      status: 'Unavailable',
+      failureReason: reason,
+      lastCheckedAt: Date.now(),
+    };
+    played.set(slot, record);
+    this.persistPlayedSources(played);
+  }
+
+  public forgetPlayedSource(key: string, season?: number, episode?: number): boolean {
+    const played = this.loadPlayedSources();
+    const removed = played.delete(LibraryStore.playedSlot(key, season, episode));
+    if (removed) this.persistPlayedSources(played);
+    return removed;
+  }
+
+  /**
+   * One slot per episode, not per title.
+   *
+   * A series is watched an episode at a time and each one resolves to its own
+   * release; keying on the title alone would have episode 6 overwrite the
+   * source that played episode 5.
+   */
+  private static playedSlot(key: string, season?: number, episode?: number): string {
+    return `${key}::${season ?? ''}::${episode ?? ''}`;
+  }
+
+  private loadPlayedSources(): Map<string, PlayedSource> {
+    const stored = this.datastore.getObject<PlayedSource[]>(PLAYED_SOURCE_KEY, []);
+    const map = new Map<string, PlayedSource>();
+    for (const record of Array.isArray(stored) ? stored : []) {
+      if (!record?.key || !record.source) continue;
+      map.set(LibraryStore.playedSlot(record.key, record.season, record.episode), record);
+    }
+    return map;
+  }
+
+  private persistPlayedSources(played: Map<string, PlayedSource>): void {
+    /**
+     * Bounded, oldest-played evicted first. Each record is a fraction of a KB,
+     * but this lives in the datastore that Android backups round-trip through,
+     * and an unbounded list there grows a user's backup without limit.
+     */
+    const all = [...played.values()].sort((a, b) => b.playedAt - a.playedAt);
+    this.datastore.setObject(PLAYED_SOURCE_KEY, all.slice(0, MAX_PLAYED_SOURCES));
   }
 
   // --- watch progress ------------------------------------------------------

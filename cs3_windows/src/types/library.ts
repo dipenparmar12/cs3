@@ -93,3 +93,70 @@ export interface LibraryEntry {
   lastSourcesRefreshedAt?: number;
   metadata?: LibraryItemMetadata;
 }
+
+/**
+ * The exact source that played, kept so it can be played again.
+ *
+ * The library already remembers *what* was watched. This remembers **which
+ * stream delivered it** — which provider, from which extension in which
+ * repository, at what quality, and the link itself.
+ *
+ * The distinction from {@link StoredSource} in `LibraryEntry.sources` is
+ * intent, not shape. That list is everything discovery *found*, refreshed
+ * wholesale and expected to churn. This is the one entry that was proved to
+ * work by playing it, and it survives a refresh that replaces the list.
+ *
+ * **The link is stored as a cached value, never as the identity.** A provider
+ * URL is a temporary address on someone else's CDN, signed and typically good
+ * for minutes; treating it as what the record *is* would make every saved
+ * source dead within the hour. The durable half is `origin` — the query that
+ * produced it — which can be replayed to obtain a fresh link for the same
+ * release. That is why both are here.
+ */
+export interface PlayedSource {
+  /** Canonical library key: `canonicalKey(title, year)`. */
+  key: string;
+  season?: number;
+  episode?: number;
+
+  /** Provider identity, quality, capabilities, and the link with its deadline. */
+  source: StoredSource;
+
+  /**
+   * What to replay when the link has died.
+   *
+   * Without this a saved source is a URL and nothing else — recoverable only by
+   * the user finding the title again by hand, which is exactly the work this
+   * feature exists to remove.
+   */
+  origin: {
+    /** The provider URL the detail page was loaded from. */
+    mediaUrl: string;
+    title: string;
+    year?: number;
+    episodeTitle?: string;
+  };
+
+  /**
+   * When it last actually played — not when it was chosen.
+   *
+   * A source picked and then abandoned because it would not start is not a
+   * source that worked, and recording it as one would send the viewer straight
+   * back to a stream that already failed them.
+   */
+  playedAt: number;
+  /** How far in, so "play the source that worked" can also resume. */
+  positionSeconds?: number;
+  durationSeconds?: number;
+  /** Bumped each time it plays; a source that keeps working is worth ranking up. */
+  playCount: number;
+}
+
+/** Why a saved source could not simply be reused. */
+export type PlayedSourceResolution =
+  /** The stored link is still good and was used as-is. */
+  | 'reused'
+  /** The link had expired or died; the same release was re-resolved. */
+  | 'refreshed'
+  /** The release is gone from the provider; nothing equivalent was found. */
+  | 'unavailable';
