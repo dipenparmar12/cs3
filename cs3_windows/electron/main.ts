@@ -1489,6 +1489,30 @@ ipcMain.handle('external:open', async (_, playerId: string, url: string) => {
   return { ...result, engine: 'external' };
 });
 
+/**
+ * Manual rollback, for an update that installed and then misbehaved in a way
+ * the load check could not see — a scraper that returns nothing, rather than an
+ * archive that will not link.
+ */
+ipcMain.handle(
+  'extension:rollback',
+  async (_, repositoryUrl: string, internalName: string) => {
+    try {
+      return await pluginManager.rollbackPlugin(repositoryUrl, internalName);
+    } catch (error) {
+      return { ...fail(error), message: 'The previous version could not be restored.' };
+    }
+  }
+);
+
+ipcMain.handle(
+  'extension:hasPreviousVersion',
+  async (_, repositoryUrl: string, internalName: string) => ({
+    ok: true,
+    available: pluginManager.hasPreviousVersion(repositoryUrl, internalName),
+  })
+);
+
 ipcMain.handle('external:capability', async (_, playerId: string) => ({
   ok: true,
   capability: playerId === 'mpv' ? (mpvEngine.isAvailable() ? 'full' : 'none') : externalPlayers.capabilityFor(playerId),

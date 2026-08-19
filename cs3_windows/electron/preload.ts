@@ -486,6 +486,21 @@ export interface CloudStreamElectronAPI {
    * URL has the provider's headers already applied.
    */
   openInExternalPlayer: (playerId: string, url: string) => Promise<Envelope>;
+  /**
+   * Puts back the archive an update replaced.
+   *
+   * A failed update rolls itself back; this is for the case the load check
+   * cannot see — an extension that links fine and then scrapes nothing.
+   */
+  rollbackExtension: (
+    repositoryUrl: string,
+    internalName: string
+  ) => Promise<Envelope & { message: string }>;
+  hasPreviousExtensionVersion: (
+    repositoryUrl: string,
+    internalName: string
+  ) => Promise<Envelope & { available: boolean }>;
+
   // --- external playback, with a control channel where one exists ---
   /**
    * Hands the stream over **and** reports whether we can drive that player.
@@ -1065,6 +1080,10 @@ const api: CloudStreamElectronAPI = {
   listExternalPlayers: (refresh) => ipcRenderer.invoke('player:listExternal', refresh),
   openInExternalPlayer: (playerId, url) =>
     ipcRenderer.invoke('player:openExternal', playerId, url),
+  rollbackExtension: (repositoryUrl, internalName) =>
+    ipcRenderer.invoke('extension:rollback', repositoryUrl, internalName),
+  hasPreviousExtensionVersion: (repositoryUrl, internalName) =>
+    ipcRenderer.invoke('extension:hasPreviousVersion', repositoryUrl, internalName),
   openControlledExternal: (playerId, url) => ipcRenderer.invoke('external:open', playerId, url),
   getExternalCapability: (playerId) => ipcRenderer.invoke('external:capability', playerId),
   getExternalSnapshot: () => ipcRenderer.invoke('external:snapshot'),
