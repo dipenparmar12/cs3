@@ -53,6 +53,15 @@ export interface MpvSnapshot {
   volume: number;
   muted: boolean;
   speed: number;
+  /**
+   * True when the video is rendering inside the app window.
+   *
+   * Reported rather than assumed: attaching a surface is an attempt that can
+   * fail — an unsupported platform, a handle the OS declines — and a player
+   * that hid its controls for an embedded surface which never appeared would
+   * leave the viewer with a detached mpv window and nothing to drive it.
+   */
+  embedded: boolean;
   fullscreen: boolean;
 
   width: number;
@@ -101,11 +110,20 @@ export interface MpvOpenRequest {
   /**
    * A native window handle to render into, passed straight to `--wid`.
    *
-   * Unused today — the engine renders into its own window. It is here because
-   * embedding is the one change that would otherwise reach into every layer of
-   * this contract at once.
+   * Set by `MpvEngine` itself from the surface it attaches, not by callers —
+   * the handle only exists after a surface has been created, and creating one
+   * is the engine's decision. See `MpvSurface`.
    */
   windowHandle?: string;
+  /**
+   * Where the video should sit inside the app window, in CSS pixels relative to
+   * the content area.
+   *
+   * Present when the player wants an embedded surface. Absent means "open a
+   * window of your own", which is what every non-Windows platform gets and what
+   * embedding falls back to when it cannot be arranged.
+   */
+  surfaceBounds?: { x: number; y: number; width: number; height: number };
 }
 
 export interface MpvCommandResult {
@@ -123,6 +141,8 @@ export interface MpvEngineStatus {
   version: string | null;
   /** `d3d11va`, `nvdec`, `vulkan`, `dxva2`… — reported, not chosen from. */
   hardwareDecoders: string[];
+  /** Whether this platform can host the video inside the app window at all. */
+  canEmbed: boolean;
   /** Which video output the running process settled on. Null when not running. */
   videoOutput: string | null;
   sessionId: string;

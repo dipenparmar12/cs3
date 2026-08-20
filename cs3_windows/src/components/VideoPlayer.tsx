@@ -1342,13 +1342,96 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const seekBy = useCallback(
     (delta: number) => {
       const video = videoRef.current;
+      /**
+       * The playhead comes from whichever engine actually holds the stream.
+       *
+       * This read `video.currentTime` unconditionally, which for the native
+       * engine and for an external player is permanently `0` — so every
+       * fast-forward and rewind seeked to `±delta` from the start of the film,
+       * and the arrow keys appeared to do nothing except jump to the beginning.
+       * `currentTime` is the app's single view of position and is fed by
+       * whichever engine is playing.
+       */
+      if (isNativeEngine || externalControl?.capability === 'full') {
+        seekTo(currentTime + delta);
+        return;
+      }
       if (!video) return;
       seekTo((isConverted ? playbackOffset : 0) + video.currentTime + delta);
     },
-    [seekTo, isConverted, playbackOffset]
+    [seekTo, isConverted, playbackOffset, isNativeEngine, externalControl?.capability, currentTime]
+  );
+
+  /**
+   * The last values this app pushed out to an engine.
+   *
+   * This is the thing that keeps two-way synchronisation from becoming a loop.
+   * The app pushes volume to mpv; mpv observes the property and reports it
+   * back; naively accepting that sets state, which re-runs the push effect,
+   * which pushes again. Comparing against what we last sent breaks it: an
+   * echo of our own value is ignored, and a value the engine arrived at by
+   * itself — a media key, a wheel over mpv's window — is not.
+   */
+  const pushedToEngine = useRef({ volume: 1, muted: false, speed: 1 });
+
+  /**
+   * Whether the video is rendering inside this window.
+   *
+   * Reported by the engine, never assumed: attaching a native surface is an
+   * attempt that fails on any non-Windows platform and can fail on Windows too.
+   * A player that adapted its controls for an embedded surface which never
+   * appeared would leave the viewer with a detached mpv window and a UI
+   * pretending otherwise.
+   */
+  const [embedded, setEmbedded] = useState(false);
+
+  /**
+   * The engine is the authority on playback state; the UI renders what it says.
+   *
+   * §2's single source of truth, in the only place it can honestly live. mpv
+   * has the decoder's own clock and its own property observations, so any state
+   * this component kept in parallel would drift within a minute and disagree
+   * after every seek. What travels the other way is *intent* — a press of play,
+   * a drag of the slider — and that is a command, not a second copy of state.
+   */
+  const applyEngineState = useCallback(
+    (state: { paused: boolean; volume: number; muted: boolean; speed: number }) => {
+      setIsPlaying(!state.paused);
+
+      const pushed = pushedToEngine.current;
+      // A float round-trips through mpv's 0-130 integer scale, so exact
+      // equality would treat every echo as a change and loop forever.
+      if (Math.abs(state.volume - pushed.volume) > 0.02) {
+        pushed.volume = state.volume;
+        setVolume(state.volume);
+      }
+      if (state.muted !== pushed.muted) {
+        pushed.muted = state.muted;
+        setIsMuted(state.muted);
+      }
+      if (Math.abs(state.speed - pushed.speed) > 0.01) {
+        pushed.speed = state.speed;
+        setSpeed(state.speed);
+      }
+    },
+    []
   );
 
   const toggleFullscreen = useCallback(async () => {
+    /**
+     * Fullscreen belongs to whoever is drawing the picture.
+     *
+     * When mpv holds the stream in its own window, fullscreening the Electron
+     * container blows up a panel of controls over an empty surface and leaves
+     * the video the size it was — visibly the wrong thing, and reported as
+     * "fullscreen does nothing". The engine has its own fullscreen; that is the
+     * one that means anything here.
+     */
+    if (isNativeEngine && !embedded) {
+      await window.cloudstream?.mpvSetFullscreen(!isFullscreen);
+      setIsFullscreen((value) => !value);
+      return;
+    }
     const container = containerRef.current;
     if (!container) return;
     try {
@@ -1362,7 +1445,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     } catch (err) {
       console.warn('Failed to toggle fullscreen:', err);
     }
-  }, []);
+  }, [isNativeEngine, embedded, isFullscreen]);
 
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -1488,6 +1571,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     // Also the single place the ref is kept current, so a newly attached element
     // starts at the volume the viewer last chose rather than at 1.0.
     audioSettings.current = { volume, muted: isMuted };
+    // What was last pushed outward. See `applyEngineState` for why.
+    pushedToEngine.current = { volume, muted: isMuted, speed };
 
     /**
      * Volume, mute and speed follow the stream wherever it is playing.
@@ -2200,11 +2285,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setCurrentTime(position);
             if (total > 0) setDuration(total);
           }}
-          /* The player's control bar is the only transport for this engine, and
-             it has no element to learn from — so the engine tells it. Without
-             this the button read "Play" over a film that was playing, and the
-             first press paused it. */
-          onPausedChange={(paused) => setIsPlaying(!paused)}
+          /* The player's control bar is the only transport for this engine
+             and has no element to learn from, so the engine tells it. */
+          onEngineState={applyEngineState}
+          onEmbeddedChange={setEmbedded}
           onEnded={() => {
             if (nextEpisode && onSelectEpisode && !upNextDismissed) onSelectEpisode(nextEpisode);
           }}

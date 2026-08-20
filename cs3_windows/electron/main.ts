@@ -18,6 +18,7 @@ import { setHttpFetch } from './torrent/http';
 import { ResilientFetch, classifyNetworkError } from './networkResilience';
 import { BinaryDownloader } from './binaryDownloader';
 import { MpvEngine } from './media/mpvEngine';
+import { MpvSurface } from './media/mpvSurface';
 import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
 import { PlaybackSessionManager } from './playbackSession';
@@ -214,6 +215,30 @@ const mpvEngine = new MpvEngine({
   resolveBinary: (name) => binaryDownloader.resolveBinary(name),
   onUpdate: (snapshot) => mainWindow?.webContents.send('mpv:update', snapshot),
   diagnostics,
+  /**
+   * The embedded video surface, wired here because this is the only layer that
+   * holds a `BrowserWindow`.
+   *
+   * `undefined` on platforms that cannot do it, which is how `MpvEngine`
+   * answers `canEmbed` without knowing anything about windows. The main window
+   * is resolved at call time rather than captured: it is created after the
+   * services are wired and, on macOS, the app outlives it.
+   */
+  createSurface: MpvSurface.supported
+    ? () => {
+        const parent = mainWindow;
+        if (!parent || parent.isDestroyed()) return null;
+        const surface = new MpvSurface();
+        return {
+          attach: (bounds) => surface.attach(parent, bounds),
+          setBounds: (bounds) => surface.setBounds(bounds),
+          detach: () => surface.detach(),
+          get attached() {
+            return surface.attached;
+          },
+        };
+      }
+    : undefined,
 });
 
 function nativeEnginePolicy(): NativeEngineCapability['policy'] {
@@ -1896,7 +1921,32 @@ ipcMain.handle('media:getPlaybackDiagnostics', async (_, sessionId?: string) => 
  */
 ipcMain.handle('mpv:status', async () => ({ ok: true, status: await mpvEngine.status() }));
 
+const NATIVE_ENGINE_EMBED_KEY = 'native_engine_embed';
+
+/**
+ * Whether the video should render inside the app window. On by default.
+ *
+ * A setting rather than a fixed behaviour because embedding is a *positioned
+ * native child window*, not a composited surface, and there are real setups
+ * where a separate window is better: a second monitor to put the film on, a
+ * window manager that mishandles owned windows, an HDR path that only engages
+ * for a top-level window. Those are not bugs this can fix, and a viewer who
+ * hits one needs a way out that is not "stop using the engine".
+ */
+function nativeEngineEmbeds(): boolean {
+  return datastore.getBool(NATIVE_ENGINE_EMBED_KEY, true);
+}
+
 ipcMain.handle('mpv:open', async (_, request: MpvOpenRequest) => {
+  /**
+   * The bounds are stripped here rather than withheld by the renderer.
+   *
+   * The renderer always measures and always sends — it is the only side that
+   * knows where the video area is — and this is the only side that knows
+   * whether embedding is wanted. Absent bounds mean "open a window of your
+   * own", which is exactly what turning the setting off should do.
+   */
+  if (!nativeEngineEmbeds()) request = { ...request, surfaceBounds: undefined };
   const result = await mpvEngine.open(request);
   if (!result.ok) {
     diagnostics.record({
@@ -1928,6 +1978,21 @@ ipcMain.handle('mpv:setSubtitleDelay', async (_, seconds: number) =>
 );
 ipcMain.handle('mpv:stop', async () => mpvEngine.stop());
 
+/**
+ * The video rectangle, in CSS pixels relative to the window's content area.
+ *
+ * Sent by the renderer whenever the player's layout moves — which is often, and
+ * has to be cheap: this is a `SetWindowPos` on a native child window, not a
+ * restart of anything. mpv keeps rendering into the same handle throughout.
+ */
+ipcMain.handle(
+  'mpv:setSurfaceBounds',
+  async (_, bounds: { x: number; y: number; width: number; height: number }) => {
+    mpvEngine.setSurfaceBounds(bounds);
+    return { ok: true };
+  }
+);
+
 /** A pull for the current state, for a player that mounted mid-playback. */
 ipcMain.handle('mpv:snapshot', async () => ({ ok: true, snapshot: mpvEngine.snapshot() }));
 
@@ -1935,7 +2000,21 @@ ipcMain.handle('mpv:getPolicy', async () => ({
   ok: true,
   policy: nativeEnginePolicy(),
   available: mpvEngine.isAvailable(),
+  embed: nativeEngineEmbeds(),
+  canEmbed: mpvEngine.canEmbed,
 }));
+
+ipcMain.handle('mpv:setEmbed', async (_, embed: boolean) => {
+  datastore.setBool(NATIVE_ENGINE_EMBED_KEY, embed);
+  /**
+   * Restarted, not adjusted. `--wid` is a command-line argument: mpv decides
+   * between rendering into a handle and creating a window once, at startup,
+   * and there is no property that changes it afterwards.
+   */
+  await mpvEngine.shutdown();
+  logger.info('mpv', 'embed_setting_changed', { embed });
+  return { ok: true, embed };
+});
 
 ipcMain.handle('mpv:setPolicy', async (_, policy: NativeEngineCapability['policy']) => {
   if (policy !== 'off' && policy !== 'auto' && policy !== 'aggressive') {

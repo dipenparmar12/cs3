@@ -185,6 +185,65 @@ try {
   check('the process is reused across files rather than respawned', () => {
     assert.equal(engine.isRunning(), true);
   });
+
+  /**
+   * The surface handshake, driven against a real process.
+   *
+   * `--wid` is decided on mpv's command line and never afterwards, so the order
+   * here is the whole contract: the surface has to be created, produce a
+   * handle, and have that handle on the argument list *before* the spawn. A
+   * mock of mpv would assert what we assumed about that ordering; a real
+   * process either takes the argument or refuses to start.
+   *
+   * A surface that declines to attach is exercised in the same pass, because it
+   * is the common case — every non-Windows platform, and any Windows machine
+   * where the handle cannot be had. It must degrade to a detached window rather
+   * than to a failure.
+   */
+  await engine.shutdown();
+  await sleep(400);
+
+  const surfaceCalls: string[] = [];
+  const refusing = new MpvEngine({
+    resolveBinary: (name) => which(name),
+    onUpdate: () => undefined,
+    createSurface: () => {
+      surfaceCalls.push('created');
+      return {
+        attach: () => {
+          surfaceCalls.push('attach');
+          return null; // Could not get a handle — the ordinary failure.
+        },
+        setBounds: () => surfaceCalls.push('setBounds'),
+        detach: () => surfaceCalls.push('detach'),
+        get attached() {
+          return false;
+        },
+      };
+    },
+  });
+
+  const refusedOpen = await refusing.open({
+    url: fixture,
+    title: 'surface fallback',
+    surfaceBounds: { x: 0, y: 0, width: 640, height: 360 },
+  });
+
+  check('a surface that cannot attach falls back to a window of its own', () => {
+    assert.equal(refusedOpen.ok, true, refusedOpen.error ?? '');
+    assert.deepEqual(surfaceCalls, ['created', 'attach', 'detach']);
+    // The claim the player renders from. Reporting embedding that did not
+    // happen would reserve space for a surface that is not there.
+    assert.equal(refusing.snapshot().embedded, false);
+  });
+
+  check('canEmbed reflects whether the host offered a surface at all', () => {
+    assert.equal(refusing.canEmbed, true, 'a host that supplied a factory can embed');
+    assert.equal(engine.canEmbed, false, 'a host that supplied none cannot');
+  });
+
+  await refusing.shutdown();
+  await sleep(300);
 } finally {
   await engine.shutdown();
   await sleep(300);

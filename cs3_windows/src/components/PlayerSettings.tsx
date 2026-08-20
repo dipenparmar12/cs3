@@ -29,6 +29,9 @@ export const PlayerSettings: React.FC = () => {
   const [nativeVersion, setNativeVersion] = useState<string | null>(null);
   const [nativeDecoders, setNativeDecoders] = useState<string[]>([]);
   const [nativePolicy, setNativePolicy] = useState<NativePolicy>('auto');
+  const [nativeEmbed, setNativeEmbed] = useState(true);
+  /** Whether the platform can host an embedded surface at all — Windows only. */
+  const [nativeCanEmbed, setNativeCanEmbed] = useState(false);
   const [installingNative, setInstallingNative] = useState(false);
   const [nativeProgress, setNativeProgress] = useState<string | null>(null);
 
@@ -87,7 +90,11 @@ export const PlayerSettings: React.FC = () => {
       } else {
         setNativeAvailable(false);
       }
-      if (policy?.ok) setNativePolicy(policy.policy);
+      if (policy?.ok) {
+        setNativePolicy(policy.policy);
+        setNativeEmbed(policy.embed);
+        setNativeCanEmbed(policy.canEmbed);
+      }
     };
     void loadNative();
 
@@ -95,6 +102,16 @@ export const PlayerSettings: React.FC = () => {
       active = false;
     };
   }, []);
+
+  const handleChangeNativeEmbed = async (embed: boolean) => {
+    setNativeEmbed(embed);
+    await window.cloudstream?.setNativeEngineEmbed(embed);
+    flash(
+      embed
+        ? 'Video will render inside the app window. This restarts the engine.'
+        : 'Video will open in its own window. This restarts the engine.'
+    );
+  };
 
   const handleChangeNativePolicy = async (policy: NativePolicy) => {
     setNativePolicy(policy);
@@ -304,6 +321,37 @@ export const PlayerSettings: React.FC = () => {
             <option value="aggressive">Always, when the browser cannot play it</option>
             <option value="off">Never</option>
           </select>
+        </SettingRow>
+
+        <SettingRow
+          label="Render video inside the app window"
+          note={
+            nativeCanEmbed
+              ? nativeEmbed
+                ? 'On — one window'
+                : 'Off — mpv opens its own window'
+              : 'Not available on this platform'
+          }
+          hint={
+            <>
+              The engine renders into a native child window positioned over the player
+              area, so the app looks like one program rather than two.
+              <br />
+              What it is not is a composited surface: that window sits above the whole
+              page and nothing can be drawn on top of it, so the controls get a band of
+              their own instead of overlaying the picture. Turning this off is the better
+              choice if you want the film on a second monitor, or if your setup only
+              engages HDR for a top-level window.
+            </>
+          }
+        >
+          <input
+            type="checkbox"
+            checked={nativeEmbed}
+            onChange={(event) => void handleChangeNativeEmbed(event.target.checked)}
+            disabled={nativeAvailable === false || !nativeCanEmbed}
+            aria-label="Render video inside the app window"
+          />
         </SettingRow>
 
         {nativeAvailable === false && (

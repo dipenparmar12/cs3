@@ -38,15 +38,35 @@ interface NativeEngineStageProps {
   /** Position reporting, so watch progress survives a stream we do not render. */
   onProgress?: (positionSeconds: number, durationSeconds: number) => void;
   /**
-   * Transport state, reported up because the player's own control bar is the
-   * only transport for this engine and it has no `<video>` to learn from.
+   * The engine's transport state, reported up.
    *
-   * Without this the play/pause button reads the element's events, which never
-   * fire here — so it showed "Play" over a film that was playing, and the first
-   * press paused it. The engine is the authority; the button renders what the
-   * engine says.
+   * The player's control bar is the only transport for this engine and it has
+   * no `<video>` to learn from — without this the play/pause button read the
+   * element's events, which never fire here, so it showed "Play" over a playing
+   * film and the first press paused it.
+   *
+   * Volume, mute and speed travel with it because **mpv is a real window the
+   * viewer can touch**. Its own key bindings are disabled (`--no-config`,
+   * `--osc=no`) but the volume can still move from mpv's side — a wheel over
+   * the window, a media key — and an app whose slider disagrees with what is
+   * coming out of the speakers is worse than one with no slider. The engine is
+   * the authority for all of it; see `pushedToEngine` in `VideoPlayer` for how
+   * that avoids becoming a feedback loop.
    */
-  onPausedChange?: (paused: boolean) => void;
+  onEngineState?: (state: {
+    paused: boolean;
+    volume: number;
+    muted: boolean;
+    speed: number;
+  }) => void;
+  /**
+   * Whether the video ended up inside our window.
+   *
+   * The player needs it because embedding changes what its own controls can do
+   * — fullscreen in particular, which means two different things depending on
+   * which window the picture is in.
+   */
+  onEmbeddedChange?: (embedded: boolean) => void;
   onEnded?: () => void;
   /** "Play it here instead" — the ffmpeg ladder, forced. */
   onFallbackToBuiltIn?: () => void;
@@ -74,14 +94,69 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
   initialMuted,
   externalSubtitles,
   onProgress,
-  onPausedChange,
+  onEngineState,
+  onEmbeddedChange,
   onEnded,
   onFallbackToBuiltIn,
   onError,
 }) => {
   const [snapshot, setSnapshot] = useState<MpvSnapshot | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
+  /**
+   * The element whose rectangle the embedded surface tracks.
+   *
+   * A native child window is not part of Chromium's compositor, so nothing can
+   * be drawn *over* it — which is the whole constraint this layout is built
+   * around. The surface covers exactly this element and the controls live
+   * outside it, rather than overlaying the picture as they do for a `<video>`.
+   */
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
   const endedRef = useRef(false);
+
+  /**
+   * Keeps the native surface glued to the element that stands in for it.
+   *
+   * A `ResizeObserver` on the element plus a window listener, because the two
+   * catch different things: the observer sees layout changes (the source panel
+   * opening, the window resizing) and the window listener catches a move to
+   * another monitor, which changes the element's screen position without
+   * changing its size at all.
+   *
+   * The rect is sent unconditionally rather than only when embedded. It is one
+   * cheap IPC call, and gating it on a snapshot that arrives *after* the window
+   * is created would leave the first frame in the wrong place.
+   */
+  useEffect(() => {
+    const element = surfaceRef.current;
+    if (!element) return;
+
+    let frame = 0;
+    const report = () => {
+      cancelAnimationFrame(frame);
+      // Coalesced to one report per frame: a drag-resize fires continuously,
+      // and a `SetWindowPos` per mousemove makes the video visibly lag the
+      // window it is supposed to be inside.
+      frame = requestAnimationFrame(() => {
+        const rect = element.getBoundingClientRect();
+        void window.cloudstream?.mpvSetSurfaceBounds?.({
+          x: rect.left,
+          y: rect.top,
+          width: rect.width,
+          height: rect.height,
+        });
+      });
+    };
+
+    report();
+    const observer = new ResizeObserver(report);
+    observer.observe(element);
+    window.addEventListener('resize', report);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener('resize', report);
+    };
+  }, []);
 
   useEffect(() => {
     const unsubscribe = window.cloudstream?.onMpvUpdate((next) => setSnapshot(next));
@@ -97,12 +172,22 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
     setOpenError(null);
 
     void (async () => {
+      /**
+       * The rect travels with the open request, because `--wid` is decided on
+       * mpv's command line: it chooses between rendering into a handle and
+       * creating a window once, at startup, and no property changes it after.
+       * Sending the bounds afterwards would be too late for the first launch.
+       */
+      const rect = surfaceRef.current?.getBoundingClientRect();
       const result = await window.cloudstream?.openInNativeEngine({
         url,
         headers,
         title,
         startSeconds,
         volume: initialMuted ? 0 : Math.round(initialVolume * 100),
+        surfaceBounds: rect
+          ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
+          : undefined,
       });
       if (cancelled) return;
       if (!result?.ok) {
@@ -161,16 +246,24 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
     /**
      * Anything that is not `playing` reads as paused to the control bar.
      * Buffering is deliberately *not* folded into the player's `isBuffering`:
-     * that flag drives an overlay that says "Buffering from peers…", which is a
+     * that flag drives an overlay saying "Buffering from peers…", which is a
      * torrent's story and a lie about an HTTP stream. The stage says so itself.
      */
-    onPausedChange?.(snapshot.paused || snapshot.state !== 'playing');
+    onEngineState?.({
+      paused: snapshot.paused || snapshot.state !== 'playing',
+      // mpv's scale is 0-130; the app's is 0-1.
+      volume: Math.min(1, Math.max(0, snapshot.volume / 100)),
+      muted: snapshot.muted,
+      speed: snapshot.speed,
+    });
+
+    onEmbeddedChange?.(snapshot.embedded);
 
     if (snapshot.state === 'ended' && !endedRef.current) {
       endedRef.current = true;
       onEnded?.();
     }
-  }, [snapshot, onProgress, onPausedChange, onEnded, onError]);
+  }, [snapshot, onProgress, onEngineState, onEmbeddedChange, onEnded, onError]);
 
   const loading = !snapshot || snapshot.state === 'loading' || snapshot.state === 'buffering';
 
@@ -208,52 +301,73 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
    */
   if (openError) return null;
 
+  const embedded = snapshot?.embedded ?? false;
+
   return (
-    <div className="native-stage">
-      <div className="native-stage__surface">
-        {loading ? (
+    <div className={`native-stage${embedded ? ' native-stage--embedded' : ''}`}>
+      {/*
+        The surface, and the reason it is an empty element.
+
+        When embedded, mpv paints a native child window exactly over this
+        rectangle — nothing React renders inside it would be visible, because a
+        native window sits above the whole compositor. So it holds only the
+        placeholder shown *before* the first frame arrives, and the moment
+        embedding is confirmed it goes quiet and gets out of the way.
+      */}
+      <div className="native-stage__surface" ref={surfaceRef}>
+        {loading && (
           <>
             <Loader2 className="spin" size={36} />
             <p>Starting the native engine…</p>
           </>
-        ) : (
+        )}
+
+        {/*
+          Once embedded, everything in here is behind mpv's window and cannot be
+          seen. The explanation is only worth drawing when the video really is
+          somewhere else — which is exactly the case it explains.
+        */}
+        {!loading && !embedded && (
           <>
             <Cpu size={34} />
             <p>Playing in the native engine window</p>
+            <span className="muted native-stage__why">
+              This stream is decoded on the GPU, untouched — full resolution, HDR and the
+              original audio layout are preserved. The controls here drive it.
+            </span>
           </>
         )}
+      </div>
+
+      {/*
+        Everything the viewer needs to see, outside the surface rectangle.
+
+        A native child window sits above Chromium's compositor entirely, so
+        nothing can be drawn over the video — there is no z-index that wins.
+        Overlaying the controls is therefore not an option that was rejected for
+        taste; it is not available. They get a band of their own instead, and
+        the surface is sized to the space that is left.
+      */}
+      <div className="native-stage__bar">
         <span className="muted native-stage__detail">
           {decoderNote ??
             (video
               ? `${video.codec.toUpperCase()} ${video.bitDepth > 8 ? `${video.bitDepth}-bit ` : ''}${video.width}×${video.height}`
               : capability.explanation)}
         </span>
-        <span className="muted native-stage__why">
-          {/**
-           * Why the video is not in this window is the question a viewer will
-           * actually have, so it is answered on the surface rather than in a
-           * tooltip. Nothing re-encodes here, which is the whole benefit.
-           */}
-          This stream is decoded on the GPU, untouched — full resolution, HDR and
-          the original audio layout are preserved. The player controls below drive it.
-        </span>
 
         {/*
           Only what the player's own control bar cannot do.
 
           There used to be a full transport row along the bottom of this stage —
-          play, seek, volume, mute, tracks, fullscreen — and it was a duplicate
-          of the player's, which already routes every one of those to mpv (see
-          `togglePlay`, `seekTo` and the volume effect in `VideoPlayer`). Worse,
-          it was *unusable*: `.player__controls` is `z-index: 5` and pinned to
-          the bottom, this stage is `z-index: 3`, so the whole row sat underneath
-          it, swallowing nothing and receiving no clicks — the reported
-          "controls that cannot be clicked". Its overflow is also what produced
-          the horizontal scrollbar with nothing to scroll to.
+          play, seek, volume, mute, tracks, fullscreen — duplicating the
+          player's, which already routes every one of those to mpv. Worse, it
+          was unusable: `.player__controls` is `z-index: 5` and pinned to the
+          bottom, the stage is `z-index: 3`, so the row sat underneath it and
+          received no clicks at all.
 
-          What is genuinely mpv-only is track selection and fullscreening mpv's
-          own window, so that is all that is left, and it sits in the surface
-          where nothing covers it.
+          What is genuinely mpv-only is track selection and fullscreen, so that
+          is what is left.
         */}
         {!loading && (
           <div className="native-stage__tracks">
@@ -301,16 +415,24 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
               </label>
             )}
 
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() =>
-                void window.cloudstream?.mpvSetFullscreen(!(snapshot?.fullscreen ?? false))
-              }
-              title="Fullscreen the engine's own window"
-            >
-              <Maximize size={14} /> Fullscreen
-            </button>
+            {/*
+              Only offered when the video is in its own window. Fullscreening a
+              window that is already inside ours would tear it out of the app,
+              which is the opposite of what embedding is for — the player's own
+              fullscreen control covers that case.
+            */}
+            {!embedded && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() =>
+                  void window.cloudstream?.mpvSetFullscreen(!(snapshot?.fullscreen ?? false))
+                }
+                title="Fullscreen the engine's own window"
+              >
+                <Maximize size={14} /> Fullscreen
+              </button>
+            )}
 
             {onFallbackToBuiltIn && (
               <button
@@ -319,7 +441,7 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
                 onClick={onFallbackToBuiltIn}
                 title="Convert this stream and play it inside the app window instead"
               >
-                <RotateCcw size={14} /> Play in this window
+                <RotateCcw size={14} /> Convert instead
               </button>
             )}
           </div>

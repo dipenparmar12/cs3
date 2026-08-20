@@ -555,11 +555,30 @@ export interface CloudStreamElectronAPI {
   mpvAddSubtitle: (url: string, title?: string, language?: string) => Promise<MpvCommandResult>;
   mpvSetSubtitleDelay: (seconds: number) => Promise<MpvCommandResult>;
   mpvStop: () => Promise<MpvCommandResult>;
+  /**
+   * Where the video should sit inside the window, in CSS pixels relative to the
+   * content area. Sent whenever the player's layout moves.
+   */
+  mpvSetSurfaceBounds: (bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => Promise<Envelope>;
+  /** Renders the video inside the app window, where the platform allows it. */
+  setNativeEngineEmbed: (embed: boolean) => Promise<Envelope & { embed: boolean }>;
   /** A pull, for a player that mounted while something was already playing. */
   getMpvSnapshot: () => Promise<Envelope & { snapshot: MpvSnapshot }>;
   onMpvUpdate: (callback: (snapshot: MpvSnapshot) => void) => () => void;
   getNativeEnginePolicy: () => Promise<
-    Envelope & { policy: 'off' | 'auto' | 'aggressive'; available: boolean }
+    Envelope & {
+      policy: 'off' | 'auto' | 'aggressive';
+      available: boolean;
+      /** Whether the video renders inside the app window. */
+      embed: boolean;
+      /** Whether this platform can do that at all. */
+      canEmbed: boolean;
+    }
   >;
   setNativeEnginePolicy: (
     policy: 'off' | 'auto' | 'aggressive'
@@ -1210,6 +1229,8 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('mpv:addSubtitle', url, title, language),
   mpvSetSubtitleDelay: (seconds) => ipcRenderer.invoke('mpv:setSubtitleDelay', seconds),
   mpvStop: () => ipcRenderer.invoke('mpv:stop'),
+  mpvSetSurfaceBounds: (bounds) => ipcRenderer.invoke('mpv:setSurfaceBounds', bounds),
+  setNativeEngineEmbed: (embed) => ipcRenderer.invoke('mpv:setEmbed', embed),
   getMpvSnapshot: () => ipcRenderer.invoke('mpv:snapshot'),
   onMpvUpdate: (callback) => {
     const listener = (_: unknown, snapshot: MpvSnapshot) => callback(snapshot);

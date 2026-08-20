@@ -103,11 +103,40 @@ interface Pending {
   timer: NodeJS.Timeout;
 }
 
+/**
+ * A native window mpv can render into.
+ *
+ * Named here rather than imported so this module stays loadable outside
+ * Electron; `MpvSurface` in `mpvSurface.ts` is the real implementation and
+ * `main.ts` is what wires the two together.
+ */
+export interface MpvVideoSurface {
+  /** The handle to pass to `--wid`, or `null` if a surface could not be made. */
+  attach(bounds: { x: number; y: number; width: number; height: number }): string | null;
+  setBounds(bounds: { x: number; y: number; width: number; height: number }): void;
+  detach(): void;
+  readonly attached: boolean;
+}
+
 export interface MpvEngineDeps {
   /** Where to find mpv. Resolved lazily so provisioning can happen after boot. */
   resolveBinary: (name: string) => string | null;
   /** Snapshots are pushed here; `main.ts` forwards them to the renderer. */
   onUpdate: (snapshot: MpvSnapshot) => void;
+  /**
+   * Makes a native surface for the video to render into, if the host can.
+   *
+   * A factory supplied from outside rather than a `BrowserWindow` constructed
+   * here, and the inversion is load-bearing: it keeps `electron` out of this
+   * module's imports, which is what lets `mpvEngine.test.mts` load it under
+   * Node's type stripping and drive a real mpv process. Every failure worth
+   * catching in this file lives in the seam between two processes, and a module
+   * that cannot be imported outside Electron cannot be tested there at all.
+   *
+   * Returning `null` means "this host cannot embed", which is a normal answer
+   * and not an error — mpv opens its own window, as it always did.
+   */
+  createSurface?: () => MpvVideoSurface | null;
   diagnostics?: {
     record(entry: {
       level: 'error' | 'warn' | 'info';
@@ -145,6 +174,15 @@ export class MpvEngine {
   private state: MpvSnapshot['state'] = 'idle';
   private lastError: string | null = null;
   private startedAt = 0;
+
+  /**
+   * The window mpv renders into when it is embedded, and `null` when it is not.
+   *
+   * Owned here rather than by `main.ts` because its lifetime is exactly the
+   * process's: a surface outliving mpv is a black rectangle over the UI, and
+   * mpv outliving its surface renders into a destroyed handle.
+   */
+  private surface: MpvVideoSurface | null = null;
 
   private cachedVersion: string | null = null;
   private cachedPath: string | null = null;
@@ -191,6 +229,7 @@ export class MpvEngine {
         path: null,
         version: null,
         hardwareDecoders: [],
+        canEmbed: this.canEmbed,
         videoOutput: null,
         sessionId: '',
       };
@@ -204,6 +243,7 @@ export class MpvEngine {
       path: binary,
       version: this.cachedVersion,
       hardwareDecoders: await this.readHardwareDecoders(binary),
+      canEmbed: this.canEmbed,
       videoOutput: this.process ? this.videoOutput : null,
       sessionId: this.sessionId,
     };
@@ -284,8 +324,35 @@ export class MpvEngine {
     this.state = 'loading';
 
     if (!this.process) {
+      /**
+       * The surface has to exist before the launch, because `--wid` is a
+       * command-line argument: mpv chooses between "render into this handle"
+       * and "create a window" once, at startup, and there is no property to
+       * change it afterwards. That is also why switching embedding on or off
+       * restarts the process rather than adjusting a setting.
+       */
+      if (request.surfaceBounds) {
+        const surface = this.deps.createSurface?.() ?? null;
+        const handle = surface?.attach(request.surfaceBounds) ?? null;
+        if (surface && handle) {
+          this.surface = surface;
+          request = { ...request, windowHandle: handle };
+        } else {
+          /**
+           * Attaching failed, so mpv must be allowed to open its own window —
+           * the previous behaviour, which still works. Reporting embedding that
+           * did not happen would leave the player reserving space for a surface
+           * that is not there and hiding a fullscreen control that is.
+           */
+          surface?.detach();
+          this.surface = null;
+        }
+      }
+
       const started = await this.launch(binary, request);
       if (!started.ok) {
+        this.surface?.detach();
+        this.surface = null;
         /**
          * The caller gets the error back, but anything reading `mpv:snapshot`
          * would otherwise sit on `loading` forever — a spinner over a process
@@ -820,6 +887,7 @@ export class MpvEngine {
       volume: this.numberProperty('volume'),
       muted: this.properties.get('mute') === true,
       speed: this.numberProperty('speed') || 1,
+      embedded: this.embedded,
       fullscreen: this.properties.get('fullscreen') === true,
 
       width: typeof params?.w === 'number' ? (params.w as number) : 0,
@@ -910,6 +978,28 @@ export class MpvEngine {
     } catch {
       /* a renderer that has gone away must not stop the engine */
     }
+  }
+
+  /**
+   * Moves the video area, without disturbing playback.
+   *
+   * This is the ordinary case — the app window is dragged, resized, or the
+   * player's layout changes — and it must not restart anything. The surface is
+   * a plain native window; repositioning it is a `SetWindowPos`, and mpv keeps
+   * rendering into the same handle throughout.
+   */
+  public setSurfaceBounds(bounds: { x: number; y: number; width: number; height: number }): void {
+    this.surface?.setBounds(bounds);
+  }
+
+  public get embedded(): boolean {
+    return Boolean(this.surface?.attached);
+  }
+
+  public get canEmbed(): boolean {
+    // Asked of the host rather than answered from a platform check here: the
+    // host is what knows whether it can produce a window handle at all.
+    return this.deps.createSurface !== undefined;
   }
 
   private fail(message: string): void {
@@ -1024,5 +1114,17 @@ export class MpvEngine {
     this.process = null;
     this.buffer = '';
     this.properties.clear();
+
+    /**
+     * The surface goes with the process, always.
+     *
+     * Their lifetimes are the same one: a surface outliving mpv is an opaque
+     * black rectangle sitting over the UI with nothing painting it, and mpv
+     * outliving its surface is a process rendering into a destroyed handle.
+     * `teardown` is the one path every exit runs through — clean quit, crash,
+     * failed launch — which is why it is here and not in `shutdown`.
+     */
+    this.surface?.detach();
+    this.surface = null;
   }
 }
