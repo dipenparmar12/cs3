@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Tv, Play } from 'lucide-react';
+import { Tv, Play, Cpu, Download, Loader2 } from 'lucide-react';
 import { SettingGroup, SettingRow } from './settings/SettingRow';
 import { AspectRatioMode } from '../types/player';
 
@@ -9,6 +9,8 @@ import { AspectRatioMode } from '../types/player';
  * Controls optional player toolbar buttons (Aspect Ratio, Playback Speed, and Subtitles)
  * and default playback preferences.
  */
+type NativePolicy = 'off' | 'auto' | 'aggressive';
+
 export const PlayerSettings: React.FC = () => {
   const [showSpeedControl, setShowSpeedControl] = useState(false);
   const [showAspectControl, setShowAspectControl] = useState(false);
@@ -16,6 +18,22 @@ export const PlayerSettings: React.FC = () => {
   const [defaultAspect, setDefaultAspect] = useState<string>(AspectRatioMode.Fit);
   const [defaultSpeed, setDefaultSpeed] = useState<string>('1');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  /**
+   * `null` while the answer is unknown, which is different from "not installed".
+   *
+   * Rendering "Not installed" during the round trip puts an install button in
+   * front of someone who already has the engine, and they click it.
+   */
+  const [nativeAvailable, setNativeAvailable] = useState<boolean | null>(null);
+  const [nativeVersion, setNativeVersion] = useState<string | null>(null);
+  const [nativeDecoders, setNativeDecoders] = useState<string[]>([]);
+  const [nativePolicy, setNativePolicy] = useState<NativePolicy>('auto');
+  const [nativeEmbed, setNativeEmbed] = useState(true);
+  /** Whether the platform can host an embedded surface at all — Windows only. */
+  const [nativeCanEmbed, setNativeCanEmbed] = useState(false);
+  const [installingNative, setInstallingNative] = useState(false);
+  const [nativeProgress, setNativeProgress] = useState<string | null>(null);
 
   const flash = (message: string) => {
     setStatusMessage(message);
@@ -58,10 +76,82 @@ export const PlayerSettings: React.FC = () => {
       }
     };
     void loadSettings();
+
+    const loadNative = async () => {
+      const [status, policy] = await Promise.all([
+        window.cloudstream?.getMpvStatus(),
+        window.cloudstream?.getNativeEnginePolicy(),
+      ]);
+      if (!active) return;
+      if (status?.ok) {
+        setNativeAvailable(status.status.available);
+        setNativeVersion(status.status.version);
+        setNativeDecoders(status.status.hardwareDecoders);
+      } else {
+        setNativeAvailable(false);
+      }
+      if (policy?.ok) {
+        setNativePolicy(policy.policy);
+        setNativeEmbed(policy.embed);
+        setNativeCanEmbed(policy.canEmbed);
+      }
+    };
+    void loadNative();
+
     return () => {
       active = false;
     };
   }, []);
+
+  const handleChangeNativeEmbed = async (embed: boolean) => {
+    setNativeEmbed(embed);
+    await window.cloudstream?.setNativeEngineEmbed(embed);
+    flash(
+      embed
+        ? 'Video will render inside the app window. This restarts the engine.'
+        : 'Video will open in its own window. This restarts the engine.'
+    );
+  };
+
+  const handleChangeNativePolicy = async (policy: NativePolicy) => {
+    setNativePolicy(policy);
+    await window.cloudstream?.setNativeEnginePolicy(policy);
+    flash(
+      policy === 'off'
+        ? 'The native engine is off: everything plays in the built-in player.'
+        : policy === 'aggressive'
+          ? 'The native engine will take every stream the browser cannot play.'
+          : 'The native engine will take the streams the built-in player handles badly.'
+    );
+  };
+
+  const handleInstallNative = async () => {
+    setInstallingNative(true);
+    setNativeProgress('Starting…');
+    /**
+     * Progress arrives on the shared binary channel, so it is filtered by
+     * component: the ffmpeg install can be running at the same time from the
+     * components screen, and showing its percentage here would be a lie.
+     */
+    const stop = window.cloudstream?.onBinarySetupProgress?.((update) => {
+      if (update.component === 'mpv') setNativeProgress(update.status);
+    });
+    try {
+      const result = await window.cloudstream?.setupMpv();
+      if (result?.ok) {
+        setNativeAvailable(true);
+        setNativeVersion(result.status?.version ?? null);
+        setNativeDecoders(result.status?.hardwareDecoders ?? []);
+        flash('The native playback engine is installed and ready.');
+      } else {
+        flash(result?.error ?? 'The native playback engine could not be installed.');
+      }
+    } finally {
+      stop?.();
+      setInstallingNative(false);
+      setNativeProgress(null);
+    }
+  };
 
   const handleToggleSpeed = async (enabled: boolean) => {
     setShowSpeedControl(enabled);
@@ -177,6 +267,135 @@ export const PlayerSettings: React.FC = () => {
         </SettingRow>
       </SettingGroup>
 
+      <SettingGroup title="Native Playback Engine" icon={<Cpu size={15} />}>
+        {/**
+         * The setting exists because the trade-off is real in both directions,
+         * not because there was no defensible default.
+         *
+         * Routing a stream to mpv buys hardware decoding, full resolution, HDR
+         * and the original channel layout — and costs the in-app player: the
+         * video renders in the engine's own window, driven from here. That is
+         * clearly worth it for a 4K HEVC release the app would otherwise
+         * downscale to 1080p at 100% CPU. It is clearly not worth it for a
+         * 720p H.264 web-rip that plays perfectly in place. `auto` draws that
+         * line; the other two let someone who disagrees say so.
+         */}
+        <SettingRow
+          label="Use the native engine"
+          note={
+            nativeAvailable === null
+              ? 'Checking…'
+              : nativeAvailable
+                ? nativeVersion ?? 'Installed'
+                : 'Not installed'
+          }
+          hint={
+            <>
+              Streams the browser cannot decode — 4K and HEVC, 10-bit, HDR, VC-1, MPEG-2,
+              DTS-HD and TrueHD — are otherwise re-encoded by FFmpeg, which costs a whole
+              CPU core, drops HDR and flattens surround sound to stereo. The native engine
+              (mpv) decodes them on the GPU untouched instead, in its own window, driven by
+              the controls in the player.
+              <br />
+              <br />
+              <strong>Automatic</strong> hands over what the built-in player would have
+              re-encoded or downmixed: 4K, HEVC, 10-bit and HDR video, and any soundtrack with
+              more than two channels — which is most 1080p WEB-DL releases, where E-AC-3 5.1
+              would otherwise be flattened to stereo.
+              <br />
+              <strong>Always</strong> also hands over the cases that lose nothing, such as a
+              stereo container remux, at the cost of leaving the in-app window more often.
+              <br />
+              <strong>Never</strong> keeps everything in the built-in player and its FFmpeg
+              conversion path, exactly as before this engine existed.
+            </>
+          }
+        >
+          <select
+            value={nativePolicy}
+            onChange={(event) => handleChangeNativePolicy(event.target.value as NativePolicy)}
+            aria-label="Native engine policy"
+            disabled={nativeAvailable === false}
+          >
+            <option value="auto">Automatic (recommended)</option>
+            <option value="aggressive">Always, when the browser cannot play it</option>
+            <option value="off">Never</option>
+          </select>
+        </SettingRow>
+
+        <SettingRow
+          label="Render video inside the app window"
+          note={
+            nativeCanEmbed
+              ? nativeEmbed
+                ? 'On — one window'
+                : 'Off — mpv opens its own window'
+              : 'Not available on this platform'
+          }
+          hint={
+            <>
+              The engine renders into a native child window positioned over the player
+              area, so the app looks like one program rather than two.
+              <br />
+              What it is not is a composited surface: that window sits above the whole
+              page and nothing can be drawn on top of it, so the controls get a band of
+              their own instead of overlaying the picture. Turning this off is the better
+              choice if you want the film on a second monitor, or if your setup only
+              engages HDR for a top-level window.
+            </>
+          }
+        >
+          <input
+            type="checkbox"
+            checked={nativeEmbed}
+            onChange={(event) => void handleChangeNativeEmbed(event.target.checked)}
+            disabled={nativeAvailable === false || !nativeCanEmbed}
+            aria-label="Render video inside the app window"
+          />
+        </SettingRow>
+
+        {nativeAvailable === false && (
+          <SettingRow
+            label="Install the native engine"
+            note={nativeProgress ?? '~32 MB download'}
+            hint={
+              <>
+                Fetches a portable build of mpv into this app's own folder. Nothing is
+                installed system-wide and no existing mpv configuration is used or changed.
+                This is deliberately not part of "install all components": someone who only
+                watches H.264 web releases never needs it.
+              </>
+            }
+          >
+            <button
+              type="button"
+              className="btn"
+              onClick={handleInstallNative}
+              disabled={installingNative}
+            >
+              {installingNative ? <Loader2 size={14} className="spin" /> : <Download size={14} />}
+              {installingNative ? 'Installing…' : 'Install'}
+            </button>
+          </SettingRow>
+        )}
+
+        {nativeAvailable && nativeDecoders.length > 0 && (
+          <SettingRow
+            label="Hardware decoders available"
+            hint={
+              <>
+                What this build can offer, as reported by mpv. Which one is actually used is
+                chosen per stream and shown in the player while it is running — a decoder
+                that fails to open falls back to software silently, so the two are not the
+                same claim.
+              </>
+            }
+          >
+            <span className="setting-row__note">{nativeDecoders.join(', ')}</span>
+          </SettingRow>
+        )}
+      </SettingGroup>
+
       <SettingGroup title="Playback Defaults" icon={<Play size={15} />}>
         <SettingRow
           label="Default aspect ratio"
@@ -214,6 +433,131 @@ export const PlayerSettings: React.FC = () => {
           </select>
         </SettingRow>
       </SettingGroup>
+
+      <NativePlayerSettingsGroup flash={flash} />
     </div>
+  );
+};
+
+const NativePlayerSettingsGroup: React.FC<{ flash: (msg: string) => void }> = ({ flash }) => {
+  const [players, setPlayers] = useState<Array<{ id: string; name: string; path?: string }>>([]);
+  const [downloads, setDownloads] = useState<
+    Array<{ id: string; name: string; url: string; note: string }>
+  >([]);
+  const [loading, setLoading] = useState(false);
+  const [showNativeButton, setShowNativeButton] = useState(true);
+
+  const loadPlayers = async (refresh = false) => {
+    setLoading(true);
+    try {
+      const res = await window.cloudstream?.listExternalPlayers?.(refresh);
+      setPlayers(res?.players ?? []);
+      setDownloads(res?.downloads ?? []);
+      const btnEnabled = await window.cloudstream?.getSetting('player_show_native_player_btn', 'true');
+      setShowNativeButton(btnEnabled !== 'false');
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadPlayers(false);
+  }, []);
+
+  const handleToggleNativeButton = async (enabled: boolean) => {
+    setShowNativeButton(enabled);
+    await window.cloudstream?.setSetting('player_show_native_player_btn', enabled);
+    flash(
+      enabled
+        ? 'Native Player button enabled in player toolbar.'
+        : 'Native Player button hidden from player toolbar.'
+    );
+  };
+
+  return (
+    <SettingGroup title="Platform Native & External Players" icon={<Tv size={15} />}>
+      <SettingRow
+        label="Native player toolbar button"
+        note={showNativeButton ? 'Visible' : 'Hidden'}
+        hint={
+          <>
+            Shows a quick one-click button in the player controls to launch streams into platform native
+            players (VLC, mpv, IINA, or OS Default). Recommended for 4K 10-bit HEVC, DTS:X, and TrueHD.
+          </>
+        }
+      >
+        <label className="settings__switch">
+          <input
+            type="checkbox"
+            checked={showNativeButton}
+            onChange={(e) => handleToggleNativeButton(e.target.checked)}
+            aria-label="Toggle native player button"
+          />
+          <span>{showNativeButton ? 'Enabled' : 'Disabled'}</span>
+        </label>
+      </SettingRow>
+
+      <SettingRow
+        label="Detected native players"
+        note={`${players.length} available`}
+        hint="Desktop players detected on your system (Windows, macOS, Linux)."
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {players.map((p) => (
+              <span
+                key={p.id}
+                style={{
+                  fontSize: '0.75rem',
+                  padding: '0.2rem 0.5rem',
+                  borderRadius: '4px',
+                  backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                  border: '1px solid rgba(59, 130, 246, 0.3)',
+                  color: '#60a5fa',
+                  fontWeight: 600,
+                }}
+              >
+                {p.name}
+              </span>
+            ))}
+          </div>
+          <button
+            className="btn btn-secondary"
+            style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
+            onClick={() => {
+              void loadPlayers(true);
+              flash('Rescanned installed native players.');
+            }}
+            disabled={loading}
+          >
+            {loading ? 'Scanning…' : 'Rescan Players'}
+          </button>
+        </div>
+      </SettingRow>
+
+      {downloads.length > 0 && (
+        <SettingRow
+          label="Recommended native players"
+          note="Free / Open-Source"
+          hint="Install any of these players for 100% native decoding of 4K 10-bit HEVC and surround audio codecs."
+        >
+          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {downloads.map((d) => (
+              <button
+                key={d.id}
+                className="btn btn-secondary"
+                style={{ fontSize: '0.75rem' }}
+                title={d.note}
+                onClick={() => window.cloudstream?.openExternalLink?.(d.url)}
+              >
+                Get {d.name}
+              </button>
+            ))}
+          </div>
+        </SettingRow>
+      )}
+    </SettingGroup>
   );
 };

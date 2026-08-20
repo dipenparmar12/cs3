@@ -312,8 +312,38 @@ export class FastChunkDownloader {
               const status = res.statusCode ?? 0;
               if (status !== 206 && status !== 200) {
                 if (stallTimer) clearTimeout(stallTimer);
-                res.resume();
+                res.destroy();
                 reject(new Error(`Server returned HTTP ${status} for segment`));
+                return;
+              }
+
+              /**
+               * A `200` here means the server ignored the Range header.
+               *
+               * This request asked for `bytes=${currentOffset}-${endOffset}`;
+               * a `200` is the whole file from byte zero. Accepting it writes
+               * the *beginning* of the file at this chunk's offset — so the
+               * output is silently corrupted, every worker downloads the entire
+               * file, and the progress total races past 100% while the result
+               * is unplayable.
+               *
+               * The probe already routes such a host to the sequential path, so
+               * reaching here means the server changed its mind between the
+               * probe and the transfer — which
+               * `video-downloads.googleusercontent.com` and other signed-URL
+               * CDNs do under load. Failing the chunk is the only safe answer:
+               * a corrupt file that finishes is worse than a download that
+               * reports why it stopped.
+               */
+              if (status === 200) {
+                if (stallTimer) clearTimeout(stallTimer);
+                res.destroy();
+                reject(
+                  new Error(
+                    'Server ignored the byte-range request and offered the whole file; ' +
+                      'this source cannot be downloaded in parallel segments.'
+                  )
+                );
                 return;
               }
 
@@ -520,9 +550,17 @@ export class FastChunkDownloader {
   ): Promise<ProbeResult> {
     let currentUrl = initialUrl;
     let redirects = 0;
+    const seenUrls = new Set<string>();
 
     while (redirects < MAX_REDIRECTS) {
       if (signal?.aborted) throw new Error('Probe aborted');
+
+      if (seenUrls.has(currentUrl)) {
+        throw new Error(
+          `Redirect loop detected: host redirected back to an already visited location (${currentUrl}). The stream token, IP, or session may be blocked or expired.`
+        );
+      }
+      seenUrls.add(currentUrl);
 
       const client = currentUrl.startsWith('https:') ? https : http;
       const headers: Record<string, string> = {
@@ -564,7 +602,26 @@ export class FastChunkDownloader {
             supportsRange = true;
           }
 
-          res.resume();
+          /**
+           * The body is thrown away, not drained — and on some hosts that is
+           * the difference between a download and a stall.
+           *
+           * `res.resume()` discards the data but leaves the transfer running,
+           * and this probe asked for `bytes=0-0`. A server that honours it
+           * sends one byte and nothing is lost. A server that **ignores Range**
+           * answers `200` with the whole file, so the probe quietly keeps
+           * pulling it long after it has returned its answer.
+           *
+           * Measured against a `video-downloads.googleusercontent.com` link —
+           * which returns `200`, no `Accept-Ranges`, `Content-Length`
+           * 6,175,245,105: the abandoned probe drained **5.6 MB in the five
+           * seconds after it resolved**, and kept going. The real download runs
+           * beside that, competing with it for the same throttled signed URL,
+           * which is exactly the reported symptom: a few megabytes transferred
+           * and then `0 KB/s` forever on a 5.75 GB file.
+           */
+          res.destroy();
+          req.destroy();
           resolve({
             finalUrl: currentUrl,
             contentLength: isNaN(contentLength) ? 0 : contentLength,

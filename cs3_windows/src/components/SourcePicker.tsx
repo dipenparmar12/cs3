@@ -1,13 +1,16 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   X, Users, HardDrive, Loader2, AlertTriangle, Filter, ChevronDown,
-  ChevronRight, Play, Download, Info, Zap, ShieldAlert, Square,
+  ChevronRight, Play, Download, Info, Zap, ShieldAlert, Square, Link2, Check,
 } from 'lucide-react';
 import type { TorrentResult } from '../types/torrent';
 import type { SourceDiagnosis } from '../types/diagnostics';
 import { Resolution } from '../types/torrent';
 import { SourceFilterBar } from './SourceFilterBar';
 import { CopyErrorButton } from './CopyErrorButton';
+import { SourceExportButton } from './SourceExportButton';
+import { useSourceProvenance } from './useSourceProvenance';
+import { provenanceChain, sourceAddress, sourceHost } from '../utils/sourceExport';
 import {
   DEFAULT_FILTER_STATE,
   filterAndSortSources,
@@ -110,6 +113,21 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
   const [showFiltered, setShowFiltered] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [expandedHash, setExpandedHash] = useState<string | null>(null);
+  const [copiedLink, setCopiedLink] = useState<string | null>(null);
+  const { provenanceFor } = useSourceProvenance(data?.sources ?? []);
+
+  /** The provider's address, not the loopback one the player would be using. */
+  const copyLink = useCallback(async (source: TorrentResult) => {
+    const address = sourceAddress(source);
+    if (!address) return;
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopiedLink(source.infoHash);
+      setTimeout(() => setCopiedLink(null), 1800);
+    } catch {
+      // Nothing is lost when the clipboard refuses — the bulk export remains.
+    }
+  }, []);
   const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);
 
   const best = useMemo(() => data?.sources[0] ?? null, [data]);
@@ -281,11 +299,21 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                 {displayedSources.length} showing (of {data.sources.length} total)
                 {data.query.imdbId && ` · matched on ${data.query.imdbId}`}
               </span>
-              {best && (
-                <button className="btn btn-primary" onClick={() => onPlay(best)}>
-                  <Zap size={15} /> Play best
-                </button>
-              )}
+              <div className="source-picker__toolbar-actions">
+                {/* The list, with every provider, extension, repository and link
+                    — pasteable into a spreadsheet or a downloader. */}
+                <SourceExportButton
+                  sources={displayedSources}
+                  provenanceFor={provenanceFor}
+                  heading={`${data.query?.title ?? 'Sources'} (${displayedSources.length})`}
+                  compact
+                />
+                {best && (
+                  <button className="btn btn-primary" onClick={() => onPlay(best)}>
+                    <Zap size={15} /> Play best
+                  </button>
+                )}
+              </div>
             </div>
 
             <SourceFilterBar
@@ -342,11 +370,26 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                           <Users size={13} /> {source.seeders}
                         </span>
                         <span><HardDrive size={13} /> {formatBytes(source.sizeBytes)}</span>
-                        <span className="muted">{source.indexerName}</span>
+                        <span className="muted" title="Host or extractor this link points at">
+                          {sourceHost(source) ?? source.indexerName}
+                        </span>
                         {source.parsed.releaseGroup && (
                           <span className="muted">{source.parsed.releaseGroup}</span>
                         )}
                       </div>
+
+                      {/* Repository, extension, provider. `indexerName` above is
+                          the extractor an extension picked, not the extension —
+                          so without this a failing source cannot be traced to
+                          anything the user is able to turn off. */}
+                      {provenanceChain(source, provenanceFor(source)) && (
+                        <p
+                          className="source-row__origin"
+                          title={provenanceChain(source, provenanceFor(source))}
+                        >
+                          {provenanceChain(source, provenanceFor(source))}
+                        </p>
+                      )}
                     </div>
 
                     <div className="source-row__actions">
@@ -360,6 +403,16 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                       >
                         <Download size={14} />
                       </button>
+                      {sourceAddress(source) && (
+                        <button
+                          className="icon-button"
+                          onClick={() => void copyLink(source)}
+                          aria-label={`Copy the link for ${source.title}`}
+                          title="Copy this source's link"
+                        >
+                          {copiedLink === source.infoHash ? <Check size={15} /> : <Link2 size={15} />}
+                        </button>
+                      )}
                       <button
                         className="icon-button"
                         onClick={() => setExpandedHash(isExpanded ? null : source.infoHash)}

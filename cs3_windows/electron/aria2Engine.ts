@@ -7,7 +7,18 @@ import { app } from 'electron';
 
 export interface Aria2Progress {
   gid: string;
-  status: 'active' | 'waiting' | 'paused' | 'completed' | 'error' | 'removed';
+  /**
+   * aria2's own vocabulary, passed through untouched — and `complete` is the
+   * word, not `completed`.
+   *
+   * This union used to say `completed`, which is not a value aria2 ever sends.
+   * `getStatus` copies `raw.status` straight through, so the comparison in
+   * `DownloadService.pollAria2Tasks` could never be true: a finished download
+   * sat at 100% in the `Downloading` state forever, its gid never released, and
+   * the poller kept asking about it for the life of the session. Verified
+   * against a live aria2 RPC: `tellStatus` answers `"active"` then `"complete"`.
+   */
+  status: 'active' | 'waiting' | 'paused' | 'complete' | 'error' | 'removed';
   totalLength: number;
   completedLength: number;
   downloadSpeed: number;

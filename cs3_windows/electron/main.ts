@@ -4,6 +4,8 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { DatastoreManager } from './datastore';
+import { HomeProviderRegistry, DEFAULT_PROVIDER_ID } from './cs3/homeProviderRegistry';
+import { Logger, LOG_LEVELS, setLogger, type LogLevel, type LogScope } from './logging/logger';
 import { Aria2Engine } from './aria2Engine';
 import { DownloadService } from './downloadService';
 import { PluginManager } from './pluginManager';
@@ -16,13 +18,25 @@ import {
 import { setHttpFetch } from './torrent/http';
 import { ResilientFetch, classifyNetworkError } from './networkResilience';
 import { BinaryDownloader } from './binaryDownloader';
+import { MpvEngine } from './media/mpvEngine';
+import { MpvSurface } from './media/mpvSurface';
 import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
 import { PlaybackSessionManager } from './playbackSession';
 import { SearchSuggestionService } from './searchSuggestions';
 import { SearchHistoryStore } from './searchHistory';
 import { SubtitleService } from './subtitleService';
-import { MediaTranscoder, VIDEO_CODEC_PROBES, type RendererCapabilities } from './mediaTranscoder';
+import { MediaTranscoder, VIDEO_CODEC_PROBES } from './mediaTranscoder';
+import { PlaybackEngine } from './media/playbackEngine';
+import { InspectionStore } from './media/inspectionStore';
+import { detectExtensionPicky } from './media/mediaInspector';
+import { runTool } from './media/runTool';
+import type {
+  NativeEngineCapability,
+  PlaybackStreamRequest,
+  RendererCapabilities,
+} from '../src/types/media';
+import type { MpvOpenRequest } from '../src/types/mpv';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { BootstrapService } from './cs3/bootstrap';
@@ -31,8 +45,16 @@ import { DiagnosticsLog } from './cs3/diagnostics';
 import { ProviderAnalytics } from './cs3/providerAnalytics';
 import { ProviderRanking } from './cs3/providerRanking';
 import { ProviderRecommender } from './cs3/providerRecommendations';
-import { ExternalPlayerService, PLAYER_DOWNLOADS } from './externalPlayer';
-import { LibraryStore, type WatchStatus, canonicalKey, torrentResultToStoredSource } from './cs3/libraryStore';
+import { ExternalPlayerService } from './externalPlayer';
+import {
+  LibraryStore,
+  type WatchStatus,
+  canonicalKey,
+  torrentResultToStoredSource,
+  storedSourceToTorrentResult,
+} from './cs3/libraryStore';
+import { isLinkUsable, pickReplacement } from './cs3/playedSource';
+import { deadlineFromUrl } from './sourceCache';
 import { HistoryStore } from './cs3/historyStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
 import { DiscoveryService } from './cs3/discovery';
@@ -64,7 +86,15 @@ const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
 const historyStore = new HistoryStore(datastore);
 const bookmarks = new BookmarkStore(datastore);
-const discovery = new DiscoveryService();
+/**
+ * The home screen's catalogue source, and the rows built from it.
+ *
+ * The registry is constructed first because `DiscoveryService` resolves the
+ * active provider on every call rather than holding one — a provider that goes
+ * down mid-session falls back on the next request, not on the next restart.
+ */
+const homeProviders = new HomeProviderRegistry(datastore);
+const discovery = new DiscoveryService(homeProviders);
 const titleEnricher = new TitleEnricher();
 /**
  * Warms the source cache while a detail page is being read.
@@ -75,8 +105,78 @@ const titleEnricher = new TitleEnricher();
 const sourcePrefetcher = new SourcePrefetcher(contentService, datastore);
 const bootstrap = new BootstrapService(datastore, pluginManager);
 const titleOutcomes = new TitleOutcomeStore(datastore);
+/**
+ * The structured log, constructed before the services that write to it.
+ *
+ * The directory is passed in rather than resolved inside `Logger`, which
+ * deliberately does not import `electron` — that import would make the module
+ * unloadable under Node's type stripping, which is where its tests run.
+ */
+const logger = new Logger({ directory: path.join(app.getPath('userData'), 'logs') });
+setLogger(logger);
+/**
+ * The level survives a restart, because what it is turned up for has not
+ * happened yet: a `trace` setting that reset on launch would be back to normal
+ * by the time anyone managed to reproduce the thing they turned it up for.
+ */
+const savedLogLevel = datastore.getString('log_level_key', '');
+if (LOG_LEVELS.includes(savedLogLevel as LogLevel)) logger.setLevel(savedLogLevel as LogLevel);
+
+logger.info('app', 'session_started', {
+  version: app.getVersion(),
+  electron: process.versions.electron,
+  platform: `${process.platform}-${process.arch}`,
+  logFile: logger.logFile,
+});
+
+/**
+ * Anything that reaches the top of the stack is recorded before it is lost.
+ *
+ * An unhandled rejection in the main process is invisible: there is no console
+ * a user can see, and the renderer carries on as though nothing happened. These
+ * two handlers are the difference between "it just stopped working" and a
+ * record naming what threw.
+ */
+process.on('unhandledRejection', (reason) => {
+  logger.error('app', 'unhandled_rejection', {
+    error: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack?.slice(0, 2000) : undefined,
+  });
+});
+process.on('uncaughtException', (error) => {
+  logger.fatal('app', 'uncaught_exception', { error: error.message, stack: error.stack?.slice(0, 2000) });
+});
+
 const diagnostics = new DiagnosticsLog();
+
+/**
+ * Every diagnostic also becomes a structured record.
+ *
+ * The two logs answer different questions and both are worth having:
+ * `DiagnosticsLog` is shaped to be pasted to a provider maintainer, this one to
+ * be filtered and grouped. Mirroring rather than replacing means a failure is
+ * in the timeline beside the search that led to it, without the call sites
+ * having to write it twice.
+ */
+diagnostics.setListener((record) => {
+  logger.write(
+    record.level === 'error' ? 'error' : record.level === 'warn' ? 'warn' : 'info',
+    'provider',
+    `diagnostic_${record.stage}`,
+    {
+      provider: record.source,
+      mediaTitle: record.title,
+      url: record.url,
+      operation: record.stage,
+      error: record.level === 'error' ? record.message : undefined,
+      message: record.level === 'error' ? undefined : record.message,
+    }
+  );
+});
 const externalPlayers = new ExternalPlayerService();
+externalPlayers.setSnapshotListener((snapshot) =>
+  mainWindow?.webContents.send('external:update', snapshot)
+);
 pluginManager.setDiagnostics(diagnostics);
 
 /**
@@ -106,6 +206,54 @@ const searchHistory = new SearchHistoryStore(datastore);
 const subtitles = new SubtitleService();
 const mediaTranscoder = new MediaTranscoder(binaryDownloader);
 mediaTranscoder.setDiagnostics(diagnostics);
+
+/**
+ * The native playback engine, and how eagerly it is used.
+ *
+ * `auto` by default: mpv takes the streams the in-app player handles badly — any
+ * video re-encode, and lossless or object-based audio — and leaves everything
+ * else alone. See `shouldRouteToNativeEngine` for what each policy costs.
+ *
+ * The policy is read from the datastore per decision rather than captured once,
+ * because both halves of the answer move while the app runs: the setting is a
+ * setting, and mpv itself can be installed mid-session.
+ */
+const NATIVE_ENGINE_POLICY_KEY = 'native_engine_policy';
+
+const mpvEngine = new MpvEngine({
+  resolveBinary: (name) => binaryDownloader.resolveBinary(name),
+  onUpdate: (snapshot) => mainWindow?.webContents.send('mpv:update', snapshot),
+  diagnostics,
+  /**
+   * The embedded video surface, wired here because this is the only layer that
+   * holds a `BrowserWindow`.
+   *
+   * `undefined` on platforms that cannot do it, which is how `MpvEngine`
+   * answers `canEmbed` without knowing anything about windows. The main window
+   * is resolved at call time rather than captured: it is created after the
+   * services are wired and, on macOS, the app outlives it.
+   */
+  createSurface: MpvSurface.supported
+    ? () => {
+        const parent = mainWindow;
+        if (!parent || parent.isDestroyed()) return null;
+        const surface = new MpvSurface();
+        return {
+          attach: (bounds) => surface.attach(parent, bounds),
+          setBounds: (bounds) => surface.setBounds(bounds),
+          detach: () => surface.detach(),
+          get attached() {
+            return surface.attached;
+          },
+        };
+      }
+    : undefined,
+});
+
+function nativeEnginePolicy(): NativeEngineCapability['policy'] {
+  const stored = datastore.getString(NATIVE_ENGINE_POLICY_KEY, 'auto', true);
+  return stored === 'off' || stored === 'aggressive' ? stored : 'auto';
+}
 const network = new NetworkSettingsStore(datastore);
 
 downloadService.setTorrentEngine(torrentEngine);
@@ -129,6 +277,59 @@ const resilientFetch = new ResilientFetch({
   diagnostics,
 });
 setHttpFetch((input, init) => resilientFetch.fetch(input, init));
+
+/**
+ * The Universal Media Compatibility Engine (PRD-37).
+ *
+ * Constructed here rather than beside the transcoder because it needs
+ * `resilientFetch` to sniff manifests: an `.m3u8` served from a `.php` URL and an
+ * `.mpd` served as `application/octet-stream` are both routine, and the only
+ * reliable classifier is the first few bytes of the body.
+ */
+const playbackEngine = new PlaybackEngine({
+  proxy: contentService.getProxy(),
+  transcoder: mediaTranscoder,
+  nativeEngine: () => ({ available: mpvEngine.isAvailable(), policy: nativeEnginePolicy() }),
+  inspections: new InspectionStore(datastore),
+  fetchText: async (url, bytes) => {
+    try {
+      const response = await resilientFetch.fetch(
+        url,
+        { headers: { Range: `bytes=0-${bytes - 1}` }, signal: AbortSignal.timeout(12_000) },
+        { operation: 'manifest-sniff' }
+      );
+      if (!response.ok && response.status !== 206) return null;
+      const text = await response.text();
+      return text.slice(0, bytes);
+    } catch {
+      // A manifest that cannot be read is classified by its URL instead, which
+      // is what happened before this existed and is still a usable answer.
+      return null;
+    }
+  },
+  describeUnreadable: (url) => describeUnreadableSource(url),
+  diagnostics,
+});
+
+/**
+ * Asks the probe binary which HLS options it understands.
+ *
+ * FFmpeg 7.1 introduced `-extension_picky` and defaulted it to *on*, which made
+ * the long-standing `-allowed_extensions ALL` fix inert — every provider serving
+ * segments from `.png` or extensionless URLs started failing again, with the
+ * very message that fix was written against. The flag cannot be passed blindly:
+ * an older binary rejects the entire command line and every probe dies, not just
+ * the ones this was meant to rescue. So it is detected once, and again whenever
+ * ffmpeg is installed or replaced.
+ */
+function refreshFfmpegOptionSupport(): void {
+  const ffprobe = mediaTranscoder.resolveFfprobe();
+  if (!ffprobe) return;
+  void detectExtensionPicky(ffprobe, (command, args, timeoutMs) =>
+    runTool(command, args, timeoutMs)
+  );
+}
+refreshFfmpegOptionSupport();
 
 /**
  * The last line of defence for the main process.
@@ -190,6 +391,7 @@ function installProcessGuards(): void {
       message: error instanceof Error ? error.message : String(error),
       detail: error instanceof Error ? error.stack : undefined,
     });
+    logger.info('app', 'session_ending');
     diagnostics.flush();
     providerAnalytics.flush();
     throw error;
@@ -416,11 +618,23 @@ app.on('before-quit', async (event) => {
     diagnostics.flush();
     providerAnalytics.flush();
     mediaTranscoder.shutdown();
+    // A child process with its own window: without this it survives the app and
+    // keeps playing, with nothing left on screen to stop it.
+    await mpvEngine.shutdown();
+    // A controlled VLC is our child process; without this it outlives the app.
+    await externalPlayers.shutdown();
     contentService.shutdown();
     await torrentEngine.destroy();
-  } catch {
-    // Shutdown is best-effort; never block quit on it.
+  } catch (error) {
+    // Shutdown is best-effort; never block quit on it. It is still worth
+    // recording, because a service that throws here is one that leaked
+    // something — and the next launch is where that shows up.
+    logger.warn('app', 'shutdown_incomplete', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
+  // Last, and synchronous: nothing after this point gets written.
+  logger.shutdown();
   app.exit(0);
 });
 
@@ -652,6 +866,98 @@ ipcMain.handle('diagnostics:clear', async () => {
   return { ok: true };
 });
 
+// --- the structured log ----------------------------------------------------
+
+/**
+ * `log:*` is the developer-facing surface, deliberately thin.
+ *
+ * The log's job is to be on disk when something goes wrong, not to be browsed;
+ * a large UI over it would be effort spent on the wrong half. What is exposed
+ * is what a person actually needs at the moment they are debugging: query the
+ * recent past, find the file, open the folder, and turn the level up for the
+ * next reproduction attempt.
+ */
+ipcMain.handle(
+  'log:query',
+  async (
+    _,
+    filter?: {
+      level?: LogLevel;
+      scopes?: LogScope[];
+      event?: string;
+      search?: string;
+      since?: number;
+      limit?: number;
+    }
+  ) => {
+    try {
+      return {
+        ok: true,
+        records: logger.query(filter ?? {}),
+        session: logger.session,
+        level: logger.level,
+        file: logger.logFile,
+      };
+    } catch (error) {
+      return { ...fail(error), records: [], session: '', level: 'info' as LogLevel, file: '' };
+    }
+  }
+);
+
+ipcMain.handle('log:sessions', async () => {
+  try {
+    // Flushed first, or the current session under-reports its own size by
+    // however much is sitting in the write buffer.
+    logger.flush();
+    return { ok: true, sessions: logger.sessions(), directory: path.dirname(logger.logFile) };
+  } catch (error) {
+    return { ...fail(error), sessions: [], directory: '' };
+  }
+});
+
+/**
+ * The level is persisted, because the thing it is turned up for is a bug that
+ * has not happened yet. A `trace` setting that reset on restart would be off
+ * again by the time the user managed to reproduce anything.
+ */
+ipcMain.handle('log:setLevel', async (_, level: LogLevel) => {
+  try {
+    logger.setLevel(level);
+    datastore.setString('log_level_key', level);
+    logger.info('app', 'log_level_changed', { level });
+    return { ok: true, level };
+  } catch (error) {
+    return { ...fail(error), level: logger.level };
+  }
+});
+
+ipcMain.handle('log:reveal', async () => {
+  try {
+    logger.flush();
+    shell.showItemInFolder(logger.logFile);
+    return { ok: true };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/**
+ * The whole current session as text, for attaching to a report.
+ *
+ * Read back off disk rather than served from the ring: the ring holds the last
+ * couple of thousand records and the file holds the session, and a report that
+ * silently omits the beginning is worse than one that is large.
+ */
+ipcMain.handle('log:exportSession', async () => {
+  try {
+    logger.flush();
+    const text = fs.readFileSync(logger.logFile, 'utf8');
+    return { ok: true, text, file: logger.logFile };
+  } catch (error) {
+    return { ...fail(error), text: '', file: logger.logFile };
+  }
+});
+
 /**
  * A pasteable report, in one of two sizes.
  *
@@ -876,6 +1182,34 @@ ipcMain.handle('api:getProviderProvenance', async (_, providerName: string) => {
   }
 });
 
+/**
+ * The same mapping for a whole source list, in one call.
+ *
+ * `provenanceOf` reads two in-memory Maps, so the cost here is entirely the IPC
+ * round trip — which is why thirty rows asking individually was worth removing.
+ * An unknown name still answers, with just itself: a provider that has since
+ * been uninstalled must still be attributable in a list captured before it was.
+ */
+ipcMain.handle('api:getProviderProvenanceMap', async (_, providerNames: string[]) => {
+  try {
+    const provenance: Record<
+      string,
+      { provider: string; repositoryName?: string; extensionName?: string }
+    > = {};
+    for (const name of new Set((providerNames ?? []).filter(Boolean))) {
+      const record = pluginManager.provenanceOf(name);
+      provenance[name] = {
+        provider: record.provider,
+        repositoryName: record.repositoryName,
+        extensionName: record.extensionName,
+      };
+    }
+    return { ok: true, provenance };
+  } catch (error) {
+    return { ...fail(error), provenance: {} };
+  }
+});
+
 // --- saved detail pages (bookmarks) ---------------------------------------
 
 ipcMain.handle('bookmarks:list', async () => ({
@@ -1093,6 +1427,15 @@ ipcMain.handle('components:getStatus', async () => {
     const downloadReady = Boolean(binaries.aria2 && binaries.ytdlp);
     const runtimeReady = Boolean(runtime.ready);
 
+    /**
+     * The native engine is deliberately not counted here.
+     *
+     * `missingCount` drives a "components missing" prompt, and mpv is optional
+     * by design — someone who only watches H.264 web releases never needs it,
+     * and nagging them into a 32 MB download to clear a warning badge would be
+     * asking for bandwidth to fix a problem they do not have. `binaries.mpv` is
+     * still reported so a screen that wants to show its state can.
+     */
     let missingCount = 0;
     if (!runtimeReady) missingCount++;
     if (!downloadReady) missingCount++;
@@ -1316,7 +1659,8 @@ ipcMain.handle('playback:stop', async (_, sessionId: string, keepFiles?: boolean
  * strings live beside the codec table they correct.
  */
 ipcMain.handle('media:setCapabilities', async (_, capabilities: RendererCapabilities) => {
-  mediaTranscoder.setCapabilities(capabilities);
+  // INV-RACE-4: registered during bootstrap, before any playback session opens.
+  playbackEngine.setCapabilities(capabilities);
   return { ok: true };
 });
 
@@ -1349,8 +1693,96 @@ ipcMain.handle('shell:openExternal', async (_, url: string) => {
 ipcMain.handle('player:listExternal', async (_, refresh?: boolean) => ({
   ok: true,
   players: refresh ? externalPlayers.refresh() : externalPlayers.list(),
-  downloads: PLAYER_DOWNLOADS,
+  downloads: externalPlayers.getDownloads(),
 }));
+
+/**
+ * Hands a stream to an external player **and keeps a channel to it** where one
+ * exists.
+ *
+ * The capability comes back with the result so the renderer knows which player
+ * it got: one it can drive, or one it can only report as running. A UI that
+ * offers a seek bar it cannot honour is worse than one that says so.
+ */
+ipcMain.handle('external:open', async (_, playerId: string, url: string) => {
+  if (playerId === 'mpv') {
+    /**
+     * mpv is ours already. Routing it through `MpvEngine` instead of spawning a
+     * second, dumber client gets the full contract — track lists, property
+     * observation, seek that reports back — from code that is already tested.
+     */
+    const result = await mpvEngine.open({ url, title: 'CloudStream' });
+    return { ...result, capability: result.ok ? 'full' : 'none', engine: 'mpv' };
+  }
+  const result = await externalPlayers.openControlled(playerId, url);
+  if (!result.ok) {
+    diagnostics.record({
+      level: 'error',
+      stage: 'playback',
+      source: playerId,
+      url,
+      message: result.error ?? 'The external player could not be started.',
+    });
+  }
+  return { ...result, engine: 'external' };
+});
+
+/**
+ * Manual rollback, for an update that installed and then misbehaved in a way
+ * the load check could not see — a scraper that returns nothing, rather than an
+ * archive that will not link.
+ */
+ipcMain.handle(
+  'extension:rollback',
+  async (_, repositoryUrl: string, internalName: string) => {
+    try {
+      return await pluginManager.rollbackPlugin(repositoryUrl, internalName);
+    } catch (error) {
+      return { ...fail(error), message: 'The previous version could not be restored.' };
+    }
+  }
+);
+
+ipcMain.handle(
+  'extension:hasPreviousVersion',
+  async (_, repositoryUrl: string, internalName: string) => ({
+    ok: true,
+    available: pluginManager.hasPreviousVersion(repositoryUrl, internalName),
+  })
+);
+
+ipcMain.handle('external:capability', async (_, playerId: string) => ({
+  ok: true,
+  capability: playerId === 'mpv' ? (mpvEngine.isAvailable() ? 'full' : 'none') : externalPlayers.capabilityFor(playerId),
+}));
+
+ipcMain.handle('external:snapshot', async () => ({
+  ok: true,
+  snapshot: externalPlayers.controller()?.current() ?? null,
+}));
+
+ipcMain.handle('external:setPaused', async (_, paused: boolean) => ({
+  ok: (await externalPlayers.controller()?.setPaused(paused)) ?? false,
+}));
+ipcMain.handle('external:seek', async (_, seconds: number) => ({
+  ok: (await externalPlayers.controller()?.seek(seconds)) ?? false,
+}));
+ipcMain.handle('external:setVolume', async (_, percent: number) => ({
+  ok: (await externalPlayers.controller()?.setVolume(percent)) ?? false,
+}));
+ipcMain.handle('external:setMuted', async (_, muted: boolean) => ({
+  ok: (await externalPlayers.controller()?.setMuted(muted)) ?? false,
+}));
+ipcMain.handle('external:setSpeed', async (_, rate: number) => ({
+  ok: (await externalPlayers.controller()?.setSpeed(rate)) ?? false,
+}));
+ipcMain.handle('external:setFullscreen', async () => ({
+  ok: (await externalPlayers.controller()?.setFullscreen()) ?? false,
+}));
+ipcMain.handle('external:stop', async () => {
+  await externalPlayers.shutdown();
+  return { ok: true };
+});
 
 ipcMain.handle('player:openExternal', async (_, playerId: string, url: string) => {
   const result = externalPlayers.open(playerId, url);
@@ -1430,70 +1862,204 @@ async function describeUnreadableSource(url: string): Promise<{
   }
 }
 
-ipcMain.handle('media:probe', async (_, url: string) => {
-  try {
-    const wrappedUrl = await contentService.getProxy().wrap(url);
-    if (!mediaTranscoder.isAvailable()) {
-      return {
-        ok: false,
-        probe: null,
-        error:
-          'Media components are not installed, so audio tracks cannot be inspected. ' +
-          'Install them from Settings to enable audio for all formats.',
-        needsComponents: true,
-      };
-    }
-    const probe = await mediaTranscoder.probe(wrappedUrl);
-    if (probe) return { ok: true, probe, needsComponents: false, failure: null };
-
-    /**
-     * A probe that returns nothing has not said why, and the two reasons need
-     * different responses from the viewer.
-     *
-     * A dead link is one click — try another source. An undecodable codec is
-     * not, and may be worth an external player. The player was reporting both
-     * as "unsupported codec, or the source may be dead", which is two guesses
-     * where one HTTP request gives the answer: a reported link turned out to be
-     * a plain 404, and nothing on screen said so.
-     */
-    const failure = await describeUnreadableSource(wrappedUrl);
-    diagnostics.record({
-      level: 'error',
-      stage: 'playback',
-      url,
-      message: failure.reason,
-      detail: failure.status ? `HTTP ${failure.status}` : undefined,
-    });
-    return { ok: true, probe: null, needsComponents: false, failure };
-  } catch (error) {
-    return { ...fail(error), probe: null, needsComponents: false, failure: null };
-  }
-});
-
+/**
+ * Classifies a source without starting anything.
+ *
+ * Used by the detail screen and by anything that wants to say what a source *is*
+ * before committing to it — AC-COMPAT-10, which asks the UI to distinguish
+ * downloadable from directly playable. A 25 GB HEVC 10-bit MKV downloads at full
+ * speed and decodes nothing, and conflating the two is the root of PRD-37 §2.
+ */
 ipcMain.handle(
-  'media:openTranscode',
-  async (_, url: string, audioIndex: number, transcodeVideo?: boolean, transcodeAudio?: boolean) => {
+  'media:inspect',
+  async (_, request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'refresh'>) => {
     try {
-      const wrappedUrl = await contentService.getProxy().wrap(url);
-      const streamUrl = await mediaTranscoder.createSession(
-        wrappedUrl,
-        audioIndex,
-        Boolean(transcodeVideo),
-        transcodeAudio !== false
-      );
-      if (!streamUrl) {
-        return { ok: false, url: null, error: 'Media components are not installed.' };
-      }
-      return { ok: true, url: streamUrl };
+      return { ok: true, capability: await playbackEngine.inspect(request) };
     } catch (error) {
-      return { ...fail(error), url: null };
+      return { ...fail(error), capability: null };
     }
   }
 );
 
-ipcMain.handle('media:closeTranscode', async (_, token: string) => {
-  mediaTranscoder.closeSession(token);
+/**
+ * Inspect, decide, open — and only then hand back a URL to attach.
+ *
+ * This replaces a probe that ran *beside* playback. The renderer used to assign
+ * `video.src` on mount and start an inspection in parallel; Chromium's parser
+ * failed on an unsupported bitstream within ~150 ms, its `error` handler fired
+ * while the probe was still in flight, and the fallback therefore ran `-c:v copy`
+ * on video it knew nothing about — re-wrapping an undecodable HEVC stream into
+ * MP4 and failing identically a second time. There is no longer a code path that
+ * attaches an unclassified URL.
+ */
+ipcMain.handle('media:prepare', async (_, request: PlaybackStreamRequest) => {
+  try {
+    return await playbackEngine.prepare(request);
+  } catch (error) {
+    return { ...fail(error), playbackUrl: request?.url ?? '', sessionId: '', subtitles: [] };
+  }
+});
+
+ipcMain.handle(
+  'media:switchAudio',
+  async (_, sessionId: string, audioIndex: number, positionSeconds: number) =>
+    playbackEngine.switchAudio(sessionId, audioIndex, positionSeconds)
+);
+
+ipcMain.handle('media:closeStream', async (_, sessionId: string) => {
+  playbackEngine.close(sessionId);
   return { ok: true };
+});
+
+ipcMain.handle('media:getPlaybackDiagnostics', async (_, sessionId?: string) => ({
+  ok: true,
+  events: playbackEngine.getDiagnostics(sessionId),
+}));
+
+// --- native playback engine (mpv) -----------------------------------------
+
+/**
+ * The native engine's surface, and the one thing it does not have.
+ *
+ * There is deliberately **no** `mpv:play(url)` that takes a raw link. Everything
+ * playable still comes out of `media:prepare`, which inspects first — the same
+ * gate INV-RACE-1 puts in front of the `<video>` element. A second entry point
+ * that skipped inspection would reintroduce the original bug in a new engine:
+ * playback started against unclassified content, with the diagnosis arriving
+ * afterwards if at all.
+ */
+ipcMain.handle('mpv:status', async () => ({ ok: true, status: await mpvEngine.status() }));
+
+const NATIVE_ENGINE_EMBED_KEY = 'native_engine_embed';
+
+/**
+ * Whether the video should render inside the app window. On by default.
+ *
+ * A setting rather than a fixed behaviour because embedding is a *positioned
+ * native child window*, not a composited surface, and there are real setups
+ * where a separate window is better: a second monitor to put the film on, a
+ * window manager that mishandles owned windows, an HDR path that only engages
+ * for a top-level window. Those are not bugs this can fix, and a viewer who
+ * hits one needs a way out that is not "stop using the engine".
+ */
+function nativeEngineEmbeds(): boolean {
+  return datastore.getBool(NATIVE_ENGINE_EMBED_KEY, true);
+}
+
+ipcMain.handle('mpv:open', async (_, request: MpvOpenRequest) => {
+  /**
+   * The bounds are stripped here rather than withheld by the renderer.
+   *
+   * The renderer always measures and always sends — it is the only side that
+   * knows where the video area is — and this is the only side that knows
+   * whether embedding is wanted. Absent bounds mean "open a window of your
+   * own", which is exactly what turning the setting off should do.
+   */
+  if (!nativeEngineEmbeds()) request = { ...request, surfaceBounds: undefined };
+  const result = await mpvEngine.open(request);
+  if (!result.ok) {
+    diagnostics.record({
+      level: 'error',
+      stage: 'playback',
+      url: request?.url,
+      source: 'mpv',
+      message: result.error ?? 'The native engine could not open this source.',
+    });
+  }
+  return result;
+});
+
+ipcMain.handle('mpv:setPaused', async (_, paused: boolean) => mpvEngine.setPaused(paused));
+ipcMain.handle('mpv:seek', async (_, seconds: number) => mpvEngine.seek(seconds));
+ipcMain.handle('mpv:setVolume', async (_, volume: number) => mpvEngine.setVolume(volume));
+ipcMain.handle('mpv:setMuted', async (_, muted: boolean) => mpvEngine.setMuted(muted));
+ipcMain.handle('mpv:setSpeed', async (_, speed: number) => mpvEngine.setSpeed(speed));
+ipcMain.handle('mpv:setFullscreen', async (_, on: boolean) => mpvEngine.setFullscreen(on));
+ipcMain.handle('mpv:setAudioTrack', async (_, id: number | null) => mpvEngine.setAudioTrack(id));
+ipcMain.handle('mpv:setSubtitleTrack', async (_, id: number | null) =>
+  mpvEngine.setSubtitleTrack(id)
+);
+ipcMain.handle('mpv:addSubtitle', async (_, url: string, title?: string, language?: string) =>
+  mpvEngine.addSubtitle(url, title, language)
+);
+ipcMain.handle('mpv:setSubtitleDelay', async (_, seconds: number) =>
+  mpvEngine.setSubtitleDelay(seconds)
+);
+ipcMain.handle('mpv:stop', async () => mpvEngine.stop());
+
+/**
+ * The video rectangle, in CSS pixels relative to the window's content area.
+ *
+ * Sent by the renderer whenever the player's layout moves — which is often, and
+ * has to be cheap: this is a `SetWindowPos` on a native child window, not a
+ * restart of anything. mpv keeps rendering into the same handle throughout.
+ */
+ipcMain.handle(
+  'mpv:setSurfaceBounds',
+  async (_, bounds: { x: number; y: number; width: number; height: number }) => {
+    mpvEngine.setSurfaceBounds(bounds);
+    return { ok: true };
+  }
+);
+
+/** A pull for the current state, for a player that mounted mid-playback. */
+ipcMain.handle('mpv:snapshot', async () => ({ ok: true, snapshot: mpvEngine.snapshot() }));
+
+ipcMain.handle('mpv:getPolicy', async () => ({
+  ok: true,
+  policy: nativeEnginePolicy(),
+  available: mpvEngine.isAvailable(),
+  embed: nativeEngineEmbeds(),
+  canEmbed: mpvEngine.canEmbed,
+}));
+
+ipcMain.handle('mpv:setEmbed', async (_, embed: boolean) => {
+  datastore.setBool(NATIVE_ENGINE_EMBED_KEY, embed);
+  /**
+   * Restarted, not adjusted. `--wid` is a command-line argument: mpv decides
+   * between rendering into a handle and creating a window once, at startup,
+   * and there is no property that changes it afterwards.
+   */
+  await mpvEngine.shutdown();
+  logger.info('mpv', 'embed_setting_changed', { embed });
+  return { ok: true, embed };
+});
+
+ipcMain.handle('mpv:setPolicy', async (_, policy: NativeEngineCapability['policy']) => {
+  if (policy !== 'off' && policy !== 'auto' && policy !== 'aggressive') {
+    return { ok: false, error: `Unknown native engine policy: ${policy}` };
+  }
+  datastore.setString(NATIVE_ENGINE_POLICY_KEY, policy, true);
+  /**
+   * Every cached verdict was reached under the old policy and is now wrong in
+   * whichever direction the policy moved. Without this, changing the setting
+   * appears to do nothing for the next ten minutes on any source already seen.
+   */
+  playbackEngine.invalidateCapabilityCache();
+  return { ok: true, policy };
+});
+
+/**
+ * Installs mpv on demand.
+ *
+ * Kept out of `binary:setupAll` on purpose — see `setupMpv`. It is the largest
+ * download the app makes and it is only worth making for someone who actually
+ * meets the streams that need it.
+ */
+ipcMain.handle('binary:setupMpv', async () => {
+  try {
+    const ok = await binaryDownloader.setupMpv((status, percent) => {
+      mainWindow?.webContents.send('binary:setupProgress', { component: 'mpv', status, percent });
+    });
+    /**
+     * The engine that was absent a moment ago now exists, and every capability
+     * record in the cache was decided on the assumption that it did not.
+     */
+    if (ok) playbackEngine.invalidateCapabilityCache();
+    return { ok, status: await mpvEngine.status() };
+  } catch (error) {
+    return { ...fail(error), status: await mpvEngine.status() };
+  }
 });
 
 ipcMain.handle('sources:getCacheStats', async () => contentService.getCache().stats());
@@ -1558,7 +2124,93 @@ ipcMain.handle('sources:savePreferences', async (_, prefs: Partial<SourcePrefere
 ipcMain.handle('download:enqueue', async (_, task: DownloadTask) => downloadService.enqueue(task));
 ipcMain.handle('download:pause', async (_, id: string) => downloadService.pause(id));
 ipcMain.handle('download:resume', async (_, id: string) => downloadService.resume(id));
-ipcMain.handle('download:remove', async (_, id: string) => downloadService.remove(id));
+ipcMain.handle('download:remove', async (_, id: string, deleteFile?: boolean) =>
+  downloadService.remove(id, deleteFile === true)
+);
+
+/**
+ * How "Delete" should behave, remembered.
+ *
+ * Three values rather than a boolean, because "ask me" is a real answer and the
+ * only safe default: removing a finished film from the list and deleting a
+ * finished film off the disk are unrecoverably different, and guessing wrong in
+ * the destructive direction cannot be undone. The prompt is where the user opts
+ * out of being asked, and Settings is where they opt back in — a preference that
+ * can only be set from a confirmation dialog is one nobody can reverse.
+ */
+const DELETE_PREFERENCE_KEY = 'download_delete_behavior';
+type DeletePreference = 'ask' | 'list-only' | 'list-and-file';
+
+/**
+ * Player preferences that belong to the viewer rather than to a film.
+ *
+ * Volume, mute and speed persist across media and across restarts because they
+ * describe the room, not the title. Track *languages* persist for the same
+ * reason; track **indices** deliberately do not — audio track 2 is the Hindi dub
+ * on one release and the director's commentary on the next, so restoring an
+ * index would confidently select the wrong thing on every file.
+ */
+const PLAYER_PREFERENCES_KEY = 'player_preferences';
+
+interface StoredPlayerPreferences {
+  volume: number;
+  muted: boolean;
+  speed: number;
+  audioLanguage?: string;
+  subtitleLanguage?: string;
+}
+
+const DEFAULT_PLAYER_PREFERENCES: StoredPlayerPreferences = {
+  volume: 1,
+  muted: false,
+  speed: 1,
+};
+
+ipcMain.handle('player:getPreferences', async () => {
+  const stored = datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null);
+  /**
+   * Clamped on read, not just on write. A datastore edited by hand — or carried
+   * in from an Android backup — can hold a volume of 40 or -1, and either one
+   * makes the element throw `IndexSizeError` the moment it is assigned.
+   */
+  const preferences: StoredPlayerPreferences = {
+    ...DEFAULT_PLAYER_PREFERENCES,
+    ...(stored ?? {}),
+  };
+  preferences.volume = Math.min(1, Math.max(0, Number(preferences.volume) || 0));
+  preferences.speed = Math.min(4, Math.max(0.25, Number(preferences.speed) || 1));
+  preferences.muted = preferences.muted === true;
+  return { ok: true, preferences };
+});
+
+ipcMain.handle(
+  'player:setPreferences',
+  async (_, patch: Partial<StoredPlayerPreferences>) => {
+    const current =
+      datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null) ??
+      DEFAULT_PLAYER_PREFERENCES;
+    // Merged rather than replaced: the player writes volume/mute/speed while the
+    // track panels write languages, and a whole-record write from either would
+    // erase the other's choice.
+    datastore.setObject(PLAYER_PREFERENCES_KEY, { ...current, ...patch }, true);
+    return { ok: true };
+  }
+);
+
+ipcMain.handle('download:getDeletePreference', async () => {
+  const stored = datastore.getString(DELETE_PREFERENCE_KEY, 'ask', true);
+  const preference: DeletePreference =
+    stored === 'list-only' || stored === 'list-and-file' ? stored : 'ask';
+  return { ok: true, preference };
+});
+
+ipcMain.handle('download:setDeletePreference', async (_, preference: DeletePreference) => {
+  if (preference !== 'ask' && preference !== 'list-only' && preference !== 'list-and-file') {
+    return { ok: false, error: `Unknown delete preference: ${preference}` };
+  }
+  datastore.setString(DELETE_PREFERENCE_KEY, preference, true);
+  return { ok: true, preference };
+});
 ipcMain.handle('download:getQueue', async () => downloadService.getTasks());
 
 // Season and series downloads. Resolution runs here rather than in the
@@ -1616,11 +2268,11 @@ ipcMain.handle('binary:checkBinaries', async () => binaryDownloader.checkBinarie
 
 ipcMain.handle('binary:testAll', async () => binaryDownloader.testAllBinaries());
 
-ipcMain.handle('binary:testOne', async (_, name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe') => {
+ipcMain.handle('binary:testOne', async (_, name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'mpv') => {
   return await binaryDownloader.testBinary(name);
 });
 
-ipcMain.handle('binary:remove', async (_, name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'media' | 'downloads' | 'all') => {
+ipcMain.handle('binary:remove', async (_, name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'mpv' | 'media' | 'downloads' | 'all') => {
   const removed = binaryDownloader.removeBinary(name);
   return { ok: removed };
 });
@@ -1659,6 +2311,8 @@ ipcMain.handle('binary:setupFfmpeg', async () => {
         mainWindow.webContents.send('binary:setupProgress', { component: 'ffmpeg', status, percent });
       }
     });
+    // A different binary may have arrived with a different option set.
+    if (ok) refreshFfmpegOptionSupport();
     return {
       ok,
       message: ok
@@ -2048,9 +2702,132 @@ ipcMain.handle('library:getProgressForKey', async (_, key: string) =>
   libraryStore.getProgressForKey(key)
 );
 
+const SHOW_CONTINUE_WATCHING_KEY = 'home_show_continue_watching';
+
 ipcMain.handle('library:getContinueWatching', async (_, limit?: number) =>
-  libraryStore.getContinueWatching(limit)
+  /**
+   * The setting is enforced here rather than in the renderer.
+   *
+   * A home screen that fetched the rows and then declined to draw them would
+   * still have read the watch history to build them, and "do not show me what I
+   * have been watching" is a request about the data as much as the pixels — on
+   * a shared machine it is the whole point. Off means the rows are never
+   * assembled.
+   */
+  datastore.getBool(SHOW_CONTINUE_WATCHING_KEY, true)
+    ? libraryStore.getContinueWatching(limit)
+    : []
 );
+
+/**
+ * Removes one title from the row, keeping where it got to.
+ *
+ * A dismissal rather than a deletion: "take this off my home screen" and
+ * "forget where I was" are different intentions, and the destructive reading of
+ * the first is unrecoverable — someone tidying the row would silently lose the
+ * resume point on a film they were halfway through.
+ */
+ipcMain.handle('library:dismissContinueWatching', async (_, key: string) => {
+  try {
+    const removed = libraryStore.dismissFromContinueWatching(key);
+    logger.info('library', 'continue_watching_dismissed', { mediaId: key, removed });
+    return { ok: true, removed };
+  } catch (error) {
+    return { ...fail(error), removed: false };
+  }
+});
+
+ipcMain.handle('library:clearContinueWatching', async () => {
+  try {
+    const cleared = libraryStore.clearContinueWatching();
+    logger.info('library', 'continue_watching_cleared', { cleared });
+    return { ok: true, cleared };
+  } catch (error) {
+    return { ...fail(error), cleared: 0 };
+  }
+});
+
+// --- the home screen's catalogue source ------------------------------------
+
+/**
+ * `home:*` is the surface over `HomeProviderRegistry`.
+ *
+ * `check` is separate from `list` and forced, because "is it working *now*" is
+ * a different question from "what is available" and the answer to the first is
+ * cached for ten minutes. Someone who has just pasted an addon URL wants it
+ * probed, not told what a probe said before the URL existed.
+ */
+ipcMain.handle('home:listProviders', async (_, force?: boolean) => {
+  try {
+    return {
+      ok: true,
+      providers: await homeProviders.summaries(Boolean(force)),
+      selected: homeProviders.selectedId,
+      tmdbKeySet: homeProviders.hasTmdbKey(),
+      customUrl: homeProviders.customCatalogUrl(),
+    };
+  } catch (error) {
+    return { ...fail(error), providers: [], selected: DEFAULT_PROVIDER_ID, tmdbKeySet: false, customUrl: '' };
+  }
+});
+
+/**
+ * Selecting refuses a provider that is not answering, and says why.
+ *
+ * Accepting it and letting the home screen come up empty would make the health
+ * check a decoration. The refusal can name the cause; the empty screen could
+ * not.
+ */
+ipcMain.handle('home:selectProvider', async (_, id: string) => {
+  try {
+    const result = await homeProviders.select(id);
+    if (result.ok) {
+      // The cache is keyed by provider, so the old rows are not wrong — they
+      // are someone else's catalogue, and leaving them would keep the previous
+      // provider on screen until each row aged out six hours later.
+      discovery.invalidateForProviderChange();
+      mainWindow?.webContents.send('discover:invalidated');
+    }
+    return result;
+  } catch (error) {
+    return { ...fail(error), id: homeProviders.selectedId };
+  }
+});
+
+ipcMain.handle('home:setTmdbKey', async (_, key: string) => {
+  try {
+    homeProviders.setTmdbKey(key);
+    // Probed immediately: a key is pasted in order to find out whether it
+    // works, and making the user hunt for a refresh button to learn that is a
+    // gap they will read as the field not saving.
+    return { ok: true, health: await homeProviders.checkOne('tmdb', true) };
+  } catch (error) {
+    return { ...fail(error), health: null };
+  }
+});
+
+ipcMain.handle('home:setCustomCatalogUrl', async (_, url: string) => {
+  try {
+    homeProviders.setCustomCatalogUrl(url);
+    return { ok: true, health: url.trim() ? await homeProviders.checkOne('custom', true) : null };
+  } catch (error) {
+    return { ...fail(error), health: null };
+  }
+});
+
+ipcMain.handle('library:getContinueWatchingEnabled', async () => ({
+  ok: true,
+  enabled: datastore.getBool(SHOW_CONTINUE_WATCHING_KEY, true),
+}));
+
+ipcMain.handle('library:setContinueWatchingEnabled', async (_, enabled: boolean) => {
+  datastore.setBool(SHOW_CONTINUE_WATCHING_KEY, enabled);
+  logger.info('library', 'continue_watching_visibility_changed', { enabled });
+  // Nothing is deleted either way. The history is what the library is built on
+  // — resume points, the played-source records, the ranking — and hiding a row
+  // is not consent to discard any of it.
+  return { ok: true, enabled };
+});
 
 ipcMain.handle('library:clearProgress', async (_, key: string, season?: number, episode?: number) =>
   libraryStore.clearProgress(key, season, episode)
@@ -2098,6 +2875,199 @@ ipcMain.handle(
         sources: [],
         storedSources: [],
       };
+    }
+  }
+);
+
+// --- the source that actually played --------------------------------------
+
+/**
+ * Saving and re-opening the exact stream that worked.
+ *
+ * The library already remembers *what* was watched and the bookmarks remember
+ * *which page* it came from. Neither remembers **which of thirty sources
+ * actually delivered it** — so returning to a title meant picking again from a
+ * list, with no record that the fourth one down is the only one that ever
+ * played.
+ *
+ * The link is stored, but it is never the identity: a provider URL is a signed
+ * address on someone else's CDN, good for minutes. What makes the record
+ * durable is the `origin` query beside it, which is replayed to obtain a fresh
+ * link for the same release when the stored one has died.
+ */
+ipcMain.handle(
+  'library:recordPlayedSource',
+  async (
+    _,
+    input: {
+      title: string;
+      year?: number;
+      mediaUrl: string;
+      episodeTitle?: string;
+      season?: number;
+      episode?: number;
+      source: TorrentResult;
+      positionSeconds?: number;
+      durationSeconds?: number;
+    }
+  ) => {
+    try {
+      const key = canonicalKey(input.title, input.year);
+      const stored = torrentResultToStoredSource(input.source);
+
+      /**
+       * The deadline is read from the URL now, while we have it.
+       *
+       * `SourceCache` already knows how to find one — CloudFront's `Expires`,
+       * a JWT `exp`, and the handful of other schemes providers actually use.
+       * Recording it here is what lets `isLinkUsable` answer later without
+       * another request; without it every saved source would be re-resolved on
+       * every open, which is the cost this feature exists to avoid.
+       */
+      if (stored.directUrl && stored.expiresAt === undefined) {
+        const deadline = deadlineFromUrl(stored.directUrl);
+        if (deadline) stored.expiresAt = deadline;
+      }
+
+      const record = libraryStore.recordPlayedSource({
+        key,
+        season: input.season,
+        episode: input.episode,
+        source: stored,
+        origin: {
+          mediaUrl: input.mediaUrl,
+          title: input.title,
+          year: input.year,
+          episodeTitle: input.episodeTitle,
+        },
+        positionSeconds: input.positionSeconds,
+        durationSeconds: input.durationSeconds,
+      });
+      return { ok: true, record };
+    } catch (error) {
+      return { ...fail(error), record: null };
+    }
+  }
+);
+
+ipcMain.handle(
+  'library:getPlayedSource',
+  async (_, key: string, season?: number, episode?: number) => ({
+    ok: true,
+    record: libraryStore.getPlayedSource(key, season, episode),
+  })
+);
+
+ipcMain.handle('library:listPlayedSources', async (_, limit?: number) => ({
+  ok: true,
+  records: libraryStore.listPlayedSources(limit),
+}));
+
+ipcMain.handle('library:getPlayedSourcesForKey', async (_, key: string) => ({
+  ok: true,
+  records: libraryStore.getPlayedSourcesForKey(key),
+}));
+
+ipcMain.handle(
+  'library:forgetPlayedSource',
+  async (_, key: string, season?: number, episode?: number) => ({
+    ok: true,
+    removed: libraryStore.forgetPlayedSource(key, season, episode),
+  })
+);
+
+/**
+ * Hands back a playable source for a saved record, refreshing it if it has died.
+ *
+ * Three outcomes, and the caller is told which — because they mean different
+ * things to the viewer and a single "here is a stream" would hide the one that
+ * matters:
+ *
+ * - `reused` — the stored link still holds. Instant; no provider was contacted.
+ * - `refreshed` — the link had expired, so the *same release* was re-resolved
+ *   from the same provider and the record updated in place.
+ * - `unavailable` — the provider no longer offers that release. The record is
+ *   marked rather than deleted, because "the one that used to work is gone" is
+ *   more useful than an entry that silently vanishes, and the full source list
+ *   comes back so the viewer can choose again.
+ */
+ipcMain.handle(
+  'library:resolvePlayedSource',
+  async (_, key: string, season?: number, episode?: number) => {
+    try {
+      const record = libraryStore.getPlayedSource(key, season, episode);
+      if (!record) {
+        return { ok: false, error: 'No source has been saved for this item.', resolution: null };
+      }
+
+      if (isLinkUsable(record.source)) {
+        return {
+          ok: true,
+          resolution: 'reused' as const,
+          record,
+          source: storedSourceToTorrentResult(record.source),
+          sources: [],
+        };
+      }
+
+      /**
+       * The saved link is dead, so the query that produced it is replayed.
+       * `bypassCache` because a cached answer is what just failed.
+       */
+      const discovered = await contentService.getSources(
+        {
+          mediaUrl: record.origin.mediaUrl,
+          titleOverride: record.origin.title,
+          season: record.season,
+          episode: record.episode,
+        },
+        undefined,
+        { bypassCache: true }
+      );
+
+      const replacement = pickReplacement(record.source, discovered.sources);
+      if (!replacement) {
+        libraryStore.markPlayedSourceUnavailable(
+          key,
+          'The provider no longer offers this release.',
+          season,
+          episode
+        );
+        return {
+          ok: false,
+          resolution: 'unavailable' as const,
+          error:
+            'The exact source you saved is no longer offered by that provider. ' +
+            'Pick another from the list below.',
+          record,
+          // The alternatives, so this is a choice rather than a dead end.
+          sources: discovered.sources,
+        };
+      }
+
+      const refreshed = torrentResultToStoredSource(replacement);
+      const updated = libraryStore.updatePlayedSourceLink(
+        key,
+        {
+          directUrl: refreshed.directUrl,
+          directHeaders: refreshed.directHeaders,
+          magnet: refreshed.magnet,
+          isM3u8: refreshed.isM3u8,
+          expiresAt: refreshed.directUrl ? deadlineFromUrl(refreshed.directUrl) ?? undefined : undefined,
+        },
+        season,
+        episode
+      );
+
+      return {
+        ok: true,
+        resolution: 'refreshed' as const,
+        record: updated ?? record,
+        source: replacement,
+        sources: discovered.sources,
+      };
+    } catch (error) {
+      return { ...fail(error), resolution: null, sources: [] };
     }
   }
 );

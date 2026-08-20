@@ -314,9 +314,51 @@ export class ExtensionUpdater {
       // treats an absent hash as "publisher did not supply one", as on install.
     }
 
+    /**
+     * The working archive is kept before it is overwritten.
+     *
+     * An update that downloads cleanly and verifies its hash can still be built
+     * against a provider API this runtime does not have — and the first anyone
+     * knows is that every provider from that extension has silently vanished.
+     * Copying the old file aside costs a few hundred KB and is the difference
+     * between a recoverable mistake and a broken install with nothing to go
+     * back to.
+     */
+    const preserved = this.plugins.preserveInstalledVersion(
+      update.repositoryUrl,
+      internalName
+    );
+
     const outcome = await this.plugins.installPlugin(plugin, update.repositoryUrl);
 
     if (outcome.ok) {
+      /**
+       * Loaded before the update is called a success.
+       *
+       * This is the check that turns "the file was written" into "the extension
+       * works". A `T4_BLOCKED` verdict means the runtime cannot load it at all;
+       * anything else — including `T3_DEGRADED`, which is the normal state of a
+       * large part of the corpus — is accepted.
+       */
+      const verified = await this.plugins.verifyInstalledPlugin(
+        internalName,
+        this.plugins.archivePathFor(update.repositoryUrl, internalName)
+      );
+
+      if (!verified.ok && preserved) {
+        const restored = await this.plugins.rollbackPlugin(update.repositoryUrl, internalName);
+        const result: UpdateOutcome = {
+          internalName,
+          ok: false,
+          fromVersion: update.installedVersion,
+          message: restored.ok
+            ? `${update.name} v${plugin.version} does not load (${verified.message}); v${update.installedVersion} has been restored.`
+            : `${update.name} v${plugin.version} does not load (${verified.message}), and the previous version could not be restored: ${restored.message}`,
+        };
+        this.emit('extension:updateFinished', result);
+        return result;
+      }
+
       this.dropCachedUpdate(internalName);
     }
 

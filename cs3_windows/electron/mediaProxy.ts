@@ -108,6 +108,16 @@ export function alignRefererScheme(
   return out;
 }
 
+/** Our own servers, which need no header injection and no extra hop. */
+function isLoopback(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
 /** First byte of `bytes 40000-99999/1000000`, which is where a resume continues. */
 function offsetFromContentRange(value: string | null): number | null {
   const match = value?.match(/bytes\s+(\d+)-/i);
@@ -129,7 +139,13 @@ function looksLikeHls(url: string, contentType: string | null): boolean {
     const type = contentType.toLowerCase();
     if (type.includes('mpegurl') || type.includes('m3u8')) return true;
   }
-  return /\.m3u8(\?|$)/i.test(url);
+  const clean = url.split(/[?#]/)[0].toLowerCase();
+  return (
+    clean.endsWith('.m3u8') ||
+    clean.endsWith('.m3u') ||
+    /\/(getm3u8|m3u8|hls)\b/i.test(clean) ||
+    /[?&]format=m3u8/i.test(url)
+  );
 }
 
 export class MediaProxy {
@@ -165,6 +181,19 @@ export class MediaProxy {
    */
   public async wrap(url: string, headers?: Record<string, string>): Promise<string> {
     if (!/^https?:\/\//i.test(url)) return url;
+    /**
+     * A loopback URL is already ours and is returned untouched.
+     *
+     * Everything that serves media locally — the torrent engine, this proxy, the
+     * transcoder — hands back `http://127.0.0.1:…`, which matches the scheme test
+     * above. Without this guard the compatibility engine wraps a torrent stream in
+     * a second proxy hop that copies every byte for no reason, and re-wrapping this
+     * proxy's own output builds a chain that grows by one hop per call.
+     *
+     * There is nothing to gain either way: header injection exists to satisfy a
+     * third-party CDN's hotlink check, and our own servers set what they need.
+     */
+    if (isLoopback(url)) return url;
     const cleaned = this.clean(headers);
 
     await this.ensureServer();

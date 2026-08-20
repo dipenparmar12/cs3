@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
+import { NativeEngineStage } from './player/NativeEngineStage';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
   SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
   HardDriveDownload, FolderDown, GripHorizontal, Maximize2, Minimize2, X,
+  Search,
 } from 'lucide-react';
 import type { TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
 import { AspectRatioMode } from '../types/player';
+import type { ExternalPlaybackSnapshot } from '../types/player';
 import type { TorrentResult } from '../types/torrent';
 import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
@@ -18,13 +21,13 @@ import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
 import { SubtitlePanel } from './player/SubtitlePanel';
 import { PlayerDownloadPanel } from './player/PlayerDownloadPanel';
-import type { MediaProbe, ProbeFailure } from '../../electron/mediaTranscoder';
+import type { PlaybackStreamResponse, SourceCapabilityModel } from '../types/media';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
 import { useMiniFrame } from './player/useMiniFrame';
-import { CopyErrorButton } from './CopyErrorButton';
-import { ExternalPlayerFallback } from './player/ExternalPlayerFallback';
+import { PlayerCopyMenu } from './player/PlayerCopyMenu';
+import { PlaybackErrorPanel } from './player/PlaybackErrorPanel';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -138,6 +141,15 @@ interface VideoPlayerProps {
     onCancelSearch?: () => void;
     onDownloadSource?: (source: TorrentResult) => void;
   };
+  /**
+   * Searches the app for this title, from inside the player.
+   *
+   * The viewer is already looking at the name of the thing they want more of —
+   * another release, a different provider, the next season — and the only route
+   * was to close the player, go to Search, and retype it. The title is right
+   * there; this makes it a target.
+   */
+  onSearchTitle?: (query: string) => void;
   /** When provided, overrides the stored setting for showing aspect ratio control (default false) */
   showAspectRatioControl?: boolean;
   /** When provided, overrides the stored setting for showing playback speed control (default false) */
@@ -162,6 +174,19 @@ const CONTROLS_IDLE_MS = 3_000;
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const SKIP_SECONDS = 10;
+
+/**
+ * Points a conversion URL at a timestamp, replacing any it already carries.
+ *
+ * A live fragmented MP4 has no index, so seeking is a re-request with `?t=`. The
+ * URL therefore already has one after any seek or audio-track switch, and naive
+ * concatenation produces `…?t=5?t=90`, which parses as `t=5` — so the second seek
+ * silently jumps back to where the first one went.
+ */
+function atTime(url: string, seconds: number): string {
+  const [base] = url.split('?');
+  return seconds > 0 ? `${base}?t=${Math.floor(seconds)}` : base;
+}
 
 /** Sentinel for HLS automatic level selection, which hls.js represents as -1. */
 const AUTO_QUALITY = -1;
@@ -197,7 +222,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   infoHash, subtitles, onBack, series, onSelectEpisode, switchingTo, switchError,
   progress, sourceSession, subtitleContext, onDownloadCurrent, onOpenDownloads,
   hidden = false, mini = false, onMinimize, onExpand, showAspectRatioControl,
-  showPlaybackSpeedControl, showSubtitlesControl: showSubtitlesControlProp,
+  showPlaybackSpeedControl, showSubtitlesControl: showSubtitlesControlProp, onSearchTitle,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -209,6 +234,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [duration, setDuration] = useState(0);
   const [buffered, setBuffered] = useState(0);
   const [volume, setVolume] = useState(1);
+  /** Current volume/mute, readable from effects that must not depend on them. */
+  const audioSettings = useRef({ volume: 1, muted: false });
   const [isMuted, setIsMuted] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -339,7 +366,224 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     );
   }, [downloadQueue, title, progress?.mediaUrl, streamUrl, infoHash]);
 
+  /**
+   * Lightweight acknowledgement for actions taken during playback.
+   *
+   * The reported problem: pressing Download started a background transfer with
+   * nothing on screen to say so, and people pressed it again — and again —
+   * because silence is indistinguishable from a dead button. The fix is not a
+   * dialog: a modal over a playing film to confirm a background download is a
+   * worse interruption than the silence it replaces. A toast says it happened
+   * and gets out of the way.
+   */
+  const [toasts, setToasts] = useState<Array<{ id: number; text: string; tone: 'info' | 'good' | 'bad' }>>(
+    []
+  );
+  const toastId = useRef(0);
+
+  const notify = useCallback((text: string, tone: 'info' | 'good' | 'bad' = 'info') => {
+    const id = ++toastId.current;
+    setToasts((current) => [...current.slice(-2), { id, text, tone }]);
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((toast) => toast.id !== id));
+    }, 4000);
+  }, []);
+
+  /**
+   * Download state changes, announced once each.
+   *
+   * Driven off the queue rather than off the click, so a transfer that fails
+   * twenty minutes later still says so — and so a state reached without the
+   * viewer touching anything (a source expiring, a retry succeeding) is reported
+   * the same way. The previous state is held in a ref because this must fire on
+   * the *transition*, not on every poll that repeats the same value.
+   */
+  const lastDownloadState = useRef<string | null>(null);
+  useEffect(() => {
+    const state = currentDownload?.state ?? null;
+    const previous = lastDownloadState.current;
+    lastDownloadState.current = state;
+    if (!state || previous === null || previous === state) return;
+
+    if (state === DownloadState.Completed) notify('Download completed', 'good');
+    else if (state === DownloadState.Failed) notify('Download failed', 'bad');
+    else if (state === DownloadState.Paused) notify('Download paused');
+    else if (state === DownloadState.Downloading && previous === DownloadState.Paused) {
+      notify('Download resumed');
+    } else if (state === DownloadState.RefreshingSource) {
+      notify('Link expired — finding the source again');
+    }
+  }, [currentDownload?.state, notify]);
+
+  /**
+   * The external player currently holding this stream, and how far we can reach it.
+   *
+   * `null` while playback is ours. Set on a handoff, cleared when the viewer
+   * closes that player — a window that is gone while our timeline still runs is
+   * the same lie as a seek bar that does nothing, in the other direction.
+   */
+  const [externalControl, setExternalControl] = useState<{
+    playerId: string;
+    playerName: string;
+    capability: 'full' | 'none';
+  } | null>(null);
+  const [externalSnapshot, setExternalSnapshot] = useState<ExternalPlaybackSnapshot | null>(null);
+
+  useEffect(() => {
+    if (!externalControl) return;
+    const dispose = window.cloudstream?.onExternalUpdate((snapshot) => {
+      setExternalSnapshot(snapshot);
+      // A capability that downgrades mid-session is reported, not hidden: VLC
+      // without its HTTP module plays perfectly and answers nothing.
+      if (snapshot.capability !== externalControl.capability) {
+        setExternalControl((current) =>
+          current ? { ...current, capability: snapshot.capability } : current
+        );
+      }
+      if (snapshot.state === 'closed' || snapshot.state === 'ended') {
+        setExternalControl(null);
+        setExternalSnapshot(null);
+      }
+    });
+    return dispose;
+  }, [externalControl?.playerId, externalControl?.capability]);
+
+  /**
+   * Mirrors the external player's position into the app's own timeline.
+   *
+   * The requirement is that "50% there" reads as "50% here". Feeding the same
+   * state the `<video>` path writes means watch progress, the resume point and
+   * the up-next card all keep working without knowing which engine is playing.
+   */
+  useEffect(() => {
+    if (!externalSnapshot || externalControl?.capability !== 'full') return;
+    if (externalSnapshot.positionSeconds > 0) setCurrentTime(externalSnapshot.positionSeconds);
+    if (externalSnapshot.durationSeconds > 0) setDuration(externalSnapshot.durationSeconds);
+    setIsPlaying(!externalSnapshot.paused);
+  }, [externalSnapshot, externalControl?.capability]);
+
+  /**
+   * Saves the source that actually delivered this stream.
+   *
+   * The threshold is the whole point. A source is recorded as working only
+   * after playback has genuinely run for a few seconds — not when it was
+   * selected, and not when a URL was merely attached. A release that opens and
+   * dies on the second GOP looks identical to a good one at attach time, and
+   * saving it would send the viewer straight back to a stream that already
+   * failed them. Ten seconds is past every failure mode that presents as
+   * "it started and then stopped".
+   *
+   * Recorded once per stream. The effect re-runs on every timeupdate, so the
+   * ref is what stops this becoming an IPC call four times a second.
+   */
+  const recordedSourceFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!streamUrl || recordedSourceFor.current === streamUrl) return;
+    if (currentTime < 10) return;
+    if (!activeSource || !progress?.mediaUrl) return;
+
+    recordedSourceFor.current = streamUrl;
+    void window.cloudstream?.recordPlayedSource({
+      title,
+      year: progress.year,
+      mediaUrl: progress.mediaUrl,
+      episodeTitle,
+      season: progress.season,
+      episode: progress.episode,
+      source: activeSource,
+      positionSeconds: currentTime,
+      durationSeconds: duration || undefined,
+    });
+  }, [streamUrl, currentTime, activeSource, progress, title, episodeTitle, duration]);
+
+  // A new stream is a new question about which source works.
+  useEffect(() => {
+    recordedSourceFor.current = null;
+  }, [streamUrl]);
+
+  const [showNativePlayerBtn, setShowNativePlayerBtn] = useState(true);
+  const [externalPlayers, setExternalPlayers] = useState<Array<{ id: string; name: string }>>([]);
+  const [extPlayerStatus, setExtPlayerStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void window.cloudstream?.listExternalPlayers?.().then((res) => {
+      if (active && res?.players) {
+        setExternalPlayers(res.players);
+      }
+    });
+    void window.cloudstream?.getSetting?.('player_show_native_player_btn', 'true').then((val) => {
+      if (active) setShowNativePlayerBtn(val !== 'false');
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleOpenExternalPlayer = useCallback(
+    async (playerId: string) => {
+      if (!streamUrl) return;
+      const target = externalPlayers.find((p) => p.id === playerId);
+      const playerName = target?.name ?? playerId;
+
+      // Pause HTML5 video playback to avoid duplicate audio
+      if (videoRef.current && !videoRef.current.paused) {
+        videoRef.current.pause();
+        setIsPlaying(false);
+      }
+
+      setExtPlayerStatus(`Launching in ${playerName}…`);
+
+      /**
+       * Handed over through the controlled path, which keeps a channel open
+       * where the player has one.
+       *
+       * The capability that comes back decides what the app may claim. mpv and
+       * VLC answer `full`, so our transport controls become a real remote and
+       * their position drives our timeline. Everything else answers `none`, and
+       * the honest response is to say the stream is playing elsewhere rather
+       * than to render controls that cannot reach it.
+       */
+      const res = await window.cloudstream?.openControlledExternal?.(playerId, streamUrl);
+      if (res?.ok) {
+        setExternalControl({ playerId, playerName, capability: res.capability });
+        setExtPlayerStatus(
+          res.capability === 'full'
+            ? `Playing in ${playerName} — controls here are connected to it`
+            : `Playing in ${playerName} — this player cannot be controlled from here`
+        );
+      } else {
+        setExternalControl(null);
+        setExtPlayerStatus(res?.error ?? `Could not launch ${playerName}`);
+      }
+      setTimeout(() => setExtPlayerStatus(null), 5000);
+    },
+    [streamUrl, externalPlayers]
+  );
+
   const handleDownloadCurrentMedia = useCallback(async () => {
+    /**
+     * A second press on something already downloading is not a second download.
+     *
+     * This is the other half of the silence problem: without feedback people
+     * pressed again, and every press enqueued another copy of the same file.
+     * Saying what is already happening is both the acknowledgement and the
+     * guard — and "Completed" is called out separately, because "already
+     * downloading" would be a lie about a file that is sitting on disk.
+     */
+    if (currentDownload) {
+      if (currentDownload.state === DownloadState.Completed) {
+        notify('Already downloaded — open Downloads to find it', 'good');
+      } else if (currentDownload.state === DownloadState.Failed) {
+        notify('That download failed. Retry it from the download panel.', 'bad');
+      } else {
+        notify(`Already downloading — ${title}`);
+      }
+      return;
+    }
+
+    notify(`Download started — ${episodeTitle || title}`, 'good');
+
     if (onDownloadCurrent) {
       onDownloadCurrent();
       return;
@@ -455,32 +699,40 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [activeAudioTrack, setActiveAudioTrack] = useState<string | number>('default');
 
   /**
-   * Audio compatibility state.
+   * The prepared stream, and the gate that stops playback racing inspection.
    *
-   * Chromium ships no AC-3, E-AC-3 or DTS decoder, and the failure is silent —
-   * the container opens, video decodes, and the audio track is dropped with no
-   * error. Measured on this build: an H.264 + AC-3 file decodes 65 KB of video
-   * and exactly 0 bytes of audio. So the stream is probed up front and remuxed
-   * through ffmpeg when its audio cannot be played.
+   * Nothing is attached to the `<video>` element until this exists (INV-RACE-1).
+   * That ordering is the whole fix for PRD-37 §4.1: the element used to receive
+   * the raw URL on mount while a probe ran beside it, Chromium's parser failed
+   * on an unsupported bitstream within ~150 ms, and its `error` handler fired
+   * with `needsVideoTranscode` still `false` because the probe had not returned
+   * — so the fallback stream-copied an undecodable HEVC bitstream into MP4 and
+   * failed a second time in exactly the same way.
+   *
+   * `null` means "still inspecting", which the overlay says out loud rather than
+   * showing a frozen black frame.
    */
-  const [audioProbe, setAudioProbe] = useState<MediaProbe | null>(null);
+  const [prepared, setPrepared] = useState<PlaybackStreamResponse | null>(null);
   /**
-   * The probe, readable from the `error` listener.
+   * The prepared stream, readable from the `error` listener.
    *
-   * That listener is attached once per stream and would otherwise close over
-   * whatever the probe was at attach time — which is always `null`, because the
-   * probe finishes later than the element starts loading.
+   * That listener is attached once and would otherwise close over whatever the
+   * state was at attach time.
    */
-  const audioProbeRef = useRef<MediaProbe | null>(null);
+  const preparedRef = useRef<PlaybackStreamResponse | null>(null);
+  /** What the engine decided, for the track list, the messages and the report. */
+  const capability: SourceCapabilityModel | null = prepared?.capability ?? null;
   /**
-   * Why the probe came back empty, when it did.
+   * This stream is not going to the `<video>` element at all.
    *
-   * Separates "this link is a 404" from "this format cannot be decoded". They
-   * were being reported as one sentence offering both, and only one of them is
-   * worth opening another player for.
+   * The engine decided the browser cannot decode it and that re-encoding it
+   * would cost more than it is worth — see `shouldRouteToNativeEngine`. mpv has
+   * it instead, and everything below that reads from the element has to know
+   * that the element is empty rather than broken.
    */
-  const [probeFailure, setProbeFailure] = useState<ProbeFailure | null>(null);
-  const probeFailureRef = useRef<ProbeFailure | null>(null);
+  const isNativeEngine = prepared?.ok === true && capability?.requiredStrategy === 'NATIVE_MPV';
+  const probeFailure = capability?.failure ?? null;
+  const probeFailureRef = useRef<typeof probeFailure>(null);
   /**
    * Asks for the next source, at most once per stream.
    *
@@ -507,8 +759,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const forceTranscodeRef = useRef<(() => void) | null>(null);
   const forcedFor = useRef<string | null>(null);
-  const [transcode, setTranscode] = useState<{ url: string; token: string } | null>(null);
-  const [transcodeOffset, setTranscodeOffset] = useState(0);
+  /**
+   * Where in the film the current ffmpeg process was started.
+   *
+   * A live fragmented MP4 has no index, so `currentTime` counts from the seek
+   * point rather than from the start of the film. Every position the UI shows or
+   * saves is this plus the element's own clock.
+   */
+  const [playbackOffset, setPlaybackOffset] = useState(0);
   const [audioNeedsComponents, setAudioNeedsComponents] = useState(false);
   const [selectedAudioIndex, setSelectedAudioIndex] = useState(0);
 
@@ -561,19 +819,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !streamUrl) return;
+    // INV-RACE-1: no source is attached until the engine has classified it.
+    // There is deliberately no `?? streamUrl` fallback here — that expression is
+    // precisely what attached unclassified URLs and created the race.
+    if (!video || !streamUrl || !prepared?.ok || !prepared.playbackUrl) return;
+    /**
+     * A native-engine stream must not also be assigned here. Chromium would
+     * take the URL, fail to decode it, fire `error`, and trip the failover
+     * ladder — so the source that is playing perfectly well in mpv would be
+     * reported as unplayable and skipped.
+     */
+    if (prepared.capability.requiredStrategy === 'NATIVE_MPV') return;
 
     setError(null);
     setQualities([]);
     setQuality(AUTO_QUALITY);
     let hls: Hls | null = null;
 
-    const isHls = /\.m3u8(\?|$)/i.test(streamUrl) || mimeType === 'application/x-mpegURL';
+    const playbackUrl = prepared.playbackUrl;
+    // Decided by the engine from the manifest body, not by matching `.m3u8` on
+    // the URL: providers serve playlists from `.php` and from URLs with no
+    // extension at all, and an HLS ladder carrying HEVC is routed to ffmpeg
+    // instead because hls.js cannot invent decoders either.
+    const isHls = prepared.capability.requiredStrategy === 'HLS_NATIVE';
 
     if (isHls && Hls.isSupported()) {
       hls = new Hls({ enableWorker: true, lowLatencyMode: true });
       hlsRef.current = hls;
-      hls.loadSource(streamUrl);
+      hls.loadSource(playbackUrl);
       hls.attachMedia(video);
 
       // Renditions are only known once the manifest is parsed, so the quality
@@ -592,13 +865,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (data.fatal) setError(`Playback error: ${data.details}`);
       });
     } else {
-      // When the audio needed remuxing, the loopback URL is what plays; the
-      // original is left untouched and is still what everything else refers to.
-      video.src = transcode?.url ?? streamUrl;
+      // Either the source itself (DIRECT) or the conversion's loopback URL. The
+      // original `streamUrl` is left untouched and is still what everything else
+      // — downloads, the external player, the error report — refers to.
+      video.src = playbackUrl;
     }
 
-    video.volume = volume;
-    video.muted = isMuted;
+    video.volume = audioSettings.current.volume;
+    video.muted = audioSettings.current.muted;
 
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -615,8 +889,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video
       .play()
       .then(() => {
-        video.volume = volume;
-        video.muted = isMuted;
+        video.volume = audioSettings.current.volume;
+        video.muted = audioSettings.current.muted;
         setIsPlaying(true);
 
         // Record successful playback event in history
@@ -665,7 +939,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.removeAttribute('src');
       video.load();
     };
-  }, [streamUrl, mimeType, volume, isMuted, transcode?.url]);
+    /**
+     * Volume is deliberately **not** a dependency.
+     *
+     * This effect tears the element's `src` down in its cleanup, so listing it
+     * meant every movement of the volume slider detached the source, called
+     * `load()` and restarted playback from zero — and on a converted stream, killed
+     * the ffmpeg process and restarted the encode. Volume is applied by its own
+     * effect below, which is where it belongs; the reads above are only the
+     * initial value for a freshly attached element, taken from a ref so they
+     * cannot go stale.
+     */
+  }, [streamUrl, prepared]);
 
   useEffect(() => {
     const hls = hlsRef.current;
@@ -762,9 +1047,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video) return;
 
     const onMediaReady = () => {
-      // Re-assert volume & mute settings on video load to prevent muted autoplay
-      video.volume = volume;
-      video.muted = isMuted;
+      // Re-assert volume & mute on load, or autoplay policy can leave the element
+      // muted after a source change. Read from the ref for the same reason the
+      // attach effect does: depending on them would rebuild these listeners on
+      // every movement of the volume slider.
+      video.volume = audioSettings.current.volume;
+      video.muted = audioSettings.current.muted;
       detectAudioTracks();
     };
 
@@ -801,7 +1089,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         } catch {}
       }
     };
-  }, [streamUrl, volume, isMuted, detectAudioTracks]);
+  }, [streamUrl, detectAudioTracks]);
 
   // --- torrent stats -------------------------------------------------------
 
@@ -837,12 +1125,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Read inside listeners registered once, so they must not close over state.
   const offsetRef = useRef(0);
   const probedDurationRef = useRef<number | undefined>(undefined);
+  /** A converted stream is the only one whose clock starts at the seek point. */
+  const isConverted = Boolean(prepared?.sessionId);
   useEffect(() => {
-    offsetRef.current = transcode ? transcodeOffset : 0;
-  }, [transcode, transcodeOffset]);
+    offsetRef.current = isConverted ? playbackOffset : 0;
+  }, [isConverted, playbackOffset]);
   useEffect(() => {
-    probedDurationRef.current = transcode ? audioProbe?.durationSeconds : undefined;
-  }, [transcode, audioProbe]);
+    // ffmpeg reports the remaining duration from the seek point, not the whole
+    // file; the inspection knows the real length.
+    probedDurationRef.current = isConverted
+      ? capability?.metadata?.durationSeconds
+      : undefined;
+  }, [isConverted, capability]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -882,18 +1176,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         skipRef.current?.(failure.reason);
         return;
       }
-      const codec = audioProbeRef.current?.videoCodec;
-      const convertible = Boolean(audioProbeRef.current?.needsVideoTranscode);
-      if (codec && convertible) {
-        setError(
-          `This file is ${codec.toUpperCase()}, which this build cannot decode directly. ` +
-            `Converting it now — if it does not start shortly, install the media components ` +
-            `in Settings → Advanced, or try another source.`
-        );
-        return;
-      }
+      const model = preparedRef.current?.capability;
+      const codec = model?.metadata?.video?.codec;
+      const depth = model?.metadata?.video?.bitDepth ?? 8;
       const message = codec
-        ? `The player could not decode this ${codec.toUpperCase()} stream.`
+        ? `The player could not decode this ${codec.toUpperCase()}${
+            depth > 8 ? ` ${depth}-bit` : ''
+          } stream.`
         : 'The player could not decode this file.';
 
       // Convert first, abandon second. See `forceTranscodeRef`.
@@ -986,12 +1275,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // --- controls ------------------------------------------------------------
 
+  /**
+   * Where a transport command should go.
+   *
+   * Three engines can hold the stream — the `<video>` element, mpv, or a
+   * controlled external player — and every control has to ask the same question
+   * or they disagree. Derived rather than stored, so it can never drift from
+   * the state that actually decides it.
+   */
   const togglePlay = useCallback(() => {
+    if (externalControl?.capability === 'full') {
+      void window.cloudstream?.externalSetPaused(externalSnapshot?.paused === false);
+      return;
+    }
+    if (isNativeEngine) {
+      void window.cloudstream?.getMpvSnapshot().then((response) => {
+        if (response?.ok) void window.cloudstream?.mpvSetPaused(!response.snapshot.paused);
+      });
+      return;
+    }
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) video.play().catch(() => undefined);
     else video.pause();
-  }, []);
+  }, [externalControl?.capability, externalSnapshot?.paused, isNativeEngine]);
 
   /**
    * Seeks, accounting for a remuxed stream having no seekable range.
@@ -1003,33 +1310,128 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const seekTo = useCallback(
     (time: number) => {
-      const video = videoRef.current;
-      if (!video) return;
       const target = Math.max(0, time);
 
-      if (transcode) {
-        setTranscodeOffset(target);
+      // The external player owns the playhead; seeking the empty local element
+      // would move a timeline nobody is watching.
+      if (externalControl?.capability === 'full') {
+        void window.cloudstream?.externalSeek(target);
+        return;
+      }
+      if (isNativeEngine) {
+        void window.cloudstream?.mpvSeek(target);
+        return;
+      }
+
+      const video = videoRef.current;
+      if (!video) return;
+
+      if (isConverted && prepared) {
+        setPlaybackOffset(target);
         const wasPlaying = !video.paused;
-        video.src = `${transcode.url}?t=${Math.floor(target)}`;
+        video.src = atTime(prepared.playbackUrl, target);
         video.load();
         if (wasPlaying) void video.play().catch(() => undefined);
         return;
       }
       video.currentTime = target;
     },
-    [transcode]
+    [isConverted, prepared, externalControl?.capability, isNativeEngine]
   );
 
   const seekBy = useCallback(
     (delta: number) => {
       const video = videoRef.current;
+      /**
+       * The playhead comes from whichever engine actually holds the stream.
+       *
+       * This read `video.currentTime` unconditionally, which for the native
+       * engine and for an external player is permanently `0` — so every
+       * fast-forward and rewind seeked to `±delta` from the start of the film,
+       * and the arrow keys appeared to do nothing except jump to the beginning.
+       * `currentTime` is the app's single view of position and is fed by
+       * whichever engine is playing.
+       */
+      if (isNativeEngine || externalControl?.capability === 'full') {
+        seekTo(currentTime + delta);
+        return;
+      }
       if (!video) return;
-      seekTo((transcode ? transcodeOffset : 0) + video.currentTime + delta);
+      seekTo((isConverted ? playbackOffset : 0) + video.currentTime + delta);
     },
-    [seekTo, transcode, transcodeOffset]
+    [seekTo, isConverted, playbackOffset, isNativeEngine, externalControl?.capability, currentTime]
+  );
+
+  /**
+   * The last values this app pushed out to an engine.
+   *
+   * This is the thing that keeps two-way synchronisation from becoming a loop.
+   * The app pushes volume to mpv; mpv observes the property and reports it
+   * back; naively accepting that sets state, which re-runs the push effect,
+   * which pushes again. Comparing against what we last sent breaks it: an
+   * echo of our own value is ignored, and a value the engine arrived at by
+   * itself — a media key, a wheel over mpv's window — is not.
+   */
+  const pushedToEngine = useRef({ volume: 1, muted: false, speed: 1 });
+
+  /**
+   * Whether the video is rendering inside this window.
+   *
+   * Reported by the engine, never assumed: attaching a native surface is an
+   * attempt that fails on any non-Windows platform and can fail on Windows too.
+   * A player that adapted its controls for an embedded surface which never
+   * appeared would leave the viewer with a detached mpv window and a UI
+   * pretending otherwise.
+   */
+  const [embedded, setEmbedded] = useState(false);
+
+  /**
+   * The engine is the authority on playback state; the UI renders what it says.
+   *
+   * §2's single source of truth, in the only place it can honestly live. mpv
+   * has the decoder's own clock and its own property observations, so any state
+   * this component kept in parallel would drift within a minute and disagree
+   * after every seek. What travels the other way is *intent* — a press of play,
+   * a drag of the slider — and that is a command, not a second copy of state.
+   */
+  const applyEngineState = useCallback(
+    (state: { paused: boolean; volume: number; muted: boolean; speed: number }) => {
+      setIsPlaying(!state.paused);
+
+      const pushed = pushedToEngine.current;
+      // A float round-trips through mpv's 0-130 integer scale, so exact
+      // equality would treat every echo as a change and loop forever.
+      if (Math.abs(state.volume - pushed.volume) > 0.02) {
+        pushed.volume = state.volume;
+        setVolume(state.volume);
+      }
+      if (state.muted !== pushed.muted) {
+        pushed.muted = state.muted;
+        setIsMuted(state.muted);
+      }
+      if (Math.abs(state.speed - pushed.speed) > 0.01) {
+        pushed.speed = state.speed;
+        setSpeed(state.speed);
+      }
+    },
+    []
   );
 
   const toggleFullscreen = useCallback(async () => {
+    /**
+     * Fullscreen belongs to whoever is drawing the picture.
+     *
+     * When mpv holds the stream in its own window, fullscreening the Electron
+     * container blows up a panel of controls over an empty surface and leaves
+     * the video the size it was — visibly the wrong thing, and reported as
+     * "fullscreen does nothing". The engine has its own fullscreen; that is the
+     * one that means anything here.
+     */
+    if (isNativeEngine && !embedded) {
+      await window.cloudstream?.mpvSetFullscreen(!isFullscreen);
+      setIsFullscreen((value) => !value);
+      return;
+    }
     const container = containerRef.current;
     if (!container) return;
     try {
@@ -1043,7 +1445,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     } catch (err) {
       console.warn('Failed to toggle fullscreen:', err);
     }
-  }, []);
+  }, [isNativeEngine, embedded, isFullscreen]);
 
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -1100,13 +1502,101 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     hidden, mini,
   ]);
 
+  /**
+   * Volume, mute and speed, remembered across media and across restarts.
+   *
+   * These are properties of the *viewer*, not of the film — someone who watches
+   * at 40% because the flat is quiet expects that to hold when the next episode
+   * starts, and re-dragging the slider on every title is the kind of small
+   * friction that makes an app feel unfinished. So they are loaded once on mount
+   * and written back when they change.
+   *
+   * Two details that would otherwise bite:
+   *
+   * - The load is **applied through the same ref the attach effect reads**, so a
+   *   source that attaches before the preference arrives still gets it. Setting
+   *   only the React state would leave the first few seconds at full volume,
+   *   which is the one moment a remembered volume most needs to be right.
+   * - Writes are debounced. Dragging the volume slider fires a change per pixel,
+   *   and each one is a datastore write behind an IPC round trip.
+   */
+  const preferencesLoaded = useRef(false);
+
   useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const stored = await window.cloudstream?.getPlayerPreferences();
+      if (cancelled || !stored?.ok) {
+        preferencesLoaded.current = true;
+        return;
+      }
+      const preferences = stored.preferences;
+      audioSettings.current = { volume: preferences.volume, muted: preferences.muted };
+      setVolume(preferences.volume);
+      setIsMuted(preferences.muted);
+      setSpeed(preferences.speed);
+      if (preferences.subtitleLanguage) preferredSubtitleLanguage.current = preferences.subtitleLanguage;
+      if (preferences.audioLanguage) preferredAudioLanguage.current = preferences.audioLanguage;
+      preferencesLoaded.current = true;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    // Never write before the load has landed, or the defaults this component
+    // starts with would overwrite the stored values on every mount.
+    if (!preferencesLoaded.current) return;
+    const timer = window.setTimeout(() => {
+      void window.cloudstream?.setPlayerPreferences({ volume, muted: isMuted, speed });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [volume, isMuted, speed]);
+
+  /**
+   * The languages the viewer keeps choosing, remembered as a *preference*
+   * rather than as a track number.
+   *
+   * A track index means nothing across files — audio track 2 is the Hindi dub on
+   * one release and the director's commentary on another — so restoring the
+   * index would confidently select the wrong thing. The language is the part
+   * that carries over, and it is matched against whatever the next file happens
+   * to contain.
+   */
+  const preferredAudioLanguage = useRef<string | null>(null);
+  const preferredSubtitleLanguage = useRef<string | null>(null);
+
+  useEffect(() => {
+    // Also the single place the ref is kept current, so a newly attached element
+    // starts at the volume the viewer last chose rather than at 1.0.
+    audioSettings.current = { volume, muted: isMuted };
+    // What was last pushed outward. See `applyEngineState` for why.
+    pushedToEngine.current = { volume, muted: isMuted, speed };
+
+    /**
+     * Volume, mute and speed follow the stream wherever it is playing.
+     *
+     * Applied to *every* engine rather than to whichever is active, because the
+     * element keeps its own value for when playback comes back to it — a
+     * handoff to VLC and back should not restore the volume to 100%.
+     */
+    if (externalControl?.capability === 'full') {
+      void window.cloudstream?.externalSetVolume(Math.round(volume * 100));
+      void window.cloudstream?.externalSetMuted(isMuted);
+      void window.cloudstream?.externalSetSpeed(speed);
+    } else if (isNativeEngine) {
+      void window.cloudstream?.mpvSetVolume(Math.round(volume * 100));
+      void window.cloudstream?.mpvSetMuted(isMuted);
+      void window.cloudstream?.mpvSetSpeed(speed);
+    }
+
     const video = videoRef.current;
     if (!video) return;
     video.volume = volume;
     video.muted = isMuted;
     video.playbackRate = speed;
-  }, [volume, isMuted, speed]);
+  }, [volume, isMuted, speed, externalControl?.capability, isNativeEngine]);
 
   /**
    * Controls visibility.
@@ -1257,6 +1747,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const isResolving = Boolean(sourceSession && sourceSession.phase !== 'playing');
 
+  /**
+   * True between having a URL and knowing what is inside it.
+   *
+   * Ranked below `isResolving`: a session that has not produced a source yet has
+   * nothing to inspect, and saying "inspecting media" over a running search
+   * would describe the wrong step.
+   */
+  const isInspecting = Boolean(streamUrl) && !prepared && !isResolving && !switchingTo;
+
+  /**
+   * Whether to say what the engine is doing to this stream.
+   *
+   * Only while nothing is on screen yet: once frames are decoding the viewer can
+   * see it working, and a caption explaining a remux over a playing film is
+   * noise.
+   */
+  const showStrategyNote =
+    Boolean(prepared?.sessionId) && !error && currentTime === 0 && !isResolving;
+
   // A switch that has landed clears the row spinner; comparing against the
   // session's active hash avoids leaving it spinning when the start failed.
   useEffect(() => {
@@ -1269,80 +1778,93 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const progressPercent = duration ? (currentTime / duration) * 100 : 0;
 
   /**
-   * Probes the stream's audio and remuxes it when Chromium cannot decode it.
+   * Inspects the stream and opens whatever it needs, before anything plays.
    *
-   * Runs on every new stream. HLS is excluded: hls.js handles its own
-   * demuxing and its segments are already in a browser-friendly codec set.
+   * One call, one answer, and the answer is what gets attached. The version this
+   * replaced probed *beside* playback and had four ways to lose the race; the
+   * ordering is now structural rather than something every code path has to
+   * remember.
    */
   useEffect(() => {
     if (!streamUrl) return;
-    const isHls = /\.m3u8(\?|$)/i.test(streamUrl) || mimeType === 'application/x-mpegURL';
-    if (isHls) return;
 
     let cancelled = false;
-    let openedToken: string | null = null;
+    let openedSession: string | null = null;
+    setPrepared(null);
 
-    (async () => {
-      const response = await window.cloudstream?.probeMedia(streamUrl);
+    void (async () => {
+      const response = await window.cloudstream?.preparePlaybackStream({
+        url: streamUrl,
+        headers: activeSource?.directHeaders,
+        isM3u8: mimeType === 'application/x-mpegURL',
+        provider: providerProvenance?.provider,
+      });
       if (cancelled || !response) return;
 
       setAudioNeedsComponents(Boolean(response.needsComponents));
-      // A probe that produced nothing now says why, and the source's own HTTP
-      // status is the difference between "expired link" and "odd codec".
-      if (response.failure) setProbeFailure(response.failure);
-      if (!response.ok || !response.probe) return;
-
-      setAudioProbe(response.probe);
-      const preferred = response.probe.audio.find((a) => a.isDefault) ?? response.probe.audio[0];
-      if (preferred) setSelectedAudioIndex(preferred.index);
-
-      if (!response.probe.needsTranscode) return;
+      if (response.sessionId) openedSession = response.sessionId;
 
       /**
-       * Video is only re-encoded when the probe says it cannot be decoded.
+       * The engine's pick, overridden by the language the viewer keeps choosing.
        *
-       * The audio case copies the video and is nearly free; this one is not, so
-       * the flag is passed through rather than transcoding both whenever either
-       * needs it.
+       * `decideStrategy` selects from the file's own default, which is right
+       * for a first play and wrong for someone who has said "Hindi" on the last
+       * six episodes. The remembered *language* is matched against this file's
+       * tracks, so it degrades to the engine's choice whenever the release does
+       * not carry it — which is the correct outcome, not a failure.
        */
-      const session = await window.cloudstream?.openMediaTranscode(
-        streamUrl,
-        preferred?.index ?? 0,
-        response.probe.needsVideoTranscode,
-        // Container-only problems copy the audio; re-encoding a perfectly good
-        // track to reach a different wrapper is work for nothing.
-        response.probe.needsAudioTranscode
-      );
-      if (cancelled || !session?.ok || !session.url) return;
+      const tracks = response.capability?.metadata?.audio ?? [];
+      const remembered = preferredAudioLanguage.current
+        ? tracks.find((track) => track.language === preferredAudioLanguage.current)
+        : undefined;
+      const preferred =
+        remembered?.index ?? response.capability?.transformationPlan.selectedAudioIndex ?? -1;
+      if (preferred >= 0) setSelectedAudioIndex(preferred);
 
-      openedToken = session.url.split('/').pop() ?? null;
-      setTranscodeOffset(0);
-      setTranscode({ url: session.url, token: openedToken ?? '' });
+      setPlaybackOffset(0);
+      setPrepared(response);
+      if (!response.ok && response.error) setError(response.error);
+
+      /**
+       * A source that is gone gets the next mirror, not a conversion attempt.
+       *
+       * Waiting for ffmpeg to rediscover a 404 costs several seconds on a link
+       * that no decoder could have helped with, and the source list usually has
+       * a live mirror one row down.
+       */
+      if (response.capability?.failure?.dead) {
+        skipRef.current?.(response.capability.failure.reason);
+      }
     })();
 
     return () => {
       cancelled = true;
       // The ffmpeg process outlives the component otherwise.
-      if (openedToken) void window.cloudstream?.closeMediaTranscode(openedToken);
+      if (openedSession) void window.cloudstream?.closePlaybackStream(openedSession);
     };
-  }, [streamUrl, mimeType]);
+  }, [streamUrl, mimeType, providerProvenance?.provider]);
 
   useEffect(() => {
-    audioProbeRef.current = audioProbe;
-  }, [audioProbe]);
+    preparedRef.current = prepared;
+  }, [prepared]);
 
   useEffect(() => {
     probeFailureRef.current = probeFailure;
   }, [probeFailure]);
 
   /**
-   * The forced conversion pass.
+   * The forced conversion pass — the last rung of the failover ladder.
    *
-   * Deliberately ignores the probe: it runs only after the probe's verdict has
-   * already proved wrong. Video is copied unless the probe positively said it
-   * could not be decoded — the common case is a container problem, where a copy
-   * is nearly free, and re-encoding video on a guess would burn a CPU for
-   * nothing.
+   * Runs only when the engine's verdict has already been disproved: it said this
+   * would play, the element disagreed. So the decision is re-made with `force`,
+   * which re-encodes unconditionally rather than trusting an inspection that has
+   * just been shown to be wrong about this file.
+   *
+   * The implementation this replaces guessed here from the URL — searching the
+   * link for `hevc`, `x265` and `10bit` — which is a guess about a filename some
+   * scraper produced, and it was wrong in both directions: releases mislabelled
+   * by whoever named them, and bare `?id=…` Drive URLs carrying 10-bit HEVC with
+   * nothing in them to match on.
    */
   useEffect(() => {
     forceTranscodeRef.current = () => {
@@ -1350,48 +1872,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       forcedFor.current = streamUrl;
 
       void (async () => {
-        const previous = transcode?.token;
-        const at = transcodeOffset + (videoRef.current?.currentTime ?? 0);
+        const previous = prepared?.sessionId;
+        const at = (isConverted ? playbackOffset : 0) + (videoRef.current?.currentTime ?? 0);
 
-        // Fetch probe if not available yet (resolves race condition when video errors before probe finishes)
-        let probe = audioProbeRef.current;
-        if (!probe) {
-          const res = await window.cloudstream?.probeMedia(streamUrl);
-          if (res?.ok && res.probe) {
-            probe = res.probe;
-            setAudioProbe(probe);
-          }
-        }
-
-        const urlLower = streamUrl.toLowerCase();
-        const isHevc = Boolean(
-          probe?.needsVideoTranscode ||
-            probe?.videoCodec === 'hevc' ||
-            probe?.videoCodec === 'h265' ||
-            urlLower.includes('hevc') ||
-            urlLower.includes('x265') ||
-            urlLower.includes('10bit')
-        );
-        const isAudioTranscode = probe ? probe.needsAudioTranscode : true;
-
-        const session = await window.cloudstream?.openMediaTranscode(
-          streamUrl,
-          selectedAudioIndex ?? 0,
-          isHevc,
-          isAudioTranscode
-        );
-        if (!session?.ok || !session.url) {
+        const response = await window.cloudstream?.preparePlaybackStream({
+          url: streamUrl,
+          headers: activeSource?.directHeaders,
+          isM3u8: mimeType === 'application/x-mpegURL',
+          provider: providerProvenance?.provider,
+          // The cached verdict is the one that was wrong; measure again and then
+          // override it anyway.
+          refresh: true,
+          force: true,
+        });
+        if (!response?.ok || !response.playbackUrl) {
           // Conversion is unavailable; the source has had its chance.
-          skipRef.current?.('This file could not be converted for playback.');
+          skipRef.current?.(
+            response?.error ?? 'This file could not be converted for playback.'
+          );
           return;
         }
-        if (previous) void window.cloudstream?.closeMediaTranscode(previous);
+        if (previous) void window.cloudstream?.closePlaybackStream(previous);
         setError(null);
-        setTranscodeOffset(at);
-        setTranscode({ url: session.url, token: session.url.split('/').pop() ?? '' });
+        setPlaybackOffset(at);
+        setPrepared({ ...response, playbackUrl: atTime(response.playbackUrl, at) });
       })();
     };
-  }, [streamUrl, transcode?.token, transcodeOffset, selectedAudioIndex]);
+  }, [streamUrl, mimeType, prepared, isConverted, playbackOffset, providerProvenance?.provider]);
 
   useEffect(() => {
     const skip = sourceSession?.onSourceUnplayable;
@@ -1406,64 +1913,92 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // A new stream invalidates everything learned about the previous one.
   useEffect(() => {
-    setAudioProbe(null);
-    setProbeFailure(null);
     forcedFor.current = null;
     skippedFor.current = null;
-    setTranscode(null);
-    setTranscodeOffset(0);
+    setPlaybackOffset(0);
     setAudioNeedsComponents(false);
   }, [streamUrl]);
 
   /**
-   * Switches audio track. On a remuxed stream this restarts ffmpeg mapping the
-   * chosen track, because the element only ever receives the one stereo track
-   * that was selected for it.
+   * Switches audio track, keeping the viewer's place.
+   *
+   * On a converted stream the element only ever receives the one track mapped
+   * for it, so this restarts ffmpeg with a different `-map` at the current
+   * position. On a direct stream there is nothing to restart — the element's own
+   * `audioTracks` handles it, which the effect above already wires up.
    */
   const selectProbedAudio = useCallback(
     async (index: number) => {
       setSelectedAudioIndex(index);
-      if (!transcode) return;
+
+      /**
+       * Remembered by language, never by index.
+       *
+       * A viewer who picks the Hindi dub means "Hindi", not "track 2" — the next
+       * release may order its tracks differently or carry a commentary there.
+       * Storing the index would confidently select the wrong audio on the next
+       * file, which is worse than not remembering at all.
+       */
+      const language = preparedRef.current?.capability?.metadata?.audio.find(
+        (track) => track.index === index
+      )?.language;
+      if (language && language !== 'und') {
+        preferredAudioLanguage.current = language;
+        void window.cloudstream?.setPlayerPreferences({ audioLanguage: language });
+      }
+      if (!prepared?.sessionId) return;
 
       const video = videoRef.current;
-      const at = transcodeOffset + (video?.currentTime ?? 0);
-      const session = await window.cloudstream?.openMediaTranscode(
-        streamUrl,
-        index,
-        audioProbe?.needsVideoTranscode ?? false,
-        audioProbe?.needsAudioTranscode ?? true
-      );
-      if (!session?.ok || !session.url) return;
+      const at = playbackOffset + (video?.currentTime ?? 0);
+      const result = await window.cloudstream?.switchAudioTrack(prepared.sessionId, index, at);
+      if (!result?.ok || !result.url) return;
 
-      if (transcode.token) void window.cloudstream?.closeMediaTranscode(transcode.token);
-      setTranscodeOffset(at);
-      setTranscode({ url: session.url, token: session.url.split('/').pop() ?? '' });
+      setPlaybackOffset(at);
+      setPrepared({ ...prepared, playbackUrl: result.url });
     },
-    [transcode, transcodeOffset, streamUrl, audioProbe]
+    [prepared, playbackOffset]
   );
 
-  /** Audio tracks as ffprobe reported them, labelled for the picker. */
+  /** Audio tracks as the inspection reported them, labelled for the picker. */
   const probedAudioTracks = useMemo(
     () =>
-      (audioProbe?.audio ?? []).map((track) => {
+      (capability?.metadata?.audio ?? []).map((track) => {
         const language = track.language && track.language !== 'und'
           ? track.language.toUpperCase()
           : null;
         const name = track.title || language || `Track ${track.index + 1}`;
+        const layout =
+          track.channels === 8 ? '7.1'
+          : track.channels === 6 ? '5.1'
+          : track.channels === 2 ? 'Stereo'
+          : track.channels === 1 ? 'Mono'
+          : undefined;
         const facts = [
           track.codec.toUpperCase(),
-          track.channels === 6 ? '5.1' : track.channels === 2 ? 'Stereo' : undefined,
+          layout,
           // Worth saying: it is why this track sounds different from the file.
-          track.playable ? undefined : 'converted',
+          track.playable && track.channels <= 2 ? undefined : 'converted',
         ].filter(Boolean);
         return { index: track.index, label: name, detail: facts.join(' · ') };
       }),
-    [audioProbe]
+    [capability]
   );
 
-  /** Subtitles shipped with the stream, plus any fetched from online search. */
+  /**
+   * Subtitles shipped with the stream, embedded inside it, and searched online.
+   *
+   * The embedded ones are new and matter most where the online search cannot
+   * help at all: an extension-sourced film with no IMDb id has nothing for
+   * OpenSubtitles to match on, while the release itself routinely carries its
+   * own forced-narrative track. `<track>` rejects SubRip and ASS silently, so
+   * these are served as WebVTT from loopback and extracted on first fetch.
+   */
   const allSubtitles = useMemo(() => {
-    const combined = [...subtitles, ...fetchedSubtitles];
+    const embedded = (prepared?.subtitles ?? []).map((track) => ({
+      name: track.label,
+      url: track.url,
+    }));
+    const combined = [...subtitles, ...embedded, ...fetchedSubtitles];
     const englishFirst = combined.sort((a, b) => {
       const aIsEnglish = /english|eng/i.test(a.name);
       const bIsEnglish = /english|eng/i.test(b.name);
@@ -1472,7 +2007,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       return 0;
     });
     return englishFirst;
-  }, [subtitles, fetchedSubtitles]);
+  }, [subtitles, fetchedSubtitles, prepared?.subtitles]);
 
   /**
    * Applies the selected subtitle by driving `TextTrack.mode` directly.
@@ -1553,7 +2088,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       ref={containerRef}
       className={
         `player${controlsVisible || keepControls ? '' : ' player--idle'}` +
-        (mini ? ' player--mini' : '')
+        (mini ? ' player--mini' : '') +
+        (mini && miniFrame.isDragging ? ' player--dragging' : '')
       }
       // `display: none` rather than unmounting: see the `hidden` prop. The
       // element keeps its buffer, its position and its decoder.
@@ -1562,7 +2098,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       onMouseMove={revealControls}
       onMouseEnter={handlePlayerEnter}
       onMouseLeave={handlePlayerLeave}
-      onPointerDown={handlePlayerPointerDown}
+      onPointerDown={mini ? miniFrame.startDrag : handlePlayerPointerDown}
     >
       {/*
         The mini player's own chrome.
@@ -1574,39 +2110,86 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       */}
       {mini && (
         <>
-          <div
-            className="player-mini__grip"
-            onPointerDown={miniFrame.startDrag}
-            title="Drag to move"
-            role="presentation"
-          >
-            <GripHorizontal size={13} />
-            <span className="player-mini__title">{episodeTitle || title}</span>
+          {/* Top Window Bar: Title, Grip indicator, and Windows-style Top-Right Window Controls */}
+          <div className="player-mini__top" role="presentation">
+            <div className="player-mini__title-wrap" title={episodeTitle || title}>
+              <GripHorizontal size={13} className="player-mini__grip-icon" />
+              <span className="player-mini__title">{episodeTitle || title}</span>
+            </div>
+            <div className="player-mini__top-actions">
+              {onExpand && (
+                <button
+                  type="button"
+                  className="player-mini__btn player-mini__btn--expand"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onExpand();
+                  }}
+                  title="Expand to full player"
+                  aria-label="Expand player"
+                >
+                  <Maximize2 size={13} />
+                </button>
+              )}
+              <button
+                type="button"
+                className="player-mini__btn player-mini__btn--close"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onBack();
+                }}
+                title="Close player"
+                aria-label="Close player"
+              >
+                <X size={14} />
+              </button>
+            </div>
           </div>
 
+          {/* Bottom Controls Bar: Playback controls, Volume, Time and Expand */}
           <div className="player-mini__bar">
-            <button onClick={togglePlay} title={isPlaying ? 'Pause' : 'Play'} aria-label={isPlaying ? 'Pause' : 'Play'}>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePlay();
+              }}
+              title={isPlaying ? 'Pause' : 'Play'}
+              aria-label={isPlaying ? 'Pause' : 'Play'}
+            >
               {isPlaying ? <Pause size={15} /> : <Play size={15} fill="currentColor" />}
             </button>
             <button
-              onClick={() => setIsMuted((value) => !value)}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsMuted((value) => !value);
+              }}
               title={isMuted ? 'Unmute' : 'Mute'}
               aria-label={isMuted ? 'Unmute' : 'Mute'}
             >
               {isMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
             </button>
+            <span className="player-mini__time">
+              {formatTime(currentTime)} / {formatTime(duration)}
+            </span>
             <div className="player-mini__spacer" />
             {onExpand && (
-              <button onClick={onExpand} title="Back to the full player" aria-label="Expand player">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onExpand();
+                }}
+                title="Back to full player"
+                aria-label="Expand player"
+              >
                 <Maximize2 size={15} />
               </button>
             )}
-            <button onClick={onBack} title="Stop and close" aria-label="Close player">
-              <X size={15} />
-            </button>
           </div>
 
-          {/* Top-left rather than bottom-right: a window parked in the corner
+          {/* Top-left resize handle: a window parked in the corner
               of the screen has its bottom-right corner against the edge. */}
           <div
             className="player-mini__resize"
@@ -1630,6 +2213,89 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <track key={sub.url} kind="subtitles" label={sub.name} src={sub.url} />
         ))}
       </video>
+
+      {/*
+        One stack per anchor, laid out in flow.
+
+        These were four independently positioned `absolute` boxes — the external
+        banner at `top: 4.5rem`, the components notice at `top: 4.2rem`, the
+        strategy note at `bottom: 5.5rem`, the toasts at `bottom: 6.5rem`. Any
+        two that were true at once overlapped, and since none of them paints an
+        opaque background the two messages rendered *through each other*: the
+        reported "two messages one layer upon the other". They can genuinely
+        co-occur — a stream being converted, on a machine missing the components
+        that would convert it, while a download finishes — so suppressing one
+        was never the answer. Stacked in a column they simply sit beside each
+        other, and the stack itself carries the blur.
+      */}
+      <div className="player__messages player__messages--top">
+        {externalControl && (
+          <div className="player__external-banner">
+            <MonitorPlay size={18} />
+            <div>
+              <strong>Playing in {externalControl.playerName}</strong>
+              <span>
+                {externalControl.capability === 'full'
+                  ? 'The controls below are connected to it.'
+                  : 'This player cannot be controlled from here — use its own window.'}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                void window.cloudstream?.externalStop();
+                setExternalControl(null);
+                setExternalSnapshot(null);
+              }}
+            >
+              Bring playback back here
+            </button>
+          </div>
+        )}
+        {/* Silence with no error is the worst possible failure mode: the volume
+            control works, the video plays, and nothing says why. If the audio
+            cannot be decoded and the components that would fix it are missing,
+            say so on screen. */}
+        {audioNeedsComponents && (
+          <div className="player__audio-notice">
+            <AlertTriangle size={14} />
+            <span>
+              This stream needs conversion to play here, and the media components are
+              missing. Install them in Settings to enable Matroska, HEVC and Dolby audio.
+            </span>
+          </div>
+        )}
+      </div>
+
+      {isNativeEngine && capability && prepared?.playbackUrl && (
+        <NativeEngineStage
+          url={prepared.playbackUrl}
+          headers={activeSource?.directHeaders}
+          title={episodeTitle ? `${title} — ${episodeTitle}` : title}
+          capability={capability}
+          startSeconds={progress?.resumeAt}
+          initialVolume={audioSettings.current.volume}
+          initialMuted={audioSettings.current.muted}
+          externalSubtitles={allSubtitles.map((sub) => ({ name: sub.name, url: sub.url }))}
+          onProgress={(position, total) => {
+            // Feeds the same state the `<video>` path writes, so the existing
+            // save interval, the resume point and the up-next card all work
+            // without knowing which engine produced the numbers.
+            setCurrentTime(position);
+            if (total > 0) setDuration(total);
+          }}
+          /* The player's control bar is the only transport for this engine
+             and has no element to learn from, so the engine tells it. */
+          onEngineState={applyEngineState}
+          onEmbeddedChange={setEmbedded}
+          onEnded={() => {
+            if (nextEpisode && onSelectEpisode && !upNextDismissed) onSelectEpisode(nextEpisode);
+          }}
+          onFallbackToBuiltIn={() => forceTranscodeRef.current?.()}
+          onError={(message) => setError(message)}
+        />
+      )}
 
       {/* Resolving a source for another episode happens over the live player, so
           it needs its own overlay — the buffering one belongs to the stream that
@@ -1681,91 +2347,115 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         />
       )}
 
-      {(isBuffering || error) && !switchingTo && !switchError && !isResolving && (
+      {/*
+        INV-RACE-2: the probe gate is visible.
+
+        Between "a source was chosen" and "it is safe to attach", nothing is
+        playing and nothing has failed — and a frozen black frame reads as both.
+        Inspection is 250 ms on a nearby CDN and a few seconds on a distant one,
+        which is exactly long enough for silence to look like a bug.
+      */}
+      {isInspecting && (
         <div className="player__overlay">
-          {error ? (
+          <Loader2 className="spin" size={36} />
+          <p>Inspecting media…</p>
+          <span className="muted">
+            Checking the container and codecs so this plays first time.
+          </span>
+        </div>
+      )}
+
+      {/*
+        What the engine decided, when it decided to do work.
+
+        Silent conversion is indistinguishable from a slow stream, and this is
+        the difference between "nothing is happening" and "the audio is being
+        converted because Chromium has no Dolby decoder". It clears itself once
+        the picture is up.
+      */}
+
+      {/*
+        Playback failed. One surface, one owner — see `PlaybackErrorPanel` for
+        why there used to be two and what that looked like.
+      */}
+      {error && !switchingTo && !switchError && !isResolving && !isInspecting && (
+        <PlaybackErrorPanel
+          message={error}
+          title={title}
+          episodeTitle={episodeTitle}
+          streamUrl={streamUrl}
+          capability={capability}
+          activeSource={activeSource}
+          provenance={resolvedProvenance ?? providerProvenance ?? undefined}
+          attempts={
+            sourceSession && sourceSession.attempts.length > 0
+              ? { tried: sourceSession.attempts.length, total: sourceSession.sources.length }
+              : undefined
+          }
+          isNativeEngine={isNativeEngine}
+          dead={probeFailure?.dead}
+          onDownload={() => void handleDownloadCurrentMedia()}
+          onChooseAnother={() => {
+            // The in-player list, not `onBack` — leaving the player to change
+            // source loses the position and the place in the series, which is
+            // the whole reason the in-player switcher exists.
+            if (sourceSession && sourceSession.sources.length > 0) setSourcePanelOpen(true);
+            else onBack();
+          }}
+          onConvertHere={() => forceTranscodeRef.current?.()}
+        />
+      )}
+
+      {isBuffering && !error && !switchingTo && !switchError && !isResolving && !isInspecting && (
+        <div className="player__overlay">
+          <Loader2 className="spin" size={36} />
+          <p>Buffering from peers…</p>
+          {stats && (
+            <span className="muted">
+              {formatSpeed(stats.downloadSpeed)} · {stats.peers} peer
+              {stats.peers === 1 ? '' : 's'} · {(stats.progress * 100).toFixed(1)}%
+            </span>
+          )}
+          {stats?.isStalled && (
             <>
-              <AlertTriangle size={36} />
-              <p>{error}</p>
-              {/* Failover is silent otherwise, and a viewer watching a dead
-                  frame has no way to tell trying-the-next from given-up. */}
-              {sourceSession && sourceSession.attempts.length > 0 && (
-                <span className="muted">
-                  Tried {sourceSession.attempts.length} of {sourceSession.sources.length} source
-                  {sourceSession.sources.length === 1 ? '' : 's'}
-                  {sourceSession.attempts.length < sourceSession.sources.length
-                    ? ' — trying the next…'
-                    : ''}
-                </span>
-              )}
-              {/* Codecs and stream URL, because a playback failure is the least
-                  reproducible thing in the app: the stream is transient and the
-                  viewer has no way to describe it afterwards. */}
-              <div className="player__error-actions">
-                <button className="btn" onClick={onBack}>Choose another source</button>
-                <CopyErrorButton
-                  compact
-                  context={{
-                    title: episodeTitle ? `${title} — ${episodeTitle}` : title,
-                    url: streamUrl,
-                    source: audioProbe?.videoCodec
-                      ? `video=${audioProbe.videoCodec}` +
-                        (audioProbe.audio[0]?.codec ? ` audio=${audioProbe.audio[0].codec}` : '')
-                      : undefined,
-                    message: error ?? undefined,
-                  }}
-                />
+              <span className="muted">
+                Nothing has arrived for {Math.round(stats.stalledMs / 1000)}s
+                {stats.peers === 0 ? ' and no peers have connected' : ''}. This swarm
+                is probably dead.
+              </span>
+              <div className="player__overlay-actions">
+                {/* A dead swarm is the case where downloading is *also* the
+                    honest suggestion: the same bytes are not arriving either
+                    way, and another source is the real fix. */}
+                <button className="btn btn-primary" onClick={() => setSourcePanelOpen(true)}>
+                  <List size={16} /> Choose another source
+                </button>
               </div>
-              {/*
-                Offered only when the source is actually there. A dead link
-                plays no better in VLC, and suggesting it would send the viewer
-                to fetch a player that cannot help.
-              */}
-              {!probeFailure?.dead && <ExternalPlayerFallback streamUrl={streamUrl} compact />}
             </>
-          ) : (
-            <>
-              <Loader2 className="spin" size={36} />
-              <p>Buffering from peers…</p>
-              {stats && (
-                <span className="muted">
-                  {formatSpeed(stats.downloadSpeed)} · {stats.peers} peer
-                  {stats.peers === 1 ? '' : 's'} · {(stats.progress * 100).toFixed(1)}%
-                </span>
-              )}
-              {stats?.isStalled && (
-                <>
-                  <span className="muted">
-                    Nothing has arrived for {Math.round(stats.stalledMs / 1000)}s
-                    {stats.peers === 0 ? ' and no peers have connected' : ''}. This swarm
-                    is probably dead.
-                  </span>
-                  <button className="btn" onClick={onBack}>Choose another source</button>
-                </>
-              )}
-              {stats && !stats.isStalled && stats.peers === 0 && (
-                <span className="muted">
-                  No peers yet. If this persists the swarm may be dead — try a source with more seeders.
-                </span>
-              )}
-            </>
+          )}
+          {stats && !stats.isStalled && stats.peers === 0 && (
+            <span className="muted">
+              No peers yet. If this persists the swarm may be dead — try a source with more seeders.
+            </span>
           )}
         </div>
       )}
 
-      {/* Silence with no error is the worst possible failure mode: the volume
-          control works, the video plays, and nothing says why. If the audio
-          cannot be decoded and the components that would fix it are missing,
-          say so on screen. */}
-      {audioNeedsComponents && audioProbe?.needsTranscode && (
-        <div className="player__audio-notice">
-          <AlertTriangle size={14} />
-          <span>
-            This file&rsquo;s audio uses a format Windows cannot play here. Install
-            the media components in Settings to enable it.
-          </span>
-        </div>
-      )}
+      <div className="player__messages player__messages--bottom">
+        {showStrategyNote && capability && (
+          <div className="player__strategy-note">{capability.explanation}</div>
+        )}
+        {/* Above the controls, clear of the seek bar, gone in four seconds. */}
+        {toasts.length > 0 && (
+          <div className="player__toasts" role="status" aria-live="polite">
+            {toasts.map((toast) => (
+              <div key={toast.id} className={`player__toast player__toast--${toast.tone}`}>
+                {toast.text}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <header
         className={`player__top${controlsVisible || keepControls ? '' : ' hidden'}`}
@@ -1793,7 +2483,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </button>
         )}
         <div className="player__titles">
-          <h2>{title}</h2>
+          <div className="player__title-row">
+            <h2>{title}</h2>
+            {onSearchTitle && (
+              <button
+                type="button"
+                className="player__title-search"
+                /* The clean title, not the release name: "Avengers Age of Ultron"
+                   finds the film, while "Avengers.Age.of.Ultron.2015.1080p.WEB-DL"
+                   finds nothing on any catalogue. */
+                onClick={() => onSearchTitle(title)}
+                title={`Search for "${title}"`}
+                aria-label={`Search for ${title}`}
+              >
+                <Search size={15} />
+              </button>
+            )}
+          </div>
           {(originalTitle || (activeSource?.title && activeSource.title !== title)) && (
             <span
               className="player__original-title"
@@ -1986,6 +2692,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setFetchedSubtitles((prev) => [...prev, { name: label, url }]);
           }
           setActiveSubtitle(url);
+
+          /**
+           * The label carries the language; the URL is per-file and worthless
+           * to remember. Turning subtitles *off* is remembered too — an explicit
+           * choice, and the one most likely to be undone by a default.
+           */
+          const language = url ? label?.split(/[^A-Za-z]+/)[0] ?? '' : '';
+          void window.cloudstream?.setPlayerPreferences({ subtitleLanguage: language });
+          preferredSubtitleLanguage.current = language || null;
         }}
       />
 
@@ -2372,11 +3087,89 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             />
           )}
 
+          {showNativePlayerBtn && externalPlayers.length > 0 && streamUrl && (
+            <HoverMenu
+              icon={<MonitorPlay size={16} />}
+              label="Native Player"
+              value=""
+              onChange={(val) => void handleOpenExternalPlayer(String(val))}
+              options={externalPlayers.map((p) => ({
+                value: p.id,
+                label: p.name,
+                detail: p.id === 'system-default' ? 'OS Default' : 'Desktop App',
+              }))}
+              triggerText="Native"
+            />
+          )}
+
+          {/* Everything technical lives behind one affordance, so the control
+              bar stays about watching — see PlayerCopyMenu. */}
+          <PlayerCopyMenu
+            title={title}
+            episodeTitle={episodeTitle}
+            streamUrl={streamUrl}
+            capability={capability}
+            provenance={providerProvenance}
+            activeSource={activeSource}
+            allSources={sourceSession?.sources}
+            download={currentDownload ?? null}
+            playerState={() => ({
+              position: `${Math.floor(currentTime)}s`,
+              duration: duration ? `${Math.floor(duration)}s` : undefined,
+              paused: !isPlaying,
+              volume,
+              muted: isMuted,
+              speed,
+              engine: isNativeEngine ? 'native (mpv)' : isConverted ? 'ffmpeg conversion' : 'browser',
+              buffering: isBuffering,
+              error: error ?? undefined,
+            })}
+            onCopyDiagnostics={async (mode) => {
+              const response = await window.cloudstream?.reportDiagnostics?.({
+                mode,
+                context: {
+                  title: episodeTitle ? `${title} — ${episodeTitle}` : title,
+                  url: streamUrl,
+                  source: providerProvenance?.provider,
+                },
+              });
+              return response?.text ?? null;
+            }}
+          />
+
           <button className="icon-button" onClick={toggleFullscreen} aria-label="Fullscreen">
             {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
           </button>
         </div>
       </footer>
+
+      {extPlayerStatus && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '4.5rem',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: 'rgba(15, 23, 42, 0.95)',
+            border: '1px solid rgba(59, 130, 246, 0.4)',
+            color: '#60a5fa',
+            padding: '0.45rem 1.1rem',
+            borderRadius: '20px',
+            fontSize: '0.82rem',
+            fontWeight: 600,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+            zIndex: 70,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            backdropFilter: 'blur(10px)',
+            pointerEvents: 'none',
+          }}
+        >
+          <MonitorPlay size={16} />
+          <span>{extPlayerStatus}</span>
+        </div>
+      )}
     </div>
   );
 };

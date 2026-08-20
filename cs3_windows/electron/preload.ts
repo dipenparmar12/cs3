@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { LogLevel } from './logging/logger';
 import type {
   SearchHistoryEntry,
   SearchOptions,
@@ -48,7 +49,7 @@ import type {
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
 import type { BootstrapProgress } from './cs3/bootstrap';
 import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
-import type { StoredSource } from '../src/types/library';
+import type { StoredSource, PlayedSource } from '../src/types/library';
 import type {
   HistoryEvent,
   HistoryFilter,
@@ -57,6 +58,7 @@ import type {
 } from '../src/types/history';
 import type { DiagnosticRecord, DiagnosticStage } from './cs3/diagnostics';
 import type { ExternalPlayer } from './externalPlayer';
+import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import type {
   LibraryEntry,
   SourceMemory,
@@ -66,7 +68,19 @@ import type {
 import type { StreamHandle } from './torrent/torrentEngine';
 import type { PlaybackSnapshot } from './playbackSession';
 import type { SubtitleSearchResult } from './subtitleService';
-import type { MediaProbe, ProbeFailure, RendererCapabilities } from './mediaTranscoder';
+import type {
+  PlaybackDiagnosticEvent,
+  PlaybackStreamRequest,
+  PlaybackStreamResponse,
+  RendererCapabilities,
+  SourceCapabilityModel,
+} from '../src/types/media';
+import type {
+  MpvCommandResult,
+  MpvEngineStatus,
+  MpvOpenRequest,
+  MpvSnapshot,
+} from '../src/types/mpv';
 
 /**
  * Typed, allow-listed IPC surface (ARCH-2 / SEC-9).
@@ -408,16 +422,36 @@ export interface CloudStreamElectronAPI {
    * sound and one whose AC-3 track was silently dropped — nor between a broken
    * source and an HEVC one.
    */
-  probeMedia: (
-    url: string
-  ) => Promise<
-    Envelope & {
-      probe: MediaProbe | null;
-      needsComponents: boolean;
-      /** Present when `probe` is null: why, including the source's HTTP status. */
-      failure: ProbeFailure | null;
-    }
-  >;
+  inspectMediaSource: (
+    request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'refresh'>
+  ) => Promise<Envelope & { capability: SourceCapabilityModel | null }>;
+  /**
+   * Inspects, decides and opens a playable stream in one call.
+   *
+   * The whole contract with the player: ask, wait, attach. There is deliberately
+   * no way to obtain a URL that has not been classified — that shape is what
+   * created the race PRD-37 §4.1 describes, where the element failed on an
+   * unsupported bitstream before the probe it was racing had returned.
+   */
+  preparePlaybackStream: (request: PlaybackStreamRequest) => Promise<PlaybackStreamResponse>;
+  /**
+   * Maps a different audio track and resumes at the current position.
+   *
+   * The element only ever receives the one track selected for it, so switching
+   * restarts the conversion with a different `-map`. The returned URL carries
+   * the seek, which is the difference between changing track and losing your
+   * place in the film.
+   */
+  switchAudioTrack: (
+    sessionId: string,
+    audioIndex: number,
+    positionSeconds: number
+  ) => Promise<Envelope & { url?: string }>;
+  closePlaybackStream: (sessionId: string) => Promise<Envelope>;
+  /** Strategy, codecs and encoder timings for every playback attempt. */
+  getPlaybackDiagnostics: (
+    sessionId?: string
+  ) => Promise<Envelope & { events: PlaybackDiagnosticEvent[] }>;
   /** Codec strings to hand `canPlayType`, keyed by ffprobe's name for each. */
   getCodecProbes: () => Promise<Record<string, string>>;
   /**
@@ -428,21 +462,6 @@ export interface CloudStreamElectronAPI {
    * can answer for the machine in front of the user.
    */
   setMediaCapabilities: (capabilities: RendererCapabilities) => Promise<Envelope>;
-  /**
-   * Opens a remuxing session and returns a loopback URL that plays.
-   *
-   * `transcodeVideo` is the expensive half and is only worth passing when the
-   * probe said the video cannot be decoded — audio-only remuxing copies the
-   * video untouched and costs almost nothing.
-   */
-  openMediaTranscode: (
-    url: string,
-    audioIndex: number,
-    transcodeVideo?: boolean,
-    /** False copies the audio stream, for the container-only case. */
-    transcodeAudio?: boolean
-  ) => Promise<Envelope & { url: string | null }>;
-  closeMediaTranscode: (token: string) => Promise<Envelope>;
 
   /**
    * Media players installed on this machine, and where to get one.
@@ -468,8 +487,104 @@ export interface CloudStreamElectronAPI {
    * URL has the provider's headers already applied.
    */
   openInExternalPlayer: (playerId: string, url: string) => Promise<Envelope>;
+  /**
+   * Puts back the archive an update replaced.
+   *
+   * A failed update rolls itself back; this is for the case the load check
+   * cannot see — an extension that links fine and then scrapes nothing.
+   */
+  rollbackExtension: (
+    repositoryUrl: string,
+    internalName: string
+  ) => Promise<Envelope & { message: string }>;
+  hasPreviousExtensionVersion: (
+    repositoryUrl: string,
+    internalName: string
+  ) => Promise<Envelope & { available: boolean }>;
+
+  // --- external playback, with a control channel where one exists ---
+  /**
+   * Hands the stream over **and** reports whether we can drive that player.
+   *
+   * `capability: 'full'` means the controls below reach it and its position
+   * comes back; `'none'` means it is playing and we have no channel to it. The
+   * player UI must respect the difference rather than showing controls that
+   * cannot work.
+   */
+  openControlledExternal: (
+    playerId: string,
+    url: string
+  ) => Promise<Envelope & { capability: 'full' | 'none'; engine?: string }>;
+  getExternalCapability: (
+    playerId: string
+  ) => Promise<Envelope & { capability: 'full' | 'none' }>;
+  getExternalSnapshot: () => Promise<Envelope & { snapshot: ExternalPlaybackSnapshot | null }>;
+  onExternalUpdate: (callback: (snapshot: ExternalPlaybackSnapshot) => void) => () => void;
+  externalSetPaused: (paused: boolean) => Promise<Envelope>;
+  externalSeek: (seconds: number) => Promise<Envelope>;
+  externalSetVolume: (percent: number) => Promise<Envelope>;
+  externalSetMuted: (muted: boolean) => Promise<Envelope>;
+  externalSetSpeed: (rate: number) => Promise<Envelope>;
+  externalSetFullscreen: () => Promise<Envelope>;
+  externalStop: () => Promise<Envelope>;
+
   /** Opens an http(s) link in the system browser. Other schemes are refused. */
   openExternalLink: (url: string) => Promise<Envelope>;
+
+  // --- native playback engine (mpv) ---
+  /**
+   * The engine's controls, mirroring what a `<video>` element would have offered.
+   *
+   * A stream routed to mpv produces no `timeupdate`, no `buffered` ranges and no
+   * track list in the DOM, so the player renders from {@link onMpvUpdate}
+   * snapshots and drives playback through these instead. There is deliberately
+   * no method that takes a raw URL: everything playable still comes out of
+   * `preparePlaybackStream`, which inspects the source first.
+   */
+  getMpvStatus: () => Promise<Envelope & { status: MpvEngineStatus }>;
+  openInNativeEngine: (request: MpvOpenRequest) => Promise<MpvCommandResult>;
+  mpvSetPaused: (paused: boolean) => Promise<MpvCommandResult>;
+  mpvSeek: (seconds: number) => Promise<MpvCommandResult>;
+  mpvSetVolume: (volume: number) => Promise<MpvCommandResult>;
+  mpvSetMuted: (muted: boolean) => Promise<MpvCommandResult>;
+  mpvSetSpeed: (speed: number) => Promise<MpvCommandResult>;
+  mpvSetFullscreen: (fullscreen: boolean) => Promise<MpvCommandResult>;
+  /** mpv track ids, which are 1-based and per type — not ffprobe ordinals. */
+  mpvSetAudioTrack: (id: number | null) => Promise<MpvCommandResult>;
+  mpvSetSubtitleTrack: (id: number | null) => Promise<MpvCommandResult>;
+  mpvAddSubtitle: (url: string, title?: string, language?: string) => Promise<MpvCommandResult>;
+  mpvSetSubtitleDelay: (seconds: number) => Promise<MpvCommandResult>;
+  mpvStop: () => Promise<MpvCommandResult>;
+  /**
+   * Where the video should sit inside the window, in CSS pixels relative to the
+   * content area. Sent whenever the player's layout moves.
+   */
+  mpvSetSurfaceBounds: (bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => Promise<Envelope>;
+  /** Renders the video inside the app window, where the platform allows it. */
+  setNativeEngineEmbed: (embed: boolean) => Promise<Envelope & { embed: boolean }>;
+  /** A pull, for a player that mounted while something was already playing. */
+  getMpvSnapshot: () => Promise<Envelope & { snapshot: MpvSnapshot }>;
+  onMpvUpdate: (callback: (snapshot: MpvSnapshot) => void) => () => void;
+  getNativeEnginePolicy: () => Promise<
+    Envelope & {
+      policy: 'off' | 'auto' | 'aggressive';
+      available: boolean;
+      /** Whether the video renders inside the app window. */
+      embed: boolean;
+      /** Whether this platform can do that at all. */
+      canEmbed: boolean;
+    }
+  >;
+  setNativeEnginePolicy: (
+    policy: 'off' | 'auto' | 'aggressive'
+  ) => Promise<Envelope & { policy?: string }>;
+  /** Fetches mpv. Not part of `setupAllBinaries` — it is the biggest download. */
+  setupMpv: () => Promise<Envelope & { status: MpvEngineStatus }>;
 
   getSourceCacheStats: () => Promise<{ entries: number; sources: number }>;
   clearSourceCache: () => Promise<Envelope>;
@@ -494,7 +609,41 @@ export interface CloudStreamElectronAPI {
   enqueueDownload: (task: DownloadTask) => Promise<string>;
   pauseDownload: (id: string) => Promise<void>;
   resumeDownload: (id: string) => Promise<void>;
-  removeDownload: (id: string) => Promise<void>;
+  /**
+   * Removes a download from the list, and its file when `deleteFile` is true.
+   *
+   * The flag is required rather than inferred: on a finished film the two are
+   * unrecoverably different actions, and the destructive one cannot be undone.
+   */
+  removeDownload: (id: string, deleteFile?: boolean) => Promise<void>;
+  /**
+   * Player preferences that outlive one film: volume, mute, speed, and the
+   * track *languages* the viewer keeps choosing.
+   */
+  getPlayerPreferences: () => Promise<
+    Envelope & {
+      preferences: {
+        volume: number;
+        muted: boolean;
+        speed: number;
+        audioLanguage?: string;
+        subtitleLanguage?: string;
+      };
+    }
+  >;
+  setPlayerPreferences: (patch: {
+    volume?: number;
+    muted?: boolean;
+    speed?: number;
+    audioLanguage?: string;
+    subtitleLanguage?: string;
+  }) => Promise<Envelope>;
+  getDeleteDownloadPreference: () => Promise<
+    Envelope & { preference: 'ask' | 'list-only' | 'list-and-file' }
+  >;
+  setDeleteDownloadPreference: (
+    preference: 'ask' | 'list-only' | 'list-and-file'
+  ) => Promise<Envelope & { preference?: string }>;
   getDownloadQueue: () => Promise<DownloadTask[]>;
   revealInFolder: (filePath?: string) => Promise<void>;
   onDownloadProgress: (callback: (tasks: DownloadTask[]) => void) => () => void;
@@ -512,7 +661,7 @@ export interface CloudStreamElectronAPI {
     allReady: boolean;
     missingCount: number;
     runtime: SystemRuntimeStatus;
-    binaries: { aria2: boolean; ytdlp: boolean; ffmpeg: boolean; ffprobe: boolean };
+    binaries: { aria2: boolean; ytdlp: boolean; ffmpeg: boolean; ffprobe: boolean; mpv: boolean };
     suites: { runtime: boolean; downloads: boolean; media: boolean };
   }>;
   checkBinaries: () => Promise<{
@@ -520,6 +669,8 @@ export interface CloudStreamElectronAPI {
     ytdlp: boolean;
     ffmpeg: boolean;
     ffprobe: boolean;
+    /** The native engine is optional: absent is a normal, working state. */
+    mpv: boolean;
   }>;
   testAllBinaries: () => Promise<{
     aria2: { ok: boolean; version?: string; path?: string; error?: string };
@@ -528,7 +679,7 @@ export interface CloudStreamElectronAPI {
     ffprobe: { ok: boolean; version?: string; path?: string; error?: string };
   }>;
   testBinary: (
-    name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe'
+    name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'mpv'
   ) => Promise<{ ok: boolean; version?: string; path?: string; error?: string }>;
   removeBinary: (
     name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'media' | 'downloads' | 'all'
@@ -624,6 +775,49 @@ export interface CloudStreamElectronAPI {
         extensionInternalName?: string;
         extensionName?: string;
       };
+    }
+  >;
+
+  /**
+   * The same mapping for many providers at once.
+   *
+   * A source list routinely holds thirty rows drawn from a dozen providers, and
+   * every row wants its origin chain. Asking one at a time is thirty IPC round
+   * trips to read from one in-memory Map, so the whole list is answered in one.
+   */
+  // The structured log. Deliberately a thin surface — the log's job is to be on
+  // disk when something goes wrong, not to be browsed.
+  queryLog: (filter?: {
+    level?: LogLevel;
+    scopes?: string[];
+    event?: string;
+    search?: string;
+    since?: number;
+    limit?: number;
+  }) => Promise<
+    Envelope & {
+      records: Array<Record<string, unknown>>;
+      session: string;
+      level: LogLevel;
+      file: string;
+    }
+  >;
+  listLogSessions: () => Promise<
+    Envelope & {
+      sessions: Array<{ file: string; bytes: number; modified: number; current: boolean }>;
+      directory: string;
+    }
+  >;
+  setLogLevel: (level: LogLevel) => Promise<Envelope & { level: LogLevel }>;
+  revealLogFile: () => Promise<Envelope>;
+  exportLogSession: () => Promise<Envelope & { text: string; file: string }>;
+
+  getProviderProvenanceMap: (providerNames: string[]) => Promise<
+    Envelope & {
+      provenance: Record<
+        string,
+        { provider: string; repositoryName?: string; extensionName?: string }
+      >;
     }
   >;
 
@@ -779,7 +973,96 @@ export interface CloudStreamElectronAPI {
   }) => Promise<WatchProgress | null>;
   getProgressForKey: (key: string) => Promise<WatchProgress[]>;
   getContinueWatching: (limit?: number) => Promise<WatchProgress[]>;
+  // The home screen's catalogue source. Only a provider that is actually
+  // answering can be selected — see `home:selectProvider`.
+  listHomeProviders: (force?: boolean) => Promise<
+    Envelope & {
+      providers: Array<{
+        id: string;
+        name: string;
+        description: string;
+        requiresKey: boolean;
+        catalogs: string[];
+        genres: number;
+        selectable: boolean;
+        active: boolean;
+        health: {
+          status: 'healthy' | 'degraded' | 'unavailable' | 'unchecked';
+          latencyMs?: number;
+          items?: number;
+          withArtwork?: number;
+          reason?: string;
+          needsKey?: boolean;
+          checkedAt: number;
+        } | null;
+      }>;
+      selected: string;
+      tmdbKeySet: boolean;
+      customUrl: string;
+    }
+  >;
+  selectHomeProvider: (id: string) => Promise<Envelope & { id: string }>;
+  setTmdbKey: (key: string) => Promise<Envelope & { health: unknown }>;
+  setCustomCatalogUrl: (url: string) => Promise<Envelope & { health: unknown }>;
+
+  /** Takes one title off the row. The watch position is kept. */
+  dismissContinueWatching: (key: string) => Promise<Envelope & { removed: boolean }>;
+  /** Empties the row. Nothing is deleted; positions survive. */
+  clearContinueWatching: () => Promise<Envelope & { cleared: number }>;
+  getContinueWatchingEnabled: () => Promise<Envelope & { enabled: boolean }>;
+  setContinueWatchingEnabled: (enabled: boolean) => Promise<Envelope & { enabled: boolean }>;
   clearWatchProgress: (key: string, season?: number, episode?: number) => Promise<boolean>;
+  // --- the source that actually played ---
+  /**
+   * Saves the exact stream that delivered playback, with the query to rebuild it.
+   *
+   * Distinct from `rememberSource`, which records what the viewer *picked*. A
+   * release that is chosen and then fails to start is not one that works, and
+   * saving it as one sends them straight back to a stream that already failed.
+   */
+  recordPlayedSource: (input: {
+    title: string;
+    year?: number;
+    mediaUrl: string;
+    episodeTitle?: string;
+    season?: number;
+    episode?: number;
+    source: TorrentResult;
+    positionSeconds?: number;
+    durationSeconds?: number;
+  }) => Promise<Envelope & { record: PlayedSource | null }>;
+  getPlayedSource: (
+    key: string,
+    season?: number,
+    episode?: number
+  ) => Promise<Envelope & { record: PlayedSource | null }>;
+  listPlayedSources: (limit?: number) => Promise<Envelope & { records: PlayedSource[] }>;
+  getPlayedSourcesForKey: (key: string) => Promise<Envelope & { records: PlayedSource[] }>;
+  forgetPlayedSource: (
+    key: string,
+    season?: number,
+    episode?: number
+  ) => Promise<Envelope & { removed: boolean }>;
+  /**
+   * Hands back a playable source for a saved record, refreshing a dead link.
+   *
+   * `resolution` says which happened — `reused` (the stored link still holds),
+   * `refreshed` (the same release re-resolved), or `unavailable` (the provider
+   * no longer offers it, and `sources` carries the alternatives).
+   */
+  resolvePlayedSource: (
+    key: string,
+    season?: number,
+    episode?: number
+  ) => Promise<
+    Envelope & {
+      resolution: 'reused' | 'refreshed' | 'unavailable' | null;
+      record?: PlayedSource;
+      source?: TorrentResult;
+      sources: TorrentResult[];
+    }
+  >;
+
   rememberSource: (input: Omit<SourceMemory, 'chosenAt'>) => Promise<void>;
   recallSource: (key: string, season?: number, episode?: number) => Promise<SourceMemory | null>;
   exportLibrary: () => Promise<{
@@ -936,17 +1219,65 @@ const api: CloudStreamElectronAPI = {
     return () => ipcRenderer.removeListener('extension:providerLoadProgress', listener);
   },
 
-  probeMedia: (url) => ipcRenderer.invoke('media:probe', url),
+  inspectMediaSource: (request) => ipcRenderer.invoke('media:inspect', request),
+  preparePlaybackStream: (request) => ipcRenderer.invoke('media:prepare', request),
+  switchAudioTrack: (sessionId, audioIndex, positionSeconds) =>
+    ipcRenderer.invoke('media:switchAudio', sessionId, audioIndex, positionSeconds),
+  closePlaybackStream: (sessionId) => ipcRenderer.invoke('media:closeStream', sessionId),
+  getPlaybackDiagnostics: (sessionId) =>
+    ipcRenderer.invoke('media:getPlaybackDiagnostics', sessionId),
   getCodecProbes: () => ipcRenderer.invoke('media:getCodecProbes'),
   setMediaCapabilities: (capabilities) =>
     ipcRenderer.invoke('media:setCapabilities', capabilities),
-  openMediaTranscode: (url, audioIndex, transcodeVideo, transcodeAudio) =>
-    ipcRenderer.invoke('media:openTranscode', url, audioIndex, transcodeVideo, transcodeAudio),
-  closeMediaTranscode: (token) => ipcRenderer.invoke('media:closeTranscode', token),
   listExternalPlayers: (refresh) => ipcRenderer.invoke('player:listExternal', refresh),
   openInExternalPlayer: (playerId, url) =>
     ipcRenderer.invoke('player:openExternal', playerId, url),
+  rollbackExtension: (repositoryUrl, internalName) =>
+    ipcRenderer.invoke('extension:rollback', repositoryUrl, internalName),
+  hasPreviousExtensionVersion: (repositoryUrl, internalName) =>
+    ipcRenderer.invoke('extension:hasPreviousVersion', repositoryUrl, internalName),
+  openControlledExternal: (playerId, url) => ipcRenderer.invoke('external:open', playerId, url),
+  getExternalCapability: (playerId) => ipcRenderer.invoke('external:capability', playerId),
+  getExternalSnapshot: () => ipcRenderer.invoke('external:snapshot'),
+  onExternalUpdate: (callback) => {
+    const listener = (_: unknown, snapshot: ExternalPlaybackSnapshot) => callback(snapshot);
+    ipcRenderer.on('external:update', listener);
+    return () => ipcRenderer.removeListener('external:update', listener);
+  },
+  externalSetPaused: (paused) => ipcRenderer.invoke('external:setPaused', paused),
+  externalSeek: (seconds) => ipcRenderer.invoke('external:seek', seconds),
+  externalSetVolume: (percent) => ipcRenderer.invoke('external:setVolume', percent),
+  externalSetMuted: (muted) => ipcRenderer.invoke('external:setMuted', muted),
+  externalSetSpeed: (rate) => ipcRenderer.invoke('external:setSpeed', rate),
+  externalSetFullscreen: () => ipcRenderer.invoke('external:setFullscreen'),
+  externalStop: () => ipcRenderer.invoke('external:stop'),
   openExternalLink: (url) => ipcRenderer.invoke('shell:openExternal', url),
+
+  getMpvStatus: () => ipcRenderer.invoke('mpv:status'),
+  openInNativeEngine: (request) => ipcRenderer.invoke('mpv:open', request),
+  mpvSetPaused: (paused) => ipcRenderer.invoke('mpv:setPaused', paused),
+  mpvSeek: (seconds) => ipcRenderer.invoke('mpv:seek', seconds),
+  mpvSetVolume: (volume) => ipcRenderer.invoke('mpv:setVolume', volume),
+  mpvSetMuted: (muted) => ipcRenderer.invoke('mpv:setMuted', muted),
+  mpvSetSpeed: (speed) => ipcRenderer.invoke('mpv:setSpeed', speed),
+  mpvSetFullscreen: (fullscreen) => ipcRenderer.invoke('mpv:setFullscreen', fullscreen),
+  mpvSetAudioTrack: (id) => ipcRenderer.invoke('mpv:setAudioTrack', id),
+  mpvSetSubtitleTrack: (id) => ipcRenderer.invoke('mpv:setSubtitleTrack', id),
+  mpvAddSubtitle: (url, title, language) =>
+    ipcRenderer.invoke('mpv:addSubtitle', url, title, language),
+  mpvSetSubtitleDelay: (seconds) => ipcRenderer.invoke('mpv:setSubtitleDelay', seconds),
+  mpvStop: () => ipcRenderer.invoke('mpv:stop'),
+  mpvSetSurfaceBounds: (bounds) => ipcRenderer.invoke('mpv:setSurfaceBounds', bounds),
+  setNativeEngineEmbed: (embed) => ipcRenderer.invoke('mpv:setEmbed', embed),
+  getMpvSnapshot: () => ipcRenderer.invoke('mpv:snapshot'),
+  onMpvUpdate: (callback) => {
+    const listener = (_: unknown, snapshot: MpvSnapshot) => callback(snapshot);
+    ipcRenderer.on('mpv:update', listener);
+    return () => ipcRenderer.removeListener('mpv:update', listener);
+  },
+  getNativeEnginePolicy: () => ipcRenderer.invoke('mpv:getPolicy'),
+  setNativeEnginePolicy: (policy) => ipcRenderer.invoke('mpv:setPolicy', policy),
+  setupMpv: () => ipcRenderer.invoke('binary:setupMpv'),
 
   getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
   clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),
@@ -971,7 +1302,12 @@ const api: CloudStreamElectronAPI = {
   enqueueDownload: (task) => ipcRenderer.invoke('download:enqueue', task),
   pauseDownload: (id) => ipcRenderer.invoke('download:pause', id),
   resumeDownload: (id) => ipcRenderer.invoke('download:resume', id),
-  removeDownload: (id) => ipcRenderer.invoke('download:remove', id),
+  removeDownload: (id, deleteFile) => ipcRenderer.invoke('download:remove', id, deleteFile),
+  getPlayerPreferences: () => ipcRenderer.invoke('player:getPreferences'),
+  setPlayerPreferences: (patch) => ipcRenderer.invoke('player:setPreferences', patch),
+  getDeleteDownloadPreference: () => ipcRenderer.invoke('download:getDeletePreference'),
+  setDeleteDownloadPreference: (preference) =>
+    ipcRenderer.invoke('download:setDeletePreference', preference),
   getDownloadQueue: () => ipcRenderer.invoke('download:getQueue'),
   revealInFolder: (filePath) => ipcRenderer.invoke('download:revealInFolder', filePath),
   onDownloadProgress: (callback) => {
@@ -1042,6 +1378,14 @@ const api: CloudStreamElectronAPI = {
 
   getProviderProvenance: (providerName) =>
     ipcRenderer.invoke('api:getProviderProvenance', providerName),
+  getProviderProvenanceMap: (providerNames) =>
+    ipcRenderer.invoke('api:getProviderProvenanceMap', providerNames),
+
+  queryLog: (filter) => ipcRenderer.invoke('log:query', filter),
+  listLogSessions: () => ipcRenderer.invoke('log:sessions'),
+  setLogLevel: (level) => ipcRenderer.invoke('log:setLevel', level),
+  revealLogFile: () => ipcRenderer.invoke('log:reveal'),
+  exportLogSession: () => ipcRenderer.invoke('log:exportSession'),
 
   listBookmarks: () => ipcRenderer.invoke('bookmarks:list'),
   getBookmark: (mediaUrl) => ipcRenderer.invoke('bookmarks:get', mediaUrl),
@@ -1101,8 +1445,27 @@ const api: CloudStreamElectronAPI = {
   recordWatchProgress: (input) => ipcRenderer.invoke('library:recordProgress', input),
   getProgressForKey: (key) => ipcRenderer.invoke('library:getProgressForKey', key),
   getContinueWatching: (limit) => ipcRenderer.invoke('library:getContinueWatching', limit),
+  listHomeProviders: (force) => ipcRenderer.invoke('home:listProviders', force),
+  selectHomeProvider: (id) => ipcRenderer.invoke('home:selectProvider', id),
+  setTmdbKey: (key) => ipcRenderer.invoke('home:setTmdbKey', key),
+  setCustomCatalogUrl: (url) => ipcRenderer.invoke('home:setCustomCatalogUrl', url),
+
+  dismissContinueWatching: (key) => ipcRenderer.invoke('library:dismissContinueWatching', key),
+  clearContinueWatching: () => ipcRenderer.invoke('library:clearContinueWatching'),
+  getContinueWatchingEnabled: () => ipcRenderer.invoke('library:getContinueWatchingEnabled'),
+  setContinueWatchingEnabled: (enabled) =>
+    ipcRenderer.invoke('library:setContinueWatchingEnabled', enabled),
   clearWatchProgress: (key, season, episode) =>
     ipcRenderer.invoke('library:clearProgress', key, season, episode),
+  recordPlayedSource: (input) => ipcRenderer.invoke('library:recordPlayedSource', input),
+  getPlayedSource: (key, season, episode) =>
+    ipcRenderer.invoke('library:getPlayedSource', key, season, episode),
+  listPlayedSources: (limit) => ipcRenderer.invoke('library:listPlayedSources', limit),
+  getPlayedSourcesForKey: (key) => ipcRenderer.invoke('library:getPlayedSourcesForKey', key),
+  forgetPlayedSource: (key, season, episode) =>
+    ipcRenderer.invoke('library:forgetPlayedSource', key, season, episode),
+  resolvePlayedSource: (key, season, episode) =>
+    ipcRenderer.invoke('library:resolvePlayedSource', key, season, episode),
   rememberSource: (input) => ipcRenderer.invoke('library:rememberSource', input),
   recallSource: (key, season, episode) =>
     ipcRenderer.invoke('library:recallSource', key, season, episode),

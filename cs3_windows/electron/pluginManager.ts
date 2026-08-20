@@ -715,6 +715,140 @@ export class PluginManager {
     return path.join(this.pluginsDir, repoDir, file);
   }
 
+  /**
+   * The archive kept aside so a bad update can be undone.
+   *
+   * One generation only. Two would be a version history nobody asked for, and
+   * the question this answers is narrow: the extension worked five minutes ago
+   * and does not now, so put back the one that worked.
+   */
+  /** The installed archive for a plugin. Public so the updater can verify it. */
+  public archivePathFor(repoUrl: string, internalName: string): string {
+    return this.installPathFor(repoUrl, internalName);
+  }
+
+  private backupPathFor(repoUrl: string, internalName: string): string {
+    return `${this.installPathFor(repoUrl, internalName)}.previous`;
+  }
+
+  /**
+   * Copies the currently-installed archive aside before it is overwritten.
+   *
+   * Returns whether there was anything to preserve — a first install has no
+   * previous version, and that is not a failure.
+   */
+  public preserveInstalledVersion(repoUrl: string, internalName: string): boolean {
+    const current = this.installPathFor(repoUrl, internalName);
+    if (!fs.existsSync(current)) return false;
+    try {
+      fs.copyFileSync(current, this.backupPathFor(repoUrl, internalName));
+      return true;
+    } catch (error) {
+      console.warn('[plugins] could not preserve the previous version:', error);
+      return false;
+    }
+  }
+
+  public hasPreviousVersion(repoUrl: string, internalName: string): boolean {
+    return fs.existsSync(this.backupPathFor(repoUrl, internalName));
+  }
+
+  /**
+   * Puts the preserved archive back and reloads from it.
+   *
+   * The update is undone on disk *and* in the running sidecar: leaving the new
+   * bytes loaded while the old file sits on disk would mean the rollback
+   * appeared to work and changed nothing until a restart, which is the most
+   * confusing possible outcome for someone already dealing with a broken
+   * extension.
+   */
+  public async rollbackPlugin(
+    repoUrl: string,
+    internalName: string
+  ): Promise<{ ok: boolean; message: string }> {
+    const backup = this.backupPathFor(repoUrl, internalName);
+    const target = this.installPathFor(repoUrl, internalName);
+
+    if (!fs.existsSync(backup)) {
+      return {
+        ok: false,
+        message: 'There is no previous version of this extension to go back to.',
+      };
+    }
+
+    try {
+      fs.copyFileSync(backup, target);
+    } catch (error) {
+      return {
+        ok: false,
+        message: `The previous version could not be restored: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+
+    /**
+     * The restored archive is loaded before this reports success, so "rolled
+     * back" means "and it works" rather than "and the file is in place".
+     */
+    const verification = await this.verifyInstalledPlugin(internalName, target);
+    if (!verification.ok) {
+      return {
+        ok: false,
+        message: `The previous version was restored but still does not load: ${verification.message}`,
+      };
+    }
+
+    return { ok: true, message: 'The previous version has been restored and loaded.' };
+  }
+
+  /**
+   * Asks the sidecar whether an archive actually runs.
+   *
+   * This is the check §10 turns on: an update that downloads, verifies its hash
+   * and writes cleanly can still be built against a provider API this runtime
+   * does not have, and the first anyone knows is that every provider from that
+   * extension has vanished. Loading it is the only way to find out, and it is
+   * the same load the app would do on next launch — brought forward to a moment
+   * where the previous version is still recoverable.
+   *
+   * A `T4_BLOCKED` tier counts as a failure. Anything else does not: `T3_DEGRADED`
+   * means the extension runs with some non-critical Android API missing, which
+   * is the normal state of a large part of the corpus and emphatically not a
+   * reason to refuse an update.
+   */
+  public async verifyInstalledPlugin(
+    internalName: string,
+    archivePath: string
+  ): Promise<{ ok: boolean; message: string; tier?: string }> {
+    try {
+      const report = await this.inspect(internalName, archivePath);
+
+      /**
+       * A null report is the sidecar being unreachable, which is a different
+       * condition from the plugin being broken (DROP-34) — and rolling an
+       * update back because the JVM had not started yet would be its own bug.
+       */
+      if (!report) return { ok: true, message: 'the extension runtime is unavailable; not judged' };
+
+      if (report.tier === 'T4_BLOCKED') {
+        return {
+          ok: false,
+          tier: report.tier,
+          message:
+            report.reason ||
+            'the extension runtime cannot load it (missing classes or an incompatible API)',
+        };
+      }
+      return { ok: true, tier: report.tier, message: 'loads' };
+    } catch (error) {
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   // --- repositories --------------------------------------------------------
 
   /**
@@ -2159,8 +2293,16 @@ export class PluginManager {
       url: String(link.url ?? ''),
       referer: link.referer ? String(link.referer) : '',
       quality: typeof link.quality === 'number' ? link.quality : 0,
-      isM3u8: Boolean(link.isM3u8) || link.type === 'M3U8',
-      isDash: link.type === 'DASH',
+      isM3u8:
+        Boolean(link.isM3u8) ||
+        /^(m3u8|hls)$/i.test(String(link.type ?? '')) ||
+        /\.(m3u8|m3u)(\?|$)/i.test(String(link.url ?? '')) ||
+        /\/(getm3u8|m3u8|hls)\b/i.test(String(link.url ?? '')) ||
+        /[?&]format=m3u8/i.test(String(link.url ?? '')),
+      isDash:
+        /^(dash|mpd)$/i.test(String(link.type ?? '')) ||
+        /\.mpd(\?|$)/i.test(String(link.url ?? '')) ||
+        /\/(dash|mpd)\b/i.test(String(link.url ?? '')),
       headers: (link.headers as Record<string, string> | undefined) ?? {},
     }));
 

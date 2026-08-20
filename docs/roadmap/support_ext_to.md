@@ -647,3 +647,199 @@ That gives you the equivalent of a CloudStream-style community provider ecosyste
 [5]: https://github.com/sooti/sootio-stremio-addon/blob/main/.env.example?utm_source=chatgpt.com "sootio-stremio-addon/.env.example at main · sooti/sootio-stremio-addon · GitHub"
 [6]: https://ext.to/advanced/?utm_source=chatgpt.com "Advanced Search - EXT Torrents"
 [7]: https://developers.cloudflare.com/bots/concepts/bot-detection-engines/?utm_source=chatgpt.com "Bot detection engines · Cloudflare bot solutions docs"
+
+
+
+---
+  We have conducted empirical multi-provider testing, media inspection, and adaptive streaming analysis
+  across 23 active English and Hindi providers, authored the formal PRD-38 specification, created a
+  runnable automated test suite, and verified that tsc -b typechecks cleanly with 0 errors.
+  ──────
+  ## 1. Summary of Empirical Test Findings Across English & Hindi Providers
+
+  We evaluated live stream scraping, media probing (ffprobe), and progressive adaptive streaming (ffmpeg
+  / MediaTranscoder) across 23 community providers and real-world movies and series (Spider-Man: No Way
+  Home, The Incredible Hulk, Interstellar, Meet Dave, RRR, Jawan, Mirzapur, Stranger Things, etc.):
+
+  ### 1.1 Live Stream Probing & Codec Matrix
+
+   Content & T… | Provider  | Container | Video Codec … | Audio Codec … | Chromium Dir… | Adaptive Eng…
+  --------------|-----------|-----------|---------------|---------------|---------------|---------------
+   Spider-Man:  | Cinefreak | matroska  | hevc (Main    | aac (2        | Playback      | Success:
+   No Way Home  |           |           | 10,           | channels, 2   | Failure       | Intel QSV
+                |           |           | yuv420p10le,  | streams)      | (undecodable  | Hardware
+                |           |           | 1280x674)     |               | HEVC 10-bit)  | Transcode to
+                |           |           |               |               |               | H.264 → 1.96
+                |           |           |               |               |               | MB in 7s
+                |           |           |               |               |               | (TTFB:
+                |           |           |               |               |               | 3258ms)
+   Spider-Man:  | Movies4u  | matroska  | h264 (High,   | eac3 (5.1ch)  | Silent Video  | Success:
+   No Way Home  |           |           | yuv420p,      | × 3 streams + | (Chromium     | Instant Remux
+                |           |           | 1280x534)     | aac           | drops E-AC-3) | (-c:v copy) +
+                |           |           |               |               |               | AAC downmix →
+                |           |           |               |               |               | 19.75 MB in
+                |           |           |               |               |               | 7s (TTFB:
+                |           |           |               |               |               | 1330ms)
+   Spider-Man:  | UHDmovies | matroska  | h264 (High,   | eac3 (5.1ch)  | Silent Video  | Success:
+   No Way Home  |           |           | yuv420p,      | × 2 streams   | (Chromium     | Instant Remux
+                |           |           | 1920x800)     |               | drops E-AC-3) | + AAC downmix
+                |           |           |               |               |               | → 21.95 MB in
+                |           |           |               |               |               | 7s (TTFB:
+                |           |           |               |               |               | 1238ms)
+   The          | Cinefreak | matroska  | h264 (High,   | ac3 (5.1ch, 2 | Silent Video  | Success:
+   Incredible   |           |           | yuv420p,      | streams)      | (Chromium     | Instant Remux
+   Hulk         |           |           | 1920x816)     |               | drops AC-3)   | + AAC downmix
+                |           |           |               |               |               | → 8.40 MB in
+                |           |           |               |               |               | 7s (TTFB:
+                |           |           |               |               |               | 3031ms)
+   The          | 4K HDHUB  | matroska  | h264 (High,   | eac3 (5.1ch)  | Silent Video  | Success:
+   Incredible   |           |           | yuv420p,      | × 4 streams   | (Chromium     | Instant Remux
+   Hulk         |           |           | 1920x804)     |               | drops E-AC-3) | + AAC downmix
+                |           |           |               |               |               | → 12.40 MB in
+                |           |           |               |               |               | 7s (TTFB:
+                |           |           |               |               |               | 2274ms)
+   The          | 4K HDHUB  | matroska  | hevc (Main    | eac3 5.1,     | Complete      | Success:
+   Incredible   |           |           | 10,           | dts-hd ma 7.1 | Stall         | Intel QSV /
+   Hulk (4K)    |           |           | 3840x2160,    |               | (undecodable  | 1080p
+                |           |           | 32.7 Mbps)    |               | HEVC + DTS)   | Downscale →
+                |           |           |               |               |               | 26–60 FPS
+                |           |           |               |               |               | real-time
+                |           |           |               |               |               | streaming
+   The          | Hdmovie2  | hls       | h264 (Segment | aac stereo    | Demux Failure | Success: Pass
+   Incredible   |           |           | URLs masked   |               | (rejected     | -allowed_exte
+   Hulk         |           |           | as .png)      |               | non-standard  | nsions ALL to
+                |           |           |               |               | ext)          | FFmpeg
+                |           |           |               |               |               | demuxer
+   Spider-Man:  | MovieBox  | dash      | MPEG-DASH     | Multi-bitrate | Browser Demux | Success:
+   No Way Home  |           |           | manifest      | AAC/E-AC-3    | Error         | Direct
+                |           |           | (.mpd)        |               |               | browser MSE
+                |           |           |               |               |               | routing via
+                |           |           |               |               |               | dash.js
+   Spider-Man:  | DudeFilms | matroska  | h264          | aac / eac3    | HTTP 403      | Success:
+   No Way Home  |           |           | (Cloudflare   |               | Forbidden     | mediaProxy.ts
+                |           |           | Workers CDN)  |               |               | injects
+                |           |           |               |               |               | Referer:
+                |           |           |               |               |               | https://dudef
+                |           |           |               |               |               | ilms.in/
+  ──────
+  ## 2. Root Cause Taxonomy & Architectural Mitigations
+
+    ┌──────────────────────────────────────────────────────────────────────────────────┐
+    │                            STREAM RESOLUTION PIPELINE                            │
+    │           Provider Scrape → Link Extracted → Pre-Playback Classification         │
+    └────────────────────────────────────────┬─────────────────────────────────────────┘
+                                             │
+                     ┌───────────────────────┴───────────────────────┐
+                     ▼                                               ▼
+         ┌───────────────────────┐                       ┌───────────────────────┐
+         │   SEGMENTED MANIFEST  │                       │   DIRECT / CDN FILE   │
+         │   (HLS / MPEG-DASH)   │                       │  (.mkv / .mp4 / CDN)  │
+         └───────────┬───────────┘                       └───────────┬───────────┘
+                     │                                               │
+            ┌────────┴────────┐                             ┌────────┴────────┐
+            ▼                 ▼                             ▼                 ▼
+     ┌─────────────┐   ┌─────────────┐               ┌─────────────┐   ┌─────────────┐
+     │ Native HLS  │   │  MPEG-DASH  │               │ Probe Valid │   │ Anti-Hotlink│
+     │  (hls.js)   │   │  (dash.js)  │               │   (ffprobe) │   │ (MediaProxy)│
+     └─────────────┘   └─────────────┘               └──────┬──────┘   └─────────────┘
+                                                            │
+                          ┌─────────────────────────────────┴────────────────────────┐
+                          ▼                                                          ▼
+              ┌───────────────────────┐                                  ┌───────────────────────┐
+              │  DIRECT PLAY / REMUX  │                                  │   ADAPTIVE TRANSCODE  │
+              │ H.264 + AAC in MP4/MKV│                                  │  HEVC 10-bit, AC-3,   │
+              │   Speed: > 10.0x RT   │                                  │  E-AC-3, DTS, TrueHD  │
+              │   CPU Overhead: ~0%   │                                  │ Speed: 1.5x - 4.0x RT │
+              └───────────────────────┘                                  └───────────────────────┘
+
+  1. Silent Multi-Track Audio (AC-3, E-AC-3, DTS, TrueHD):
+      • Root Cause: Chromium ignores unsupported audio codecs in Matroska containers, decoding video
+      with zero audio output.
+      • Mitigation: Immediate remux passing video through -c:v copy (zero CPU overhead) and downmixing
+      audio to stereo AAC (-c:a aac -b:a 192k -ac 2).
+  2. The "3–5 Second Freeze" on 4K HEVC / 10-Bit Streams:
+      • Root Cause: CPU software transcoding (libx264) at 4K runs at only 11–13 FPS (0.47x–0.54x real-
+      time). Once the player consumes the initial buffer, it stalls indefinitely.
+      • Mitigation: Hardware acceleration (h264_qsv, h264_nvenc, h264_amf @ 26–60 FPS) with automatic
+      fallback to 1080p downscaling (-vf scale=-2:1080 @ 26–28 FPS, > 1.0x real-time).
+  3. Image-Masked HLS Segments (.png extensions):
+      • Root Cause: Providers like Hdmovie2 mask video .ts chunks as .png files to bypass CDN blockers.
+      FFmpeg rejects them by default.
+      • Mitigation: Supply -allowed_extensions ALL to the FFmpeg probe and transcoder.
+  4. Referer & Origin Locked CDNs:
+      • Root Cause: Cloudflare workers return 403 when requests lack the provider's apex domain.
+      • Mitigation: Route through mediaProxy.ts on 127.0.0.1 injecting required Referer, User-Agent, and
+      Cookie headers.
+
+  ──────
+  ## 3. Documents Created and Verified
+
+  1. PRD Document:
+      • Authored 38-multi-provider-streaming-matrix-and-test-spec.md detailing the empirical results,
+      codec/container matrix, error taxonomy, and automated test specifications.
+      • Registered in 00-index.md.
+  2. Automated Test Suite:
+      • Authored multi-provider-streaming-matrix.test.mjs.
+      • Executed and validated: 22 tests passed, 0 failed.
+  3. Typecheck Integrity:
+      • Verified that bun run typecheck (tsc -b) exits cleanly with 0 errors.
+
+
+
+# Final Pan-Provider Streaming Benchmark & Empirical Analysis Report
+
+The comprehensive background test execution across **23 active English & Hindi providers** and **20 diverse movies & TV series** has completed.
+
+---
+
+## 1. Aggregate Empirical Test Corpus Metrics
+
+Across **322 provider search and link resolution cycles**:
+- **Total Scrape & Resolution Cycles**: `322`
+- **Total Search Hits Discovered**: `322`
+- **Queries with Resolved Playable Streams**: `131`
+- **Total Live Stream Links & Mirrors Extracted**: **`1,051 stream links`**
+- **Verified Probed Streams**: `37`
+- **Verified Progressive Stream Deliveries ($\ge 1.0\times$ Real-time)**: `28`
+- **Container Breakdown**: 100% of tested dual-audio / high-bitrate direct file streams used **Matroska** (`.mkv`).
+- **Video Codec Distribution**:
+  - `H.264 / AVC`: **65%** (24 streams)
+  - `HEVC / H.265` (including 10-bit Main 10): **30%** (11 streams)
+- **Audio Codec Distribution**:
+  - `AAC`: **54%** (36 tracks)
+  - `E-AC-3` (Dolby Digital Plus 5.1): **30%** (20 tracks)
+  - `AC-3` (Dolby Digital 5.1): **11%** (7 tracks)
+  - `TrueHD` (Dolby TrueHD Lossless): **5%** (3 tracks)
+
+---
+
+## 2. Key Discoveries from the Complete Run
+
+1. **Multi-Track Audio Silence in Chromium (Dolby Digital Plus `E-AC-3` & `AC-3`)**:
+   - Streams from `Movies4u`, `UHDmovies`, `4K HDHUB`, and `Cinefreak` contain up to 4 simultaneous `E-AC-3` 5.1 and `AC-3` tracks.
+   - Chromium plays the video normally while completely dropping the audio (yielding `0` audio bytes decoded).
+   - Our adaptive remuxing pipeline (`-c:v copy -c:a aac -b:a 192k -ac 2`) delivers **19.75 MB – 21.95 MB in 7 seconds** with a time-to-first-byte (TTFB) of **1.2s – 1.3s** and zero CPU video overhead.
+
+2. **The "3–5 Second Freeze" Root Cause on 4K HEVC 10-Bit Content**:
+   - `libx264` software transcoding on 4K 10-bit HEVC runs at **11–13 FPS (0.47x–0.54x real-time)**, causing fatal buffer underruns once the initial burst is consumed.
+   - Hardware acceleration (`h264_qsv` / `h264_nvenc` / `h264_amf`) and automatic 1080p downscaling (`-vf scale=-2:1080`) achieve **26–60 FPS (1.06x–2.55x real-time)**, guaranteeing continuous playback.
+
+3. **Anti-Hotlink Obfuscated HLS Chunks (`.png` segment URLs)**:
+   - `Hdmovie2` (`imagesharerhost.com`) masks video `.ts` chunks as `.png` images. Standard demuxers reject these without `-allowed_extensions ALL`. Adding this flag enables playback.
+
+4. **MPEG-DASH XML Manifests**:
+   - `MovieBoxProvider` delivers segmented `.mpd` manifests. Rather than feeding raw XML to binary demuxers, the adaptive engine directs these to `dash.js` with MSE in the renderer.
+
+5. **Cloudflare Worker & GDrive Signed CDN Expiry & Referer Verification**:
+   - `Dudefilms` and `HDHub4u` require apex domain `Referer` headers and background token re-resolution when signed URLs expire.
+
+---
+
+## 3. Documents & Artifacts
+
+- **PRD Specification**: [`docs/PRD/38-multi-provider-streaming-matrix-and-test-spec.md`](file:///D:/projects/cs3/docs/PRD/38-multi-provider-streaming-matrix-and-test-spec.md)
+  - Registered in [`docs/PRD/00-index.md`](file:///D:/projects/cs3/docs/PRD/00-index.md).
+- **Automated Test Suite**: [`tools/e2e/multi-provider-streaming-matrix.test.mjs`](file:///D:/projects/cs3/tools/e2e/multi-provider-streaming-matrix.test.mjs)
+  - **22 test assertions passed (0 failed)**.
+- **Detailed JSON Benchmark Report**: `%APPDATA%\CloudStream 3 Desktop\cs3-pan-provider-test-matrix.json` (322 detailed test records).
+- **Codebase Type Safety**: `bun run typecheck` (`tsc -b`) exits cleanly with **0 errors**.

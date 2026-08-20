@@ -72,8 +72,16 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (10 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (169 tests, Node type-stripping — no framework) |
+| Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
+| Source export only | `cs3_windows/` | `bun run test:export` (13 cases, pure) |
+| Logging only | `cs3_windows/` | `bun run test:log` (17 cases, real files in a temp dir) |
+| Home providers only | `cs3_windows/` | `bun run test:home` (9 cases, pure) |
+| Media decisions only | `cs3_windows/` | `bun run test:media` (53 cases, no ffmpeg needed) |
+| Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
+| Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
+| Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
 | Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
 
@@ -100,13 +108,25 @@ carry a reason with it.
 Toolchain present in the cloud environment: Java 21, Maven, Bun, Node 22.
 
 There is **almost no automated test suite for the Electron/React side** and no CI workflow
-(`.github/` does not exist). The exception is `electron/sharedDiscovery.test.mts`, run by
-`bun run test:electron`: Node strips the types itself — possible only because
-`erasableSyntaxOnly` is set — so there is no framework, no transform and no config to keep
-working. That module earns tests where the rest of `electron/` has none because its failure
-modes are invisible: a doubled scrape reads as a slow provider and a wrongly-cancelled run
-reads as a flaky site, and neither would ever be traced back to it from a bug report. `.mts`
-is in `tsconfig.node.json`'s `include`, so the tests are typechecked too.
+(`.github/` does not exist). The exceptions are `electron/sharedDiscovery.test.mts` and the two
+media suites under `electron/media/`, all run by `bun run test:electron`: Node strips the types
+itself — possible only because `erasableSyntaxOnly` is set — so there is no framework, no
+transform and no config to keep working. `.mts` is in `tsconfig.node.json`'s `include`, so the
+tests are typechecked too.
+
+Those modules earn tests where the rest of `electron/` has none, for two different reasons.
+`sharedDiscovery` because its failure modes are invisible: a doubled scrape reads as a slow
+provider and a wrongly-cancelled run reads as a flaky site, and neither would ever be traced
+back to it from a bug report. The media suites because their inputs are **expensive to
+reproduce and cheap to encode** — every row of the compatibility matrix was measured against a
+real 25 GB file behind a provider link that has since expired, and a regression there is silent
+in the worst way: choosing `-c:v copy` for a 10-bit HEVC file produces an MP4 that downloads
+perfectly and plays nothing, which is indistinguishable from a bad provider.
+
+Note the `.ts` extensions on imports inside `electron/media/`. They are load-bearing: Node's
+type stripping is an ESM loader and will not resolve an extensionless specifier, so without
+them the tests cannot import the modules they test. `allowImportingTsExtensions` is already set
+in both tsconfigs and the Rollup build is indifferent.
 
 **The `tsc` in `bun run build` typechecks nothing.** The root `tsconfig.json` is
 solution-style (`"files": []` plus two `references`), and plain `tsc` on such a config is a
@@ -206,8 +226,27 @@ sidecar dispatches each onto a bounded pool sized to the core count.
 
 Also namespaced: `analytics:*` (provider measurement, ranking weights, recommendations,
 and the erase control), `bookmarks:*` (saved detail pages), `discover:*` (home-screen
-catalogues and title enrichment), `subtitles:*` (online search, SubRip→WebVTT), `audio:*` (ffprobe
-inspection and remux sessions), `sources:getCacheStats` / `sources:clearCache`.
+catalogues and title enrichment), `home:*` (which catalogue those come from, and its
+health), `log:*` (the structured log — query, sessions, level, reveal, export),
+`subtitles:*` (online search, SubRip→WebVTT), `sources:getCacheStats` /
+`sources:clearCache`.
+
+`media:*` is the compatibility engine's surface: `media:inspect` classifies a source without
+starting anything, `media:prepare` inspects-decides-opens and returns the URL to attach,
+`media:switchAudio` / `media:closeStream` drive a live session, `media:setCapabilities` /
+`media:getCodecProbes` carry what the renderer measured about its own decoders, and
+`media:getPlaybackDiagnostics` returns the per-attempt telemetry. There is deliberately **no**
+channel that hands back an unclassified playback URL.
+
+`external:*` drives a handed-off player and pushes `external:update` snapshots back, with a
+`capability` that says whether those controls reach anything. `player:getPreferences` /
+`player:setPreferences` hold volume, mute, speed and track languages.
+`download:getDeletePreference` / `download:setDeletePreference` hold the delete behaviour, and
+`extension:rollback` puts back the archive an update replaced.
+
+`mpv:*` drives the native engine — `mpv:open` (a *prepared* URL only), transport and track
+controls, `mpv:update` snapshots pushed like `playback:*`, and `mpv:getPolicy`/`mpv:setPolicy`
+for how eagerly it is used. It has no channel that takes a raw link either, for the same reason.
 
 Fallible handlers return an **envelope**, `{ ok: boolean; error?: string; …payload }`,
 instead of rejecting. `main.ts` has a `fail()` helper for this. A transport failure must
@@ -238,7 +277,11 @@ not a layering mistake.
 | `searchHistory.ts` | Past search *queries* (not results — a cached result set goes stale silently), stored via the datastore so backups carry it. |
 | `sourceCache.ts` | Resolved sources, with expiry tracked **per source**: magnets never expire, provider links carry a deadline read from the URL (`Expires`/`exp`/JWT claim, case-insensitively) or a short TTL. A cache hit can be partially stale — good magnets beside dead links — and `read()` reports that split. |
 | `subtitleService.ts` | Online subtitle search via the keyless OpenSubtitles v3 Stremio addon, keyed by IMDb id. Converts SubRip to WebVTT, which is **not optional**: `<track>` rejects `.srt` silently. |
-| `mediaTranscoder.ts` | ffprobe/ffmpeg audio *and* video compatibility. See the codec section below — the fix for both the "no sound" bug and undecodable HEVC. |
+| `media/mediaInspector.ts` | ffprobe → `MediaMetadata`; transport and DRM classified from the manifest body, never the URL. |
+| `media/decisionEngine.ts` | Pure decision: metadata + host capability → `TransformationPlan`. Tested exhaustively; see the codec section. |
+| `media/playbackEngine.ts` | Inspect → decide → open, and the only way to obtain a URL to attach. Owns playback telemetry. |
+| `media/mpvEngine.ts` | The native engine. Spawns mpv, drives it over JSON-RPC, and reports snapshots. For the streams Chromium will never decode — see below. |
+| `mediaTranscoder.ts` | Executes a plan as a live fragmented-MP4 stream on loopback, plus embedded-subtitle extraction. |
 | `metadataProvider.ts` | TVmaze + AniList. **Catalogue metadata only, never streams.** Its key output is the IMDb id, which indexers match on far better than free text. |
 | `cinemeta.ts` | Stremio Cinemeta metadata provider, prioritised in search. |
 | `pluginManager.ts` | `.cs3` repository discovery, plugin-list parsing (mirrors upstream `RepositoryManager.kt`), download + SHA-256 verification, Android-style install paths, then hands archives to the sidecar. Also owns the enable/disable cascade — see the extensions-screen section. |
@@ -249,17 +292,25 @@ not a layering mistake.
 | `cs3/diagnostics.ts` | Provider failures with the context that makes them reproducible. See below. |
 | `cs3/titleOutcomes.ts` | How each title last behaved, so a dead row is not clicked twice. |
 | `cs3/batchDownloader.ts` | Season/series batch download orchestration. |
-| `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, and remembered source choices. |
+| `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, remembered source choices, and the source that actually played. |
+| `cs3/playedSource.ts` | Re-finding a saved source after its link expires. Pure and tested — a provider source has no durable id. |
 | `cs3/bookmarkStore.ts` | Saved *detail pages*, with the provider, extension, repository and query that produced them. Deliberately **not** the library: that keys on a normalised title so one film from five providers is one entry, which is right for watch tracking and useless for "reopen the page I was on". Identity and origin are stored; resolved links are not, because they expire. |
 | `cs3/providerAnalytics.ts` | How every provider has actually behaved, counted. Aggregates only — no queries, no titles, no viewing history — because provider quality does not depend on any of them and this file is meant to be shareable. `empty` is tracked separately from `failure`: a provider with nothing for this title is working, and folding the two together would rank providers by catalogue breadth. |
 | `cs3/providerRanking.ts` | Weighted scoring over those counts. Criteria are **rows in a table**, not a formula: an id, a weight, a sample floor and a function to `0..1` or `null`. A `null` is excluded from the denominator rather than scored zero — a provider nobody has downloaded from must not rank below one whose downloads always fail. Rates are smoothed toward a neutral prior so a new extension starts mid-table and can never be permanently buried by one unlucky first call. |
 | `cs3/providerRecommendations.ts` | Turns scores into advice, and (only with `autoEnableProven`) into action. Nothing is ever auto-**disabled**: a site being down for a week is not consent to remove a source the user chose. |
 | `cs3/failureTaxonomy.ts` | `classifyFailure` — one closed set of causes, shared by the ranking and the diagnostics. Counting free text produces a tally with one entry per failure; grouping by cause is what showed 113 load failures came from six missing classes. |
+| `logging/logger.ts` | The structured log: NDJSON, one file per session, redacted at the logger rather than the call site. Does **not** import `electron`, so it stays testable. |
+| `logging/redact.ts` | Taking credentials out of a log line without taking its shape out. |
+| `cs3/homeProviders.ts` | Where the home screen's catalogue comes from, as something replaceable. Stremio catalog protocol, AniList, and TMDB with the user's own key. |
+| `cs3/homeProviderRegistry.ts` | Which one is active, whether it is answering, and the fallback when it is not. |
+| `media/mpvSurface.ts` | The native child window mpv renders into. Windows only; attaching is an attempt. |
 | `cs3/discovery.ts` | The home screen's catalogues. Stale-while-revalidate over Stremio's keyless Cinemeta catalogs (`top`/`year`/`imdbRating`, filterable by 19 genres, pageable) plus AniList for anime. Finds **nothing playable** — sources are resolved by providers when an item is opened. |
 | `cs3/titleEnricher.ts` | Resolves `Avengers End Game 720p Hindi Dubbed` to the film it is about. Conservative on purpose: a disagreeing year is disqualifying and the similarity bar is high enough that `Avengers` does not match `Avengers: Endgame`. An unenriched row is a small loss; a mislabelled one reads as data corruption. |
 | `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. |
 | `torrent/indexerRegistry.ts`, `indexers/*` | 7 built-in public indexers, Torznab (Jackett/Prowlarr), and aggregators (Torrentio, apibay). |
 | `torrent/ranker.ts`, `releaseParser.ts` | Release-name parsing (quality/codec/group/season/episode) and result ranking. |
+| `externalPlayerControl.ts` | Two-way control of VLC over its HTTP interface. Capability is declared per player, never assumed — see below. |
+| `media/inspectionStore.ts` | Persists what a probe found, keyed on the origin URL. The measurement only; the verdict is recomputed. |
 | `downloadService.ts`, `aria2Engine.ts`, `ytdlpEngine.ts`, `binaryDownloader.ts` | Downloads via aria2c RPC with an HTTP fallback; portable `aria2c`/`yt-dlp` binaries are fetched on first use. |
 
 ### Codecs: Chromium cannot decode a lot of what people actually stream
@@ -285,13 +336,98 @@ so "the browser could not decode this file" was a growing dead end. Android does
 not have this problem — ExoPlayer hands the stream to the device's hardware
 decoders.
 
-`mediaTranscoder.ts` (was `audioTranscoder.ts`) probes with ffprobe and remuxes
-through ffmpeg to a loopback URL. Audio goes to AAC downmixed to stereo; video is
-**copied unless it genuinely cannot be decoded**, because copying is free and
-re-encoding is not. Verified end to end: an HEVC + AC-3 file comes back as H.264
-High/yuv420p + AAC stereo.
+#### The engine: inspect, decide, execute — in that order
 
-Two things about that path are load-bearing:
+Rebuilt 2026-08-16 against PRD-37 and PRD-38. It was one file that decided *and*
+executed, with the decision made from whatever happened to be known at the moment
+the `<video>` element failed. It is now four, and the split is the fix rather than
+tidying:
+
+| File | Role |
+|---|---|
+| `media/mediaInspector.ts` | ffprobe → `MediaMetadata`. Also classifies the transport (progressive / HLS / DASH) from the **manifest body**, and reads DRM out of it. |
+| `media/decisionEngine.ts` | Pure. `(metadata, transport, rendererCaps, hostEncoder) → TransformationPlan`. No I/O, no URLs, no clock. |
+| `mediaTranscoder.ts` | Executes a plan as a live fragmented-MP4 stream on loopback. Builds ffmpeg arguments and nothing else. |
+| `media/playbackEngine.ts` | Assembles them, caches capability records per URL, and owns the telemetry. |
+
+Shared types are in `src/types/media.ts` — `MediaMetadata`, `SourceCapabilityModel`,
+`TransformationPlan`, `PlaybackStrategyType`, `DrmConfiguration`.
+
+**The decision is pure so that it can be tested, and it is tested because the
+measurements behind it are expensive to reproduce.** Every row of the matrix came
+from a real 25 GB file behind a provider link that has since expired.
+`media/decisionEngine.test.mts` (35 cases) pins the decisions;
+`media/pipeline.test.mts` (13 cases) runs real ffmpeg over synthesised fixtures and
+asserts what comes *out* is 8-bit H.264 + stereo AAC. Both run under
+`bun run test:electron`, and the pipeline suite skips itself when ffmpeg is absent.
+
+**The ordering is the whole bug fix.** Playback used to be attached on mount while
+a probe ran beside it. Chromium's parser failed on an unsupported bitstream within
+~150 ms, its `error` handler fired with the probe still in flight, and the fallback
+therefore ran `-c:v copy` on video it knew nothing about — re-wrapping an
+undecodable HEVC bitstream into MP4 and failing a second time in exactly the same
+way, which is why the bug looked like it had no fix. `media:prepare` now returns
+the URL to attach and there is no other way to obtain one. **If you add a code path
+that assigns `video.src` from anything but a prepared response, you have
+reintroduced it.**
+
+Four invariants, from PRD-37 §4.2, and where each lives:
+
+| ID | Rule | Enforced in |
+|---|---|---|
+| INV-RACE-1 | Nothing is attached before inspection completes | `VideoPlayer` — no `?? streamUrl` fallback exists |
+| INV-RACE-2 | The gate is visible ("Inspecting media…") | `VideoPlayer`, `isInspecting` |
+| INV-RACE-3 | `-c:v copy` never runs on unverified codec info | `blindFallbackPlan` re-encodes |
+| INV-RACE-4 | Renderer capabilities registered before playback | `App.tsx` on mount → `media:setCapabilities` |
+
+**Nothing is decided from the URL.** The implementation this replaced searched the
+link for `hevc`, `x265` and `10bit`, which is a guess about a filename some scraper
+produced — wrong in both directions: releases mislabelled by whoever named them,
+and bare `?id=…` Drive links carrying 10-bit HEVC with nothing to match on. The
+same rule covers transports: an `.m3u8` served from a `.php` URL and an `.mpd`
+served as `application/octet-stream` are both routine, so the first 64 KB of the
+body classifies it (`#EXTM3U` / `<MPD`).
+
+Three things about the plan are load-bearing:
+
+- **The software 4K guard is the fix for the "plays for 3–5 seconds then freezes"
+  report, and it is arithmetic rather than a heuristic.** Measured on a 3840x2160
+  10-bit HEVC source: libx264 `veryfast` at native resolution encodes 11–13 FPS —
+  0.47x realtime — so Chromium drains the buffer it was handed in about three
+  seconds and buffers forever. The same encode at `scale=-2:1080` runs 26–28 FPS,
+  above realtime, and plays. So a software-only host downscales anything over
+  1080p; a host with a working GPU encoder keeps full resolution, and so does a
+  16-thread machine, which clears realtime at 4K without help.
+- **A track switch re-derives the plan, it does not re-index it.** Caught by
+  `pipeline.test.mts` rather than reasoned about: pointing a copy-the-audio plan at
+  a 6-channel AC-3 track makes ffmpeg refuse outright with `Cannot write moov atom
+  before AC3 packets`, because AC-3 in MP4 takes its extradata from the first
+  packet and a fragmented output writes its header before one exists. The
+  user-visible form is the worst kind — the viewer picks the Hindi dub and playback
+  stops, blamed on the source. `planForAudioTrack` is the only correct way to
+  change tracks.
+- **An unplayable default audio track is swapped only for one in the same
+  language.** PRD-38 measured Movies4u shipping three E-AC-3 5.1 tracks beside an
+  AAC stereo of the same film, and copying the AAC is free where transcoding the
+  E-AC-3 is not. Silently swapping an English default for a Hindi AAC track because
+  it was cheaper would be a far worse bug than a few percent of one CPU core.
+
+Two more, further from the hot path:
+
+- **`-allowed_extensions ALL`** is passed for HLS and DASH. `Hdmovie2` serves its
+  MPEG-TS segments from `.png` URLs to get past CDN filters, and ffmpeg's HLS
+  demuxer refuses unknown extensions by default. There is no way to enumerate what
+  a provider will pick next, so the extension allow-list is opened while the
+  protocol whitelist stays closed — that is the boundary that actually matters.
+- **DASH is remuxed by ffmpeg rather than played by dash.js.** Handed an `.mpd`
+  directly, Chromium reports `Unable to parse XML declaration` — an XML document
+  arriving at a binary demuxer. ffmpeg's `dash` demuxer reads it properly and the
+  output joins the same fragmented-MP4 path as everything else, which avoids a
+  second player library. The cost is honest and worth knowing: it collapses the
+  adaptive ladder to one rendition. A Widevine or ClearKey DASH stream is
+  *detected* and reported, not played — see below.
+
+Two things about the surrounding path are load-bearing:
 
 - **What is decodable is measured in the renderer, not tabled in main.** Chromium's
   HEVC support varies by build and platform, so `App.tsx` runs `canPlayType` over
@@ -321,6 +457,26 @@ Things that will bite if you change it:
 - **The probe is also what makes multi-audio selection work.** A `<video>`
   element does not expose tracks it cannot decode, so without ffprobe the app
   cannot even tell the user a Japanese AC-3 dub exists.
+- **Embedded text subtitles are extracted on demand, and that is deliberate.**
+  `<track>` rejects SubRip and ASS silently, so a release carrying its own
+  forced-narrative track had none in the app — and the online search cannot help
+  an extension-sourced film with no IMDb id. Extraction reads the *whole* file,
+  because subtitle packets are interleaved through it, so a 25 GB remote MKV
+  cannot be subtitled quickly. It runs when the viewer picks the track, is bounded
+  at three minutes, and is cached. Bitmap tracks (PGS, DVB, VOBSUB) are listed as
+  present and never offered: an empty WebVTT named "English" reads as broken
+  subtitles rather than absent ones.
+
+**DRM is classified, and the classification is the point.** HLS AES-128 and
+SAMPLE-AES are *not* DRM as far as this engine is concerned — hls.js fetches the
+key over HTTP and decrypts in JavaScript, and routing those to an EME path they do
+not need would break streams that work today. ClearKey, Widevine and PlayReady need
+a CDM, so they are marked `requiresEmeDecryption` and FFmpeg is bypassed entirely:
+it holds no keys, so probing one spends twenty seconds on encrypted noise and
+remuxing one produces an unplayable file with a codec error about content it never
+decrypted. **What is not built:** Widevine CDM discovery/loading and dash.js. Such a
+stream is detected and reported by name instead of failing as a corrupt file, which
+is the honest state, not the finished one.
 
 Two behaviours in `torrentEngine.ts` are load-bearing and easy to break:
 **file selection inside season packs** (deselect all, select one, or swarm bandwidth is
@@ -644,6 +800,63 @@ from everything above — Ultima is a host-UI replacement rather than a scraper,
 it means shimming the Android app itself. Left alone deliberately; one extension is not worth
 a fake `MainActivity`.
 
+### Android vs Windows: where the two actually diverge now (2026-08-19)
+
+The recurring report is "this provider works in the Android app and fails here". Measured
+rather than assumed, with `provider-e2e.mjs --plugins 30` across all five bundled
+repositories:
+
+```
+providers loaded    66
+providers answering 24
+links resolved      18
+streams with bytes  16
+PASS — extensions load, scrape and stream
+```
+
+**`NoClassDefFoundError` occurrences across the whole run: 3, all of one class —
+`com.lagradost.cloudstream3.CloudStreamApp`.** That is Ultima, and it is the one deliberate
+exclusion on record: a host-UI replacement rather than a scraper, whose dependency chain runs
+through `MainActivity`, `CommonActivity` and `HomeViewModel`. Shimming it means shimming the
+Android app itself.
+
+So the answer to "what is the translation layer still missing?" is: for the corpus we can
+see, **nothing**. The four rounds of shim work documented above closed it. A provider that
+works on Android and fails here is now failing for a reason that is *not* a missing class,
+and looking for one is looking in the wrong place.
+
+The divergences that remain are runtime and platform, not translation:
+
+1. **TLS strictness.** `SSLHandshakeException: Received fatal alert: unrecognized_name`
+   appears in sidecar stderr against some provider hosts. This is a real Android/JVM
+   difference and not a provider bug: a server that does not recognise the SNI name sends a
+   *warning*-level `unrecognized_name` alert, Android's Conscrypt ignores it, and the stock
+   JVM treats it as fatal. The documented JVM workaround, `-Djsse.enableSNIExtension=false`,
+   is **not** applied here and should not be applied casually — it disables SNI for every
+   connection, and virtually every CDN in the corpus needs SNI to serve the right
+   certificate. Trading a handful of hosts for most of them is the wrong direction. A
+   correct fix is per-connection and belongs in the bridge's HTTP client; it is not built.
+   **The frequency is not yet measured** — the harness prints only the last 15 lines of
+   sidecar stderr, so the occurrences seen are a signal, not a rate. Count it properly before
+   spending effort on it.
+
+2. **No WebView.** Still doc 36 step 7, still the largest single gap, and now the dominant
+   one. Android providers get a real browser for Cloudflare challenges and for extractors
+   that need JavaScript to run; `CloudflareKiller` here forwards rather than bypasses.
+   Aniworld's Google 403 and the Voe/Vidsonic extractor failures are all this. This is the
+   thing to build next if the goal is parity — not more shims.
+
+3. **Host-side reality, which is not a divergence at all.** Expired signed URLs, hotlink
+   403s, dead swarms and slow sites fail identically on both platforms. The vendor matrix
+   (§5.2) counted these: of 72 non-playing streams, every one was a host refusing or
+   expiring a link, or a provider with nothing for that title. Attributing those to the
+   compatibility layer is the mistake that sends people looking for translation bugs that
+   are not there.
+
+**Count before fixing.** That rule produced the six-classes finding in the third round and it
+applies here in the other direction: the counting now says the class problem is solved, so
+the next unit of effort belongs in the WebView bridge.
+
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 
 Run it before believing anything about extension health:
@@ -921,6 +1134,580 @@ because a system that reorders results on evidence nobody can see is one users l
 distrust the first time it is wrong — and with hundreds of third-party scrapers it will
 sometimes be wrong.
 
+### Downloads: the state machine, and why 100% was not "done"
+
+**aria2 says `complete`, not `completed`.** `Aria2Progress.status` declared the latter and
+`getStatus` passes `raw.status` straight through, so the comparison in `pollAria2Tasks`
+could never be true. Every finished aria2 transfer sat at 100% in `Downloading` for the life
+of the session, and its gid was never released, so the poller kept asking about it forever.
+Verified against a live aria2 daemon: `tellStatus` answers `"active"`, then `"complete"`.
+`removed` and `paused` were unhandled too — each a second way for a task to stick with no
+poll left that could change it.
+
+**Completion is now verified rather than reported.** All three engines route through
+`finalizeCompletion`, because "the engine finished" and "there is a playable file" are
+different claims and a download list that reports the second knowing only the first is
+worthless. It requires: the target exists, no unfinalised `.part` remains beside it, and the
+size agrees with expectations where any exist — 1% tolerance, since plenty of sources send
+no `Content-Length` and a strict test would fail every one of them. Anything else is
+`Failed` **with the reason**, which is retryable.
+
+**Delete is two actions.** `remove(id, deleteFile)` — removing a finished film from the list
+and erasing it from disk are unrecoverably different, so the caller decides and
+`DeleteDownloadDialog` asks. The "remember my choice" box is off by default (a preference
+learned from one click is one nobody knows they set) and Settings → Downloads can put the
+prompt back, because a preference settable only inside a dialog you opted out of seeing
+cannot otherwise be undone.
+
+### The player: three bugs that all looked like "nothing happened"
+
+**`onRefresh` was `() => {}` on two of three player mount points.** Only the live
+`PlaybackSession` path had a working "Search again"; the path taken after picking a source
+from the detail page rendered the button and wired it to nothing — which reads as "the
+search found nothing new" rather than as a dead control. It now runs a real cache-bypassing
+discovery whose results stream into the open list, and reports when one cannot start.
+
+**Two sources could both show "Playing".** `isActive` compared `infoHash`, which for a
+provider stream is *synthetic* — the SHA-1 of its URL. Two extensions scraping the same file
+host produce the same id, so every copy lit up. Only the first match is marked now, and the
+React key is disambiguated so duplicates do not collapse into one row either.
+
+**Volume, mute, speed and track languages persist**, across media and restarts. Languages,
+never indices: audio track 2 is the Hindi dub on one release and the director's commentary
+on the next, so restoring an index would confidently select the wrong thing. The load is
+applied through the same ref the attach effect reads, or a source that attaches before the
+preference arrives spends its first seconds at full volume.
+
+### External players are driven, where driving them is possible
+
+The requirement is that transport controls keep working after a handoff. What is actually
+possible is not uniform, and `externalPlayerControl.ts` declares it per player rather than
+pretending:
+
+| Player | Channel | Capability |
+|---|---|---|
+| mpv | JSON IPC — routed through `MpvEngine` | `full` |
+| VLC | its built-in HTTP interface | `full` |
+| MPC-HC/BE | web UI, **off unless the user enabled it**, no launch switch | `none` |
+| PotPlayer, IINA, Celluloid, SMPlayer | none | `none` |
+
+VLC is launched with `--extraintf http` on an OS-assigned loopback port behind a
+per-session password — that interface is unauthenticated by default, and binding it without
+one would hand playback control to anything else on the machine.
+
+**Capability can downgrade at runtime.** A VLC built without its HTTP module launches, plays
+perfectly, and answers no request; after a grace period the snapshot reports `none` and the
+UI stops offering controls that cannot work. A seek bar that silently does nothing is worse
+than one the viewer was told about — that is the whole reason this is declared rather than
+assumed.
+
+`transport` in `VideoPlayer` is the single derived answer to "who is holding this stream?" —
+element, native engine, or external — and every control reads it. Volume/mute/speed are
+applied to *all* engines rather than only the active one, so a handoff to VLC and back does
+not restore the volume to 100%.
+
+### Probes are remembered; verdicts are not
+
+`media/inspectionStore.ts` persists what ffprobe found, keyed on the **origin** URL — never
+the proxied one, whose port and token are minted per session and would miss on every restart
+while looking like they should hit.
+
+The split is the point. A **measurement** (container, codecs, bit depth, track list) is a
+fact about the file and never changes. A **verdict** is a function of that measurement *and*
+this machine: the renderer's decoders, whether a GPU encoder exists, whether mpv is
+installed, which routing policy is set. So only the measurement is stored and
+`decideStrategy` runs again every time. Caching the verdict would be the stale-cache bug in
+its most expensive form — install mpv, and every previously-played title keeps re-encoding
+because a record from last week says so.
+
+Query strings are deliberately **not** stripped to normalise signed URLs: two films behind
+one path template would then be served each other's codec lists. A signed URL simply misses
+and is re-probed.
+
+Measured: 97 ms saved on a local multi-track MKV, and the probe was 1.6–1.7 s per source
+against real provider streams in the vendor matrix — which is where it actually pays.
+
+### The library remembers which source actually played
+
+The library remembered *what* was watched and `bookmarkStore` remembered *which page* it
+came from. Neither remembered **which of thirty sources delivered it**, so returning to a
+title meant picking from the list again with nothing recording that the fourth row down is
+the only one that ever produced a frame.
+
+`PlayedSource` (in `src/types/library.ts`, stored by `libraryStore`) is one slot per
+(title, season, episode) — per episode, because keying on the title alone would have episode
+6 overwrite what played episode 5. It holds the full `StoredSource` (provider, repository,
+extension, quality, capabilities, the link and its deadline) plus an `origin` query.
+
+**The link is stored but is never the identity.** A provider URL is a signed address on
+someone else's CDN, good for minutes; the durable half is `origin`, which is replayed to get
+a fresh link for the same release. That is why both are there.
+
+**It is recorded on playback, not on selection.** `SourceMemory` already covers "what the
+viewer picked", and the two are different claims — a release chosen and then abandoned
+because it would not start is not one that works. `VideoPlayer` records after **10 seconds**
+of real playback, which is past every failure that presents as "it started and then stopped".
+
+`library:resolvePlayedSource` returns one of three outcomes, and the caller is told which
+because they mean different things:
+
+- `reused` — the stored link still holds; no provider contacted.
+- `refreshed` — it had expired, so the same release was re-resolved and the record updated
+  in place. Surfaced in the UI, because it explains the pause the viewer just sat through.
+- `unavailable` — the provider no longer offers it. The record is **marked, not deleted**
+  ("the one that used to work is gone" beats an entry that silently vanishes) and the
+  alternatives come back so it is a choice rather than a dead end.
+
+#### Matching a saved source after its link dies
+
+`cs3/playedSource.ts`, and the reason it is its own tested module: **a provider source has
+no durable id.** Torrents do — an infohash addresses content. A provider stream's
+`infoHash` is *synthesised* by `ContentService` as the SHA-1 of its URL, purely so the
+ranker and the dedupe key have something to work with. Re-resolve that release an hour later,
+get a freshly signed URL, and the id is different for the identical file. **Matching on it
+alone can never re-find a provider source, which is the case this feature exists for.**
+
+So: torrents match on infohash; everything else matches on the durable triple — provider,
+normalised release name, resolution. Strict on purpose, because returning the wrong release
+is worse than returning nothing: the viewer asked to resume *this* stream, and quietly
+starting a different cut, dub or a 480p rip is a failure they will attribute to the app
+losing their place. The one concession is containment in either direction, since providers
+append and drop decorations (a size, a mirror name, `[Dual Audio]`) between refreshes.
+
+A direct link with **no recorded deadline is treated as expired**, deliberately. The costs
+are asymmetric: guessing "still good" spends the ffmpeg startup and the player's timeout
+before failing over, while guessing "expired" costs one provider call and produces a stream
+that works.
+
+Pinned by `cs3/playedSource.test.mts` (12 cases), including that a provider source is
+re-found despite its synthetic id changing, and that nothing matching returns null rather
+than a nearby release.
+
+### A source list has to say where it came from, and hand over its link
+
+The in-player list and the detail page both showed a release name, a size, a
+seeder count and `indexerName`. For an extension link **`indexerName` is the
+extractor** — "Gdshine", "Voe", "Server 3" — a file host the provider picked. It
+is not the provider, so a source that started failing could not be traced to
+whose code or whose repository to turn off, which is the only action a user can
+actually take. Both lists now carry the `repository ▸ extension ▸ provider`
+chain beside the host, resolved through `api:getProviderProvenanceMap` — batched
+because a thirty-row list asking one at a time is thirty IPC round trips to read
+one in-memory Map.
+
+`src/utils/sourceExport.ts` is the shared format, used by the in-player panel,
+the detail page and the player's copy menu. **CSV is the default**: the useful
+operation on thirty sources is sorting and filtering them, and every machine
+already has something that does that. Text and links-only are the other two
+destinations — a chat window, and a downloader that wants one URL per line.
+
+**The exported address is always the provider's, never the loopback one.** By
+the time a stream is playing its URL is `http://127.0.0.1:<ephemeral>/…`, which
+names our own proxy and is dead when the app closes — a link that *looks* like
+it should work in a downloader and cannot. `sourceAddress` is the only way to
+get it, and `sourceExport.test.mts` (13 cases) pins that along with RFC 4180
+quoting, which matters more than it looks: a release called `Dune, Part Two`
+does not break an unquoted CSV, it silently shifts every later column by one and
+produces a spreadsheet of plausible rows with every link attributed to the wrong
+provider.
+
+### Playback failure is one surface, and it offers a download
+
+There were two overlays, and they stacked. `NativeEngineStage` rendered its own
+full-bleed `.player__overlay` on an mpv failure **and** reported the same failure
+through `onError`, so `VideoPlayer` rendered its error overlay as well — two
+translucent black panels, each dimming the other, with two different sentences
+about one failure legible through each other. Both also sat under `.native-stage`
+(`z-index: 3`) while carrying no `z-index` of their own, so on the engine that
+fails most interestingly neither could be read at all.
+
+`player/PlaybackErrorPanel.tsx` is the single owner now; the engine reports and
+the player renders. `.player__overlay` is `z-index: 4` — chosen against its
+neighbours, not for headroom: above `.native-stage` (3), below `.player__top` (5)
+so Back stays reachable, and below `.player-panel` (7) so "Choose another source"
+opens the list *over* the error that offered it.
+
+**The first action is Download, deliberately.** Decoding and fetching are
+different capabilities: a 10-bit HEVC file with Dolby audio can be undecodable
+here and completely ordinary to download, and every report of "it will not play"
+from a source that would have downloaded fine was a dead end the app put there
+itself. Offered only when the source is alive — `describeUnreadableSource`
+reporting `dead` suppresses the download, the external players and everything
+else that cannot help a 404.
+
+### Four messages that positioned themselves independently
+
+`.player__external-banner` at `top: 4.5rem`, `.player__audio-notice` at
+`top: 4.2rem`, `.player__strategy-note` at `bottom: 5.5rem`, `.player__toasts` at
+`bottom: 6.5rem` — four absolutely positioned boxes, none of them opaque. Any two
+that were true at once overlapped and rendered *through each other*. They can
+genuinely co-occur (a stream being converted, on a machine missing the components
+that would convert it, while a download finishes), so suppressing one was never
+the answer. They are two flow columns now — `.player__messages--top` and
+`--bottom` — and the stack carries the blur. `pointer-events: none` on the stack
+with `auto` on each child keeps the gaps click-through; the stack spans the width
+of the player and would otherwise swallow clicks on the picture.
+
+### The native stage drew a control bar nobody could click
+
+`NativeEngineStage` had a full transport row along its bottom edge: play, seek,
+volume, mute, track menus, fullscreen. Every one of those except the track menus
+was a duplicate — `VideoPlayer`'s own bar already routes `togglePlay`, `seekTo`
+and volume to mpv. And the duplicate was **unreachable**: `.player__controls` is
+`z-index: 5` and pinned to the bottom, the stage is `z-index: 3`, so the row sat
+underneath it receiving no clicks at all. Its overflow is also what produced the
+reported horizontal scrollbar with nothing to scroll to.
+
+Two flexbox faults were behind that overflow, and both are the same trap:
+`.native-stage__surface` had `flex: 1` with the default `min-height: auto`, so it
+refused to shrink below its own text and pushed the control row off the bottom of
+the player; `.native-stage__seek` had `flex: 1` with `min-width: auto`, so the
+range input's intrinsic width forced the row wider than the player. **A flex item
+does not shrink below its content unless you say so.**
+
+What is left in the stage is what the player's bar genuinely cannot do — mpv
+track selection and fullscreening mpv's own window — sitting in the surface where
+nothing covers it. Transport state now flows the other way: `onPausedChange`
+reports the engine's own `paused` up, because the play button reads the
+`<video>` element's events and those never fire here. It showed "Play" over a
+film that was playing, and the first press paused it. Buffering is deliberately
+*not* forwarded into `isBuffering` — that flag drives an overlay reading
+"Buffering from peers…", which is a torrent's story and a lie about an HTTP
+stream.
+
+### Containers: "the codecs play" and "the codecs fit in this box" are two questions
+
+`REMUX_CONTAINER` always targeted fragmented MP4 with `-c copy`, on the reasoning
+that both streams being decodable was enough. It is two independent claims, and
+each fails differently — both measured on the bundled ffmpeg, not looked up:
+
+1. **ffmpeg refuses the mux.** VP8 into MP4 answers `Could not find tag for codec
+   vp8 in stream #0, codec not currently supported in container`, then `Could not
+   write header`, and the command dies having produced nothing. Every earlier
+   step looked right, because both codecs are ones the browser decodes.
+2. **ffmpeg writes it and Chromium cannot decode it.** Vorbis into MP4 muxes
+   cleanly and plays no audio, because Vorbis is a WebM/Ogg codec there. This is
+   the worse one: exit status says success, so nothing downstream can catch it,
+   and the viewer gets a silent black player.
+
+`chooseCopyContainer(video, audio)` answers `mp4_fragmented`, `webm`, or `null`.
+**`null` is the important answer** — VP8 beside AAC is legal in neither, so a
+copy is impossible and one stream has to be re-encoded. Returning a container
+anyway is what produced the original bug.
+
+**The mux tables are deliberately broad.** HEVC, AC-3 and DTS are all legal in
+MP4; whether a decoder exists is a separate question `canPlayVideo` already
+answers, and one of them is measured at runtime. Folding "no decoder here" into
+"cannot be muxed" would force a full re-encode on every build that grew a
+platform HEVC decoder — the exact case the capability override exists to serve.
+
+`predictOutput` states what a plan will produce (container, codecs, MIME) and
+`decideStrategy` escalates to a full transcode rather than shipping a plan whose
+output would not play. **A remux is not successful because ffmpeg exited zero.**
+`pipeline.test.mts` asserts on the bytes — EBML magic versus `ftyp` — rather than
+on an exit status, because the Vorbis case exits zero.
+
+Note the reachability, which is not obvious: a Matroska carrying WebM-legal
+codecs *is* a WebM to Chromium and plays directly, so it never reaches a remux.
+It takes a container Chromium cannot demux at all (AVI, MPEG-TS) to get WebM-only
+codecs onto the copy path. The common shape of the bug is the `null` case.
+
+### The log: structured, redacted, and written a line at a time
+
+`electron/logging/` — `DiagnosticsLog` answers "what went wrong, with what
+context" and is shaped to be pasted to a provider maintainer. `Logger` is the
+layer underneath: everything the app does, as data.
+
+- **Structured, not formatted.** Grouping 113 load failures into six missing
+  classes — the thing that actually solved that problem — is a `GROUP BY` over a
+  field and impossible over prose.
+- **NDJSON, appended, flushed synchronously on exit.** A crash truncates the last
+  few hundred milliseconds and never corrupts what came before, which a rewritten
+  JSON array cannot promise — and a crash is when the log matters. One file per
+  session, because a session is the unit users report in.
+- **Redaction is applied by the logger, not by call sites.** These URLs are
+  signed CDN addresses whose query string *is* the credential, and a log is a
+  file people paste into issues. A rule enforced at four hundred call sites holds
+  at three hundred and ninety. Structure survives, secrets do not:
+  `?token=<redacted>` keeps the fact that the link was signed, which is what
+  distinguishes an expired link from one that never had credentials. Malformed
+  URLs fall back to text rules rather than throwing — a redactor that threw would
+  take down the logging of the failure worth recording.
+
+**`Logger` does not import `electron`**, deliberately: that import makes a module
+unloadable under Node's type stripping, which is where its tests run. The
+directory comes from `main.ts`.
+
+Instrumented at **choke points**, so coverage cannot rot: `PlaybackEngine.record`
+(every `prepare` outcome), `MediaInspector.inspect` (wrapped — the body has five
+exits), the ffmpeg spawn (the arguments, which is what makes a conversion failure
+reproducible), `MpvEngine.emit` (state transitions, deduplicated because
+`time-pos` fires once a second for a whole film), `ContentService.runDiscovery`,
+download finalisation. Diagnostics are mirrored in.
+
+`log:*` is thin on purpose — the log's job is to be on disk when something goes
+wrong, not to be browsed. The level persists, because what it gets turned up for
+has not happened yet.
+
+### mpv, embedded: what `--wid` buys and what it costs
+
+True embedding needs libmpv's render API through a native addon, which this
+repository does not build. `MpvSurface` does the next thing: a frameless child
+`BrowserWindow`, its HWND passed as `--wid`, tracking the player's video rect.
+
+**The constraint that shapes the whole layout: a native child window sits above
+Chromium's compositor entirely, so nothing can be drawn over the video.**
+Overlaying controls is not an option that was rejected for taste — it is not
+available. `NativeEngineStage` reserves bands above and below and reports only
+the remaining rect. That letterboxes by roughly 9rem of chrome, and the bands do
+not collapse when the chrome auto-hides, because a video that jumped every time
+the controls faded reads far worse than a stable frame.
+
+Windows only (`--wid` takes an `NSView*` on macOS, an X11 id on Linux). Attaching
+is an *attempt*; `embedded` is reported from the engine, never assumed, because a
+player reserving space for a surface that never appeared is worse than one that
+never tried. Settable, since a second monitor or an HDR path that only engages
+top-level are real reasons to want a separate window — and changing it restarts
+the process, because `--wid` is decided once on the command line.
+
+**The dependency is inverted**: `MpvEngine` takes a `createSurface` factory
+rather than importing `BrowserWindow`, which is what keeps it loadable under type
+stripping so its test can drive a real mpv.
+
+Two control bugs fixed alongside. `seekBy` read `video.currentTime`, which is
+permanently `0` for mpv — so every fast-forward and rewind seeked to ±delta from
+the *start of the film*. `toggleFullscreen` fullscreened the Electron container,
+blowing up a panel of controls over an empty surface. Volume, mute and speed now
+sync **both ways**, because mpv is a real window a viewer can touch;
+`pushedToEngine` breaks the echo by ignoring a value matching what was last sent.
+
+### The home screen's catalogue is chosen, and checked
+
+`cs3/homeProviders.ts` + `homeProviderRegistry.ts`. The keyless constraint has not
+changed, so the useful move was supporting the **Stremio catalog protocol**
+rather than a host: one documented GET shape served by Cinemeta and by a whole
+ecosystem of community addons, so a user with an addon URL is supported without
+anyone writing an adapter — the same bet the indexer layer makes with Torznab.
+
+TMDB is offered honestly: listed, described as needing a key, selectable only
+once the *user* supplies one. A key embedded in a distributed client violates
+their terms and gets revoked, breaking the home screen for everyone at once with
+no way for any individual to fix it.
+
+**Sections come from `capabilities()`**, not a fixed list, so selecting AniList
+produces an anime home screen rather than five empty headings. The discovery
+cache is keyed by provider — without that, switching would serve one provider's
+row out of another's entry, and both answers look like plausible catalogues.
+
+**Health is measured with a real catalogue request.** The failures that actually
+happen — a 200 with empty `metas`, a page of items with no artwork or ids — all
+come back from a healthy-looking server and render as blank cards that do nothing
+when clicked, which reads as *our* bug. An unhealthy provider cannot be selected
+and the refusal names the cause; the empty screen it replaces could not. It stays
+listed, because "unavailable" and "does not exist" are different facts. The
+active provider is *resolved* rather than stored: a host down for an afternoon
+falls back without rewriting the user's choice.
+
+### Continue Watching: removal is a dismissal
+
+`dismissedAt`, compared against `updatedAt` rather than being a boolean. "Take
+this off my home screen" and "forget where I was" are different intentions, and
+the destructive reading of the first is unrecoverable — someone tidying the row
+would silently lose the resume point on a film they were halfway through. The
+comparison is also what makes "Play again" work with no extra machinery: watching
+more moves `updatedAt` past the dismissal and the card returns.
+
+Dismissal is per **title**, not per row: the rail shows the newest episode of a
+series as one card, so dismissing only that episode would put the previous one in
+its place and read as the button not working.
+
+The visibility toggle is enforced in the main process. Off means the rows are
+never assembled, not merely hidden — on a shared machine that is the point.
+
+### The source cache learns from playback
+
+It was already persistent with per-source expiry. What it lacked was any memory of a source
+having *failed*: `unplayable` lived on the session and died with the player, so the same
+dead link was served first again next time.
+
+`recordFailure` now decides between two responses, and the distinction is the whole policy.
+A **definitive** answer — 404, 410, or the host saying the file is gone — drops the source
+immediately, because no amount of retrying changes it. Anything else is **counted**: a
+timeout, a reset, a 5xx, or a 403 is the network or the host having a moment, and a cache
+that forgets everything on the first bad minute is worse than no cache. Three such failures
+drop it. `recordSuccess` clears the count, so a source that failed twice on a bad afternoon
+is not dropped by an unrelated blip a week later.
+
+403 is specifically **not** definitive: expired signed URLs and hotlink protection both
+answer 403 and both are recovered by re-resolving, which the expiry machinery already does.
+
+Pinned by `sourceCache.test.mts` (10 cases), including that removing the last source removes
+the entry rather than leaving an empty shell — `hit: true` with nothing in it makes the
+caller skip the discovery it needs.
+
+### An extension update that breaks itself is put back
+
+`updatePlugin` now copies the working archive aside, installs, **loads the new one**, and
+restores the old one when it will not link. An update can download cleanly, verify its hash
+and write successfully while being built against a provider API this runtime does not have —
+and the first anyone knows is that every provider from that extension has silently vanished.
+
+`T4_BLOCKED` is the only verdict that counts as failure. `T3_DEGRADED` is the normal state of
+a large part of the corpus and refusing an update over it would block most of the ecosystem.
+A **null** report — the sidecar being unreachable — is explicitly not a failure either
+(DROP-34): rolling an update back because the JVM had not started yet would be its own bug.
+
+One generation is kept. `extension:rollback` exposes it manually, for the case the load check
+cannot see: an extension that links fine and then scrapes nothing.
+
+### The native engine: mpv, for the streams Chromium will never decode
+
+Added 2026-08-19 against `docs/roadmap/support_libmpv.md`. Everything in the codec
+section above is still true and still the fallback; what changed is that the transcoding
+ladder is no longer the *only* answer, and it stopped being the answer for the case where
+it was worst.
+
+The arithmetic that motivates it. A 4K HEVC 10-bit release — routine on GDFlix, Google
+Drive links and any decent torrent — has exactly one browser-side path: re-encode to 8-bit
+H.264. That costs a whole CPU core, throws away the HDR metadata, flattens 5.1 to stereo,
+and on a software-only host under 16 threads it downscales to 1080p because libx264 cannot
+hold realtime at 4K. mpv carries its own FFmpeg and hands the bitstream to D3D11VA, NVDEC,
+Vulkan or VideoToolbox. **Measured here: `d3d11va`, full resolution, nothing re-encoded.**
+
+| File | Role |
+|---|---|
+| `media/mpvEngine.ts` | Spawns and supervises mpv; line-delimited JSON-RPC over a named pipe (Windows) or unix socket. Property observation, track lists, seek, tracks, subtitles. |
+| `src/types/mpv.ts` | The contract, imported by both sides. `MpvSnapshot` is what the player renders from. |
+| `src/components/player/NativeEngineStage.tsx` | The player surface for a routed stream: our controls, mpv's playback. |
+| `binaryDownloader.setupMpv` | Fetches a portable build on demand. |
+
+**Routing is a decision, not a mode.** `shouldRouteToNativeEngine` runs *after* the
+browser-side decision rather than instead of it, so removing mpv from the machine reverts
+every verdict to exactly what it was — there is no second code path to keep correct. Three
+policies, stored in the datastore under `native_engine_policy`:
+
+- `off` — the ladder does everything, as before.
+- `auto` (default) — mpv takes any stream the browser path would have **re-encoded** or
+  **downmixed**: that is anything above stereo, plus lossless and object-based audio
+  (TrueHD, DTS-HD MA, DTS:X, FLAC, PCM) at any channel count.
+- `aggressive` — mpv takes everything that is not already playing natively, including a
+  stereo container remux that loses nothing.
+
+**The channel rule replaced a codec rule, and a user's catalogue is what settled it.** The
+first version routed only *lossless* audio, reasoning that AC-3/E-AC-3 5.1 was a recoverable
+loss and that routing it would push most television out of the in-app player. The report
+back was "this happens on most of the content", with `Audio re-encoded, video copied
+untouched: matroska,webm cannot be demuxed by the browser; EAC3 audio has no decoder here`
+on title after title. A 1080p WEB-DL carrying E-AC-3 5.1 in Matroska is the **modal**
+provider release, so the rule meant to protect the common case was degrading it: nearly
+every film and episode played as stereo while the 5.1 sat in a file the GPU decodes for
+free. The line is now channels, not codec — genuine stereo still stays in the app, where a
+remux costs nothing and loses nothing.
+
+**A stream never reaches mpv without being inspected first.** There is no `mpv:play(url)`
+that takes a raw link; `media:prepare` remains the only way to obtain a playable URL, and
+it returns `requiredStrategy: 'NATIVE_MPV'` with the proxied loopback address. INV-RACE-1
+applies to this engine exactly as it applies to the `<video>` element — a second entry
+point that skipped inspection would reintroduce PRD-37's original bug in a new decoder.
+`VideoPlayer` also refuses to assign a `NATIVE_MPV` URL to the element: Chromium would take
+it, fail, fire `error`, and the failover ladder would skip a source that is playing fine.
+
+Things that will bite:
+
+- **The URL handed over is the proxied one**, same rule as `externalPlayer`. Headers are
+  also passed per-file through `loadfile`'s option map rather than as process arguments,
+  because one long-lived mpv process serves a whole series and episode 2's `Referer` is not
+  episode 1's.
+- **`--no-config` is not tidiness.** Someone who uses mpv has configured it for mpv — key
+  bindings, an OSC, a profile forcing software decoding, `--save-position-on-quit`. Any of
+  those silently changes what this engine does, and the bug is invisible on every machine
+  but theirs.
+- **`--ytdl=no`.** Link resolution is the extensions' job and it is already done. Left on,
+  every failed load spends seconds shelling out to a downloader that cannot help — measured
+  at ~8s added to a failure mpv had already diagnosed as HTTP 522.
+- **`video-params/pixelformat` lies once hardware decoding is running.** It reports the GPU
+  surface type (`d3d11`, `cuda`), and the real format moves to `hw-pixelformat`. Reading
+  only the first makes every hardware-decoded file look like it has no bit depth — which is
+  the fact that put it on this path.
+- **`mpv.com` ships beside `mpv.exe`.** `mpv.exe` is a GUI-subsystem binary whose stdout
+  goes nowhere, so without the console front-end `--version` and `--hwdec=help` return
+  empty and every diagnostic about the engine is blank.
+- **The 7z archive needs bsdtar.** Windows' own `tar.exe` is libarchive and reads 7z;
+  PowerShell's `Expand-Archive` does not, so `extractZip`'s fallback cannot rescue this one.
+- **mpv is a child process with its own window** and is wired into `before-quit`. Without
+  that it outlives the app and keeps playing with nothing left on screen to stop it.
+
+**What is not built: embedding.** mpv renders in its own window, driven over IPC — the
+roadmap's Option A, which it calls the recommended first step. Putting the video surface
+inside the Electron window needs libmpv's render API through a native addon (Option B).
+`MpvOpenRequest.windowHandle` exists and is passed to `--wid` for when that lands; nothing
+sets it today.
+
+`electron/media/mpvEngine.test.mts` (12 cases, `bun run test:native`) drives a real mpv
+process against a synthesised HEVC 10-bit / AC-3 5.1 Matroska fixture. It is not pure and
+should not be: every failure worth catching lives in the seam between two processes — the
+JSON framing, `request_id` correlation, the property observations that drive the timeline,
+`end-file` telling a dead link apart from the credits — and a mock would only ever assert
+what we assumed mpv does.
+
+### FFmpeg 7.1 silently broke the image-segment fix
+
+`-allowed_extensions ALL` — the documented answer to `Hdmovie2` serving MPEG-TS from `.png`
+URLs — **stopped working, and nothing in this repository changed on the day it did.**
+FFmpeg 7.1 added `-extension_picky`, defaulted it to *true*, and evaluates it before the
+allow-list. On the bundled build (n8.0) the old flag is inert and every provider serving
+extensionless or image-named segments fails with the exact message the fix was written
+against.
+
+Measured against a local HLS fixture with `.png` segments served as `image/png`:
+
+| Flags | Result |
+|---|---|
+| `-allowed_extensions ALL` | refused |
+| `-allowed_segment_extensions ALL` | refused |
+| `-extension_picky 0` | **probes cleanly** |
+
+The flag cannot simply be added: passing an option a binary does not know is fatal to the
+whole command line (`Option extension_picky not found`), and FFmpeg 7.0 is still in the
+download mirrors. So `detectExtensionPicky` asks the binary via `-h demuxer=hls` once at
+startup and again after any ffmpeg install, and `hlsDemuxerOptions()` includes the flag
+only where it exists. Pinned by `pipeline.test.mts`.
+
+Found by `tools/e2e/native-engine-matrix.mjs` on a real provider playlist, on its first
+run — which is the argument for that harness existing.
+
+### 5.2 The vendor coverage matrix — `tools/e2e/native-engine-matrix.mjs`
+
+```
+node --experimental-strip-types tools/e2e/native-engine-matrix.mjs
+node --experimental-strip-types tools/e2e/native-engine-matrix.mjs --plugins 12 --links 2
+node --experimental-strip-types tools/e2e/native-engine-matrix.mjs --only Cinefreak,HDhub4u
+node --experimental-strip-types tools/e2e/native-engine-matrix.mjs --titles hindi-movie,english-series
+```
+
+`provider-e2e.mjs` answers "does the extension corpus still run?". This answers the question
+after it: **given what those extensions hand back, can this app put it on screen?** Those are
+different failures with different owners — a provider resolving five links to 10-bit HEVC is
+working perfectly and is still, without the native engine, five links we could not play.
+
+It imports the shipping `MediaInspector` and `decideStrategy` rather than reimplementing
+them, so the strategy in the report is literally the one the app will choose for that URL;
+a harness with its own copy of the decision agrees with the product right until it matters.
+Every candidate stream is then **played for real by mpv for a few seconds**, headless
+(`--vo=null --ao=null`, which still runs the full demux and decode path), and the report
+carries how far the playhead got and how many frames dropped. `--untimed` is deliberately
+not passed — decoding as fast as the CPU allows would hide the exact failure being looked
+for, a stream that cannot sustain realtime.
+
+Each row records **both** verdicts: what the strategy would have been without the engine and
+what it is with it. A row where they differ is a stream that used to be re-encoded and now
+is not, which is the only honest way to state what the engine bought.
+
+Language coverage is deliberate rather than decorative. Hindi releases are where the hard
+cases cluster — dual-audio Matroska with per-language 5.1 AC-3/E-AC-3, 10-bit HEVC encodes,
+the multi-track files the audio-selection logic exists for — so a matrix of English titles
+alone reports a compatibility story that is true for half the catalogue.
+
 ### When we cannot play it, hand it to something that can
 
 `externalPlayer.ts` detects VLC, mpv, MPC-HC/BE and PotPlayer and offers to open
@@ -978,6 +1765,21 @@ URL so a playlist reached via redirect still resolves correctly.
 
 Bound to loopback only: it forwards arbitrary URLs with caller-supplied headers.
 
+**A loopback URL is returned from `wrap` untouched.** Everything that serves media
+locally — the torrent engine, this proxy, the transcoder — hands back
+`http://127.0.0.1:…`, which matches the scheme test. Without the guard the
+compatibility engine wraps a torrent stream in a second proxy hop that copies every
+byte for nothing, and re-wrapping this proxy's own output builds a chain that grows
+by one hop per call. There is nothing to gain either way: header injection exists to
+satisfy a third-party CDN's hotlink check, and our own servers set what they need.
+
+**A source that answers 4xx is failed over immediately, not converted.** Expired
+signed URLs from Cloudflare Workers and Googleusercontent are the routine case, and
+opening ffmpeg on one costs its startup plus the wait for the element to give up
+before the next mirror gets a turn. `PlaybackEngine.prepare` returns the failure as
+soon as `describeUnreadableSource` reports it dead, and the player asks the session
+for the next candidate.
+
 ### Diagnosability: a message is not a report
 
 A failure message is a fact about a string. `Expected URL scheme 'http' or 'https'`
@@ -1024,6 +1826,41 @@ covering a timeout, a thrown extractor, a blocked host, a provider with no
 links with empty URLs. The empty list still goes back; what changed is that a
 `SourceDiagnosis` travels beside it, carrying the summary for the screen, a hint
 for the user, and the facts for the clipboard.
+
+### The range probe was downloading the whole file
+
+Reported as a stalled download: `Babe Beach`, 4K HDHUB, **2 MB of 5.75 GB at 0 KB/s**. The
+link was alive and the source was fine.
+
+`FastChunkDownloader.probeUrl` asks for `bytes=0-0`, reads the headers, and called
+`res.resume()` before resolving. `resume()` discards the data — it does not stop the
+transfer. Against a server that honours Range that is harmless, because the body is one
+byte. Against a server that **ignores** Range it is not, and
+`video-downloads.googleusercontent.com` ignores it: measured on the reported link, it
+answers `200` with no `Accept-Ranges` and `Content-Length: 6,175,245,105`, so the probe kept
+pulling the file after it had already returned its answer — **5.6 MB in the five seconds
+after resolving, and still going.** The real download then ran beside it, competing for the
+same throttled signed URL. A few megabytes, then nothing.
+
+The probe now destroys the response and the request once it has the headers. Verified
+against the same URL: 0 bytes after resolving, where the old code reached 5.6 MB.
+
+Two things worth keeping straight while you are in there:
+
+- **`supportsRange` was never wrong.** It reads `206` or `Accept-Ranges: bytes`, and this
+  host offers neither, so `canParallelize` was already false and the sequential path was
+  already chosen. The bug was entirely in the abandoned probe connection — which is why it
+  looked like a network problem rather than a downloader one.
+- **A chunk worker used to accept `200`.** If a host changes its mind between the probe and
+  the transfer — signed-URL CDNs do this under load — a ranged request answered with `200`
+  is the whole file from byte zero, and writing it at that chunk's offset corrupts the
+  output while every worker downloads the entire file. It now fails the chunk with a reason.
+  A corrupt file that finishes is worse than a download that says why it stopped.
+
+Unrelated but reported alongside it: a `RefreshingSource` retry on a
+`googleusercontent.com` link is usually **correct behaviour, not a bug**. Those URLs are
+signed and short-lived; the second reported link answered `HTTP 400` outright, and
+re-resolving it from the provider is the only thing that can help.
 
 ### Shipping: the box has to contain everything
 

@@ -13,6 +13,7 @@ import type { AnalyticsSink } from './pluginManager';
 import type { TorrentResult } from '../src/types/torrent';
 import type { HistoryStore } from './cs3/historyStore';
 import type { HistoryAction, HistoryStatus } from '../src/types/history';
+import { getLogger } from './logging/logger';
 
 /**
  * The download queue, across every kind of source the app can play.
@@ -43,6 +44,8 @@ const MAX_CONCURRENT_DOWNLOADS = 3;
 interface ActiveHandle {
   cancel(): void;
 }
+
+const log = getLogger().child('download');
 
 export class DownloadService {
   private datastore: DatastoreManager;
@@ -132,10 +135,16 @@ export class DownloadService {
   }
 
   private static isSegmented(task: DownloadTask): boolean {
+    const url = task.link?.url ?? '';
+    const clean = url.split(/[?#]/)[0].toLowerCase();
     return (
-      Boolean(task.link.isM3u8) ||
-      Boolean(task.link.isDash) ||
-      /\.(m3u8|mpd)(\?|$)/i.test(task.link.url)
+      Boolean(task.link?.isM3u8) ||
+      Boolean(task.link?.isDash) ||
+      clean.endsWith('.m3u8') ||
+      clean.endsWith('.m3u') ||
+      clean.endsWith('.mpd') ||
+      /\/(getm3u8|m3u8|hls|dash|mpd)\b/i.test(clean) ||
+      /[?&]format=(m3u8|hls|dash)/i.test(url)
     );
   }
 
@@ -213,11 +222,27 @@ export class DownloadService {
           task.etaSeconds = 0;
         }
 
-        if (status.status === 'completed') {
-          task.state = DownloadState.Completed;
-          task.downloadSpeed = 0;
-          task.etaSeconds = 0;
+        if (status.status === 'complete') {
+          /**
+           * `complete`, not `completed` — see `Aria2Progress.status`. The old
+           * spelling matched nothing aria2 sends, so every finished aria2
+           * transfer stayed `Downloading` at 100% for the life of the session.
+           */
           this.gidToTaskId.delete(gid);
+          this.finalizeCompletion(task, status.totalLength);
+        } else if (status.status === 'removed') {
+          /**
+           * Removed out from under us — an aria2 restart, or a `remove` we did
+           * not initiate. Left unhandled this was the second way a task could
+           * stick: the gid is gone, so no further poll will ever change it.
+           */
+          this.gidToTaskId.delete(gid);
+          if (task.state === DownloadState.Downloading) {
+            this.markFailed(task, 'The transfer was removed from the download engine.');
+          }
+        } else if (status.status === 'paused') {
+          // Paused inside aria2 (not through us) must still show as paused.
+          if (task.state === DownloadState.Downloading) task.state = DownloadState.Paused;
         } else if (status.status === 'error') {
           const isRangeError =
             status.errorMessage &&
@@ -266,10 +291,8 @@ export class DownloadService {
         task.errorMessage = stats.error;
         this.torrentTasks.delete(taskId);
       } else if (stats.progress >= 1) {
-        task.state = DownloadState.Completed;
-        task.downloadSpeed = 0;
-        task.etaSeconds = 0;
         this.torrentTasks.delete(taskId);
+        this.finalizeCompletion(task, stats.fileSize);
       } else if (stats.isStalled && !stats.isPaused) {
         // Say so rather than showing 0 B/s forever with no explanation.
         task.errorMessage = `No data for ${Math.round(stats.stalledMs / 1000)}s — the swarm may be dead.`;
@@ -435,8 +458,94 @@ export class DownloadService {
     this.saveQueueToStorage();
   }
 
+  /** An engine reported success. Whether that is true is decided below. */
   private markCompleted(task: DownloadTask, totalBytes: number): void {
+    this.finalizeCompletion(task, totalBytes);
+  }
+
+  /**
+   * The only path to `Completed`, and it verifies rather than trusts.
+   *
+   * "The engine said 100%" and "there is a playable file on disk" are different
+   * claims, and the download list is worthless if it reports the second when it
+   * only knows the first. A transfer can report every byte and still leave
+   * nothing usable: the rename out of `.part` can fail on a locked file, the
+   * target directory can vanish onto a disconnected drive, and a server that
+   * ignores Range can satisfy a segmented download with garbage that is exactly
+   * the right length.
+   *
+   * So completion requires all of: the engine finished, the target file exists,
+   * and its size agrees with what was expected where an expectation exists. A
+   * download that fails any of them becomes `Failed` **with the reason**, which
+   * the user can retry — rather than `Completed` over a file that will not open.
+   */
+  /**
+   * Completion is verified, and the verification is what gets logged.
+   *
+   * "The engine finished" and "there is a playable file" are different claims,
+   * and the gap between them is where the 100%-forever bug lived. Recording the
+   * verdict *and* the numbers behind it means a future disagreement can be
+   * settled from the log rather than reproduced.
+   */
+  private finalizeCompletion(task: DownloadTask, reportedBytes: number): void {
     this.handles.delete(task.id);
+    log.info('download_finalising', {
+      mediaTitle: task.title,
+      provider: task.providerName,
+      sourceId: task.id,
+      reportedBytes,
+      expectedBytes: task.totalBytes,
+      target: task.targetFilePath,
+    });
+
+    const expected = reportedBytes || task.totalBytes || 0;
+    let actual = 0;
+    try {
+      actual = fs.statSync(task.targetFilePath).size;
+    } catch {
+      /**
+       * Torrent downloads are the exception worth naming: the engine owns the
+       * path and may have nested the episode inside the torrent's folder, in
+       * which case `targetFilePath` was already rewritten to the real location.
+       * If it still is not there, the file genuinely is not there.
+       */
+      this.markFailed(
+        task,
+        'The transfer finished but the downloaded file is not on disk. It may have been ' +
+          'moved, or the destination folder is no longer available.'
+      );
+      return;
+    }
+
+    /**
+     * A leftover `.part` means the finalising rename never happened, so the
+     * target is at best a previous attempt. Reporting success here is how a
+     * half-written file ends up in someone's library.
+     */
+    if (fs.existsSync(`${task.targetFilePath}.part`) && actual < expected) {
+      this.markFailed(
+        task,
+        'The transfer finished but the file could not be finalised — a partial download is ' +
+          'still on disk. Retry to finish it.'
+      );
+      return;
+    }
+
+    /**
+     * Size is checked only when something credible was expected, and with a
+     * tolerance. Plenty of sources never send `Content-Length`, and a strict
+     * equality test would fail every one of those on a file that is perfectly
+     * fine. A shortfall of more than 1% on a *known* size is a truncated file.
+     */
+    if (expected > 0 && actual < expected * 0.99) {
+      this.markFailed(
+        task,
+        `The transfer stopped early: ${DownloadService.formatBytes(actual)} of ` +
+          `${DownloadService.formatBytes(expected)} was written. Retry to resume it.`
+      );
+      return;
+    }
+
     // Counted here rather than at the engine: a download that retried through a
     // refreshed source still succeeded, and the provider that supplied the link
     // that finally worked is the one that earned the credit.
@@ -447,8 +556,9 @@ export class DownloadService {
       produced: 1,
       latencyMs: Date.now() - task.createdTime,
     });
+
     task.state = DownloadState.Completed;
-    task.totalBytes = totalBytes || task.totalBytes;
+    task.totalBytes = actual || expected || task.totalBytes;
     task.bytesDownloaded = task.totalBytes;
     task.downloadSpeed = 0;
     task.etaSeconds = 0;
@@ -456,6 +566,12 @@ export class DownloadService {
     this.recordHistory(task, 'download_completed', 'Downloaded');
     this.saveQueueToStorage();
     this.pump();
+  }
+
+  private static formatBytes(bytes: number): string {
+    if (!bytes || bytes < 0) return '0 MB';
+    const gb = bytes / 1e9;
+    return gb >= 1 ? `${gb.toFixed(2)} GB` : `${Math.round(bytes / 1e6)} MB`;
   }
 
   /**
@@ -724,14 +840,28 @@ export class DownloadService {
     this.pump();
   }
 
-  public async remove(id: string): Promise<void> {
+  /**
+   * Removes a download from the list, and optionally the file it produced.
+   *
+   * Two genuinely different actions behind one word, which is why `deleteFile`
+   * is a parameter rather than a guess. "Remove" on a finished film usually
+   * means "tidy the list" — the file is the whole point and deleting it would be
+   * unrecoverable — while "remove" on an abandoned one usually means "get rid of
+   * it". Neither reading is safe to assume, so the caller decides and the UI asks
+   * (see `downloads:deletePreference`).
+   */
+  public async remove(id: string, deleteFile = false): Promise<void> {
     const task = this.queue.get(id);
     if (!task) return;
 
     const infoHash = this.torrentTasks.get(id);
     if (infoHash && this.torrentEngine) {
-      // Keep completed files; a finished download must survive removal from the queue.
-      await this.torrentEngine.stopStream(infoHash, task.state === DownloadState.Completed);
+      // Keep completed files unless the caller asked for them to go; a finished
+      // download must survive removal from the queue by default.
+      await this.torrentEngine.stopStream(
+        infoHash,
+        task.state === DownloadState.Completed && !deleteFile
+      );
       this.torrentTasks.delete(id);
     }
 
@@ -745,12 +875,28 @@ export class DownloadService {
     this.handles.get(id)?.cancel();
     this.handles.delete(id);
 
-    // An abandoned partial file is pure waste; a completed one is the deliverable.
-    if (task.state !== DownloadState.Completed) {
+    /**
+     * The partial always goes: an abandoned `.part` is pure waste, and keeping
+     * one for a completed download would leave a stale duplicate beside the
+     * real file.
+     */
+    try {
+      fs.rmSync(`${task.targetFilePath}.part`, { force: true });
+    } catch {
+      // A locked file just stays.
+    }
+
+    if (deleteFile) {
+      /**
+       * Failure to delete is reported by leaving the file, not by refusing to
+       * remove the entry. A file held open by a player is the common case, and
+       * trapping the download in the list because of it helps nobody — the entry
+       * is what the user asked to be rid of.
+       */
       try {
-        fs.rmSync(`${task.targetFilePath}.part`, { force: true });
-      } catch {
-        // A locked file just stays.
+        fs.rmSync(task.targetFilePath, { force: true });
+      } catch (error) {
+        console.warn('[downloads] could not delete file for removed task:', describe(error));
       }
     }
 
