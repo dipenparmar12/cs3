@@ -805,6 +805,21 @@ export interface CloudStreamElectronAPI {
   setLogLevel: (level: LogLevel) => Promise<Envelope & { level: LogLevel }>;
   revealLogFile: () => Promise<Envelope>;
   exportLogSession: () => Promise<Envelope & { text: string; file: string }>;
+  /**
+   * The same mapping for many providers at once.
+   *
+   * A source list routinely holds thirty rows drawn from a dozen providers, and
+   * every row wants its origin chain. Asking one at a time is thirty IPC round
+   * trips to read from one in-memory Map, so the whole list is answered in one.
+   */
+  getProviderProvenanceMap: (providerNames: string[]) => Promise<
+    Envelope & {
+      provenance: Record<
+        string,
+        { provider: string; repositoryName?: string; extensionName?: string }
+      >;
+    }
+  >;
 
   // Saved detail pages
   /**
@@ -1328,6 +1343,8 @@ const api: CloudStreamElectronAPI = {
 
   getProviderProvenance: (providerName) =>
     ipcRenderer.invoke('api:getProviderProvenance', providerName),
+  getProviderProvenanceMap: (providerNames) =>
+    ipcRenderer.invoke('api:getProviderProvenanceMap', providerNames),
 
   queryLog: (filter) => ipcRenderer.invoke('log:query', filter),
   listLogSessions: () => ipcRenderer.invoke('log:sessions'),

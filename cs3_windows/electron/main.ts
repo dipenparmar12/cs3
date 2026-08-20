@@ -1286,6 +1286,34 @@ ipcMain.handle('api:getProviderProvenance', async (_, providerName: string) => {
   }
 });
 
+/**
+ * The same mapping for a whole source list, in one call.
+ *
+ * `provenanceOf` reads two in-memory Maps, so the cost here is entirely the IPC
+ * round trip — which is why thirty rows asking individually was worth removing.
+ * An unknown name still answers, with just itself: a provider that has since
+ * been uninstalled must still be attributable in a list captured before it was.
+ */
+ipcMain.handle('api:getProviderProvenanceMap', async (_, providerNames: string[]) => {
+  try {
+    const provenance: Record<
+      string,
+      { provider: string; repositoryName?: string; extensionName?: string }
+    > = {};
+    for (const name of new Set((providerNames ?? []).filter(Boolean))) {
+      const record = pluginManager.provenanceOf(name);
+      provenance[name] = {
+        provider: record.provider,
+        repositoryName: record.repositoryName,
+        extensionName: record.extensionName,
+      };
+    }
+    return { ok: true, provenance };
+  } catch (error) {
+    return { ...fail(error), provenance: {} };
+  }
+});
+
 // --- saved detail pages (bookmarks) ---------------------------------------
 
 ipcMain.handle('bookmarks:list', async () => ({

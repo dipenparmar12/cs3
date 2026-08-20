@@ -1,10 +1,13 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   X, Play, RefreshCw, Loader2, Users, HardDrive, Radio, Check, AlertTriangle, Download, Filter,
-  Square, Globe,
+  Square, Globe, Link2, Package,
 } from 'lucide-react';
 import type { TorrentResult } from '../../types/torrent';
 import { SourceFilterBar } from '../SourceFilterBar';
+import { SourceExportButton } from '../SourceExportButton';
+import { useSourceProvenance } from '../useSourceProvenance';
+import { provenanceChain, sourceAddress, sourceHost } from '../../utils/sourceExport';
 import {
   DEFAULT_FILTER_STATE,
   filterAndSortSources,
@@ -94,6 +97,28 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
 }) => {
   const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);
   const [showFilterBar, setShowFilterBar] = useState(true);
+  const [copiedLink, setCopiedLink] = useState<string | null>(null);
+  const { provenanceFor } = useSourceProvenance(sources);
+
+  /**
+   * One source's address, copied.
+   *
+   * Offered per row rather than only in bulk because the common need is
+   * singular: this release will not play here and the viewer wants to give
+   * *this* link to a downloader or a browser. The address copied is the
+   * provider's, not the loopback proxy the player is using.
+   */
+  const copyLink = useCallback(async (source: TorrentResult) => {
+    const address = sourceAddress(source);
+    if (!address) return;
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopiedLink(source.infoHash);
+      setTimeout(() => setCopiedLink(null), 1800);
+    } catch {
+      // Refused clipboard access loses nothing — the bulk export is still there.
+    }
+  }, []);
 
   const displayedSources = useMemo(
     () => filterAndSortSources(sources, filterState),
@@ -127,6 +152,14 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
           </div>
         </div>
         <div className="player-panel__head-actions">
+          {/* Every source, with its provider, extension, repository and link —
+              for feeding a downloader, or for saying which provider is broken. */}
+          <SourceExportButton
+            sources={displayedSources}
+            provenanceFor={provenanceFor}
+            heading={`Sources (${displayedSources.length})`}
+            compact
+          />
           <button
             className={`icon-button${showFilterBar ? ' active' : ''}`}
             onClick={() => setShowFilterBar((v) => !v)}
@@ -262,6 +295,9 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
             displayedSources.findIndex((candidate) => candidate.infoHash === activeInfoHash) ===
               rowIndex;
           const isSwitching = switchingTo === source.infoHash;
+          const chain = provenanceChain(source, provenanceFor(source));
+          const host = sourceHost(source);
+          const address = sourceAddress(source);
 
           return (
             <li
@@ -303,12 +339,39 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
                   <span title="Size">
                     <HardDrive size={12} /> {formatReleaseSize(source.sizeBytes)}
                   </span>
-                  <span title="Indexer">
-                    <Radio size={12} /> {source.indexerName}
+                  <span title="Host or extractor this link points at">
+                    <Radio size={12} /> {host ?? source.indexerName}
                   </span>
                   {isActive && <span className="player-panel__now">Playing</span>}
                 </div>
+
+                {/*
+                  Where this actually came from.
+
+                  `indexerName` above is the *extractor* for an extension link —
+                  a file host the provider chose, like "Voe" or "Server 3". It
+                  is not the provider, and showing only it means a source that
+                  starts failing cannot be traced to whose code or whose
+                  repository to turn off. The chain answers that.
+                */}
+                {chain && (
+                  <div className="player-panel__source-origin" title={chain}>
+                    <Package size={11} />
+                    <span>{chain}</span>
+                  </div>
+                )}
               </button>
+
+              {address && (
+                <button
+                  className="player-panel__source-link"
+                  onClick={() => void copyLink(source)}
+                  title={`Copy this link — ${address.slice(0, 120)}`}
+                  aria-label={`Copy the link for ${source.title}`}
+                >
+                  {copiedLink === source.infoHash ? <Check size={14} /> : <Link2 size={14} />}
+                </button>
+              )}
 
               {onDownload && (
                 <button

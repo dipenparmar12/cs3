@@ -29,9 +29,8 @@ import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
 import { useMiniFrame } from './player/useMiniFrame';
-import { CopyErrorButton } from './CopyErrorButton';
 import { PlayerCopyMenu } from './player/PlayerCopyMenu';
-import { ExternalPlayerFallback } from './player/ExternalPlayerFallback';
+import { PlaybackErrorPanel } from './player/PlaybackErrorPanel';
 import { formatTimecode, formatTransferRate } from '../utils/format';
 
 interface VideoPlayerProps {
@@ -2363,41 +2362,59 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         ))}
       </video>
 
-      {externalControl && (
-        <div className="player__external-banner">
-          <MonitorPlay size={18} />
-          <div>
-            <strong>Playing in {externalControl.playerName}</strong>
+      {/*
+        One stack per anchor, laid out in flow.
+
+        These were four independently positioned `absolute` boxes — the external
+        banner at `top: 4.5rem`, the components notice at `top: 4.2rem`, the
+        strategy note at `bottom: 5.5rem`, the toasts at `bottom: 6.5rem`. Any
+        two that were true at once overlapped, and since none of them paints an
+        opaque background the two messages rendered *through each other*: the
+        reported "two messages one layer upon the other". They can genuinely
+        co-occur — a stream being converted, on a machine missing the components
+        that would convert it, while a download finishes — so suppressing one
+        was never the answer. Stacked in a column they simply sit beside each
+        other, and the stack itself carries the blur.
+      */}
+      <div className="player__messages player__messages--top">
+        {externalControl && (
+          <div className="player__external-banner">
+            <MonitorPlay size={18} />
+            <div>
+              <strong>Playing in {externalControl.playerName}</strong>
+              <span>
+                {externalControl.capability === 'full'
+                  ? 'The controls below are connected to it.'
+                  : 'This player cannot be controlled from here — use its own window.'}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                void window.cloudstream?.externalStop();
+                setExternalControl(null);
+                setExternalSnapshot(null);
+              }}
+            >
+              Bring playback back here
+            </button>
+          </div>
+        )}
+        {/* Silence with no error is the worst possible failure mode: the volume
+            control works, the video plays, and nothing says why. If the audio
+            cannot be decoded and the components that would fix it are missing,
+            say so on screen. */}
+        {audioNeedsComponents && (
+          <div className="player__audio-notice">
+            <AlertTriangle size={14} />
             <span>
-              {externalControl.capability === 'full'
-                ? 'The controls below are connected to it.'
-                : 'This player cannot be controlled from here — use its own window.'}
+              This stream needs conversion to play here, and the media components are
+              missing. Install them in Settings to enable Matroska, HEVC and Dolby audio.
             </span>
           </div>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => {
-              void window.cloudstream?.externalStop();
-              setExternalControl(null);
-              setExternalSnapshot(null);
-            }}
-          >
-            Bring playback back here
-          </button>
-        </div>
-      )}
-
-      {/* Above the controls, clear of the seek bar, gone in four seconds. */}
-      {toasts.length > 0 && (
-        <div className="player__toasts" role="status" aria-live="polite">
-          {toasts.map((toast) => (
-            <div key={toast.id} className={`player__toast player__toast--${toast.tone}`}>
-              {toast.text}
-            </div>
-          ))}
-        </div>
-      )}
+        )}
+      </div>
 
       {isNativeEngine && capability && prepared?.playbackUrl && (
         <NativeEngineStage
@@ -2416,6 +2433,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setCurrentTime(position);
             if (total > 0) setDuration(total);
           }}
+          /* The player's control bar is the only transport for this engine, and
+             it has no element to learn from — so the engine tells it. Without
+             this the button read "Play" over a film that was playing, and the
+             first press paused it. */
+          onPausedChange={(paused) => setIsPlaying(!paused)}
           onEnded={() => {
             if (nextEpisode && onSelectEpisode && !upNextDismissed) onSelectEpisode(nextEpisode);
           }}
@@ -2502,118 +2524,101 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         converted because Chromium has no Dolby decoder". It clears itself once
         the picture is up.
       */}
-      {showStrategyNote && capability && (
-        <div className="player__strategy-note">{capability.explanation}</div>
+
+      {/*
+        Playback failed. One surface, one owner — see `PlaybackErrorPanel` for
+        why there used to be two and what that looked like.
+      */}
+      {error && !switchingTo && !switchError && !isResolving && !isInspecting && (
+        <PlaybackErrorPanel
+          message={error}
+          title={title}
+          episodeTitle={episodeTitle}
+          streamUrl={streamUrl}
+          capability={capability}
+          activeSource={activeSource}
+          provenance={resolvedProvenance ?? providerProvenance ?? undefined}
+          attempts={
+            sourceSession && sourceSession.attempts.length > 0
+              ? { tried: sourceSession.attempts.length, total: sourceSession.sources.length }
+              : undefined
+          }
+          isNativeEngine={isNativeEngine}
+          dead={probeFailure?.dead}
+          onDownload={() => void handleDownloadCurrentMedia()}
+          onChooseAnother={() => {
+            // The in-player list, not `onBack` — leaving the player to change
+            // source loses the position and the place in the series, which is
+            // the whole reason the in-player switcher exists.
+            if (sourceSession && sourceSession.sources.length > 0) setSourcePanelOpen(true);
+            else onBack();
+          }}
+          onConvertHere={() => forceTranscodeRef.current?.()}
+        />
       )}
 
-      {(isBuffering || error) && !switchingTo && !switchError && !isResolving && !isInspecting && (
+      {isBuffering && !error && !switchingTo && !switchError && !isResolving && !isInspecting && (
         <div className="player__overlay">
-          {error ? (
+          <Loader2 className="spin" size={36} />
+          <p>Buffering from peers…</p>
+          {stats && (
+            <span className="muted">
+              {formatTransferRate(stats.downloadSpeed)} · {stats.peers} peer
+              {stats.peers === 1 ? '' : 's'} · {(stats.progress * 100).toFixed(1)}%
+            </span>
+          )}
+          {stats?.isStalled && (
             <>
-              <AlertTriangle size={36} />
-              <p>{error}</p>
-              {/* Failover is silent otherwise, and a viewer watching a dead
-                  frame has no way to tell trying-the-next from given-up. */}
-              {sourceSession && sourceSession.attempts.length > 0 && (
-                <span className="muted">
-                  Tried {sourceSession.attempts.length} of {sourceSession.sources.length} source
-                  {sourceSession.sources.length === 1 ? '' : 's'}
-                  {sourceSession.attempts.length < sourceSession.sources.length
-                    ? ' — trying the next…'
-                    : ''}
-                </span>
-              )}
-              {/* Codecs and stream URL, because a playback failure is the least
-                  reproducible thing in the app: the stream is transient and the
-                  viewer has no way to describe it afterwards. */}
-              <div className="player__error-actions">
-                <button className="btn" onClick={onBack}>Choose another source</button>
-                <CopyErrorButton
-                  compact
-                  context={{
-                    title: episodeTitle ? `${title} — ${episodeTitle}` : title,
-                    url: streamUrl,
-                    source: capability
-                      ? [
-                          `strategy=${capability.requiredStrategy}`,
-                          `container=${capability.metadata?.formatName ?? capability.transport}`,
-                          capability.metadata?.video
-                            ? `video=${capability.metadata.video.codec}/${capability.metadata.video.bitDepth}bit@${capability.metadata.video.width}x${capability.metadata.video.height}`
-                            : null,
-                          capability.metadata?.audio[0]
-                            ? `audio=${capability.metadata.audio[0].codec}/${capability.metadata.audio[0].channels}ch`
-                            : null,
-                        ]
-                          .filter(Boolean)
-                          .join(' ')
-                      : undefined,
-                    message: error ?? undefined,
-                  }}
-                />
+              <span className="muted">
+                Nothing has arrived for {Math.round(stats.stalledMs / 1000)}s
+                {stats.peers === 0 ? ' and no peers have connected' : ''}. This swarm
+                is probably dead.
+              </span>
+              <div className="player__overlay-actions">
+                {/* A dead swarm is the case where downloading is *also* the
+                    honest suggestion: the same bytes are not arriving either
+                    way, and another source is the real fix. */}
+                <button className="btn btn-primary" onClick={() => setSourcePanelOpen(true)}>
+                  <List size={16} /> Choose another source
+                </button>
               </div>
-              {/*
-                Offered only when the source is actually there. A dead link
-                plays no better in VLC, and suggesting it would send the viewer
-                to fetch a player that cannot help.
-              */}
-              {!probeFailure?.dead && <ExternalPlayerFallback streamUrl={streamUrl} compact />}
             </>
-          ) : (
-            <>
-              <Loader2 className="spin" size={36} />
-              <p>Buffering from peers…</p>
-              {stats && (
-                <span className="muted">
-                  {formatTransferRate(stats.downloadSpeed)} · {stats.peers} peer
-                  {stats.peers === 1 ? '' : 's'} · {(stats.progress * 100).toFixed(1)}%
-                </span>
-              )}
-              {stats?.isStalled && (
-                <>
-                  <span className="muted">
-                    Nothing has arrived for {Math.round(stats.stalledMs / 1000)}s
-                    {stats.peers === 0 ? ' and no peers have connected' : ''}. This swarm
-                    is probably dead.
-                  </span>
-                  <button className="btn" onClick={onBack}>Choose another source</button>
-                </>
-              )}
-              {stats && !stats.isStalled && stats.peers === 0 && (
-                <span className="muted">
-                  No peers yet. If this persists the swarm may be dead — try a source with more seeders.
-                </span>
-              )}
-              {/*
-                Shown while the viewer is already waiting, which is the only
-                moment the answer is worth anything. Most of it is not something
-                the app can fix — a four-seeder swarm is a four-seeder swarm —
-                but an unnamed limit reads as "this app is slow", and that was
-                the report.
-              */}
-              {swarmLimit && !stats?.isStalled && (
-                <span className="muted">
-                  {swarmLimit.summary}
-                  {swarmLimit.advice ? `. ${swarmLimit.advice}` : '.'}
-                </span>
-              )}
-            </>
+          )}
+          {stats && !stats.isStalled && stats.peers === 0 && (
+            <span className="muted">
+              No peers yet. If this persists the swarm may be dead — try a source with more seeders.
+            </span>
+          )}
+          {/*
+            Shown while the viewer is already waiting, which is the only moment
+            the answer is worth anything. Most of it is not something the app can
+            fix — a four-seeder swarm is a four-seeder swarm — but an unnamed
+            limit reads as "this app is slow", and that was the report.
+          */}
+          {swarmLimit && !stats?.isStalled && (
+            <span className="muted">
+              {swarmLimit.summary}
+              {swarmLimit.advice ? `. ${swarmLimit.advice}` : '.'}
+            </span>
           )}
         </div>
       )}
 
-      {/* Silence with no error is the worst possible failure mode: the volume
-          control works, the video plays, and nothing says why. If the audio
-          cannot be decoded and the components that would fix it are missing,
-          say so on screen. */}
-      {audioNeedsComponents && (
-        <div className="player__audio-notice">
-          <AlertTriangle size={14} />
-          <span>
-            This stream needs conversion to play here, and the media components are
-            missing. Install them in Settings to enable Matroska, HEVC and Dolby audio.
-          </span>
-        </div>
-      )}
+      <div className="player__messages player__messages--bottom">
+        {showStrategyNote && capability && (
+          <div className="player__strategy-note">{capability.explanation}</div>
+        )}
+        {/* Above the controls, clear of the seek bar, gone in four seconds. */}
+        {toasts.length > 0 && (
+          <div className="player__toasts" role="status" aria-live="polite">
+            {toasts.map((toast) => (
+              <div key={toast.id} className={`player__toast player__toast--${toast.tone}`}>
+                {toast.text}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <header
         className={`player__top${controlsVisible || keepControls ? '' : ' hidden'}`}

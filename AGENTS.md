@@ -81,6 +81,11 @@ cs3/
 | Subtitles only | `cs3_windows/` | `bun run test:subtitles` (16 cases) |
 | Media decisions only | `cs3_windows/` | `bun run test:media` (71 cases, no ffmpeg needed) |
 | Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (17 cases, real ffmpeg; skips itself without it) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (124 tests, Node type-stripping — no framework) |
+| Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
+| Source export only | `cs3_windows/` | `bun run test:export` (13 cases, pure) |
+| Media decisions only | `cs3_windows/` | `bun run test:media` (53 cases, no ffmpeg needed) |
+| Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
 | Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
@@ -1598,6 +1603,154 @@ and is re-probed.
 
 Measured: 97 ms saved on a local multi-track MKV, and the probe was 1.6–1.7 s per source
 against real provider streams in the vendor matrix — which is where it actually pays.
+
+### The library remembers which source actually played
+
+The library remembered *what* was watched and `bookmarkStore` remembered *which page* it
+came from. Neither remembered **which of thirty sources delivered it**, so returning to a
+title meant picking from the list again with nothing recording that the fourth row down is
+the only one that ever produced a frame.
+
+`PlayedSource` (in `src/types/library.ts`, stored by `libraryStore`) is one slot per
+(title, season, episode) — per episode, because keying on the title alone would have episode
+6 overwrite what played episode 5. It holds the full `StoredSource` (provider, repository,
+extension, quality, capabilities, the link and its deadline) plus an `origin` query.
+
+**The link is stored but is never the identity.** A provider URL is a signed address on
+someone else's CDN, good for minutes; the durable half is `origin`, which is replayed to get
+a fresh link for the same release. That is why both are there.
+
+**It is recorded on playback, not on selection.** `SourceMemory` already covers "what the
+viewer picked", and the two are different claims — a release chosen and then abandoned
+because it would not start is not one that works. `VideoPlayer` records after **10 seconds**
+of real playback, which is past every failure that presents as "it started and then stopped".
+
+`library:resolvePlayedSource` returns one of three outcomes, and the caller is told which
+because they mean different things:
+
+- `reused` — the stored link still holds; no provider contacted.
+- `refreshed` — it had expired, so the same release was re-resolved and the record updated
+  in place. Surfaced in the UI, because it explains the pause the viewer just sat through.
+- `unavailable` — the provider no longer offers it. The record is **marked, not deleted**
+  ("the one that used to work is gone" beats an entry that silently vanishes) and the
+  alternatives come back so it is a choice rather than a dead end.
+
+#### Matching a saved source after its link dies
+
+`cs3/playedSource.ts`, and the reason it is its own tested module: **a provider source has
+no durable id.** Torrents do — an infohash addresses content. A provider stream's
+`infoHash` is *synthesised* by `ContentService` as the SHA-1 of its URL, purely so the
+ranker and the dedupe key have something to work with. Re-resolve that release an hour later,
+get a freshly signed URL, and the id is different for the identical file. **Matching on it
+alone can never re-find a provider source, which is the case this feature exists for.**
+
+So: torrents match on infohash; everything else matches on the durable triple — provider,
+normalised release name, resolution. Strict on purpose, because returning the wrong release
+is worse than returning nothing: the viewer asked to resume *this* stream, and quietly
+starting a different cut, dub or a 480p rip is a failure they will attribute to the app
+losing their place. The one concession is containment in either direction, since providers
+append and drop decorations (a size, a mirror name, `[Dual Audio]`) between refreshes.
+
+A direct link with **no recorded deadline is treated as expired**, deliberately. The costs
+are asymmetric: guessing "still good" spends the ffmpeg startup and the player's timeout
+before failing over, while guessing "expired" costs one provider call and produces a stream
+that works.
+
+Pinned by `cs3/playedSource.test.mts` (12 cases), including that a provider source is
+re-found despite its synthetic id changing, and that nothing matching returns null rather
+than a nearby release.
+
+### A source list has to say where it came from, and hand over its link
+
+The in-player list and the detail page both showed a release name, a size, a
+seeder count and `indexerName`. For an extension link **`indexerName` is the
+extractor** — "Gdshine", "Voe", "Server 3" — a file host the provider picked. It
+is not the provider, so a source that started failing could not be traced to
+whose code or whose repository to turn off, which is the only action a user can
+actually take. Both lists now carry the `repository ▸ extension ▸ provider`
+chain beside the host, resolved through `api:getProviderProvenanceMap` — batched
+because a thirty-row list asking one at a time is thirty IPC round trips to read
+one in-memory Map.
+
+`src/utils/sourceExport.ts` is the shared format, used by the in-player panel,
+the detail page and the player's copy menu. **CSV is the default**: the useful
+operation on thirty sources is sorting and filtering them, and every machine
+already has something that does that. Text and links-only are the other two
+destinations — a chat window, and a downloader that wants one URL per line.
+
+**The exported address is always the provider's, never the loopback one.** By
+the time a stream is playing its URL is `http://127.0.0.1:<ephemeral>/…`, which
+names our own proxy and is dead when the app closes — a link that *looks* like
+it should work in a downloader and cannot. `sourceAddress` is the only way to
+get it, and `sourceExport.test.mts` (13 cases) pins that along with RFC 4180
+quoting, which matters more than it looks: a release called `Dune, Part Two`
+does not break an unquoted CSV, it silently shifts every later column by one and
+produces a spreadsheet of plausible rows with every link attributed to the wrong
+provider.
+
+### Playback failure is one surface, and it offers a download
+
+There were two overlays, and they stacked. `NativeEngineStage` rendered its own
+full-bleed `.player__overlay` on an mpv failure **and** reported the same failure
+through `onError`, so `VideoPlayer` rendered its error overlay as well — two
+translucent black panels, each dimming the other, with two different sentences
+about one failure legible through each other. Both also sat under `.native-stage`
+(`z-index: 3`) while carrying no `z-index` of their own, so on the engine that
+fails most interestingly neither could be read at all.
+
+`player/PlaybackErrorPanel.tsx` is the single owner now; the engine reports and
+the player renders. `.player__overlay` is `z-index: 4` — chosen against its
+neighbours, not for headroom: above `.native-stage` (3), below `.player__top` (5)
+so Back stays reachable, and below `.player-panel` (7) so "Choose another source"
+opens the list *over* the error that offered it.
+
+**The first action is Download, deliberately.** Decoding and fetching are
+different capabilities: a 10-bit HEVC file with Dolby audio can be undecodable
+here and completely ordinary to download, and every report of "it will not play"
+from a source that would have downloaded fine was a dead end the app put there
+itself. Offered only when the source is alive — `describeUnreadableSource`
+reporting `dead` suppresses the download, the external players and everything
+else that cannot help a 404.
+
+### Four messages that positioned themselves independently
+
+`.player__external-banner` at `top: 4.5rem`, `.player__audio-notice` at
+`top: 4.2rem`, `.player__strategy-note` at `bottom: 5.5rem`, `.player__toasts` at
+`bottom: 6.5rem` — four absolutely positioned boxes, none of them opaque. Any two
+that were true at once overlapped and rendered *through each other*. They can
+genuinely co-occur (a stream being converted, on a machine missing the components
+that would convert it, while a download finishes), so suppressing one was never
+the answer. They are two flow columns now — `.player__messages--top` and
+`--bottom` — and the stack carries the blur. `pointer-events: none` on the stack
+with `auto` on each child keeps the gaps click-through; the stack spans the width
+of the player and would otherwise swallow clicks on the picture.
+
+### The native stage drew a control bar nobody could click
+
+`NativeEngineStage` had a full transport row along its bottom edge: play, seek,
+volume, mute, track menus, fullscreen. Every one of those except the track menus
+was a duplicate — `VideoPlayer`'s own bar already routes `togglePlay`, `seekTo`
+and volume to mpv. And the duplicate was **unreachable**: `.player__controls` is
+`z-index: 5` and pinned to the bottom, the stage is `z-index: 3`, so the row sat
+underneath it receiving no clicks at all. Its overflow is also what produced the
+reported horizontal scrollbar with nothing to scroll to.
+
+Two flexbox faults were behind that overflow, and both are the same trap:
+`.native-stage__surface` had `flex: 1` with the default `min-height: auto`, so it
+refused to shrink below its own text and pushed the control row off the bottom of
+the player; `.native-stage__seek` had `flex: 1` with `min-width: auto`, so the
+range input's intrinsic width forced the row wider than the player. **A flex item
+does not shrink below its content unless you say so.**
+
+What is left in the stage is what the player's bar genuinely cannot do — mpv
+track selection and fullscreening mpv's own window — sitting in the surface where
+nothing covers it. Transport state now flows the other way: `onPausedChange`
+reports the engine's own `paused` up, because the play button reads the
+`<video>` element's events and those never fire here. It showed "Play" over a
+film that was playing, and the first press paused it. Buffering is deliberately
+*not* forwarded into `isBuffering` — that flag drives an overlay reading
+"Buffering from peers…", which is a torrent's story and a lie about an HTTP
+stream.
 
 ### The source cache learns from playback
 
