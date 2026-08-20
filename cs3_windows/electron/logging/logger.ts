@@ -465,6 +465,11 @@ export class ScopedLogger {
     return new ScopedLogger(this.root, this.scope, { ...this.base, ...context });
   }
 
+  /** For a call site whose level depends on the outcome it is reporting. */
+  public write(level: LogLevel, event: string, context?: LogContext): void {
+    this.root.write(level, this.scope, event, { ...this.base, ...context });
+  }
+
   public trace(event: string, context?: LogContext): void {
     this.root.write('trace', this.scope, event, { ...this.base, ...context });
   }

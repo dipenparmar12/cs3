@@ -8,6 +8,7 @@ import type {
 } from '../../src/types/media';
 import { isPlayableAudioCodec } from './decisionEngine.ts';
 import { runTool } from './runTool.ts';
+import { getLogger } from '../logging/logger.ts';
 
 /**
  * Reads what is actually inside a stream, before anything tries to play it.
@@ -369,6 +370,8 @@ export interface InspectionResult {
   latencyMs: number;
 }
 
+const log = getLogger().child('ffprobe');
+
 export class MediaInspector {
   private resolveFfprobe: () => string | null;
   /**
@@ -393,7 +396,40 @@ export class MediaInspector {
    * the start of the document`, which names neither DASH nor the provider and
    * sends whoever reads it looking for a corrupt file.
    */
+  /**
+   * Wrapped rather than instrumented in place: the body has five exits and
+   * would grow a sixth.
+   *
+   * One record carries both the question and the answer, including the
+   * duration. The probe measures 1.6-1.7s against real provider streams, which
+   * makes it a routine suspect whenever "play" feels slow — and a latency
+   * nobody recorded is a suspicion nobody can settle.
+   */
   public async inspect(url: string, hintM3u8?: boolean): Promise<InspectionResult> {
+    const finish = log.begin('inspect', { url });
+    try {
+      const result = await this.probe(url, hintM3u8);
+      finish({
+        status: result.metadata ? 'ok' : result.timedOut ? 'timeout' : 'failed',
+        transport: result.transport,
+        container: result.metadata?.formatName,
+        videoCodec: result.metadata?.video?.codec,
+        videoBitDepth: result.metadata?.video?.bitDepth,
+        audioTracks: result.metadata?.audio.length,
+        audioCodec: result.metadata?.audio[0]?.codec,
+        audioChannels: result.metadata?.audio[0]?.channels,
+        subtitleTracks: result.metadata?.subtitles.length,
+        drm: result.drm.type === 'none' ? undefined : result.drm.type,
+        error: result.error,
+      });
+      return result;
+    } catch (error) {
+      finish({ status: 'threw', error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }
+
+  private async probe(url: string, hintM3u8?: boolean): Promise<InspectionResult> {
     const startedAt = Date.now();
     let transport = transportFromUrl(url, hintM3u8);
     let drm: DrmConfiguration = { type: 'none' };

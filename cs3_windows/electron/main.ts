@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { DatastoreManager } from './datastore';
+import { Logger, LOG_LEVELS, setLogger, type LogLevel, type LogScope } from './logging/logger';
 import { Aria2Engine } from './aria2Engine';
 import { DownloadService } from './downloadService';
 import { PluginManager } from './pluginManager';
@@ -94,7 +95,74 @@ const titleEnricher = new TitleEnricher();
 const sourcePrefetcher = new SourcePrefetcher(contentService, datastore);
 const bootstrap = new BootstrapService(datastore, pluginManager);
 const titleOutcomes = new TitleOutcomeStore(datastore);
+/**
+ * The structured log, constructed before the services that write to it.
+ *
+ * The directory is passed in rather than resolved inside `Logger`, which
+ * deliberately does not import `electron` — that import would make the module
+ * unloadable under Node's type stripping, which is where its tests run.
+ */
+const logger = new Logger({ directory: path.join(app.getPath('userData'), 'logs') });
+setLogger(logger);
+/**
+ * The level survives a restart, because what it is turned up for has not
+ * happened yet: a `trace` setting that reset on launch would be back to normal
+ * by the time anyone managed to reproduce the thing they turned it up for.
+ */
+const savedLogLevel = datastore.getString('log_level_key', '');
+if (LOG_LEVELS.includes(savedLogLevel as LogLevel)) logger.setLevel(savedLogLevel as LogLevel);
+
+logger.info('app', 'session_started', {
+  version: app.getVersion(),
+  electron: process.versions.electron,
+  platform: `${process.platform}-${process.arch}`,
+  logFile: logger.logFile,
+});
+
+/**
+ * Anything that reaches the top of the stack is recorded before it is lost.
+ *
+ * An unhandled rejection in the main process is invisible: there is no console
+ * a user can see, and the renderer carries on as though nothing happened. These
+ * two handlers are the difference between "it just stopped working" and a
+ * record naming what threw.
+ */
+process.on('unhandledRejection', (reason) => {
+  logger.error('app', 'unhandled_rejection', {
+    error: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack?.slice(0, 2000) : undefined,
+  });
+});
+process.on('uncaughtException', (error) => {
+  logger.fatal('app', 'uncaught_exception', { error: error.message, stack: error.stack?.slice(0, 2000) });
+});
+
 const diagnostics = new DiagnosticsLog();
+
+/**
+ * Every diagnostic also becomes a structured record.
+ *
+ * The two logs answer different questions and both are worth having:
+ * `DiagnosticsLog` is shaped to be pasted to a provider maintainer, this one to
+ * be filtered and grouped. Mirroring rather than replacing means a failure is
+ * in the timeline beside the search that led to it, without the call sites
+ * having to write it twice.
+ */
+diagnostics.setListener((record) => {
+  logger.write(
+    record.level === 'error' ? 'error' : record.level === 'warn' ? 'warn' : 'info',
+    'provider',
+    `diagnostic_${record.stage}`,
+    {
+      provider: record.source,
+      mediaTitle: record.title,
+      url: record.url,
+      operation: record.stage,
+      error: record.level === 'error' ? record.message : undefined,
+      message: record.level === 'error' ? undefined : record.message,
+    }
+  );
+});
 const externalPlayers = new ExternalPlayerService();
 externalPlayers.setSnapshotListener((snapshot) =>
   mainWindow?.webContents.send('external:update', snapshot)
@@ -289,6 +357,7 @@ function installProcessGuards(): void {
       message: error instanceof Error ? error.message : String(error),
       detail: error instanceof Error ? error.stack : undefined,
     });
+    logger.info('app', 'session_ending');
     diagnostics.flush();
     providerAnalytics.flush();
     throw error;
@@ -522,9 +591,16 @@ app.on('before-quit', async (event) => {
     await externalPlayers.shutdown();
     contentService.shutdown();
     await torrentEngine.destroy();
-  } catch {
-    // Shutdown is best-effort; never block quit on it.
+  } catch (error) {
+    // Shutdown is best-effort; never block quit on it. It is still worth
+    // recording, because a service that throws here is one that leaked
+    // something — and the next launch is where that shows up.
+    logger.warn('app', 'shutdown_incomplete', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
+  // Last, and synchronous: nothing after this point gets written.
+  logger.shutdown();
   app.exit(0);
 });
 
@@ -754,6 +830,98 @@ ipcMain.handle(
 ipcMain.handle('diagnostics:clear', async () => {
   diagnostics.clear();
   return { ok: true };
+});
+
+// --- the structured log ----------------------------------------------------
+
+/**
+ * `log:*` is the developer-facing surface, deliberately thin.
+ *
+ * The log's job is to be on disk when something goes wrong, not to be browsed;
+ * a large UI over it would be effort spent on the wrong half. What is exposed
+ * is what a person actually needs at the moment they are debugging: query the
+ * recent past, find the file, open the folder, and turn the level up for the
+ * next reproduction attempt.
+ */
+ipcMain.handle(
+  'log:query',
+  async (
+    _,
+    filter?: {
+      level?: LogLevel;
+      scopes?: LogScope[];
+      event?: string;
+      search?: string;
+      since?: number;
+      limit?: number;
+    }
+  ) => {
+    try {
+      return {
+        ok: true,
+        records: logger.query(filter ?? {}),
+        session: logger.session,
+        level: logger.level,
+        file: logger.logFile,
+      };
+    } catch (error) {
+      return { ...fail(error), records: [], session: '', level: 'info' as LogLevel, file: '' };
+    }
+  }
+);
+
+ipcMain.handle('log:sessions', async () => {
+  try {
+    // Flushed first, or the current session under-reports its own size by
+    // however much is sitting in the write buffer.
+    logger.flush();
+    return { ok: true, sessions: logger.sessions(), directory: path.dirname(logger.logFile) };
+  } catch (error) {
+    return { ...fail(error), sessions: [], directory: '' };
+  }
+});
+
+/**
+ * The level is persisted, because the thing it is turned up for is a bug that
+ * has not happened yet. A `trace` setting that reset on restart would be off
+ * again by the time the user managed to reproduce anything.
+ */
+ipcMain.handle('log:setLevel', async (_, level: LogLevel) => {
+  try {
+    logger.setLevel(level);
+    datastore.setString('log_level_key', level);
+    logger.info('app', 'log_level_changed', { level });
+    return { ok: true, level };
+  } catch (error) {
+    return { ...fail(error), level: logger.level };
+  }
+});
+
+ipcMain.handle('log:reveal', async () => {
+  try {
+    logger.flush();
+    shell.showItemInFolder(logger.logFile);
+    return { ok: true };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/**
+ * The whole current session as text, for attaching to a report.
+ *
+ * Read back off disk rather than served from the ring: the ring holds the last
+ * couple of thousand records and the file holds the session, and a report that
+ * silently omits the beginning is worse than one that is large.
+ */
+ipcMain.handle('log:exportSession', async () => {
+  try {
+    logger.flush();
+    const text = fs.readFileSync(logger.logFile, 'utf8');
+    return { ok: true, text, file: logger.logFile };
+  } catch (error) {
+    return { ...fail(error), text: '', file: logger.logFile };
+  }
 });
 
 /**

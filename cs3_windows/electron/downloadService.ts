@@ -13,6 +13,7 @@ import type { AnalyticsSink } from './pluginManager';
 import type { TorrentResult } from '../src/types/torrent';
 import type { HistoryStore } from './cs3/historyStore';
 import type { HistoryAction, HistoryStatus } from '../src/types/history';
+import { getLogger } from './logging/logger';
 
 /**
  * The download queue, across every kind of source the app can play.
@@ -43,6 +44,8 @@ const MAX_CONCURRENT_DOWNLOADS = 3;
 interface ActiveHandle {
   cancel(): void;
 }
+
+const log = getLogger().child('download');
 
 export class DownloadService {
   private datastore: DatastoreManager;
@@ -476,8 +479,24 @@ export class DownloadService {
    * download that fails any of them becomes `Failed` **with the reason**, which
    * the user can retry — rather than `Completed` over a file that will not open.
    */
+  /**
+   * Completion is verified, and the verification is what gets logged.
+   *
+   * "The engine finished" and "there is a playable file" are different claims,
+   * and the gap between them is where the 100%-forever bug lived. Recording the
+   * verdict *and* the numbers behind it means a future disagreement can be
+   * settled from the log rather than reproduced.
+   */
   private finalizeCompletion(task: DownloadTask, reportedBytes: number): void {
     this.handles.delete(task.id);
+    log.info('download_finalising', {
+      mediaTitle: task.title,
+      provider: task.providerName,
+      sourceId: task.id,
+      reportedBytes,
+      expectedBytes: task.totalBytes,
+      target: task.targetFilePath,
+    });
 
     const expected = reportedBytes || task.totalBytes || 0;
     let actual = 0;

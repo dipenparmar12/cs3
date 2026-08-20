@@ -10,6 +10,7 @@ import type {
 } from '../src/types/media';
 import { inputOptionsFor } from './media/mediaInspector.ts';
 import { runTool } from './media/runTool.ts';
+import { getLogger } from './logging/logger.ts';
 
 /**
  * Executes a {@link TransformationPlan} as a live HTTP stream.
@@ -125,6 +126,8 @@ interface Session {
   transport: MediaTransport;
   plan: TransformationPlan;
 }
+
+const log = getLogger().child('ffmpeg');
 
 export class MediaTranscoder {
   private binaries: BinaryDownloader;
@@ -447,7 +450,24 @@ export class MediaTranscoder {
       return;
     }
 
-    const proc = spawn(ffmpeg, this.buildArgs(session, seek), { windowsHide: true });
+    const args = this.buildArgs(session, seek);
+    /**
+     * The arguments, not a summary of them.
+     *
+     * An ffmpeg failure is almost always reproducible from its command line and
+     * almost never from a description of it, and the arguments are assembled
+     * from a plan that depends on the host's encoder, the renderer's decoders
+     * and the file's contents — so no two machines build the same ones. This is
+     * the single most useful line in the log when a conversion misbehaves.
+     */
+    log.info('transcode_started', {
+      url: session.url,
+      operation: session.plan.videoAction,
+      container: session.plan.containerAction,
+      seekSeconds: seek,
+      args: args.join(' '),
+    });
+    const proc = spawn(ffmpeg, args, { windowsHide: true });
     this.active.set(token, proc);
 
     res.writeHead(200, {

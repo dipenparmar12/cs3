@@ -10,6 +10,7 @@ import type {
   MpvSnapshot,
   MpvTrack,
 } from '../../src/types/mpv';
+import { getLogger } from '../logging/logger.ts';
 
 /**
  * The native media engine: mpv, owned and driven by this app.
@@ -119,6 +120,8 @@ export interface MpvEngineDeps {
   };
 }
 
+const log = getLogger().child('mpv');
+
 export class MpvEngine {
   private deps: MpvEngineDeps;
 
@@ -129,6 +132,8 @@ export class MpvEngine {
   private pending = new Map<number, Pending>();
 
   private sessionId = '';
+  /** Guards the transition log against `time-pos` firing once a second. */
+  private lastLoggedState: MpvSnapshot['state'] | null = null;
   private nextSession = 1;
   private currentUrl = '';
   private currentTitle = '';
@@ -252,9 +257,26 @@ export class MpvEngine {
   public async open(request: MpvOpenRequest): Promise<MpvCommandResult> {
     const binary = this.resolvePath();
     if (!binary) {
+      log.warn('open_refused', { error: 'mpv is not installed', url: request.url });
       return { ok: false, error: 'The native playback engine (mpv) is not installed.' };
     }
-    if (!request.url) return { ok: false, error: 'No stream URL was given to the native engine.' };
+    if (!request.url) {
+      log.warn('open_refused', { error: 'no stream URL' });
+      return { ok: false, error: 'No stream URL was given to the native engine.' };
+    }
+    /**
+     * `reused` is the fact worth recording here. The process is kept idle
+     * between episodes so the next one loads in a few hundred milliseconds
+     * rather than paying for a window and a GPU context again — and when that
+     * optimisation misbehaves, "was this a fresh launch or a reuse?" is the
+     * first question and the log is the only place that can answer it.
+     */
+    log.info('open', {
+      url: request.url,
+      mediaTitle: request.title,
+      startSeconds: request.startSeconds,
+      reused: Boolean(this.process),
+    });
 
     this.currentUrl = request.url;
     this.currentTitle = request.title ?? '';
@@ -848,14 +870,55 @@ export class MpvEngine {
   }
 
   private emit(): void {
+    const snapshot = this.snapshot();
+
+    /**
+     * State transitions are logged here and nowhere else.
+     *
+     * `deriveState` assigns `this.state` from six different branches, and
+     * instrumenting each would be six chances to add a seventh without one.
+     * Every one of them ends up here, so a transition is recorded exactly once
+     * and the sequence in the log is the sequence that actually happened —
+     * which is the whole point of recording a state machine.
+     *
+     * Only *changes* are recorded. `time-pos` alone fires about once a second
+     * for the length of a film, and logging an unchanged `playing` each time
+     * would bury the transitions that matter under two thousand that do not.
+     */
+    if (snapshot.state !== this.lastLoggedState) {
+      const previous = this.lastLoggedState;
+      this.lastLoggedState = snapshot.state;
+      log.write(snapshot.state === 'error' ? 'warn' : 'info', 'state_changed', {
+        playbackState: snapshot.state,
+        from: previous,
+        url: this.currentUrl,
+        mediaTitle: this.currentTitle,
+        positionSeconds: Math.round(snapshot.positionSeconds),
+        durationSeconds: Math.round(snapshot.durationSeconds),
+        videoCodec: snapshot.videoCodec,
+        audioCodec: snapshot.audioCodec,
+        // The decoder actually chosen, not the setting: `auto-safe` falls back
+        // to software silently, and that is the first thing worth knowing when
+        // someone reports a 4K file stuttering.
+        hardwareDecoder: snapshot.hardwareDecoder,
+        error: snapshot.error ?? undefined,
+      });
+    }
+
     try {
-      this.deps.onUpdate(this.snapshot());
+      this.deps.onUpdate(snapshot);
     } catch {
       /* a renderer that has gone away must not stop the engine */
     }
   }
 
   private fail(message: string): void {
+    log.error('engine_failed', {
+      error: message,
+      url: this.currentUrl,
+      mediaTitle: this.currentTitle,
+      playbackState: this.state,
+    });
     this.lastError = message;
     this.state = 'error';
     this.emit();
