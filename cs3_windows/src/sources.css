@@ -5255,3 +5255,124 @@
 
 /* The mini player is 420px of mostly video; any of these would cover the film. */
 .player--mini .player__messages { display: none; }
+
+
+/* --- Continue watching: management -----------------------------------------
+   Removal is per card and quiet: revealed on hover, in the corner furthest
+   from the play affordance, so tidying the row and starting a film are never
+   the same gesture aimed slightly wrong. */
+.poster-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(8, 10, 16, 0.82);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.poster-card:hover .poster-dismiss,
+.poster-dismiss:focus-visible { opacity: 1; }
+.poster-dismiss:hover { background: rgba(190, 60, 60, 0.9); color: #fff; }
+
+.home-row__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+  padding: 0.2rem 0.45rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-subtle);
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.home-row__action:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+
+.home-row__confirm {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-left: auto;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  max-width: 46ch;
+}
+
+
+/* --- Home catalogue picker -------------------------------------------------
+   Radio rows rather than a `<select>`, because the choice is not just a name:
+   which catalogues a provider publishes and whether it is answering are what
+   the decision actually turns on, and neither fits in an option label. */
+.home-settings__providers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.5rem 0 1rem;
+}
+.home-settings__provider {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+}
+.home-settings__provider:hover { background: rgba(255, 255, 255, 0.05); }
+.home-settings__provider--selected { border-color: rgba(96, 165, 250, 0.5); }
+/* Unselectable, and visibly so — but still listed with its reason, because
+   "unavailable" and "does not exist" are different facts. */
+.home-settings__provider--unavailable { opacity: 0.62; cursor: not-allowed; }
+.home-settings__provider input { margin-top: 0.25rem; flex-shrink: 0; }
+.home-settings__provider-body { min-width: 0; flex: 1; }
+.home-settings__provider-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.home-settings__provider-body p { margin: 0.15rem 0 0; font-size: 0.76rem; line-height: 1.4; }
+
+.home-settings__status { font-size: 0.7rem; font-weight: 700; white-space: nowrap; }
+.home-settings__status--healthy { color: #5fc28c; }
+.home-settings__status--degraded { color: #e0b341; }
+.home-settings__status--unavailable { color: #e58f86; }
+.home-settings__status--unchecked { color: var(--text-subtle); }
+
+.home-settings__reason { color: #e0b341 !important; }
+.home-settings__catalogs { color: var(--text-subtle) !important; font-size: 0.7rem !important; }
+
+.home-settings__field { display: flex; gap: 0.4rem; align-items: center; min-width: 0; }
+.home-settings__field input {
+  flex: 1 1 180px;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+.home-settings__message {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.76rem;
+  color: #5fc28c;
+}
+.home-settings__message--bad { color: #e58f86; }

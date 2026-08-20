@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { DatastoreManager } from './datastore';
+import { HomeProviderRegistry, DEFAULT_PROVIDER_ID } from './cs3/homeProviderRegistry';
 import { Logger, LOG_LEVELS, setLogger, type LogLevel, type LogScope } from './logging/logger';
 import { Aria2Engine } from './aria2Engine';
 import { DownloadService } from './downloadService';
@@ -85,7 +86,15 @@ const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
 const historyStore = new HistoryStore(datastore);
 const bookmarks = new BookmarkStore(datastore);
-const discovery = new DiscoveryService();
+/**
+ * The home screen's catalogue source, and the rows built from it.
+ *
+ * The registry is constructed first because `DiscoveryService` resolves the
+ * active provider on every call rather than holding one — a provider that goes
+ * down mid-session falls back on the next request, not on the next restart.
+ */
+const homeProviders = new HomeProviderRegistry(datastore);
+const discovery = new DiscoveryService(homeProviders);
 const titleEnricher = new TitleEnricher();
 /**
  * Warms the source cache while a detail page is being read.
@@ -2693,9 +2702,132 @@ ipcMain.handle('library:getProgressForKey', async (_, key: string) =>
   libraryStore.getProgressForKey(key)
 );
 
+const SHOW_CONTINUE_WATCHING_KEY = 'home_show_continue_watching';
+
 ipcMain.handle('library:getContinueWatching', async (_, limit?: number) =>
-  libraryStore.getContinueWatching(limit)
+  /**
+   * The setting is enforced here rather than in the renderer.
+   *
+   * A home screen that fetched the rows and then declined to draw them would
+   * still have read the watch history to build them, and "do not show me what I
+   * have been watching" is a request about the data as much as the pixels — on
+   * a shared machine it is the whole point. Off means the rows are never
+   * assembled.
+   */
+  datastore.getBool(SHOW_CONTINUE_WATCHING_KEY, true)
+    ? libraryStore.getContinueWatching(limit)
+    : []
 );
+
+/**
+ * Removes one title from the row, keeping where it got to.
+ *
+ * A dismissal rather than a deletion: "take this off my home screen" and
+ * "forget where I was" are different intentions, and the destructive reading of
+ * the first is unrecoverable — someone tidying the row would silently lose the
+ * resume point on a film they were halfway through.
+ */
+ipcMain.handle('library:dismissContinueWatching', async (_, key: string) => {
+  try {
+    const removed = libraryStore.dismissFromContinueWatching(key);
+    logger.info('library', 'continue_watching_dismissed', { mediaId: key, removed });
+    return { ok: true, removed };
+  } catch (error) {
+    return { ...fail(error), removed: false };
+  }
+});
+
+ipcMain.handle('library:clearContinueWatching', async () => {
+  try {
+    const cleared = libraryStore.clearContinueWatching();
+    logger.info('library', 'continue_watching_cleared', { cleared });
+    return { ok: true, cleared };
+  } catch (error) {
+    return { ...fail(error), cleared: 0 };
+  }
+});
+
+// --- the home screen's catalogue source ------------------------------------
+
+/**
+ * `home:*` is the surface over `HomeProviderRegistry`.
+ *
+ * `check` is separate from `list` and forced, because "is it working *now*" is
+ * a different question from "what is available" and the answer to the first is
+ * cached for ten minutes. Someone who has just pasted an addon URL wants it
+ * probed, not told what a probe said before the URL existed.
+ */
+ipcMain.handle('home:listProviders', async (_, force?: boolean) => {
+  try {
+    return {
+      ok: true,
+      providers: await homeProviders.summaries(Boolean(force)),
+      selected: homeProviders.selectedId,
+      tmdbKeySet: homeProviders.hasTmdbKey(),
+      customUrl: homeProviders.customCatalogUrl(),
+    };
+  } catch (error) {
+    return { ...fail(error), providers: [], selected: DEFAULT_PROVIDER_ID, tmdbKeySet: false, customUrl: '' };
+  }
+});
+
+/**
+ * Selecting refuses a provider that is not answering, and says why.
+ *
+ * Accepting it and letting the home screen come up empty would make the health
+ * check a decoration. The refusal can name the cause; the empty screen could
+ * not.
+ */
+ipcMain.handle('home:selectProvider', async (_, id: string) => {
+  try {
+    const result = await homeProviders.select(id);
+    if (result.ok) {
+      // The cache is keyed by provider, so the old rows are not wrong — they
+      // are someone else's catalogue, and leaving them would keep the previous
+      // provider on screen until each row aged out six hours later.
+      discovery.invalidateForProviderChange();
+      mainWindow?.webContents.send('discover:invalidated');
+    }
+    return result;
+  } catch (error) {
+    return { ...fail(error), id: homeProviders.selectedId };
+  }
+});
+
+ipcMain.handle('home:setTmdbKey', async (_, key: string) => {
+  try {
+    homeProviders.setTmdbKey(key);
+    // Probed immediately: a key is pasted in order to find out whether it
+    // works, and making the user hunt for a refresh button to learn that is a
+    // gap they will read as the field not saving.
+    return { ok: true, health: await homeProviders.checkOne('tmdb', true) };
+  } catch (error) {
+    return { ...fail(error), health: null };
+  }
+});
+
+ipcMain.handle('home:setCustomCatalogUrl', async (_, url: string) => {
+  try {
+    homeProviders.setCustomCatalogUrl(url);
+    return { ok: true, health: url.trim() ? await homeProviders.checkOne('custom', true) : null };
+  } catch (error) {
+    return { ...fail(error), health: null };
+  }
+});
+
+ipcMain.handle('library:getContinueWatchingEnabled', async () => ({
+  ok: true,
+  enabled: datastore.getBool(SHOW_CONTINUE_WATCHING_KEY, true),
+}));
+
+ipcMain.handle('library:setContinueWatchingEnabled', async (_, enabled: boolean) => {
+  datastore.setBool(SHOW_CONTINUE_WATCHING_KEY, enabled);
+  logger.info('library', 'continue_watching_visibility_changed', { enabled });
+  // Nothing is deleted either way. The history is what the library is built on
+  // — resume points, the played-source records, the ranking — and hiding a row
+  // is not consent to discard any of it.
+  return { ok: true, enabled };
+});
 
 ipcMain.handle('library:clearProgress', async (_, key: string, season?: number, episode?: number) =>
   libraryStore.clearProgress(key, season, episode)

@@ -28,6 +28,20 @@ export interface WatchProgress {
   posterUrl?: string;
   /** A provider URL that plays this item, for resuming without a search. */
   mediaUrl: string;
+  /**
+   * When the viewer removed this from Continue Watching.
+   *
+   * A dismissal, deliberately, rather than deleting the progress. "Remove this
+   * from the row" and "forget where I was" are different intentions, and the
+   * destructive reading of the first is unrecoverable: someone tidying their
+   * home screen would silently lose the resume point on a film they were
+   * halfway through.
+   *
+   * Compared against `updatedAt` rather than being a boolean, which is what
+   * makes "Play again" work with no extra machinery: watching more of the title
+   * moves `updatedAt` past the dismissal and the row comes back on its own.
+   */
+  dismissedAt?: number;
 }
 
 /** The source the user chose last time, so the same pick can be reused. */
@@ -627,6 +641,8 @@ export class LibraryStore {
     for (const row of this.progress.values()) {
       if (row.completed) continue;
       if (row.positionSeconds < RESUME_FLOOR_SECONDS) continue;
+      // Dismissed, and not watched since. See `dismissedAt`.
+      if (row.dismissedAt !== undefined && row.dismissedAt >= row.updatedAt) continue;
       const seen = newestPerKey.get(row.key);
       if (!seen || row.updatedAt > seen.updatedAt) newestPerKey.set(row.key, row);
     }
@@ -634,6 +650,47 @@ export class LibraryStore {
     return [...newestPerKey.values()]
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, limit);
+  }
+
+  /**
+   * Takes one title off the Continue Watching row, keeping where it got to.
+   *
+   * Applied to every episode of the title rather than to one row, because the
+   * row is *per title* — it shows the newest episode of a series as one card,
+   * so dismissing only that episode would put the previous one back in its
+   * place, which reads as the remove button not working.
+   */
+  public dismissFromContinueWatching(key: string): boolean {
+    const at = Date.now();
+    let changed = false;
+    for (const row of this.progress.values()) {
+      if (row.key !== key) continue;
+      row.dismissedAt = at;
+      changed = true;
+    }
+    if (changed) this.persistProgress();
+    return changed;
+  }
+
+  /**
+   * Empties the row without touching a single watch position.
+   *
+   * The confirmation says exactly this, because a "clear all" that people
+   * expect to be destructive and is not would be its own surprise — and one
+   * they would discover by finding their positions intact, which is the good
+   * direction to be wrong in.
+   */
+  public clearContinueWatching(): number {
+    const at = Date.now();
+    let cleared = 0;
+    for (const row of this.progress.values()) {
+      if (row.completed) continue;
+      if (row.dismissedAt !== undefined && row.dismissedAt >= row.updatedAt) continue;
+      row.dismissedAt = at;
+      cleared++;
+    }
+    if (cleared > 0) this.persistProgress();
+    return cleared;
   }
 
   public clearProgress(key: string, season?: number, episode?: number): boolean {

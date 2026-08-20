@@ -169,6 +169,8 @@ export class Logger {
    */
   private readonly ring: LogRecord[] = [];
   private static readonly RING_SIZE = 2_000;
+  /** Disambiguates two loggers built in the same millisecond. See `sessionId`. */
+  private static sessionCounter = 0;
 
   private listeners = new Set<(record: LogRecord) => void>();
 
@@ -183,7 +185,17 @@ export class Logger {
     this.dir = options.directory ?? path.join(process.cwd(), 'logs');
     this.persist = options.persist ?? true;
     this.minLevel = options.level ?? 'debug';
-    this.sessionId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
+    /**
+     * Timestamp, pid, and a counter.
+     *
+     * The counter is not belt-and-braces: `toISOString` has millisecond
+     * resolution, so two loggers constructed inside the same millisecond in one
+     * process produced the *same id* and therefore the same file, and their
+     * records interleaved into it. Only tests do that today — but a log whose
+     * sessions can collide is one whose central promise, that a session is a
+     * complete and separate record, is conditional on timing.
+     */
+    this.sessionId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}-${++Logger.sessionCounter}`;
     this.file = path.join(this.dir, `${FILE_PREFIX}${this.sessionId}.ndjson`);
 
     if (this.persist) {
