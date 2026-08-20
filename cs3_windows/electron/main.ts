@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { DatastoreManager } from './datastore';
+import { HomeProviderRegistry, DEFAULT_PROVIDER_ID } from './cs3/homeProviderRegistry';
 import { Logger, LOG_LEVELS, setLogger, type LogLevel, type LogScope } from './logging/logger';
 import { Aria2Engine } from './aria2Engine';
 import { DownloadService } from './downloadService';
@@ -142,7 +143,15 @@ const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
 const historyStore = new HistoryStore(datastore);
 const bookmarks = new BookmarkStore(datastore);
-const discovery = new DiscoveryService();
+/**
+ * The home screen's catalogue source, and the rows built from it.
+ *
+ * The registry is constructed first because `DiscoveryService` resolves the
+ * active provider on every call rather than holding one — a provider that goes
+ * down mid-session falls back on the next request, not on the next restart.
+ */
+const homeProviders = new HomeProviderRegistry(datastore);
+const discovery = new DiscoveryService(homeProviders);
 const titleEnricher = new TitleEnricher();
 /**
  * Warms the source cache while a detail page is being read.
@@ -1138,6 +1147,72 @@ ipcMain.handle('discover:more', async (_, section: string, skip: number) => {
 ipcMain.handle('discover:refresh', async () => {
   discovery.invalidate();
   return { ok: true };
+});
+
+/**
+ * `home:*` is the surface over `HomeProviderRegistry`.
+ *
+ * `check` is separate from `list` and forced, because "is it working *now*" is
+ * a different question from "what is available" and the answer to the first is
+ * cached for ten minutes. Someone who has just pasted an addon URL wants it
+ * probed, not told what a probe said before the URL existed.
+ */
+ipcMain.handle('home:listProviders', async (_, force?: boolean) => {
+  try {
+    return {
+      ok: true,
+      providers: await homeProviders.summaries(Boolean(force)),
+      selected: homeProviders.selectedId,
+      tmdbKeySet: homeProviders.hasTmdbKey(),
+      customUrl: homeProviders.customCatalogUrl(),
+    };
+  } catch (error) {
+    return { ...fail(error), providers: [], selected: DEFAULT_PROVIDER_ID, tmdbKeySet: false, customUrl: '' };
+  }
+});
+
+/**
+ * Selecting refuses a provider that is not answering, and says why.
+ *
+ * Accepting it and letting the home screen come up empty would make the health
+ * check a decoration. The refusal can name the cause; the empty screen could
+ * not.
+ */
+ipcMain.handle('home:selectProvider', async (_, id: string) => {
+  try {
+    const result = await homeProviders.select(id);
+    if (result.ok) {
+      // The cache is keyed by provider, so the old rows are not wrong — they
+      // are someone else's catalogue, and leaving them would keep the previous
+      // provider on screen until each row aged out six hours later.
+      discovery.invalidateForProviderChange();
+      mainWindow?.webContents.send('discover:invalidated');
+    }
+    return result;
+  } catch (error) {
+    return { ...fail(error), id: homeProviders.selectedId };
+  }
+});
+
+ipcMain.handle('home:setTmdbKey', async (_, key: string) => {
+  try {
+    homeProviders.setTmdbKey(key);
+    // Probed immediately: a key is pasted in order to find out whether it
+    // works, and making the user hunt for a refresh button to learn that is a
+    // gap they will read as the field not saving.
+    return { ok: true, health: await homeProviders.checkOne('tmdb', true) };
+  } catch (error) {
+    return { ...fail(error), health: null };
+  }
+});
+
+ipcMain.handle('home:setCustomCatalogUrl', async (_, url: string) => {
+  try {
+    homeProviders.setCustomCatalogUrl(url);
+    return { ok: true, health: url.trim() ? await homeProviders.checkOne('custom', true) : null };
+  } catch (error) {
+    return { ...fail(error), health: null };
+  }
 });
 
 /**

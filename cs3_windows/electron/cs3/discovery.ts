@@ -2,9 +2,10 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
-import { fetchJson } from '../torrent/http';
-import { TvType, type SearchResponse } from '../../src/types/api';
-import { buildCinemetaUrl } from '../cinemeta';
+import type { SearchResponse } from '../../src/types/api';
+import type { HomeProviderRegistry } from './homeProviderRegistry.ts';
+import type { HomeCatalogKind } from './homeProviders.ts';
+import { getLogger } from '../logging/logger.ts';
 
 /**
  * What is worth watching right now, from services that need no API key.
@@ -46,9 +47,6 @@ import { buildCinemetaUrl } from '../cinemeta';
  * streams.
  */
 
-/** The Popular/New/Featured catalogues, which live on a different host to `meta`. */
-const CATALOG_BASE = 'https://cinemeta-catalogs.strem.io';
-const ANILIST = 'https://graphql.anilist.co';
 
 /**
  * How long a section is served before it is refreshed.
@@ -63,6 +61,8 @@ const TTL_MS = 6 * 60 * 60 * 1000;
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 const FILE_NAME = 'cs3-discovery-cache.json';
+
+const log = getLogger().child('discovery');
 
 export type DiscoverySectionId =
   | 'trending'
@@ -91,47 +91,31 @@ interface CachedSection {
   fetchedAt: number;
 }
 
-interface CinemetaCatalogMeta {
-  id?: string;
-  imdb_id?: string;
-  name?: string;
-  type?: string;
-  poster?: string;
-  genre?: string[];
-  genres?: string[];
-  releaseInfo?: string;
-  year?: string | number;
-  imdbRating?: string;
-  description?: string;
-}
-
-interface CatalogResponse {
-  metas?: CinemetaCatalogMeta[];
-}
-
-function parseYear(value: string | number | undefined): number | undefined {
-  if (typeof value === 'number') return value;
-  if (!value) return undefined;
-  const match = /(\d{4})/.exec(String(value));
-  return match ? parseInt(match[1], 10) : undefined;
-}
-
-function toTvType(type: string | undefined, genres: string[] | undefined): TvType {
-  const isAnime = (genres ?? []).some((genre) => /animation|anime/i.test(genre));
-  if (type === 'series') return isAnime ? TvType.Anime : TvType.TvSeries;
-  return isAnime ? TvType.AnimeMovie : TvType.Movie;
-}
-
 export class DiscoveryService {
+  private providers: HomeProviderRegistry;
   private cache = new Map<string, CachedSection>();
   private inFlight = new Map<string, Promise<SearchResponse[]>>();
   private file: string;
   private writeTimer: NodeJS.Timeout | null = null;
 
-  constructor(directory?: string) {
+  constructor(providers: HomeProviderRegistry, directory?: string) {
+    this.providers = providers;
     const base = directory ?? (app ? app.getPath('userData') : process.cwd());
     this.file = path.join(base, FILE_NAME);
     this.restore();
+  }
+
+  /**
+   * Drops the rows built by whichever provider was active.
+   *
+   * Called when the selection changes. The cache is keyed by provider, so the
+   * old entries are not *wrong* — they are simply someone else's catalogue, and
+   * leaving them would have the home screen keep showing the previous
+   * provider's rows until each one aged out six hours later.
+   */
+  public invalidateForProviderChange(): void {
+    this.cache.clear();
+    this.scheduleWrite();
   }
 
   private restore(): void {
@@ -176,117 +160,6 @@ export class DiscoveryService {
 
   // --- fetching ------------------------------------------------------------
 
-  private catalogUrl(
-    catalog: 'top' | 'year' | 'imdbRating',
-    type: 'movie' | 'series',
-    extra?: { genre?: string; skip?: number }
-  ): string {
-    const parts: string[] = [];
-    if (extra?.genre) parts.push(`genre=${encodeURIComponent(extra.genre)}`);
-    if (extra?.skip) parts.push(`skip=${extra.skip}`);
-    const suffix = parts.length > 0 ? `/${parts.join('&')}` : '';
-    return `${CATALOG_BASE}/${catalog}/catalog/${type}/${catalog}${suffix}.json`;
-  }
-
-  private async fetchCatalog(
-    catalog: 'top' | 'year' | 'imdbRating',
-    type: 'movie' | 'series',
-    extra?: { genre?: string; skip?: number }
-  ): Promise<SearchResponse[]> {
-    const response = await fetchJson<CatalogResponse>(this.catalogUrl(catalog, type, extra), {
-      timeoutMs: 15_000,
-    });
-
-    const out: SearchResponse[] = [];
-    for (const meta of response.metas ?? []) {
-      const imdbId = meta.imdb_id || meta.id;
-      // Without an IMDb id the item cannot be addressed, and an unaddressable
-      // poster on the home screen is a card that does nothing when clicked.
-      if (!imdbId?.startsWith('tt') || !meta.name) continue;
-      out.push({
-        name: meta.name,
-        url: buildCinemetaUrl(type, imdbId),
-        apiName: 'Catalogue',
-        type: toTvType(type, meta.genre ?? meta.genres),
-        posterUrl: meta.poster,
-        year: parseYear(meta.releaseInfo ?? meta.year),
-      });
-    }
-    return out;
-  }
-
-  /**
-   * Seasonal anime, from AniList.
-   *
-   * Separate from the catalogues rather than folded into the Animation genre:
-   * "Animation" on IMDb is mostly Western film, and an anime section built from
-   * it returns Pixar. The audiences barely overlap and neither is served by the
-   * merge.
-   */
-  private async fetchTrendingAnime(): Promise<SearchResponse[]> {
-    const query = `
-      query {
-        Page(perPage: 24) {
-          media(sort: TRENDING_DESC, type: ANIME, isAdult: false) {
-            idMal
-            title { romaji english }
-            coverImage { large }
-            seasonYear
-            format
-          }
-        }
-      }`;
-
-    const response = await fetch(ANILIST, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ query }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) throw new Error(`AniList returned ${response.status}`);
-
-    const payload = (await response.json()) as {
-      data?: {
-        Page?: {
-          media?: Array<{
-            idMal?: number;
-            title?: { romaji?: string; english?: string };
-            coverImage?: { large?: string };
-            seasonYear?: number;
-            format?: string;
-          }>;
-        };
-      };
-    };
-
-    const out: SearchResponse[] = [];
-    for (const media of payload.data?.Page?.media ?? []) {
-      const name = media.title?.english || media.title?.romaji;
-      if (!name) continue;
-      // Addressed by title rather than by id: AniList ids are not IMDb ids, and
-      // the extension providers this app streams from search by name. Using the
-      // title keeps the card clickable through the ordinary search path.
-      out.push({
-        name,
-        url: `search://${encodeURIComponent(name)}`,
-        apiName: 'AniList',
-        type: media.format === 'MOVIE' ? TvType.AnimeMovie : TvType.Anime,
-        posterUrl: media.coverImage?.large,
-        year: media.seasonYear,
-      });
-    }
-    return out;
-  }
-
-  /**
-   * Serves a section, refreshing behind the answer rather than in front of it.
-   *
-   * Stale-while-revalidate, and the "while" is the important half. A home
-   * screen that waits for six network calls before it draws anything is a home
-   * screen with a spinner on it every morning; one that draws yesterday's
-   * trending list instantly and quietly replaces it a second later is
-   * indistinguishable from instant.
-   */
   private async section(key: string, load: () => Promise<SearchResponse[]>): Promise<CachedSection> {
     const cached = this.cache.get(key);
     const fresh = cached && Date.now() - cached.fetchedAt < TTL_MS;
@@ -332,69 +205,98 @@ export class DiscoveryService {
    * Nothing about that leaves the machine — the genre is used to pick a public
    * catalogue URL, and the catalogue is not told who asked.
    */
+  /**
+   * The rows, built from what the active provider actually publishes.
+   *
+   * This used to be a fixed list of six with Cinemeta's URLs baked into each
+   * one. Deriving it from `capabilities()` is what makes the provider
+   * replaceable in a way that means something: selecting AniList produces an
+   * anime home screen rather than five empty headings and one row, and a
+   * community catalogue addon that publishes only popular films produces
+   * exactly that one row.
+   */
   public async sections(options: { genres?: string[]; includeAnime?: boolean } = {}): Promise<
     DiscoverySection[]
   > {
+    const { provider, fellBack } = this.providers.active();
+    const capabilities = provider.capabilities();
+    const available = new Set(capabilities.catalogs);
+
+    /**
+     * Keyed by provider as well as catalogue.
+     *
+     * Without the provider in the key, switching from Cinemeta to TMDB would
+     * serve TMDB's row out of Cinemeta's cache entry — the same class of bug as
+     * the stale-runtime trap, and just as hard to see, because both answers are
+     * plausible catalogues of films.
+     */
+    const key = (suffix: string) => `${provider.id}:${suffix}`;
+
     const requested: Array<{
       id: DiscoverySectionId;
       title: string;
       subtitle?: string;
       key: string;
       load: () => Promise<SearchResponse[]>;
-    }> = [
-      {
-        id: 'trending',
-        title: 'Trending now',
-        subtitle: 'Most watched across the catalogue this week',
-        key: 'top:movie',
-        load: () => this.fetchCatalog('top', 'movie'),
-      },
-      {
-        id: 'popular-series',
-        title: 'Popular series',
-        key: 'top:series',
-        load: () => this.fetchCatalog('top', 'series'),
-      },
-      {
-        id: 'new-movies',
-        title: 'New releases',
-        subtitle: 'Recently released films',
-        key: 'year:movie',
-        load: () => this.fetchCatalog('year', 'movie'),
-      },
-      {
-        id: 'new-series',
-        title: 'New episodes and seasons',
-        key: 'year:series',
-        load: () => this.fetchCatalog('year', 'series'),
-      },
-      {
-        id: 'featured',
-        title: 'Highest rated',
-        subtitle: 'By IMDb rating',
-        key: 'imdbRating:movie',
-        load: () => this.fetchCatalog('imdbRating', 'movie'),
-      },
-    ];
+    }> = [];
 
-    if (options.includeAnime !== false) {
+    const add = (
+      kind: HomeCatalogKind,
+      id: DiscoverySectionId,
+      title: string,
+      subtitle?: string
+    ) => {
+      if (!available.has(kind)) return;
       requested.push({
-        id: 'trending-anime',
-        title: 'Trending anime',
-        subtitle: 'This season, from AniList',
-        key: 'anilist:trending',
-        load: () => this.fetchTrendingAnime(),
+        id,
+        title,
+        subtitle,
+        key: key(kind),
+        load: () => provider.fetch({ kind }),
       });
+    };
+
+    add('popular-movies', 'trending', 'Trending now', 'Most watched across the catalogue this week');
+    add('popular-series', 'popular-series', 'Popular series');
+    add('new-movies', 'new-movies', 'New releases', 'Recently released films');
+    add('new-series', 'new-series', 'New episodes and seasons');
+    add('top-rated', 'featured', 'Highest rated', 'By rating');
+
+    /**
+     * Anime comes from AniList even when it is not the selected provider.
+     *
+     * The alternative — showing anime only when AniList is chosen — would mean
+     * choosing a film catalogue silently removes the anime row, which is not
+     * what selecting a *film* catalogue means. AniList is additive here for the
+     * same reason it is separate from the Animation genre: nothing else in the
+     * roster ranks anime at all.
+     */
+    if (options.includeAnime !== false) {
+      const anime = available.has('anime') ? provider : this.providers.get('anilist');
+      if (anime) {
+        requested.push({
+          id: 'trending-anime',
+          title: 'Trending anime',
+          subtitle: 'This season, from AniList',
+          key: `${anime.id}:anime`,
+          load: () => anime.fetch({ kind: 'anime' }),
+        });
+      }
     }
 
-    for (const genre of (options.genres ?? []).slice(0, 3)) {
-      requested.push({
-        id: `genre:${genre}`,
-        title: `Popular in ${genre}`,
-        subtitle: 'Because of what you have been watching',
-        key: `top:movie:${genre}`,
-        load: () => this.fetchCatalog('top', 'movie', { genre }),
-      });
+    // Personalised rows, only where the provider can filter by genre at all.
+    if (capabilities.genres.length > 0 && available.has('popular-movies')) {
+      const known = new Set(capabilities.genres.map((genre) => genre.toLowerCase()));
+      for (const genre of (options.genres ?? []).slice(0, 3)) {
+        if (!known.has(genre.toLowerCase())) continue;
+        requested.push({
+          id: `genre:${genre}`,
+          title: `Popular in ${genre}`,
+          subtitle: 'Because of what you have been watching',
+          key: key(`popular-movies:${genre}`),
+          load: () => provider.fetch({ kind: 'popular-movies', genre }),
+        });
+      }
     }
 
     const resolved = await Promise.all(
@@ -411,25 +313,37 @@ export class DiscoveryService {
       })
     );
 
+    if (fellBack) {
+      log.warn('home_provider_fell_back', { provider: this.providers.selectedId });
+    }
+
     // A section with nothing in it is noise, not information: the user cannot
     // act on "Trending anime is empty" and the heading takes up a screenful.
     return resolved.filter((section) => section.items.length > 0);
   }
 
   /** More of one section, for paging a row. */
-  public async more(
-    section: DiscoverySectionId,
-    skip: number
-  ): Promise<SearchResponse[]> {
+  public async more(section: DiscoverySectionId, skip: number): Promise<SearchResponse[]> {
+    const { provider } = this.providers.active();
+    if (!provider.capabilities().paging) return [];
+
     if (section === 'trending' || section === 'popular-movies') {
-      return this.fetchCatalog('top', 'movie', { skip });
+      return provider.fetch({ kind: 'popular-movies', skip });
     }
-    if (section === 'popular-series') return this.fetchCatalog('top', 'series', { skip });
-    if (section === 'new-movies') return this.fetchCatalog('year', 'movie', { skip });
-    if (section === 'new-series') return this.fetchCatalog('year', 'series', { skip });
-    if (section === 'featured') return this.fetchCatalog('imdbRating', 'movie', { skip });
+    if (section === 'popular-series') return provider.fetch({ kind: 'popular-series', skip });
+    if (section === 'new-movies') return provider.fetch({ kind: 'new-movies', skip });
+    if (section === 'new-series') return provider.fetch({ kind: 'new-series', skip });
+    if (section === 'featured') return provider.fetch({ kind: 'top-rated', skip });
+    if (section === 'trending-anime') {
+      const anime = this.providers.get('anilist');
+      return anime ? anime.fetch({ kind: 'anime', skip }) : [];
+    }
     if (section.startsWith('genre:')) {
-      return this.fetchCatalog('top', 'movie', { genre: section.slice('genre:'.length), skip });
+      return provider.fetch({
+        kind: 'popular-movies',
+        genre: section.slice('genre:'.length),
+        skip,
+      });
     }
     return [];
   }

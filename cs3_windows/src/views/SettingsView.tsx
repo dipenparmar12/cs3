@@ -14,9 +14,11 @@ import {
   AlertTriangle,
   Play,
   Trash2,
+  Home,
 } from 'lucide-react';
 import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
+import { HomeSettings } from '../components/settings/HomeSettings';
 import { PlayerSettings } from '../components/PlayerSettings';
 import { ProviderRankingPanel } from '../components/settings/ProviderRankingPanel';
 import { NetworkSettings } from '../components/NetworkSettings';
@@ -258,6 +260,13 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                 <span>{prefetchSources ? 'Enabled' : 'Disabled'}</span>
               </label>
             </SettingRow>
+          </SettingGroup>
+
+          {/* The home screen: where its catalogue comes from, and what shows on
+              it. Grouped with Search under General because both are about what
+              the app puts in front of you before you have asked for anything. */}
+          <SettingGroup title="Home screen" icon={<Home size={15} />}>
+            <HomeSettings />
           </SettingGroup>
 
           <AdultContentSetting />

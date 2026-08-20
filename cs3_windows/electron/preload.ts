@@ -958,6 +958,38 @@ export interface CloudStreamElectronAPI {
   }) => Promise<WatchProgress | null>;
   getProgressForKey: (key: string) => Promise<WatchProgress[]>;
   getContinueWatching: (limit?: number) => Promise<WatchProgress[]>;
+  // The home screen's catalogue source. Only a provider that is actually
+  // answering can be selected — see `home:selectProvider`.
+  listHomeProviders: (force?: boolean) => Promise<
+    Envelope & {
+      providers: Array<{
+        id: string;
+        name: string;
+        description: string;
+        requiresKey: boolean;
+        catalogs: string[];
+        genres: number;
+        selectable: boolean;
+        active: boolean;
+        health: {
+          status: 'healthy' | 'degraded' | 'unavailable' | 'unchecked';
+          latencyMs?: number;
+          items?: number;
+          withArtwork?: number;
+          reason?: string;
+          needsKey?: boolean;
+          checkedAt: number;
+        } | null;
+      }>;
+      selected: string;
+      tmdbKeySet: boolean;
+      customUrl: string;
+    }
+  >;
+  selectHomeProvider: (id: string) => Promise<Envelope & { id: string }>;
+  setTmdbKey: (key: string) => Promise<Envelope & { health: unknown }>;
+  setCustomCatalogUrl: (url: string) => Promise<Envelope & { health: unknown }>;
+
   /** Takes one title off the row. The watch position is kept. */
   dismissContinueWatching: (key: string) => Promise<Envelope & { removed: boolean }>;
   /** Empties the row. Nothing is deleted; positions survive. */
@@ -1363,6 +1395,11 @@ const api: CloudStreamElectronAPI = {
   recordWatchProgress: (input) => ipcRenderer.invoke('library:recordProgress', input),
   getProgressForKey: (key) => ipcRenderer.invoke('library:getProgressForKey', key),
   getContinueWatching: (limit) => ipcRenderer.invoke('library:getContinueWatching', limit),
+  listHomeProviders: (force) => ipcRenderer.invoke('home:listProviders', force),
+  selectHomeProvider: (id) => ipcRenderer.invoke('home:selectProvider', id),
+  setTmdbKey: (key) => ipcRenderer.invoke('home:setTmdbKey', key),
+  setCustomCatalogUrl: (url) => ipcRenderer.invoke('home:setCustomCatalogUrl', url),
+
   dismissContinueWatching: (key) => ipcRenderer.invoke('library:dismissContinueWatching', key),
   clearContinueWatching: () => ipcRenderer.invoke('library:clearContinueWatching'),
   getContinueWatchingEnabled: () => ipcRenderer.invoke('library:getContinueWatchingEnabled'),

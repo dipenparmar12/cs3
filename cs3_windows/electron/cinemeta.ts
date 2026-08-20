@@ -1,6 +1,6 @@
-import { fetchJson } from './torrent/http';
-import { TvType, type Episode, type SearchResponse } from '../src/types/api';
-import { normaliseTitleForMatch, titleSimilarity } from './torrent/releaseParser';
+import { fetchJson } from './torrent/http.ts';
+import { TvType, type Episode, type SearchResponse } from '../src/types/api.ts';
+import { normaliseTitleForMatch, titleSimilarity } from './torrent/releaseParser.ts';
 
 /**
  * Cinemeta — IMDb-keyed catalogue metadata for movies and series.
