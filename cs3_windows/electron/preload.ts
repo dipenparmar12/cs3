@@ -758,6 +758,22 @@ export interface CloudStreamElectronAPI {
     }
   >;
 
+  /**
+   * The same mapping for many providers at once.
+   *
+   * A source list routinely holds thirty rows drawn from a dozen providers, and
+   * every row wants its origin chain. Asking one at a time is thirty IPC round
+   * trips to read from one in-memory Map, so the whole list is answered in one.
+   */
+  getProviderProvenanceMap: (providerNames: string[]) => Promise<
+    Envelope & {
+      provenance: Record<
+        string,
+        { provider: string; repositoryName?: string; extensionName?: string }
+      >;
+    }
+  >;
+
   // Saved detail pages
   /**
    * Saved pages, newest first, with the facets to filter them by.
@@ -1275,6 +1291,8 @@ const api: CloudStreamElectronAPI = {
 
   getProviderProvenance: (providerName) =>
     ipcRenderer.invoke('api:getProviderProvenance', providerName),
+  getProviderProvenanceMap: (providerNames) =>
+    ipcRenderer.invoke('api:getProviderProvenanceMap', providerNames),
 
   listBookmarks: () => ipcRenderer.invoke('bookmarks:list'),
   getBookmark: (mediaUrl) => ipcRenderer.invoke('bookmarks:get', mediaUrl),
