@@ -92,6 +92,31 @@ export const VIDEO_CODEC_PROBES: Record<string, string> = {
   mpeg4: 'video/mp4; codecs="mp4v.20.8"',
 };
 
+/**
+ * The output wrapper, as ffmpeg arguments.
+ *
+ * WebM is not a stylistic alternative to MP4 here — it is the only wrapper that
+ * takes VP8, which ffmpeg flatly refuses to write into MP4 (`Could not find tag
+ * for codec vp8 in stream #0`), killing the command at the header. See
+ * `chooseCopyContainer`, which is what decides between them.
+ *
+ * `-live 1` matters for the same reason `frag_keyframe+empty_moov` does on the
+ * MP4 side: the default WebM muxer seeks back to the head of the file to write
+ * cue points and the duration, and the output here is a pipe that cannot seek.
+ * Without it the muxer produces a file whose header is never finalised.
+ */
+function containerOptionsFor(action: TransformationPlan['containerAction']): string[] {
+  if (action === 'webm') {
+    return ['-live', '1', '-cluster_time_limit', '2000', '-f', 'webm'];
+  }
+  return ['-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4'];
+}
+
+/** The wrapper's MIME type. A WebM served as `video/mp4` is refused outright. */
+function contentTypeFor(action: TransformationPlan['containerAction']): string {
+  return action === 'webm' ? 'video/webm' : 'video/mp4';
+}
+
 /** How long a subtitle extraction may run before it is given up on. */
 const SUBTITLE_EXTRACT_TIMEOUT_MS = 180_000;
 
@@ -380,8 +405,7 @@ export class MediaTranscoder {
       // increasing dts" and drops frames.
       '-fflags', '+genpts+discardcorrupt',
       '-avoid_negative_ts', 'make_zero',
-      '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
-      '-f', 'mp4',
+      ...containerOptionsFor(plan.containerAction),
       'pipe:1',
     ];
   }
@@ -427,7 +451,7 @@ export class MediaTranscoder {
     this.active.set(token, proc);
 
     res.writeHead(200, {
-      'Content-Type': 'video/mp4',
+      'Content-Type': contentTypeFor(session.plan.containerAction),
       // Ranges cannot be honoured on a live pipe; saying so stops the player
       // from issuing range requests it will not get an answer to.
       'Accept-Ranges': 'none',

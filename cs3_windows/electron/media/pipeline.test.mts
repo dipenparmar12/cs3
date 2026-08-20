@@ -232,6 +232,52 @@ test('MKV / H.264 / AAC is remuxed to fragmented MP4 with both streams intact', 
   assert.equal(audioOf(result)?.codec_name, 'aac');
 });
 
+test('VP8 is remuxed into WebM, and the output really is a WebM', async () => {
+  /**
+   * The failure this replaces was total, not partial. `ffmpeg -c:v copy -f mp4`
+   * on a VP8 stream answers `Could not find tag for codec vp8 in stream #0,
+   * codec not currently supported in container`, then `Could not write header`,
+   * and exits having produced nothing — while every earlier step looked right,
+   * because both codecs are ones the browser decodes.
+   *
+   * AVI as the wrapper on purpose: a Matroska carrying WebM-legal codecs *is* a
+   * WebM to Chromium and plays directly, so it never reaches a remux at all.
+   *
+   * The assertion is on the bytes, not on ffmpeg's exit status. That is the
+   * whole point — the sibling case (Vorbis into MP4) exits zero and produces a
+   * file nothing can play.
+   */
+  const file = synthesise('vp8.avi', [
+    '-c:v', 'libvpx', '-b:v', '200k', '-cpu-used', '8',
+    '-c:a', 'libvorbis', '-shortest',
+  ]);
+  const { decision, bytes, result } = await convert(file);
+  assert.equal(decision.plan.containerAction, 'webm');
+  assert.ok(bytes.length > 1_000, `expected real output, got ${bytes.length} bytes`);
+  // 0x1A45DFA3 is the EBML magic every Matroska/WebM file starts with. An MP4
+  // would carry `ftyp` at offset 4 instead, and a failed mux carries nothing.
+  assert.equal(bytes.subarray(0, 4).toString('hex'), '1a45dfa3');
+  assert.equal(videoOf(result)?.codec_name, 'vp8');
+  assert.equal(audioOf(result)?.codec_name, 'vorbis');
+});
+
+test('Vorbis beside H.264 is re-encoded, because MP4 would carry it silently unplayed', async () => {
+  /**
+   * The dangerous half: ffmpeg writes Vorbis into MP4 without complaint, so
+   * exit status says success, and Chromium plays no audio from the result
+   * because Vorbis is a WebM/Ogg codec there. Nothing downstream could have
+   * caught it — the file is well-formed.
+   */
+  const file = synthesise('vorbis.mkv', [
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    '-c:a', 'libvorbis', '-shortest',
+  ]);
+  const { decision, result } = await convert(file);
+  assert.equal(decision.plan.containerAction, 'mp4_fragmented');
+  assert.notEqual(decision.plan.audioAction, 'copy');
+  assert.equal(audioOf(result)?.codec_name, 'aac');
+});
+
 test('AC-3 audio becomes stereo AAC while the video is copied untouched', async () => {
   // The silent-audio bug, end to end. Video must stay bit-identical H.264 —
   // re-encoding it to reach stereo audio is the expensive mistake.

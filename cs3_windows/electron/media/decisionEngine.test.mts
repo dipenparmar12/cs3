@@ -31,9 +31,11 @@ import {
   blindFallbackPlan,
   canPlayContainer,
   canPlayVideo,
+  chooseCopyContainer,
   decideStrategy,
   isPlayableAudioCodec,
   isTenBitOrDeeper,
+  predictOutput,
   selectAudioTrack,
 } from './decisionEngine.ts';
 
@@ -675,6 +677,186 @@ test('the explanation keeps the browser-side reason and says what changed', () =
   assert.match(decision.explanation, /native engine \(mpv\)/);
   assert.match(decision.explanation, /HEVC/);
   assert.match(decision.explanation, /HDR/);
+});
+
+// --- the output container is chosen, not assumed ---------------------------
+
+test('VP8 is remuxed into WebM, because ffmpeg refuses to write it into MP4', () => {
+  /**
+   * Measured, not assumed. `ffmpeg -c:v copy -f mp4` on a VP8 stream answers
+   * `Could not find tag for codec vp8 in stream #0, codec not currently
+   * supported in container` and then `Could not write header` — the command
+   * dies and the viewer gets nothing. Both streams decode here, so this took
+   * the copy path and produced no output at all.
+   *
+   * The wrapper is AVI rather than Matroska on purpose: a Matroska carrying
+   * WebM-legal codecs *is* a WebM to Chromium and plays directly, so it never
+   * reaches a remux. It takes a container Chromium cannot demux at all to get
+   * WebM-only codecs onto this path.
+   */
+  const decision = decide(
+    media({
+      formatName: 'avi',
+      video: video({ codec: 'vp8' }),
+      audio: [audio({ codec: 'vorbis' })],
+    })
+  );
+  assert.equal(decision.strategy, 'REMUX_CONTAINER');
+  assert.equal(decision.plan.containerAction, 'webm');
+  assert.equal(decision.plan.videoAction, 'copy');
+  assert.equal(decision.plan.audioAction, 'copy');
+});
+
+test('Vorbis is re-encoded rather than copied into MP4, though ffmpeg would write it', () => {
+  /**
+   * The silent half of the bug. ffmpeg muxes Vorbis into MP4 without complaint
+   * — verified — and Chromium plays no audio from it, because Vorbis is a
+   * WebM/Ogg codec there. An exit-status check believes this worked. Beside
+   * H.264 there is no shared container, so the audio is what moves.
+   */
+  const decision = decide(
+    media({
+      formatName: 'matroska,webm',
+      video: video({ codec: 'h264' }),
+      audio: [audio({ codec: 'vorbis' })],
+    })
+  );
+  assert.notEqual(decision.plan.audioAction, 'copy');
+  assert.equal(decision.plan.containerAction, 'mp4_fragmented');
+});
+
+test('a codec pair with no shared container is re-encoded, not copied', () => {
+  /**
+   * VP8 beside AAC: MP4 will not take the video, WebM will not take the audio.
+   * This is the *common* shape of the bug — a Matroska whose audio is ordinary
+   * AAC, which is exactly why the container is unplayable in the first place.
+   */
+  assert.equal(chooseCopyContainer('vp8', 'aac'), null);
+  const decision = decide(
+    media({
+      formatName: 'matroska,webm',
+      video: video({ codec: 'vp8' }),
+      audio: [audio({ codec: 'aac' })],
+    })
+  );
+  assert.notEqual(decision.plan.videoAction, 'copy');
+  assert.equal(decision.plan.containerAction, 'mp4_fragmented');
+});
+
+test('the ordinary Matroska case is unchanged: H.264 + AAC still goes to MP4', () => {
+  // The modal provider release. Everything above must not disturb it.
+  const decision = decide(media({ formatName: 'matroska,webm' }));
+  assert.equal(decision.strategy, 'REMUX_CONTAINER');
+  assert.equal(decision.plan.containerAction, 'mp4_fragmented');
+  assert.equal(decision.plan.videoAction, 'copy');
+  assert.equal(decision.plan.audioAction, 'copy');
+});
+
+test('chooseCopyContainer prefers MP4 and reaches for WebM only when it must', () => {
+  assert.equal(chooseCopyContainer('h264', 'aac'), 'mp4_fragmented');
+  assert.equal(chooseCopyContainer('vp9', 'opus'), 'mp4_fragmented');
+  assert.equal(chooseCopyContainer('vp9', 'vorbis'), 'webm');
+  assert.equal(chooseCopyContainer('vp8', 'opus'), 'webm');
+  assert.equal(chooseCopyContainer('h264', undefined), 'mp4_fragmented');
+  assert.equal(chooseCopyContainer('mpeg2video', 'vorbis'), null);
+});
+
+test('HEVC is muxable in MP4, so a build that decodes it still gets a cheap remux', () => {
+  /**
+   * The distinction the tables exist to keep: mux legality and decoder support
+   * are different questions. Folding "no decoder here" into "cannot be muxed"
+   * would force a full re-encode on every build that grew a platform HEVC
+   * decoder, which is the exact case the runtime capability override serves.
+   */
+  const decision = decide(
+    media({ formatName: 'matroska,webm', video: video({ codec: 'hevc' }) }),
+    'progressive',
+    HEVC_CAPABLE
+  );
+  assert.equal(decision.strategy, 'REMUX_CONTAINER');
+  assert.equal(decision.plan.videoAction, 'copy');
+});
+
+// --- the output is validated before it is acted on -------------------------
+
+test('predictOutput describes what will come out, not what went in', () => {
+  const metadata = media({
+    formatName: 'matroska,webm',
+    video: video({ codec: 'hevc' }),
+    audio: [audio({ codec: 'eac3', channels: 6, playable: false })],
+  });
+  const predicted = predictOutput(
+    metadata,
+    {
+      videoAction: 'transcode',
+      targetVideoCodec: 'h264',
+      targetPixelFormat: 'yuv420p',
+      audioAction: 'transcode',
+      targetAudioCodec: 'aac',
+      selectedAudioIndex: 0,
+      containerAction: 'mp4_fragmented',
+      subtitleAction: 'ignore',
+    },
+    PLAIN
+  );
+  assert.equal(predicted.container, 'mp4');
+  assert.equal(predicted.videoCodec, 'h264');
+  assert.equal(predicted.audioCodec, 'aac');
+  assert.equal(predicted.mimeType, 'video/mp4');
+  assert.equal(predicted.playable, true);
+});
+
+test('a plan whose output would not play is rejected, with the reason', () => {
+  // Exactly the case an exit-status check cannot catch: ffmpeg writes it and
+  // the browser plays nothing.
+  const predicted = predictOutput(
+    media({ audio: [audio({ codec: 'vorbis' })] }),
+    {
+      videoAction: 'copy',
+      audioAction: 'copy',
+      selectedAudioIndex: 0,
+      containerAction: 'mp4_fragmented',
+      subtitleAction: 'ignore',
+    },
+    PLAIN
+  );
+  assert.equal(predicted.playable, false);
+  assert.match(predicted.problems.join(' '), /vorbis/i);
+});
+
+test('predicted output catches a copied multichannel track', () => {
+  // Copying 6 channels forward leaves the dialogue-routing problem in place,
+  // which is the bug the downmix exists to fix wearing a different costume.
+  const predicted = predictOutput(
+    media({ audio: [audio({ codec: 'aac', channels: 6 })] }),
+    {
+      videoAction: 'copy',
+      audioAction: 'copy',
+      selectedAudioIndex: 0,
+      containerAction: 'mp4_fragmented',
+      subtitleAction: 'ignore',
+    },
+    PLAIN
+  );
+  assert.equal(predicted.playable, false);
+  assert.match(predicted.problems.join(' '), /6-channel/);
+});
+
+test('passthrough is not second-guessed: nothing is produced to validate', () => {
+  // HLS and EME outputs are not ffmpeg's, so there is no output to predict.
+  const predicted = predictOutput(
+    media(),
+    {
+      videoAction: 'none',
+      audioAction: 'none',
+      selectedAudioIndex: 0,
+      containerAction: 'passthrough',
+      subtitleAction: 'ignore',
+    },
+    PLAIN
+  );
+  assert.equal(predicted.container, 'source');
+  assert.equal(predicted.playable, true);
 });
 
 // --- runner ----------------------------------------------------------------

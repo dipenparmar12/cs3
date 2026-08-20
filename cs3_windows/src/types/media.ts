@@ -149,7 +149,17 @@ export interface TransformationPlan {
   /** Ordinal among audio streams; `-1` when the file has no audio. */
   selectedAudioIndex: number;
 
-  containerAction: 'passthrough' | 'mp4_fragmented';
+  /**
+   * The wrapper to produce.
+   *
+   * `webm` exists because "the codecs play" and "the codecs are legal in MP4"
+   * are different claims, and conflating them was a real bug: a Matroska file
+   * carrying VP8 has both streams the browser can decode, so it took the
+   * copy-remux path — and ffmpeg refuses outright with `Could not find tag for
+   * codec vp8 in stream #0, codec not currently supported in container`. The
+   * container is chosen from the codecs being copied, not assumed.
+   */
+  containerAction: 'passthrough' | 'mp4_fragmented' | 'webm';
 
   subtitleAction: 'extract_webvtt' | 'ignore';
 }
