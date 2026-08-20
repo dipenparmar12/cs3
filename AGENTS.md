@@ -72,9 +72,11 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (124 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (169 tests, Node type-stripping — no framework) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Source export only | `cs3_windows/` | `bun run test:export` (13 cases, pure) |
+| Logging only | `cs3_windows/` | `bun run test:log` (17 cases, real files in a temp dir) |
+| Home providers only | `cs3_windows/` | `bun run test:home` (9 cases, pure) |
 | Media decisions only | `cs3_windows/` | `bun run test:media` (53 cases, no ffmpeg needed) |
 | Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
 | Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
@@ -224,7 +226,9 @@ sidecar dispatches each onto a bounded pool sized to the core count.
 
 Also namespaced: `analytics:*` (provider measurement, ranking weights, recommendations,
 and the erase control), `bookmarks:*` (saved detail pages), `discover:*` (home-screen
-catalogues and title enrichment), `subtitles:*` (online search, SubRip→WebVTT), `sources:getCacheStats` /
+catalogues and title enrichment), `home:*` (which catalogue those come from, and its
+health), `log:*` (the structured log — query, sessions, level, reveal, export),
+`subtitles:*` (online search, SubRip→WebVTT), `sources:getCacheStats` /
 `sources:clearCache`.
 
 `media:*` is the compatibility engine's surface: `media:inspect` classifies a source without
@@ -295,6 +299,11 @@ not a layering mistake.
 | `cs3/providerRanking.ts` | Weighted scoring over those counts. Criteria are **rows in a table**, not a formula: an id, a weight, a sample floor and a function to `0..1` or `null`. A `null` is excluded from the denominator rather than scored zero — a provider nobody has downloaded from must not rank below one whose downloads always fail. Rates are smoothed toward a neutral prior so a new extension starts mid-table and can never be permanently buried by one unlucky first call. |
 | `cs3/providerRecommendations.ts` | Turns scores into advice, and (only with `autoEnableProven`) into action. Nothing is ever auto-**disabled**: a site being down for a week is not consent to remove a source the user chose. |
 | `cs3/failureTaxonomy.ts` | `classifyFailure` — one closed set of causes, shared by the ranking and the diagnostics. Counting free text produces a tally with one entry per failure; grouping by cause is what showed 113 load failures came from six missing classes. |
+| `logging/logger.ts` | The structured log: NDJSON, one file per session, redacted at the logger rather than the call site. Does **not** import `electron`, so it stays testable. |
+| `logging/redact.ts` | Taking credentials out of a log line without taking its shape out. |
+| `cs3/homeProviders.ts` | Where the home screen's catalogue comes from, as something replaceable. Stremio catalog protocol, AniList, and TMDB with the user's own key. |
+| `cs3/homeProviderRegistry.ts` | Which one is active, whether it is answering, and the fallback when it is not. |
+| `media/mpvSurface.ts` | The native child window mpv renders into. Windows only; attaching is an attempt. |
 | `cs3/discovery.ts` | The home screen's catalogues. Stale-while-revalidate over Stremio's keyless Cinemeta catalogs (`top`/`year`/`imdbRating`, filterable by 19 genres, pageable) plus AniList for anime. Finds **nothing playable** — sources are resolved by providers when an item is opened. |
 | `cs3/titleEnricher.ts` | Resolves `Avengers End Game 720p Hindi Dubbed` to the film it is about. Conservative on purpose: a disagreeing year is disqualifying and the similarity bar is high enough that `Avengers` does not match `Avengers: Endgame`. An unenriched row is a small loss; a mislabelled one reads as data corruption. |
 | `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. |
@@ -1365,6 +1374,155 @@ film that was playing, and the first press paused it. Buffering is deliberately
 *not* forwarded into `isBuffering` — that flag drives an overlay reading
 "Buffering from peers…", which is a torrent's story and a lie about an HTTP
 stream.
+
+### Containers: "the codecs play" and "the codecs fit in this box" are two questions
+
+`REMUX_CONTAINER` always targeted fragmented MP4 with `-c copy`, on the reasoning
+that both streams being decodable was enough. It is two independent claims, and
+each fails differently — both measured on the bundled ffmpeg, not looked up:
+
+1. **ffmpeg refuses the mux.** VP8 into MP4 answers `Could not find tag for codec
+   vp8 in stream #0, codec not currently supported in container`, then `Could not
+   write header`, and the command dies having produced nothing. Every earlier
+   step looked right, because both codecs are ones the browser decodes.
+2. **ffmpeg writes it and Chromium cannot decode it.** Vorbis into MP4 muxes
+   cleanly and plays no audio, because Vorbis is a WebM/Ogg codec there. This is
+   the worse one: exit status says success, so nothing downstream can catch it,
+   and the viewer gets a silent black player.
+
+`chooseCopyContainer(video, audio)` answers `mp4_fragmented`, `webm`, or `null`.
+**`null` is the important answer** — VP8 beside AAC is legal in neither, so a
+copy is impossible and one stream has to be re-encoded. Returning a container
+anyway is what produced the original bug.
+
+**The mux tables are deliberately broad.** HEVC, AC-3 and DTS are all legal in
+MP4; whether a decoder exists is a separate question `canPlayVideo` already
+answers, and one of them is measured at runtime. Folding "no decoder here" into
+"cannot be muxed" would force a full re-encode on every build that grew a
+platform HEVC decoder — the exact case the capability override exists to serve.
+
+`predictOutput` states what a plan will produce (container, codecs, MIME) and
+`decideStrategy` escalates to a full transcode rather than shipping a plan whose
+output would not play. **A remux is not successful because ffmpeg exited zero.**
+`pipeline.test.mts` asserts on the bytes — EBML magic versus `ftyp` — rather than
+on an exit status, because the Vorbis case exits zero.
+
+Note the reachability, which is not obvious: a Matroska carrying WebM-legal
+codecs *is* a WebM to Chromium and plays directly, so it never reaches a remux.
+It takes a container Chromium cannot demux at all (AVI, MPEG-TS) to get WebM-only
+codecs onto the copy path. The common shape of the bug is the `null` case.
+
+### The log: structured, redacted, and written a line at a time
+
+`electron/logging/` — `DiagnosticsLog` answers "what went wrong, with what
+context" and is shaped to be pasted to a provider maintainer. `Logger` is the
+layer underneath: everything the app does, as data.
+
+- **Structured, not formatted.** Grouping 113 load failures into six missing
+  classes — the thing that actually solved that problem — is a `GROUP BY` over a
+  field and impossible over prose.
+- **NDJSON, appended, flushed synchronously on exit.** A crash truncates the last
+  few hundred milliseconds and never corrupts what came before, which a rewritten
+  JSON array cannot promise — and a crash is when the log matters. One file per
+  session, because a session is the unit users report in.
+- **Redaction is applied by the logger, not by call sites.** These URLs are
+  signed CDN addresses whose query string *is* the credential, and a log is a
+  file people paste into issues. A rule enforced at four hundred call sites holds
+  at three hundred and ninety. Structure survives, secrets do not:
+  `?token=<redacted>` keeps the fact that the link was signed, which is what
+  distinguishes an expired link from one that never had credentials. Malformed
+  URLs fall back to text rules rather than throwing — a redactor that threw would
+  take down the logging of the failure worth recording.
+
+**`Logger` does not import `electron`**, deliberately: that import makes a module
+unloadable under Node's type stripping, which is where its tests run. The
+directory comes from `main.ts`.
+
+Instrumented at **choke points**, so coverage cannot rot: `PlaybackEngine.record`
+(every `prepare` outcome), `MediaInspector.inspect` (wrapped — the body has five
+exits), the ffmpeg spawn (the arguments, which is what makes a conversion failure
+reproducible), `MpvEngine.emit` (state transitions, deduplicated because
+`time-pos` fires once a second for a whole film), `ContentService.runDiscovery`,
+download finalisation. Diagnostics are mirrored in.
+
+`log:*` is thin on purpose — the log's job is to be on disk when something goes
+wrong, not to be browsed. The level persists, because what it gets turned up for
+has not happened yet.
+
+### mpv, embedded: what `--wid` buys and what it costs
+
+True embedding needs libmpv's render API through a native addon, which this
+repository does not build. `MpvSurface` does the next thing: a frameless child
+`BrowserWindow`, its HWND passed as `--wid`, tracking the player's video rect.
+
+**The constraint that shapes the whole layout: a native child window sits above
+Chromium's compositor entirely, so nothing can be drawn over the video.**
+Overlaying controls is not an option that was rejected for taste — it is not
+available. `NativeEngineStage` reserves bands above and below and reports only
+the remaining rect. That letterboxes by roughly 9rem of chrome, and the bands do
+not collapse when the chrome auto-hides, because a video that jumped every time
+the controls faded reads far worse than a stable frame.
+
+Windows only (`--wid` takes an `NSView*` on macOS, an X11 id on Linux). Attaching
+is an *attempt*; `embedded` is reported from the engine, never assumed, because a
+player reserving space for a surface that never appeared is worse than one that
+never tried. Settable, since a second monitor or an HDR path that only engages
+top-level are real reasons to want a separate window — and changing it restarts
+the process, because `--wid` is decided once on the command line.
+
+**The dependency is inverted**: `MpvEngine` takes a `createSurface` factory
+rather than importing `BrowserWindow`, which is what keeps it loadable under type
+stripping so its test can drive a real mpv.
+
+Two control bugs fixed alongside. `seekBy` read `video.currentTime`, which is
+permanently `0` for mpv — so every fast-forward and rewind seeked to ±delta from
+the *start of the film*. `toggleFullscreen` fullscreened the Electron container,
+blowing up a panel of controls over an empty surface. Volume, mute and speed now
+sync **both ways**, because mpv is a real window a viewer can touch;
+`pushedToEngine` breaks the echo by ignoring a value matching what was last sent.
+
+### The home screen's catalogue is chosen, and checked
+
+`cs3/homeProviders.ts` + `homeProviderRegistry.ts`. The keyless constraint has not
+changed, so the useful move was supporting the **Stremio catalog protocol**
+rather than a host: one documented GET shape served by Cinemeta and by a whole
+ecosystem of community addons, so a user with an addon URL is supported without
+anyone writing an adapter — the same bet the indexer layer makes with Torznab.
+
+TMDB is offered honestly: listed, described as needing a key, selectable only
+once the *user* supplies one. A key embedded in a distributed client violates
+their terms and gets revoked, breaking the home screen for everyone at once with
+no way for any individual to fix it.
+
+**Sections come from `capabilities()`**, not a fixed list, so selecting AniList
+produces an anime home screen rather than five empty headings. The discovery
+cache is keyed by provider — without that, switching would serve one provider's
+row out of another's entry, and both answers look like plausible catalogues.
+
+**Health is measured with a real catalogue request.** The failures that actually
+happen — a 200 with empty `metas`, a page of items with no artwork or ids — all
+come back from a healthy-looking server and render as blank cards that do nothing
+when clicked, which reads as *our* bug. An unhealthy provider cannot be selected
+and the refusal names the cause; the empty screen it replaces could not. It stays
+listed, because "unavailable" and "does not exist" are different facts. The
+active provider is *resolved* rather than stored: a host down for an afternoon
+falls back without rewriting the user's choice.
+
+### Continue Watching: removal is a dismissal
+
+`dismissedAt`, compared against `updatedAt` rather than being a boolean. "Take
+this off my home screen" and "forget where I was" are different intentions, and
+the destructive reading of the first is unrecoverable — someone tidying the row
+would silently lose the resume point on a film they were halfway through. The
+comparison is also what makes "Play again" work with no extra machinery: watching
+more moves `updatedAt` past the dismissal and the card returns.
+
+Dismissal is per **title**, not per row: the rail shows the newest episode of a
+series as one card, so dismissing only that episode would put the previous one in
+its place and read as the button not working.
+
+The visibility toggle is enforced in the main process. Off means the rows are
+never assembled, not merely hidden — on a shared machine that is the point.
 
 ### The source cache learns from playback
 
