@@ -26,7 +26,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { MediaInspector, detectExtensionPicky } from './mediaInspector.ts';
+import {
+  MediaInspector,
+  detectExtensionPicky,
+  detectToneMapSupport,
+  toneMapFilters,
+} from './mediaInspector.ts';
 import { runTool } from './runTool.ts';
 import { MediaTranscoder } from '../mediaTranscoder.ts';
 import type { BinaryDownloader } from '../binaryDownloader.ts';
@@ -470,6 +475,147 @@ test('HLS segments served as .png are probed, not refused', async () => {
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+// --- encryption ------------------------------------------------------------
+
+/**
+ * ClearKey, end to end, against a file that is genuinely encrypted.
+ *
+ * The measurement that motivates this is the one below it: a CENC file read
+ * *without* the key does not fail. It probes with correct codec names and then
+ * decodes to garbage — which is why an encrypted provider stream reached users
+ * as "this file is corrupt" rather than as "this is encrypted". A test that only
+ * asserted the happy path would not have caught the reason the bug was
+ * invisible.
+ */
+const CENC_KEY = '00112233445566778899aabbccddeeff';
+const CENC_KID = '0123456789abcdef0123456789abcdef';
+
+test('a CENC file read without the key decodes to garbage rather than failing', async () => {
+  /**
+   * HEVC rather than H.264, deliberately. An encrypted H.264/AAC MP4 is
+   * decided the other way and correctly so — nothing but the encryption is
+   * wrong with it, so EME decrypts it for free and FFmpeg never runs. The
+   * FFmpeg path exists for the case where decrypting is not enough because the
+   * bitstream still has no decoder here, and that is what this fixture is.
+   */
+  const encrypted = synthesise('cenc.mp4', [
+    '-c:v', 'libx265', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac',
+    '-tag:v', 'hvc1',
+    '-encryption_scheme', 'cenc-aes-ctr',
+    '-encryption_key', CENC_KEY,
+    '-encryption_kid', CENC_KID,
+    '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+  ]);
+
+  // The probe succeeds and reports the right codecs — this is the lie.
+  const inspection = await inspector.inspect(encrypted);
+  assert.ok(inspection.metadata, 'ffprobe reads the container of an encrypted file');
+  assert.equal(inspection.metadata?.video?.codec, 'hevc');
+
+  // Decoding it is where the truth appears, as errors rather than as an exit code.
+  const { stderr } = await runTool(
+    FFMPEG!,
+    ['-hide_banner', '-v', 'error', '-i', encrypted, '-f', 'null', '-'],
+    30_000
+  );
+  assert.ok(stderr.length > 0, 'decoding without the key should produce decoder errors');
+});
+
+test('the same file decodes cleanly once the plan carries the key', async () => {
+  const encrypted = path.join(WORK, 'cenc.mp4');
+  const inspection = await inspector.inspect(encrypted);
+  assert.ok(inspection.metadata);
+
+  const decision = decideStrategy(inspection.metadata, 'progressive', PLAIN, CPU_HOST, {
+    type: 'clearkey',
+    // base64url of the hex pair above — the encoding EME wants, converted to
+    // hex by the decision engine because that is what FFmpeg takes.
+    clearKeys: { ASNFZ4mrze8BI0VniavN7w: 'ABEiM0RVZneImaq7zN3u_w' },
+  });
+  assert.deepEqual(decision.plan.decryptionKeys, { [CENC_KID]: CENC_KEY });
+
+  const url = await transcoder.createSession(encrypted, decision.plan, 'progressive');
+  assert.ok(url, 'a session should have opened');
+  const response = await fetch(url!);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  transcoder.closeSession(url!.split('/').pop()!);
+
+  const out = path.join(WORK, 'out-cenc.mp4');
+  fs.writeFileSync(out, bytes);
+  // Decrypted *and* re-encoded to something Chromium decodes, in one pass.
+  const video = videoOf(probeJson(out));
+  assert.equal(video?.codec_name, 'h264');
+
+  const { stderr } = await runTool(
+    FFMPEG!,
+    ['-hide_banner', '-v', 'error', '-i', out, '-f', 'null', '-'],
+    30_000
+  );
+  assert.equal(stderr.trim(), '', `decrypted output should decode cleanly: ${stderr}`);
+});
+
+// --- HDR -------------------------------------------------------------------
+
+test('HDR re-encoded without tone-mapping comes out washed out, and with it does not', async () => {
+  /**
+   * The failure this pins is entirely silent: nothing errors, the file plays,
+   * and the picture is grey. So it is asserted on the *picture* — average
+   * saturation of the first frame — because there is no exit code to check.
+   *
+   * A real PQ fixture is needed rather than an SDR one tagged as PQ: tagging
+   * alone leaves SDR code values in the file and tone-mapping them changes
+   * almost nothing, which would make this test pass whatever the code did.
+   */
+  await detectToneMapSupport(FFMPEG!, (command, args, timeoutMs) =>
+    runTool(command, args, timeoutMs)
+  );
+  if (toneMapFilters().length === 0) {
+    console.log('  skip zscale is not in this ffmpeg build');
+    return;
+  }
+
+  const hdr = synthesise('hdr.mkv', [
+    '-vf',
+    'format=yuv420p,zscale=pin=bt709:tin=bt709:min=bt709:rin=tv:' +
+      'p=bt2020:t=smpte2084:m=bt2020nc:r=tv:npl=100,format=yuv420p10le',
+    '-c:v', 'libx265', '-preset', 'ultrafast',
+    '-x265-params', 'colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc',
+    '-an',
+  ]);
+
+  const inspection = await inspector.inspect(hdr);
+  assert.ok(inspection.metadata, `probe failed: ${inspection.error}`);
+  assert.equal(inspection.metadata?.video?.isHdr, true, 'the fixture must actually be HDR');
+
+  const decision = decideStrategy(inspection.metadata!, 'progressive', PLAIN, CPU_HOST);
+  assert.equal(decision.plan.tonemapHdr, true, 'HEVC HDR is re-encoded, so it must be tone-mapped');
+
+  const saturationOf = async (filters: string): Promise<number> => {
+    const { stderr } = await runTool(
+      FFMPEG!,
+      [
+        '-hide_banner', '-v', 'info', '-i', hdr,
+        '-vf', `${filters},signalstats,metadata=print`,
+        '-frames:v', '1', '-f', 'null', '-',
+      ],
+      60_000
+    );
+    const match = /lavfi\.signalstats\.SATAVG=([0-9.]+)/.exec(stderr);
+    assert.ok(match, `no saturation reported: ${stderr.slice(0, 400)}`);
+    return Number(match![1]);
+  };
+
+  const untouched = await saturationOf('format=yuv420p');
+  const tonemapped = await saturationOf([...toneMapFilters(), 'format=yuv420p'].join(','));
+
+  // Measured on this fixture: ~23 without, ~63 with. The margin is wide enough
+  // that a factor of two is a safe assertion and a broken chain cannot pass.
+  assert.ok(
+    tonemapped > untouched * 2,
+    `tone-mapping should restore colour: ${untouched} -> ${tonemapped}`
+  );
 });
 
 // --- runner ----------------------------------------------------------------

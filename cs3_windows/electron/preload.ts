@@ -649,8 +649,13 @@ export interface CloudStreamElectronAPI {
     ytdlp: boolean;
     ffmpeg: boolean;
     ffprobe: boolean;
-    /** The native engine is optional: absent is a normal, working state. */
+    /**
+     * The native engine. Bundled on Windows; on Linux and macOS it comes from
+     * the platform's own package, so absent is a normal, working state there.
+     */
     mpv: boolean;
+    /** Which of these shipped with the app rather than being downloaded. */
+    bundled: { ffmpeg: boolean; ffprobe: boolean; mpv: boolean };
   }>;
   testAllBinaries: () => Promise<{
     aria2: { ok: boolean; version?: string; path?: string; error?: string };

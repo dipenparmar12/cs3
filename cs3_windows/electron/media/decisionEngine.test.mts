@@ -19,6 +19,7 @@
 import assert from 'node:assert/strict';
 import type {
   AudioStreamMetadata,
+  DrmConfiguration,
   HostEncodeCapability,
   MediaMetadata,
   MediaTransport,
@@ -110,8 +111,18 @@ const decide = (
   transport: MediaTransport = 'progressive',
   caps: RendererCapabilities | null = PLAIN,
   host: HostEncodeCapability = GPU,
-  eme = false
-) => decideStrategy(metadata, transport, caps, host, eme);
+  drm: DrmConfiguration = NO_DRM
+) => decideStrategy(metadata, transport, caps, host, drm);
+
+/** Not encrypted, which is what almost every row below is. */
+const NO_DRM: DrmConfiguration = { type: 'none' };
+/** Widevine: declared, unreadable here, and the reason EME exists as a verdict. */
+const WIDEVINE: DrmConfiguration = { type: 'widevine', licenseUrl: 'https://lic.test/w' };
+/** ClearKey with the key attached — the one DRM case that actually plays. */
+const CLEARKEY: DrmConfiguration = {
+  type: 'clearkey',
+  clearKeys: { ASNFZ4mrze8BI0VniavN7w: 'ABEiM0RVZneImaq7zN3u_w' },
+};
 
 // --- container classification ---------------------------------------------
 
@@ -403,18 +414,201 @@ test('HLS carrying AC-3 transcodes only the audio', () => {
   assert.equal(decision.plan.videoAction, 'copy');
 });
 
-test('DASH is remuxed rather than handed to a demuxer that rejects XML', () => {
+test('DASH is played by Shaka when the browser can decode what is inside', () => {
+  // Remuxing works and is still the fallback, but it is the expensive way to be
+  // worse: it spends an ffmpeg process and flattens the adaptive ladder to one
+  // rendition, which is the thing DASH exists for.
   const decision = decide(media({ formatName: 'dash' }), 'dash');
+  assert.equal(decision.strategy, 'DASH_NATIVE');
+  assert.equal(decision.plan.videoAction, 'none');
+  assert.equal(decision.directPlayable, true);
+});
+
+test('DASH carrying a codec the browser cannot decode still goes to ffmpeg', () => {
+  // Shaka drives MSE, so it cannot invent decoders any more than hls.js can.
+  const decision = decide(
+    media({ formatName: 'dash', video: video({ codec: 'hevc' }) }),
+    'dash'
+  );
   assert.equal(decision.strategy, 'DASH_REMUX');
   assert.equal(decision.plan.containerAction, 'mp4_fragmented');
 });
 
 test('encrypted streams bypass FFmpeg entirely', () => {
   // FFmpeg holds no keys: probing one wastes twenty seconds on noise and
-  // remuxing one produces an unplayable file.
-  const decision = decide(media({ formatName: 'dash' }), 'dash', PLAIN, GPU, true);
+  // remuxing one produces an unplayable file. Whether the CDM that *can* read
+  // it exists on this machine is a separate question — what matters here is
+  // that no plan asks ffmpeg to touch it.
+  const decision = decide(media(), 'progressive', PLAIN, GPU, WIDEVINE);
   assert.equal(decision.strategy, 'EME_NATIVE');
   assert.equal(decision.plan.videoAction, 'none');
+
+  // The DASH form of the same stream reaches Shaka instead, and still never
+  // reaches ffmpeg.
+  const dash = decide(media({ formatName: 'dash' }), 'dash', PLAIN, GPU, WIDEVINE);
+  assert.equal(dash.strategy, 'DASH_NATIVE');
+  assert.equal(dash.plan.videoAction, 'none');
+});
+
+test('a Widevine stream is named as a licensing limit, not as a broken source', () => {
+  // The two used to read identically — "encrypted stream" — which sent people
+  // looking for a provider fault in the one case that has none.
+  const decision = decide(media(), 'progressive', PLAIN, GPU, WIDEVINE);
+  assert.equal(decision.strategy, 'EME_NATIVE');
+  assert.match(decision.explanation, /Widevine CDM/);
+  assert.match(decision.explanation, /not a fault in the source/);
+});
+
+test('ClearKey with a key plays in the browser, untouched', () => {
+  const decision = decide(media(), 'progressive', PLAIN, GPU, CLEARKEY);
+  assert.equal(decision.strategy, 'EME_NATIVE');
+  assert.equal(decision.plan.videoAction, 'none');
+  assert.match(decision.explanation, /key the provider supplied/);
+});
+
+test('ClearKey over a codec the browser cannot decode goes to FFmpeg with the key', () => {
+  // The case EME alone cannot serve: decrypting is not enough when the
+  // bitstream still has no decoder. FFmpeg does both in one pass, and the keys
+  // are hex because that is what `-decryption_keys` takes.
+  const decision = decide(
+    media({ formatName: 'mov,mp4,m4a', video: video({ codec: 'hevc' }) }),
+    'progressive',
+    PLAIN,
+    GPU,
+    CLEARKEY
+  );
+  assert.equal(decision.strategy, 'VIDEO_TRANSCODE');
+  assert.deepEqual(decision.plan.decryptionKeys, {
+    '0123456789abcdef0123456789abcdef': '00112233445566778899aabbccddeeff',
+  });
+  assert.match(decision.explanation, /ClearKey/);
+});
+
+test('ClearKey DASH is played by Shaka, which is the only thing that can', () => {
+  // FFmpeg cannot: measured, its DASH demuxer answers `Option decryption_key
+  // not found`, which is fatal to the whole command line rather than ignored.
+  // And a bare `.mpd` on the media element is XML arriving at a binary demuxer.
+  const decision = decide(media({ formatName: 'dash' }), 'dash', PLAIN, GPU, CLEARKEY);
+  assert.equal(decision.strategy, 'DASH_NATIVE');
+  assert.equal(decision.plan.decryptionKeys, undefined);
+  assert.match(decision.explanation, /Shaka/);
+});
+
+test('ClearKey DASH over an undecodable codec has nowhere to go, and says so', () => {
+  // Shaka can decrypt it and still cannot decode it. Reporting that is the
+  // whole job here — the alternative is FFmpeg producing a "corrupt file".
+  const decision = decide(
+    media({ formatName: 'dash', video: video({ codec: 'hevc' }) }),
+    'dash',
+    PLAIN,
+    GPU,
+    CLEARKEY
+  );
+  assert.equal(decision.strategy, 'EME_NATIVE');
+  assert.equal(decision.plan.decryptionKeys, undefined);
+});
+
+test('a DRM system we cannot name still keeps FFmpeg off the stream', () => {
+  const decision = decide(media(), 'progressive', PLAIN, GPU, { type: 'unknown' });
+  assert.equal(decision.strategy, 'EME_NATIVE');
+});
+
+test('HLS AES-128 is not DRM here, because hls.js decrypts it itself', () => {
+  const decision = decide(media({ formatName: 'hls' }), 'hls', PLAIN, GPU, { type: 'aes-128' });
+  assert.equal(decision.strategy, 'HLS_NATIVE');
+});
+
+// --- resolution and HDR ----------------------------------------------------
+
+test('the 4K software guard is unchanged, because it is what was measured', () => {
+  // libx264 veryfast at 3840x2160 ran 11-13 FPS on this host — 0.47x realtime.
+  const decision = decide(
+    media({ formatName: 'matroska,webm', video: video({ codec: 'hevc', width: 3840, height: 2160 }) }),
+    'progressive',
+    PLAIN,
+    { hardware: false, accelerator: 'cpu', logicalCores: 8 }
+  );
+  assert.equal(decision.plan.videoAction, 'downscale');
+  assert.equal(decision.plan.targetHeight, 1080);
+});
+
+test('16 threads still keep full resolution at 4K', () => {
+  const decision = decide(
+    media({ formatName: 'matroska,webm', video: video({ codec: 'hevc', width: 3840, height: 2160 }) }),
+    'progressive',
+    PLAIN,
+    { hardware: false, accelerator: 'cpu', logicalCores: 16 }
+  );
+  assert.equal(decision.plan.videoAction, 'transcode');
+  assert.equal(decision.plan.targetHeight, undefined);
+});
+
+test('8K on those same 16 threads is downscaled, where the height-only guard let it stall', () => {
+  // Four times the pixels of 4K, so the 16-thread machine that holds 1.0x at 4K
+  // holds about 0.25x here. The old rule asked only "is it taller than 1080?"
+  // and "are there fewer than 16 cores?", so it waved this through at full
+  // resolution — producing exactly the stall the guard exists to prevent, on
+  // the most expensive files in the corpus.
+  const decision = decide(
+    media({ formatName: 'matroska,webm', video: video({ codec: 'hevc', width: 7680, height: 4320 }) }),
+    'progressive',
+    PLAIN,
+    { hardware: false, accelerator: 'cpu', logicalCores: 16 }
+  );
+  assert.equal(decision.plan.videoAction, 'downscale');
+  assert.equal(decision.plan.targetHeight, 1080);
+});
+
+test('a GPU encoder keeps full resolution at 8K, as it does at 4K', () => {
+  const decision = decide(
+    media({ formatName: 'matroska,webm', video: video({ codec: 'hevc', width: 7680, height: 4320 }) }),
+    'progressive',
+    PLAIN,
+    GPU
+  );
+  assert.equal(decision.plan.videoAction, 'transcode');
+});
+
+test('an ultra-wide 2160-tall frame is more pixels than 4K and is judged as such', () => {
+  // The height-only test called 4096x2160 and 3840x2160 equal. They are not.
+  const decision = decide(
+    media({ formatName: 'matroska,webm', video: video({ codec: 'hevc', width: 5120, height: 2160 }) }),
+    'progressive',
+    PLAIN,
+    { hardware: false, accelerator: 'cpu', logicalCores: 16 }
+  );
+  assert.equal(decision.plan.videoAction, 'downscale');
+});
+
+test('HDR being re-encoded is tone-mapped, or the picture comes out grey', () => {
+  // `-pix_fmt yuv420p` converts the storage format and says nothing about the
+  // transfer function, so PQ values get displayed as if they were SDR ones.
+  // Nothing errors; the file simply looks washed out.
+  const decision = decide(
+    media({
+      formatName: 'matroska,webm',
+      video: video({ codec: 'hevc', pixelFormat: 'yuv420p10le', bitDepth: 10, isHdr: true }),
+    }),
+    'progressive',
+    PLAIN,
+    GPU
+  );
+  assert.equal(decision.plan.videoAction, 'transcode');
+  assert.equal(decision.plan.tonemapHdr, true);
+});
+
+test('HDR that is only being remuxed is not tone-mapped', () => {
+  // A copied stream carries its own metadata and is displayed correctly by
+  // whatever decodes it. `-c:v copy` could not tone-map anyway.
+  const decision = decide(
+    media({
+      formatName: 'matroska,webm',
+      video: video({ codec: 'h264', isHdr: true }),
+      audio: [audio({ codec: 'aac', channels: 2 })],
+    })
+  );
+  assert.equal(decision.strategy, 'REMUX_CONTAINER');
+  assert.equal(decision.plan.tonemapHdr, undefined);
 });
 
 // --- subtitles -------------------------------------------------------------
@@ -513,7 +707,7 @@ const decideNative = (
   transport: MediaTransport = 'progressive',
   caps: RendererCapabilities | null = PLAIN,
   host: HostEncodeCapability = GPU
-) => decideStrategy(metadata, transport, caps, host, false, native);
+) => decideStrategy(metadata, transport, caps, host, NO_DRM, native);
 
 const HEVC_10BIT_4K = media({
   formatName: 'matroska,webm',
@@ -559,7 +753,7 @@ test('a stream that already plays natively is never taken away from the in-app p
 });
 
 test('encrypted streams stay with EME, which is the only thing holding keys', () => {
-  const decision = decideStrategy(media(), 'hls', PLAIN, GPU, true, MPV_AGGRESSIVE);
+  const decision = decideStrategy(media(), 'hls', PLAIN, GPU, WIDEVINE, MPV_AGGRESSIVE);
   assert.equal(decision.strategy, 'EME_NATIVE');
 });
 
@@ -658,9 +852,15 @@ test('HLS carrying HEVC routes, because hls.js cannot invent a decoder either', 
 });
 
 test('DASH routes only when the browser path would have re-encoded it', () => {
-  // A remux of a playable DASH ladder is cheap and keeps the in-app player.
+  // A playable DASH ladder stays with Shaka even under `aggressive`: it is
+  // already playing natively, and routing it would trade the adaptive ladder
+  // and the in-app player for nothing.
   const plain = decideNative(media({ formatName: 'dash' }), MPV_AUTO, 'dash');
-  assert.equal(plain.strategy, 'DASH_REMUX');
+  assert.equal(plain.strategy, 'DASH_NATIVE');
+  assert.equal(
+    decideNative(media({ formatName: 'dash' }), MPV_AGGRESSIVE, 'dash').strategy,
+    'DASH_NATIVE'
+  );
 
   const hevc = decideNative(
     media({ formatName: 'dash', video: video({ codec: 'hevc' }) }),
@@ -668,6 +868,47 @@ test('DASH routes only when the browser path would have re-encoded it', () => {
     'dash'
   );
   assert.equal(hevc.strategy, 'NATIVE_MPV');
+});
+
+test('an encrypted DASH stream is never handed to mpv, which holds no CDM', () => {
+  // Routing it would turn a stream Shaka can actually play into undecryptable
+  // noise — the same trap `EME_NATIVE` is kept off the engine for.
+  const decision = decideStrategy(
+    media({ formatName: 'dash' }),
+    'dash',
+    PLAIN,
+    GPU,
+    { type: 'widevine', licenseUrl: 'https://lic.test/w' },
+    MPV_AGGRESSIVE
+  );
+  assert.equal(decision.strategy, 'DASH_NATIVE');
+});
+
+test('above 4K, even a cheap remux routes: the browser still has to decode it', () => {
+  // The remux stays cheap and leaves Chromium decoding an 8K frame in software,
+  // with four times a 4K surface behind it. This is the tier where "the browser
+  // can demux it" and "the machine can play it" come apart.
+  const decision = decideNative(
+    media({
+      formatName: 'matroska,webm',
+      video: video({ codec: 'h264', width: 7680, height: 4320 }),
+      audio: [audio({ codec: 'aac', channels: 2 })],
+    }),
+    MPV_AUTO
+  );
+  assert.equal(decision.strategy, 'NATIVE_MPV');
+});
+
+test('at 4K and below a plain remux is still left in the app', () => {
+  const decision = decideNative(
+    media({
+      formatName: 'matroska,webm',
+      video: video({ codec: 'h264', width: 3840, height: 2160 }),
+      audio: [audio({ codec: 'aac', channels: 2 })],
+    }),
+    MPV_AUTO
+  );
+  assert.equal(decision.strategy, 'REMUX_CONTAINER');
 });
 
 test('the explanation keeps the browser-side reason and says what changed', () => {

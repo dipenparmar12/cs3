@@ -12,6 +12,7 @@
  * silent audio, a 3-second stall, "could not decode this file" — was previously
  * diagnosed by guessing at the URL string.
  */
+import type { ProviderDrm } from './api';
 
 /** How a stream is delivered, which decides who demuxes it. */
 export type MediaTransport =
@@ -110,6 +111,20 @@ export type PlaybackStrategyType =
   /** A DASH manifest, remuxed by ffmpeg into fragmented MP4. */
   | 'DASH_REMUX'
   /**
+   * A DASH manifest played by Shaka Player, which drives MSE itself.
+   *
+   * The right answer whenever the payload is something Chromium can decode,
+   * and it replaces {@link 'DASH_REMUX'} for that case rather than joining it.
+   * Remuxing works but collapses the adaptive ladder to a single rendition and
+   * spends an ffmpeg process on a job the browser can do for nothing — and it
+   * cannot touch an encrypted manifest at all, because FFmpeg's DASH demuxer
+   * rejects decryption keys outright.
+   *
+   * Shaka also owns the EME handshake, so this is the only strategy that can
+   * play DASH under ClearKey, Widevine or PlayReady.
+   */
+  | 'DASH_NATIVE'
+  /**
    * Handed to the bundled mpv engine, which decodes it natively on the GPU.
    *
    * The escape hatch from the whole transcoding ladder. Chromium's decoder set
@@ -152,9 +167,42 @@ export interface TransformationPlan {
   containerAction: 'passthrough' | 'mp4_fragmented';
 
   subtitleAction: 'extract_webvtt' | 'ignore';
+
+  /**
+   * Tone-map to SDR before encoding. Set only when the source is HDR and the
+   * video is being re-encoded — see `mediaTranscoder` for why omitting it
+   * produces a grey picture rather than an error.
+   */
+  tonemapHdr?: boolean;
+
+  /**
+   * ClearKey key ids → keys, in hex, for FFmpeg's `-decryption_keys`.
+   *
+   * Set only where FFmpeg can actually apply them: a progressive CENC file. The
+   * DASH demuxer rejects the option outright (`Option decryption_key not
+   * found`), which is fatal to the whole command line rather than ignored — the
+   * same trap `-extension_picky` set, from a different direction.
+   */
+  decryptionKeys?: Record<string, string>;
 }
 
-export type DrmType = 'none' | 'aes-128' | 'sample-aes' | 'clearkey' | 'widevine' | 'playready';
+export type DrmType =
+  | 'none'
+  | 'aes-128'
+  | 'sample-aes'
+  | 'clearkey'
+  | 'widevine'
+  | 'playready'
+  /**
+   * Encrypted by a system this build has no name for.
+   *
+   * Distinct from `none` and it matters: what everything downstream does with a
+   * DRM verdict is decide whether FFmpeg may touch the stream, and an
+   * unrecognised system is exactly as unreadable to FFmpeg as a recognised one.
+   * Folding it into `none` sends it back to the probe, which spends its timeout
+   * on encrypted noise and reports a corrupt file.
+   */
+  | 'unknown';
 
 export interface DrmConfiguration {
   type: DrmType;
@@ -253,6 +301,18 @@ export interface PlaybackStreamRequest {
   /** Headers the provider supplied — usually a `Referer` a browser cannot send. */
   headers?: Record<string, string>;
   isM3u8?: boolean;
+  /** The provider said this is a DASH manifest. Believed over the URL. */
+  isDash?: boolean;
+  /**
+   * DRM exactly as the provider declared it, which outranks anything a probe
+   * could conclude — and arrives before the probe, so the probe can be skipped.
+   *
+   * This is the field whose absence made encrypted streams look like corrupt
+   * ones: FFmpeg holds no keys, so inspecting a Widevine stream spends the
+   * timeout on noise and reports an unreadable file. The provider knew all
+   * along.
+   */
+  drm?: ProviderDrm;
   /** Skips the cached capability record. Used by the failover ladder. */
   refresh?: boolean;
   /**

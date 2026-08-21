@@ -1,7 +1,9 @@
 package com.cloudstream.desktop.bridge
 
 import com.lagradost.cloudstream3.AnimeLoadResponse
+import com.lagradost.cloudstream3.AudioFile
 import com.lagradost.cloudstream3.Episode
+import com.lagradost.cloudstream3.LiveStreamLoadResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MovieLoadResponse
@@ -10,7 +12,11 @@ import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TorrentLoadResponse
 import com.lagradost.cloudstream3.TvSeriesLoadResponse
+import com.lagradost.cloudstream3.utils.DrmExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkPlayList
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.PlayListItem
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 
@@ -235,9 +241,28 @@ object ProviderBridge {
                         list.map { encodeEpisode(it, status.name) }
                     }
                 )
+            /**
+             * Live TV, and the reason an entire content category was missing.
+             *
+             * `TvType.Live` providers are a substantial part of the corpus and
+             * every one of them fell into the `else` branch below, which said
+             * live streams had "no single data url worth guessing at". They do:
+             * `dataUrl` is on the class, and it is the only handle the channel
+             * has. Without it a live provider searched, opened a detail page and
+             * offered nothing to play.
+             *
+             * `isLive` travels with it because live changes the player rather
+             * than just the source: there is no duration to seek within, no
+             * position worth resuming, and an ended stream is a channel going
+             * off air rather than a title finishing.
+             */
+            is LiveStreamLoadResponse -> {
+                field("dataUrl", response.dataUrl)
+                field("isLive", true)
+            }
             else -> {
-                // Other LoadResponse shapes exist (live streams, audio). They
-                // have no episode list and no single data url worth guessing at.
+                // Other LoadResponse shapes carry neither an episode list nor a
+                // single data url. Nothing here is worth guessing at.
             }
         }
     }
@@ -264,10 +289,25 @@ object ProviderBridge {
         field("referer", link.referer)
         field("quality", link.quality)
         field("type", link.type.name)
+        /**
+         * The provider's own answer to "what is this stream?".
+         *
+         * `ExtractorLinkType` is what Android hands ExoPlayer to pick a
+         * `MediaSource` factory, so it is a statement of intent rather than a
+         * guess — and it is the only reliable one available. The desktop used
+         * to re-derive the transport by matching `.m3u8`, `/hls/` and
+         * `?format=m3u8` against the URL, which is wrong in both directions:
+         * providers serve playlists from `.php` addresses with no extension,
+         * and a progressive MP4 sitting behind a path containing `dash` is not
+         * a manifest. `isDash` in particular was never read from here at all —
+         * the base class has carried it since 4.x and the host was inferring it
+         * from the string.
+         */
+        field("mimeType", mimeTypeOf(link.type))
         field("isM3u8", link.isM3u8)
-        // Upstream's `allHeaders` does exactly this fold, but it is `internal`
-        // to the library module and so invisible here. Sending the referer as a
-        // header matters: many hosts 403 a request that omits it, which the
+        field("isDash", link.isDash)
+        // Upstream's `allHeaders` does exactly this fold. Sending the referer as
+        // a header matters: many hosts 403 a request that omits it, which the
         // player would surface as an unplayable stream rather than a rejection.
         stringMap(
             "headers",
@@ -279,9 +319,107 @@ object ProviderBridge {
             }
         )
         field("extractorData", link.extractorData)
-        // AudioFile carries a URL and headers only — there is no track name or
-        // language on it, so separate audio streams are reported by URL.
-        stringArray("audioTracks", link.audioTracks?.map { it.url })
+        /**
+         * Audio delivered as its own file, beside the video.
+         *
+         * Android merges these into the timeline with a `MergingMediaSource`,
+         * which is how a provider ships one video track and four dubs without
+         * muxing five copies of the film. Only the URL used to cross this
+         * boundary, and a URL without its headers is a 403 on most of the hosts
+         * that do this — so the track arrived nameless *and* unfetchable.
+         */
+        rawArray("audioTracks", link.audioTracks.orEmpty().map { encodeAudioFile(it) })
+
+        /**
+         * DRM, as the provider declared it.
+         *
+         * This is the field whose absence was most expensive. A
+         * `DrmExtractorLink` carries the ClearKey pair or the licence endpoint
+         * that makes the stream playable, and none of it reached the desktop —
+         * so an encrypted stream arrived indistinguishable from an ordinary
+         * one, was handed to ffprobe (which holds no keys), spent its timeout
+         * on encrypted noise and was reported as a corrupt file. The engine has
+         * had somewhere to put this since PRD-37; nothing was ever filling it.
+         */
+        if (link is DrmExtractorLink) {
+            raw("drm", encodeDrm(link))
+        }
+
+        /**
+         * A film delivered in parts.
+         *
+         * `ExtractorLinkPlayList` is how a provider says "these N URLs are one
+         * title, in this order" — the shape used by hosts that cap upload
+         * length. Android concatenates them into a single timeline. Dropping
+         * the list left only the base link, which for a playlist is not a
+         * playable address at all.
+         */
+        if (link is ExtractorLinkPlayList) {
+            rawArray("playlist", link.playlist.map { encodePlayListItem(it) })
+        }
+    }
+
+    private fun encodeAudioFile(file: AudioFile): String = json {
+        field("url", file.url)
+        stringMap("headers", file.headers)
+    }
+
+    private fun encodePlayListItem(item: PlayListItem): String = json {
+        field("url", item.url)
+        // Microseconds, as ExoPlayer's ClippingMediaSource takes them. Kept in
+        // the source unit rather than converted, because 0 means "unknown" here
+        // and would become an indistinguishable 0.0 seconds after a divide.
+        field("durationUs", item.durationUs)
+    }
+
+    /**
+     * The DRM parameters, named by scheme rather than by UUID.
+     *
+     * The UUID is what Android needs and a meaningless 36 characters to
+     * everything on the desktop side, where the question is only ever "can this
+     * machine decrypt it?". ClearKey can be answered locally from `kid`/`key`;
+     * Widevine and PlayReady need a CDM this app does not ship. Both the raw
+     * UUID and the resolved name go over, because a scheme we do not recognise
+     * must still be reportable by its identifier rather than silently becoming
+     * "no DRM" — which would send it back down the ffmpeg path this exists to
+     * keep it off.
+     */
+    private fun encodeDrm(link: DrmExtractorLink): String {
+        val uuid = runCatching { link.uuid.toString() }.getOrNull()
+        return json {
+            field("scheme", drmSchemeOf(uuid))
+            field("uuid", uuid)
+            field("kid", link.kid)
+            field("key", link.key)
+            field("keyType", link.kty)
+            field("licenseUrl", link.licenseUrl)
+            stringMap("keyRequestParameters", link.keyRequestParameters)
+        }
+    }
+
+    /**
+     * The MIME type upstream attaches to each link type.
+     *
+     * Restated here rather than read from `ExtractorLinkType.mimeType`, which is
+     * `internal` to the library module: its bytecode is public but the Kotlin
+     * metadata hides it, so referencing it does not compile. The four values are
+     * copied verbatim from that property — if upstream changes one, this is the
+     * line that has to follow it.
+     */
+    private fun mimeTypeOf(type: ExtractorLinkType): String = when (type) {
+        ExtractorLinkType.VIDEO -> "video/mp4"
+        ExtractorLinkType.M3U8 -> "application/x-mpegURL"
+        ExtractorLinkType.DASH -> "application/dash+xml"
+        ExtractorLinkType.TORRENT, ExtractorLinkType.MAGNET -> "application/x-bittorrent"
+    }
+
+    /** The three registered DRM system ids, lower-cased and hyphenated. */
+    private fun drmSchemeOf(uuid: String?): String = when (uuid?.lowercase()) {
+        "edef8ba9-79d6-4ace-a3c8-27dcd51d21ed" -> "widevine"
+        "9a04f079-9840-4286-ab92-e65be0885f95" -> "playready"
+        "e2719d58-a985-b3c9-781a-b030af78d30e" -> "clearkey"
+        null -> "clearkey"
+        else -> "unknown"
     }
 
     private fun encodeSubtitle(subtitle: SubtitleFile): String = json {

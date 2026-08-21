@@ -12,7 +12,9 @@ import { Check, Loader2, Wrench, ChevronDown, ChevronRight, AlertTriangle } from
  */
 
 export const MediaComponentsCard: React.FC = () => {
-  const [status, setStatus] = useState<{ ffmpeg: boolean; ffprobe: boolean } | null>(null);
+  const [status, setStatus] = useState<{ ffmpeg: boolean; ffprobe: boolean; bundled: boolean } | null>(
+    null
+  );
   const [installing, setInstalling] = useState(false);
   const [progress, setProgress] = useState<{ status: string; percent: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -20,7 +22,13 @@ export const MediaComponentsCard: React.FC = () => {
 
   const refresh = useCallback(async () => {
     const binaries = await window.cloudstream?.checkBinaries();
-    if (binaries) setStatus({ ffmpeg: binaries.ffmpeg, ffprobe: binaries.ffprobe });
+    if (binaries) {
+      setStatus({
+        ffmpeg: binaries.ffmpeg,
+        ffprobe: binaries.ffprobe,
+        bundled: binaries.bundled.ffmpeg && binaries.bundled.ffprobe,
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -45,6 +53,14 @@ export const MediaComponentsCard: React.FC = () => {
   }, [refresh]);
 
   const installed = Boolean(status?.ffmpeg && status?.ffprobe);
+  /**
+   * Reported as "included" rather than "installed" when it shipped in the box.
+   *
+   * Saying "Installed" for something nobody installed teaches the reader that
+   * this badge is decorative — and this is the same badge they will come back
+   * to when something really is missing.
+   */
+  const bundled = Boolean(status?.bundled);
 
   return (
     <div className="settings-card">
@@ -53,14 +69,16 @@ export const MediaComponentsCard: React.FC = () => {
         <h3>Media Components</h3>
         {installed && (
           <span className="settings-card__badge">
-            <Check size={12} /> Installed
+            <Check size={12} /> {bundled ? 'Included' : 'Installed'}
           </span>
         )}
       </div>
 
       <p className="muted">
         {installed
-          ? 'Everything needed for wider format support is installed. Media with unusual audio will play normally.'
+          ? bundled
+            ? 'These ship with the app, so wider format support works out of the box. Nothing to install.'
+            : 'Everything needed for wider format support is installed. Media with unusual audio will play normally.'
           : 'Some media uses audio formats Windows cannot play on its own. Installing these components fixes that, and improves download handling.'}
       </p>
 

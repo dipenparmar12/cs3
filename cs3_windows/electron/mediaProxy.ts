@@ -1,7 +1,10 @@
 import http from 'http';
 import type { AddressInfo } from 'net';
-import { classifyNetworkError } from './networkResilience';
-import type { DiagnosticsSink } from './pluginManager';
+// `.ts` is load-bearing: the test suite runs under Node's type stripping, which
+// is an ESM loader and will not resolve an extensionless specifier. Rollup is
+// indifferent and `allowImportingTsExtensions` is already set in both tsconfigs.
+import { classifyNetworkError } from './networkResilience.ts';
+import type { DiagnosticsSink } from './pluginManager.ts';
 
 /**
  * Serves a provider's stream with the headers that provider requires.
@@ -148,10 +151,39 @@ function looksLikeHls(url: string, contentType: string | null): boolean {
   );
 }
 
+/**
+ * Whether this reply is a DASH manifest.
+ *
+ * The body is consulted, not just the URL, for the same reason the compatibility
+ * engine reads manifests rather than matching extensions: providers serve `.mpd`
+ * documents as `application/octet-stream` and from addresses with no extension
+ * at all. `<MPD` in the first bytes is unambiguous where the URL is not.
+ */
+function looksLikeDash(url: string, contentType: string | null, body?: string): boolean {
+  if (body && /^\s*(<\?xml[^>]*\?>\s*)?<MPD[\s>]/i.test(body.slice(0, 512))) return true;
+  if (contentType && contentType.toLowerCase().includes('dash+xml')) return true;
+  const clean = url.split(/[?#]/)[0].toLowerCase();
+  return clean.endsWith('.mpd');
+}
+
+/**
+ * The largest body the proxy will read into memory to identify it.
+ *
+ * A DASH manifest is kilobytes; a film is gigabytes. Anything above this is
+ * streamed without being looked at.
+ */
+const MAX_SNIFF_BYTES = 4 * 1024 * 1024;
+
+/** `<BaseURL>…</BaseURL>`, and the three attributes that name a segment. */
+const DASH_BASE_URL = /<BaseURL([^>]*)>([^<]*)<\/BaseURL>/gi;
+const DASH_URL_ATTRIBUTE = /\b(media|initialization|sourceURL|initializationSegmentURL)="([^"]*)"/gi;
+
 export class MediaProxy {
   private server: http.Server | null = null;
   private port = 0;
   private routes = new Map<string, Route>();
+  /** Directory routes, for DASH — see {@link prefixRouteFor}. */
+  private prefixes = new Map<string, Route>();
   /** Reverse index so a playlist's hundred segments do not mint a token each. */
   private tokensByKey = new Map<string, string>();
   private nextToken = 1;
@@ -228,6 +260,53 @@ export class MediaProxy {
     return `http://127.0.0.1:${this.port}/stream/${token}`;
   }
 
+  /**
+   * A token standing for a *directory* rather than one file.
+   *
+   * DASH needs this and HLS does not, which is why it did not exist before. An
+   * HLS playlist names every segment it has, so each one can be given its own
+   * exact route; a DASH `SegmentTemplate` names them with `$Number$` and
+   * `$Time$` placeholders the *player* expands, so there is no list of URLs to
+   * rewrite — only a base to point somewhere else. `<BaseURL>` becomes one of
+   * these, and every relative segment the player derives resolves through it.
+   *
+   * The base always ends in `/` so `new URL(rest, base)` appends rather than
+   * replacing the last path element.
+   */
+  private prefixRouteFor(baseUrl: string, headers: Record<string, string>): string {
+    const normalised = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+    const key = `base ${normalised} ${JSON.stringify(headers)}`;
+    let token = this.tokensByKey.get(key);
+    if (!token) {
+      token = String(this.nextToken++);
+      this.tokensByKey.set(key, token);
+      this.prefixes.set(token, { url: normalised, headers });
+    }
+    return `http://127.0.0.1:${this.port}/base/${token}/`;
+  }
+
+  /**
+   * Resolves `/base/<token>/<rest>` against the base that token stands for.
+   *
+   * Returns null when the result would leave the base's origin. The suffix
+   * arrives from the renderer and a `..` in it would otherwise turn a
+   * directory route into the arbitrary-URL fetcher `wrap` already is — which is
+   * fine when *we* chose the URL and is not when a manifest did.
+   */
+  private resolvePrefixed(token: string, rest: string): Route | null {
+    const prefix = this.prefixes.get(token);
+    if (!prefix) return null;
+    try {
+      const target = new URL(rest, prefix.url);
+      const base = new URL(prefix.url);
+      if (target.origin !== base.origin) return null;
+      if (!target.pathname.startsWith(base.pathname)) return null;
+      return { url: target.toString(), headers: prefix.headers };
+    } catch {
+      return null;
+    }
+  }
+
   private async ensureServer(): Promise<void> {
     if (this.server) return;
     this.server = http.createServer((req, res) => {
@@ -253,8 +332,17 @@ export class MediaProxy {
       return;
     }
 
-    const token = req.url?.match(/^\/stream\/(\d+)/)?.[1];
-    const route = token ? this.routes.get(token) : undefined;
+    /**
+     * Two shapes: `/stream/<token>` is one file, `/base/<token>/<rest>` is a
+     * path inside a directory route. Only DASH mints the second kind.
+     */
+    const direct = req.url?.match(/^\/stream\/(\d+)/)?.[1];
+    const prefixed = req.url?.match(/^\/base\/(\d+)\/(.*)$/);
+    const route = direct
+      ? this.routes.get(direct)
+      : prefixed
+        ? this.resolvePrefixed(prefixed[1], decodeURIComponent(prefixed[2]))
+        : undefined;
     if (!route) {
       res.writeHead(404).end('Unknown stream');
       return;
@@ -303,6 +391,76 @@ export class MediaProxy {
           'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
         });
         res.end(rewritten);
+        return;
+      }
+
+      /**
+       * DASH manifests are rewritten for the same reason playlists are, and it
+       * had never been done.
+       *
+       * A manifest names its segments relative to its own address. Serving one
+       * unmodified from loopback means the player resolves them against
+       * `http://127.0.0.1:PORT/stream/<token>` and asks this proxy for paths it
+       * has no route for — so every segment 404s. It is not only the new Shaka
+       * path that needed this: ffmpeg's DASH demuxer resolves relative segments
+       * exactly the same way, so the existing remux path was broken for every
+       * manifest that did not spell its segments out in full.
+       *
+       * The manifest is fetched as text before the check because a provider
+       * serving `application/octet-stream` is routine; `looksLikeDash` reads the
+       * body when the headers will not say.
+       */
+      if (looksLikeDash(route.url, contentType)) {
+        const body = await upstream.text();
+        const rewritten = this.rewriteDashManifest(body, upstream.url || route.url, route.headers);
+        res.writeHead(upstream.status, {
+          'Content-Type': 'application/dash+xml',
+          'Cache-Control': 'no-store',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': '*',
+          'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+        });
+        res.end(rewritten);
+        return;
+      }
+
+      /**
+       * The body-sniffed case: nothing in the URL or the content type said
+       * "manifest", so it is only recognisable from its first bytes.
+       *
+       * **Bounded by declared length, and that bound is load-bearing.** Reading
+       * the body to look at it means buffering it, and a provider serving a
+       * 5 GB MKV as `application/octet-stream` with no content type is not
+       * unusual. Sniffing that would hold the whole film in memory and delay
+       * the first byte until the last one arrived. So a body is only read when
+       * the origin said how big it is and it is manifest-sized, or when the
+       * content type already says XML.
+       */
+      const declaredLength = Number(upstream.headers.get('content-length') ?? NaN);
+      const sniffable =
+        (Number.isFinite(declaredLength) && declaredLength > 0 && declaredLength <= MAX_SNIFF_BYTES) ||
+        /application\/xml|text\/xml/i.test(contentType ?? '');
+
+      if (sniffable && !req.headers.range) {
+        const body = await upstream.text();
+        if (looksLikeDash(route.url, contentType, body)) {
+          const rewritten = this.rewriteDashManifest(body, upstream.url || route.url, route.headers);
+          res.writeHead(upstream.status, {
+            'Content-Type': 'application/dash+xml',
+            'Cache-Control': 'no-store',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+          });
+          res.end(rewritten);
+          return;
+        }
+        res.writeHead(upstream.status, {
+          'Content-Type': contentType ?? 'application/octet-stream',
+          'Cache-Control': 'no-store',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(body);
         return;
       }
 
@@ -544,9 +702,82 @@ export class MediaProxy {
       .join('\n');
   }
 
+  /**
+   * Points a DASH manifest's segments back at this proxy.
+   *
+   * Three things name a URL in an MPD and all three are handled, because
+   * missing any one sends those requests direct and they arrive without the
+   * provider's `Referer`:
+   *
+   * - **`<BaseURL>`** — the element every relative segment resolves against. It
+   *   is replaced with a *directory* route, which is the whole reason
+   *   {@link prefixRouteFor} exists: `SegmentTemplate` names segments with
+   *   `$Number$` placeholders the player expands at request time, so there is no
+   *   list of URLs to rewrite, only a base to redirect.
+   * - **Absolute `media` / `initialization` / `sourceURL` attributes** — rewritten
+   *   by pointing their *directory* at a route and leaving the filename, which
+   *   keeps any placeholder in the filename intact.
+   * - **No `<BaseURL>` at all** — one is inserted, pointing at the manifest's own
+   *   directory. Without it the player resolves relative segments against the
+   *   loopback manifest URL and asks for paths this proxy has no route for.
+   *
+   * Rewritten with regular expressions rather than an XML parser, matching how
+   * the compatibility engine already sniffs manifests. The trade is deliberate:
+   * an unparseable manifest is passed through slightly wrong rather than
+   * throwing, and no XML dependency joins the main process for one document
+   * type.
+   */
+  private rewriteDashManifest(
+    body: string,
+    manifestUrl: string,
+    headers: Record<string, string>
+  ): string {
+    const directoryOf = (url: string): string => url.slice(0, url.lastIndexOf('/') + 1);
+    const manifestBase = directoryOf(manifestUrl);
+
+    const proxiedDirectory = (absolute: string): string =>
+      this.prefixRouteFor(directoryOf(absolute), headers);
+
+    let sawBaseUrl = false;
+    let rewritten = body.replace(DASH_BASE_URL, (match, attrs: string, value: string) => {
+      const trimmed = value.trim();
+      if (!trimmed) return match;
+      sawBaseUrl = true;
+      try {
+        const absolute = new URL(trimmed, manifestBase).toString();
+        return `<BaseURL${attrs}>${this.prefixRouteFor(absolute, headers)}</BaseURL>`;
+      } catch {
+        return match;
+      }
+    });
+
+    rewritten = rewritten.replace(DASH_URL_ATTRIBUTE, (match, name: string, value: string) => {
+      // Relative values are handled by BaseURL; only absolute ones escape it.
+      if (!/^https?:\/\//i.test(value)) return match;
+      try {
+        const directory = proxiedDirectory(value);
+        const file = value.slice(value.lastIndexOf('/') + 1);
+        return `${name}="${directory}${file}"`;
+      } catch {
+        return match;
+      }
+    });
+
+    if (!sawBaseUrl) {
+      const base = this.prefixRouteFor(manifestBase, headers);
+      rewritten = rewritten.replace(
+        /(<MPD[^>]*>)/i,
+        (match) => `${match}\n  <BaseURL>${base}</BaseURL>`
+      );
+    }
+
+    return rewritten;
+  }
+
   /** Wired into app shutdown, like every other socket owner. */
   public shutdown(): void {
     this.routes.clear();
+    this.prefixes.clear();
     this.tokensByKey.clear();
     this.server?.close();
     this.server = null;

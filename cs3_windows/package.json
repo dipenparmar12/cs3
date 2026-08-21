@@ -11,17 +11,21 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "typecheck": "tsc -b",
-    "test:electron": "node --experimental-strip-types electron/sharedDiscovery.test.mts && node --experimental-strip-types electron/sourceCache.test.mts && node --experimental-strip-types electron/media/decisionEngine.test.mts && node --experimental-strip-types electron/media/pipeline.test.mts && node --experimental-strip-types electron/media/mpvEngine.test.mts",
+    "test:electron": "node --experimental-strip-types electron/sharedDiscovery.test.mts && node --experimental-strip-types electron/sourceCache.test.mts && node --experimental-strip-types electron/cs3/providerLinks.test.mts && node --experimental-strip-types electron/mediaProxy.test.mts && node --experimental-strip-types electron/subtitles/convert.test.mts && node --experimental-strip-types electron/media/decisionEngine.test.mts && node --experimental-strip-types electron/media/pipeline.test.mts && node --experimental-strip-types electron/media/mpvEngine.test.mts",
     "test:media": "node --experimental-strip-types electron/media/decisionEngine.test.mts",
     "test:pipeline": "node --experimental-strip-types electron/media/pipeline.test.mts",
     "preview": "vite preview",
     "build:runtime": "node ../tools/package/build-runtime.mjs --verify",
-    "electron:build": "npm run build:runtime && vite build && electron-builder",
+    "electron:build": "npm run build:runtime && npm run build:media && vite build && electron-builder",
     "e2e:providers": "node ../tools/e2e/provider-e2e.mjs",
     "e2e:network": "node ../tools/e2e/network-resilience.mjs",
     "e2e:sources": "node ../tools/e2e/source-discovery.mjs",
     "test:native": "node --experimental-strip-types electron/media/mpvEngine.test.mts",
-    "test:cache": "node --experimental-strip-types electron/sourceCache.test.mts"
+    "test:cache": "node --experimental-strip-types electron/sourceCache.test.mts",
+    "test:links": "node --experimental-strip-types electron/cs3/providerLinks.test.mts",
+    "build:media": "node ../tools/package/build-media-runtime.mjs --verify",
+    "test:proxy": "node --experimental-strip-types electron/mediaProxy.test.mts",
+    "test:subtitles": "node --experimental-strip-types electron/subtitles/convert.test.mts"
   },
   "build": {
     "appId": "com.lagradost.cloudstream3.desktop",
@@ -34,11 +38,15 @@
       "dist-electron/**/*",
       "node_modules/**/*"
     ],
-    "//extraResources": "The end user installs one thing and streams. That means the JVM, the sidecar and the whole provider classpath ship inside the app — SidecarSupervisor looks for exactly these paths under resources/sidecar when app.isPackaged. Build them first with: node ../tools/package/build-runtime.mjs",
+    "//extraResources": "The end user installs one thing and streams. That means the JVM, the sidecar and the whole provider classpath ship inside the app \u2014 SidecarSupervisor looks for exactly these paths under resources/sidecar when app.isPackaged. Build them first with: node ../tools/package/build-runtime.mjs",
     "extraResources": [
       {
         "from": "../sidecar/dist",
         "to": "sidecar"
+      },
+      {
+        "from": "media-runtime",
+        "to": "media"
       }
     ],
     "//asarUnpack": "Native .node binaries cannot be loaded from inside an asar archive, and webtorrent's transitive native deps must be unpacked or the app fails at startup exactly as it does when they are bundled.",
@@ -60,6 +68,7 @@
     "utp-native"
   ],
   "dependencies": {
+    "chardet": "^2.2.0",
     "cheerio": "^1.2.0",
     "fast-xml-parser": "^5.10.1",
     "hls.js": "^1.6.18",
@@ -67,6 +76,7 @@
     "parse-torrent": "^11.0.24",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "shaka-player": "^5.2.6",
     "webtorrent": "^3.0.21",
     "ws": "^8.21.3"
   },

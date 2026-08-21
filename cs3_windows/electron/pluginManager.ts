@@ -10,6 +10,7 @@ import type { DatastoreManager } from './datastore';
 import { SidecarSupervisor } from './cs3/sidecarSupervisor';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from './officialRepositories';
 import { classifyFailure, FAILURE_KIND_LABELS } from './cs3/failureTaxonomy';
+import { mapProviderLink } from './cs3/providerLinks';
 import type { FailureKind } from '../src/types/analytics';
 import type {
   DiagnosisFact,
@@ -2134,6 +2135,7 @@ export class PluginManager {
       // A film has no episode list; its `dataUrl` is the playable handle and is
       // re-addressed the same way an episode's is.
       id: undefined,
+      isLive: detail.isLive === true ? true : undefined,
       ...(detail.dataUrl
         ? { dataUrl: buildExtensionUrl(ref.provider, String(detail.dataUrl)) }
         : {}),
@@ -2287,29 +2289,24 @@ export class PluginManager {
       );
     }
 
-    const links = rawLinks.map((link) => ({
-      source: link.source ? String(link.source) : ref.provider,
-      name: link.name ? String(link.name) : ref.provider,
-      url: String(link.url ?? ''),
-      referer: link.referer ? String(link.referer) : '',
-      quality: typeof link.quality === 'number' ? link.quality : 0,
-      isM3u8:
-        Boolean(link.isM3u8) ||
-        /^(m3u8|hls)$/i.test(String(link.type ?? '')) ||
-        /\.(m3u8|m3u)(\?|$)/i.test(String(link.url ?? '')) ||
-        /\/(getm3u8|m3u8|hls)\b/i.test(String(link.url ?? '')) ||
-        /[?&]format=m3u8/i.test(String(link.url ?? '')),
-      isDash:
-        /^(dash|mpd)$/i.test(String(link.type ?? '')) ||
-        /\.mpd(\?|$)/i.test(String(link.url ?? '')) ||
-        /\/(dash|mpd)\b/i.test(String(link.url ?? '')),
-      headers: (link.headers as Record<string, string> | undefined) ?? {},
-    }));
+    const links = rawLinks.map((link) => mapProviderLink(link, ref.provider));
 
-    // Links with no address are not links. This happens when an extractor
-    // half-succeeds — it built the result object and failed to fill it — and
-    // it used to reach the player as a source that could never load.
-    const usable = links.filter((link) => /^https?:\/\//i.test(link.url) || link.url.startsWith('magnet:'));
+    /**
+     * Links with no address are not links. This happens when an extractor
+     * half-succeeds — it built the result object and failed to fill it — and it
+     * used to reach the player as a source that could never load.
+     *
+     * A playlist link is the one exception, and it is not a special case so much
+     * as a different shape: `ExtractorLinkPlayList` carries no top-level URL at
+     * all, because the parts *are* the address. Judging it by `link.url` alone
+     * discarded every multi-part title as malformed.
+     */
+    const usable = links.filter(
+      (link) =>
+        /^https?:\/\//i.test(link.url) ||
+        link.url.startsWith('magnet:') ||
+        (link.playlist?.length ?? 0) > 0
+    );
     if (usable.length === 0) {
       return nothing(
         'links-unusable',

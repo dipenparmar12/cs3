@@ -22,6 +22,8 @@ import { SourceResolveOverlay } from './player/SourceResolveOverlay';
 import { SubtitlePanel } from './player/SubtitlePanel';
 import { PlayerDownloadPanel } from './player/PlayerDownloadPanel';
 import type { PlaybackStreamResponse, SourceCapabilityModel } from '../types/media';
+import { attachClearKey, type ClearKeyAttachment } from '../utils/clearKeySession';
+import { attachShaka, type ShakaAttachment } from '../utils/shakaSession';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
@@ -229,6 +231,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const seekBarRef = useRef<HTMLDivElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const shakaRef = useRef<ShakaAttachment | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -797,88 +800,134 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setQualities([]);
     setQuality(AUTO_QUALITY);
     let hls: Hls | null = null;
+    let cancelled = false;
+    let clearKey: ClearKeyAttachment | null = null;
+    let shaka: ShakaAttachment | null = null;
 
     const playbackUrl = prepared.playbackUrl;
     // Decided by the engine from the manifest body, not by matching `.m3u8` on
     // the URL: providers serve playlists from `.php` and from URLs with no
     // extension at all, and an HLS ladder carrying HEVC is routed to ffmpeg
     // instead because hls.js cannot invent decoders either.
-    const isHls = prepared.capability.requiredStrategy === 'HLS_NATIVE';
+    /**
+     * hls.js is needed for the transport, not for the strategy.
+     *
+     * A ClearKey-encrypted HLS ladder is classified `EME_NATIVE` — the CDM
+     * decrypts it — but it is still an `.m3u8`, and assigning one to `video.src`
+     * outside Safari plays nothing. The keys are attached to the element either
+     * way, and hls.js appends to the same Media Source Extensions the CDM sits
+     * behind, so the two compose.
+     */
+    const isHls =
+      prepared.capability.requiredStrategy === 'HLS_NATIVE' ||
+      (prepared.capability.requiredStrategy === 'EME_NATIVE' &&
+        prepared.capability.transport === 'hls');
 
-    if (isHls && Hls.isSupported()) {
-      hls = new Hls({ enableWorker: true, lowLatencyMode: true });
-      hlsRef.current = hls;
-      hls.loadSource(playbackUrl);
-      hls.attachMedia(video);
+    /**
+     * ClearKey, attached before anything is assigned.
+     *
+     * `EME_NATIVE` was a verdict nothing acted on: the engine classified the
+     * stream correctly, the element was handed the URL with no key, and it
+     * failed — so the classification bought an accurate log line and no
+     * playback. The provider sent the key with the link, so answering the
+     * licence request needs no server.
+     *
+     * The ordering is the same rule as INV-RACE-1 and matters for the same
+     * reason: `setMediaKeys` is asynchronous, and an element given its source
+     * first fires `encrypted` against no keys, which surfaces as a decode error
+     * that says nothing about encryption.
+     */
+    const clearKeys =
+      prepared.capability.requiredStrategy === 'EME_NATIVE'
+        ? prepared.capability.drm.clearKeys
+        : undefined;
 
-      // Renditions are only known once the manifest is parsed, so the quality
-      // menu is populated here rather than guessed from the URL.
-      hls.on(Hls.Events.MANIFEST_PARSED, (_evt, data) => {
-        setQualities(
-          data.levels.map((level, index) => ({
-            level: index,
-            label: level.height ? `${level.height}p` : `Level ${index + 1}`,
-            detail: level.bitrate ? `${Math.round(level.bitrate / 1000)} kbps` : undefined,
-          }))
-        );
-      });
+    /**
+     * DASH is Shaka's, and it is the only thing here that can take it.
+     *
+     * Chromium cannot demux an `.mpd`, and FFmpeg — which can — refuses
+     * decryption keys on its DASH demuxer, so an encrypted manifest had no path
+     * at all before this. Shaka drives MSE itself and owns the EME handshake.
+     */
+    const isDash = prepared.capability.requiredStrategy === 'DASH_NATIVE';
 
-      hls.on(Hls.Events.ERROR, (_evt, data) => {
-        if (data.fatal) setError(`Playback error: ${data.details}`);
-      });
-    } else {
-      // Either the source itself (DIRECT) or the conversion's loopback URL. The
-      // original `streamUrl` is left untouched and is still what everything else
-      // — downloads, the external player, the error report — refers to.
-      video.src = playbackUrl;
-    }
-
-    video.volume = audioSettings.current.volume;
-    video.muted = audioSettings.current.muted;
-
-    try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioCtx) {
-        if (!(window as any).__audioContext) (window as any).__audioContext = new AudioCtx();
-        if ((window as any).__audioContext?.state === 'suspended') {
-          (window as any).__audioContext.resume();
-        }
+    const attach = () => {
+      if (isDash) {
+        void attachShaka(video, playbackUrl, prepared.capability)
+          .then((attachment) => {
+            if (cancelled) {
+              void attachment.destroy();
+              return;
+            }
+            shaka = attachment;
+            shakaRef.current = attachment;
+            setQualities(attachment.qualities);
+            void video.play().catch(() => {
+              /* Autoplay may be blocked; a click starts it. */
+            });
+          })
+          .catch((err: unknown) => {
+            if (cancelled) return;
+            setError(
+              `This DASH stream could not be played: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          });
+        return;
       }
-    } catch {
-      // Best effort AudioContext resume
-    }
 
-    video
-      .play()
-      .then(() => {
-        video.volume = audioSettings.current.volume;
-        video.muted = audioSettings.current.muted;
-        setIsPlaying(true);
+      if (isHls && Hls.isSupported()) {
+        hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+        hlsRef.current = hls;
+        hls.loadSource(playbackUrl);
+        hls.attachMedia(video);
 
-        // Record successful playback event in history
-        window.cloudstream?.recordHistoryEvent?.({
-          title,
-          year: progress?.year,
-          type: progress?.season !== undefined ? 'series' : 'movie',
-          posterUrl: progress?.posterUrl,
-          mediaUrl: progress?.mediaUrl || streamUrl,
-          episodeTitle,
-          season: progress?.season,
-          episode: progress?.episode,
-          action: 'playback_started',
-          status: 'Played',
-          durationSeconds: video.duration || undefined,
-          source: {
-            sourceName: title,
-            quality: undefined,
-            directUrl: streamUrl.startsWith('http') ? streamUrl : undefined,
-          },
+        // Renditions are only known once the manifest is parsed, so the quality
+        // menu is populated here rather than guessed from the URL.
+        hls.on(Hls.Events.MANIFEST_PARSED, (_evt, data) => {
+          setQualities(
+            data.levels.map((level, index) => ({
+              level: index,
+              label: level.height ? `${level.height}p` : `Level ${index + 1}`,
+              detail: level.bitrate ? `${Math.round(level.bitrate / 1000)} kbps` : undefined,
+            }))
+          );
         });
-      })
-      .catch((err) => {
-        setIsPlaying(false);
-        // Autoplay may be blocked; user interaction will start it
-        if (err?.name !== 'NotAllowedError') {
+
+        hls.on(Hls.Events.ERROR, (_evt, data) => {
+          if (data.fatal) setError(`Playback error: ${data.details}`);
+        });
+      } else {
+        // Either the source itself (DIRECT) or the conversion's loopback URL. The
+        // original `streamUrl` is left untouched and is still what everything else
+        // — downloads, the external player, the error report — refers to.
+        video.src = playbackUrl;
+      }
+
+      video.volume = audioSettings.current.volume;
+      video.muted = audioSettings.current.muted;
+
+      try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx) {
+          if (!(window as any).__audioContext) (window as any).__audioContext = new AudioCtx();
+          if ((window as any).__audioContext?.state === 'suspended') {
+            (window as any).__audioContext.resume();
+          }
+        }
+      } catch {
+        // Best effort AudioContext resume
+      }
+
+      video
+        .play()
+        .then(() => {
+          video.volume = audioSettings.current.volume;
+          video.muted = audioSettings.current.muted;
+          setIsPlaying(true);
+
+          // Record successful playback event in history
           window.cloudstream?.recordHistoryEvent?.({
             title,
             year: progress?.year,
@@ -888,14 +937,69 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             episodeTitle,
             season: progress?.season,
             episode: progress?.episode,
-            action: 'playback_failed',
-            status: 'Failed',
-            failureReason: err?.message || 'Video element playback rejected',
+            action: 'playback_started',
+            status: 'Played',
+            durationSeconds: video.duration || undefined,
+            source: {
+              sourceName: title,
+              quality: undefined,
+              directUrl: streamUrl.startsWith('http') ? streamUrl : undefined,
+            },
           });
-        }
-      });
+        })
+        .catch((err) => {
+          setIsPlaying(false);
+          // Autoplay may be blocked; user interaction will start it
+          if (err?.name !== 'NotAllowedError') {
+            window.cloudstream?.recordHistoryEvent?.({
+              title,
+              year: progress?.year,
+              type: progress?.season !== undefined ? 'series' : 'movie',
+              posterUrl: progress?.posterUrl,
+              mediaUrl: progress?.mediaUrl || streamUrl,
+              episodeTitle,
+              season: progress?.season,
+              episode: progress?.episode,
+              action: 'playback_failed',
+              status: 'Failed',
+              failureReason: err?.message || 'Video element playback rejected',
+            });
+          }
+        });
+    };
+
+    if (!clearKeys) {
+      attach();
+    } else {
+      void attachClearKey(video, clearKeys)
+        .then((attachment) => {
+          if (cancelled) {
+            attachment.release();
+            return;
+          }
+          clearKey = attachment;
+          attach();
+        })
+        .catch((err: unknown) => {
+          /**
+           * Reported rather than attempted anyway. Assigning the source without
+           * keys produces a decode error that names a codec, which is the
+           * misdiagnosis this whole path exists to stop.
+           */
+          if (cancelled) return;
+          setError(
+            `This stream is ClearKey-encrypted and the browser refused the key: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        });
+    }
 
     return () => {
+      cancelled = true;
+      clearKey?.release();
+      void shaka?.destroy();
+      shakaRef.current = null;
       hls?.destroy();
       hlsRef.current = null;
       video.removeAttribute('src');
@@ -917,6 +1021,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     const hls = hlsRef.current;
     if (hls) hls.currentLevel = quality;
+    // Shaka calls the same thing a "variant track", and selecting one turns its
+    // adaptive switching off — so `AUTO_QUALITY` has to turn it back on rather
+    // than simply selecting nothing, or the menu becomes a one-way door.
+    shakaRef.current?.selectQuality(quality);
   }, [quality]);
 
   // --- audio tracks (multi-audio & audio volume sync) ---------------------
@@ -1674,6 +1782,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         url: streamUrl,
         headers: activeSource?.directHeaders,
         isM3u8: mimeType === 'application/x-mpegURL',
+        isDash: activeSource?.isDash,
+        // What the provider said about encryption, which outranks the probe —
+        // and arrives before it, so an encrypted stream is never sent to
+        // ffprobe to be misdiagnosed as a corrupt file.
+        drm: activeSource?.drm,
         provider: providerProvenance?.provider,
       });
       if (cancelled || !response) return;
@@ -1756,6 +1869,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           url: streamUrl,
           headers: activeSource?.directHeaders,
           isM3u8: mimeType === 'application/x-mpegURL',
+          isDash: activeSource?.isDash,
+          drm: activeSource?.drm,
           provider: providerProvenance?.provider,
           // The cached verdict is the one that was wrong; measure again and then
           // override it anyway.

@@ -8,7 +8,7 @@ import type {
   MediaTransport,
   TransformationPlan,
 } from '../src/types/media';
-import { inputOptionsFor } from './media/mediaInspector.ts';
+import { inputOptionsFor, toneMapFilters } from './media/mediaInspector.ts';
 import { runTool } from './media/runTool.ts';
 
 /**
@@ -140,6 +140,11 @@ export class MediaTranscoder {
 
   public resolveFfprobe(): string | null {
     return this.binaries.resolveBinary('ffprobe');
+  }
+
+  /** Filters are listed by ffmpeg, not ffprobe — see `detectToneMapSupport`. */
+  public resolveFfmpeg(): string | null {
+    return this.binaries.resolveBinary('ffmpeg');
   }
 
   // --- host capability -----------------------------------------------------
@@ -312,6 +317,36 @@ export class MediaTranscoder {
     if (plan.videoAction === 'copy') {
       videoArgs.push('-c:v', 'copy');
     } else if (plan.videoAction === 'transcode' || plan.videoAction === 'downscale') {
+      /**
+       * One filter chain, because ffmpeg takes one `-vf`.
+       *
+       * A second `-vf` silently replaces the first rather than adding to it, so
+       * a downscaled HDR 4K source would have kept whichever of the two was
+       * written last — losing either the resolution guard or the tone-map, with
+       * no warning either way.
+       */
+      const filters: string[] = [];
+
+      if (plan.tonemapHdr) {
+        /**
+         * HDR to SDR, and the reason it cannot be skipped.
+         *
+         * `-pix_fmt yuv420p` converts the storage format and says nothing about
+         * the transfer function, so a PQ or HLG source re-encoded to 8-bit
+         * keeps HDR-referred values that are then displayed as if they were SDR:
+         * washed out, flat and desaturated. Nothing errors and nothing reports
+         * it — the file plays perfectly and looks wrong, which is why it went
+         * unnoticed.
+         *
+         * `zscale` is the correct filter and is not always compiled in, so the
+         * chain is chosen by what this binary actually has — see
+         * {@link toneMapFilters}, which returns nothing at all when `zscale` is
+         * absent, because the obvious degraded fallback measures *worse* than
+         * leaving the picture alone.
+         */
+        filters.push(...toneMapFilters());
+      }
+
       if (plan.videoAction === 'downscale' && plan.targetHeight) {
         /**
          * The software-encoder guard, and the whole reason for the `downscale`
@@ -323,8 +358,10 @@ export class MediaTranscoder {
          * at 26–28 FPS — above realtime — and plays smoothly. `-2` keeps the
          * width even, which H.264 requires.
          */
-        videoArgs.push('-vf', `scale=-2:${plan.targetHeight}`);
+        filters.push(`scale=-2:${plan.targetHeight}`);
       }
+
+      if (filters.length > 0) videoArgs.push('-vf', filters.join(','));
       videoArgs.push('-c:v', encoder.name, ...encoder.args);
       // 8-bit 4:2:0 is what Chromium decodes. HEVC sources are routinely 10-bit,
       // and handing back 10-bit H.264 would swap one undecodable stream for
@@ -363,9 +400,29 @@ export class MediaTranscoder {
       );
     }
 
+    /**
+     * The ClearKey the provider supplied, where FFmpeg is the thing that can
+     * use it.
+     *
+     * Before `-i`, because it is a demuxer option. Measured on a synthesised
+     * CENC file: without it the input probes with *correct codec names* and
+     * then decodes to garbage — so the failure is not an error, it is a
+     * plausible-looking success, which is exactly what made encrypted provider
+     * streams read as corrupt downloads.
+     */
+    const decryption = plan.decryptionKeys
+      ? [
+          '-decryption_keys',
+          Object.entries(plan.decryptionKeys)
+            .map(([kid, key]) => `${kid}=${key}`)
+            .join(','),
+        ]
+      : [];
+
     return [
       '-hide_banner', '-loglevel', 'error',
       ...inputOptionsFor(session.url, session.transport),
+      ...decryption,
       // Before -i: seeks by keyframe without decoding everything up to it.
       ...(seekSeconds > 0 ? ['-ss', String(seekSeconds)] : []),
       '-i', session.url,

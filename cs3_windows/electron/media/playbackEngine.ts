@@ -16,10 +16,12 @@ import type { MediaTranscoder } from '../mediaTranscoder';
 import {
   blindFallbackPlan,
   decideStrategy,
+  requiresEmeDecryption,
   isTextSubtitle,
   planForAudioTrack,
 } from './decisionEngine.ts';
 import { MediaInspector, drmRequiresEme, transportFromUrl } from './mediaInspector.ts';
+import { drmFromProvider } from '../cs3/providerLinks.ts';
 import type { InspectionStore } from './inspectionStore.ts';
 
 /**
@@ -174,7 +176,7 @@ export class PlaybackEngine {
    * costs three round trips to a CDN that is already the slow part.
    */
   public async inspect(
-    request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'refresh'>
+    request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh'>
   ): Promise<SourceCapabilityModel> {
     const resolvedUrl = await this.deps.proxy.wrap(request.url, request.headers);
 
@@ -183,7 +185,7 @@ export class PlaybackEngine {
       if (hit && Date.now() - hit.at < CAPABILITY_TTL_MS) return hit.model;
     }
 
-    const model = await this.measure(resolvedUrl, request.url, request.isM3u8);
+    const model = await this.measure(resolvedUrl, request.url, request);
 
     if (this.cache.size >= MAX_CACHED_CAPABILITIES) {
       const oldest = this.cache.keys().next().value;
@@ -196,9 +198,50 @@ export class PlaybackEngine {
   private async measure(
     resolvedUrl: string,
     originUrl: string,
-    isM3u8?: boolean
+    request: Pick<PlaybackStreamRequest, 'isM3u8' | 'isDash' | 'drm'>
   ): Promise<SourceCapabilityModel> {
     const host = await this.hostCapability();
+    const { isM3u8 } = request;
+
+    /**
+     * What the provider said about encryption, believed over the probe.
+     *
+     * This is the short circuit that stops an encrypted stream being reported as
+     * a corrupt file. FFmpeg holds no keys: measured on a synthesised CENC file,
+     * probing one without the key returns *correct codec names* and then decodes
+     * to garbage — so the probe does not fail, it succeeds with a lie, and every
+     * decision made from it is wrong. When the provider has already told us the
+     * stream is encrypted there is nothing to learn from asking.
+     */
+    const declaredDrm = drmFromProvider(request.drm);
+    if (declaredDrm && requiresEmeDecryption(declaredDrm)) {
+      const transport = request.isDash
+        ? 'dash'
+        : transportFromUrl(originUrl, isM3u8);
+      const decision = decideStrategy(
+        { formatName: transport, video: null, audio: [], subtitles: [] },
+        transport,
+        this.capabilities,
+        host,
+        declaredDrm,
+        this.deps.nativeEngine()
+      );
+      return {
+        resolvedUrl,
+        transport,
+        supportsRangeRequests: transport === 'progressive',
+        inspectionStatus: 'skipped',
+        metadata: null,
+        failure: null,
+        directPlayable: decision.directPlayable,
+        requiredStrategy: decision.strategy,
+        transformationPlan: decision.plan,
+        drm: declaredDrm,
+        requiresEmeDecryption: true,
+        explanation: decision.explanation,
+        probeLatencyMs: 0,
+      };
+    }
 
     if (!this.deps.transcoder.isAvailable()) {
       /**
@@ -246,7 +289,7 @@ export class PlaybackEngine {
           inspection.transport,
           this.capabilities,
           host,
-          true,
+          inspection.drm,
           this.deps.nativeEngine()
         );
         return {
@@ -308,7 +351,7 @@ export class PlaybackEngine {
       inspection.transport,
       this.capabilities,
       host,
-      requiresEme,
+      inspection.drm,
       this.deps.nativeEngine()
     );
 

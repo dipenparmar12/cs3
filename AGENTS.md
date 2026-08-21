@@ -67,15 +67,19 @@ cs3/
 | Dev app | `cs3_windows/` | `bun run dev` — Vite on :5173, `vite-plugin-electron` launches Electron and rebuilds main/preload on change |
 | Typecheck + build | `cs3_windows/` | `bun run build` (`tsc && vite build`) |
 | Bundle the JVM | repo root | `node tools/package/build-runtime.mjs --verify` → `sidecar/dist/` |
+| Bundle ffmpeg + mpv | repo root | `node tools/package/build-media-runtime.mjs --verify` → `cs3_windows/media-runtime/` |
 | Package (Windows) | `cs3_windows/` | `bun run electron:build` → `release/` (runs the above first) |
 | Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (99 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (150 tests, Node type-stripping — no framework) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
-| Media decisions only | `cs3_windows/` | `bun run test:media` (53 cases, no ffmpeg needed) |
-| Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
+| Provider links only | `cs3_windows/` | `bun run test:links` (15 cases, no ffmpeg needed) |
+| Media proxy only | `cs3_windows/` | `bun run test:proxy` (11 cases, stubbed origin) |
+| Subtitles only | `cs3_windows/` | `bun run test:subtitles` (16 cases) |
+| Media decisions only | `cs3_windows/` | `bun run test:media` (71 cases, no ffmpeg needed) |
+| Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (17 cases, real ffmpeg; skips itself without it) |
 | Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
@@ -85,6 +89,14 @@ cs3/
 On a fresh clone run all three **in that order**: the sidecar build produces the android
 shim the bridge compiles against, runtime-deps puts `library-jvm` in place, and the bridge
 needs both. Nothing can execute an extension until all three have run.
+
+**The bridge build needs jitpack.io, which some cloud sessions cannot reach** —
+`library-jvm` is published there and nowhere else, and a blocked egress policy fails the
+build at dependency resolution before a line is compiled. The jars are already vendored in
+`sidecar/runtime/`, so the module can be compiled against that directory directly with
+`kotlin-compiler-embeddable` (it resolves from Central) and packaged with `jar`. That
+produces the same classpath the pom does; it is a workaround for the network, not for the
+build.
 
 The sidecar needs **Java 21 or newer** — it is compiled to class file 65. An older
 `JAVA_HOME` is detected and named rather than crashing the runtime at startup, and
@@ -233,6 +245,11 @@ starting anything, `media:prepare` inspects-decides-opens and returns the URL to
 `media:getPlaybackDiagnostics` returns the per-attempt telemetry. There is deliberately **no**
 channel that hands back an unclassified playback URL.
 
+`media:prepare` also takes what the *provider* said about the source — `isDash` and `drm` —
+and those outrank anything the probe could conclude. `drm` in particular arrives *before* the
+probe and skips it: FFmpeg holds no keys, and a probe of an encrypted file does not fail, it
+succeeds with correct codec names over undecodable payload.
+
 `external:*` drives a handed-off player and pushes `external:update` snapshots back, with a
 `capability` that says whether those controls reach anything. `player:getPreferences` /
 `player:setPreferences` hold volume, mute, speed and track languages.
@@ -273,13 +290,14 @@ not a layering mistake.
 | `sourceCache.ts` | Resolved sources, with expiry tracked **per source**: magnets never expire, provider links carry a deadline read from the URL (`Expires`/`exp`/JWT claim, case-insensitively) or a short TTL. A cache hit can be partially stale — good magnets beside dead links — and `read()` reports that split. |
 | `subtitleService.ts` | Online subtitle search via the keyless OpenSubtitles v3 Stremio addon, keyed by IMDb id. Converts SubRip to WebVTT, which is **not optional**: `<track>` rejects `.srt` silently. |
 | `media/mediaInspector.ts` | ffprobe → `MediaMetadata`; transport and DRM classified from the manifest body, never the URL. |
-| `media/decisionEngine.ts` | Pure decision: metadata + host capability → `TransformationPlan`. Tested exhaustively; see the codec section. |
+| `media/decisionEngine.ts` | Pure decision: metadata + host capability + DRM → `TransformationPlan`. Tested exhaustively; see the codec section. |
 | `media/playbackEngine.ts` | Inspect → decide → open, and the only way to obtain a URL to attach. Owns playback telemetry. |
 | `media/mpvEngine.ts` | The native engine. Spawns mpv, drives it over JSON-RPC, and reports snapshots. For the streams Chromium will never decode — see below. |
 | `mediaTranscoder.ts` | Executes a plan as a live fragmented-MP4 stream on loopback, plus embedded-subtitle extraction. |
 | `metadataProvider.ts` | TVmaze + AniList. **Catalogue metadata only, never streams.** Its key output is the IMDb id, which indexers match on far better than free text. |
 | `cinemeta.ts` | Stremio Cinemeta metadata provider, prioritised in search. |
 | `pluginManager.ts` | `.cs3` repository discovery, plugin-list parsing (mirrors upstream `RepositoryManager.kt`), download + SHA-256 verification, Android-style install paths, then hands archives to the sidecar. Also owns the enable/disable cascade — see the extensions-screen section. |
+| `cs3/providerLinks.ts` | Reads a provider's reply without guessing: link type, DRM, playlist parts, audio-track headers. Pure and tested — every wrong answer here looks like a bad provider rather than a bad routing decision. |
 | `pluginAnalyzer.ts` | Static compatibility classification of a plugin before it is trusted. |
 | `cs3/sidecarSupervisor.ts` | Spawns and supervises the JVM child process; line-delimited JSON-RPC over stdio; never throws on a missing/broken sidecar. |
 | `cs3/extensionUpdater.ts` | Over-the-air extension updates on a schedule, so a provider fix does not wait for an app release. |
@@ -456,16 +474,18 @@ Things that will bite if you change it:
   present and never offered: an empty WebVTT named "English" reads as broken
   subtitles rather than absent ones.
 
-**DRM is classified, and the classification is the point.** HLS AES-128 and
-SAMPLE-AES are *not* DRM as far as this engine is concerned — hls.js fetches the
-key over HTTP and decrypts in JavaScript, and routing those to an EME path they do
-not need would break streams that work today. ClearKey, Widevine and PlayReady need
-a CDM, so they are marked `requiresEmeDecryption` and FFmpeg is bypassed entirely:
-it holds no keys, so probing one spends twenty seconds on encrypted noise and
-remuxing one produces an unplayable file with a codec error about content it never
-decrypted. **What is not built:** Widevine CDM discovery/loading and dash.js. Such a
-stream is detected and reported by name instead of failing as a corrupt file, which
-is the honest state, not the finished one.
+**DRM is classified, and since 2026-08-21 the classification is also acted on.**
+HLS AES-128 and SAMPLE-AES are *not* DRM as far as this engine is concerned —
+hls.js fetches the key over HTTP and decrypts in JavaScript, and routing those to
+an EME path they do not need would break streams that work today. ClearKey,
+Widevine, PlayReady and any system this build cannot name are marked
+`requiresEmeDecryption` and FFmpeg is bypassed: it holds no keys, so probing one
+spends its timeout on encrypted noise. **ClearKey is now decrypted rather than
+merely named** — from the provider's own `kid`/`key`, either in the renderer
+through EME or by FFmpeg's `-decryption_keys`. **What is still not built:**
+Widevine/PlayReady CDMs and dash.js, so DASH under any DRM is detected and
+reported by name instead of failing as a corrupt file. See "DRM: classified
+before, decrypted now" in §5 for the three cases and the two encoding hazards.
 
 Two behaviours in `torrentEngine.ts` are load-bearing and easy to break:
 **file selection inside season packs** (deselect all, select one, or swarm bandwidth is
@@ -789,6 +809,253 @@ from everything above — Ultima is a host-UI replacement rather than a scraper,
 it means shimming the Android app itself. Left alone deliberately; one extension is not worth
 a fake `MainActivity`.
 
+### The bridge was discarding half of what Android hands back (2026-08-21)
+
+The four rounds of shim work above closed the *class* problem: providers load, scrape and
+resolve. What was still open is narrower and was invisible for exactly that reason — the
+providers were working and the bridge was throwing away part of their answer. Everything
+below was found by reading `ProviderBridge.encodeLink` against `library-jvm` 4.8.0 rather
+than by chasing a symptom, because none of it produces an error.
+
+| Discarded | Consequence |
+|---|---|
+| `DrmExtractorLink` — `kid`, `key`, `kty`, `uuid`, `licenseUrl`, `keyRequestParameters` | An encrypted stream arrived indistinguishable from an ordinary one |
+| `ExtractorLinkPlayList.playlist` | A multi-part title has **no top-level URL**; only the parts have one, so it was filtered out as malformed |
+| `LiveStreamLoadResponse` | Fell into the `else` branch. Every `TvType.Live` provider searched, opened a detail page and offered nothing to play |
+| `AudioFile.headers` | Separate audio tracks crossed as a bare URL, which most hosts that use them 403 |
+| `ExtractorLinkType` / `isDash` | Both present on the link and both ignored; the host re-derived the transport from the URL string |
+
+**The transport was being guessed while the answer sat unread.** The old mapper matched
+`.m3u8`, `/hls/` and `?format=m3u8` against the address, which is wrong in both directions:
+providers serve playlists from `.php` URLs with no extension, and a progressive MP4 behind a
+path containing `dash` is not a manifest. On Android that field picks the `MediaSource`
+factory, and where a provider leaves it unset upstream's `INFER_TYPE` fills it in *before the
+link is emitted* — so by the time it reaches here it is the best classification that exists.
+The heuristics are kept as a fallback for archives built against a library that predates the
+field; what changed is that the provider is asked first.
+
+`electron/cs3/providerLinks.ts` owns the reading, and it is separate and tested because every
+wrong answer here looks like a bad provider rather than a bad decision.
+
+**Torrent links from providers never reached the torrent engine.** `ExtractorLinkType.TORRENT`
+and `MAGNET` are ordinary results upstream — Android hands them to its torrent player the way
+it hands an M3U8 to ExoPlayer. Here every one of them was written into `directUrl` and passed
+to `MediaProxy`, which speaks HTTP: a `magnet:` URI went in and nothing came out. The swarm,
+the sequential piece ordering and the loopback server had been in place the whole time and
+were simply never reached from this direction. Two things to keep straight now that they are:
+a magnet's **real infohash** is the dedupe identity (a provider and an indexer offering the
+same release must collapse to one row), and `fileIndex` must be left **unset** — it means
+"which file inside the archive" to the torrent engine, and the list position it used to carry
+would select an arbitrary episode of a season pack.
+
+**Multi-part titles are numbered rows, not one truncated row.** Android concatenates an
+`ExtractorLinkPlayList` into a single timeline and nothing here does yet. One row that plays
+part 1 and stops is the worse failure — a film that ends after forty minutes with no
+explanation reads as a broken source — so each part is its own row, labelled `part 2 of 3`.
+Visibly partial beats silently truncated. The whole part list still travels on every source,
+so a concatenating player would not have to re-resolve the link.
+
+### DRM: classified before, decrypted now (2026-08-21)
+
+`EME_NATIVE` and `DrmConfiguration` have existed since PRD-37 and **nothing ever filled them
+in from a provider**. DRM was detected only by reading a manifest body, which happens after
+the probe — so an encrypted stream was handed to ffprobe first, and that is where the real
+damage was:
+
+> Measured on a synthesised CENC file: ffprobe reads it and reports **correct codec names**,
+> then decoding produces pages of `non-existing PPS`, `no frame!`, `reference count
+> overflow`. The probe does not fail. It succeeds with a lie, and every decision made from
+> it is wrong — which is why encrypted provider streams reached users as "this file is
+> corrupt" rather than "this is encrypted".
+
+So a provider's declaration now short-circuits inspection entirely (`PlaybackStreamRequest.drm`),
+and the verdict distinguishes three cases that used to read identically:
+
+1. **ClearKey with a key, browser-decodable payload** → `EME_NATIVE`, and it now *plays*.
+   `src/utils/clearKeySession.ts` attaches `org.w3.clearkey` MediaKeys and answers the licence
+   request locally — a ClearKey licence is a JWK Set, and the key already came with the link,
+   so there is no server in the loop. Covers progressive CENC and, through hls.js, fMP4 CENC
+   in HLS.
+2. **ClearKey with a key, payload the browser cannot decode** → the ordinary ladder, with
+   `-decryption_keys` on the plan. Decrypting is not enough when the bitstream still has no
+   decoder; FFmpeg does both in one pass. **Progressive only** — measured, the DASH demuxer
+   answers `Option decryption_key not found`, which is *fatal to the whole command line*
+   rather than ignored. Same trap `-extension_picky` set, from the other direction.
+3. **Widevine, PlayReady, ClearKey without a key, or an unrecognised system** → `EME_NATIVE`
+   and named as such. Widevine needs a CDM this build does not ship (Android gets one from
+   the device); the message now says so rather than implying a broken source.
+
+Two encoding hazards live in `src/utils/clearKey.ts`, both of which fail *silently* into a
+stream that decrypts to noise:
+
+- **Hex and base64url are told apart by length, never by alphabet.**
+  `0123456789abcdef0123456789abcdef` is valid base64url *and* valid hex; read as base64 it
+  yields 24 bytes of the wrong key. 16 bytes is 32 hex characters or 22 base64url ones, and
+  that is unambiguous.
+- **EME wants base64url and FFmpeg wants hex.** Both conversions live in one file so they can
+  be tested against each other.
+
+`DrmType` gained `unknown` deliberately: an unrecognised system is exactly as unreadable to
+FFmpeg as a recognised one, and folding it into `none` sends it back to the probe to be
+misdiagnosed.
+
+**Still not built: DASH under any DRM.** Chromium cannot demux an `.mpd` without a JavaScript
+player driving MSE, FFmpeg refuses the keys, and this build ships no dash.js. That is the
+remaining gap and it is now *reported by name* instead of failing as a corrupt file.
+
+### 4K, 8K and HDR (2026-08-21)
+
+**The software-encode guard was height-only and stopped being right above 4K.** It asked "is
+this taller than 1080?" and "are there fewer than 16 cores?", and 16 cores was measured at
+*3840x2160*. 8K is four times those pixels, so the machine that holds 1.0x at 4K holds about
+0.25x at 7680x4320 — and the guard waved it through at full resolution, producing exactly the
+stall it exists to prevent on the most expensive files in the corpus. The threshold is now
+pixels per second rather than a height, with `Math.max(1, …)` clamping it so **every verdict
+measured at or below 4K is unchanged**; it only ever tightens. Width is used where reported,
+because a 5120x2160 frame is not a 3840x2160 one.
+
+Above 4K, a container remux also routes to mpv under `auto`. The remux stays cheap and leaves
+Chromium decoding an 8K frame in software with four times a 4K surface behind it — this is
+the tier where "the browser can demux it" and "the machine can play it" come apart.
+
+**HDR that is re-encoded has to be tone-mapped, and was not.** `-pix_fmt yuv420p` converts the
+storage format and says nothing about the transfer function, so a PQ or HLG source re-encoded
+to 8-bit keeps HDR-referred values and is displayed as if they were SDR: washed out, flat,
+desaturated. Nothing errors. The file plays perfectly and looks wrong, which is why it
+survived. Measured on a synthesised PQ fixture, average saturation of the first frame:
+
+| | SATAVG | YAVG |
+|---|---|---|
+| SDR source (reference) | 112.6 | 124.7 |
+| Re-encoded, no tone-map (what shipped) | 22.8 | 97.4 |
+| Re-encoded with the zscale chain | **63.0** | 84.3 |
+| `tonemap` without `zscale` — the "graceful fallback" | 6.3 | 37.7 |
+
+**That last row is why there is no degraded fallback.** Fed non-linear PQ code values, the
+`tonemap` filter alone is not a worse tone-map, it is a wrong one — measurably worse than
+doing nothing. `toneMapFilters()` returns the chain when `zscale` is present and **nothing at
+all** when it is not. `zscale` comes from zimg, an optional dependency, so it is detected at
+startup exactly like `-extension_picky`; a filter the binary lacks fails the whole command
+line.
+
+Only a re-encode is tone-mapped. A copied stream carries its own metadata and is displayed
+correctly by whatever decodes it, and `-c:v copy` could not tone-map anyway.
+
+One trap while you are in `buildArgs`: ffmpeg takes **one** `-vf`. A second silently replaces
+the first, so the tone-map and the downscale share a chain rather than each pushing their own.
+
+### The box now contains the player (2026-08-21)
+
+`extraResources` carried exactly one entry — the sidecar — so a freshly
+installed app had **no ffprobe, no ffmpeg and no mpv**. All three were fetched on
+first use, and `setupMpv` did not even try outside Windows: it printed
+`brew install mpv` and returned false.
+
+The consequence was not a missing convenience. `MpvEngine.isAvailable()` was
+false, so `shouldRouteToNativeEngine` returned false for **every** stream and the
+native engine was never used at all — every 4K HEVC file took the software
+transcode path, which is the 0.47x-realtime stall the engine exists to avoid.
+**The default install was the worst configuration this codebase can be in, and
+the good one was opt-in behind a download the user had to discover.**
+
+`tools/package/build-media-runtime.mjs` stages the binaries per platform into
+`cs3_windows/media-runtime/`, `extraResources` copies that to `resources/media/`,
+and `electron:build` runs it. It **fails the build** when a required component is
+missing rather than producing a package quietly without its player;
+`--allow-missing` is the deliberate override.
+
+Two things about resolution order:
+
+- **The bundled copy wins**, where it used to lose. `resolveBinary` started at
+  `userData/bin`, which is the same shape as the stale-runtime trap in §3: a copy
+  fetched by an older version silently shadows the one this version was built
+  and tested against.
+- **`yt-dlp` is the exception**, and deliberately so. Its extractors break when a
+  site changes, which happens weekly, so a downloaded copy there is *newer*
+  rather than staler. It keeps the old order.
+
+On Linux and macOS mpv is `required: false` on purpose rather than by omission —
+the distribution's own package is the one wired to that platform's VA-API or
+VideoToolbox, and shipping a generic binary over it produces a player that
+cannot open the GPU. A distribution package should depend on `mpv`.
+
+**Chromium is now asked for the decoders the platform has.** `main.ts` set
+exactly one switch (`autoplay-policy`) and had never asked for
+`PlatformHEVCDecoderSupport`, available since Chrome 104 — so HEVC was
+re-encoded even on machines whose GPU decodes it for free. Enabling it cannot
+make a decision worse: `App.tsx` measures `canPlayType` at startup and overrides
+the static table **in both directions**, so a machine without the decoder still
+answers `""` and still gets the transcode.
+
+### DASH is played, not remuxed (2026-08-21)
+
+Shaka Player (`shaka-player`, Apache-2.0, an ordinary bundled dependency) now
+takes any DASH manifest whose payload the browser can decode — strategy
+`DASH_NATIVE`. The remux stays as the fallback for a payload Chromium cannot
+decode, because Shaka appends to the same MSE and cannot invent decoders either.
+
+What this buys, beyond not spending an ffmpeg process: the remux **flattens the
+adaptive ladder to one fixed rendition**, which is the thing DASH exists for.
+And it closes the gap the ClearKey work left open — `DASH_NATIVE` is the only
+strategy that can play encrypted DASH, because FFmpeg's DASH demuxer rejects
+`-decryption_key` outright.
+
+**The proxy had to learn DASH first, and that fixed an existing bug.** A manifest
+names its segments relative to its own address, so serving one unmodified from
+loopback makes the player resolve them against `…/stream/<token>` and ask for
+paths the proxy has no route for. This was never only a Shaka problem: **ffmpeg's
+DASH demuxer resolves relative segments exactly the same way**, so the remux path
+was already broken for every manifest that did not spell its segments out in
+full. `MediaProxy` now rewrites MPDs, and needed a shape it did not have:
+
+- **Directory routes** (`/base/<token>/<rest>`), because `SegmentTemplate` names
+  segments with `$Number$` placeholders the *player* expands. HLS never needed
+  this — a playlist lists every segment, so each got an exact route. A DASH
+  manifest has no list to rewrite, only a base to redirect.
+- A `<BaseURL>` is **inserted** when the manifest has none, replaced when it has
+  one, and absolute `media`/`initialization`/`sourceURL` attributes are rewritten
+  by directory so their placeholders survive.
+- The suffix arrives from the renderer, so `resolvePrefixed` refuses anything
+  that leaves the base's origin. Without that check a directory route becomes the
+  arbitrary-URL fetcher `wrap` deliberately is.
+- Manifest sniffing is **bounded by declared length** (4 MB). Reading a body to
+  identify it means buffering it, and a provider serving a 5 GB MKV as
+  `application/octet-stream` is routine.
+
+Pinned by `mediaProxy.test.mts` (11 cases). Note the origin there is a *stub*
+rather than a real server: `wrap` returns loopback URLs untouched by design, so a
+socket-backed origin on 127.0.0.1 tests nothing.
+
+### Subtitles: ASS and the charset, which Android has always had (2026-08-21)
+
+`docs/docs_cs3/05` records what the Android app does — SubRip, WebVTT **and**
+SubStation Alpha, every file through `juniversalchardet` first. Desktop did
+neither, and both failures are silent:
+
+- **`.ass` / `.ssa` went through the SubRip converter**, which emits
+  `[Script Info]` and `Dialogue:` lines as if they were cues. That is most of
+  anime and of fansubbed releases.
+- **Every download was decoded as UTF-8**, because `Response.text()` does that
+  unconditionally. A Windows-1252 or GBK subtitle then loads with correct timings
+  and a black diamond where each accent was — which reads as a bad upload.
+
+`electron/subtitles/convert.ts` owns both. Two rules in it are worth keeping:
+
+- **UTF-8 is checked, not detected.** `TextDecoder` in fatal mode either accepts
+  the bytes or throws, so the common case is answered exactly and the statistical
+  detector only sees files that are provably not UTF-8.
+- **A detection of UTF-8 is then rejected, and a decode producing U+FFFD is
+  treated as a failed decode.** `chardet` answers "UTF-8" for a four-byte
+  Windows-1252 string, and `TextDecoder` outside fatal mode substitutes rather
+  than throwing — so the substitution character *is* the error and is checked
+  for.
+
+ASS conversion reads the `Format:` line rather than assuming field positions
+(ASS declares its order per file), bounds the `Dialogue:` split so text
+containing a comma is not truncated, and drops `\p1` drawing commands — those are
+vector shapes, and printing their coordinate lists puts a wall of numbers over
+the picture.
+
 ### Android vs Windows: where the two actually diverge now (2026-08-19)
 
 The recurring report is "this provider works in the Android app and fails here". Measured
@@ -934,7 +1201,11 @@ claiming one name is a genuine collision: the first keeps it and the loser is re
 
 ### The extensions screen: `src/components/extensions/`
 
-Rebuilt 2026-08-14. It was one 2,689-line component — 25 `useState` hooks, four tabs and
+**Reconstructed 2026-08-21**, after the ignore-rule bug below meant the 2026-08-14 rebuild
+was never committed. What follows describes the current files; the reasoning is preserved
+from the original because the constraints have not changed.
+
+Originally rebuilt 2026-08-14. It was one 2,689-line component — 25 `useState` hooks, four tabs and
 ~2,000 lines of inline-styled JSX in a single function body — replaced by a container plus
 focused children (`useExtensionCatalog`, `useExtensionFilters`, `FilterBar`, `SourceTree`,
 `RepositoryCatalog`, `ExtensionCatalog`, `ProvenancePanel`, `BulkActionBar`,
@@ -1688,6 +1959,16 @@ Where they disagree, trust the code and fix the doc.
 - **Do not vendor or commit** `.cs3` archives, `library-jvm.jar`, `node_modules/`,
   `target/`, `dist/`, `dist-electron/`, or downloaded `aria2c`/`yt-dlp` binaries.
   (`.gitignore` at root covers `target/`; `cs3_windows/.gitignore` covers `dist-electron/`, `dist/`, etc.)
+- **Anchor every ignore rule that names a runtime directory**, and check what a new one
+  matches before adding it. `cs3_windows/.gitignore` carried a bare `extensions/`, meant for
+  the app's runtime archive directory. A pattern with no leading slash matches a directory of
+  that name at **any depth**, so it also matched `src/components/extensions/` and silently
+  swallowed the entire extensions screen. `App.tsx` imported a module no clone contained, so
+  `tsc -b` *and* `vite build` failed on every fresh checkout — the app could not be built at
+  all. The rules are anchored now (`/extensions/`, `/data/`, `/bin/`); `data/` and `bin/` had
+  exactly the same reach. **The screen was rebuilt from the IPC surface on 2026-08-21** and is
+  a fresh implementation, not a recovery — if the original turns up on the author's machine,
+  compare rather than assuming either is newer.
 - **Report honestly.** "Typechecks with `bun run build`" is a true claim. "Tested" is not,
   unless you ran `mvn test` or actually exercised the path. Legal/ecosystem context here
   (GPL-3.0, third-party indexers, community plugin code) makes overclaiming expensive.

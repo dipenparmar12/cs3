@@ -1,0 +1,550 @@
+/*
+ * The extensions screen. Uses the app's tokens from `index.css` throughout, so
+ * a theme change reaches it without this file being touched.
+ *
+ * Every class is prefixed `ext-`. The screen renders a deep tree with several
+ * nested lists, and unprefixed names like `.card` or `.node` collide with the
+ * app's shared styles in ways that only appear at one nesting depth.
+ */
+
+.ext-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.5rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+/* --- header --- */
+
+.ext-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.ext-header__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--accent-light);
+}
+
+.ext-header__title h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  color: var(--text-main);
+}
+
+.ext-header__summary {
+  margin: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.ext-header__summary strong {
+  color: var(--text-main);
+}
+
+/* --- tabs --- */
+
+.ext-tabs {
+  display: flex;
+  gap: 0.4rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ext-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.6rem 0.9rem;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+  transition: var(--transition);
+}
+
+.ext-tab:hover {
+  color: var(--text-main);
+}
+
+.ext-tab--on {
+  color: var(--text-main);
+  border-bottom-color: var(--accent-primary);
+}
+
+.ext-tab__label {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.ext-tab__hint {
+  font-size: 0.72rem;
+  color: var(--text-subtle);
+}
+
+/* --- tree --- */
+
+.ext-tree,
+.ext-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.ext-children {
+  /* The rail makes the three levels readable without indenting off the page. */
+  margin: 0.35rem 0 0.25rem 1.4rem;
+  padding-left: 0.85rem;
+  border-left: 1px solid var(--border-color);
+}
+
+.ext-node {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 0.55rem 0.7rem;
+}
+
+.ext-node--provider {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  background: transparent;
+  border-color: transparent;
+  padding: 0.3rem 0.4rem;
+}
+
+.ext-node--provider:hover {
+  background: var(--bg-card-hover);
+}
+
+.ext-node--extension {
+  background: transparent;
+  border-color: transparent;
+  padding: 0.25rem 0;
+}
+
+/*
+ * A node silenced by an ancestor is dimmed but its own toggle stays live and
+ * stays *on*. Showing it as off would make the switch look broken: clicking it
+ * would change nothing visible, because the ancestor is what is deciding.
+ */
+.ext-node--inherited > .ext-node__row,
+.ext-node--inherited.ext-node--provider {
+  opacity: 0.55;
+}
+
+.ext-node__row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.ext-node__disclose {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.ext-node__disclose-spacer {
+  width: 14px;
+}
+
+.ext-node__icon {
+  color: var(--text-subtle);
+  flex-shrink: 0;
+}
+
+.ext-node__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.ext-node__name {
+  color: var(--text-main);
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.ext-node__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.ext-node__origin {
+  font-size: 0.7rem;
+  color: var(--text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ext-node__reason {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  color: var(--text-subtle);
+}
+
+.ext-node__reason--warn {
+  color: var(--status-warning);
+}
+
+/* --- chips --- */
+
+.ext-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.08rem 0.36rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.ext-chip--type { color: var(--accent-light); }
+.ext-chip--adult { background: rgba(239, 68, 68, 0.15); color: var(--status-error); }
+.ext-chip--bundled { color: var(--text-subtle); }
+.ext-chip--verified { background: rgba(16, 185, 129, 0.15); color: var(--status-success); }
+.ext-chip--unverified { background: rgba(245, 158, 11, 0.15); color: var(--status-warning); }
+.ext-chip--installed { background: rgba(59, 130, 246, 0.15); color: var(--accent-light); }
+.ext-chip--good { background: rgba(16, 185, 129, 0.15); color: var(--status-success); }
+.ext-chip--warn { background: rgba(245, 158, 11, 0.15); color: var(--status-warning); }
+.ext-chip--bad { background: rgba(239, 68, 68, 0.15); color: var(--status-error); }
+
+/* --- toggle --- */
+
+.ext-toggle {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.ext-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+.ext-toggle__track {
+  width: 32px;
+  height: 18px;
+  border-radius: var(--radius-full);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  transition: var(--transition);
+  position: relative;
+}
+
+.ext-toggle__track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  background: var(--text-subtle);
+  transition: var(--transition);
+}
+
+.ext-toggle input:checked + .ext-toggle__track {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.ext-toggle input:checked + .ext-toggle__track::after {
+  transform: translateX(14px);
+  background: #fff;
+}
+
+.ext-toggle input:disabled + .ext-toggle__track {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ext-toggle input:focus-visible + .ext-toggle__track {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+/* --- buttons --- */
+
+.ext-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.38rem 0.7rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-main);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.ext-button:hover:not(:disabled) { background: var(--bg-card-hover); }
+.ext-button:disabled { opacity: 0.5; cursor: not-allowed; }
+.ext-button--primary { background: var(--accent-primary); border-color: var(--accent-primary); color: #fff; }
+.ext-button--primary:hover:not(:disabled) { background: var(--accent-hover); }
+.ext-button--danger { color: var(--status-error); }
+
+.ext-icon-button {
+  display: inline-flex;
+  padding: 0.3rem;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.ext-icon-button:hover:not(:disabled) { color: var(--status-error); background: var(--bg-input); }
+.ext-icon-button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ext-link { display: inline-flex; padding: 0.3rem; color: var(--text-subtle); }
+.ext-link:hover { color: var(--accent-light); }
+
+/* --- panels, filters, cards --- */
+
+.ext-panel { display: flex; flex-direction: column; gap: 0.9rem; }
+
+.ext-panel__head { display: flex; flex-direction: column; gap: 0.15rem; }
+.ext-panel__head h4 { margin: 0; color: var(--text-main); font-size: 0.98rem; }
+
+.ext-filterbar {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.ext-search {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  color: var(--text-subtle);
+  flex: 1;
+  min-width: 190px;
+}
+
+.ext-search input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-main);
+  font-size: 0.83rem;
+}
+
+.ext-facets { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+
+.ext-facet {
+  padding: 0.28rem 0.55rem;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.ext-facet:hover { color: var(--text-main); }
+.ext-facet--on { background: var(--accent-primary); border-color: var(--accent-primary); color: #fff; }
+
+.ext-custom-url { display: flex; gap: 0.5rem; }
+
+.ext-custom-url input {
+  flex: 1;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  font-size: 0.83rem;
+  outline: none;
+}
+
+.ext-custom-url input:focus { border-color: var(--accent-primary); }
+
+.ext-hint { margin: 0; font-size: 0.74rem; color: var(--text-subtle); }
+.ext-hint code { background: var(--bg-input); padding: 0 0.25rem; border-radius: 3px; }
+
+.ext-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.7rem;
+}
+
+.ext-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.75rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.ext-card__head { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.ext-card__name { color: var(--text-main); font-weight: 600; font-size: 0.88rem; }
+
+.ext-card__description {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.ext-card__meta { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.ext-card__actions { display: flex; gap: 0.4rem; align-items: center; margin-top: auto; }
+
+/* --- progress, messages --- */
+
+.ext-progress {
+  position: relative;
+  height: 1.15rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  overflow: hidden;
+}
+
+.ext-progress__bar {
+  height: 100%;
+  background: var(--accent-primary);
+  transition: width 0.25s ease;
+}
+
+.ext-progress__label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  color: var(--text-main);
+}
+
+.ext-empty {
+  margin: 0;
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  background: var(--bg-card);
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.ext-error {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--status-error);
+  font-size: 0.82rem;
+}
+
+.ext-warnings {
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius-sm);
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.ext-warnings li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  color: var(--status-warning);
+}
+
+/* --- footer --- */
+
+.ext-footer { border-top: 1px solid var(--border-color); padding-top: 0.9rem; }
+
+.ext-adult {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.83rem;
+}
+
+.ext-adult input { margin-top: 0.2rem; }
+.ext-adult span { display: flex; flex-direction: column; gap: 0.15rem; }
+.ext-adult em { font-style: normal; font-size: 0.72rem; color: var(--text-subtle); }
+
+/* --- motion --- */
+
+.ext-spin { animation: ext-spin 1s linear infinite; }
+
+@keyframes ext-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ext-spin { animation: none; }
+  .ext-button,
+  .ext-facet,
+  .ext-toggle__track,
+  .ext-toggle__track::after,
+  .ext-progress__bar {
+    transition: none;
+  }
+}

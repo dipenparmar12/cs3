@@ -23,15 +23,30 @@ dist-ssr
 *.sln
 dist-electron/
 
+# Every rule below is ANCHORED with a leading slash, and that is load-bearing
+# rather than tidiness. A bare `extensions/` matches a directory of that name at
+# *any* depth, so the rule meant for the app's runtime archive directory also
+# matched `src/components/extensions/` — and silently swallowed the whole
+# extensions screen, ten files of it, which is why `App.tsx` imports a module
+# that is not in this repository. `data/` and `bin/` had exactly the same reach.
+# Anchor anything naming a runtime directory; the words are too ordinary not to
+# collide with a source folder eventually.
+
 # Portable tools fetched on first use: aria2c, yt-dlp, ffmpeg, ffprobe.
 # Downloaded at runtime into the app's private bin directory, never vendored —
 # ffmpeg and ffprobe alone are ~290 MB.
-bin/
+/bin/
 
 # Created when the app (or a probe harness) runs with this directory as its
 # working directory: the sidecar falls back to cwd when Electron's `app` is not
 # available. Translated plugin jars, the datastore and installed .cs3 archives
 # are all per-machine state, never source.
-cs3-runtime/
-data/
-extensions/
+/cs3-runtime/
+/data/
+/extensions/
+
+# ffmpeg, ffprobe and mpv, staged for packaging by
+# tools/package/build-media-runtime.mjs. Fetched at build time from their
+# publishers and copied into resources/media/ — around 280 MB of third-party
+# binaries that do not belong in git history, exactly like tools/toolchain/.
+/media-runtime/
