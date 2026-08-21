@@ -112,6 +112,11 @@ const transcoder = new MediaTranscoder({
 const PLAIN: RendererCapabilities = {
   video: { h264: true, vp9: true, av1: true, hevc: false, hevc10: false },
 };
+
+/** A build with platform HEVC decoders — the case that reaches the copy path. */
+const HEVC_HOST_CAPS: RendererCapabilities = {
+  video: { h264: true, vp9: true, av1: true, hevc: true, hevc10: true },
+};
 const CPU_HOST: HostEncodeCapability = { hardware: false, accelerator: 'cpu', logicalCores: 8 };
 
 /** Runs the whole chain and returns the converted bytes plus what they contain. */
@@ -133,7 +138,15 @@ async function convert(file: string, caps = PLAIN, host = CPU_HOST) {
   return { inspection, decision, bytes, result: probeJson(out) };
 }
 
-type Stream = { codec_type?: string; codec_name?: string; pix_fmt?: string; channels?: number; height?: number };
+type Stream = {
+  codec_type?: string;
+  codec_name?: string;
+  /** The MP4 sample entry — `avc1`, `hev1`, `hvc1`. The HEVC one decides playability. */
+  codec_tag_string?: string;
+  pix_fmt?: string;
+  channels?: number;
+  height?: number;
+};
 const streamsOf = (probe: Record<string, unknown>) => (probe.streams ?? []) as Stream[];
 const videoOf = (probe: Record<string, unknown>) =>
   streamsOf(probe).find((s) => s.codec_type === 'video');
@@ -230,6 +243,38 @@ test('MKV / H.264 / AAC is remuxed to fragmented MP4 with both streams intact', 
   assert.equal(bytes.subarray(4, 8).toString('latin1'), 'ftyp');
   assert.equal(videoOf(result)?.codec_name, 'h264');
   assert.equal(audioOf(result)?.codec_name, 'aac');
+});
+
+test('HEVC copied into MP4 carries the hvc1 tag a browser will accept', async () => {
+  /**
+   * The one failure in this file that exit codes cannot catch, and the reason
+   * it is asserted on the bytes rather than on the process.
+   *
+   * HEVC has two MP4 sample entries. `hev1` keeps parameter sets in-band;
+   * `hvc1` puts them in the sample description, and **browsers accept only
+   * `hvc1`**. ffmpeg's muxer defaults to `hev1` when copying, so the remux
+   * exits 0, produces a structurally valid MP4 with the right codecs in it, and
+   * plays nothing at all.
+   *
+   * It is the exact mismatch the capability probe sets up: `VIDEO_CODEC_PROBES`
+   * asks about `hvc1.1.6.L93.B0`, and a build that says yes to that was then
+   * handed `hev1`. Measured on the bundled ffmpeg before the fix: `hev1`.
+   */
+  const file = synthesise('hevc-remux.mkv', [
+    '-c:v', 'libx265', '-pix_fmt', 'yuv420p', '-preset', 'ultrafast',
+    '-x265-params', 'log-level=none',
+    '-c:a', 'aac', '-ac', '2', '-shortest',
+  ]);
+  const { decision, bytes, result } = await convert(file, HEVC_HOST_CAPS);
+  assert.equal(decision.strategy, 'REMUX_CONTAINER');
+  assert.equal(decision.plan.videoTag, 'hvc1');
+  assert.equal(bytes.subarray(4, 8).toString('latin1'), 'ftyp');
+  assert.equal(videoOf(result)?.codec_name, 'hevc');
+  assert.equal(
+    videoOf(result)?.codec_tag_string,
+    'hvc1',
+    'hev1 mux is valid, plays in VLC, and shows nothing in a browser'
+  );
 });
 
 test('VP8 is remuxed into WebM, and the output really is a WebM', async () => {

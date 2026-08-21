@@ -97,6 +97,34 @@ export interface PlaybackEngineDeps {
 
 const log = scopedLogger('playback');
 
+/**
+ * What to say about a strategy, given that it may not be the one that was
+ * decided.
+ *
+ * `capability.explanation` describes the decision the *inspection* reached. When
+ * the player escalates — the element rejected a remux, and `prepare` was called
+ * again with `force` — the strategy becomes `FULL_TRANSCODE` while that
+ * explanation stays behind, and the two are then read together. The log line
+ * this produced was self-contradicting and was reported as a bug:
+ *
+ *     FULL_TRANSCODE: Repackaged into fragmented MP4 without re-encoding: …
+ *
+ * A full transcode is re-encoding. Worse than the contradiction, the sentence
+ * hid the event worth knowing about: a remux had been produced, the player had
+ * refused it, and the app had fallen back. Saying so is what turns this line
+ * into the start of an investigation instead of the end of one.
+ */
+function explanationFor(
+  strategy: PlaybackDiagnosticEvent['selectedStrategy'],
+  capability: SourceCapabilityModel
+): string {
+  if (strategy === capability.requiredStrategy) return capability.explanation;
+  return (
+    `re-encoded after ${capability.requiredStrategy} was rejected by the player ` +
+    `(that decision was: ${capability.explanation})`
+  );
+}
+
 export class PlaybackEngine {
   private capabilities: RendererCapabilities | null = null;
   private cache = new Map<string, CachedCapability>();
@@ -645,7 +673,7 @@ export class PlaybackEngine {
         source: request.provider,
         message: error
           ? `${error.message} (${strategy})`
-          : `${strategy}: ${capability.explanation}`,
+          : `${strategy}: ${explanationFor(strategy, capability)}`,
         detail:
           `container=${event.container} video=${event.videoCodec}` +
           `${event.videoBitDepth > 8 ? `/${event.videoBitDepth}-bit` : ''}@${event.resolution} ` +

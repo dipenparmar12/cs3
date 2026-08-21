@@ -72,15 +72,15 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (212 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (216 tests, Node type-stripping — no framework) |
 | IPC envelope only | `cs3_windows/` | `bun run test:ipc` (13 cases, pure) |
 | Formatters only | `cs3_windows/` | `bun run test:format` (19 cases, pure) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Source export only | `cs3_windows/` | `bun run test:export` (13 cases, pure) |
 | Logging only | `cs3_windows/` | `bun run test:log` (17 cases, real files in a temp dir) |
 | Home providers only | `cs3_windows/` | `bun run test:home` (9 cases, pure) |
-| Media decisions only | `cs3_windows/` | `bun run test:media` (53 cases, no ffmpeg needed) |
-| Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
+| Media decisions only | `cs3_windows/` | `bun run test:media` (66 cases, no ffmpeg needed) |
+| Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (17 cases, real ffmpeg; skips itself without it) |
 | Native engine only | `cs3_windows/` | `bun run test:native` (15 cases, spawns a real mpv; skips itself without it) |
 | Source liveness only | `cs3_windows/` | `bun run test:probe` (8 cases, pure) |
 | Sidecar stderr only | `cs3_windows/` | `bun run test:sidecar-log` (7 cases, pure) |
@@ -1876,6 +1876,53 @@ Loopback transport failures are no longer fatal. **Status codes still are, inclu
 loopback**, because the media proxy forwards the upstream status: a 403 arriving on
 127.0.0.1 really is the CDN refusing. Excusing loopback wholesale would trade one wrong
 answer for its opposite. `unreadableSource.test.mts` (8 cases) pins both directions.
+
+### HEVC copied into MP4 must be tagged `hvc1`
+
+Reported 2026-08-21 as `Repackaged into fragmented MP4 without re-encoding:
+matroska,webm cannot be demuxed by the browser` on streams that then did not play.
+
+HEVC has two sample entries in MP4. `hev1` keeps parameter sets in-band; `hvc1` puts them
+in the sample description, and **browsers accept only `hvc1`**. ffmpeg's MP4 muxer defaults
+to `hev1` when copying, so a remux of an HEVC Matroska exits 0, produces a structurally
+valid MP4 with the right codecs in it, and plays nothing — the same failure family as
+Vorbis-in-MP4 above, and the same reason it is invisible: **exit status says success, so
+nothing downstream can catch it.**
+
+It is the exact mismatch the capability probe sets up. `VIDEO_CODEC_PROBES` asks
+`canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"')` — the **hvc1** form — so a build with
+platform HEVC decoders answers yes, the decision engine picks `REMUX_CONTAINER`, and the
+muxer then writes `hev1`. The app asked one question and delivered the other answer.
+Measured on the bundled ffmpeg: `-c:v copy` into `-f mp4` gives `hev1`; adding
+`-tag:v hvc1` gives `hvc1`.
+
+`TransformationPlan.videoTag` carries the decision, set by `decisionEngine` and applied by
+`mediaTranscoder`. It belongs to the **plan**, not the executor: the transcoder should not
+have to re-derive the source codec to know what to write. Only HEVC ever sets it — H.264
+already muxes as `avc1`, and WebM has no sample entries — and both MP4 copy paths set it,
+including the one that re-encodes audio beside copied video.
+
+Pinned twice, because one of the two would pass on its own: three cases in
+`decisionEngine.test.mts` for the decision, and one in `pipeline.test.mts` that runs real
+ffmpeg and **asserts on `codec_tag_string` in the output**, not on the exit code. Verified
+by reverting: `'hev1' !== 'hvc1'`.
+
+### A forced transcode said it was not re-encoding
+
+Same report, and the reason the above took a second look to find. `PlaybackEngine.record`
+built its message as `${strategy}: ${capability.explanation}`, but when the player escalates
+— the element rejected a remux, so `prepare` is called again with `force` — the strategy
+becomes `FULL_TRANSCODE` while the cached explanation stays behind. The log line
+contradicted itself:
+
+```
+FULL_TRANSCODE: Repackaged into fragmented MP4 without re-encoding: …
+```
+
+Worse than the contradiction, it hid the event worth knowing about: a remux had been
+produced, the player had refused it, and the app had fallen back. `explanationFor` says so
+now, and names the superseded decision — which is what turns that line into the start of an
+investigation rather than the end of one.
 
 ### FFmpeg 7.1 silently broke the image-segment fix
 

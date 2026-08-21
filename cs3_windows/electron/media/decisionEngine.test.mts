@@ -185,7 +185,7 @@ test('MKV / H.264 / AAC is remuxed, both streams copied', () => {
   assert.equal(decision.plan.containerAction, 'mp4_fragmented');
 });
 
-test('HEVC copied into MP4 is tagged hvc1, not ffmpeg's default hev1', () => {
+test("HEVC copied into MP4 is tagged hvc1, not ffmpeg's default hev1", () => {
   /**
    * The difference between a stream that plays and one that does not, and it
    * gives nothing away when it is wrong: ffmpeg exits 0, the MP4 is valid, both
@@ -196,7 +196,7 @@ test('HEVC copied into MP4 is tagged hvc1, not ffmpeg's default hev1', () => {
    * `hvc1`. ffmpeg's muxer defaults to `hev1` when copying.
    *
    * It is the exact mismatch the capability probe sets up: `VIDEO_CODEC_PROBES`
-   * asks `canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"')` — the *hvc1*
+   * asks `canPlayType` with the codecs string `hvc1.1.6.L93.B0` — the *hvc1*
    * form — so a build that answers yes is then handed `hev1`.
    */
   const decision = decide(
