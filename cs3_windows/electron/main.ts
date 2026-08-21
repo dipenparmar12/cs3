@@ -1892,6 +1892,16 @@ async function describeUnreadableSource(url: string): Promise<{
       };
     }
 
+    const contentType = response.headers.get('content-type')?.toLowerCase() || '';
+    if (contentType.includes('text/html') || contentType.includes('application/xhtml+xml')) {
+      return {
+        status: response.status,
+        dead: true,
+        reason:
+          'The source returned a web page instead of a media stream (access denied or bot challenge). The link may have expired — try another source.',
+      };
+    }
+
     return {
       status: response.status,
       dead: false,

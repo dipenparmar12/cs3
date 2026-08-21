@@ -354,19 +354,9 @@ export class MediaProxy {
     const hasUserAgent = Object.keys(route.headers).some(
       (k) => k.toLowerCase() === 'user-agent'
     );
-    const hasReferer = Object.keys(route.headers).some(
-      (k) => k.toLowerCase() === 'referer'
-    );
-
-    let defaultReferer = route.url;
-    try {
-      const u = new URL(route.url);
-      defaultReferer = `${u.protocol}//${u.host}/`;
-    } catch {}
 
     const requestHeaders: Record<string, string> = alignRefererScheme(route.url, {
       ...(hasUserAgent ? {} : { 'User-Agent': CHROME_USER_AGENT }),
-      ...(hasReferer ? {} : { Referer: defaultReferer }),
       ...route.headers,
       ...(req.headers.range ? { Range: String(req.headers.range) } : {}),
     });

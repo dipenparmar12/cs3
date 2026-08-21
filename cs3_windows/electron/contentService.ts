@@ -912,6 +912,11 @@ export class ContentService {
          * ordering and the loopback server have all been in place the entire
          * time and were simply never reached from this direction.
          */
+        const directHeaders: Record<string, string> = { ...(link.headers ?? {}) };
+        if (link.referer && !Object.keys(directHeaders).some((k) => k.toLowerCase() === 'referer')) {
+          directHeaders.Referer = link.referer;
+        }
+
         const routing = torrent
           ? {
               magnet: address.startsWith('magnet:') ? address : '',
@@ -923,7 +928,7 @@ export class ContentService {
               magnet: '',
               torrentUrl: undefined,
               directUrl: address,
-              directHeaders: link.headers,
+              directHeaders,
             };
 
         return {
