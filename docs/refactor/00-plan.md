@@ -1,11 +1,42 @@
 # Refactoring plan — CloudStream 3 Desktop
 
-Status: **in progress.** Written 2026-08-21 from a full read of `cs3_windows/`, `sidecar/`
-and `tools/`. Every number below was counted, not estimated; the commands that produced
+Status: **Phases 1 and 2.1–2.2 done; Phase 2.3–2.5 and Phase 3 outstanding.** Written
+2026-08-21 from a full read of `cs3_windows/`, `sidecar/` and `tools/`. Every number below was counted, not estimated; the commands that produced
 them are in §7 so they can be re-run to measure progress.
 
 The objective is **internal only**: the same features, the same behaviour, the same IPC
 surface, the same rendered pixels. Nothing here removes a capability or changes a contract.
+
+---
+
+## 0. Progress
+
+| Counter | Before | Now |
+|---|---:|---:|
+| `main.ts` lines | 3,150 | **713** |
+| Largest IPC module | — | 250 |
+| Hand-written envelopes in `main.ts` | 68 | **0** |
+| `removeListener` in `preload.ts` | 14 | **2** |
+| Local byte/speed formatters in `src/` | 9 | **0** |
+| Debounced-persistence implementations | 5 | 3 (2 adopted) |
+| `DisabledSet` copies in `PluginManager` | 3 | **1** |
+| Tests | 162 | **194** |
+| IPC registrations | 486 | **486** (verified identical) |
+| Inline `style={{` in `src/` | 572 | 572 *(Phase 3)* |
+| `window.cloudstream` reaches | 332 | 335 *(Phase 3)* |
+
+**Done:** Phase 1.1–1.4 (envelope, JSON store, disabled set, formatters), the preload
+subscription helper, and Phase 2.1–2.2 (the `main.ts` split into 20 per-domain registrars
+plus the `Services` bag).
+
+**Not started:** Phase 1.5 (`src/api/client.ts`), 1.6 (`historyEvents.ts`), Phase 2.3
+(`PluginManager` split), 2.4 (`binaryDownloader`), 2.5 (`ContentService.discover`), and all
+of Phase 3.
+
+**One verification tool was built and is worth keeping:** `tools/refactor/ipc-surface.mjs`
+prints the whole IPC surface as a sorted manifest. A channel name is a string on both sides
+of the bridge and the compiler cannot see it, so a rename or a drop typechecks perfectly and
+fails at runtime as a feature that silently does nothing. Snapshot before, diff after.
 
 ---
 
