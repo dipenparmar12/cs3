@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, net, shell } from 'electron';
+import { app, BrowserWindow, dialog, Menu, net, shell } from 'electron';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -1156,14 +1156,12 @@ handle(
 
 // --- saved detail pages (bookmarks) ---------------------------------------
 
-ipcMain.handle('bookmarks:list', async () => ({
-  ok: true,
+handle('bookmarks:list', async () => ({
   bookmarks: bookmarks.list(),
   facets: bookmarks.originFacets(),
 }));
 
-ipcMain.handle('bookmarks:get', async (_, mediaUrl: string) => ({
-  ok: true,
+handle('bookmarks:get', async (mediaUrl: string) => ({
   bookmark: bookmarks.get(mediaUrl),
 }));
 
@@ -1175,30 +1173,25 @@ ipcMain.handle('bookmarks:get', async (_, mediaUrl: string) => ({
  * already dropped it, because one of the pair failed and the UI only checked
  * the other.
  */
-ipcMain.handle(
+handle(
   'bookmarks:toggle',
-  async (_, input: Parameters<BookmarkStore['toggle']>[0]) => {
-    try {
-      return { ok: true, ...bookmarks.toggle(input) };
-    } catch (error) {
-      return { ...fail(error), saved: false, bookmark: null };
-    }
-  }
+  async (input: Parameters<BookmarkStore['toggle']>[0]) => {
+    return { ...bookmarks.toggle(input) };
+  },
+  { saved: false, bookmark: null }
 );
 
-ipcMain.handle('bookmarks:remove', async (_, mediaUrl: string) => ({
-  ok: true,
+handle('bookmarks:remove', async (mediaUrl: string) => ({
   removed: bookmarks.remove(mediaUrl),
 }));
 
-ipcMain.handle('bookmarks:setNote', async (_, mediaUrl: string, note?: string) => ({
-  ok: true,
+handle('bookmarks:setNote', async (mediaUrl: string, note?: string) => ({
   bookmark: bookmarks.setNote(mediaUrl, note),
 }));
 
-ipcMain.handle('bookmarks:markOpened', async (_, mediaUrl: string) => {
+handle('bookmarks:markOpened', async (mediaUrl: string) => {
   bookmarks.markOpened(mediaUrl);
-  return { ok: true };
+  return {};
 });
 
 // --- provider analytics and ranking ---------------------------------------
@@ -1210,57 +1203,52 @@ ipcMain.handle('bookmarks:markOpened', async (_, mediaUrl: string) => {
  * other: a score with no counters behind it cannot be argued with, and
  * counters with no score are a spreadsheet.
  */
-ipcMain.handle('analytics:getLeaderboard', async () => {
-  try {
+handle(
+  'analytics:getLeaderboard',
+  async () => {
     return {
-      ok: true,
       scores: providerRecommender.leaderboard(),
       records: providerAnalytics.all(),
       settings: providerAnalytics.getSettings(),
       criteria: providerRanking.criteria(),
     };
-  } catch (error) {
-    return { ...fail(error), scores: [], records: [], criteria: [] };
-  }
-});
+  },
+  { scores: [], records: [], criteria: [] }
+);
 
-ipcMain.handle('analytics:getRecommendations', async (_, limit?: number) => {
-  try {
-    return { ok: true, recommendations: providerRecommender.recommendations(limit ?? 20) };
-  } catch (error) {
-    return { ...fail(error), recommendations: [] };
-  }
-});
+handle(
+  'analytics:getRecommendations',
+  async (limit?: number) => {
+    return { recommendations: providerRecommender.recommendations(limit ?? 20) };
+  },
+  { recommendations: [] }
+);
 
-ipcMain.handle('analytics:getSettings', async () => ({
-  ok: true,
+handle('analytics:getSettings', async () => ({
   settings: providerAnalytics.getSettings(),
   criteria: providerRanking.criteria(),
 }));
 
-ipcMain.handle(
+handle(
   'analytics:setSettings',
-  async (_, next: Partial<ReturnType<typeof providerAnalytics.getSettings>>) => {
-    try {
-      return { ok: true, settings: providerAnalytics.setSettings(next) };
-    } catch (error) {
-      return { ...fail(error), settings: providerAnalytics.getSettings() };
-    }
-  }
+  async (next: Partial<ReturnType<typeof providerAnalytics.getSettings>>) => {
+    return { settings: providerAnalytics.setSettings(next) };
+  },
+  { settings: providerAnalytics.getSettings() }
 );
 
-ipcMain.handle('analytics:setWeight', async (_, id: string, weight: number) => {
-  try {
+handle(
+  'analytics:setWeight',
+  async (id: string, weight: number) => {
     providerRanking.setWeight(id, weight);
-    return { ok: true, criteria: providerRanking.criteria() };
-  } catch (error) {
-    return { ...fail(error), criteria: providerRanking.criteria() };
-  }
-});
+    return { criteria: providerRanking.criteria() };
+  },
+  { criteria: providerRanking.criteria() }
+);
 
-ipcMain.handle('analytics:resetWeights', async () => {
+handle('analytics:resetWeights', async () => {
   providerRanking.resetWeights();
-  return { ok: true, criteria: providerRanking.criteria() };
+  return { criteria: providerRanking.criteria() };
 });
 
 /**
@@ -1270,28 +1258,26 @@ ipcMain.handle('analytics:resetWeights', async () => {
  * over scrapes of third-party sites and someone who knows their region's best
  * source should not have to out-argue a running total.
  */
-ipcMain.handle(
-  'analytics:setPreference',
-  async (_, provider: string, preference: 'preferred' | 'blocked' | null) => {
-    providerAnalytics.setPreference(provider, preference);
-    return { ok: true, score: providerRanking.score(provider) };
-  }
-);
+handle('analytics:setPreference', async (provider: string, preference: 'preferred' | 'blocked' | null) => {
+  providerAnalytics.setPreference(provider, preference);
+  return { score: providerRanking.score(provider) };
+
+});
 
 /** The privacy control. Erases the history; the settings survive. */
-ipcMain.handle('analytics:reset', async (_, provider?: string) => {
+handle('analytics:reset', async (provider?: string) => {
   if (provider) providerAnalytics.resetProvider(provider);
   else providerAnalytics.reset();
-  return { ok: true };
+  return {};
 });
 
-ipcMain.handle('analytics:applyAutoEnable', async () => {
-  try {
-    return { ok: true, enabled: providerRecommender.applyAutoEnable() };
-  } catch (error) {
-    return { ...fail(error), enabled: [] };
-  }
-});
+handle(
+  'analytics:applyAutoEnable',
+  async () => {
+    return { enabled: providerRecommender.applyAutoEnable() };
+  },
+  { enabled: [] }
+);
 
 /**
  * Records an outcome only the renderer can see.
@@ -1300,37 +1286,33 @@ ipcMain.handle('analytics:applyAutoEnable', async () => {
  * pictures is known to the `<video>` element and to nothing in the main
  * process. Downloads report from the main process directly.
  */
-ipcMain.handle(
-  'analytics:observe',
-  async (
-    _,
-    input: {
+handle('analytics:observe', async (input: {
       provider: string;
       stage: 'search' | 'detail' | 'links' | 'playback' | 'download';
       outcome: 'success' | 'empty' | 'failure';
       produced?: number;
       latencyMs?: number;
       error?: string;
-    }
-  ) => {
-    providerAnalytics.observe(input);
-    return { ok: true };
-  }
-);
+    }) => {
+  providerAnalytics.observe(input);
+  return {};
+
+});
 
 // --- runtime provisioner ---------------------------------------------------
 
-ipcMain.handle('runtime:getStatus', async () => {
-  try {
+handle(
+  'runtime:getStatus',
+  async () => {
     const status = pluginManager.getSidecar().getProvisioner().getStatus();
-    return { ok: true, ...status };
-  } catch (error) {
-    return { ...fail(error), ready: false, javaReady: false, sidecarReady: false, bridgeReady: false, isAppManaged: false };
-  }
-});
+    return { ...status };
+  },
+  { ready: false, javaReady: false, sidecarReady: false, bridgeReady: false, isAppManaged: false }
+);
 
-ipcMain.handle('runtime:provision', async () => {
-  try {
+handle(
+  'runtime:provision',
+  async () => {
     const provisioner = pluginManager.getSidecar().getProvisioner();
     const ready = await provisioner.provisionRuntime();
     if (ready) {
@@ -1338,33 +1320,34 @@ ipcMain.handle('runtime:provision', async () => {
         console.warn('[runtime:provision] Post-provision provider load failed:', err);
       });
     }
+    // A provision that ran without throwing but did not produce a usable
+    // runtime is not a success, so `ok` tracks `ready` rather than the absence
+    // of an exception.
     return { ok: ready, ready };
-  } catch (error) {
-    return { ...fail(error), ready: false };
-  }
-});
+  },
+  { ready: false }
+);
 
-ipcMain.handle('runtime:test', async () => {
-  try {
+handle(
+  'runtime:test',
+  async () => {
     const provisioner = pluginManager.getSidecar().getProvisioner();
-    const result = await provisioner.testRuntime();
-    return { ...result };
-  } catch (error) {
-    return { ...fail(error), ok: false };
-  }
-});
+    // The provisioner reports its own verdict; spreading it last lets that
+    // verdict stand rather than being overwritten with a blanket success.
+    return { ...(await provisioner.testRuntime()) };
+  },
+  { ok: false }
+);
 
-ipcMain.handle('runtime:clean', async () => {
-  try {
-    const provisioner = pluginManager.getSidecar().getProvisioner();
-    return await provisioner.cleanRuntime();
-  } catch (error) {
-    return { ...fail(error), ok: false };
-  }
-});
+handle(
+  'runtime:clean',
+  async () => ({ ...(await pluginManager.getSidecar().getProvisioner().cleanRuntime()) }),
+  { ok: false }
+);
 
-ipcMain.handle('components:getStatus', async () => {
-  try {
+handle(
+  'components:getStatus',
+  () => {
     const runtime = pluginManager.getSidecar().getProvisioner().getStatus();
     const binaries = binaryDownloader.checkBinaries();
     const mediaReady = Boolean(binaries.ffmpeg && binaries.ffprobe);
@@ -1397,82 +1380,70 @@ ipcMain.handle('components:getStatus', async () => {
         media: mediaReady,
       },
     };
-  } catch (error) {
-    return { ...fail(error), ok: false, allReady: false, missingCount: 3 };
-  }
-});
+  },
+  { ok: false, allReady: false, missingCount: 3 }
+);
 
 /** Catalogue browsing for the home screen. Fast by construction; see `browse`. */
-ipcMain.handle('api:browse', async (_, query: string, provider?: string) => {
-  try {
-    return { ok: true, results: await contentService.browse(query, provider) };
-  } catch (error) {
-    return { ...fail(error), results: [] };
-  }
-});
+handle(
+  'api:browse',
+  async (query: string, provider?: string) => {
+    return { results: await contentService.browse(query, provider) };
+  },
+  { results: [] }
+);
 
-ipcMain.handle('api:loadMedia', async (_, url: string) => {
-  try {
-    return { ok: true, detail: await contentService.load(url) };
-  } catch (error) {
-    return { ...fail(error), detail: null };
-  }
-});
+handle(
+  'api:loadMedia',
+  async (url: string) => {
+    return { detail: await contentService.load(url) };
+  },
+  { detail: null }
+);
 
-ipcMain.handle('api:getSources', async (_, request: SourceQuery) => {
-  try {
-    return { ok: true, ...(await contentService.getSources(request)) };
-  } catch (error) {
-    return {
-      ...fail(error),
-      sources: [],
+handle(
+  'api:getSources',
+  async (request: SourceQuery) => {
+    return { ...(await contentService.getSources(request)) };
+  },
+  { sources: [],
       filtered: [],
       indexerOutcomes: [],
-      query: { title: '' },
-    };
-  }
-});
-
-ipcMain.handle('api:getPluginRuntimeStatus', async () => pluginManager.getRuntimeStatus());
-
-ipcMain.handle('extension:getRuntimeReport', async (_, internalName: string) =>
-  pluginManager.getRuntimeReport(internalName)
+      query: { title: '' }, }
 );
+
+handleRaw('api:getPluginRuntimeStatus', async () => pluginManager.getRuntimeStatus());
+
+handleRaw('extension:getRuntimeReport', async (internalName: string) => pluginManager.getRuntimeReport(internalName));
 
 // --- torrent streaming ---------------------------------------------------
 
-ipcMain.handle(
+handle(
   'torrent:startStream',
-  async (_, source: TorrentResult, season?: number, episode?: number) => {
-    try {
-      return { ok: true, handle: await contentService.startStream(source, season, episode) };
-    } catch (error) {
-      return { ...fail(error), handle: null };
-    }
-  }
+  async (source: TorrentResult, season?: number, episode?: number) => {
+    return { handle: await contentService.startStream(source, season, episode) };
+  },
+  { handle: null }
 );
 
 // Automatic start: tries the ranked sources in order until one actually
 // delivers bytes. This is what "next episode" and "play" use, so a dead swarm
 // costs a few seconds rather than dead-ending the viewer on a black screen.
-ipcMain.handle(
+handle(
   'torrent:startBestStream',
-  async (_, sources: TorrentResult[], season?: number, episode?: number) => {
-    try {
-      return { ok: true, ...(await contentService.startBestStream(sources, season, episode)) };
-    } catch (error) {
-      return { ...fail(error), handle: null, source: null, attempts: [] };
-    }
-  }
+  async (sources: TorrentResult[], season?: number, episode?: number) => {
+    return { ...(await contentService.startBestStream(sources, season, episode)) };
+  },
+  { handle: null, source: null, attempts: [] }
 );
 
-ipcMain.handle('torrent:autoPlay', async (_, request: SourceQuery) => {
-  try {
-    return { ok: true, ...(await contentService.autoPlay(request)) };
-  } catch (error) {
-    return { ...fail(error), handle: null, source: null, attempts: [], query: null };
-  }
-});
+handle(
+  'torrent:autoPlay',
+  async (request: SourceQuery) => {
+    return { ...(await contentService.autoPlay(request)) };
+  },
+  { handle: null, source: null, attempts: [], query: null }
+);
 
 /**
  * Opens a playback session and returns immediately.
@@ -1480,15 +1451,12 @@ ipcMain.handle('torrent:autoPlay', async (_, request: SourceQuery) => {
  * The renderer shows the player on this return, not on a stream being ready;
  * everything after this point arrives as `playback:update` snapshots.
  */
-ipcMain.handle(
+handle(
   'playback:start',
-  async (_, request: SourceQuery, title: string, episodeTitle?: string) => {
-    try {
-      return { ok: true, snapshot: playbackSessions.start(request, title, episodeTitle) };
-    } catch (error) {
-      return { ...fail(error), snapshot: null };
-    }
-  }
+  async (request: SourceQuery, title: string, episodeTitle?: string) => {
+    return { snapshot: playbackSessions.start(request, title, episodeTitle) };
+  },
+  { snapshot: null }
 );
 
 /**
@@ -1498,27 +1466,27 @@ ipcMain.handle(
  * over. This is the opposite: the viewer chose nothing and the app owes them
  * the next candidate.
  */
-ipcMain.handle('playback:skipSource', async (_, sessionId: string, reason: string) => {
-  try {
+handle(
+  'playback:skipSource',
+  async (sessionId: string, reason: string) => {
     diagnostics.record({
       level: 'warn',
       stage: 'playback',
       message: reason,
       detail: 'Source could not be played; advancing to the next.',
     });
-    return { ok: true, snapshot: await playbackSessions.skipCurrentSource(sessionId, reason) };
-  } catch (error) {
-    return { ...fail(error), snapshot: null };
-  }
-});
+    return { snapshot: await playbackSessions.skipCurrentSource(sessionId, reason) };
+  },
+  { snapshot: null }
+);
 
-ipcMain.handle('playback:playNow', async (_, sessionId: string) => {
-  try {
-    return { ok: true, snapshot: await playbackSessions.playNow(sessionId) };
-  } catch (error) {
-    return { ...fail(error), snapshot: null };
-  }
-});
+handle(
+  'playback:playNow',
+  async (sessionId: string) => {
+    return { snapshot: await playbackSessions.playNow(sessionId) };
+  },
+  { snapshot: null }
+);
 
 /**
  * Finds sources without starting one, for the detail screen's picker.
@@ -1527,41 +1495,35 @@ ipcMain.handle('playback:playNow', async (_, sessionId: string) => {
  * picker gets progressive results, a progress count and a cancel for free —
  * rather than a second, worse copy of source discovery living in the renderer.
  */
-ipcMain.handle(
+handle(
   'playback:startDiscovery',
   (
-    _,
     request: SourceQuery,
     title: string,
     episodeTitle?: string,
-    options?: { bypassCache?: boolean }
-  ) => {
-    try {
-      return {
-        ok: true,
-        snapshot: playbackSessions.startDiscovery(request, title, episodeTitle, options ?? {}),
-      };
-    } catch (error) {
-      return { ...fail(error), snapshot: null };
-    }
-  }
+    options?: { bypassCache?: boolean }) => {
+    return {
+      snapshot: playbackSessions.startDiscovery(request, title, episodeTitle, options ?? {}),
+    };
+  },
+  { snapshot: null }
 );
 
-ipcMain.handle('playback:selectSource', async (_, sessionId: string, infoHash: string) => {
-  try {
-    return { ok: true, snapshot: await playbackSessions.selectSource(sessionId, infoHash) };
-  } catch (error) {
-    return { ...fail(error), snapshot: null };
-  }
-});
+handle(
+  'playback:selectSource',
+  async (sessionId: string, infoHash: string) => {
+    return { snapshot: await playbackSessions.selectSource(sessionId, infoHash) };
+  },
+  { snapshot: null }
+);
 
-ipcMain.handle('playback:refreshSources', async (_, sessionId: string) => {
-  try {
-    return { ok: true, snapshot: await playbackSessions.refresh(sessionId) };
-  } catch (error) {
-    return { ...fail(error), snapshot: null };
-  }
-});
+handle(
+  'playback:refreshSources',
+  async (sessionId: string) => {
+    return { snapshot: await playbackSessions.refresh(sessionId) };
+  },
+  { snapshot: null }
+);
 
 /**
  * Stops waiting for the remaining providers, keeping the sources already found.
@@ -1569,21 +1531,17 @@ ipcMain.handle('playback:refreshSources', async (_, sessionId: string) => {
  * Synchronous on purpose: the answer is "stop", and making the viewer wait for
  * the search they are cancelling would be its own small joke.
  */
-ipcMain.handle('playback:cancelSourceSearch', (_, sessionId: string) => {
-  try {
-    return { ok: true, snapshot: playbackSessions.cancelDiscovery(sessionId) };
-  } catch (error) {
-    return { ...fail(error), snapshot: null };
-  }
-});
+handle(
+  'playback:cancelSourceSearch',
+  (sessionId: string) => {
+    return { snapshot: playbackSessions.cancelDiscovery(sessionId) };
+  },
+  { snapshot: null }
+);
 
-ipcMain.handle('playback:stop', async (_, sessionId: string, keepFiles?: boolean) => {
-  try {
-    await playbackSessions.stop(sessionId, keepFiles ?? true);
-    return { ok: true };
-  } catch (error) {
-    return fail(error);
-  }
+handle('playback:stop', async (sessionId: string, keepFiles?: boolean) => {
+  await playbackSessions.stop(sessionId, keepFiles ?? true);
+  return {};
 });
 
 // --- audio compatibility ---------------------------------------------------
@@ -1602,13 +1560,13 @@ ipcMain.handle('playback:stop', async (_, sessionId: string, keepFiles?: boolean
  * only the renderer can answer for the machine in front of the user. The probe
  * strings live beside the codec table they correct.
  */
-ipcMain.handle('media:setCapabilities', async (_, capabilities: RendererCapabilities) => {
+handle('media:setCapabilities', async (capabilities: RendererCapabilities) => {
   // INV-RACE-4: registered during bootstrap, before any playback session opens.
   playbackEngine.setCapabilities(capabilities);
-  return { ok: true };
+  return {};
 });
 
-ipcMain.handle('media:getCodecProbes', async () => VIDEO_CODEC_PROBES);
+handleRaw('media:getCodecProbes', async () => VIDEO_CODEC_PROBES);
 
 // --- external players -----------------------------------------------------
 
@@ -1626,16 +1584,18 @@ ipcMain.handle('media:getCodecProbes', async () => VIDEO_CODEC_PROBES);
  * reachable from the renderer with an arbitrary string, and `shell.openExternal`
  * will happily launch a `file:` or custom-protocol handler if allowed to.
  */
-ipcMain.handle('shell:openExternal', async (_, url: string) => {
+handle('shell:openExternal', async (url: string) => {
+  // Re-checked here because, unlike `setWindowOpenHandler`, this is reachable
+  // from the renderer with an arbitrary string. The refusal is returned as an
+  // answer, not thrown — hence its own `ok: false`, which survives the wrapper.
   if (!/^https?:\/\//i.test(url)) {
     return { ok: false, error: 'Only http and https links can be opened.' };
   }
   await shell.openExternal(url);
-  return { ok: true };
+  return {};
 });
 
-ipcMain.handle('player:listExternal', async (_, refresh?: boolean) => ({
-  ok: true,
+handle('player:listExternal', async (refresh?: boolean) => ({
   players: refresh ? externalPlayers.refresh() : externalPlayers.list(),
   downloads: externalPlayers.getDownloads(),
 }));
@@ -1648,7 +1608,7 @@ ipcMain.handle('player:listExternal', async (_, refresh?: boolean) => ({
  * it got: one it can drive, or one it can only report as running. A UI that
  * offers a seek bar it cannot honour is worse than one that says so.
  */
-ipcMain.handle('external:open', async (_, playerId: string, url: string) => {
+handleRaw('external:open', async (playerId: string, url: string) => {
   if (playerId === 'mpv') {
     /**
      * mpv is ours already. Routing it through `MpvEngine` instead of spawning a
@@ -1676,59 +1636,59 @@ ipcMain.handle('external:open', async (_, playerId: string, url: string) => {
  * the load check could not see — a scraper that returns nothing, rather than an
  * archive that will not link.
  */
-ipcMain.handle(
+handle(
   'extension:rollback',
-  async (_, repositoryUrl: string, internalName: string) => {
-    try {
-      return await pluginManager.rollbackPlugin(repositoryUrl, internalName);
-    } catch (error) {
-      return { ...fail(error), message: 'The previous version could not be restored.' };
-    }
-  }
+  async (repositoryUrl: string, internalName: string) => ({
+    ...(await pluginManager.rollbackPlugin(repositoryUrl, internalName)),
+  }),
+  { message: 'The previous version could not be restored.' }
 );
 
-ipcMain.handle(
-  'extension:hasPreviousVersion',
-  async (_, repositoryUrl: string, internalName: string) => ({
-    ok: true,
+handle('extension:hasPreviousVersion', async (repositoryUrl: string, internalName: string) => ({
     available: pluginManager.hasPreviousVersion(repositoryUrl, internalName),
-  })
-);
+  }));
 
-ipcMain.handle('external:capability', async (_, playerId: string) => ({
-  ok: true,
+handle('external:capability', async (playerId: string) => ({
   capability: playerId === 'mpv' ? (mpvEngine.isAvailable() ? 'full' : 'none') : externalPlayers.capabilityFor(playerId),
 }));
 
-ipcMain.handle('external:snapshot', async () => ({
-  ok: true,
+handle('external:snapshot', async () => ({
   snapshot: externalPlayers.controller()?.current() ?? null,
 }));
 
-ipcMain.handle('external:setPaused', async (_, paused: boolean) => ({
+/**
+ * Transport for a handed-off player.
+ *
+ * `ok` is whether the command *reached* something, not whether the app is
+ * healthy: there may be no controller at all (MPC-HC, PotPlayer), or one whose
+ * HTTP interface was built out. A `false` here is what stops the UI offering a
+ * seek bar that silently does nothing, so it must not be flattened into the
+ * wrapper's success.
+ */
+handle('external:setPaused', async (paused: boolean) => ({
   ok: (await externalPlayers.controller()?.setPaused(paused)) ?? false,
 }));
-ipcMain.handle('external:seek', async (_, seconds: number) => ({
+handle('external:seek', async (seconds: number) => ({
   ok: (await externalPlayers.controller()?.seek(seconds)) ?? false,
 }));
-ipcMain.handle('external:setVolume', async (_, percent: number) => ({
+handle('external:setVolume', async (percent: number) => ({
   ok: (await externalPlayers.controller()?.setVolume(percent)) ?? false,
 }));
-ipcMain.handle('external:setMuted', async (_, muted: boolean) => ({
+handle('external:setMuted', async (muted: boolean) => ({
   ok: (await externalPlayers.controller()?.setMuted(muted)) ?? false,
 }));
-ipcMain.handle('external:setSpeed', async (_, rate: number) => ({
+handle('external:setSpeed', async (rate: number) => ({
   ok: (await externalPlayers.controller()?.setSpeed(rate)) ?? false,
 }));
-ipcMain.handle('external:setFullscreen', async () => ({
+handle('external:setFullscreen', async () => ({
   ok: (await externalPlayers.controller()?.setFullscreen()) ?? false,
 }));
-ipcMain.handle('external:stop', async () => {
+handle('external:stop', async () => {
   await externalPlayers.shutdown();
-  return { ok: true };
+  return {};
 });
 
-ipcMain.handle('player:openExternal', async (_, playerId: string, url: string) => {
+handleRaw('player:openExternal', async (playerId: string, url: string) => {
   const result = externalPlayers.open(playerId, url);
   if (!result.ok) {
     diagnostics.record({
@@ -1814,15 +1774,12 @@ async function describeUnreadableSource(url: string): Promise<{
  * downloadable from directly playable. A 25 GB HEVC 10-bit MKV downloads at full
  * speed and decodes nothing, and conflating the two is the root of PRD-37 §2.
  */
-ipcMain.handle(
+handle(
   'media:inspect',
-  async (_, request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'refresh'>) => {
-    try {
-      return { ok: true, capability: await playbackEngine.inspect(request) };
-    } catch (error) {
-      return { ...fail(error), capability: null };
-    }
-  }
+  async (request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'refresh'>) => {
+    return { capability: await playbackEngine.inspect(request) };
+  },
+  { capability: null }
 );
 
 /**
@@ -1836,27 +1793,25 @@ ipcMain.handle(
  * MP4 and failing identically a second time. There is no longer a code path that
  * attaches an unclassified URL.
  */
-ipcMain.handle('media:prepare', async (_, request: PlaybackStreamRequest) => {
+handle('media:prepare', async (request: PlaybackStreamRequest) => {
   try {
-    return await playbackEngine.prepare(request);
+    return { ...(await playbackEngine.prepare(request)) };
   } catch (error) {
+    // Keeps a local catch: the failure payload echoes the *requested* URL, and
+    // a fallback argument is a sibling of the handler rather than inside it, so
+    // `request` is not in scope there.
     return { ...fail(error), playbackUrl: request?.url ?? '', sessionId: '', subtitles: [] };
   }
 });
 
-ipcMain.handle(
-  'media:switchAudio',
-  async (_, sessionId: string, audioIndex: number, positionSeconds: number) =>
-    playbackEngine.switchAudio(sessionId, audioIndex, positionSeconds)
-);
+handleRaw('media:switchAudio', async (sessionId: string, audioIndex: number, positionSeconds: number) => playbackEngine.switchAudio(sessionId, audioIndex, positionSeconds));
 
-ipcMain.handle('media:closeStream', async (_, sessionId: string) => {
+handle('media:closeStream', async (sessionId: string) => {
   playbackEngine.close(sessionId);
-  return { ok: true };
+  return {};
 });
 
-ipcMain.handle('media:getPlaybackDiagnostics', async (_, sessionId?: string) => ({
-  ok: true,
+handle('media:getPlaybackDiagnostics', async (sessionId?: string) => ({
   events: playbackEngine.getDiagnostics(sessionId),
 }));
 
@@ -1872,7 +1827,7 @@ ipcMain.handle('media:getPlaybackDiagnostics', async (_, sessionId?: string) => 
  * playback started against unclassified content, with the diagnosis arriving
  * afterwards if at all.
  */
-ipcMain.handle('mpv:status', async () => ({ ok: true, status: await mpvEngine.status() }));
+handle('mpv:status', async () => ({ status: await mpvEngine.status() }));
 
 const NATIVE_ENGINE_EMBED_KEY = 'native_engine_embed';
 
@@ -1890,7 +1845,7 @@ function nativeEngineEmbeds(): boolean {
   return datastore.getBool(NATIVE_ENGINE_EMBED_KEY, true);
 }
 
-ipcMain.handle('mpv:open', async (_, request: MpvOpenRequest) => {
+handleRaw('mpv:open', async (request: MpvOpenRequest) => {
   /**
    * The bounds are stripped here rather than withheld by the renderer.
    *
@@ -1913,23 +1868,17 @@ ipcMain.handle('mpv:open', async (_, request: MpvOpenRequest) => {
   return result;
 });
 
-ipcMain.handle('mpv:setPaused', async (_, paused: boolean) => mpvEngine.setPaused(paused));
-ipcMain.handle('mpv:seek', async (_, seconds: number) => mpvEngine.seek(seconds));
-ipcMain.handle('mpv:setVolume', async (_, volume: number) => mpvEngine.setVolume(volume));
-ipcMain.handle('mpv:setMuted', async (_, muted: boolean) => mpvEngine.setMuted(muted));
-ipcMain.handle('mpv:setSpeed', async (_, speed: number) => mpvEngine.setSpeed(speed));
-ipcMain.handle('mpv:setFullscreen', async (_, on: boolean) => mpvEngine.setFullscreen(on));
-ipcMain.handle('mpv:setAudioTrack', async (_, id: number | null) => mpvEngine.setAudioTrack(id));
-ipcMain.handle('mpv:setSubtitleTrack', async (_, id: number | null) =>
-  mpvEngine.setSubtitleTrack(id)
-);
-ipcMain.handle('mpv:addSubtitle', async (_, url: string, title?: string, language?: string) =>
-  mpvEngine.addSubtitle(url, title, language)
-);
-ipcMain.handle('mpv:setSubtitleDelay', async (_, seconds: number) =>
-  mpvEngine.setSubtitleDelay(seconds)
-);
-ipcMain.handle('mpv:stop', async () => mpvEngine.stop());
+handleRaw('mpv:setPaused', async (paused: boolean) => mpvEngine.setPaused(paused));
+handleRaw('mpv:seek', async (seconds: number) => mpvEngine.seek(seconds));
+handleRaw('mpv:setVolume', async (volume: number) => mpvEngine.setVolume(volume));
+handleRaw('mpv:setMuted', async (muted: boolean) => mpvEngine.setMuted(muted));
+handleRaw('mpv:setSpeed', async (speed: number) => mpvEngine.setSpeed(speed));
+handleRaw('mpv:setFullscreen', async (on: boolean) => mpvEngine.setFullscreen(on));
+handleRaw('mpv:setAudioTrack', async (id: number | null) => mpvEngine.setAudioTrack(id));
+handleRaw('mpv:setSubtitleTrack', async (id: number | null) => mpvEngine.setSubtitleTrack(id));
+handleRaw('mpv:addSubtitle', async (url: string, title?: string, language?: string) => mpvEngine.addSubtitle(url, title, language));
+handleRaw('mpv:setSubtitleDelay', async (seconds: number) => mpvEngine.setSubtitleDelay(seconds));
+handleRaw('mpv:stop', async () => mpvEngine.stop());
 
 /**
  * The video rectangle, in CSS pixels relative to the window's content area.
@@ -1938,26 +1887,23 @@ ipcMain.handle('mpv:stop', async () => mpvEngine.stop());
  * has to be cheap: this is a `SetWindowPos` on a native child window, not a
  * restart of anything. mpv keeps rendering into the same handle throughout.
  */
-ipcMain.handle(
-  'mpv:setSurfaceBounds',
-  async (_, bounds: { x: number; y: number; width: number; height: number }) => {
-    mpvEngine.setSurfaceBounds(bounds);
-    return { ok: true };
-  }
-);
+handle('mpv:setSurfaceBounds', async (bounds: { x: number; y: number; width: number; height: number }) => {
+  mpvEngine.setSurfaceBounds(bounds);
+  return {};
+
+});
 
 /** A pull for the current state, for a player that mounted mid-playback. */
-ipcMain.handle('mpv:snapshot', async () => ({ ok: true, snapshot: mpvEngine.snapshot() }));
+handle('mpv:snapshot', async () => ({ snapshot: mpvEngine.snapshot() }));
 
-ipcMain.handle('mpv:getPolicy', async () => ({
-  ok: true,
+handle('mpv:getPolicy', async () => ({
   policy: nativeEnginePolicy(),
   available: mpvEngine.isAvailable(),
   embed: nativeEngineEmbeds(),
   canEmbed: mpvEngine.canEmbed,
 }));
 
-ipcMain.handle('mpv:setEmbed', async (_, embed: boolean) => {
+handle('mpv:setEmbed', async (embed: boolean) => {
   datastore.setBool(NATIVE_ENGINE_EMBED_KEY, embed);
   /**
    * Restarted, not adjusted. `--wid` is a command-line argument: mpv decides
@@ -1966,10 +1912,10 @@ ipcMain.handle('mpv:setEmbed', async (_, embed: boolean) => {
    */
   await mpvEngine.shutdown();
   logger.info('mpv', 'embed_setting_changed', { embed });
-  return { ok: true, embed };
+  return { embed };
 });
 
-ipcMain.handle('mpv:setPolicy', async (_, policy: NativeEngineCapability['policy']) => {
+handle('mpv:setPolicy', (policy: NativeEngineCapability['policy']) => {
   if (policy !== 'off' && policy !== 'auto' && policy !== 'aggressive') {
     return { ok: false, error: `Unknown native engine policy: ${policy}` };
   }
@@ -1980,7 +1926,7 @@ ipcMain.handle('mpv:setPolicy', async (_, policy: NativeEngineCapability['policy
    * appears to do nothing for the next ten minutes on any source already seen.
    */
   playbackEngine.invalidateCapabilityCache();
-  return { ok: true, policy };
+  return { policy };
 });
 
 /**
@@ -1990,7 +1936,7 @@ ipcMain.handle('mpv:setPolicy', async (_, policy: NativeEngineCapability['policy
  * download the app makes and it is only worth making for someone who actually
  * meets the streams that need it.
  */
-ipcMain.handle('binary:setupMpv', async () => {
+handle('binary:setupMpv', async () => {
   try {
     const ok = await binaryDownloader.setupMpv((status, percent) => {
       mainWindow?.webContents.send('binary:setupProgress', { component: 'mpv', status, percent });
@@ -2002,75 +1948,68 @@ ipcMain.handle('binary:setupMpv', async () => {
     if (ok) playbackEngine.invalidateCapabilityCache();
     return { ok, status: await mpvEngine.status() };
   } catch (error) {
+    // Keeps a local catch: the failure payload has to `await` the engine's
+    // status, and a fallback is resolved synchronously — returning a promise
+    // from one would spread a pending object into the reply.
     return { ...fail(error), status: await mpvEngine.status() };
   }
 });
 
-ipcMain.handle('sources:getCacheStats', async () => contentService.getCache().stats());
+handleRaw('sources:getCacheStats', async () => contentService.getCache().stats());
 
-ipcMain.handle('sources:clearCache', async () => {
+handle('sources:clearCache', async () => {
   contentService.getCache().clear();
-  return { ok: true };
+  return {};
 });
 
-ipcMain.handle('torrent:getStats', async (_, infoHash: string) =>
-  torrentEngine.getStats(infoHash)
-);
+handleRaw('torrent:getStats', async (infoHash: string) => torrentEngine.getStats(infoHash));
 
-ipcMain.handle('torrent:selectFile', async (_, infoHash: string, fileIndex: number) =>
-  torrentEngine.selectFile(infoHash, fileIndex)
-);
+handleRaw('torrent:selectFile', async (infoHash: string, fileIndex: number) => torrentEngine.selectFile(infoHash, fileIndex));
 
-ipcMain.handle('torrent:stopStream', async (_, infoHash: string, keepFiles?: boolean) => {
+handleRaw('torrent:stopStream', async (infoHash: string, keepFiles?: boolean) => {
   await torrentEngine.stopStream(infoHash, keepFiles ?? false);
 });
 
-ipcMain.handle('torrent:getActiveStreams', async () => torrentEngine.getActiveStreams());
+handleRaw('torrent:getActiveStreams', async () => torrentEngine.getActiveStreams());
 
-ipcMain.handle('torrent:clearCache', async () => {
-  try {
-    return { ok: true, removed: await torrentEngine.clearCache() };
-  } catch (error) {
-    return { ...fail(error), removed: 0 };
-  }
-});
+handle(
+  'torrent:clearCache',
+  async () => {
+    return { removed: await torrentEngine.clearCache() };
+  },
+  { removed: 0 }
+);
 
-ipcMain.handle('torrent:getCachePath', async () => torrentEngine.getCachePath());
+handleRaw('torrent:getCachePath', async () => torrentEngine.getCachePath());
 
 // --- indexers and source preferences -------------------------------------
 
-ipcMain.handle('indexer:getConfigs', async () => contentService.getRegistry().getConfigs());
+handleRaw('indexer:getConfigs', async () => contentService.getRegistry().getConfigs());
 
-ipcMain.handle('indexer:saveConfig', async (_, config: IndexerConfig) => {
+handleRaw('indexer:saveConfig', async (config: IndexerConfig) => {
   contentService.getRegistry().upsertConfig(config);
   return contentService.getRegistry().getConfigs();
 });
 
-ipcMain.handle('indexer:removeConfig', async (_, id: string) => {
+handleRaw('indexer:removeConfig', async (id: string) => {
   contentService.getRegistry().removeConfig(id);
   return contentService.getRegistry().getConfigs();
 });
 
-ipcMain.handle('indexer:test', async (_, config: IndexerConfig) =>
-  contentService.getRegistry().testIndexer(config)
-);
+handleRaw('indexer:test', async (config: IndexerConfig) => contentService.getRegistry().testIndexer(config));
 
-ipcMain.handle('indexer:getHealth', async () => contentService.getRegistry().getHealth());
+handleRaw('indexer:getHealth', async () => contentService.getRegistry().getHealth());
 
-ipcMain.handle('sources:getPreferences', async () => contentService.getPreferences());
+handleRaw('sources:getPreferences', async () => contentService.getPreferences());
 
-ipcMain.handle('sources:savePreferences', async (_, prefs: Partial<SourcePreferences>) =>
-  contentService.savePreferences(prefs)
-);
+handleRaw('sources:savePreferences', async (prefs: Partial<SourcePreferences>) => contentService.savePreferences(prefs));
 
 // --- downloads -----------------------------------------------------------
 
-ipcMain.handle('download:enqueue', async (_, task: DownloadTask) => downloadService.enqueue(task));
-ipcMain.handle('download:pause', async (_, id: string) => downloadService.pause(id));
-ipcMain.handle('download:resume', async (_, id: string) => downloadService.resume(id));
-ipcMain.handle('download:remove', async (_, id: string, deleteFile?: boolean) =>
-  downloadService.remove(id, deleteFile === true)
-);
+handleRaw('download:enqueue', async (task: DownloadTask) => downloadService.enqueue(task));
+handleRaw('download:pause', async (id: string) => downloadService.pause(id));
+handleRaw('download:resume', async (id: string) => downloadService.resume(id));
+handleRaw('download:remove', async (id: string, deleteFile?: boolean) => downloadService.remove(id, deleteFile === true));
 
 /**
  * How "Delete" should behave, remembered.
@@ -2110,7 +2049,7 @@ const DEFAULT_PLAYER_PREFERENCES: StoredPlayerPreferences = {
   speed: 1,
 };
 
-ipcMain.handle('player:getPreferences', async () => {
+handle('player:getPreferences', async () => {
   const stored = datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null);
   /**
    * Clamped on read, not just on write. A datastore edited by hand — or carried
@@ -2124,56 +2063,54 @@ ipcMain.handle('player:getPreferences', async () => {
   preferences.volume = Math.min(1, Math.max(0, Number(preferences.volume) || 0));
   preferences.speed = Math.min(4, Math.max(0.25, Number(preferences.speed) || 1));
   preferences.muted = preferences.muted === true;
-  return { ok: true, preferences };
+  return { preferences };
 });
 
-ipcMain.handle(
-  'player:setPreferences',
-  async (_, patch: Partial<StoredPlayerPreferences>) => {
-    const current =
-      datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null) ??
-      DEFAULT_PLAYER_PREFERENCES;
-    // Merged rather than replaced: the player writes volume/mute/speed while the
-    // track panels write languages, and a whole-record write from either would
-    // erase the other's choice.
-    datastore.setObject(PLAYER_PREFERENCES_KEY, { ...current, ...patch }, true);
-    return { ok: true };
-  }
-);
+handle('player:setPreferences', async (patch: Partial<StoredPlayerPreferences>) => {
+  const current =
+    datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null) ??
+    DEFAULT_PLAYER_PREFERENCES;
+  // Merged rather than replaced: the player writes volume/mute/speed while the
+  // track panels write languages, and a whole-record write from either would
+  // erase the other's choice.
+  datastore.setObject(PLAYER_PREFERENCES_KEY, { ...current, ...patch }, true);
+  return {};
 
-ipcMain.handle('download:getDeletePreference', async () => {
+});
+
+handle('download:getDeletePreference', async () => {
   const stored = datastore.getString(DELETE_PREFERENCE_KEY, 'ask', true);
   const preference: DeletePreference =
     stored === 'list-only' || stored === 'list-and-file' ? stored : 'ask';
-  return { ok: true, preference };
+  return { preference };
 });
 
-ipcMain.handle('download:setDeletePreference', async (_, preference: DeletePreference) => {
+handle('download:setDeletePreference', (preference: DeletePreference) => {
+  // A bad value from the renderer is an answer, not an exception — and the
+  // wrapper preserves it, because the payload spreads after `ok: true`.
   if (preference !== 'ask' && preference !== 'list-only' && preference !== 'list-and-file') {
     return { ok: false, error: `Unknown delete preference: ${preference}` };
   }
   datastore.setString(DELETE_PREFERENCE_KEY, preference, true);
-  return { ok: true, preference };
+  return { preference };
 });
-ipcMain.handle('download:getQueue', async () => downloadService.getTasks());
+handleRaw('download:getQueue', async () => downloadService.getTasks());
 
 // Season and series downloads. Resolution runs here rather than in the
 // renderer so a long season survives the user navigating away mid-run.
-ipcMain.handle('download:startBatch', async (_, request: BatchDownloadRequest) => {
-  try {
-    return { ok: true, progress: await batchDownloader.start(request) };
-  } catch (error) {
-    return { ...fail(error), progress: null };
-  }
-});
-
-ipcMain.handle('download:cancelBatch', async (_, batchId: string) =>
-  batchDownloader.cancel(batchId)
+handle(
+  'download:startBatch',
+  async (request: BatchDownloadRequest) => {
+    return { progress: await batchDownloader.start(request) };
+  },
+  { progress: null }
 );
 
-ipcMain.handle('download:getActiveBatches', async () => batchDownloader.getActive());
+handleRaw('download:cancelBatch', async (batchId: string) => batchDownloader.cancel(batchId));
 
-ipcMain.handle('download:revealInFolder', async (_, targetPath?: string) => {
+handleRaw('download:getActiveBatches', async () => batchDownloader.getActive());
+
+handleRaw('download:revealInFolder', async (targetPath?: string) => {
   const defaultDir = path.join(os.homedir(), 'Downloads', 'CloudStream');
   const target = targetPath || defaultDir;
   try {
@@ -2207,49 +2144,53 @@ ipcMain.handle('download:revealInFolder', async (_, targetPath?: string) => {
 
 // --- binaries ------------------------------------------------------------
 
-ipcMain.handle('binary:check', async () => binaryDownloader.checkBinaries());
-ipcMain.handle('binary:checkBinaries', async () => binaryDownloader.checkBinaries());
+handleRaw('binary:check', async () => binaryDownloader.checkBinaries());
+handleRaw('binary:checkBinaries', async () => binaryDownloader.checkBinaries());
 
-ipcMain.handle('binary:testAll', async () => binaryDownloader.testAllBinaries());
+handleRaw('binary:testAll', async () => binaryDownloader.testAllBinaries());
 
-ipcMain.handle('binary:testOne', async (_, name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'mpv') => {
+handleRaw('binary:testOne', async (name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'mpv') => {
   return await binaryDownloader.testBinary(name);
 });
 
-ipcMain.handle('binary:remove', async (_, name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'mpv' | 'media' | 'downloads' | 'all') => {
-  const removed = binaryDownloader.removeBinary(name);
-  return { ok: removed };
-});
+handle(
+  'binary:remove',
+  (name: 'aria2c' | 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'mpv' | 'media' | 'downloads' | 'all') => ({
+    // Whether the file went, not whether the attempt threw.
+    ok: binaryDownloader.removeBinary(name),
+  })
+);
 
-ipcMain.handle('binary:setupAria2', async () => {
-  try {
+handle(
+  'binary:setupAria2',
+  async () => {
     const ok = await binaryDownloader.setupAria2((status, percent) => {
       mainWindow?.webContents.send('binary:setupProgress', { component: 'aria2c', status, percent });
     });
     if (ok) await aria2.start().catch(() => {});
     return { ok, message: ok ? 'aria2c ready' : 'aria2c installation failed' };
-  } catch (error) {
-    return { ...fail(error), ok: false, message: 'aria2c installation failed' };
-  }
-});
+  },
+  { ok: false, message: 'aria2c installation failed' }
+);
 
-ipcMain.handle('binary:setupYtDlp', async () => {
-  try {
+handle(
+  'binary:setupYtDlp',
+  async () => {
     const ok = await binaryDownloader.setupYtDlp((status, percent) => {
       mainWindow?.webContents.send('binary:setupProgress', { component: 'yt-dlp', status, percent });
     });
     return { ok, message: ok ? 'yt-dlp ready' : 'yt-dlp installation failed' };
-  } catch (error) {
-    return { ...fail(error), ok: false, message: 'yt-dlp installation failed' };
-  }
-});
+  },
+  { ok: false, message: 'yt-dlp installation failed' }
+);
 
 /**
  * One-click FFmpeg. Progress is pushed so a ~100 MB download can show its
  * state rather than freezing a dialog.
  */
-ipcMain.handle('binary:setupFfmpeg', async () => {
-  try {
+handle(
+  'binary:setupFfmpeg',
+  async () => {
     const ok = await binaryDownloader.setupFfmpeg((status, percent) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('binary:setupProgress', { component: 'ffmpeg', status, percent });
@@ -2263,24 +2204,23 @@ ipcMain.handle('binary:setupFfmpeg', async () => {
         ? 'Media components are installed.'
         : 'The media components could not be installed.',
     };
-  } catch (error) {
-    return { ...fail(error), message: 'The media components could not be installed.' };
-  }
-});
+  },
+  { message: 'The media components could not be installed.' }
+);
 
-ipcMain.handle('binary:setupAll', async () => {
-  try {
+handle(
+  'binary:setupAll',
+  async () => {
     const res = await binaryDownloader.setupAll((component, status, percent) => {
       mainWindow?.webContents.send('binary:setupProgress', { component, status, percent });
     });
     await aria2.start().catch(() => {});
-    return res;
-  } catch (error) {
-    return { ...fail(error), ok: false, message: 'Component setup failed' };
-  }
-});
+    return { ...res };
+  },
+  { ok: false, message: 'Component setup failed' }
+);
 
-ipcMain.handle('binary:setup', async () => {
+handleRaw('binary:setup', async () => {
   try {
     const aria2Ok = await binaryDownloader.setupAria2();
     const ytdlpOk = await binaryDownloader.setupYtDlp();
@@ -2302,62 +2242,54 @@ ipcMain.handle('binary:setup', async () => {
 // --- extensions ----------------------------------------------------------
 
 /** Adult repositories are absent from this list until the user opts in. */
-ipcMain.handle('extension:getOfficialRepositories', async () => bootstrap.visibleRepositories());
+handleRaw('extension:getOfficialRepositories', async () => bootstrap.visibleRepositories());
 
-ipcMain.handle('extension:getBootstrapProgress', async () => bootstrap.getProgress());
+handleRaw('extension:getBootstrapProgress', async () => bootstrap.getProgress());
 
 /** How many extension providers a search asks at once. */
-ipcMain.handle('search:getConcurrency', async () => ({
+handleRaw('search:getConcurrency', async () => ({
   value: pluginManager.searchConcurrency(),
   ...pluginManager.searchConcurrencyBounds(),
 }));
 
-ipcMain.handle('search:setConcurrency', async (_, value: number) => ({
+handleRaw('search:setConcurrency', async (value: number) => ({
   value: pluginManager.setSearchConcurrency(value),
   ...pluginManager.searchConcurrencyBounds(),
 }));
 
-ipcMain.handle('extension:getAdultAllowed', async () => bootstrap.isAdultAllowed());
+handleRaw('extension:getAdultAllowed', async () => bootstrap.isAdultAllowed());
 
 /**
  * Turning adult content off must take effect at once, not at next launch: the
  * provider registry is re-read so anything already loaded stops being offered.
  */
-ipcMain.handle('extension:setAdultAllowed', async (_, enabled: boolean) => {
+handle('extension:setAdultAllowed', async (enabled: boolean) => {
   const value = bootstrap.setAdultAllowed(Boolean(enabled));
-  return { ok: true, enabled: value, providers: await pluginManager.listEnabledProviders() };
+  return { enabled: value, providers: await pluginManager.listEnabledProviders() };
 });
 
-ipcMain.handle('extension:fetchRepository', async (_, repoUrl: string) => {
-  try {
-    return { ok: true, repository: await pluginManager.fetchRepository(repoUrl) };
-  } catch (error) {
-    return { ...fail(error), repository: null };
-  }
-});
-
-ipcMain.handle('extension:analyzePlugin', async (_, plugin: SitePlugin) =>
-  pluginManager.analyzePlugin(plugin)
+handle(
+  'extension:fetchRepository',
+  async (repoUrl: string) => {
+    return { repository: await pluginManager.fetchRepository(repoUrl) };
+  },
+  { repository: null }
 );
 
-ipcMain.handle('extension:installPlugin', async (_, plugin: SitePlugin, repoUrl?: string) =>
-  pluginManager.installPlugin(plugin, repoUrl)
-);
+handleRaw('extension:analyzePlugin', async (plugin: SitePlugin) => pluginManager.analyzePlugin(plugin));
 
-ipcMain.handle('extension:uninstallPlugin', async (_, internalName: string) =>
-  pluginManager.uninstallPlugin(internalName)
-);
+handleRaw('extension:installPlugin', async (plugin: SitePlugin, repoUrl?: string) => pluginManager.installPlugin(plugin, repoUrl));
 
-ipcMain.handle('extension:getInstalledRepositories', async () =>
-  pluginManager.getInstalledRepositories()
-);
+handleRaw('extension:uninstallPlugin', async (internalName: string) => pluginManager.uninstallPlugin(internalName));
+
+handleRaw('extension:getInstalledRepositories', async () => pluginManager.getInstalledRepositories());
 
 /**
  * Removing a repository now uninstalls the extensions it brought with it, so the
  * reply reports both — the caller needs to be able to say "removed, and 12
  * extensions with it" rather than implying nothing else changed.
  */
-ipcMain.handle('extension:removeRepository', async (_, repoUrl: string) => {
+handleRaw('extension:removeRepository', async (repoUrl: string) => {
   const removedExtensions = pluginManager.removeRepository(repoUrl);
   return { repositories: pluginManager.getInstalledRepositories(), removedExtensions };
 });
@@ -2369,31 +2301,15 @@ ipcMain.handle('extension:removeRepository', async (_, repoUrl: string) => {
  * bundled repository the user does not want is silenced instantly and can be
  * brought back without re-downloading ~170 archives.
  */
-ipcMain.handle(
-  'extension:setRepositoryEnabled',
-  async (_, repositoryId: string, enabled: boolean) =>
-    pluginManager.setRepositoryEnabled(repositoryId, enabled)
-);
+handleRaw('extension:setRepositoryEnabled', async (repositoryId: string, enabled: boolean) => pluginManager.setRepositoryEnabled(repositoryId, enabled));
 
-ipcMain.handle(
-  'extension:setRepositoriesEnabled',
-  async (_, repositoryIds: string[], enabled: boolean) =>
-    pluginManager.setRepositoriesEnabled(repositoryIds, enabled)
-);
+handleRaw('extension:setRepositoriesEnabled', async (repositoryIds: string[], enabled: boolean) => pluginManager.setRepositoriesEnabled(repositoryIds, enabled));
 
-ipcMain.handle(
-  'extension:setExtensionEnabled',
-  async (_, internalName: string, enabled: boolean) =>
-    pluginManager.setExtensionEnabled(internalName, enabled)
-);
+handleRaw('extension:setExtensionEnabled', async (internalName: string, enabled: boolean) => pluginManager.setExtensionEnabled(internalName, enabled));
 
-ipcMain.handle(
-  'extension:setExtensionsEnabled',
-  async (_, internalNames: string[], enabled: boolean) =>
-    pluginManager.setExtensionsEnabled(internalNames, enabled)
-);
+handleRaw('extension:setExtensionsEnabled', async (internalNames: string[], enabled: boolean) => pluginManager.setExtensionsEnabled(internalNames, enabled));
 
-ipcMain.handle('extension:getInstalledPlugins', async () => pluginManager.getInstalledPlugins());
+handleRaw('extension:getInstalledPlugins', async () => pluginManager.getInstalledPlugins());
 
 // --- provider selection ---------------------------------------------------
 
@@ -2404,29 +2320,22 @@ ipcMain.handle('extension:getInstalledPlugins', async () => pluginManager.getIns
  * is only knowable by running its `load()`. There is no manifest to read them
  * from — so the list cannot be built without loading.
  */
-ipcMain.handle('extension:getProviders', async () => {
-  try {
+handle(
+  'extension:getProviders',
+  async () => {
     await pluginManager.loadProviders();
     return {
-      ok: true,
       providers: pluginManager.getProviders(),
       disabled: pluginManager.getDisabledProviders(),
     };
-  } catch (error) {
-    return { ...fail(error), providers: [], disabled: [] };
-  }
-});
-
-ipcMain.handle(
-  'extension:setProviderEnabled',
-  async (_, name: string, enabled: boolean) => pluginManager.setProviderEnabled(name, enabled)
+  },
+  { providers: [], disabled: [] }
 );
+
+handleRaw('extension:setProviderEnabled', async (name: string, enabled: boolean) => pluginManager.setProviderEnabled(name, enabled));
 
 /** Bulk toggle, so "enable this whole repository" is one call not twenty. */
-ipcMain.handle(
-  'extension:setProvidersEnabled',
-  async (_, names: string[], enabled: boolean) => pluginManager.setProvidersEnabled(names, enabled)
-);
+handleRaw('extension:setProvidersEnabled', async (names: string[], enabled: boolean) => pluginManager.setProvidersEnabled(names, enabled));
 
 /**
  * The tree plus every switched-off set, in one reply.
@@ -2436,26 +2345,22 @@ ipcMain.handle(
  * against a stale disabled-set for one frame — visible as toggles flickering
  * into place after the list draws.
  */
-ipcMain.handle('extension:getProviderTree', async () => {
-  try {
+handle(
+  'extension:getProviderTree',
+  async () => {
     await pluginManager.loadProviders();
     return {
-      ok: true,
       tree: pluginManager.getProviderTree(),
       disabled: pluginManager.getDisabledProviders(),
       disabledExtensions: pluginManager.getDisabledExtensions(),
       disabledRepositories: pluginManager.getDisabledRepositories(),
     };
-  } catch (error) {
-    return {
-      ...fail(error),
-      tree: [],
+  },
+  { tree: [],
       disabled: [],
       disabledExtensions: [],
-      disabledRepositories: [],
-    };
-  }
-});
+      disabledRepositories: [], }
+);
 
 // --- search scope ---------------------------------------------------------
 
@@ -2475,11 +2380,11 @@ ipcMain.handle('extension:getProviderTree', async () => {
  * `true` when the user opens it — paying the cost at the moment there is a
  * menu open to show progress in.
  */
-ipcMain.handle('search:getScopeOptions', async (_, ensureLoaded = true) => {
-  try {
+handle(
+  'search:getScopeOptions',
+  async (ensureLoaded = true) => {
     if (ensureLoaded) await pluginManager.loadProviders();
     return {
-      ok: true,
       repositories: pluginManager.getProviderTree(),
       disabledProviders: pluginManager.getDisabledProviders(),
       indexers: contentService
@@ -2491,35 +2396,27 @@ ipcMain.handle('search:getScopeOptions', async (_, ensureLoaded = true) => {
       ready: pluginManager.providersReady(),
       progress: pluginManager.getProviderLoadProgress(),
     };
-  } catch (error) {
-    return {
-      ...fail(error),
-      repositories: [],
+  },
+  { repositories: [],
       disabledProviders: [],
       indexers: [],
       scope: { providers: [], indexers: [] },
       ready: false,
-      progress: pluginManager.getProviderLoadProgress(),
-    };
-  }
-});
-
-ipcMain.handle('search:setScope', async (_, scope: Partial<SearchScope>) =>
-  contentService.getScope().set(scope)
+      progress: pluginManager.getProviderLoadProgress(), }
 );
+
+handleRaw('search:setScope', async (scope: Partial<SearchScope>) => contentService.getScope().set(scope));
 
 // --- network / DNS --------------------------------------------------------
 
-ipcMain.handle('network:get', async () => ({
+handleRaw('network:get', async () => ({
   settings: network.get(),
   presets: DNS_PRESETS,
 }));
 
-ipcMain.handle('network:set', async (_, settings: Partial<NetworkSettings>) =>
-  network.set(settings)
-);
+handleRaw('network:set', async (settings: Partial<NetworkSettings>) => network.set(settings));
 
-ipcMain.handle('network:reset', async () => network.reset());
+handleRaw('network:reset', async () => network.reset());
 
 /**
  * Answers "can this machine actually reach the sites the app needs".
@@ -2542,7 +2439,7 @@ ipcMain.handle('network:reset', async () => network.reset());
  * answered is "what can this network reach", and knowing a site is reachable is
  * exactly what tells someone it is worth enabling.
  */
-ipcMain.handle('network:test', async () => {
+handle('network:test', async () => {
   const targets = [
     { id: 'cinemeta', name: 'Cinemeta (catalogue)', url: 'https://v3-cinemeta.strem.io/manifest.json', enabled: true, kind: 'catalogue' as const },
     { id: 'tvmaze', name: 'TVmaze (catalogue)', url: 'https://api.tvmaze.com/shows/1', enabled: true, kind: 'catalogue' as const },
@@ -2583,73 +2480,50 @@ ipcMain.handle('network:test', async () => {
     })
   );
 
-  return { ok: true, results, dnsMode: network.get().dnsMode };
+  return { results, dnsMode: network.get().dnsMode };
 });
 
 // --- extension updates (over-the-air) ------------------------------------
 
-ipcMain.handle('extension:checkUpdates', async () => {
-  try {
-    return { ok: true, result: await extensionUpdater.checkForUpdates() };
-  } catch (error) {
-    return { ...fail(error), result: null };
-  }
-});
-
-ipcMain.handle('extension:getCachedUpdates', async () => extensionUpdater.getCachedUpdates());
-
-ipcMain.handle('extension:update', async (_, internalName: string) =>
-  extensionUpdater.updatePlugin(internalName)
+handle(
+  'extension:checkUpdates',
+  async () => {
+    return { result: await extensionUpdater.checkForUpdates() };
+  },
+  { result: null }
 );
 
-ipcMain.handle('extension:updateAll', async (_, internalNames?: string[]) =>
-  extensionUpdater.updateAll(internalNames)
-);
+handleRaw('extension:getCachedUpdates', async () => extensionUpdater.getCachedUpdates());
 
-ipcMain.handle('extension:getUpdateSettings', async () => extensionUpdater.getSettings());
+handleRaw('extension:update', async (internalName: string) => extensionUpdater.updatePlugin(internalName));
 
-ipcMain.handle('extension:saveUpdateSettings', async (_, patch: Partial<UpdateSettings>) =>
-  extensionUpdater.saveSettings(patch)
-);
+handleRaw('extension:updateAll', async (internalNames?: string[]) => extensionUpdater.updateAll(internalNames));
+
+handleRaw('extension:getUpdateSettings', async () => extensionUpdater.getSettings());
+
+handleRaw('extension:saveUpdateSettings', async (patch: Partial<UpdateSettings>) => extensionUpdater.saveSettings(patch));
 
 // --- library, watch progress and source memory ---------------------------
 
-ipcMain.handle('library:getEntries', async (_, status?: WatchStatus) =>
-  libraryStore.getEntries(status)
-);
+handleRaw('library:getEntries', async (status?: WatchStatus) => libraryStore.getEntries(status));
 
-ipcMain.handle('library:upsertEntry', async (_, input: Parameters<LibraryStore['upsertEntry']>[0]) =>
-  libraryStore.upsertEntry(input)
-);
+handleRaw('library:upsertEntry', async (input: Parameters<LibraryStore['upsertEntry']>[0]) => libraryStore.upsertEntry(input));
 
-ipcMain.handle('library:setStatus', async (_, key: string, status: WatchStatus) =>
-  libraryStore.setStatus(key, status)
-);
+handleRaw('library:setStatus', async (key: string, status: WatchStatus) => libraryStore.setStatus(key, status));
 
-ipcMain.handle('library:setUserRating', async (_, key: string, rating?: number) =>
-  libraryStore.setUserRating(key, rating)
-);
+handleRaw('library:setUserRating', async (key: string, rating?: number) => libraryStore.setUserRating(key, rating));
 
-ipcMain.handle('library:removeEntry', async (_, key: string) => libraryStore.removeEntry(key));
+handleRaw('library:removeEntry', async (key: string) => libraryStore.removeEntry(key));
 
-ipcMain.handle('library:getEntryForUrl', async (_, mediaUrl: string) =>
-  libraryStore.getEntryForUrl(mediaUrl)
-);
+handleRaw('library:getEntryForUrl', async (mediaUrl: string) => libraryStore.getEntryForUrl(mediaUrl));
 
-ipcMain.handle(
-  'library:recordProgress',
-  async (_, input: Parameters<LibraryStore['recordProgress']>[0]) =>
-    libraryStore.recordProgress(input)
-);
+handleRaw('library:recordProgress', async (input: Parameters<LibraryStore['recordProgress']>[0]) => libraryStore.recordProgress(input));
 
-ipcMain.handle('library:getProgressForKey', async (_, key: string) =>
-  libraryStore.getProgressForKey(key)
-);
+handleRaw('library:getProgressForKey', async (key: string) => libraryStore.getProgressForKey(key));
 
 const SHOW_CONTINUE_WATCHING_KEY = 'home_show_continue_watching';
 
-ipcMain.handle('library:getContinueWatching', async (_, limit?: number) =>
-  /**
+handleRaw('library:getContinueWatching', async (limit?: number) => /**
    * The setting is enforced here rather than in the renderer.
    *
    * A home screen that fetched the rows and then declined to draw them would
@@ -2660,8 +2534,7 @@ ipcMain.handle('library:getContinueWatching', async (_, limit?: number) =>
    */
   datastore.getBool(SHOW_CONTINUE_WATCHING_KEY, true)
     ? libraryStore.getContinueWatching(limit)
-    : []
-);
+    : []);
 
 /**
  * Removes one title from the row, keeping where it got to.
@@ -2671,25 +2544,25 @@ ipcMain.handle('library:getContinueWatching', async (_, limit?: number) =>
  * the first is unrecoverable — someone tidying the row would silently lose the
  * resume point on a film they were halfway through.
  */
-ipcMain.handle('library:dismissContinueWatching', async (_, key: string) => {
-  try {
+handle(
+  'library:dismissContinueWatching',
+  async (key: string) => {
     const removed = libraryStore.dismissFromContinueWatching(key);
     logger.info('library', 'continue_watching_dismissed', { mediaId: key, removed });
-    return { ok: true, removed };
-  } catch (error) {
-    return { ...fail(error), removed: false };
-  }
-});
+    return { removed };
+  },
+  { removed: false }
+);
 
-ipcMain.handle('library:clearContinueWatching', async () => {
-  try {
+handle(
+  'library:clearContinueWatching',
+  async () => {
     const cleared = libraryStore.clearContinueWatching();
     logger.info('library', 'continue_watching_cleared', { cleared });
-    return { ok: true, cleared };
-  } catch (error) {
-    return { ...fail(error), cleared: 0 };
-  }
-});
+    return { cleared };
+  },
+  { cleared: 0 }
+);
 
 // --- the home screen's catalogue source ------------------------------------
 
@@ -2701,19 +2574,18 @@ ipcMain.handle('library:clearContinueWatching', async () => {
  * cached for ten minutes. Someone who has just pasted an addon URL wants it
  * probed, not told what a probe said before the URL existed.
  */
-ipcMain.handle('home:listProviders', async (_, force?: boolean) => {
-  try {
+handle(
+  'home:listProviders',
+  async (force?: boolean) => {
     return {
-      ok: true,
       providers: await homeProviders.summaries(Boolean(force)),
       selected: homeProviders.selectedId,
       tmdbKeySet: homeProviders.hasTmdbKey(),
       customUrl: homeProviders.customCatalogUrl(),
     };
-  } catch (error) {
-    return { ...fail(error), providers: [], selected: DEFAULT_PROVIDER_ID, tmdbKeySet: false, customUrl: '' };
-  }
-});
+  },
+  { providers: [], selected: DEFAULT_PROVIDER_ID, tmdbKeySet: false, customUrl: '' }
+);
 
 /**
  * Selecting refuses a provider that is not answering, and says why.
@@ -2722,8 +2594,9 @@ ipcMain.handle('home:listProviders', async (_, force?: boolean) => {
  * check a decoration. The refusal can name the cause; the empty screen could
  * not.
  */
-ipcMain.handle('home:selectProvider', async (_, id: string) => {
-  try {
+handle(
+  'home:selectProvider',
+  async (id: string) => {
     const result = await homeProviders.select(id);
     if (result.ok) {
       // The cache is keyed by provider, so the old rows are not wrong — they
@@ -2732,76 +2605,68 @@ ipcMain.handle('home:selectProvider', async (_, id: string) => {
       discovery.invalidateForProviderChange();
       mainWindow?.webContents.send('discover:invalidated');
     }
-    return result;
-  } catch (error) {
-    return { ...fail(error), id: homeProviders.selectedId };
-  }
-});
+    // Carries the registry's own verdict: an unhealthy provider is *refused*
+    // rather than selected, and that refusal names the cause.
+    return { ...result };
+  },
+  // Read lazily, so a failed selection reports the provider still in force
+  // rather than the one that could not be adopted.
+  () => ({ id: homeProviders.selectedId })
+);
 
-ipcMain.handle('home:setTmdbKey', async (_, key: string) => {
-  try {
+handle(
+  'home:setTmdbKey',
+  async (key: string) => {
     homeProviders.setTmdbKey(key);
     // Probed immediately: a key is pasted in order to find out whether it
     // works, and making the user hunt for a refresh button to learn that is a
     // gap they will read as the field not saving.
-    return { ok: true, health: await homeProviders.checkOne('tmdb', true) };
-  } catch (error) {
-    return { ...fail(error), health: null };
-  }
-});
+    return { health: await homeProviders.checkOne('tmdb', true) };
+  },
+  { health: null }
+);
 
-ipcMain.handle('home:setCustomCatalogUrl', async (_, url: string) => {
-  try {
+handle(
+  'home:setCustomCatalogUrl',
+  async (url: string) => {
     homeProviders.setCustomCatalogUrl(url);
-    return { ok: true, health: url.trim() ? await homeProviders.checkOne('custom', true) : null };
-  } catch (error) {
-    return { ...fail(error), health: null };
-  }
-});
+    return { health: url.trim() ? await homeProviders.checkOne('custom', true) : null };
+  },
+  { health: null }
+);
 
-ipcMain.handle('library:getContinueWatchingEnabled', async () => ({
-  ok: true,
+handle('library:getContinueWatchingEnabled', async () => ({
   enabled: datastore.getBool(SHOW_CONTINUE_WATCHING_KEY, true),
 }));
 
-ipcMain.handle('library:setContinueWatchingEnabled', async (_, enabled: boolean) => {
+handle('library:setContinueWatchingEnabled', async (enabled: boolean) => {
   datastore.setBool(SHOW_CONTINUE_WATCHING_KEY, enabled);
   logger.info('library', 'continue_watching_visibility_changed', { enabled });
   // Nothing is deleted either way. The history is what the library is built on
   // — resume points, the played-source records, the ranking — and hiding a row
   // is not consent to discard any of it.
-  return { ok: true, enabled };
+  return { enabled };
 });
 
-ipcMain.handle('library:clearProgress', async (_, key: string, season?: number, episode?: number) =>
-  libraryStore.clearProgress(key, season, episode)
-);
+handleRaw('library:clearProgress', async (key: string, season?: number, episode?: number) => libraryStore.clearProgress(key, season, episode));
 
-ipcMain.handle('library:rememberSource', async (_, input: Parameters<LibraryStore['rememberSource']>[0]) => {
+handleRaw('library:rememberSource', async (input: Parameters<LibraryStore['rememberSource']>[0]) => {
   libraryStore.rememberSource(input);
 });
 
-ipcMain.handle('library:recallSource', async (_, key: string, season?: number, episode?: number) =>
-  libraryStore.recallSource(key, season, episode)
-);
+handleRaw('library:recallSource', async (key: string, season?: number, episode?: number) => libraryStore.recallSource(key, season, episode));
 
-ipcMain.handle('library:export', async () => libraryStore.exportAll());
+handleRaw('library:export', async () => libraryStore.exportAll());
 
-ipcMain.handle('library:import', async (_, payload: Parameters<LibraryStore['importAll']>[0]) =>
-  libraryStore.importAll(payload)
-);
+handleRaw('library:import', async (payload: Parameters<LibraryStore['importAll']>[0]) => libraryStore.importAll(payload));
 
-ipcMain.handle('library:setSources', async (_, key: string, sources: StoredSource[]) =>
-  libraryStore.setSources(key, sources)
-);
+handleRaw('library:setSources', async (key: string, sources: StoredSource[]) => libraryStore.setSources(key, sources));
 
-ipcMain.handle('library:getSources', async (_, key: string) =>
-  libraryStore.getStoredSources(key)
-);
+handleRaw('library:getSources', async (key: string) => libraryStore.getStoredSources(key));
 
-ipcMain.handle(
+handle(
   'library:refreshSources',
-  async (_, mediaUrl: string, title: string, year?: number, season?: number, episode?: number) => {
+  async (mediaUrl: string, title: string, year?: number, season?: number, episode?: number) => {
     try {
       const result = await contentService.getSources(
         { mediaUrl, titleOverride: title, season, episode },
@@ -2811,8 +2676,11 @@ ipcMain.handle(
       const key = canonicalKey(title, year);
       const stored = result.sources.map(torrentResultToStoredSource);
       libraryStore.setSources(key, stored);
-      return { ok: true, sources: result.sources, storedSources: stored };
+      return { sources: result.sources, storedSources: stored };
     } catch (error: any) {
+      // Keeps a local catch for its message precedence: a thrown non-Error
+      // reports the sentence below, where the shared helper would stringify
+      // whatever was thrown.
       return {
         ok: false,
         error: error?.message || 'Failed to refresh sources',
@@ -2839,11 +2707,9 @@ ipcMain.handle(
  * durable is the `origin` query beside it, which is replayed to obtain a fresh
  * link for the same release when the stored one has died.
  */
-ipcMain.handle(
+handle(
   'library:recordPlayedSource',
-  async (
-    _,
-    input: {
+  async (input: {
       title: string;
       year?: number;
       mediaUrl: string;
@@ -2853,72 +2719,58 @@ ipcMain.handle(
       source: TorrentResult;
       positionSeconds?: number;
       durationSeconds?: number;
-    }
-  ) => {
-    try {
-      const key = canonicalKey(input.title, input.year);
-      const stored = torrentResultToStoredSource(input.source);
+    }) => {
+    const key = canonicalKey(input.title, input.year);
+    const stored = torrentResultToStoredSource(input.source);
 
-      /**
-       * The deadline is read from the URL now, while we have it.
-       *
-       * `SourceCache` already knows how to find one — CloudFront's `Expires`,
-       * a JWT `exp`, and the handful of other schemes providers actually use.
-       * Recording it here is what lets `isLinkUsable` answer later without
-       * another request; without it every saved source would be re-resolved on
-       * every open, which is the cost this feature exists to avoid.
-       */
-      if (stored.directUrl && stored.expiresAt === undefined) {
-        const deadline = deadlineFromUrl(stored.directUrl);
-        if (deadline) stored.expiresAt = deadline;
-      }
-
-      const record = libraryStore.recordPlayedSource({
-        key,
-        season: input.season,
-        episode: input.episode,
-        source: stored,
-        origin: {
-          mediaUrl: input.mediaUrl,
-          title: input.title,
-          year: input.year,
-          episodeTitle: input.episodeTitle,
-        },
-        positionSeconds: input.positionSeconds,
-        durationSeconds: input.durationSeconds,
-      });
-      return { ok: true, record };
-    } catch (error) {
-      return { ...fail(error), record: null };
+    /**
+     * The deadline is read from the URL now, while we have it.
+     *
+     * `SourceCache` already knows how to find one — CloudFront's `Expires`,
+     * a JWT `exp`, and the handful of other schemes providers actually use.
+     * Recording it here is what lets `isLinkUsable` answer later without
+     * another request; without it every saved source would be re-resolved on
+     * every open, which is the cost this feature exists to avoid.
+     */
+    if (stored.directUrl && stored.expiresAt === undefined) {
+      const deadline = deadlineFromUrl(stored.directUrl);
+      if (deadline) stored.expiresAt = deadline;
     }
-  }
+
+    const record = libraryStore.recordPlayedSource({
+      key,
+      season: input.season,
+      episode: input.episode,
+      source: stored,
+      origin: {
+        mediaUrl: input.mediaUrl,
+        title: input.title,
+        year: input.year,
+        episodeTitle: input.episodeTitle,
+      },
+      positionSeconds: input.positionSeconds,
+      durationSeconds: input.durationSeconds,
+    });
+    return { record };
+  },
+  { record: null }
 );
 
-ipcMain.handle(
-  'library:getPlayedSource',
-  async (_, key: string, season?: number, episode?: number) => ({
-    ok: true,
+handle('library:getPlayedSource', async (key: string, season?: number, episode?: number) => ({
     record: libraryStore.getPlayedSource(key, season, episode),
-  })
-);
+  }));
 
-ipcMain.handle('library:listPlayedSources', async (_, limit?: number) => ({
-  ok: true,
+handle('library:listPlayedSources', async (limit?: number) => ({
   records: libraryStore.listPlayedSources(limit),
 }));
 
-ipcMain.handle('library:getPlayedSourcesForKey', async (_, key: string) => ({
-  ok: true,
+handle('library:getPlayedSourcesForKey', async (key: string) => ({
   records: libraryStore.getPlayedSourcesForKey(key),
 }));
 
-ipcMain.handle(
-  'library:forgetPlayedSource',
-  async (_, key: string, season?: number, episode?: number) => ({
-    ok: true,
+handle('library:forgetPlayedSource', async (key: string, season?: number, episode?: number) => ({
     removed: libraryStore.forgetPlayedSource(key, season, episode),
-  })
-);
+  }));
 
 /**
  * Hands back a playable source for a saved record, refreshing it if it has died.
@@ -2935,160 +2787,135 @@ ipcMain.handle(
  *   more useful than an entry that silently vanishes, and the full source list
  *   comes back so the viewer can choose again.
  */
-ipcMain.handle(
+handle(
   'library:resolvePlayedSource',
-  async (_, key: string, season?: number, episode?: number) => {
-    try {
-      const record = libraryStore.getPlayedSource(key, season, episode);
-      if (!record) {
-        return { ok: false, error: 'No source has been saved for this item.', resolution: null };
-      }
+  async (key: string, season?: number, episode?: number) => {
+    const record = libraryStore.getPlayedSource(key, season, episode);
+    if (!record) {
+      return { ok: false, error: 'No source has been saved for this item.', resolution: null };
+    }
 
-      if (isLinkUsable(record.source)) {
-        return {
-          ok: true,
-          resolution: 'reused' as const,
-          record,
-          source: storedSourceToTorrentResult(record.source),
-          sources: [],
-        };
-      }
+    if (isLinkUsable(record.source)) {
+      return {
+        resolution: 'reused' as const,
+        record,
+        source: storedSourceToTorrentResult(record.source),
+        sources: [],
+      };
+    }
 
-      /**
-       * The saved link is dead, so the query that produced it is replayed.
-       * `bypassCache` because a cached answer is what just failed.
-       */
-      const discovered = await contentService.getSources(
-        {
-          mediaUrl: record.origin.mediaUrl,
-          titleOverride: record.origin.title,
-          season: record.season,
-          episode: record.episode,
-        },
-        undefined,
-        { bypassCache: true }
-      );
+    /**
+     * The saved link is dead, so the query that produced it is replayed.
+     * `bypassCache` because a cached answer is what just failed.
+     */
+    const discovered = await contentService.getSources(
+      {
+        mediaUrl: record.origin.mediaUrl,
+        titleOverride: record.origin.title,
+        season: record.season,
+        episode: record.episode,
+      },
+      undefined,
+      { bypassCache: true }
+    );
 
-      const replacement = pickReplacement(record.source, discovered.sources);
-      if (!replacement) {
-        libraryStore.markPlayedSourceUnavailable(
-          key,
-          'The provider no longer offers this release.',
-          season,
-          episode
-        );
-        return {
-          ok: false,
-          resolution: 'unavailable' as const,
-          error:
-            'The exact source you saved is no longer offered by that provider. ' +
-            'Pick another from the list below.',
-          record,
-          // The alternatives, so this is a choice rather than a dead end.
-          sources: discovered.sources,
-        };
-      }
-
-      const refreshed = torrentResultToStoredSource(replacement);
-      const updated = libraryStore.updatePlayedSourceLink(
+    const replacement = pickReplacement(record.source, discovered.sources);
+    if (!replacement) {
+      libraryStore.markPlayedSourceUnavailable(
         key,
-        {
-          directUrl: refreshed.directUrl,
-          directHeaders: refreshed.directHeaders,
-          magnet: refreshed.magnet,
-          isM3u8: refreshed.isM3u8,
-          expiresAt: refreshed.directUrl ? deadlineFromUrl(refreshed.directUrl) ?? undefined : undefined,
-        },
+        'The provider no longer offers this release.',
         season,
         episode
       );
-
       return {
-        ok: true,
-        resolution: 'refreshed' as const,
-        record: updated ?? record,
-        source: replacement,
+        ok: false,
+        resolution: 'unavailable' as const,
+        error:
+          'The exact source you saved is no longer offered by that provider. ' +
+          'Pick another from the list below.',
+        record,
+        // The alternatives, so this is a choice rather than a dead end.
         sources: discovered.sources,
       };
-    } catch (error) {
-      return { ...fail(error), resolution: null, sources: [] };
     }
-  }
+
+    const refreshed = torrentResultToStoredSource(replacement);
+    const updated = libraryStore.updatePlayedSourceLink(
+      key,
+      {
+        directUrl: refreshed.directUrl,
+        directHeaders: refreshed.directHeaders,
+        magnet: refreshed.magnet,
+        isM3u8: refreshed.isM3u8,
+        expiresAt: refreshed.directUrl ? deadlineFromUrl(refreshed.directUrl) ?? undefined : undefined,
+      },
+      season,
+      episode
+    );
+
+    return {
+      resolution: 'refreshed' as const,
+      record: updated ?? record,
+      source: replacement,
+      sources: discovered.sources,
+    };
+  },
+  { resolution: null, sources: [] }
 );
 
 // --- media history ----------------------------------------------------------
 
-ipcMain.handle('history:recordEvent', async (_, event: Parameters<HistoryStore['record']>[0]) =>
-  historyStore.record(event)
-);
+handleRaw('history:recordEvent', async (event: Parameters<HistoryStore['record']>[0]) => historyStore.record(event));
 
-ipcMain.handle('history:updateEvent', async (_, id: string, updates: Partial<HistoryEvent>) =>
-  historyStore.update(id, updates)
-);
+handleRaw('history:updateEvent', async (id: string, updates: Partial<HistoryEvent>) => historyStore.update(id, updates));
 
-ipcMain.handle('history:list', async (_, filter?: HistoryFilter) =>
-  historyStore.list(filter)
-);
+handleRaw('history:list', async (filter?: HistoryFilter) => historyStore.list(filter));
 
-ipcMain.handle('history:get', async (_, id: string) =>
-  historyStore.get(id)
-);
+handleRaw('history:get', async (id: string) => historyStore.get(id));
 
-ipcMain.handle('history:deleteItem', async (_, id: string) =>
-  historyStore.delete(id)
-);
+handleRaw('history:deleteItem', async (id: string) => historyStore.delete(id));
 
-ipcMain.handle('history:deleteItems', async (_, ids: string[]) =>
-  historyStore.deleteMany(ids)
-);
+handleRaw('history:deleteItems', async (ids: string[]) => historyStore.deleteMany(ids));
 
-ipcMain.handle('history:clearAll', async () => {
+handle('history:clearAll', async () => {
   historyStore.clear();
-  return { ok: true };
+  return {};
 });
 
-ipcMain.handle('history:getStats', async () =>
-  historyStore.getStats()
-);
+handleRaw('history:getStats', async () => historyStore.getStats());
 
 // --- datastore -----------------------------------------------------------
 
-ipcMain.handle('datastore:getSetting', async (_, key: string, defaultValue: any) =>
-  datastore.getString(key, defaultValue, true)
-);
+handleRaw('datastore:getSetting', async (key: string, defaultValue: any) => datastore.getString(key, defaultValue, true));
 
-ipcMain.handle('datastore:setSetting', async (_, key: string, value: any) => {
+handleRaw('datastore:setSetting', async (key: string, value: any) => {
   if (typeof value === 'boolean') {
     datastore.setBool(key, value, true);
   }
   datastore.setString(key, String(value), true);
 });
 
-ipcMain.handle('datastore:getObject', async (_, key: string, defaultValue: any) =>
-  datastore.getObject(key, defaultValue)
-);
+handleRaw('datastore:getObject', async (key: string, defaultValue: any) => datastore.getObject(key, defaultValue));
 
-ipcMain.handle('datastore:setObject', async (_, key: string, value: any) => {
+handleRaw('datastore:setObject', async (key: string, value: any) => {
   datastore.setObject(key, value);
 });
 
-ipcMain.handle('datastore:importBackup', async (_, filePath: string) =>
-  datastore.importBackupFile(filePath)
-);
+handleRaw('datastore:importBackup', async (filePath: string) => datastore.importBackupFile(filePath));
 
-ipcMain.handle('datastore:exportBackup', async () => datastore.exportBackup());
+handleRaw('datastore:exportBackup', async () => datastore.exportBackup());
 
-ipcMain.handle('dialog:selectDirectory', async () => {
+handleRaw('dialog:selectDirectory', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
 });
 
-ipcMain.handle('app:reload', async () => {
+handleRaw('app:reload', async () => {
   mainWindow?.webContents.reload();
 });
 
-ipcMain.handle('app:relaunch', async () => {
+handleRaw('app:relaunch', async () => {
   app.relaunch();
   app.exit(0);
 });
