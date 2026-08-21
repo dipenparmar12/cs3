@@ -1,5 +1,7 @@
+import { clearKeysToHex } from '../../src/utils/clearKey.ts';
 import type {
   AudioStreamMetadata,
+  DrmConfiguration,
   HostEncodeCapability,
   MediaMetadata,
   MediaTransport,
@@ -104,6 +106,34 @@ const SOFTWARE_ENCODE_MAX_HEIGHT = 1080;
 const SOFTWARE_4K_CORE_THRESHOLD = 16;
 
 /**
+ * The pixel rate the core threshold was actually measured against.
+ *
+ * `SOFTWARE_4K_CORE_THRESHOLD` says "16 threads clear realtime at 4K", and for
+ * as long as 4K was the largest thing anyone streamed that was the whole rule.
+ * It is not any more: 8K is four times the pixels of 4K, so a 16-thread machine
+ * that holds 1.0x at 3840x2160 holds roughly 0.25x at 7680x4320 — and the guard
+ * as written let it through at full resolution, producing exactly the stall the
+ * guard exists to prevent, on the most expensive files in the corpus.
+ *
+ * Expressing the threshold as pixels per second instead of as a height keeps the
+ * same measured verdicts at 4K and extends them: the question is how much work
+ * the encoder has to do, and height alone stopped answering it once resolutions
+ * above 4K became ordinary.
+ */
+const UHD_PIXELS = 3840 * 2160;
+
+/**
+ * Resolutions above 4K, which the browser path should not attempt at all.
+ *
+ * Even where a host *could* encode 8K in realtime, the result is handed to a
+ * Chromium decoder that has to keep up as well, and the memory cost of an 8K
+ * surface is four times a 4K one. The native engine decodes it on the GPU
+ * untouched, which is both cheaper and better — so above 4K, routing is not an
+ * optimisation, it is the only thing that plays.
+ */
+const ABOVE_UHD_HEIGHT = 2160;
+
+/**
  * Multichannel: more than stereo, and therefore something a downmix throws away.
  *
  * The first version of this rule routed only *lossless* audio — TrueHD, DTS-HD
@@ -132,6 +162,9 @@ const LOSSLESS_OR_OBJECT_AUDIO = new Set([
 
 /** The engine is absent unless a caller says otherwise, which keeps every existing decision intact. */
 const NO_NATIVE_ENGINE: NativeEngineCapability = { available: false, policy: 'off' };
+
+/** Unencrypted unless a caller says otherwise, for the same reason. */
+const NO_DRM: DrmConfiguration = { type: 'none' };
 
 export interface StrategyDecision {
   directPlayable: boolean;
@@ -314,16 +347,107 @@ export function blindFallbackPlan(host: HostEncodeCapability): TransformationPla
  */
 function videoTranscodeAction(
   height: number,
-  host: HostEncodeCapability
+  host: HostEncodeCapability,
+  width = 0
 ): { action: 'transcode' | 'downscale'; targetHeight?: number } {
-  const softwareOnly = !host.hardware;
-  const tooTall = height > SOFTWARE_ENCODE_MAX_HEIGHT;
-  const underpowered = host.logicalCores < SOFTWARE_4K_CORE_THRESHOLD;
+  if (host.hardware) return { action: 'transcode' };
+  if (height <= SOFTWARE_ENCODE_MAX_HEIGHT) return { action: 'transcode' };
 
-  if (softwareOnly && tooTall && underpowered) {
+  /**
+   * How much encoding this frame size actually asks for, relative to the 4K
+   * frame the core threshold was measured on.
+   *
+   * Width is used when the source reports it and derived from a 16:9 frame when
+   * it does not — an anamorphic or ultra-wide 2160-tall frame is more pixels
+   * than a 3840x2160 one, and the old height-only test called them equal.
+   */
+  const pixels = (width || Math.round((height * 16) / 9)) * height;
+  /**
+   * `Math.max(1, …)` is what keeps every verdict measured at or below 4K
+   * exactly as it was. The threshold only *rises* with frame size, so this
+   * tightens the guard where it was wrong — above 4K — and changes nothing
+   * where it was measured.
+   */
+  const budget = SOFTWARE_4K_CORE_THRESHOLD * Math.max(1, pixels / UHD_PIXELS);
+
+  if (host.logicalCores < budget) {
     return { action: 'downscale', targetHeight: SOFTWARE_ENCODE_MAX_HEIGHT };
   }
   return { action: 'transcode' };
+}
+
+/**
+ * Whether this stream can only be decrypted by a CDM in the renderer.
+ *
+ * HLS AES-128 and SAMPLE-AES are deliberately **not** in this set. hls.js
+ * fetches the key over HTTP and decrypts in JavaScript, so routing them to an
+ * EME path they do not need would break streams that work today. `unknown` is
+ * in the set: an unrecognised system is exactly as unreadable to FFmpeg as a
+ * recognised one, and the whole purpose of the verdict is to keep FFmpeg off it.
+ */
+export function requiresEmeDecryption(drm: DrmConfiguration): boolean {
+  return (
+    drm.type === 'clearkey' ||
+    drm.type === 'widevine' ||
+    drm.type === 'playready' ||
+    drm.type === 'unknown'
+  );
+}
+
+/** The ClearKey pairs, in FFmpeg's hex form, when there are usable ones. */
+export function decryptableClearKeys(drm: DrmConfiguration): Record<string, string> | null {
+  if (drm.type !== 'clearkey' || !drm.clearKeys) return null;
+  const hex = clearKeysToHex(drm.clearKeys);
+  return Object.keys(hex).length > 0 ? hex : null;
+}
+
+/**
+ * Why an encrypted stream is being handed to the renderer, and what to expect.
+ *
+ * The distinction this draws is the one a viewer actually needs. A ClearKey
+ * stream with its keys attached is going to play; a Widevine one is not, because
+ * this app ships no CDM. Reporting both as "encrypted stream" made a working
+ * case and an impossible one look identical, and sent people looking for a
+ * provider fault in the second.
+ */
+function explainEme(drm: DrmConfiguration, transport: MediaTransport): string {
+  if (drm.type === 'clearkey' && drm.clearKeys) {
+    if (transport === 'dash') {
+      return (
+        'ClearKey-encrypted DASH: the key is present, but playing it needs a ' +
+        'JavaScript DASH player driving Media Source Extensions, which this ' +
+        'build does not include. FFmpeg cannot help — its DASH demuxer refuses ' +
+        'decryption keys outright.'
+      );
+    }
+    return (
+      'ClearKey-encrypted: decrypted in the browser with the key the provider ' +
+      'supplied. Nothing is re-encoded.'
+    );
+  }
+
+  if (drm.type === 'widevine' || drm.type === 'playready') {
+    const system = drm.type === 'widevine' ? 'Widevine' : 'PlayReady';
+    return (
+      `${system}-protected stream. Playing it needs a ${system} CDM, which this ` +
+      'build does not ship — the Android app gets one from the device. FFmpeg is ' +
+      'bypassed because it holds no keys; this is a licensing limit, not a fault ' +
+      'in the source or the provider.'
+    );
+  }
+
+  if (drm.type === 'clearkey') {
+    return (
+      'ClearKey-encrypted, but the provider supplied no key. Nothing here can ' +
+      'decrypt it; FFmpeg is bypassed because it would report the result as a ' +
+      'corrupt file rather than as encrypted content.'
+    );
+  }
+
+  return (
+    'Encrypted by a DRM system this build does not recognise. FFmpeg is bypassed ' +
+    'because it holds no keys and would report the stream as corrupt.'
+  );
 }
 
 /**
@@ -338,7 +462,7 @@ function decideBrowserStrategy(
   transport: MediaTransport,
   capabilities: RendererCapabilities | null,
   host: HostEncodeCapability,
-  requiresEme: boolean
+  drm: DrmConfiguration
 ): StrategyDecision {
   const video = metadata.video;
   const track = selectAudioTrack(metadata.audio);
@@ -358,28 +482,47 @@ function decideBrowserStrategy(
   );
 
   /**
-   * Encrypted content skips this engine entirely.
+   * Encrypted content, and the one case where "encrypted" does not mean "not
+   * ours".
    *
-   * FFmpeg has no keys, so a probe of a Widevine stream reports nonsense and a
-   * remux of one produces an unplayable file — and both take seconds to fail.
-   * The renderer's EME pipeline is the only thing that can decrypt it, so it is
-   * handed over untouched with the DRM configuration attached.
+   * ClearKey is a licence that *is* the key, so when the provider supplied one
+   * there are two things that can decrypt the stream: the renderer's EME
+   * pipeline, and FFmpeg via `-decryption_keys`. Which one to use is decided by
+   * whether anything else about the stream needs work.
+   *
+   * - Nothing else needs work → EME. It costs nothing and preserves everything.
+   * - The codec or the container also needs converting → FFmpeg, which has to
+   *   decrypt before it can read a frame anyway. Measured: a CENC file read
+   *   without the key probes with correct codec *names* and then decodes to
+   *   garbage, which is precisely the "corrupt download" symptom.
+   *
+   * FFmpeg can only do this on a progressive input. Its DASH demuxer rejects
+   * the option outright — `Option decryption_key not found`, fatal to the whole
+   * command line rather than ignored — so a DASH ClearKey stream can only go to
+   * EME, and needs a JavaScript DASH player to get there. That player is not
+   * built; the stream is named accurately instead of failing as a bad file.
    */
-  if (requiresEme) {
-    return {
-      directPlayable: true,
-      strategy: 'EME_NATIVE',
-      plan: {
-        videoAction: 'none',
-        audioAction: 'none',
-        selectedAudioIndex: audioIndex,
-        containerAction: 'passthrough',
-        subtitleAction: 'ignore',
-      },
-      explanation:
-        'Encrypted stream: decrypted by the browser through EME. FFmpeg is ' +
-        'bypassed because it holds no decryption keys.',
-    };
+  if (requiresEmeDecryption(drm)) {
+    const everythingElseIsFine = containerPlayable && videoPlayable && audioPlayable;
+    const ffmpegCanDecrypt = Boolean(decryptableClearKeys(drm)) && transport === 'progressive';
+    const ffmpegShouldDecrypt = ffmpegCanDecrypt && !everythingElseIsFine;
+
+    if (!ffmpegShouldDecrypt) {
+      return {
+        directPlayable: true,
+        strategy: 'EME_NATIVE',
+        plan: {
+          videoAction: 'none',
+          audioAction: 'none',
+          selectedAudioIndex: audioIndex,
+          containerAction: 'passthrough',
+          subtitleAction: 'ignore',
+        },
+        explanation: explainEme(drm, transport),
+      };
+    }
+    // Falls through: FFmpeg decrypts and converts in one pass. The keys are
+    // attached to whichever plan the ladder below produces.
   }
 
   /**
@@ -396,7 +539,9 @@ function decideBrowserStrategy(
       directPlayable: false,
       strategy: 'DASH_REMUX',
       plan: {
-        videoAction: videoPlayable ? 'copy' : videoTranscodeAction(video?.height ?? 0, host).action,
+        videoAction: videoPlayable
+        ? 'copy'
+        : videoTranscodeAction(video?.height ?? 0, host, video?.width ?? 0).action,
         targetVideoCodec: videoPlayable ? undefined : 'h264',
         targetPixelFormat: videoPlayable ? undefined : 'yuv420p',
         hardwareAccelerator: videoPlayable ? undefined : host.accelerator,
@@ -509,7 +654,7 @@ function decideBrowserStrategy(
     };
   }
 
-  const { action, targetHeight } = videoTranscodeAction(video?.height ?? 0, host);
+  const { action, targetHeight } = videoTranscodeAction(video?.height ?? 0, host, video?.width ?? 0);
   const guardNote =
     action === 'downscale'
       ? ` Scaled to ${targetHeight}p: software encoding ${describeResolution(
@@ -582,6 +727,18 @@ export function shouldRouteToNativeEngine(
   }
 
   /**
+   * Above 4K, a container remux is not the cheap answer it is everywhere else.
+   *
+   * The remux itself stays cheap — it is still a stream copy — but it leaves
+   * Chromium decoding the result, and an 8K frame is four times the samples of a
+   * 4K one with four times the surface memory behind it. The native engine hands
+   * the same bitstream to D3D11VA or NVDEC and spends nothing. This is the
+   * resolution tier where "the browser can technically demux it" and "the
+   * machine can actually play it" come apart.
+   */
+  if ((metadata.video?.height ?? 0) > ABOVE_UHD_HEIGHT) return true;
+
+  /**
    * The plan names the track it selected; asking about any other one would
    * reason about audio nobody is going to hear.
    */
@@ -604,6 +761,66 @@ export function shouldRouteToNativeEngine(
 }
 
 /**
+ * The two things FFmpeg needs that the ladder itself does not decide.
+ *
+ * Applied after the strategy rather than inside it, because neither changes
+ * *which* strategy is right — they change what the command line has to say once
+ * one has been chosen. Folding them into the ladder would mean repeating both at
+ * five return sites.
+ */
+function withFfmpegExtras(
+  decision: StrategyDecision,
+  metadata: MediaMetadata,
+  drm: DrmConfiguration,
+  transport: MediaTransport
+): StrategyDecision {
+  const encoding = decision.plan.videoAction === 'transcode' || decision.plan.videoAction === 'downscale';
+  const running = encoding || decision.plan.videoAction === 'copy' || decision.plan.audioAction !== 'none';
+  if (!running) return decision;
+
+  /**
+   * HDR that is being re-encoded has to be tone-mapped, or it comes out grey.
+   *
+   * `-pix_fmt yuv420p` converts the *storage* format and says nothing about the
+   * transfer function, so a PQ or HLG source re-encoded to 8-bit SDR keeps its
+   * HDR-referred values and is displayed as if they were SDR ones: washed out,
+   * flat, and desaturated. It is not an error and nothing reports it — the file
+   * plays perfectly and simply looks wrong, which is why it survived this long.
+   *
+   * Only set when the video is actually being re-encoded. A copied stream keeps
+   * its own metadata and is displayed correctly by whatever eventually decodes
+   * it, and tone-mapping is not something a `-c:v copy` could do anyway.
+   */
+  const tonemapHdr = encoding && Boolean(metadata.video?.isHdr);
+
+  /**
+   * ClearKey, where FFmpeg is the thing that can use it.
+   *
+   * Progressive only: measured, the DASH demuxer fails the whole command line
+   * with `Option decryption_key not found` rather than ignoring it.
+   */
+  const keys = transport === 'progressive' ? decryptableClearKeys(drm) : null;
+
+  if (!tonemapHdr && !keys) return decision;
+
+  return {
+    ...decision,
+    plan: {
+      ...decision.plan,
+      ...(tonemapHdr ? { tonemapHdr: true } : {}),
+      ...(keys ? { decryptionKeys: keys } : {}),
+    },
+    explanation: [
+      decision.explanation.replace(/\.$/, ''),
+      keys ? 'Decrypted with the ClearKey the provider supplied' : null,
+      tonemapHdr ? 'HDR tone-mapped to SDR, which a re-encode to 8-bit needs or the picture comes out grey' : null,
+    ]
+      .filter(Boolean)
+      .join('. ') + '.',
+  };
+}
+
+/**
  * The decision, from measured metadata alone.
  *
  * Never consults the URL. AC-COMPAT-2 exists because the previous implementation
@@ -617,11 +834,16 @@ export function decideStrategy(
   transport: MediaTransport,
   capabilities: RendererCapabilities | null,
   host: HostEncodeCapability,
-  /** True for ClearKey/Widevine/PlayReady. AES-128 HLS is *not* one of these. */
-  requiresEme = false,
+  /**
+   * What is known about encryption. ClearKey/Widevine/PlayReady take the EME
+   * path; HLS AES-128 and SAMPLE-AES are *not* DRM as far as this engine is
+   * concerned, because hls.js decrypts them itself.
+   */
+  drm: DrmConfiguration = NO_DRM,
   native: NativeEngineCapability = NO_NATIVE_ENGINE
 ): StrategyDecision {
-  const decision = decideBrowserStrategy(metadata, transport, capabilities, host, requiresEme);
+  const browser = decideBrowserStrategy(metadata, transport, capabilities, host, drm);
+  const decision = withFfmpegExtras(browser, metadata, drm, transport);
   if (!shouldRouteToNativeEngine(decision, metadata, native)) return decision;
 
   /**

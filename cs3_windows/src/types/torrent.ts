@@ -1,4 +1,9 @@
-import type { TvType } from './api';
+import type {
+  ProviderAudioTrack,
+  ProviderDrm,
+  ProviderPlaylistPart,
+  TvType,
+} from './api';
 
 /**
  * Video quality tiers, expressed as vertical resolution so they sort numerically
@@ -102,6 +107,25 @@ export interface TorrentResult {
   directHeaders?: Record<string, string>;
   /** True when `directUrl` is an HLS playlist rather than a progressive file. */
   isM3u8?: boolean;
+  /**
+   * True when `directUrl` is an MPEG-DASH manifest.
+   *
+   * Computed since the provider bridge learned to report it and then dropped on
+   * the floor here, so a DASH stream reached the engine looking progressive and
+   * was classified all over again from its first 64 KB.
+   */
+  isDash?: boolean;
+  /** The MIME type the provider declared for this link, when it declared one. */
+  mimeType?: string;
+  /**
+   * DRM the provider declared, which is authoritative over anything a probe
+   * could conclude. Its presence keeps the source off the FFmpeg path entirely.
+   */
+  drm?: ProviderDrm;
+  /** Audio delivered as separate files beside the video, as the provider gave them. */
+  audioTracks?: ProviderAudioTrack[];
+  /** Set when the title arrives in ordered parts rather than as one file. */
+  playlist?: ProviderPlaylistPart[];
   /** Raw, unmodified release name as the indexer reported it. */
   title: string;
   magnet: string;

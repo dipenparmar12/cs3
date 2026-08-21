@@ -38,8 +38,16 @@ export interface SystemRuntimeStatus {
  * and `CloudflareKiller` bridge types, and the per-class fix to
  * `KotlinNameRepair` — every one of which shipped into `sidecar/runtime` while
  * installed apps kept serving the generation-1 copy out of `%APPDATA%`.
+ *
+ * Generation 3 is the provider bridge learning to report what it had been
+ * discarding: DRM parameters, playlist parts, audio-track headers, the link's
+ * own type, and live streams' `dataUrl`. An old copy of the bridge still loads
+ * and still scrapes, so nothing looks broken — it simply never emits any of
+ * those fields, and the desktop half added for them sits inert. That is exactly
+ * the failure this counter exists to prevent: a working install quietly missing
+ * a capability the build believes it shipped.
  */
-const RUNTIME_GENERATION = 2;
+const RUNTIME_GENERATION = 3;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {

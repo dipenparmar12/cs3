@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { TvType, type SearchOptions, type SearchResponse } from '../src/types/api';
+import { TvType, type ExtractorLink, type SearchOptions, type SearchResponse } from '../src/types/api';
 import type {
   IndexerQuery,
   ParsedRelease,
@@ -27,6 +27,7 @@ import { SearchScopeStore } from './searchScope';
 import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
 import { SharedDiscovery } from './sharedDiscovery';
+import { isTorrentLink } from './cs3/providerLinks';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -119,7 +120,18 @@ function parseEpisodeParams(url: string): { season?: number; episode?: number } 
  * player, a download's suggested filename, the HLS check itself — was told
  * something false about the stream.
  */
-function mimeForStreamUrl(url: string, isM3u8?: boolean): string {
+function mimeForStreamUrl(
+  url: string,
+  isM3u8?: boolean,
+  /**
+   * What the provider declared, which beats every guess below it. Upstream
+   * attaches a MIME type to each `ExtractorLinkType` and that is what Android
+   * hands ExoPlayer; a scraper that says `application/dash+xml` knows something
+   * the file extension does not.
+   */
+  declared?: string
+): string {
+  if (declared) return declared;
   if (isM3u8 || /\.m3u8(\?|$)/i.test(url)) return 'application/x-mpegURL';
   const path = url.split('?')[0].toLowerCase();
   if (path.endsWith('.webm')) return 'video/webm';
@@ -132,6 +144,26 @@ function mimeForStreamUrl(url: string, isM3u8?: boolean): string {
   // Unknown extensions are far more often MP4 than anything else, and a
   // download link commonly has no extension at all.
   return 'video/mp4';
+}
+
+/**
+ * One line for the source list saying what kind of stream this is.
+ *
+ * It used to read "HLS stream" or "Progressive stream" and nothing else, which
+ * described two of the five shapes a provider can hand back. A torrent listed as
+ * "Progressive stream" is not a cosmetic error: it is the row a viewer picks
+ * when they are on a metered connection and want the direct link.
+ */
+function describeLinkShape(link: ExtractorLink): string {
+  if (link.drm) {
+    const scheme = link.drm.scheme === 'unknown' ? 'Encrypted' : `${link.drm.scheme} DRM`;
+    return `${scheme} stream`;
+  }
+  if (isTorrentLink(link)) return 'Torrent';
+  if ((link.playlist?.length ?? 0) > 1) return `${link.playlist!.length}-part stream`;
+  if (link.isM3u8) return 'HLS stream';
+  if (link.isDash) return 'DASH stream';
+  return 'Progressive stream';
 }
 
 function stripQuery(url: string): string {
@@ -788,20 +820,92 @@ export class ContentService {
       }
     }
 
-    const sources = links
-      .filter((link) => link.url)
-      .map((link, index) => {
+    /**
+     * A link becomes one source, except a playlist, which becomes one per part.
+     *
+     * `ExtractorLinkPlayList` is a title delivered in ordered pieces by a host
+     * that caps upload length. Android concatenates them into a single timeline;
+     * nothing here does yet, and the alternative — one row that plays the first
+     * part and stops — is the worse failure, because a film that ends after
+     * forty minutes with no explanation reads as a broken source. Numbered rows
+     * are visibly partial instead of silently truncated, and every part is
+     * reachable.
+     */
+    const expanded = links.flatMap((link) => {
+      const parts = link.playlist ?? [];
+      if (parts.length <= 1) {
+        const address = link.url || parts[0]?.url || '';
+        return address ? [{ link, address, part: 0, parts: 1 }] : [];
+      }
+      return parts.map((part, index) => ({
+        link,
+        address: part.url,
+        part: index + 1,
+        parts: parts.length,
+      }));
+    });
+
+    const sources = expanded
+      .map(({ link, address, part, parts }, index) => {
         const parsed = parseReleaseName(link.name || link.source || 'Stream');
-        // The ranker and the dedupe key both need an identity; a provider link
-        // has no infohash, so one is synthesised from the URL.
-        const identity = `ext-${createHash('sha1').update(link.url).digest('hex').slice(0, 20)}`;
+        const torrent = isTorrentLink(link);
+
+        /**
+         * A magnet's real infohash, where there is one.
+         *
+         * That string is the cross-indexer dedupe key, so a provider handing
+         * back the same release a torrent indexer also found should collapse to
+         * one row rather than two. Only a link with no infohash of its own gets
+         * a synthetic id.
+         */
+        const identity =
+          (address.startsWith('magnet:') ? infoHashFromMagnet(address) : null) ||
+          `ext-${createHash('sha1').update(address).digest('hex').slice(0, 20)}`;
+
+        /**
+         * A torrent from a provider goes to the torrent engine, not the proxy.
+         *
+         * `ExtractorLinkType.TORRENT` and `MAGNET` are ordinary provider results
+         * upstream — Android hands them to its torrent player the same way it
+         * hands an M3U8 to ExoPlayer. Here every one of them was written into
+         * `directUrl` and passed to `MediaProxy`, which speaks HTTP: a `magnet:`
+         * URI went in and nothing came back. Routing them into `magnet` /
+         * `torrentUrl` is the whole fix — the swarm, the sequential piece
+         * ordering and the loopback server have all been in place the entire
+         * time and were simply never reached from this direction.
+         */
+        const routing = torrent
+          ? {
+              magnet: address.startsWith('magnet:') ? address : '',
+              torrentUrl: address.startsWith('magnet:') ? undefined : address,
+              directUrl: undefined,
+              directHeaders: undefined,
+            }
+          : {
+              magnet: '',
+              torrentUrl: undefined,
+              directUrl: address,
+              directHeaders: link.headers,
+            };
+
         return {
           infoHash: identity,
-          directUrl: link.url,
-          directHeaders: link.headers,
+          ...routing,
           isM3u8: Boolean(link.isM3u8),
-          title: link.name || link.source || 'Provider stream',
-          magnet: '',
+          isDash: Boolean(link.isDash),
+          mimeType: link.mimeType,
+          drm: link.drm,
+          audioTracks: link.audioTracks,
+          /**
+           * The whole part list travels with every part, so a future
+           * concatenating player has what it needs without re-resolving the
+           * link — and so the part list is visible in an error report.
+           */
+          playlist: link.playlist,
+          title:
+            parts > 1
+              ? `${link.name || link.source || 'Provider stream'} — part ${part} of ${parts}`
+              : link.name || link.source || 'Provider stream',
           sizeBytes: 0,
           // Seeders are meaningless for a direct stream. One keeps it above the
           // `minSeeders` floor that would otherwise filter every provider link.
@@ -817,10 +921,20 @@ export class ContentService {
           score: link.quality || 0,
           scoreReasons: [
             `Supplied directly by ${link.source || 'the extension provider'}`,
-            link.isM3u8 ? 'HLS stream' : 'Progressive stream',
+            describeLinkShape(link),
           ],
-          // Preserve the provider's own ordering as the tiebreak.
-          fileIndex: index,
+          /**
+           * Ordering for a direct link; **nothing** for a torrent.
+           *
+           * `fileIndex` means two different things depending on which half of
+           * this type is in use, and only one of them is a position in a list:
+           * for a torrent it names the file to play *inside* the archive, which
+           * is how Torrentio points at one episode of a season pack. Handing the
+           * engine a list position there selects an arbitrary file. It was
+           * harmless while provider links never reached the torrent engine —
+           * they do now.
+           */
+          fileIndex: torrent ? undefined : index,
         } satisfies TorrentResult;
       })
       .sort((a, b) => b.score - a.score);
@@ -939,6 +1053,7 @@ export class ContentService {
       | 'directUrl'
       | 'directHeaders'
       | 'isM3u8'
+      | 'mimeType'
       | 'title'
     >,
     season?: number,
@@ -965,7 +1080,7 @@ export class ContentService {
         diskPath: '',
         files: [],
         subtitleUrls: [],
-        mimeType: mimeForStreamUrl(source.directUrl, source.isM3u8),
+        mimeType: mimeForStreamUrl(source.directUrl, source.isM3u8, source.mimeType),
       };
     }
 

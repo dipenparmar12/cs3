@@ -26,7 +26,7 @@ import { SubtitleService } from './subtitleService';
 import { MediaTranscoder, VIDEO_CODEC_PROBES } from './mediaTranscoder';
 import { PlaybackEngine } from './media/playbackEngine';
 import { InspectionStore } from './media/inspectionStore';
-import { detectExtensionPicky } from './media/mediaInspector';
+import { detectExtensionPicky, detectToneMapSupport } from './media/mediaInspector';
 import { runTool } from './media/runTool';
 import type {
   NativeEngineCapability,
@@ -214,10 +214,24 @@ const playbackEngine = new PlaybackEngine({
  */
 function refreshFfmpegOptionSupport(): void {
   const ffprobe = mediaTranscoder.resolveFfprobe();
-  if (!ffprobe) return;
-  void detectExtensionPicky(ffprobe, (command, args, timeoutMs) =>
-    runTool(command, args, timeoutMs)
-  );
+  if (ffprobe) {
+    void detectExtensionPicky(ffprobe, (command, args, timeoutMs) =>
+      runTool(command, args, timeoutMs)
+    );
+  }
+
+  /**
+   * `zscale` is asked of ffmpeg rather than ffprobe: it is a filter, and only
+   * ffmpeg lists filters. Same reasoning as the option above — a filter this
+   * binary does not have fails the whole command line, so the HDR tone-map is
+   * only ever emitted where it will run.
+   */
+  const ffmpeg = mediaTranscoder.resolveFfmpeg();
+  if (ffmpeg) {
+    void detectToneMapSupport(ffmpeg, (command, args, timeoutMs) =>
+      runTool(command, args, timeoutMs)
+    );
+  }
 }
 refreshFfmpegOptionSupport();
 

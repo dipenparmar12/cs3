@@ -133,6 +133,8 @@ interface DetailData {
   duration?: string;
   episodes?: Episode[];
   imdbId?: string;
+  /** A live channel: no duration to seek within and no position worth keeping. */
+  isLive?: boolean;
 }
 
 /**
@@ -161,11 +163,21 @@ async function loadWatchState(mediaUrl: string): Promise<Record<string, EpisodeW
   return state;
 }
 
-/** Where to resume an episode from, or undefined if it was finished or never started. */
+/**
+ * Where to resume an episode from, or undefined if it was finished or never
+ * started — or if it is live.
+ *
+ * A live channel has no fixed timeline, so a stored position does not address
+ * anything: yesterday's 20 minutes in is not a point in today's broadcast. The
+ * seek either lands somewhere arbitrary or is refused, and both read as the
+ * channel being broken.
+ */
 function resumePositionFrom(
   watchState: Record<string, EpisodeWatchState>,
-  episode: Episode | null
+  episode: Episode | null,
+  isLive?: boolean
 ): number | undefined {
+  if (isLive) return undefined;
   const match = watchState[episodeKey(episode?.season, episode?.episode)];
   if (!match || match.completed) return undefined;
   return match.positionSeconds;
@@ -797,7 +809,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
           posterUrl: detail.posterUrl,
           season: episode?.season,
           episode: episode?.episode,
-          resumeAt: resumePositionFrom(watchState, episode),
+          resumeAt: resumePositionFrom(watchState, episode, detail.isLive),
         },
       });
     },
@@ -885,7 +897,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
           posterUrl: detail.posterUrl,
           season: pendingEpisode?.season,
           episode: pendingEpisode?.episode,
-          resumeAt: resumePositionFrom(watchState, pendingEpisode),
+          resumeAt: resumePositionFrom(watchState, pendingEpisode, detail.isLive),
         },
       });
     },

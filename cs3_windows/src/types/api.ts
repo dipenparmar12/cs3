@@ -157,6 +157,71 @@ export interface LoadResponse {
   actors?: string[];
   recommendations?: SearchResponse[];
   id?: number;
+  /**
+   * A live channel rather than a recording.
+   *
+   * `LiveStreamLoadResponse` on the Android side, and a whole content category
+   * that was previously dropped: the bridge's `when` had no branch for it, so
+   * every `TvType.Live` provider searched, opened a detail page and offered
+   * nothing to play. Live changes more than the source — there is no duration
+   * to seek within, no position worth resuming, and a stream that ends is a
+   * channel going off air rather than a title finishing.
+   */
+  isLive?: boolean;
+}
+
+/**
+ * How the provider classified this link.
+ *
+ * `ExtractorLinkType` on the Android side, and the value Android hands ExoPlayer
+ * to pick a `MediaSource` factory. It is a statement rather than a guess: where
+ * the provider leaves it unset the library infers it from the URL before we ever
+ * see it, so by the time it reaches here it is the best answer available.
+ */
+export type ProviderLinkType = 'VIDEO' | 'M3U8' | 'DASH' | 'TORRENT' | 'MAGNET';
+
+/**
+ * An audio track delivered as its own file, beside the video.
+ *
+ * How a provider ships one video and four language tracks without muxing five
+ * copies of the film. The headers travel with it because most hosts that do this
+ * 403 a request without the `Referer`, so a URL alone is not a fetchable track.
+ */
+export interface ProviderAudioTrack {
+  url: string;
+  headers?: Record<string, string>;
+}
+
+/**
+ * DRM as the provider declared it, rather than as a probe guessed at it.
+ *
+ * `scheme` is the resolved name of the system UUID; `unknown` means the provider
+ * named a system this build has no name for, which is still very different from
+ * "not encrypted" — it must keep the stream off the FFmpeg path either way.
+ *
+ * ClearKey is the case that is actually playable here: `kid` and `key` are a
+ * complete licence, so the renderer can answer its own key request without a
+ * server. Widevine and PlayReady need a CDM this app does not ship.
+ */
+export interface ProviderDrm {
+  scheme: 'clearkey' | 'widevine' | 'playready' | 'unknown';
+  /** The registered DRM system id, hyphenated. */
+  uuid?: string;
+  /** ClearKey key id, base64url as EME wants it. */
+  kid?: string;
+  /** ClearKey key, base64url. */
+  key?: string;
+  /** JWK key type; `oct` for ClearKey. */
+  keyType?: string;
+  licenseUrl?: string;
+  keyRequestParameters?: Record<string, string>;
+}
+
+/** One part of a title the provider delivers in several files, in order. */
+export interface ProviderPlaylistPart {
+  url: string;
+  /** Microseconds, as the provider gave it. 0 means it did not say. */
+  durationUs?: number;
 }
 
 export interface ExtractorLink {
@@ -167,6 +232,22 @@ export interface ExtractorLink {
   quality: number; // e.g. 1080, 720, 480, 360
   isM3u8?: boolean;
   isDash?: boolean;
+  /**
+   * The provider's own classification, unmodified.
+   *
+   * Read in preference to sniffing the URL, which is wrong in both directions:
+   * providers serve playlists from `.php` addresses carrying no extension, and a
+   * progressive MP4 behind a path containing `dash` is not a manifest.
+   */
+  linkType?: ProviderLinkType;
+  /** The MIME type upstream attaches to `linkType`. */
+  mimeType?: string;
+  /** The extractor's own opaque state. Carried so it can be handed back. */
+  extractorData?: string;
+  audioTracks?: ProviderAudioTrack[];
+  drm?: ProviderDrm;
+  /** Set when the title is delivered in parts rather than as one file. */
+  playlist?: ProviderPlaylistPart[];
   headers?: Record<string, string>;
   subtitles?: SubtitleFile[];
 }
