@@ -16,6 +16,10 @@ import android.content.UnsupportedAndroidApiException;
  */
 public class FragmentActivity extends Activity {
 
+    public FragmentActivity() {
+        super();
+    }
+
     protected FragmentActivity(String pluginId, java.nio.file.Path scopedDir) {
         super(pluginId, scopedDir);
     }

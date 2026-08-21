@@ -136,6 +136,7 @@
               same mapper configuration, and a second one would diverge silently.
             -->
             <arg>-opt-in=com.lagradost.cloudstream3.InternalAPI</arg>
+            <arg>-opt-in=kotlin.uuid.ExperimentalUuidApi</arg>
           </args>
         </configuration>
       </plugin>
