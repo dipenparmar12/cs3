@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import { RuntimeProvisioner } from './runtimeProvisioner';
+import { scopedLogger } from '../logging/logger';
 
 export interface RpcResult {
   ok: boolean;
@@ -36,8 +37,43 @@ interface Pending {
   method: string;
 }
 
+/**
+ * The sidecar's stderr, as records rather than console noise.
+ *
+ * `logger.ts` claimed this already happened — "the sidecar logs to stderr, which
+ * the supervisor captures and re-emits through here" — and it did not: stderr
+ * went to `console.warn` and nowhere else. So every extension failure was
+ * visible only to whoever had a terminal open, and the workflow this codebase
+ * relies on for extension problems — *count the log before fixing anything* —
+ * could not be run on them at all. The six-missing-classes finding came from a
+ * user pasting a captured console by hand, and so did the two traces that
+ * prompted this.
+ */
+const sidecarLog = scopedLogger('runtime', { component: 'sidecar' });
+
+/** `INFO PluginInstance: Adding X` — the JVM's own level, where it prints one. */
+const LEVEL_PREFIX = /^(TRACE|DEBUG|INFO|WARN|WARNING|ERROR|SEVERE|FATAL)[: ]?/;
+
+/**
+ * A line that continues the record above rather than starting a new one.
+ *
+ * A Java stack trace is thirty lines describing one event. Logged individually
+ * they are thirty records that cannot be grouped and that push the cause out of
+ * the ring; joined, they are one record whose `detail` is the stack — which is
+ * the shape a `GROUP BY` over the failing class needs.
+ */
+const STACK_LINE = /^(\s+at\s|\s*Caused by:|\s*\.\.\.\s+\d+\s+more|\s*Suppressed:)/;
+
+/** The class behind a `NoClassDefFoundError`, which is the field worth counting. */
+const MISSING_CLASS = /(?:NoClassDefFoundError|ClassNotFoundException):\s*([\w/$.]+)/;
+
 export class SidecarSupervisor {
   private proc: ChildProcessWithoutNullStreams | null = null;
+
+  /** The line a stack trace is still accumulating under, and its stack so far. */
+  private stderrHead: string | null = null;
+  private stderrStack: string[] = [];
+  private stderrTimer: NodeJS.Timeout | null = null;
   private pending = new Map<string, Pending>();
   private nextId = 1;
   private restarts = 0;
@@ -232,6 +268,76 @@ export class SidecarSupervisor {
   }
 
   // --- protocol ------------------------------------------------------------
+
+  /**
+   * Folds one stderr line into the structured log.
+   *
+   * Stack lines attach to the message above them; anything else flushes the
+   * previous record and becomes the new head. A short timer flushes the last
+   * one, because the final trace of a session has no line after it to trigger
+   * the flush and is exactly the trace worth having.
+   */
+  private absorbStderr(line: string): void {
+    if (STACK_LINE.test(line) && this.stderrHead !== null) {
+      // Bounded: a runaway trace must not become the whole log file.
+      if (this.stderrStack.length < 80) this.stderrStack.push(line.trim());
+      this.scheduleStderrFlush();
+      return;
+    }
+    this.flushStderr();
+    this.stderrHead = line.trim();
+    this.scheduleStderrFlush();
+  }
+
+  private scheduleStderrFlush(): void {
+    if (this.stderrTimer) clearTimeout(this.stderrTimer);
+    this.stderrTimer = setTimeout(() => this.flushStderr(), 250);
+    this.stderrTimer.unref?.();
+  }
+
+  private flushStderr(): void {
+    if (this.stderrTimer) {
+      clearTimeout(this.stderrTimer);
+      this.stderrTimer = null;
+    }
+    const head = this.stderrHead;
+    if (!head) return;
+    const stack = this.stderrStack;
+    this.stderrHead = null;
+    this.stderrStack = [];
+
+    const levelMatch = LEVEL_PREFIX.exec(head);
+    const raw = (levelMatch?.[1] ?? '').toUpperCase();
+    /**
+     * A stack trace with no level prefix is an uncaught throwable the JVM
+     * printed itself, which is an error however quiet the line looks.
+     */
+    const level =
+      raw === 'ERROR' || raw === 'SEVERE' || raw === 'FATAL'
+        ? 'error'
+        : raw === 'WARN' || raw === 'WARNING'
+          ? 'warn'
+          : raw === 'DEBUG' || raw === 'TRACE'
+            ? 'debug'
+            : stack.length > 0
+              ? 'error'
+              : 'info';
+
+    const message = levelMatch ? head.slice(levelMatch[0].length) : head;
+    /**
+     * `missingClass` is promoted to its own field rather than left inside the
+     * text. Grouping 113 load failures into six missing types is the finding
+     * that solved that problem, and it is a `GROUP BY` over a field — over
+     * prose it is impossible.
+     */
+    const missing = MISSING_CLASS.exec([head, ...stack].join('\n'))?.[1];
+
+    sidecarLog.write(level, 'sidecar_stderr', {
+      message,
+      ...(missing ? { missingClass: missing.replace(/\//g, '.') } : {}),
+      ...(stack.length > 0 ? { detail: stack.join('\n') } : {}),
+    });
+  }
 
   private onStdout(chunk: string): void {
     this.stdoutBuffer += chunk;
