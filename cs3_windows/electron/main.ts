@@ -4,6 +4,15 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { DatastoreManager } from './datastore';
+/**
+ * Envelope semantics live in `ipc/`, not here.
+ *
+ * `handle` owns the try/catch and the `{ ok, error, …payload }` shape that
+ * sixty-eight handlers in this file used to spell out individually; `failure` is
+ * the same normalisation for the handful of places that build a reply by hand.
+ */
+import { handle, handleRaw } from './ipc/channel';
+import { failure as fail } from './ipc/envelope';
 import { HomeProviderRegistry, DEFAULT_PROVIDER_ID } from './cs3/homeProviderRegistry';
 import { Logger, LOG_LEVELS, setLogger, type LogLevel, type LogScope } from './logging/logger';
 import { Aria2Engine } from './aria2Engine';
@@ -638,24 +647,19 @@ app.on('before-quit', async (event) => {
   app.exit(0);
 });
 
-/** Normalises a thrown value into an IPC-safe result envelope. */
-function fail(error: unknown): { ok: false; error: string } {
-  return { ok: false, error: error instanceof Error ? error.message : String(error) };
-}
-
 // --- content -------------------------------------------------------------
 
-ipcMain.handle('api:searchAll', async (_, query: string, options?: SearchOptions) => {
-  try {
+handle(
+  'api:searchAll',
+  async (query: string, options?: SearchOptions) => {
     const results = await contentService.search(query, options ?? {});
     // Recorded on success only: a query that failed transport is not something
     // the user asked to remember.
     searchHistory.record(query, results.length);
-    return { ok: true, results };
-  } catch (error) {
-    return { ...fail(error), results: [] };
-  }
-});
+    return { results };
+  },
+  { results: [] }
+);
 
 /**
  * Opens a search and returns immediately.
@@ -665,8 +669,9 @@ ipcMain.handle('api:searchAll', async (_, query: string, options?: SearchOptions
  * extension providers are fifteen independent scrapes, and the slowest of them
  * should not decide when the first result becomes visible.
  */
-ipcMain.handle('search:start', async (_, query: string, options?: SearchOptions) => {
-  try {
+handle(
+  'search:start',
+  async (query: string, options?: SearchOptions) => {
     const snapshot = contentService.startSearch(query, options ?? {});
     /**
      * Recorded now, not when the search finishes.
@@ -679,31 +684,42 @@ ipcMain.handle('search:start', async (_, query: string, options?: SearchOptions)
      * The result count is filled in by the notifier once it is known.
      */
     searchHistory.record(query);
-    return { ok: true, snapshot };
-  } catch (error) {
-    return { ...fail(error), snapshot: null };
-  }
-});
+    return { snapshot };
+  },
+  { snapshot: null }
+);
 
-ipcMain.handle('search:cancel', async (_, id: string) => {
-  try {
-    return { ok: true, snapshot: contentService.cancelSearch(id) };
-  } catch (error) {
-    return { ...fail(error), snapshot: null };
-  }
+handle('search:cancel', async (id: string) => ({ snapshot: contentService.cancelSearch(id) }), {
+  snapshot: null,
 });
 
 /**
  * Title autocomplete. Called on every debounced keystroke, so it never rejects
  * and never blocks — an empty list is an acceptable answer for a search box.
  */
-ipcMain.handle('api:suggest', async (_, query: string) => {
-  try {
-    return { ok: true, suggestions: await searchSuggestions.suggest(query) };
-  } catch (error) {
-    return { ...fail(error), suggestions: [] };
-  }
+handle('api:suggest', async (query: string) => ({ suggestions: await searchSuggestions.suggest(query) }), {
+  suggestions: [],
 });
+
+/**
+ * The provider's own subtitles, in the shape the catalogue results use.
+ *
+ * Labelled with their origin because the two sets are not interchangeable: a
+ * provider's track belongs to the exact release being played, where an
+ * OpenSubtitles match is for the work in general and is routinely out of sync
+ * with a particular cut. The viewer choosing between them needs to know which
+ * is which.
+ */
+async function providerSubtitles(mediaUrl?: string) {
+  if (!mediaUrl?.startsWith('cs3ext://')) return [];
+  const entries = await pluginManager.loadSubtitles(mediaUrl).catch(() => []);
+  return entries.map((entry) => ({
+    id: `provider:${entry.url}`,
+    lang: entry.lang,
+    langName: `${entry.lang} (from this provider)`,
+    url: entry.url,
+  }));
+}
 
 /**
  * Subtitles for the thing being played, from both places they come from.
@@ -719,76 +735,51 @@ ipcMain.handle('api:suggest', async (_, query: string) => {
  * Provider subtitles lead: they belong to the exact release being played, where
  * an OpenSubtitles match is for the work in general and may be out of sync.
  */
-ipcMain.handle(
+handle(
   'subtitles:search',
-  async (_, imdbIdOrQuery: string, season?: number, episode?: number, mediaUrl?: string) => {
-    try {
-      const trimmed = imdbIdOrQuery?.trim() ?? '';
-      const [fromProvider, fromCatalogue] = await Promise.all([
-        mediaUrl?.startsWith('cs3ext://')
-          ? pluginManager.loadSubtitles(mediaUrl).catch(() => [])
-          : Promise.resolve([]),
-        trimmed
-          ? (/^tt\d+$/i.test(trimmed)
-              ? subtitles.search(trimmed, season, episode).catch(() => [])
-              : subtitles.searchByTitle(trimmed, season, episode).then((r) => r.results).catch(() => []))
-          : Promise.resolve([]),
-      ]);
+  async (imdbIdOrQuery: string, season?: number, episode?: number, mediaUrl?: string) => {
+    const trimmed = imdbIdOrQuery?.trim() ?? '';
+    const [providerResults, fromCatalogue] = await Promise.all([
+      providerSubtitles(mediaUrl),
+      trimmed
+        ? /^tt\d+$/i.test(trimmed)
+          ? subtitles.search(trimmed, season, episode).catch(() => [])
+          : subtitles
+              .searchByTitle(trimmed, season, episode)
+              .then((r) => r.results)
+              .catch(() => [])
+        : Promise.resolve([]),
+    ]);
 
-      const providerResults = fromProvider.map((entry) => ({
-        id: `provider:${entry.url}`,
-        lang: entry.lang,
-        langName: `${entry.lang} (from this provider)`,
-        url: entry.url,
-      }));
-
-      return { ok: true, results: [...providerResults, ...fromCatalogue] };
-    } catch (error) {
-      return { ...fail(error), results: [] };
-    }
-  }
+    return { results: [...providerResults, ...fromCatalogue] };
+  },
+  { results: [] }
 );
 
 /**
  * Searches subtitles by custom movie/series title or IMDb id, returning the matched title and IMDb id.
  */
-ipcMain.handle(
+handle(
   'subtitles:searchByTitle',
-  async (_, query: string, season?: number, episode?: number, mediaUrl?: string) => {
-    try {
-      const trimmed = query?.trim() ?? '';
-      if (!trimmed && !mediaUrl?.startsWith('cs3ext://')) {
-        return { ok: true, results: [], imdbId: undefined, matchedTitle: undefined };
-      }
+  async (query: string, season?: number, episode?: number, mediaUrl?: string) => {
+    const trimmed = query?.trim() ?? '';
+    const empty = { results: [], imdbId: undefined, matchedTitle: undefined };
+    if (!trimmed && !mediaUrl?.startsWith('cs3ext://')) return empty;
 
-      const [fromProvider, titleResult] = await Promise.all([
-        mediaUrl?.startsWith('cs3ext://')
-          ? pluginManager.loadSubtitles(mediaUrl).catch(() => [])
-          : Promise.resolve([]),
-        trimmed
-          ? subtitles
-              .searchByTitle(trimmed, season, episode)
-              .catch(() => ({ results: [], imdbId: undefined, matchedTitle: undefined }))
-          : Promise.resolve({ results: [], imdbId: undefined, matchedTitle: undefined }),
-      ]);
+    const [providerResults, titleResult] = await Promise.all([
+      providerSubtitles(mediaUrl),
+      trimmed
+        ? subtitles.searchByTitle(trimmed, season, episode).catch(() => empty)
+        : Promise.resolve(empty),
+    ]);
 
-      const providerResults = fromProvider.map((entry) => ({
-        id: `provider:${entry.url}`,
-        lang: entry.lang,
-        langName: `${entry.lang} (from this provider)`,
-        url: entry.url,
-      }));
-
-      return {
-        ok: true,
-        imdbId: titleResult.imdbId,
-        matchedTitle: titleResult.matchedTitle,
-        results: [...providerResults, ...titleResult.results],
-      };
-    } catch (error) {
-      return { ...fail(error), results: [], imdbId: undefined, matchedTitle: undefined };
-    }
-  }
+    return {
+      imdbId: titleResult.imdbId,
+      matchedTitle: titleResult.matchedTitle,
+      results: [...providerResults, ...titleResult.results],
+    };
+  },
+  { results: [], imdbId: undefined, matchedTitle: undefined }
 );
 
 /**
@@ -798,21 +789,13 @@ ipcMain.handle(
  * are SubRip, which `<track>` rejects. Conversion happens here and the renderer
  * turns the returned text into a blob URL.
  */
-ipcMain.handle('subtitles:fetch', async (_, url: string) => {
-  try {
-    return { ok: true, vtt: await subtitles.fetchAsVtt(url) };
-  } catch (error) {
-    return { ...fail(error), vtt: '' };
-  }
+handle('subtitles:fetch', async (url: string) => ({ vtt: await subtitles.fetchAsVtt(url) }), {
+  vtt: '',
 });
 
-ipcMain.handle('api:getSearchHistory', async () => searchHistory.list());
-
-ipcMain.handle('api:removeSearchHistory', async (_, query: string) =>
-  searchHistory.remove(query)
-);
-
-ipcMain.handle('api:clearSearchHistory', async () => searchHistory.clear());
+handleRaw('api:getSearchHistory', () => searchHistory.list());
+handleRaw('api:removeSearchHistory', (query: string) => searchHistory.remove(query));
+handleRaw('api:clearSearchHistory', () => searchHistory.clear());
 
 // --- diagnostics ----------------------------------------------------------
 
@@ -851,19 +834,15 @@ async function diagnosticsEnvironment(): Promise<Record<string, string>> {
  * session around it — but a panel where every successful search scrolls past
  * the one error is not a debugging tool.
  */
-ipcMain.handle(
-  'diagnostics:list',
-  async (_, limit?: number, levels?: Array<'error' | 'warn' | 'info'>) => ({
-    ok: true,
-    records: diagnostics.list(limit ?? 200, levels ?? ['error', 'warn']),
-    total: diagnostics.all().length,
-    filePath: diagnostics.filePath,
-  })
-);
+handle('diagnostics:list', (limit?: number, levels?: Array<'error' | 'warn' | 'info'>) => ({
+  records: diagnostics.list(limit ?? 200, levels ?? ['error', 'warn']),
+  total: diagnostics.all().length,
+  filePath: diagnostics.filePath,
+}));
 
-ipcMain.handle('diagnostics:clear', async () => {
+handle('diagnostics:clear', () => {
   diagnostics.clear();
-  return { ok: true };
+  return {};
 });
 
 // --- the structured log ----------------------------------------------------
@@ -877,68 +856,57 @@ ipcMain.handle('diagnostics:clear', async () => {
  * recent past, find the file, open the folder, and turn the level up for the
  * next reproduction attempt.
  */
-ipcMain.handle(
+handle(
   'log:query',
-  async (
-    _,
-    filter?: {
-      level?: LogLevel;
-      scopes?: LogScope[];
-      event?: string;
-      search?: string;
-      since?: number;
-      limit?: number;
-    }
-  ) => {
-    try {
-      return {
-        ok: true,
-        records: logger.query(filter ?? {}),
-        session: logger.session,
-        level: logger.level,
-        file: logger.logFile,
-      };
-    } catch (error) {
-      return { ...fail(error), records: [], session: '', level: 'info' as LogLevel, file: '' };
-    }
-  }
+  (filter?: {
+    level?: LogLevel;
+    scopes?: LogScope[];
+    event?: string;
+    search?: string;
+    since?: number;
+    limit?: number;
+  }) => ({
+    records: logger.query(filter ?? {}),
+    session: logger.session,
+    level: logger.level,
+    file: logger.logFile,
+  }),
+  { records: [], session: '', level: 'info' as LogLevel, file: '' }
 );
 
-ipcMain.handle('log:sessions', async () => {
-  try {
+handle(
+  'log:sessions',
+  () => {
     // Flushed first, or the current session under-reports its own size by
     // however much is sitting in the write buffer.
     logger.flush();
-    return { ok: true, sessions: logger.sessions(), directory: path.dirname(logger.logFile) };
-  } catch (error) {
-    return { ...fail(error), sessions: [], directory: '' };
-  }
-});
+    return { sessions: logger.sessions(), directory: path.dirname(logger.logFile) };
+  },
+  { sessions: [], directory: '' }
+);
 
 /**
  * The level is persisted, because the thing it is turned up for is a bug that
  * has not happened yet. A `trace` setting that reset on restart would be off
  * again by the time the user managed to reproduce anything.
  */
-ipcMain.handle('log:setLevel', async (_, level: LogLevel) => {
-  try {
+handle(
+  'log:setLevel',
+  (level: LogLevel) => {
     logger.setLevel(level);
     datastore.setString('log_level_key', level);
     logger.info('app', 'log_level_changed', { level });
-    return { ok: true, level };
-  } catch (error) {
-    return { ...fail(error), level: logger.level };
-  }
-});
+    return { level };
+  },
+  // The level the logger is *actually* at, so a rejected change leaves the
+  // settings control showing the truth rather than the value that failed.
+  () => ({ level: logger.level })
+);
 
-ipcMain.handle('log:reveal', async () => {
-  try {
-    logger.flush();
-    shell.showItemInFolder(logger.logFile);
-    return { ok: true };
-  } catch (error) {
-    return fail(error);
-  }
+handle('log:reveal', () => {
+  logger.flush();
+  shell.showItemInFolder(logger.logFile);
+  return {};
 });
 
 /**
@@ -948,15 +916,14 @@ ipcMain.handle('log:reveal', async () => {
  * couple of thousand records and the file holds the session, and a report that
  * silently omits the beginning is worse than one that is large.
  */
-ipcMain.handle('log:exportSession', async () => {
-  try {
+handle(
+  'log:exportSession',
+  () => {
     logger.flush();
-    const text = fs.readFileSync(logger.logFile, 'utf8');
-    return { ok: true, text, file: logger.logFile };
-  } catch (error) {
-    return { ...fail(error), text: '', file: logger.logFile };
-  }
-});
+    return { text: fs.readFileSync(logger.logFile, 'utf8'), file: logger.logFile };
+  },
+  () => ({ text: '', file: logger.logFile })
+);
 
 /**
  * A pasteable report, in one of two sizes.
@@ -972,58 +939,50 @@ ipcMain.handle('log:exportSession', async () => {
  * loop produces the same line hundreds of times, and an occurrence count says
  * everything the repetition did.
  */
-ipcMain.handle(
+handle(
   'diagnostics:report',
   async (
-    _,
     options: {
       ids?: string[];
       mode?: 'current' | 'full';
       context?: Parameters<DiagnosticsLog['selectForContext']>[0];
     } = {}
   ) => {
-    try {
-      const mode = options.mode ?? 'full';
-      const all = diagnostics.all();
+    const mode = options.mode ?? 'full';
+    const all = diagnostics.all();
 
-      let chosen = all;
-      let contextMatched: boolean | undefined;
+    let chosen = all;
+    let contextMatched: boolean | undefined;
 
-      if (options.ids?.length) {
-        chosen = all.filter((record) => options.ids!.includes(record.id));
-      } else if (mode === 'current' && options.context) {
-        const selection = diagnostics.selectForContext(options.context);
-        chosen = selection.records;
-        contextMatched = selection.matched;
-      } else {
-        // Reports carry everything retained, successes included: the run that
-        // worked is the control for the one that did not.
-        chosen = all.slice(0, 300);
-      }
-
-      return {
-        ok: true,
-        text: diagnostics.report(chosen, await diagnosticsEnvironment(), {
-          mode,
-          context: options.context,
-          contextMatched,
-        }),
-        records: chosen.length,
-      };
-    } catch (error) {
-      return { ...fail(error), text: '', records: 0 };
+    if (options.ids?.length) {
+      chosen = all.filter((record) => options.ids!.includes(record.id));
+    } else if (mode === 'current' && options.context) {
+      const selection = diagnostics.selectForContext(options.context);
+      chosen = selection.records;
+      contextMatched = selection.matched;
+    } else {
+      // Reports carry everything retained, successes included: the run that
+      // worked is the control for the one that did not.
+      chosen = all.slice(0, 300);
     }
-  }
+
+    return {
+      text: diagnostics.report(chosen, await diagnosticsEnvironment(), {
+        mode,
+        context: options.context,
+        contextMatched,
+      }),
+      records: chosen.length,
+    };
+  },
+  { text: '', records: 0 }
 );
 
 /** Lets the renderer record what only it can see, such as a playback failure. */
-ipcMain.handle(
-  'diagnostics:record',
-  async (_, entry: Parameters<DiagnosticsLog['record']>[0]) => {
-    diagnostics.record(entry);
-    return { ok: true };
-  }
-);
+handle('diagnostics:record', (entry: Parameters<DiagnosticsLog['record']>[0]) => {
+  diagnostics.record(entry);
+  return {};
+});
 
 /**
  * What happened last time each title was opened.
@@ -1031,13 +990,13 @@ ipcMain.handle(
  * Read once per search rather than per row, so the grid can mark dead entries
  * without a round trip for every poster on screen.
  */
-ipcMain.handle('api:getTitleOutcomes', async () => titleOutcomes.list());
+handleRaw('api:getTitleOutcomes', () => titleOutcomes.list());
 
-ipcMain.handle(
+handle(
   'api:recordTitleOutcome',
-  async (_, url: string, kind: TitleOutcomeKind, reason?: string) => {
+  (url: string, kind: TitleOutcomeKind, reason?: string) => {
     titleOutcomes.record(url, kind, reason);
-    return { ok: true };
+    return {};
   }
 );
 
@@ -1050,27 +1009,19 @@ ipcMain.handle(
  * waiting for an answer. Progress arrives on `sources:prefetch` and the results
  * land in the source cache, where Play finds them.
  */
-ipcMain.handle('sources:prefetch', async (_, request: SourceQuery) => {
-  try {
-    sourcePrefetcher.schedule(request);
-    return { ok: true };
-  } catch (error) {
-    return fail(error);
-  }
+handle('sources:prefetch', (request: SourceQuery) => {
+  sourcePrefetcher.schedule(request);
+  return {};
 });
 
-ipcMain.handle('sources:cancelPrefetch', async () => {
+handle('sources:cancelPrefetch', () => {
   sourcePrefetcher.cancel();
-  return { ok: true };
+  return {};
 });
 
-ipcMain.handle('sources:getPrefetchSetting', async () => ({
-  ok: true,
-  enabled: sourcePrefetcher.isEnabled(),
-}));
+handle('sources:getPrefetchSetting', () => ({ enabled: sourcePrefetcher.isEnabled() }));
 
-ipcMain.handle('sources:setPrefetchSetting', async (_, enabled: boolean) => ({
-  ok: true,
+handle('sources:setPrefetchSetting', (enabled: boolean) => ({
   enabled: sourcePrefetcher.setEnabled(enabled),
 }));
 
@@ -1084,31 +1035,26 @@ ipcMain.handle('sources:setPrefetchSetting', async (_, enabled: boolean) => ({
  * user is sent anywhere: the catalogue is asked "what is popular in Horror",
  * not "what should this person watch".
  */
-ipcMain.handle('discover:sections', async (_, options?: { includeAnime?: boolean }) => {
-  try {
+handle(
+  'discover:sections',
+  async (options?: { includeAnime?: boolean }) => {
     const genres = topGenresFromHistory();
-    const sections = await discovery.sections({
-      genres,
-      includeAnime: options?.includeAnime,
-    });
-    return { ok: true, sections, personalGenres: genres };
-  } catch (error) {
-    return { ...fail(error), sections: [], personalGenres: [] };
-  }
-});
+    const sections = await discovery.sections({ genres, includeAnime: options?.includeAnime });
+    return { sections, personalGenres: genres };
+  },
+  { sections: [], personalGenres: [] }
+);
 
-ipcMain.handle('discover:more', async (_, section: string, skip: number) => {
-  try {
-    return { ok: true, items: await discovery.more(section as never, skip) };
-  } catch (error) {
-    return { ...fail(error), items: [] };
-  }
-});
+handle(
+  'discover:more',
+  async (section: string, skip: number) => ({ items: await discovery.more(section as never, skip) }),
+  { items: [] }
+);
 
 /** Forces the next fetch to hit the network. The "refresh" button. */
-ipcMain.handle('discover:refresh', async () => {
+handle('discover:refresh', () => {
   discovery.invalidate();
-  return { ok: true };
+  return {};
 });
 
 /**
@@ -1144,26 +1090,22 @@ function topGenresFromHistory(): string[] {
  * caller decides when it is worth the round trips — a grid of two hundred rows
  * does not want two hundred lookups before it draws anything.
  */
-ipcMain.handle(
-  'discover:enrich',
-  async (_, results: Parameters<TitleEnricher['enrichAll']>[0], limit?: number) => {
-    try {
-      return { ok: true, results: await titleEnricher.enrichAll(results, { limit }) };
-    } catch (error) {
-      return { ...fail(error), results };
-    }
+handle('discover:enrich', async (results: Parameters<TitleEnricher['enrichAll']>[0], limit?: number) => {
+  try {
+    return { results: await titleEnricher.enrichAll(results, { limit }) };
+  } catch (error) {
+    // The unenriched rows are the fallback, so this one keeps its own catch:
+    // the payload is the *input*, which the shared helper cannot see.
+    return { ...fail(error), results };
   }
-);
+});
 
-ipcMain.handle(
+handle(
   'discover:resolveTitle',
-  async (_, rawTitle: string, hint?: { type?: never; year?: number }) => {
-    try {
-      return { ok: true, metadata: await titleEnricher.resolve(rawTitle, hint ?? {}) };
-    } catch (error) {
-      return { ...fail(error), metadata: null };
-    }
-  }
+  async (rawTitle: string, hint?: { type?: never; year?: number }) => ({
+    metadata: await titleEnricher.resolve(rawTitle, hint ?? {}),
+  }),
+  { metadata: null }
 );
 
 /**
@@ -1174,10 +1116,12 @@ ipcMain.handle(
  * — which is exactly what someone needs when a provider starts returning
  * nothing and they want to know what to turn off.
  */
-ipcMain.handle('api:getProviderProvenance', async (_, providerName: string) => {
+handle('api:getProviderProvenance', (providerName: string) => {
   try {
-    return { ok: true, provenance: pluginManager.provenanceOf(providerName) };
+    return { provenance: pluginManager.provenanceOf(providerName) };
   } catch (error) {
+    // Keeps its own catch: the fallback names the provider that was asked for,
+    // which is an argument the shared helper never sees.
     return { ...fail(error), provenance: { provider: providerName } };
   }
 });
@@ -1190,8 +1134,9 @@ ipcMain.handle('api:getProviderProvenance', async (_, providerName: string) => {
  * An unknown name still answers, with just itself: a provider that has since
  * been uninstalled must still be attributable in a list captured before it was.
  */
-ipcMain.handle('api:getProviderProvenanceMap', async (_, providerNames: string[]) => {
-  try {
+handle(
+  'api:getProviderProvenanceMap',
+  (providerNames: string[]) => {
     const provenance: Record<
       string,
       { provider: string; repositoryName?: string; extensionName?: string }
@@ -1204,11 +1149,10 @@ ipcMain.handle('api:getProviderProvenanceMap', async (_, providerNames: string[]
         extensionName: record.extensionName,
       };
     }
-    return { ok: true, provenance };
-  } catch (error) {
-    return { ...fail(error), provenance: {} };
-  }
-});
+    return { provenance };
+  },
+  { provenance: {} }
+);
 
 // --- saved detail pages (bookmarks) ---------------------------------------
 
