@@ -31,6 +31,23 @@ export function describeUnreadableSource(
   return probe(fetcher, url);
 }
 
+/**
+ * Whether this address is one of our own servers.
+ *
+ * The torrent engine, the media proxy and the transcoder all serve from
+ * loopback, and they are not third-party CDNs that can expire a link. The
+ * distinction matters because `dead` is acted on: `PlaybackEngine.prepare`
+ * refuses outright and the player skips to the next source.
+ */
+function isLoopback(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+  } catch {
+    return false;
+  }
+}
+
 async function probe(fetcher: ResilientFetch, url: string): Promise<UnreadableSource> {
   if (!/^https?:\/\//i.test(url)) {
     return { reason: 'This source could not be read.', dead: false };
@@ -77,6 +94,32 @@ async function probe(fetcher: ResilientFetch, url: string): Promise<UnreadableSo
         'The source is reachable but its format could not be read. It may use a container or codec that cannot be played here.',
     };
   } catch (error) {
+    /**
+     * A transport failure against **our own** loopback server is not a dead
+     * link, and calling it one was skipping torrents that were simply still
+     * finding peers.
+     *
+     * The torrent engine does not answer a byte until the first piece lands.
+     * From a cold swarm that regularly takes longer than this probe's timeout,
+     * so the probe reported "The source could not be reached" — and because
+     * `dead` makes `prepare` refuse and the player advance to the next source,
+     * the app walked the whole list without playing anything. The session logs
+     * show it plainly: forty-two of sixty-six playback attempts were loopback
+     * URLs, and the timeouts are all on `/webtorrent/` paths.
+     *
+     * Status codes are still trusted, including from loopback: the proxy
+     * forwards the upstream status, so a 403 arriving here really is the CDN
+     * refusing. It is only the *transport* verdict that is wrong for a server we
+     * are running ourselves.
+     */
+    if (isLoopback(url)) {
+      return {
+        dead: false,
+        reason:
+          'The stream has not produced any data yet. A torrent still finding peers, or a slow ' +
+          'upstream host, will start on its own — the source itself is not gone.',
+      };
+    }
     return {
       dead: true,
       reason: `The source could not be reached: ${
