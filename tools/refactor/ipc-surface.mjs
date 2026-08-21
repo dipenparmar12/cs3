@@ -57,7 +57,10 @@ function sources(dir) {
  */
 const PATTERNS = [
   ['handle  ', /ipcMain\.handle\(\s*['"]([\w:.-]+)['"]/g],
-  ['handle  ', /^handle(?:Raw)?\(\s*\n?\s*['"]([\w:.-]+)['"]/gm],
+  // Indented, because the registrations now sit inside per-domain registrar
+  // functions rather than at module scope. Still anchored to the start of a
+  // line so an unrelated local named `handle` cannot be mistaken for one.
+  ['handle  ', /^[ \t]*handle(?:Raw)?\(\s*\n?\s*['"]([\w:.-]+)['"]/gm],
   ['on      ', /ipcMain\.on\(\s*['"]([\w:.-]+)['"]/g],
   ['invoke  ', /ipcRenderer\.invoke\(\s*['"]([\w:.-]+)['"]/g],
   ['listen  ', /ipcRenderer\.on\(\s*['"]([\w:.-]+)['"]/g],
