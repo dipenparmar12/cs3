@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { SearchResponse } from '../types/api';
 import { matchesTab, tabsFor } from '../utils/contentTypes';
-import { Play, History, Loader2, RefreshCw, Sparkles } from 'lucide-react';
+import { Play, History, Loader2, RefreshCw, Sparkles, X, Trash2 } from 'lucide-react';
 import type { WatchProgress } from '../../electron/cs3/libraryStore';
 import type { DiscoverySection } from '../../electron/cs3/discovery';
 import { TvType } from '../types/api';
@@ -49,6 +49,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [continueWatching, setContinueWatching] = useState<WatchProgress[]>([]);
   const [typeTab, setTypeTab] = useState<string>('all');
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const loadSections = useCallback(async () => {
     if (!window.cloudstream?.getDiscoverySections) {
@@ -224,6 +225,43 @@ export const HomeView: React.FC<HomeViewProps> = ({
           <header>
             <History size={17} />
             <h3>Continue watching</h3>
+            {/*
+              Inline rather than a modal. A modal over the home screen to
+              confirm tidying a row is a heavier interruption than the action
+              deserves — and the sentence it needs to say is short enough to fit
+              here, which is what makes the confirmation meaningful rather than
+              a reflex "Are you sure?".
+            */}
+            {confirmClear ? (
+              <span className="home-row__confirm">
+                Clear the row? Your positions are kept — anything you open again
+                resumes where you left off.
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => {
+                    void window.cloudstream?.clearContinueWatching().then(() => {
+                      setContinueWatching([]);
+                      setConfirmClear(false);
+                    });
+                  }}
+                >
+                  Clear
+                </button>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setConfirmClear(false)}>
+                  Keep
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="home-row__action"
+                onClick={() => setConfirmClear(true)}
+                title="Clear Continue watching"
+              >
+                <Trash2 size={13} /> Clear all
+              </button>
+            )}
           </header>
           <div className="home-rail">
             {continueWatching.map((row) => {
@@ -263,6 +301,27 @@ export const HomeView: React.FC<HomeViewProps> = ({
                         <Play size={20} fill="#fff" />
                       </button>
                     </div>
+                    {/*
+                      Removes the title from this row and nothing else. The
+                      position is kept, so opening it again still resumes — and
+                      watching more of it brings the card back, which is what
+                      someone who removed it by accident would expect.
+
+                      `stopPropagation` because the whole card is a play target.
+                    */}
+                    <button
+                      type="button"
+                      className="poster-dismiss"
+                      title="Remove from Continue watching (your position is kept)"
+                      aria-label={`Remove ${row.title} from Continue watching`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void window.cloudstream?.dismissContinueWatching(row.key);
+                        setContinueWatching((rows) => rows.filter((r) => r.key !== row.key));
+                      }}
+                    >
+                      <X size={13} />
+                    </button>
                     <div className="poster-progress">
                       <div style={{ width: `${Math.min(100, percent)}%` }} />
                     </div>

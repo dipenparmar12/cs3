@@ -44,7 +44,19 @@ import { ProviderAnalytics } from './cs3/providerAnalytics';
 import { ProviderRanking } from './cs3/providerRanking';
 import { ProviderRecommender } from './cs3/providerRecommendations';
 import { ExternalPlayerService } from './externalPlayer';
-import { LibraryStore, type WatchStatus, canonicalKey, torrentResultToStoredSource } from './cs3/libraryStore';
+import {
+  continueWatchingEnabled,
+  setContinueWatchingEnabled,
+} from './cs3/continueWatching';
+import { isLinkUsable, pickReplacement } from './cs3/playedSource';
+import {
+  LibraryStore,
+  type WatchStatus,
+  canonicalKey,
+  torrentResultToStoredSource,
+  storedSourceToTorrentResult,
+} from './cs3/libraryStore';
+import { deadlineFromUrl } from './sourceCache';
 import { HistoryStore } from './cs3/historyStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
 import { DiscoveryService } from './cs3/discovery';
@@ -2682,8 +2694,246 @@ ipcMain.handle('library:getProgressForKey', async (_, key: string) =>
   libraryStore.getProgressForKey(key)
 );
 
+// Enforced in the main process: off means the rows are never assembled, not
+// merely not drawn. See `cs3/continueWatching.ts`.
 ipcMain.handle('library:getContinueWatching', async (_, limit?: number) =>
-  libraryStore.getContinueWatching(limit)
+  continueWatchingEnabled(datastore) ? libraryStore.getContinueWatching(limit) : []
+);
+
+/**
+ * Removes one title from the row, keeping where it got to.
+ *
+ * A dismissal rather than a deletion: "take this off my home screen" and
+ * "forget where I was" are different intentions, and the destructive reading of
+ * the first is unrecoverable — someone tidying the row would silently lose the
+ * resume point on a film they were halfway through.
+ */
+ipcMain.handle('library:dismissContinueWatching', async (_, key: string) => {
+  try {
+    const removed = libraryStore.dismissFromContinueWatching(key);
+    logger.info('library', 'continue_watching_dismissed', { mediaId: key, removed });
+    return { ok: true, removed };
+  } catch (error) {
+    return { ...fail(error), removed: false };
+  }
+});
+
+ipcMain.handle('library:clearContinueWatching', async () => {
+  try {
+    const cleared = libraryStore.clearContinueWatching();
+    logger.info('library', 'continue_watching_cleared', { cleared });
+    return { ok: true, cleared };
+  } catch (error) {
+    return { ...fail(error), cleared: 0 };
+  }
+});
+
+ipcMain.handle('library:getContinueWatchingEnabled', async () => ({
+  ok: true,
+  enabled: continueWatchingEnabled(datastore),
+}));
+
+ipcMain.handle('library:setContinueWatchingEnabled', async (_, enabled: boolean) => {
+  setContinueWatchingEnabled(datastore, enabled);
+  return { ok: true, enabled };
+});
+
+// --- the source that actually played ---------------------------------------
+
+/**
+ * Saving and re-opening the exact stream that worked.
+ *
+ * The library already remembers *what* was watched and the bookmarks remember
+ * *which page* it came from. Neither remembers **which of thirty sources
+ * actually delivered it** — so returning to a title meant picking again from a
+ * list, with no record that the fourth one down is the only one that ever
+ * played.
+ *
+ * The link is stored, but it is never the identity: a provider URL is a signed
+ * address on someone else's CDN, good for minutes. What makes the record
+ * durable is the `origin` query beside it, which is replayed to obtain a fresh
+ * link for the same release when the stored one has died.
+ */
+ipcMain.handle(
+  'library:recordPlayedSource',
+  async (
+    _,
+    input: {
+      title: string;
+      year?: number;
+      mediaUrl: string;
+      episodeTitle?: string;
+      season?: number;
+      episode?: number;
+      source: TorrentResult;
+      positionSeconds?: number;
+      durationSeconds?: number;
+    }
+  ) => {
+    try {
+      const key = canonicalKey(input.title, input.year);
+      const stored = torrentResultToStoredSource(input.source);
+
+      /**
+       * The deadline is read from the URL now, while we have it.
+       *
+       * `SourceCache` already knows how to find one — CloudFront's `Expires`,
+       * a JWT `exp`, and the handful of other schemes providers actually use.
+       * Recording it here is what lets `isLinkUsable` answer later without
+       * another request; without it every saved source would be re-resolved on
+       * every open, which is the cost this feature exists to avoid.
+       */
+      if (stored.directUrl && stored.expiresAt === undefined) {
+        const deadline = deadlineFromUrl(stored.directUrl);
+        if (deadline) stored.expiresAt = deadline;
+      }
+
+      const record = libraryStore.recordPlayedSource({
+        key,
+        season: input.season,
+        episode: input.episode,
+        source: stored,
+        origin: {
+          mediaUrl: input.mediaUrl,
+          title: input.title,
+          year: input.year,
+          episodeTitle: input.episodeTitle,
+        },
+        positionSeconds: input.positionSeconds,
+        durationSeconds: input.durationSeconds,
+      });
+      return { ok: true, record };
+    } catch (error) {
+      return { ...fail(error), record: null };
+    }
+  }
+);
+
+ipcMain.handle(
+  'library:getPlayedSource',
+  async (_, key: string, season?: number, episode?: number) => ({
+    ok: true,
+    record: libraryStore.getPlayedSource(key, season, episode),
+  })
+);
+
+ipcMain.handle('library:listPlayedSources', async (_, limit?: number) => ({
+  ok: true,
+  records: libraryStore.listPlayedSources(limit),
+}));
+
+ipcMain.handle('library:getPlayedSourcesForKey', async (_, key: string) => ({
+  ok: true,
+  records: libraryStore.getPlayedSourcesForKey(key),
+}));
+
+ipcMain.handle(
+  'library:forgetPlayedSource',
+  async (_, key: string, season?: number, episode?: number) => ({
+    ok: true,
+    removed: libraryStore.forgetPlayedSource(key, season, episode),
+  })
+);
+
+/**
+ * Hands back a playable source for a saved record, refreshing it if it has died.
+ *
+ * Three outcomes, and the caller is told which — because they mean different
+ * things to the viewer and a single "here is a stream" would hide the one that
+ * matters:
+ *
+ * - `reused` — the stored link still holds. Instant; no provider was contacted.
+ * - `refreshed` — the link had expired, so the *same release* was re-resolved
+ *   from the same provider and the record updated in place.
+ * - `unavailable` — the provider no longer offers that release. The record is
+ *   marked rather than deleted, because "the one that used to work is gone" is
+ *   more useful than an entry that silently vanishes, and the full source list
+ *   comes back so the viewer can choose again.
+ */
+ipcMain.handle(
+  'library:resolvePlayedSource',
+  async (_, key: string, season?: number, episode?: number) => {
+    try {
+      const record = libraryStore.getPlayedSource(key, season, episode);
+      if (!record) {
+        return {
+          ok: false,
+          error: 'No source has been saved for this item.',
+          resolution: null,
+          sources: [],
+        };
+      }
+
+      if (isLinkUsable(record.source)) {
+        return {
+          ok: true,
+          resolution: 'reused' as const,
+          record,
+          source: storedSourceToTorrentResult(record.source),
+          sources: [],
+        };
+      }
+
+      /**
+       * The saved link is dead, so the query that produced it is replayed.
+       * `bypassCache` because a cached answer is what just failed.
+       */
+      const discovered = await contentService.getSources(
+        {
+          mediaUrl: record.origin.mediaUrl,
+          titleOverride: record.origin.title,
+          season: record.season,
+          episode: record.episode,
+        },
+        undefined,
+        { bypassCache: true }
+      );
+
+      const replacement = pickReplacement(record.source, discovered.sources);
+      if (!replacement) {
+        libraryStore.markPlayedSourceUnavailable(
+          key,
+          'The provider no longer offers this release.',
+          season,
+          episode
+        );
+        return {
+          ok: false,
+          resolution: 'unavailable' as const,
+          error:
+            'The exact source you saved is no longer offered by that provider. ' +
+            'Pick another from the list below.',
+          record,
+          // The alternatives, so this is a choice rather than a dead end.
+          sources: discovered.sources,
+        };
+      }
+
+      const refreshed = torrentResultToStoredSource(replacement);
+      const updated = libraryStore.updatePlayedSourceLink(
+        key,
+        {
+          directUrl: refreshed.directUrl,
+          directHeaders: refreshed.directHeaders,
+          magnet: refreshed.magnet,
+          isM3u8: refreshed.isM3u8,
+          expiresAt: refreshed.directUrl ? deadlineFromUrl(refreshed.directUrl) ?? undefined : undefined,
+        },
+        season,
+        episode
+      );
+
+      return {
+        ok: true,
+        resolution: 'refreshed' as const,
+        record: updated ?? record,
+        source: replacement,
+        sources: discovered.sources,
+      };
+    } catch (error) {
+      return { ...fail(error), resolution: null, sources: [] };
+    }
+  }
 );
 
 ipcMain.handle('library:clearProgress', async (_, key: string, season?: number, episode?: number) =>

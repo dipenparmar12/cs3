@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { PlayedSource } from './types/library';
 import { Sidebar } from './components/Sidebar';
 import type { ActiveTab } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
@@ -254,6 +255,47 @@ export const App: React.FC = () => {
     const previous = lastQuery.current;
     if (previous?.query) void handleSearch(previous.query, previous.options);
   }, [handleSearch]);
+
+  /**
+   * Plays the exact source the library saved as working.
+   *
+   * The panel has already done the hard half — reused the stored link or
+   * re-resolved the same release through its provider — so this is the ordinary
+   * "start a stream from this source" path, the same one the detail screen uses
+   * when the viewer picks from a list. Going straight to a known-good source is
+   * the whole point: no discovery, no ranking, no waiting on fifteen scrapers.
+   */
+  const handlePlaySavedSource = useCallback(
+    async (source: TorrentResult, record: PlayedSource) => {
+      const response = await window.cloudstream?.startStream(
+        source,
+        record.season,
+        record.episode
+      );
+      if (!response?.handle?.streamUrl) return;
+
+      setPlayback({
+        streamUrl: response.handle.streamUrl,
+        mimeType: response.handle.mimeType,
+        title: record.origin.title,
+        episodeTitle: record.origin.episodeTitle,
+        infoHash: response.handle.infoHash,
+        subtitles: response.handle.subtitleUrls ?? [],
+        progress: {
+          mediaUrl: record.origin.mediaUrl,
+          year: record.origin.year,
+          season: record.season,
+          episode: record.episode,
+          // Straight back to where they stopped, which is the other half of
+          // "take me back to what was working".
+          resumeAt: record.positionSeconds,
+        },
+      });
+      setPlayerHidden(false);
+      setPlayerMini(false);
+    },
+    []
+  );
 
   /**
    * Search from inside the player.
@@ -1080,6 +1122,7 @@ export const App: React.FC = () => {
                   <LibraryView
                     onSelectMedia={handleSelectMedia}
                     onSearch={handleSearchFromDetail}
+                    onPlaySavedSource={handlePlaySavedSource}
                   />
                 </ErrorBoundary>
               )}

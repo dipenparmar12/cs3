@@ -49,7 +49,7 @@ import type {
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
 import type { BootstrapProgress } from './cs3/bootstrap';
 import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
-import type { StoredSource } from '../src/types/library';
+import type { StoredSource, PlayedSource } from '../src/types/library';
 import type {
   HistoryEvent,
   HistoryFilter,
@@ -943,7 +943,65 @@ export interface CloudStreamElectronAPI {
   }) => Promise<WatchProgress | null>;
   getProgressForKey: (key: string) => Promise<WatchProgress[]>;
   getContinueWatching: (limit?: number) => Promise<WatchProgress[]>;
+  /** Takes one title off the row. The watch position is kept. */
+  dismissContinueWatching: (key: string) => Promise<Envelope & { removed: boolean }>;
+  /** Empties the row. Nothing is deleted; positions survive. */
+  clearContinueWatching: () => Promise<Envelope & { cleared: number }>;
+  getContinueWatchingEnabled: () => Promise<Envelope & { enabled: boolean }>;
+  setContinueWatchingEnabled: (enabled: boolean) => Promise<Envelope & { enabled: boolean }>;
   clearWatchProgress: (key: string, season?: number, episode?: number) => Promise<boolean>;
+
+  // --- the source that actually played ---
+  /**
+   * Saves the exact stream that delivered playback, with the query to rebuild it.
+   *
+   * Distinct from `rememberSource`, which records what the viewer *picked*. A
+   * release that is chosen and then fails to start is not one that works, and
+   * saving it as one sends them straight back to a stream that already failed.
+   */
+  recordPlayedSource: (input: {
+    title: string;
+    year?: number;
+    mediaUrl: string;
+    episodeTitle?: string;
+    season?: number;
+    episode?: number;
+    source: TorrentResult;
+    positionSeconds?: number;
+    durationSeconds?: number;
+  }) => Promise<Envelope & { record: PlayedSource | null }>;
+  getPlayedSource: (
+    key: string,
+    season?: number,
+    episode?: number
+  ) => Promise<Envelope & { record: PlayedSource | null }>;
+  listPlayedSources: (limit?: number) => Promise<Envelope & { records: PlayedSource[] }>;
+  getPlayedSourcesForKey: (key: string) => Promise<Envelope & { records: PlayedSource[] }>;
+  forgetPlayedSource: (
+    key: string,
+    season?: number,
+    episode?: number
+  ) => Promise<Envelope & { removed: boolean }>;
+  /**
+   * Hands back a playable source for a saved record, refreshing a dead link.
+   *
+   * `resolution` says which happened — `reused` (the stored link still holds),
+   * `refreshed` (the same release re-resolved), or `unavailable` (the provider
+   * no longer offers it, and `sources` carries the alternatives).
+   */
+  resolvePlayedSource: (
+    key: string,
+    season?: number,
+    episode?: number
+  ) => Promise<
+    Envelope & {
+      resolution: 'reused' | 'refreshed' | 'unavailable' | null;
+      record?: PlayedSource;
+      source?: TorrentResult;
+      sources: TorrentResult[];
+    }
+  >;
+
   rememberSource: (input: Omit<SourceMemory, 'chosenAt'>) => Promise<void>;
   recallSource: (key: string, season?: number, episode?: number) => Promise<SourceMemory | null>;
   exportLibrary: () => Promise<{
@@ -1322,8 +1380,22 @@ const api: CloudStreamElectronAPI = {
   recordWatchProgress: (input) => ipcRenderer.invoke('library:recordProgress', input),
   getProgressForKey: (key) => ipcRenderer.invoke('library:getProgressForKey', key),
   getContinueWatching: (limit) => ipcRenderer.invoke('library:getContinueWatching', limit),
+  dismissContinueWatching: (key) => ipcRenderer.invoke('library:dismissContinueWatching', key),
+  clearContinueWatching: () => ipcRenderer.invoke('library:clearContinueWatching'),
+  getContinueWatchingEnabled: () => ipcRenderer.invoke('library:getContinueWatchingEnabled'),
+  setContinueWatchingEnabled: (enabled) =>
+    ipcRenderer.invoke('library:setContinueWatchingEnabled', enabled),
   clearWatchProgress: (key, season, episode) =>
     ipcRenderer.invoke('library:clearProgress', key, season, episode),
+  recordPlayedSource: (input) => ipcRenderer.invoke('library:recordPlayedSource', input),
+  getPlayedSource: (key, season, episode) =>
+    ipcRenderer.invoke('library:getPlayedSource', key, season, episode),
+  listPlayedSources: (limit) => ipcRenderer.invoke('library:listPlayedSources', limit),
+  getPlayedSourcesForKey: (key) => ipcRenderer.invoke('library:getPlayedSourcesForKey', key),
+  forgetPlayedSource: (key, season, episode) =>
+    ipcRenderer.invoke('library:forgetPlayedSource', key, season, episode),
+  resolvePlayedSource: (key, season, episode) =>
+    ipcRenderer.invoke('library:resolvePlayedSource', key, season, episode),
   rememberSource: (input) => ipcRenderer.invoke('library:rememberSource', input),
   recallSource: (key, season, episode) =>
     ipcRenderer.invoke('library:recallSource', key, season, episode),
