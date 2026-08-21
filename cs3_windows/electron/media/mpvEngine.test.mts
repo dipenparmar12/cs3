@@ -187,6 +187,55 @@ try {
   });
 
   /**
+   * Two opens that overlap, which is the normal case rather than an edge one.
+   *
+   * The player opens the engine from an effect keyed on the stream URL. That
+   * effect re-runs on every source change — a failover, another release, the
+   * next episode — and React's StrictMode double-invokes it on every mount, so
+   * a second `open` arriving mid-launch is what happens routinely.
+   *
+   * It used to fail. `process` is assigned immediately after `spawn` while the
+   * control channel takes up to ten seconds to appear, and `open` keyed its
+   * "already running" check off that handle — so the second call skipped the
+   * launch it believed had happened and sent `loadfile` into a null socket.
+   * The answer was "The native engine is not running.", 86ms after the engine
+   * had decided to use mpv, and the renderer showed whichever call it made
+   * last. A launch that was about to succeed was reported as a missing engine.
+   *
+   * Both calls must succeed. Asserting only the first would pass against the
+   * bug, because the first call was never the one that failed.
+   */
+  const concurrent = await Promise.all([
+    engine.open({ url: fixture, title: 'race a' }),
+    engine.open({ url: fixture, title: 'race b' }),
+  ]);
+
+  check('overlapping opens both succeed instead of racing the launch', () => {
+    for (const [index, result] of concurrent.entries()) {
+      assert.equal(
+        result.ok,
+        true,
+        `open #${index + 1} failed: ${result.ok ? '' : result.error}`
+      );
+    }
+  });
+
+  check('an overlapping open never reports the engine as not running', () => {
+    // The exact sentence from the session logs. It is a lie whenever a process
+    // is being launched, and it is the one users saw.
+    const notRunning = concurrent.find(
+      (r) => !r.ok && (r.error ?? '').includes('not running')
+    );
+    assert.equal(notRunning, undefined);
+  });
+
+  await waitFor((s) => s.state === 'playing' || s.state === 'paused', 12_000);
+
+  check('the stream from an overlapping open actually plays', () => {
+    assert.equal(engine.isRunning(), true);
+  });
+
+  /**
    * The surface handshake, driven against a real process.
    *
    * `--wid` is decided on mpv's command line and never afterwards, so the order
