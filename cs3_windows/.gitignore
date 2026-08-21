@@ -44,3 +44,9 @@ dist-electron/
 /cs3-runtime/
 /data/
 /extensions/
+
+# ffmpeg, ffprobe and mpv, staged for packaging by
+# tools/package/build-media-runtime.mjs. Fetched at build time from their
+# publishers and copied into resources/media/ — around 280 MB of third-party
+# binaries that do not belong in git history, exactly like tools/toolchain/.
+/media-runtime/

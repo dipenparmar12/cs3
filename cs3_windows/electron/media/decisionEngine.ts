@@ -414,10 +414,9 @@ function explainEme(drm: DrmConfiguration, transport: MediaTransport): string {
   if (drm.type === 'clearkey' && drm.clearKeys) {
     if (transport === 'dash') {
       return (
-        'ClearKey-encrypted DASH: the key is present, but playing it needs a ' +
-        'JavaScript DASH player driving Media Source Extensions, which this ' +
-        'build does not include. FFmpeg cannot help — its DASH demuxer refuses ' +
-        'decryption keys outright.'
+        'ClearKey-encrypted DASH: played by Shaka Player, which drives Media ' +
+        'Source Extensions and decrypts with the key the provider supplied. ' +
+        'FFmpeg is bypassed — its DASH demuxer refuses decryption keys outright.'
       );
     }
     return (
@@ -428,11 +427,17 @@ function explainEme(drm: DrmConfiguration, transport: MediaTransport): string {
 
   if (drm.type === 'widevine' || drm.type === 'playready') {
     const system = drm.type === 'widevine' ? 'Widevine' : 'PlayReady';
+    /**
+     * Shaka performs the licence exchange, but only a CDM can answer it. On a
+     * stock Electron build there is none, so this reports the limit by name
+     * rather than failing as a broken file — and the message stays accurate if
+     * a CDM-carrying build is ever adopted, because then it simply plays.
+     */
     return (
-      `${system}-protected stream. Playing it needs a ${system} CDM, which this ` +
-      'build does not ship — the Android app gets one from the device. FFmpeg is ' +
-      'bypassed because it holds no keys; this is a licensing limit, not a fault ' +
-      'in the source or the provider.'
+      `${system}-protected stream. The licence exchange is handled, but decrypting ` +
+      `needs a ${system} CDM, which a stock Electron build does not ship — the ` +
+      'Android app gets one from the device. This is a licensing limit, not a ' +
+      'fault in the source or the provider.'
     );
   }
 
@@ -507,6 +512,32 @@ function decideBrowserStrategy(
     const ffmpegCanDecrypt = Boolean(decryptableClearKeys(drm)) && transport === 'progressive';
     const ffmpegShouldDecrypt = ffmpegCanDecrypt && !everythingElseIsFine;
 
+    /**
+     * Encrypted DASH is Shaka's, and this is the case that used to have no
+     * answer at all.
+     *
+     * FFmpeg cannot help — its DASH demuxer refuses decryption keys outright —
+     * and a bare `.mpd` handed to the media element is an XML document arriving
+     * at a binary demuxer. Shaka drives MSE and owns the EME handshake, so it is
+     * the only thing here that can do both. What it cannot do is invent
+     * decoders: an encrypted ladder carrying HEVC on a machine without an HEVC
+     * decoder still has nowhere to go, and falls through to be reported.
+     */
+    if (transport === 'dash' && videoPlayable && audioPlayable) {
+      return {
+        directPlayable: true,
+        strategy: 'DASH_NATIVE',
+        plan: {
+          videoAction: 'none',
+          audioAction: 'none',
+          selectedAudioIndex: audioIndex,
+          containerAction: 'passthrough',
+          subtitleAction: 'ignore',
+        },
+        explanation: explainEme(drm, transport),
+      };
+    }
+
     if (!ffmpegShouldDecrypt) {
       return {
         directPlayable: true,
@@ -535,6 +566,32 @@ function decideBrowserStrategy(
    * cannot hand over — one path, no second player library to keep current.
    */
   if (transport === 'dash') {
+    /**
+     * Shaka plays it whenever the browser can decode what is inside.
+     *
+     * The remux below still works and is still the fallback, but it is the
+     * expensive way to be worse: it spends an ffmpeg process, and DASH's whole
+     * point is the adaptive ladder, which a remux flattens to one fixed
+     * rendition. Handing the manifest to a player that speaks DASH keeps every
+     * rendition and costs nothing.
+     */
+    if (videoPlayable && audioPlayable) {
+      return {
+        directPlayable: true,
+        strategy: 'DASH_NATIVE',
+        plan: {
+          videoAction: 'none',
+          audioAction: 'none',
+          selectedAudioIndex: audioIndex,
+          containerAction: 'passthrough',
+          subtitleAction: 'ignore',
+        },
+        explanation:
+          'MPEG-DASH manifest: played by Shaka Player, which drives Media Source ' +
+          'Extensions directly and keeps the adaptive ladder.',
+      };
+    }
+
     return {
       directPlayable: false,
       strategy: 'DASH_REMUX',
@@ -718,7 +775,19 @@ export function shouldRouteToNativeEngine(
 ): boolean {
   if (!native.available || native.policy === 'off') return false;
   if (decision.strategy === 'EME_NATIVE') return false;
-  if (decision.strategy === 'DIRECT' || decision.strategy === 'HLS_NATIVE') return false;
+  /**
+   * Anything already playing in the browser stays there. `DASH_NATIVE` joins
+   * this list rather than being routed: Shaka is playing it natively through
+   * MSE, so there is no re-encode to avoid — and under DRM mpv holds no CDM,
+   * which would turn a working stream into an unplayable one.
+   */
+  if (
+    decision.strategy === 'DIRECT' ||
+    decision.strategy === 'HLS_NATIVE' ||
+    decision.strategy === 'DASH_NATIVE'
+  ) {
+    return false;
+  }
 
   if (native.policy === 'aggressive') return true;
 

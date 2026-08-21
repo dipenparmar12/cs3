@@ -67,15 +67,18 @@ cs3/
 | Dev app | `cs3_windows/` | `bun run dev` — Vite on :5173, `vite-plugin-electron` launches Electron and rebuilds main/preload on change |
 | Typecheck + build | `cs3_windows/` | `bun run build` (`tsc && vite build`) |
 | Bundle the JVM | repo root | `node tools/package/build-runtime.mjs --verify` → `sidecar/dist/` |
+| Bundle ffmpeg + mpv | repo root | `node tools/package/build-media-runtime.mjs --verify` → `cs3_windows/media-runtime/` |
 | Package (Windows) | `cs3_windows/` | `bun run electron:build` → `release/` (runs the above first) |
 | Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (120 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (150 tests, Node type-stripping — no framework) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Provider links only | `cs3_windows/` | `bun run test:links` (15 cases, no ffmpeg needed) |
-| Media decisions only | `cs3_windows/` | `bun run test:media` (68 cases, no ffmpeg needed) |
+| Media proxy only | `cs3_windows/` | `bun run test:proxy` (11 cases, stubbed origin) |
+| Subtitles only | `cs3_windows/` | `bun run test:subtitles` (16 cases) |
+| Media decisions only | `cs3_windows/` | `bun run test:media` (71 cases, no ffmpeg needed) |
 | Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (17 cases, real ffmpeg; skips itself without it) |
 | Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
@@ -941,6 +944,118 @@ correctly by whatever decodes it, and `-c:v copy` could not tone-map anyway.
 One trap while you are in `buildArgs`: ffmpeg takes **one** `-vf`. A second silently replaces
 the first, so the tone-map and the downscale share a chain rather than each pushing their own.
 
+### The box now contains the player (2026-08-21)
+
+`extraResources` carried exactly one entry — the sidecar — so a freshly
+installed app had **no ffprobe, no ffmpeg and no mpv**. All three were fetched on
+first use, and `setupMpv` did not even try outside Windows: it printed
+`brew install mpv` and returned false.
+
+The consequence was not a missing convenience. `MpvEngine.isAvailable()` was
+false, so `shouldRouteToNativeEngine` returned false for **every** stream and the
+native engine was never used at all — every 4K HEVC file took the software
+transcode path, which is the 0.47x-realtime stall the engine exists to avoid.
+**The default install was the worst configuration this codebase can be in, and
+the good one was opt-in behind a download the user had to discover.**
+
+`tools/package/build-media-runtime.mjs` stages the binaries per platform into
+`cs3_windows/media-runtime/`, `extraResources` copies that to `resources/media/`,
+and `electron:build` runs it. It **fails the build** when a required component is
+missing rather than producing a package quietly without its player;
+`--allow-missing` is the deliberate override.
+
+Two things about resolution order:
+
+- **The bundled copy wins**, where it used to lose. `resolveBinary` started at
+  `userData/bin`, which is the same shape as the stale-runtime trap in §3: a copy
+  fetched by an older version silently shadows the one this version was built
+  and tested against.
+- **`yt-dlp` is the exception**, and deliberately so. Its extractors break when a
+  site changes, which happens weekly, so a downloaded copy there is *newer*
+  rather than staler. It keeps the old order.
+
+On Linux and macOS mpv is `required: false` on purpose rather than by omission —
+the distribution's own package is the one wired to that platform's VA-API or
+VideoToolbox, and shipping a generic binary over it produces a player that
+cannot open the GPU. A distribution package should depend on `mpv`.
+
+**Chromium is now asked for the decoders the platform has.** `main.ts` set
+exactly one switch (`autoplay-policy`) and had never asked for
+`PlatformHEVCDecoderSupport`, available since Chrome 104 — so HEVC was
+re-encoded even on machines whose GPU decodes it for free. Enabling it cannot
+make a decision worse: `App.tsx` measures `canPlayType` at startup and overrides
+the static table **in both directions**, so a machine without the decoder still
+answers `""` and still gets the transcode.
+
+### DASH is played, not remuxed (2026-08-21)
+
+Shaka Player (`shaka-player`, Apache-2.0, an ordinary bundled dependency) now
+takes any DASH manifest whose payload the browser can decode — strategy
+`DASH_NATIVE`. The remux stays as the fallback for a payload Chromium cannot
+decode, because Shaka appends to the same MSE and cannot invent decoders either.
+
+What this buys, beyond not spending an ffmpeg process: the remux **flattens the
+adaptive ladder to one fixed rendition**, which is the thing DASH exists for.
+And it closes the gap the ClearKey work left open — `DASH_NATIVE` is the only
+strategy that can play encrypted DASH, because FFmpeg's DASH demuxer rejects
+`-decryption_key` outright.
+
+**The proxy had to learn DASH first, and that fixed an existing bug.** A manifest
+names its segments relative to its own address, so serving one unmodified from
+loopback makes the player resolve them against `…/stream/<token>` and ask for
+paths the proxy has no route for. This was never only a Shaka problem: **ffmpeg's
+DASH demuxer resolves relative segments exactly the same way**, so the remux path
+was already broken for every manifest that did not spell its segments out in
+full. `MediaProxy` now rewrites MPDs, and needed a shape it did not have:
+
+- **Directory routes** (`/base/<token>/<rest>`), because `SegmentTemplate` names
+  segments with `$Number$` placeholders the *player* expands. HLS never needed
+  this — a playlist lists every segment, so each got an exact route. A DASH
+  manifest has no list to rewrite, only a base to redirect.
+- A `<BaseURL>` is **inserted** when the manifest has none, replaced when it has
+  one, and absolute `media`/`initialization`/`sourceURL` attributes are rewritten
+  by directory so their placeholders survive.
+- The suffix arrives from the renderer, so `resolvePrefixed` refuses anything
+  that leaves the base's origin. Without that check a directory route becomes the
+  arbitrary-URL fetcher `wrap` deliberately is.
+- Manifest sniffing is **bounded by declared length** (4 MB). Reading a body to
+  identify it means buffering it, and a provider serving a 5 GB MKV as
+  `application/octet-stream` is routine.
+
+Pinned by `mediaProxy.test.mts` (11 cases). Note the origin there is a *stub*
+rather than a real server: `wrap` returns loopback URLs untouched by design, so a
+socket-backed origin on 127.0.0.1 tests nothing.
+
+### Subtitles: ASS and the charset, which Android has always had (2026-08-21)
+
+`docs/docs_cs3/05` records what the Android app does — SubRip, WebVTT **and**
+SubStation Alpha, every file through `juniversalchardet` first. Desktop did
+neither, and both failures are silent:
+
+- **`.ass` / `.ssa` went through the SubRip converter**, which emits
+  `[Script Info]` and `Dialogue:` lines as if they were cues. That is most of
+  anime and of fansubbed releases.
+- **Every download was decoded as UTF-8**, because `Response.text()` does that
+  unconditionally. A Windows-1252 or GBK subtitle then loads with correct timings
+  and a black diamond where each accent was — which reads as a bad upload.
+
+`electron/subtitles/convert.ts` owns both. Two rules in it are worth keeping:
+
+- **UTF-8 is checked, not detected.** `TextDecoder` in fatal mode either accepts
+  the bytes or throws, so the common case is answered exactly and the statistical
+  detector only sees files that are provably not UTF-8.
+- **A detection of UTF-8 is then rejected, and a decode producing U+FFFD is
+  treated as a failed decode.** `chardet` answers "UTF-8" for a four-byte
+  Windows-1252 string, and `TextDecoder` outside fatal mode substitutes rather
+  than throwing — so the substitution character *is* the error and is checked
+  for.
+
+ASS conversion reads the `Format:` line rather than assuming field positions
+(ASS declares its order per file), bounds the `Dialogue:` split so text
+containing a comma is not truncated, and drops `\p1` drawing commands — those are
+vector shapes, and printing their coordinate lists puts a wall of numbers over
+the picture.
+
 ### Android vs Windows: where the two actually diverge now (2026-08-19)
 
 The recurring report is "this provider works in the Android app and fails here". Measured
@@ -1086,7 +1201,11 @@ claiming one name is a genuine collision: the first keeps it and the loser is re
 
 ### The extensions screen: `src/components/extensions/`
 
-Rebuilt 2026-08-14. It was one 2,689-line component — 25 `useState` hooks, four tabs and
+**Reconstructed 2026-08-21**, after the ignore-rule bug below meant the 2026-08-14 rebuild
+was never committed. What follows describes the current files; the reasoning is preserved
+from the original because the constraints have not changed.
+
+Originally rebuilt 2026-08-14. It was one 2,689-line component — 25 `useState` hooks, four tabs and
 ~2,000 lines of inline-styled JSX in a single function body — replaced by a container plus
 focused children (`useExtensionCatalog`, `useExtensionFilters`, `FilterBar`, `SourceTree`,
 `RepositoryCatalog`, `ExtensionCatalog`, `ProvenancePanel`, `BulkActionBar`,
@@ -1844,12 +1963,12 @@ Where they disagree, trust the code and fix the doc.
   matches before adding it. `cs3_windows/.gitignore` carried a bare `extensions/`, meant for
   the app's runtime archive directory. A pattern with no leading slash matches a directory of
   that name at **any depth**, so it also matched `src/components/extensions/` and silently
-  swallowed the entire extensions screen — which is why `App.tsx` imports
-  `./components/extensions/ExtensionsScreen` and the module is not in this repository. The
-  section describing that screen above documents code no clone contains, and `tsc -b` fails
-  on a fresh checkout because of it. **Those files still exist only on the author's machine
-  and need committing.** The rules are anchored now (`/extensions/`, `/data/`, `/bin/`), and
-  `data/` and `bin/` had exactly the same reach.
+  swallowed the entire extensions screen. `App.tsx` imported a module no clone contained, so
+  `tsc -b` *and* `vite build` failed on every fresh checkout — the app could not be built at
+  all. The rules are anchored now (`/extensions/`, `/data/`, `/bin/`); `data/` and `bin/` had
+  exactly the same reach. **The screen was rebuilt from the IPC surface on 2026-08-21** and is
+  a fresh implementation, not a recovery — if the original turns up on the author's machine,
+  compare rather than assuming either is newer.
 - **Report honestly.** "Typechecks with `bun run build`" is a true claim. "Tested" is not,
   unless you ran `mvn test` or actually exercised the path. Legal/ecosystem context here
   (GPL-3.0, third-party indexers, community plugin code) makes overclaiming expensive.

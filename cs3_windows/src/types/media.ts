@@ -111,6 +111,20 @@ export type PlaybackStrategyType =
   /** A DASH manifest, remuxed by ffmpeg into fragmented MP4. */
   | 'DASH_REMUX'
   /**
+   * A DASH manifest played by Shaka Player, which drives MSE itself.
+   *
+   * The right answer whenever the payload is something Chromium can decode,
+   * and it replaces {@link 'DASH_REMUX'} for that case rather than joining it.
+   * Remuxing works but collapses the adaptive ladder to a single rendition and
+   * spends an ffmpeg process on a job the browser can do for nothing — and it
+   * cannot touch an encrypted manifest at all, because FFmpeg's DASH demuxer
+   * rejects decryption keys outright.
+   *
+   * Shaka also owns the EME handshake, so this is the only strategy that can
+   * play DASH under ClearKey, Widevine or PlayReady.
+   */
+  | 'DASH_NATIVE'
+  /**
    * Handed to the bundled mpv engine, which decodes it natively on the GPU.
    *
    * The escape hatch from the whole transcoding ladder. Chromium's decoder set

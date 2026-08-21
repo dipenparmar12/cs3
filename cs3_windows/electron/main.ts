@@ -153,6 +153,33 @@ downloadService.setHistoryStore(historyStore);
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 /**
+ * Ask Chromium for the decoders the platform already has.
+ *
+ * HEVC is the one that matters and the reason this exists. Chromium has shipped
+ * platform HEVC decoding since Chrome 104 behind
+ * `PlatformHEVCDecoderSupport`, and this app had never asked for it — so every
+ * HEVC stream was re-encoded on machines whose GPU decodes it for free. HEVC is
+ * routine at 4K and in 10-bit encodes, which is precisely the population the
+ * software encoder cannot hold realtime on.
+ *
+ * Enabling it cannot make a decision worse, and that is a property of the
+ * design rather than optimism: `App.tsx` measures `canPlayType` against
+ * {@link VIDEO_CODEC_PROBES} at startup and `media:setCapabilities` overrides
+ * the engine's static table **in both directions**. A machine without a
+ * hardware decoder still answers `""` and still gets the transcode; a machine
+ * with one stops paying for a conversion it never needed. The verdict follows
+ * the measurement either way.
+ *
+ * One switch, one comma-joined list: `appendSwitch('enable-features', …)`
+ * replaces rather than merges, so a second call elsewhere would silently drop
+ * whatever the first one asked for.
+ */
+const CHROMIUM_FEATURES = [
+  'PlatformHEVCDecoderSupport',
+];
+app.commandLine.appendSwitch('enable-features', CHROMIUM_FEATURES.join(','));
+
+/**
  * Retries, backs off, and downgrades HTTP/2 origins to HTTP/1.1.
  *
  * Node's `fetch` is the fallback because undici speaks HTTP/1.1 only, which is

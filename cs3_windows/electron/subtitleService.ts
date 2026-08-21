@@ -1,4 +1,5 @@
-import { fetchJson, fetchText } from './torrent/http';
+import { fetchBuffer, fetchJson, fetchText } from './torrent/http';
+import { decodeSubtitle, toWebVtt } from './subtitles/convert';
 
 /**
  * Online subtitle search, for the player.
@@ -82,28 +83,6 @@ const ENGLISH_CODES = new Set(['eng', 'en', 'en-us', 'en-gb']);
 
 export function languageName(code: string): string {
   return LANGUAGE_NAMES[code.toLowerCase()] ?? code.toUpperCase();
-}
-
-/**
- * Converts SubRip to WebVTT.
- *
- * The differences that matter are small but total: WebVTT needs the `WEBVTT`
- * header, and its timestamps use a `.` for the fractional separator where
- * SubRip uses `,`. A file missing either is rejected outright by the browser.
- */
-export function srtToVtt(srt: string): string {
-  const body = srt
-    // A BOM before the WEBVTT header invalidates the file.
-    .replace(/^﻿/, '')
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    // 00:00:41,330 --> 00:00:43,400  ==>  00:00:41.330 --> 00:00:43.400
-    .replace(
-      /(\d{1,2}:\d{2}:\d{2}),(\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}),(\d{1,3})/g,
-      '$1.$2 --> $3.$4'
-    );
-
-  return body.startsWith('WEBVTT') ? body : `WEBVTT\n\n${body}`;
 }
 
 export class SubtitleService {
@@ -290,9 +269,17 @@ export class SubtitleService {
     };
   }
 
-  /** Downloads one subtitle and returns it as WebVTT text. */
+  /**
+   * Downloads one subtitle and returns it as WebVTT text.
+   *
+   * Fetched as **bytes** rather than text, which is the whole reason this reads
+   * the way it does: `Response.text()` decodes as UTF-8 unconditionally, and a
+   * Windows-1252 or GBK subtitle decoded that way loads perfectly with every
+   * accented character replaced by a black diamond. Nothing errors, so it reads
+   * as a bad upload rather than as our decoding. See `subtitles/convert.ts`.
+   */
   public async fetchAsVtt(url: string): Promise<string> {
-    const raw = await fetchText(url, { timeoutMs: DOWNLOAD_TIMEOUT_MS });
-    return srtToVtt(raw);
+    const raw = await fetchBuffer(url, { timeoutMs: DOWNLOAD_TIMEOUT_MS });
+    return toWebVtt(decodeSubtitle(raw));
   }
 }

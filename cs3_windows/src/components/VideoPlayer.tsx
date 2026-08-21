@@ -23,6 +23,7 @@ import { SubtitlePanel } from './player/SubtitlePanel';
 import { PlayerDownloadPanel } from './player/PlayerDownloadPanel';
 import type { PlaybackStreamResponse, SourceCapabilityModel } from '../types/media';
 import { attachClearKey, type ClearKeyAttachment } from '../utils/clearKeySession';
+import { attachShaka, type ShakaAttachment } from '../utils/shakaSession';
 import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
@@ -230,6 +231,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const seekBarRef = useRef<HTMLDivElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const shakaRef = useRef<ShakaAttachment | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -800,6 +802,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let hls: Hls | null = null;
     let cancelled = false;
     let clearKey: ClearKeyAttachment | null = null;
+    let shaka: ShakaAttachment | null = null;
 
     const playbackUrl = prepared.playbackUrl;
     // Decided by the engine from the manifest body, not by matching `.m3u8` on
@@ -839,7 +842,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         ? prepared.capability.drm.clearKeys
         : undefined;
 
+    /**
+     * DASH is Shaka's, and it is the only thing here that can take it.
+     *
+     * Chromium cannot demux an `.mpd`, and FFmpeg — which can — refuses
+     * decryption keys on its DASH demuxer, so an encrypted manifest had no path
+     * at all before this. Shaka drives MSE itself and owns the EME handshake.
+     */
+    const isDash = prepared.capability.requiredStrategy === 'DASH_NATIVE';
+
     const attach = () => {
+      if (isDash) {
+        void attachShaka(video, playbackUrl, prepared.capability)
+          .then((attachment) => {
+            if (cancelled) {
+              void attachment.destroy();
+              return;
+            }
+            shaka = attachment;
+            shakaRef.current = attachment;
+            setQualities(attachment.qualities);
+            void video.play().catch(() => {
+              /* Autoplay may be blocked; a click starts it. */
+            });
+          })
+          .catch((err: unknown) => {
+            if (cancelled) return;
+            setError(
+              `This DASH stream could not be played: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          });
+        return;
+      }
+
       if (isHls && Hls.isSupported()) {
         hls = new Hls({ enableWorker: true, lowLatencyMode: true });
         hlsRef.current = hls;
@@ -961,6 +998,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       cancelled = true;
       clearKey?.release();
+      void shaka?.destroy();
+      shakaRef.current = null;
       hls?.destroy();
       hlsRef.current = null;
       video.removeAttribute('src');
@@ -982,6 +1021,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     const hls = hlsRef.current;
     if (hls) hls.currentLevel = quality;
+    // Shaka calls the same thing a "variant track", and selecting one turns its
+    // adaptive switching off — so `AUTO_QUALITY` has to turn it back on rather
+    // than simply selecting nothing, or the menu becomes a one-way door.
+    shakaRef.current?.selectQuality(quality);
   }, [quality]);
 
   // --- audio tracks (multi-audio & audio volume sync) ---------------------

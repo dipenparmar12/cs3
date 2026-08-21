@@ -414,18 +414,40 @@ test('HLS carrying AC-3 transcodes only the audio', () => {
   assert.equal(decision.plan.videoAction, 'copy');
 });
 
-test('DASH is remuxed rather than handed to a demuxer that rejects XML', () => {
+test('DASH is played by Shaka when the browser can decode what is inside', () => {
+  // Remuxing works and is still the fallback, but it is the expensive way to be
+  // worse: it spends an ffmpeg process and flattens the adaptive ladder to one
+  // rendition, which is the thing DASH exists for.
   const decision = decide(media({ formatName: 'dash' }), 'dash');
+  assert.equal(decision.strategy, 'DASH_NATIVE');
+  assert.equal(decision.plan.videoAction, 'none');
+  assert.equal(decision.directPlayable, true);
+});
+
+test('DASH carrying a codec the browser cannot decode still goes to ffmpeg', () => {
+  // Shaka drives MSE, so it cannot invent decoders any more than hls.js can.
+  const decision = decide(
+    media({ formatName: 'dash', video: video({ codec: 'hevc' }) }),
+    'dash'
+  );
   assert.equal(decision.strategy, 'DASH_REMUX');
   assert.equal(decision.plan.containerAction, 'mp4_fragmented');
 });
 
 test('encrypted streams bypass FFmpeg entirely', () => {
   // FFmpeg holds no keys: probing one wastes twenty seconds on noise and
-  // remuxing one produces an unplayable file.
-  const decision = decide(media({ formatName: 'dash' }), 'dash', PLAIN, GPU, WIDEVINE);
+  // remuxing one produces an unplayable file. Whether the CDM that *can* read
+  // it exists on this machine is a separate question — what matters here is
+  // that no plan asks ffmpeg to touch it.
+  const decision = decide(media(), 'progressive', PLAIN, GPU, WIDEVINE);
   assert.equal(decision.strategy, 'EME_NATIVE');
   assert.equal(decision.plan.videoAction, 'none');
+
+  // The DASH form of the same stream reaches Shaka instead, and still never
+  // reaches ffmpeg.
+  const dash = decide(media({ formatName: 'dash' }), 'dash', PLAIN, GPU, WIDEVINE);
+  assert.equal(dash.strategy, 'DASH_NATIVE');
+  assert.equal(dash.plan.videoAction, 'none');
 });
 
 test('a Widevine stream is named as a licensing limit, not as a broken source', () => {
@@ -462,9 +484,19 @@ test('ClearKey over a codec the browser cannot decode goes to FFmpeg with the ke
   assert.match(decision.explanation, /ClearKey/);
 });
 
-test('ClearKey DASH cannot use FFmpeg, and says so rather than failing as a bad file', () => {
-  // Measured: the DASH demuxer answers `Option decryption_key not found`, which
-  // is fatal to the whole command line rather than ignored.
+test('ClearKey DASH is played by Shaka, which is the only thing that can', () => {
+  // FFmpeg cannot: measured, its DASH demuxer answers `Option decryption_key
+  // not found`, which is fatal to the whole command line rather than ignored.
+  // And a bare `.mpd` on the media element is XML arriving at a binary demuxer.
+  const decision = decide(media({ formatName: 'dash' }), 'dash', PLAIN, GPU, CLEARKEY);
+  assert.equal(decision.strategy, 'DASH_NATIVE');
+  assert.equal(decision.plan.decryptionKeys, undefined);
+  assert.match(decision.explanation, /Shaka/);
+});
+
+test('ClearKey DASH over an undecodable codec has nowhere to go, and says so', () => {
+  // Shaka can decrypt it and still cannot decode it. Reporting that is the
+  // whole job here — the alternative is FFmpeg producing a "corrupt file".
   const decision = decide(
     media({ formatName: 'dash', video: video({ codec: 'hevc' }) }),
     'dash',
@@ -474,7 +506,6 @@ test('ClearKey DASH cannot use FFmpeg, and says so rather than failing as a bad 
   );
   assert.equal(decision.strategy, 'EME_NATIVE');
   assert.equal(decision.plan.decryptionKeys, undefined);
-  assert.match(decision.explanation, /DASH player/);
 });
 
 test('a DRM system we cannot name still keeps FFmpeg off the stream', () => {
@@ -821,9 +852,15 @@ test('HLS carrying HEVC routes, because hls.js cannot invent a decoder either', 
 });
 
 test('DASH routes only when the browser path would have re-encoded it', () => {
-  // A remux of a playable DASH ladder is cheap and keeps the in-app player.
+  // A playable DASH ladder stays with Shaka even under `aggressive`: it is
+  // already playing natively, and routing it would trade the adaptive ladder
+  // and the in-app player for nothing.
   const plain = decideNative(media({ formatName: 'dash' }), MPV_AUTO, 'dash');
-  assert.equal(plain.strategy, 'DASH_REMUX');
+  assert.equal(plain.strategy, 'DASH_NATIVE');
+  assert.equal(
+    decideNative(media({ formatName: 'dash' }), MPV_AGGRESSIVE, 'dash').strategy,
+    'DASH_NATIVE'
+  );
 
   const hevc = decideNative(
     media({ formatName: 'dash', video: video({ codec: 'hevc' }) }),
@@ -831,6 +868,20 @@ test('DASH routes only when the browser path would have re-encoded it', () => {
     'dash'
   );
   assert.equal(hevc.strategy, 'NATIVE_MPV');
+});
+
+test('an encrypted DASH stream is never handed to mpv, which holds no CDM', () => {
+  // Routing it would turn a stream Shaka can actually play into undecryptable
+  // noise — the same trap `EME_NATIVE` is kept off the engine for.
+  const decision = decideStrategy(
+    media({ formatName: 'dash' }),
+    'dash',
+    PLAIN,
+    GPU,
+    { type: 'widevine', licenseUrl: 'https://lic.test/w' },
+    MPV_AGGRESSIVE
+  );
+  assert.equal(decision.strategy, 'DASH_NATIVE');
 });
 
 test('above 4K, even a cheap remux routes: the browser still has to decode it', () => {

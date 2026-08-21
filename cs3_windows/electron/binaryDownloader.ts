@@ -56,10 +56,45 @@ export class BinaryDownloader {
     return this.binDir;
   }
 
-  /** Resolves a tool by name in the app's bin dir, then dev checkout, then PATH. */
+  /**
+   * Where the bundled media runtime lives.
+   *
+   * `tools/package/build-media-runtime.mjs` stages ffmpeg, ffprobe and mpv into
+   * `cs3_windows/media-runtime/`, and `extraResources` copies that to
+   * `resources/media/`. Both are listed so a dev checkout resolves the same
+   * binaries the packaged app will.
+   */
+  private bundledDirs(): string[] {
+    return [
+      ...(app?.isPackaged ? [path.join(process.resourcesPath, 'media')] : []),
+      path.join(process.cwd(), 'media-runtime'),
+    ];
+  }
+
+  /**
+   * Resolves a tool, preferring the copy that shipped with the app.
+   *
+   * The order is the point. It used to start at `userData/bin` — the directory
+   * the on-demand downloader writes to — which is the same shape as the
+   * stale-runtime trap documented in `AGENTS.md`: a copy fetched by an older
+   * version of the app silently shadows the one this version was built and
+   * tested against, and nothing reports it. The bundled copy is versioned with
+   * the app, so it wins.
+   *
+   * **`yt-dlp` is the deliberate exception.** Extractors break when a site
+   * changes, which happens weekly, so a downloaded copy there is *newer* rather
+   * than staler and pinning it to the release cadence would break downloads
+   * between releases. It keeps the old order.
+   */
   public resolveBinary(name: string): string | null {
     const exe = process.platform === 'win32' ? `${name}.exe` : name;
-    for (const dir of [this.binDir, path.join(process.cwd(), 'bin')]) {
+    const selfUpdating = name === 'yt-dlp';
+
+    const dirs = selfUpdating
+      ? [this.binDir, ...this.bundledDirs(), path.join(process.cwd(), 'bin')]
+      : [...this.bundledDirs(), this.binDir, path.join(process.cwd(), 'bin')];
+
+    for (const dir of dirs) {
       const candidate = path.join(dir, exe);
       if (fs.existsSync(candidate)) return candidate;
     }
@@ -75,12 +110,28 @@ export class BinaryDownloader {
     return null;
   }
 
+  /** True when this tool came out of the box rather than from a download. */
+  public isBundled(name: string): boolean {
+    const resolved = this.resolveBinary(name);
+    if (!resolved) return false;
+    return this.bundledDirs().some((dir) => resolved.startsWith(dir + path.sep));
+  }
+
   public checkBinaries(): {
     aria2: boolean;
     ytdlp: boolean;
     ffmpeg: boolean;
     ffprobe: boolean;
     mpv: boolean;
+    /**
+     * Which of these came out of the box.
+     *
+     * Carried separately so the UI can say "included" rather than "installed".
+     * The difference is not cosmetic: a card reporting "Installed" for something
+     * the user never installed teaches them that the status is decorative, and
+     * the same card is what they will look at when something really is missing.
+     */
+    bundled: { ffmpeg: boolean; ffprobe: boolean; mpv: boolean };
   } {
     return {
       aria2: this.resolveBinary('aria2c') !== null,
@@ -88,6 +139,11 @@ export class BinaryDownloader {
       ffmpeg: this.resolveBinary('ffmpeg') !== null,
       ffprobe: this.resolveBinary('ffprobe') !== null,
       mpv: this.resolveBinary('mpv') !== null,
+      bundled: {
+        ffmpeg: this.isBundled('ffmpeg'),
+        ffprobe: this.isBundled('ffprobe'),
+        mpv: this.isBundled('mpv'),
+      },
     };
   }
 
