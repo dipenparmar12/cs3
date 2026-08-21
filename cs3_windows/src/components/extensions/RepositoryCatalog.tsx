@@ -12,7 +12,7 @@
  * row that vanishes on the next read.
  */
 import React, { useMemo, useState } from 'react';
-import { Search, ShieldCheck, ExternalLink, Loader2 } from 'lucide-react';
+import { Search, ShieldCheck, ExternalLink, Loader2, Users } from 'lucide-react';
 import type { OfficialRepository } from './useExtensionCatalog';
 
 interface RepositoryCatalogProps {
@@ -68,7 +68,9 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
       return (
         repository.name.toLowerCase().includes(needle) ||
         repository.description.toLowerCase().includes(needle) ||
-        repository.language.toLowerCase().includes(needle)
+        repository.language.toLowerCase().includes(needle) ||
+        (repository.shortcode && repository.shortcode.toLowerCase().includes(needle)) ||
+        repository.id.toLowerCase().includes(needle)
       );
     });
   }, [official, query, category, adultAllowed]);
@@ -81,7 +83,7 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
           <input
             type="search"
             value={query}
-            placeholder="Search repositories"
+            placeholder="Search repositories by name or shortcode"
             onChange={(event) => setQuery(event.target.value)}
           />
         </div>
@@ -108,9 +110,9 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
         }}
       >
         <input
-          type="url"
+          type="text"
           value={customUrl}
-          placeholder="https://example.com/repo.json — or a project page"
+          placeholder="https://example.com/repo.json — or shortcode (e.g. gizlikeyif, cxxx)"
           onChange={(event) => setCustomUrl(event.target.value)}
         />
         <button type="submit" className="ext-button" disabled={!customUrl.trim()}>
@@ -118,7 +120,7 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
         </button>
       </form>
       <p className="ext-hint">
-        A project page works too. There is no convention for where a plugin list
+        A project page or repository shortcode works too. There is no convention for where a plugin list
         lives, so the branch and filename are probed — <code>master/repo.json</code>,{' '}
         <code>builds/repo.json</code> and <code>builds/plugins.json</code> are all in use.
       </p>
@@ -130,6 +132,11 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
             <li key={repository.id} className="ext-card">
               <div className="ext-card__head">
                 <span className="ext-card__name">{repository.name}</span>
+                {repository.shortcode ? (
+                  <span className="ext-chip" title="Shortcode">
+                    {repository.shortcode}
+                  </span>
+                ) : null}
                 {repository.verified ? (
                   <span className="ext-chip ext-chip--verified" title="Confirmed to return a plugin list">
                     <ShieldCheck size={11} /> verified
@@ -170,6 +177,17 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                   >
                     Remove
                   </button>
+                ) : null}
+                {repository.communityUrl ? (
+                  <a
+                    className="ext-link"
+                    href={repository.communityUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Open Discord community"
+                  >
+                    <Users size={13} />
+                  </a>
                 ) : null}
                 <a
                   className="ext-link"

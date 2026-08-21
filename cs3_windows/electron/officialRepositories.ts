@@ -4,9 +4,11 @@ export interface OfficialRepository {
   id: string;
   name: string;
   internalName: string;
+  shortcode?: string;
   description: string;
   url: string;
   rawRepoUrl: string;
+  communityUrl?: string;
   category:
     | 'Official'
     | 'Regional'

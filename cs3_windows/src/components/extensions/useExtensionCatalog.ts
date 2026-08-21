@@ -23,9 +23,11 @@ import type { ProviderTreeRepository, SitePlugin } from '../../types/plugin';
 export interface OfficialRepository {
   id: string;
   name: string;
+  shortcode?: string;
   description: string;
   url: string;
   rawRepoUrl: string;
+  communityUrl?: string;
   category: string;
   language: string;
   iconUrl?: string;
