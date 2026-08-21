@@ -72,7 +72,9 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (169 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (194 tests, Node type-stripping — no framework) |
+| IPC envelope only | `cs3_windows/` | `bun run test:ipc` (13 cases, pure) |
+| Formatters only | `cs3_windows/` | `bun run test:format` (19 cases, pure) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Source export only | `cs3_windows/` | `bun run test:export` (13 cases, pure) |
 | Logging only | `cs3_windows/` | `bun run test:log` (17 cases, real files in a temp dir) |
@@ -249,14 +251,44 @@ controls, `mpv:update` snapshots pushed like `playback:*`, and `mpv:getPolicy`/`
 for how eagerly it is used. It has no channel that takes a raw link either, for the same reason.
 
 Fallible handlers return an **envelope**, `{ ok: boolean; error?: string; …payload }`,
-instead of rejecting. `main.ts` has a `fail()` helper for this. A transport failure must
-surface as UI text the user can act on, never an unhandled rejection in the renderer.
+instead of rejecting. A transport failure must surface as UI text the user can act on,
+never an unhandled rejection in the renderer.
+
+**`electron/ipc/` owns that contract, and `main.ts` no longer does.** Registration is
+`handle(channel, fn, fallback?)` for a fallible channel and `handleRaw(channel, fn)` for a
+total one — a read that cannot fail and answers with a bare value, where an envelope would
+be a contract change rather than a tidy-up. Two spread orders inside `toEnvelope` are
+load-bearing and pinned by `ipc/envelope.test.mts`:
+
+- **The payload spreads after `ok: true`**, so a handler can still answer `ok: false` for a
+  *validation* failure. A bad enum from the renderer is an answer, not an exception, and
+  `shell:openExternal`, `download:setDeletePreference`, `runtime:provision` and the six
+  `external:set*` channels all rely on it. Hard-coding `ok: true` afterwards silently turns
+  every rejection-as-a-value into a success.
+- **The fallback spreads after the error**, so a channel with a better sentence than the
+  exception can supply one.
+
+The `fallback` exists because the renderer *destructures* these replies: a failed search
+answering `{ ok: false, error }` with no `results` makes every caller's `.map()` throw,
+converting a reported provider failure into an unhandled renderer crash — the exact outcome
+the envelope was introduced to prevent. Four handlers keep a local `try` because their
+failure payload needs an argument the fallback cannot see, an `await` a synchronous
+fallback cannot perform, or a message precedence the helper does not express. Each says so
+in a comment; they are not oversights.
+
+`ipc/envelope.ts` deliberately does **not** import `electron` — that import makes a module
+unloadable under Node's type stripping, which is where its tests run.
 
 **When you add a feature that crosses the boundary, all four of these change together:**
 1. the service in `electron/`,
-2. `ipcMain.handle('ns:name', …)` in `electron/main.ts`,
+2. `handle('ns:name', …)` in the matching `electron/ipc/<domain>.ts`,
 3. the method + its type in `CloudStreamElectronAPI` in `electron/preload.ts`,
 4. the caller in `src/`.
+
+**A channel name is a string on both sides and the compiler cannot see it**, so a rename or
+a drop typechecks perfectly and fails at runtime as a feature that silently does nothing.
+`node tools/refactor/ipc-surface.mjs` prints the whole surface as a sorted manifest; snapshot
+it before a large move and diff it afterwards. It currently reports **486 registrations**.
 
 Shared types live in `cs3_windows/src/types/{api,plugin,torrent,download,player}.ts` and
 are imported by **both** sides — `electron/` importing from `../src/types/` is intentional,
@@ -266,8 +298,17 @@ not a layering mistake.
 
 | File | Responsibility |
 |---|---|
-| `main.ts` | Window, lifecycle, service wiring, every IPC handler. |
-| `preload.ts` | The typed API surface. |
+| `main.ts` | Window, lifecycle, service construction. **Not the handlers** — see `ipc/` below. |
+| `ipc/envelope.ts` | The `{ ok, error, …payload }` semantics, pure and tested. Does not import `electron`. |
+| `ipc/channel.ts` | `handle` / `handleRaw` — the only two ways a channel is registered. |
+| `ipc/services.ts` | The `Services` bag: every dependency a handler may reach, named. |
+| `ipc/<domain>.ts` | 20 registrars, one per surface, grouped as `main.ts` already grouped them. |
+| `preload.ts` | The typed API surface. `subscribe()` owns the listener/teardown pair. |
+| `util/jsonFileStore.ts` | Debounced JSON persistence: coalesced writes, unref'd timer, explicit flush. |
+| `util/disabledSet.ts` | A datastore-backed set of switched-off identities, for the enable cascade. |
+| `media/unreadableSource.ts` | The one-byte range probe that decides whether a link is dead rather than undecodable. |
+| `media/nativeEnginePolicy.ts` | How eagerly mpv is used, and whether it embeds. Read per decision, never captured. |
+| `cs3/continueWatching.ts` | Whether the Continue Watching rail is assembled at all. |
 | `datastore.ts` | Persistence. Reimplements **Android's 6-bucket key grammar** (`_Bool`/`_Int`/`_String`/`_Float`/`_Long`/`_StringSet`) so Android backups import losslessly. Non-transferable keys (tokens, device ids, cache paths) are filtered on import by regex. |
 | `contentService.ts` | The content pipeline orchestrator: `search → MetadataProvider → getSources → IndexerRegistry → startStream → TorrentEngine`. Extension providers are consulted first; torrents are the fallback. A `cs3ext://` media URL bypasses indexers entirely — the provider already knows its links. |
 | `playbackSession.ts` | Owns one "user pressed play" interaction. Opens the player *before* a stream exists and streams discovery progress into it, so the viewer can start the best source found so far instead of waiting for the slowest indexer. Also owns in-player source switching and refresh. Retains the `SourceQuery`, which is what makes refresh possible without navigating back. |
