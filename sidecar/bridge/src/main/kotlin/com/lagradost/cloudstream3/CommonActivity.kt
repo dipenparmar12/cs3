@@ -8,22 +8,18 @@ import com.lagradost.cloudstream3.utils.UiText
  * `com.lagradost.cloudstream3.CommonActivity` — an `:app` symbol in CloudStream 3.
  *
  * Provides activity context, foreground tracking, and toast notifications.
- * Extensions like `StreamingCommunity` access `CommonActivity.activity` to read
- * preferences or register UI settings.
+ * In upstream CloudStream, this is a standard Kotlin singleton object with instance methods.
+ * Extensions like `StreamingCommunity` access `CommonActivity.activity` (via `CommonActivity.INSTANCE.getActivity()`)
+ * to read preferences or register UI settings.
  */
 object CommonActivity {
 
-    @JvmStatic
     var activity: Activity? = null
 
-    @JvmStatic
     var keyIsDown: Boolean = false
 
-    @JvmStatic
     var currentFocus: Any? = null
 
-    @JvmStatic
-    @JvmOverloads
     fun showToast(
         activity: Activity?,
         message: String,
@@ -31,8 +27,6 @@ object CommonActivity {
     ) {
     }
 
-    @JvmStatic
-    @JvmOverloads
     fun showToast(
         activity: Activity?,
         message: UiText,
@@ -40,8 +34,6 @@ object CommonActivity {
     ) {
     }
 
-    @JvmStatic
-    @JvmOverloads
     fun showToast(
         activity: Activity?,
         messageRes: Int,
@@ -49,8 +41,6 @@ object CommonActivity {
     ) {
     }
 
-    @JvmStatic
-    @JvmOverloads
     fun showToast(
         message: String,
         duration: Int = 0
@@ -58,8 +48,6 @@ object CommonActivity {
         showToast(activity, message, duration)
     }
 
-    @JvmStatic
-    @JvmOverloads
     fun showToast(
         message: UiText,
         duration: Int = 0
@@ -67,8 +55,6 @@ object CommonActivity {
         showToast(activity, message, duration)
     }
 
-    @JvmStatic
-    @JvmOverloads
     fun showToast(
         messageRes: Int,
         duration: Int = 0
@@ -76,7 +62,6 @@ object CommonActivity {
         showToast(activity, messageRes, duration)
     }
 
-    @JvmStatic
     fun canShowToast(): Boolean = true
 }
 
