@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { LogLevel } from './logging/logger';
 import type {
   SearchHistoryEntry,
   SearchOptions,
@@ -763,6 +764,33 @@ export interface CloudStreamElectronAPI {
     }
   >;
 
+  // The structured log. Deliberately a thin surface — the log's job is to be on
+  // disk when something goes wrong, not to be browsed.
+  queryLog: (filter?: {
+    level?: LogLevel;
+    scopes?: string[];
+    event?: string;
+    search?: string;
+    since?: number;
+    limit?: number;
+  }) => Promise<
+    Envelope & {
+      records: Array<Record<string, unknown>>;
+      session: string;
+      level: LogLevel;
+      file: string;
+    }
+  >;
+  listLogSessions: () => Promise<
+    Envelope & {
+      sessions: Array<{ file: string; bytes: number; modified: number; current: boolean }>;
+      directory: string;
+    }
+  >;
+  setLogLevel: (level: LogLevel) => Promise<Envelope & { level: LogLevel }>;
+  revealLogFile: () => Promise<Envelope>;
+  exportLogSession: () => Promise<Envelope & { text: string; file: string }>;
+
   // Saved detail pages
   /**
    * Saved pages, newest first, with the facets to filter them by.
@@ -1229,6 +1257,12 @@ const api: CloudStreamElectronAPI = {
 
   getProviderProvenance: (providerName) =>
     ipcRenderer.invoke('api:getProviderProvenance', providerName),
+
+  queryLog: (filter) => ipcRenderer.invoke('log:query', filter),
+  listLogSessions: () => ipcRenderer.invoke('log:sessions'),
+  setLogLevel: (level) => ipcRenderer.invoke('log:setLevel', level),
+  revealLogFile: () => ipcRenderer.invoke('log:reveal'),
+  exportLogSession: () => ipcRenderer.invoke('log:exportSession'),
 
   listBookmarks: () => ipcRenderer.invoke('bookmarks:list'),
   getBookmark: (mediaUrl) => ipcRenderer.invoke('bookmarks:get', mediaUrl),

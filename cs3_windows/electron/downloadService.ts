@@ -13,6 +13,9 @@ import type { AnalyticsSink } from './pluginManager';
 import type { TorrentResult } from '../src/types/torrent';
 import type { HistoryStore } from './cs3/historyStore';
 import type { HistoryAction, HistoryStatus } from '../src/types/history';
+import { scopedLogger } from './logging/logger.ts';
+
+const log = scopedLogger('download');
 
 /**
  * The download queue, across every kind of source the app can play.
@@ -478,6 +481,14 @@ export class DownloadService {
    */
   private finalizeCompletion(task: DownloadTask, reportedBytes: number): void {
     this.handles.delete(task.id);
+    log.info('download_finalising', {
+      mediaTitle: task.title,
+      provider: task.providerName,
+      sourceId: task.id,
+      reportedBytes,
+      expectedBytes: task.totalBytes,
+      target: task.targetFilePath,
+    });
 
     const expected = reportedBytes || task.totalBytes || 0;
     let actual = 0;

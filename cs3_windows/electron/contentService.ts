@@ -23,6 +23,9 @@ import { MediaProxy } from './mediaProxy';
 import { DetailCache } from './detailCache';
 import { mergeSearchResults } from './searchMerge';
 import { rawFetch } from './torrent/http';
+import { scopedLogger } from './logging/logger.ts';
+
+const log = scopedLogger('sources');
 import { SearchScopeStore } from './searchScope';
 import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
@@ -497,7 +500,42 @@ export class ContentService {
     return this.inFlightSources.has(this.sourceKey(request));
   }
 
+  /**
+   * Wrapped so one record covers the whole discovery, however it ends.
+   *
+   * A scrape across fifteen providers takes 20-40 seconds and the slowest one
+   * decides. When "finding sources" feels broken, the two questions are always
+   * how long it took and how many answered — and both are here, on one line,
+   * without needing the fifteen per-provider records to be correlated first.
+   */
   private async runDiscovery(
+    request: SourceQuery,
+    onProgress?: (progress: SearchProgress) => void,
+    options: { bypassCache?: boolean; signal?: AbortSignal } = {}
+  ): Promise<SourceResponse> {
+    const finish = log.begin('discovery', {
+      mediaId: request.mediaUrl,
+      mediaTitle: request.titleOverride,
+      season: request.season,
+      episode: request.episode,
+      bypassCache: Boolean(options.bypassCache),
+    });
+    try {
+      const response = await this.discover(request, onProgress, options);
+      finish({
+        status: response.sources.length > 0 ? 'ok' : 'empty',
+        sources: response.sources.length,
+        filtered: response.filtered?.length ?? 0,
+        error: response.emptyReason,
+      });
+      return response;
+    } catch (error) {
+      finish({ status: 'threw', error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }
+
+  private async discover(
     request: SourceQuery,
     onProgress?: (progress: SearchProgress) => void,
     options: { bypassCache?: boolean; signal?: AbortSignal } = {}

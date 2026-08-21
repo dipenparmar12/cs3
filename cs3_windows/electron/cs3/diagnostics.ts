@@ -109,6 +109,14 @@ export class DiagnosticsLog {
   private file: string;
   private writeTimer: NodeJS.Timeout | null = null;
   private nextId = 1;
+  /**
+   * Mirrors every record into the structured log.
+   *
+   * A listener rather than a direct dependency on `Logger`, so this file stays
+   * the self-contained thing it is — it is the service that reports problems,
+   * and giving it a new way to fail would be its own kind of bug.
+   */
+  private listener: ((record: DiagnosticRecord) => void) | null = null;
 
   constructor(directory?: string) {
     const base = directory ?? (app ? app.getPath('userData') : process.cwd());
@@ -178,6 +186,16 @@ export class DiagnosticsLog {
     }
     if (this.records.length > MAX_RECORDS) this.records.length = MAX_RECORDS;
     this.scheduleWrite();
+
+    try {
+      this.listener?.(record);
+    } catch {
+      // A mirror that throws must not take down the thing being mirrored.
+    }
+  }
+
+  public setListener(listener: (record: DiagnosticRecord) => void): void {
+    this.listener = listener;
   }
 
   /**
