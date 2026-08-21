@@ -1,6 +1,6 @@
 import { app } from 'electron';
-import fs from 'fs';
 import path from 'path';
+import { JsonFileStore } from './util/jsonFileStore';
 import type { MetadataDetail } from './metadataProvider';
 
 /**
@@ -53,57 +53,46 @@ export interface CacheRead {
   stale: boolean;
 }
 
+/** The on-disk shape: a `Map` does not survive `JSON.stringify`. */
+type CacheRow = { url: string; entry: CacheEntry };
+
 export class DetailCache {
   private entries = new Map<string, CacheEntry>();
-  private file: string;
-  private writeTimer: NodeJS.Timeout | null = null;
+  /**
+   * Debounced at two seconds, because a search that opens several titles writes
+   * several times and this file carries whole episode lists.
+   */
+  private store: JsonFileStore<CacheRow[]>;
 
   constructor(directory?: string) {
     const base = directory ?? (app ? app.getPath('userData') : process.cwd());
-    this.file = path.join(base, FILE_NAME);
+    this.store = new JsonFileStore(path.join(base, FILE_NAME), 2_000, () =>
+      [...this.entries.entries()].map(([url, entry]) => ({ url, entry }))
+    );
     this.restore();
   }
 
   private restore(): void {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      if (!Array.isArray(parsed)) return;
-      const cutoff = Date.now() - MAX_AGE_MS;
-      for (const row of parsed as Array<{ url: string; entry: CacheEntry }>) {
-        if (row?.url && row.entry?.detail && row.entry.at >= cutoff) {
-          this.entries.set(row.url, row.entry);
-        }
+    // An unreadable or absent file simply means the app refetches, which is the
+    // behaviour this cache replaces rather than a new failure.
+    const parsed = this.store.load();
+    if (!Array.isArray(parsed)) return;
+    // The age filter happens here rather than in the store: what counts as too
+    // old is this cache's policy, not a property of JSON on disk.
+    const cutoff = Date.now() - MAX_AGE_MS;
+    for (const row of parsed) {
+      if (row?.url && row.entry?.detail && row.entry.at >= cutoff) {
+        this.entries.set(row.url, row.entry);
       }
-    } catch {
-      // No cache yet, or an unreadable one. Either way the app refetches, which
-      // is the behaviour this replaces rather than a new failure.
     }
   }
 
-  /**
-   * Debounced, because a search that opens several titles writes several times
-   * and this file carries whole episode lists.
-   */
   private scheduleWrite(): void {
-    if (this.writeTimer) return;
-    this.writeTimer = setTimeout(() => {
-      this.writeTimer = null;
-      this.flush();
-    }, 2_000);
-    this.writeTimer.unref?.();
+    this.store.schedule();
   }
 
   public flush(): void {
-    if (this.writeTimer) {
-      clearTimeout(this.writeTimer);
-      this.writeTimer = null;
-    }
-    try {
-      const rows = [...this.entries.entries()].map(([url, entry]) => ({ url, entry }));
-      fs.writeFileSync(this.file, JSON.stringify(rows), 'utf8');
-    } catch {
-      // Losing a cache is not worth surfacing; it costs one refetch.
-    }
+    this.store.flush();
   }
 
   public read(url: string): CacheRead | null {

@@ -61,6 +61,10 @@ const PATTERNS = [
   ['on      ', /ipcMain\.on\(\s*['"]([\w:.-]+)['"]/g],
   ['invoke  ', /ipcRenderer\.invoke\(\s*['"]([\w:.-]+)['"]/g],
   ['listen  ', /ipcRenderer\.on\(\s*['"]([\w:.-]+)['"]/g],
+  // `subscribe(channel, callback)` in preload.ts is the same registration with
+  // its teardown handled once instead of fourteen times — same key, for the
+  // reason given above.
+  ['listen  ', /\bsubscribe\(\s*['"]([\w:.-]+)['"]/g],
   ['send    ', /webContents\.send\(\s*['"]([\w:.-]+)['"]/g],
 ];
 
