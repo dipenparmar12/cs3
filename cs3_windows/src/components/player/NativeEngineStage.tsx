@@ -138,8 +138,13 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
     }
 
     if (snapshot.state === 'ended' && !endedRef.current) {
-      endedRef.current = true;
-      onEnded?.();
+      if (
+        (snapshot.durationSeconds > 0 && snapshot.positionSeconds >= Math.max(1, snapshot.durationSeconds - 5)) ||
+        snapshot.positionSeconds > 10
+      ) {
+        endedRef.current = true;
+        onEnded?.();
+      }
     }
   }, [snapshot, onProgress, onEnded, onError]);
 

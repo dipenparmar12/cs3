@@ -724,8 +724,12 @@ export class MpvEngine {
     if (this.state === 'error') return;
 
     if (this.properties.get('eof-reached') === true) {
-      this.state = 'ended';
-      return;
+      const pos = this.numberProperty('time-pos');
+      const dur = this.numberProperty('duration');
+      if (pos > 0 && dur > 0 && pos >= dur - 2) {
+        this.state = 'ended';
+        return;
+      }
     }
     /**
      * Buffering is `paused-for-cache`, not `core-idle`.
@@ -738,7 +742,7 @@ export class MpvEngine {
       return;
     }
     if (this.properties.get('idle-active') === true) {
-      this.state = this.state === 'playing' || this.state === 'paused' ? 'ended' : 'idle';
+      this.state = 'idle';
       return;
     }
     /**
