@@ -19,7 +19,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Logger } from './logger.ts';
+import { Logger, scopedLogger, setLogger } from './logger.ts';
 import { redact, redactHeaders, redactUrl } from './redact.ts';
 
 const tests: Array<[string, () => void | Promise<void>]> = [];
@@ -271,6 +271,66 @@ test('a logger whose directory cannot be created still works in memory', () => {
   logger.info('app', 'still_works');
   logger.flush();
   assert.equal(logger.query({ event: 'still_works' }).length, 1);
+});
+
+// --- late binding -----------------------------------------------------------
+
+/**
+ * The bug this pins cost twenty-one sessions of blank logs.
+ *
+ * Nine services bind their scope at module scope — `const log =
+ * scopedLogger('mpv')` — and module bodies run when `main.ts` imports them,
+ * which is *before* `main.ts` reaches `setLogger()`. When `child()` captured the
+ * logger alive at that moment, all nine bound to the throwaway instance
+ * `getLogger()` lazily creates, writing to a directory nobody reads. Every choke
+ * point the architecture notes describe as instrumented — mpv, playback,
+ * ffprobe, ffmpeg, sources, downloads, discovery — wrote into a void, and the
+ * first engine failure that needed them had to be diagnosed from a timestamp gap.
+ */
+test('a scope bound before setLogger still writes to the installed logger', () => {
+  // Exactly the module-scope shape, evaluated before any logger is installed.
+  const log = scopedLogger('mpv', { component: 'surface' });
+
+  const real = makeLogger('late-binding');
+  setLogger(real);
+
+  log.info('open', { url: 'http://127.0.0.1:9/stream/1' });
+  real.flush();
+
+  const records = linesOf(real).filter((r) => r.event === 'open');
+  assert.equal(records.length, 1, 'the record never reached the installed logger');
+  assert.equal(records[0].scope, 'mpv');
+  // Standing context survives the late resolution.
+  assert.equal(records[0].component, 'surface');
+});
+
+test('a scope follows a logger replaced after it was created', () => {
+  const log = scopedLogger('playback');
+  const first = makeLogger('follow-first');
+  setLogger(first);
+  log.info('decided');
+
+  // A second launch, or a test installing its own: records go to the new one.
+  const second = makeLogger('follow-second');
+  setLogger(second);
+  log.info('decided_again');
+
+  first.flush();
+  second.flush();
+  assert.equal(linesOf(first).filter((r) => r.event === 'decided_again').length, 0);
+  assert.equal(linesOf(second).filter((r) => r.event === 'decided_again').length, 1);
+});
+
+test('an explicitly bound child stays with the logger it came from', () => {
+  // `logger.child(...)` is still a binding, which is what tests and any service
+  // constructed after `setLogger` rely on.
+  const owner = makeLogger('explicit-binding');
+  const log = owner.child('ffmpeg');
+  setLogger(makeLogger('somewhere-else'));
+
+  log.warn('spawned');
+  owner.flush();
+  assert.equal(linesOf(owner).filter((r) => r.event === 'spawned').length, 1);
 });
 
 // --- runner -----------------------------------------------------------------
