@@ -28,6 +28,7 @@ import { useTimelinePreview } from './player/useTimelinePreview';
 import { useMiniFrame } from './player/useMiniFrame';
 import { PlayerCopyMenu } from './player/PlayerCopyMenu';
 import { PlaybackErrorPanel } from './player/PlaybackErrorPanel';
+import { formatTimecode, formatTransferRate } from '../utils/format';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -190,22 +191,6 @@ function atTime(url: string, seconds: number): string {
 
 /** Sentinel for HLS automatic level selection, which hls.js represents as -1. */
 const AUTO_QUALITY = -1;
-
-function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  return h > 0
-    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-    : `${m}:${String(s).padStart(2, '0')}`;
-}
-
-function formatSpeed(bytesPerSecond: number): string {
-  if (bytesPerSecond <= 0) return '0 KB/s';
-  const mb = bytesPerSecond / 1e6;
-  return mb >= 1 ? `${mb.toFixed(1)} MB/s` : `${(bytesPerSecond / 1e3).toFixed(0)} KB/s`;
-}
 
 /** How long before the end the up-next card appears, and how long it counts down. */
 const UP_NEXT_LEAD_SECONDS = 40;
@@ -2171,7 +2156,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {isMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
             </button>
             <span className="player-mini__time">
-              {formatTime(currentTime)} / {formatTime(duration)}
+              {formatTimecode(currentTime)} / {formatTimecode(duration)}
             </span>
             <div className="player-mini__spacer" />
             {onExpand && (
@@ -2412,7 +2397,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <p>Buffering from peers…</p>
           {stats && (
             <span className="muted">
-              {formatSpeed(stats.downloadSpeed)} · {stats.peers} peer
+              {formatTransferRate(stats.downloadSpeed)} · {stats.peers} peer
               {stats.peers === 1 ? '' : 's'} · {(stats.progress * 100).toFixed(1)}%
             </span>
           )}
@@ -2619,7 +2604,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {stats && (
           <div className="player__stats">
             <span title="Peers"><Users size={14} /> {stats.peers}</span>
-            <span title="Download speed"><Gauge size={14} /> {formatSpeed(stats.downloadSpeed)}</span>
+            <span title="Download speed"><Gauge size={14} /> {formatTransferRate(stats.downloadSpeed)}</span>
           </div>
         )}
       </header>
@@ -2762,7 +2747,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   {preview.loading ? <Loader2 className="spin" size={18} /> : <MonitorPlay size={18} />}
                 </div>
               )}
-              <span>{formatTime(hoverTime)}</span>
+              <span>{formatTimecode(hoverTime)}</span>
             </div>
           )}
 
@@ -2828,7 +2813,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           )}
 
           <span className="player__time">
-            {formatTime(currentTime)} / {formatTime(duration)}
+            {formatTimecode(currentTime)} / {formatTimecode(duration)}
           </span>
 
           <button className="icon-button" onClick={() => setIsMuted((v) => !v)} aria-label="Mute">

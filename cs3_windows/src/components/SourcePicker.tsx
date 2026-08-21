@@ -16,6 +16,7 @@ import {
   filterAndSortSources,
   type SourceFilterState,
 } from '../utils/sourceFilter';
+import { formatBytes } from '../utils/format';
 
 export interface SourcePickerData {
   sources: TorrentResult[];
@@ -63,18 +64,6 @@ interface SourcePickerProps {
   onPlay: (source: TorrentResult) => void;
   onDownload: (source: TorrentResult) => void;
   onRetry: () => void;
-}
-
-function formatBytes(bytes: number): string {
-  if (!bytes) return '—';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit++;
-  }
-  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
 /** Seeder count is the strongest predictor of whether a stream will actually start. */
