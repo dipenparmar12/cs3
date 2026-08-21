@@ -101,6 +101,30 @@ export function alignRefererScheme(
   targetUrl: string,
   headers: Record<string, string>
 ): Record<string, string> {
+  let hostname = '';
+  try {
+    hostname = new URL(targetUrl).hostname.toLowerCase();
+  } catch {}
+
+  // Google CDN, Google Drive, and signed video URLs reject requests
+  // that carry a cross-origin Referer header with HTTP 403 Forbidden.
+  if (
+    hostname.endsWith('googleusercontent.com') ||
+    hostname.endsWith('googlevideo.com') ||
+    hostname.endsWith('gvt1.com') ||
+    hostname.endsWith('drive.google.com') ||
+    hostname.endsWith('docs.google.com') ||
+    hostname.endsWith('1e100.net')
+  ) {
+    const out: Record<string, string> = {};
+    for (const [name, value] of Object.entries(headers)) {
+      if (name.toLowerCase() !== 'referer') {
+        out[name] = value;
+      }
+    }
+    return out;
+  }
+
   if (!/^http:\/\//i.test(targetUrl)) return headers;
 
   const out = { ...headers };

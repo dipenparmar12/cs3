@@ -172,6 +172,16 @@ test('a loopback URL is returned untouched rather than wrapped again', async () 
   assert.equal(await proxy.wrap(already, { Referer: 'x' }), already);
 });
 
+test('Google CDN URLs strip Referer headers to avoid 403 Forbidden', async () => {
+  const wrapped = await proxy.wrap('https://video-downloads.googleusercontent.com/test-video', {
+    Referer: 'https://provider.test/',
+  });
+  seen.length = 0;
+  await fetch(wrapped);
+  assert.equal(seen.at(-1)?.url, 'https://video-downloads.googleusercontent.com/test-video');
+  assert.equal(seen.at(-1)?.referer, undefined);
+});
+
 // --- runner ----------------------------------------------------------------
 
 let failed = 0;
