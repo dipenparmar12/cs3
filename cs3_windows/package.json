@@ -11,7 +11,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "typecheck": "tsc -b",
-    "test:electron": "node --experimental-strip-types electron/ipc/envelope.test.mts && node --experimental-strip-types electron/sharedDiscovery.test.mts && node --experimental-strip-types electron/sourceCache.test.mts && node --experimental-strip-types electron/cs3/playedSource.test.mts && node --experimental-strip-types electron/media/decisionEngine.test.mts && node --experimental-strip-types electron/media/unreadableSource.test.mts && node --experimental-strip-types electron/media/pipeline.test.mts && node --experimental-strip-types electron/media/mpvEngine.test.mts && node --experimental-strip-types src/utils/format.test.mts && node --experimental-strip-types src/utils/sourceExport.test.mts && node --experimental-strip-types electron/logging/logger.test.mts && node --experimental-strip-types electron/cs3/homeProviders.test.mts",
+    "test:electron": "node --experimental-strip-types electron/ipc/envelope.test.mts && node --experimental-strip-types electron/sharedDiscovery.test.mts && node --experimental-strip-types electron/sourceCache.test.mts && node --experimental-strip-types electron/cs3/playedSource.test.mts && node --experimental-strip-types electron/media/decisionEngine.test.mts && node --experimental-strip-types electron/media/unreadableSource.test.mts && node --experimental-strip-types electron/media/pipeline.test.mts && node --experimental-strip-types electron/media/mpvEngine.test.mts && node --experimental-strip-types src/utils/format.test.mts && node --experimental-strip-types src/utils/sourceExport.test.mts && node --experimental-strip-types electron/logging/logger.test.mts && node --experimental-strip-types electron/cs3/homeProviders.test.mts && node --experimental-strip-types electron/cs3/sidecarStderr.test.mts",
     "test:media": "node --experimental-strip-types electron/media/decisionEngine.test.mts",
     "test:pipeline": "node --experimental-strip-types electron/media/pipeline.test.mts",
     "preview": "vite preview",
@@ -27,7 +27,8 @@
     "test:log": "node --experimental-strip-types electron/logging/logger.test.mts",
     "test:home": "node --experimental-strip-types electron/cs3/homeProviders.test.mts",
     "test:ipc": "node --experimental-strip-types electron/ipc/envelope.test.mts",
-    "test:probe": "node --experimental-strip-types electron/media/unreadableSource.test.mts"
+    "test:probe": "node --experimental-strip-types electron/media/unreadableSource.test.mts",
+    "test:sidecar-log": "node --experimental-strip-types electron/cs3/sidecarStderr.test.mts"
   },
   "build": {
     "appId": "com.lagradost.cloudstream3.desktop",

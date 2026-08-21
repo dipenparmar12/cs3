@@ -33,9 +33,12 @@ import { redact, redactUrl } from './redact.ts';
  * interleaved with the current one's.
  *
  * Writes are single-writer by construction: the main process owns this file and
- * nothing else opens it. The sidecar logs to stderr, which the supervisor
- * captures and re-emits through here, so its lines are ordered against
- * everything else rather than racing with them.
+ * nothing else opens it. The sidecar logs to stderr, which `SidecarSupervisor`
+ * folds into records through `cs3/sidecarStderr.ts` and re-emits here, so its
+ * lines are ordered against everything else rather than racing with them. That
+ * sentence described an intention rather than the code until 2026-08-21: stderr
+ * went to `console.warn` and nowhere else, and every extension failure was
+ * therefore invisible to anyone without a terminal open.
  */
 
 export const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;

@@ -72,7 +72,7 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (205 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (212 tests, Node type-stripping — no framework) |
 | IPC envelope only | `cs3_windows/` | `bun run test:ipc` (13 cases, pure) |
 | Formatters only | `cs3_windows/` | `bun run test:format` (19 cases, pure) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
@@ -83,6 +83,7 @@ cs3/
 | Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
 | Native engine only | `cs3_windows/` | `bun run test:native` (15 cases, spawns a real mpv; skips itself without it) |
 | Source liveness only | `cs3_windows/` | `bun run test:probe` (8 cases, pure) |
+| Sidecar stderr only | `cs3_windows/` | `bun run test:sidecar-log` (7 cases, pure) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
@@ -1802,6 +1803,62 @@ from the log written to explain it.
 `scopedLogger(scope)` is the export module-scope call sites should use.
 `logger.child(scope)` still binds, which is what tests and anything constructed after
 `setLogger` want. **If you add a module-scope logger, use `scopedLogger`.**
+
+### Sidecar stderr now reaches the log
+
+`logger.ts` claimed it already did — "the sidecar logs to stderr, which the supervisor
+captures and re-emits through here" — and it did not. `SidecarSupervisor` wrote every line
+to `console.warn` and nowhere else, so **every extension failure was visible only to
+whoever had a terminal open**. The six-missing-classes finding came from a user pasting a
+captured console by hand, and so did the `CloudStreamApp` and MegaProvider traces after it.
+That is the workflow this document keeps insisting on — *count the log before fixing
+anything* — being impossible to run on the half of the system that fails most.
+
+`cs3/sidecarStderr.ts` folds the stream into records. Three decisions in it matter:
+
+- **One record per event, not per line.** A Java stack trace is thirty lines describing one
+  thing; logged individually they cannot be grouped and they push the cause out of the
+  ring. Continuation lines (`at …`, `Caused by:`, `… n more`, `Suppressed:`) attach to the
+  message above them and travel as `detail`.
+- **`missingClass` is promoted to its own field.** Grouping 113 load failures into six
+  missing types is a `GROUP BY` over a field and impossible over prose — the whole reason
+  that investigation worked.
+- **A stack with no level prefix is an `error`.** The JVM prints uncaught throwables
+  itself, with no `INFO`/`ERROR` word in front. Recording those at `info` would hide every
+  plugin crash from the problems-only view, which is the view anyone debugging opens. A
+  `DEBUG ApiError:` line stays `debug`, because upstream's `safeApiCall` caught it and a
+  handled condition does not belong beside real crashes.
+
+Free of `electron`, like `logger.ts` and for the same reason: that import makes a module
+unloadable under Node's type stripping, which is where its seven tests run. The fixtures
+are the two traces as pasted.
+
+### Two extensions need `CloudStreamApp`, not one
+
+This document has said Ultima is the single deliberate exclusion. Counting the recorded
+sessions says otherwise: `NoClassDefFoundError` appears **5 times, all
+`com.lagradost.cloudstream3.CloudStreamApp`, all from `CinemaCity`** — plus Ultima, whose
+`UltimaStorageManager.getAppSettingsSyncCreds` hits it during `load()`.
+
+The verdict does not change, but the reasoning should be stated properly rather than as
+"one extension is not worth it". Behind `CloudStreamApp` sit `MainActivity`,
+`CommonActivity`, `HomeViewModel`, `PluginWrapper`, `AppContextUtils` and
+`DataStoreHelper$ResumeWatchingResult` — shimming it means shimming the Android
+application object and the UI it owns, which is a different category from the scraper-side
+shims in the four rounds above. Both extensions fail at `load` and neither takes anything
+else down. **Recount before revisiting**: now that sidecar stderr is in the log, the
+grouping is `missingClass`, not a pasted console.
+
+**MegaProvider's `KotlinReflectionInternalError` is not ours.** `getRepositories` declares
+a local class (`MegaPlugin$getRepositories$VerifiedRepo`) and hands it to Jackson;
+`jackson-module-kotlin` 2.13.1 calls `KClasses.getMemberProperties` on it and
+`kotlin-reflect` cannot build a descriptor for a local class. Those two versions —
+jackson-module-kotlin 2.13.1 against kotlin-stdlib 2.3.21 — are what **upstream's own POM
+declares**, so the same skew exists in the Android app. Upstream's `safeApiCall` catches
+it, the line is `DEBUG`, and provider loading continues. Bumping jackson to get one
+extension's repository list would deviate from the versions every other provider was
+compiled against, which §"the third round" records as how a `NoSuchMethodError` gets
+introduced.
 
 ### A buffering torrent is not a dead link
 
