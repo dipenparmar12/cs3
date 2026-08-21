@@ -1,5 +1,5 @@
 import type { DatastoreManager } from '../datastore.ts';
-import { getLogger } from '../logging/logger.ts';
+import { scopedLogger } from '../logging/logger.ts';
 import {
   AniListProvider,
   HEALTH_TTL_MS,
@@ -26,7 +26,7 @@ import {
  * choice either, so the stored id is left alone and the fallback is reported.
  */
 
-const log = getLogger().child('discovery', { component: 'home-providers' });
+const log = scopedLogger('discovery', { component: 'home-providers' });
 
 const SELECTED_KEY = 'home_provider_key';
 const TMDB_KEY = 'home_tmdb_api_key';

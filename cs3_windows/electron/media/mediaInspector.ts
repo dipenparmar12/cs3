@@ -8,7 +8,7 @@ import type {
 } from '../../src/types/media';
 import { isPlayableAudioCodec } from './decisionEngine.ts';
 import { runTool } from './runTool.ts';
-import { getLogger } from '../logging/logger.ts';
+import { scopedLogger } from '../logging/logger.ts';
 
 /**
  * Reads what is actually inside a stream, before anything tries to play it.
@@ -370,7 +370,7 @@ export interface InspectionResult {
   latencyMs: number;
 }
 
-const log = getLogger().child('ffprobe');
+const log = scopedLogger('ffprobe');
 
 export class MediaInspector {
   private resolveFfprobe: () => string | null;

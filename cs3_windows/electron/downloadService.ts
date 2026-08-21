@@ -13,7 +13,7 @@ import type { AnalyticsSink } from './pluginManager';
 import type { TorrentResult } from '../src/types/torrent';
 import type { HistoryStore } from './cs3/historyStore';
 import type { HistoryAction, HistoryStatus } from '../src/types/history';
-import { getLogger } from './logging/logger';
+import { scopedLogger } from './logging/logger';
 
 /**
  * The download queue, across every kind of source the app can play.
@@ -45,7 +45,7 @@ interface ActiveHandle {
   cancel(): void;
 }
 
-const log = getLogger().child('download');
+const log = scopedLogger('download');
 
 export class DownloadService {
   private datastore: DatastoreManager;

@@ -10,7 +10,7 @@ import type {
 } from '../src/types/media';
 import { inputOptionsFor } from './media/mediaInspector.ts';
 import { runTool } from './media/runTool.ts';
-import { getLogger } from './logging/logger.ts';
+import { scopedLogger } from './logging/logger.ts';
 
 /**
  * Executes a {@link TransformationPlan} as a live HTTP stream.
@@ -127,7 +127,7 @@ interface Session {
   plan: TransformationPlan;
 }
 
-const log = getLogger().child('ffmpeg');
+const log = scopedLogger('ffmpeg');
 
 export class MediaTranscoder {
   private binaries: BinaryDownloader;

@@ -27,7 +27,7 @@ import { SearchScopeStore } from './searchScope';
 import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
 import { SharedDiscovery } from './sharedDiscovery';
-import { getLogger } from './logging/logger';
+import { scopedLogger } from './logging/logger';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -140,7 +140,7 @@ function stripQuery(url: string): string {
   return index >= 0 ? url.slice(0, index) : url;
 }
 
-const log = getLogger().child('sources');
+const log = scopedLogger('sources');
 
 export class ContentService {
   private cinemeta = new CinemetaProvider();

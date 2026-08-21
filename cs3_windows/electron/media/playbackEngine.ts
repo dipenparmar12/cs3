@@ -21,7 +21,7 @@ import {
 } from './decisionEngine.ts';
 import { MediaInspector, drmRequiresEme, transportFromUrl } from './mediaInspector.ts';
 import type { InspectionStore } from './inspectionStore.ts';
-import { getLogger } from '../logging/logger.ts';
+import { scopedLogger } from '../logging/logger.ts';
 
 /**
  * The Universal Media Compatibility Engine (PRD-37), assembled.
@@ -95,7 +95,7 @@ export interface PlaybackEngineDeps {
   };
 }
 
-const log = getLogger().child('playback');
+const log = scopedLogger('playback');
 
 export class PlaybackEngine {
   private capabilities: RendererCapabilities | null = null;

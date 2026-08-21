@@ -10,7 +10,7 @@ import type {
   MpvSnapshot,
   MpvTrack,
 } from '../../src/types/mpv';
-import { getLogger } from '../logging/logger.ts';
+import { scopedLogger } from '../logging/logger.ts';
 
 /**
  * The native media engine: mpv, owned and driven by this app.
@@ -149,7 +149,7 @@ export interface MpvEngineDeps {
   };
 }
 
-const log = getLogger().child('mpv');
+const log = scopedLogger('mpv');
 
 export class MpvEngine {
   private deps: MpvEngineDeps;
@@ -159,6 +159,27 @@ export class MpvEngine {
   private buffer = '';
   private nextRequestId = 1;
   private pending = new Map<number, Pending>();
+
+  /**
+   * Serialises `open`, because two of them overlapping is the normal case.
+   *
+   * The player opens the engine from an effect keyed on the stream URL, and
+   * that effect re-runs whenever the source changes — a failover, a different
+   * release, the next episode — with a cleanup that fires `stop` without
+   * awaiting it. React's StrictMode double-invokes the same effect on every
+   * mount. So a second `open` arriving while the first is still launching is
+   * not an edge case; in development it happens every single time.
+   *
+   * Without this, the second call found `process` already set (assigned right
+   * after `spawn`, long before the control channel exists), skipped the launch
+   * it thought had happened, and sent `loadfile` into a null socket — which
+   * answers "The native engine is not running." **86 milliseconds after the
+   * engine decided to use it**, which is what the session logs show. The
+   * renderer reports whichever call it made last, so a launch that was going to
+   * succeed was displayed as an engine that was not there, and the failover
+   * ladder dropped the stream to a full transcode.
+   */
+  private opening: Promise<unknown> = Promise.resolve();
 
   private sessionId = '';
   /** Guards the transition log against `time-pos` firing once a second. */
@@ -218,6 +239,20 @@ export class MpvEngine {
 
   public isRunning(): boolean {
     return this.process !== null;
+  }
+
+  /**
+   * Whether the engine can actually be *commanded*, which is not the same as
+   * whether a process exists.
+   *
+   * `process` is assigned immediately after `spawn`; the control channel opens
+   * up to ten seconds later, and can close on its own afterwards while the
+   * process keeps running. Every decision about whether to launch has to ask
+   * this rather than `process`, or it will either skip a launch that never
+   * finished or refuse to relaunch one that has since died.
+   */
+  private isReady(): boolean {
+    return this.process !== null && this.socket !== null && !this.socket.destroyed;
   }
 
   public async status(): Promise<MpvEngineStatus> {
@@ -294,7 +329,25 @@ export class MpvEngine {
    * Binge-watching is the common case and it is the one that would otherwise
    * have felt slowest.
    */
-  public async open(request: MpvOpenRequest): Promise<MpvCommandResult> {
+  /**
+   * Opens a stream, one call at a time.
+   *
+   * The queue is the fix for the overlap described on {@link opening}: a second
+   * caller waits for the first to settle instead of racing it through a
+   * half-built engine. Callers keep their own result, so a failed open does not
+   * fail the one behind it — `catch` feeds the chain, never the caller.
+   */
+  public open(request: MpvOpenRequest): Promise<MpvCommandResult> {
+    const result = this.opening.then(
+      () => this.openExclusive(request),
+      () => this.openExclusive(request)
+    );
+    // The chain must never reject, or one failed open poisons every later one.
+    this.opening = result.catch(() => undefined);
+    return result;
+  }
+
+  private async openExclusive(request: MpvOpenRequest): Promise<MpvCommandResult> {
     const binary = this.resolvePath();
     if (!binary) {
       log.warn('open_refused', { error: 'mpv is not installed', url: request.url });
@@ -323,7 +376,35 @@ export class MpvEngine {
     this.lastError = null;
     this.state = 'loading';
 
-    if (!this.process) {
+    /**
+     * Readiness, not existence.
+     *
+     * This asked `if (!this.process)`, which is true for a process that has been
+     * spawned and has not yet opened its control channel — and for one whose
+     * channel has since closed. Both cases skipped the launch and then sent a
+     * command into a null socket. Asking whether the engine can be *commanded*
+     * makes the two states that matter — launching, and dead-but-not-reaped —
+     * relaunch instead of fail.
+     */
+    if (!this.isReady()) {
+      /**
+       * A process without a usable channel is an orphan: it holds a window and
+       * a GPU context and will never be spoken to again. Reap it before
+       * replacing it, or a session accumulates one per failed open.
+       */
+      if (this.process) {
+        log.warn('relaunch', {
+          url: request.url,
+          reason: 'the previous process had no usable control channel',
+        });
+        try {
+          this.process.kill();
+        } catch {
+          /* already gone */
+        }
+        this.teardown();
+      }
+
       /**
        * The surface has to exist before the launch, because `--wid` is a
        * command-line argument: mpv chooses between "render into this handle"
@@ -493,6 +574,20 @@ export class MpvEngine {
     child.stderr?.on('data', (chunk: string) => this.readStderr(chunk));
 
     child.on('exit', (code) => {
+      /**
+       * Only the *current* process may tear the engine down.
+       *
+       * `launch` walks the video-output list, killing each failed attempt before
+       * trying the next, and `kill` is asynchronous — so a dead attempt's exit
+       * event can land after its successor is already connected. Without this
+       * guard that stale event destroys the working process's socket and nulls
+       * its handle, and the engine reports itself as not running while a
+       * perfectly good mpv sits there playing.
+       */
+      if (this.process !== child) {
+        log.trace('exit_ignored', { code, reason: 'superseded by a later process' });
+        return;
+      }
       const wasPlaying = this.state === 'playing' || this.state === 'paused';
       this.teardown();
       if (wasPlaying) {
@@ -503,7 +598,10 @@ export class MpvEngine {
       }
     });
 
-    child.on('error', (error) => this.fail(error.message));
+    child.on('error', (error) => {
+      if (this.process !== child) return;
+      this.fail(error.message);
+    });
 
     if (!(await this.connect(ipcPath))) {
       return {
@@ -623,7 +721,21 @@ export class MpvEngine {
         socket.on('data', (chunk: string) => this.readIpc(chunk));
         socket.on('error', () => undefined);
         socket.on('close', () => {
+          if (this.socket !== socket) return;
           this.socket = null;
+          /**
+           * A channel can close while the process lives — a broken pipe, or mpv
+           * shutting its IPC server down. The process handle used to survive
+           * that, and because `open` keyed off the handle, every later attempt
+           * skipped the launch and failed into the dead socket forever. Now the
+           * next `open` sees an unready engine and relaunches; `isReady` is what
+           * makes the recovery automatic.
+           */
+          for (const [, waiting] of this.pending) {
+            clearTimeout(waiting.timer);
+            waiting.resolve({ ok: false, error: 'The native engine closed its control channel.' });
+          }
+          this.pending.clear();
         });
         return true;
       }

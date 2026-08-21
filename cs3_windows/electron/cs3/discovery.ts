@@ -5,7 +5,7 @@ import path from 'path';
 import type { SearchResponse } from '../../src/types/api';
 import type { HomeProviderRegistry } from './homeProviderRegistry.ts';
 import type { HomeCatalogKind } from './homeProviders.ts';
-import { getLogger } from '../logging/logger.ts';
+import { scopedLogger } from '../logging/logger.ts';
 
 /**
  * What is worth watching right now, from services that need no API key.
@@ -62,7 +62,7 @@ const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 const FILE_NAME = 'cs3-discovery-cache.json';
 
-const log = getLogger().child('discovery');
+const log = scopedLogger('discovery');
 
 export type DiscoverySectionId =
   | 'trending'

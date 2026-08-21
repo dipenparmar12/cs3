@@ -1,6 +1,6 @@
 import { BrowserWindow, screen } from 'electron';
 
-import { getLogger } from '../logging/logger.ts';
+import { scopedLogger } from '../logging/logger.ts';
 
 /**
  * A native window for mpv to render into, positioned inside our own.
@@ -38,7 +38,7 @@ import { getLogger } from '../logging/logger.ts';
  * hiding controls for a surface that is not there.
  */
 
-const log = getLogger().child('mpv', { component: 'surface' });
+const log = scopedLogger('mpv', { component: 'surface' });
 
 /** The video area, in CSS pixels relative to the parent window's content area. */
 export interface SurfaceBounds {

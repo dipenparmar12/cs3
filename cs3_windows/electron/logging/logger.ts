@@ -460,17 +460,46 @@ export class Logger {
  * question worth asking of it.
  */
 export class ScopedLogger {
-  private readonly root: Logger;
+  /**
+   * The logger this scope was created from, or `null` for one that follows
+   * whichever logger is currently installed.
+   *
+   * **The null case is the one that matters, and it is the default for
+   * `getLogger().child(...)`.** Nine services bind their scope at module scope:
+   *
+   *     const log = getLogger().child('mpv');
+   *
+   * That line runs when the module is first imported, which — because `main.ts`
+   * imports every service at the top of the file — is *before* `main.ts` reaches
+   * `setLogger(logger)` and installs the real one. Capturing the instance there
+   * bound all nine to the throwaway `Logger` that `getLogger()` lazily creates,
+   * writing to a default directory nobody reads.
+   *
+   * The consequence was total and silent: twenty-one recorded sessions contain
+   * `app` and `provider` records and **not one** from `mpv`, `playback`,
+   * `ffprobe`, `ffmpeg`, `sources`, `download` or `discovery`. Every choke point
+   * `AGENTS.md` describes as instrumented was writing into a void, so the engine
+   * failure this was needed for had to be diagnosed from a timestamp gap instead
+   * of from the log written to explain it.
+   *
+   * Resolving late costs one property read per record and cannot go stale.
+   */
+  private readonly root: Logger | null;
   private readonly scope: LogScope;
   private readonly base: LogContext;
 
   // Explicit fields rather than parameter properties: `erasableSyntaxOnly` is
   // set, and the `.mts` tests are run by Node's type stripping, which cannot
   // erase a parameter property because it emits code.
-  constructor(root: Logger, scope: LogScope, base: LogContext) {
+  constructor(root: Logger | null, scope: LogScope, base: LogContext) {
     this.root = root;
     this.scope = scope;
     this.base = base;
+  }
+
+  /** The bound logger, or whichever one is installed right now. */
+  private get target(): Logger {
+    return this.root ?? getLogger();
   }
 
   public child(context: LogContext): ScopedLogger {
@@ -479,23 +508,23 @@ export class ScopedLogger {
 
   /** For a call site whose level depends on the outcome it is reporting. */
   public write(level: LogLevel, event: string, context?: LogContext): void {
-    this.root.write(level, this.scope, event, { ...this.base, ...context });
+    this.target.write(level, this.scope, event, { ...this.base, ...context });
   }
 
   public trace(event: string, context?: LogContext): void {
-    this.root.write('trace', this.scope, event, { ...this.base, ...context });
+    this.target.write('trace', this.scope, event, { ...this.base, ...context });
   }
   public debug(event: string, context?: LogContext): void {
-    this.root.write('debug', this.scope, event, { ...this.base, ...context });
+    this.target.write('debug', this.scope, event, { ...this.base, ...context });
   }
   public info(event: string, context?: LogContext): void {
-    this.root.write('info', this.scope, event, { ...this.base, ...context });
+    this.target.write('info', this.scope, event, { ...this.base, ...context });
   }
   public warn(event: string, context?: LogContext): void {
-    this.root.write('warn', this.scope, event, { ...this.base, ...context });
+    this.target.write('warn', this.scope, event, { ...this.base, ...context });
   }
   public error(event: string, context?: LogContext): void {
-    this.root.write('error', this.scope, event, { ...this.base, ...context });
+    this.target.write('error', this.scope, event, { ...this.base, ...context });
   }
 
   /**
@@ -509,14 +538,14 @@ export class ScopedLogger {
    */
   public begin(event: string, context?: LogContext): (outcome?: LogContext) => void {
     const startedAt = Date.now();
-    this.root.write('trace', this.scope, `${event}_started`, { ...this.base, ...context });
+    this.target.write('trace', this.scope, `${event}_started`, { ...this.base, ...context });
     let settled = false;
     return (outcome: LogContext = {}) => {
       if (settled) return;
       settled = true;
       const durationMs = Date.now() - startedAt;
       const level: LogLevel = outcome.error ? 'warn' : 'info';
-      this.root.write(level, this.scope, event, {
+      this.target.write(level, this.scope, event, {
         ...this.base,
         ...context,
         ...outcome,
@@ -556,6 +585,20 @@ let instance: Logger | null = null;
 export function getLogger(): Logger {
   if (!instance) instance = new Logger();
   return instance;
+}
+
+/**
+ * A scope that follows whichever logger is installed, rather than one that
+ * captures the logger alive at import time.
+ *
+ * This is what module-scope call sites want, and what they were silently not
+ * getting from `getLogger().child(...)` — see the note on
+ * {@link ScopedLogger.root} for what that cost. Services should reach for this;
+ * `getLogger().child(...)` remains correct for anything constructed *after*
+ * `setLogger`, and for tests that deliberately bind one logger.
+ */
+export function scopedLogger(scope: LogScope, base: LogContext = {}): ScopedLogger {
+  return new ScopedLogger(null, scope, base);
 }
 
 export function setLogger(logger: Logger): void {
