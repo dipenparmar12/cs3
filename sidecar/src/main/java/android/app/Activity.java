@@ -28,6 +28,10 @@ public class Activity extends Context {
     public static final int RESULT_OK = -1;
     public static final int RESULT_CANCELED = 0;
 
+    public Activity() {
+        super("activity", java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), "cs3-activity"));
+    }
+
     /**
      * Carries the plugin's own scoped storage down the chain.
      *

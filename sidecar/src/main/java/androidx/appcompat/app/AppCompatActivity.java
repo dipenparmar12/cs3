@@ -29,6 +29,10 @@ import androidx.fragment.app.FragmentActivity;
  */
 public class AppCompatActivity extends FragmentActivity {
 
+    public AppCompatActivity() {
+        super();
+    }
+
     protected AppCompatActivity(String pluginId, java.nio.file.Path scopedDir) {
         super(pluginId, scopedDir);
     }

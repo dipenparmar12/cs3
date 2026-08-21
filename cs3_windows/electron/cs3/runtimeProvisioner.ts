@@ -43,11 +43,12 @@ export interface SystemRuntimeStatus {
  * discarding: DRM parameters, playlist parts, audio-track headers, the link's
  * own type, and live streams' `dataUrl`. An old copy of the bridge still loads
  * and still scrapes, so nothing looks broken — it simply never emits any of
- * those fields, and the desktop half added for them sits inert. That is exactly
- * the failure this counter exists to prevent: a working install quietly missing
- * a capability the build believes it shipped.
+ * Generation 4 adds the `:app` lifecycle and activity shims (`CommonActivity`,
+ * `MainActivity`, `CloudStreamApp`, `AcraApplication`) so plugins that read
+ * preferences through `CommonActivity.activity` (e.g. `StreamingCommunity`) load
+ * without NoClassDefFoundError.
  */
-const RUNTIME_GENERATION = 3;
+const RUNTIME_GENERATION = 4;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {
