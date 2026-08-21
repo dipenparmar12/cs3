@@ -10,6 +10,7 @@ import {
   filterAndSortSources,
   type SourceFilterState,
 } from '../../utils/sourceFilter';
+import { formatReleaseSize } from '../../utils/format';
 
 /**
  * In-player source switcher.
@@ -55,12 +56,6 @@ interface SourcePanelProps {
   onCancelSearch?: () => void;
   /** Offered per source, so a viewer can grab the release they are watching. */
   onDownload?: (source: TorrentResult) => void;
-}
-
-function formatSize(bytes: number): string {
-  if (!bytes) return '—';
-  const gb = bytes / 1e9;
-  return gb >= 1 ? `${gb.toFixed(2)} GB` : `${(bytes / 1e6).toFixed(0)} MB`;
 }
 
 /** The tags that decide whether a release is the one you want, in one line. */
@@ -306,7 +301,7 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
                     <Users size={12} /> {source.seeders}
                   </span>
                   <span title="Size">
-                    <HardDrive size={12} /> {formatSize(source.sizeBytes)}
+                    <HardDrive size={12} /> {formatReleaseSize(source.sizeBytes)}
                   </span>
                   <span title="Indexer">
                     <Radio size={12} /> {source.indexerName}
