@@ -143,7 +143,10 @@ export class SidecarSupervisor {
     this.proc.stderr.setEncoding('utf8');
     this.proc.stderr.on('data', (chunk: string) => {
       for (const line of chunk.split('\n')) {
-        if (line.trim()) console.warn(`[cs3-sidecar] ${line}`);
+        if (!line.trim()) continue;
+        // Kept: a terminal is still the fastest way to watch a plugin load.
+        console.warn(`[cs3-sidecar] ${line}`);
+        this.absorbStderr(line);
       }
     });
 
