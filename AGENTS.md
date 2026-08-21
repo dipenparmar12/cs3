@@ -354,6 +354,61 @@ not a layering mistake.
 | `media/inspectionStore.ts` | Persists what a probe found, keyed on the origin URL. The measurement only; the verdict is recomputed. |
 | `downloadService.ts`, `aria2Engine.ts`, `ytdlpEngine.ts`, `binaryDownloader.ts` | Downloads via aria2c RPC with an HTTP fallback; portable `aria2c`/`yt-dlp` binaries are fetched on first use. |
 
+### Shared primitives, and the duplication they replaced
+
+Four patterns had each been written out repeatedly. They are one implementation now, and
+the thing worth knowing about each is *why the copies differed*.
+
+**`src/utils/format.ts` — six byte formatters that disagreed.** Not copies:
+
+| Call site | zero answers | base | MB decimals |
+|---|---|---|---|
+| `DownloadCenter` | `Unknown` | 1024 | 0 |
+| `PlayerDownloadPanel` | `0 MB` | 1024 | 0 |
+| `SourcePanel` | `—` | **1000** | 0 |
+| `HistoryView` | `Unknown size` | 1024 | 1 |
+| `SourcePicker` | `—` | 1024 | adaptive |
+| `ProvenancePanel` | `0 B` | 1024 | 2 |
+
+A single `formatBytes` would have been shorter and would have changed what six screens
+display, so the differences are **parameters** and every one is preserved exactly.
+`format.test.mts` computes its expectations from the old implementations, including the
+ones that look wrong.
+
+Two of those differences are deliberate and must survive any future tidy-up. **Release
+sizes use base 1000** because providers and trackers quote SI: a torrent listed as "4.3 GB"
+upstream must not be redrawn as "4.00 GB", or a viewer comparing our list against the site
+it came from reads them as different releases. **Download progress uses base 1024**, so the
+figure matches what the file manager will say about the same file once it lands. The test
+asserts both renderings of one byte count side by side so the divergence is visible.
+
+The zero placeholders are *not* deliberate, and neither is 1000-vs-1024 for what is
+arguably the same quantity. Both are flagged in the module header as a UI decision nobody
+has made.
+
+**`electron/util/jsonFileStore.ts` — five debounced-persistence implementations.** Owns
+coalescing, the unref'd timer, the explicit shutdown flush, and the rule that losing a
+cache is never worth throwing over. It deliberately does **not** own the data shape:
+`detailCache` drops entries past a TTL on load and `diagnostics` filters by retention, and
+those are real per-store policies rather than one sameness worth inventing.
+
+**`electron/util/disabledSet.ts` — three copies of the enable cascade's toggle.** The list
+stores *exceptions*, so a newly installed extension works without anyone opting it in;
+every mutation returns the whole stored list, so a failed write shows up as the toggle
+springing back rather than as a lie on screen; and bulk is the primitive, because enabling
+a repository is one write rather than twenty flushes to disk.
+
+**`preload.ts`'s `subscribe()` — fourteen listener/teardown pairs.** The teardown is the
+part that matters and the part easy to leave out: an earlier version of that file
+registered listeners that accumulated on every React remount, which reads as a handler
+firing five times for one update rather than as an error. `onExtensionUpdateEvent` keeps
+its own listener because it carries a discriminator beside the payload, and widening the
+helper to absorb one caller would cost every other subscriber its argument type.
+
+Note that `util/disabledSet.ts` writes its fields out longhand rather than using
+constructor parameter properties. `erasableSyntaxOnly` is set across this project so Node
+can strip types and run the suites directly, and that syntax is not erasable.
+
 ### Codecs: Chromium cannot decode a lot of what people actually stream
 
 Measured on this Electron build with `canPlayType`, not assumed. AAC, MP3, FLAC
