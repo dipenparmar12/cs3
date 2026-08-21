@@ -7,6 +7,7 @@ import type { SearchResponse, LoadResponse, ExtractorLink } from '../src/types/a
 import { PluginCompatibilityAnalyzer } from './pluginAnalyzer';
 import { fetchBuffer, fetchJson } from './torrent/http';
 import type { DatastoreManager } from './datastore';
+import { DisabledSet } from './util/disabledSet';
 import { SidecarSupervisor } from './cs3/sidecarSupervisor';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from './officialRepositories';
 import { classifyFailure, FAILURE_KIND_LABELS } from './cs3/failureTaxonomy';
@@ -640,6 +641,17 @@ export class PluginManager {
   private analytics: AnalyticsSink | null = null;
 
   /** Providers registered by loaded plugins, keyed by provider name. */
+  /**
+   * The three levels of the enable cascade, each an exception list.
+   *
+   * Stored as *disabled* rather than enabled so a newly installed extension
+   * works without anyone opting it in — see `util/disabledSet.ts` for why the
+   * bulk form is the primitive.
+   */
+  private readonly disabledProviders: DisabledSet;
+  private readonly disabledRepositories: DisabledSet;
+  private readonly disabledExtensions: DisabledSet;
+
   private providers = new Map<string, ExtensionProvider>();
   /** Names an extension tried to register that another extension already held. */
   private providerNameClashes = new Map<string, string[]>();
@@ -671,6 +683,9 @@ export class PluginManager {
 
   constructor(datastore: DatastoreManager, sidecar?: SidecarSupervisor) {
     this.datastore = datastore;
+    this.disabledProviders = new DisabledSet(datastore, SETTINGS_KEY_DISABLED_PROVIDERS);
+    this.disabledRepositories = new DisabledSet(datastore, SETTINGS_KEY_DISABLED_REPOSITORIES);
+    this.disabledExtensions = new DisabledSet(datastore, SETTINGS_KEY_DISABLED_EXTENSIONS);
     this.sidecar = sidecar ?? new SidecarSupervisor();
     this.pluginsDir = app
       ? path.join(app.getPath('userData'), 'extensions')
@@ -1779,15 +1794,15 @@ export class PluginManager {
   }
 
   public getDisabledProviders(): string[] {
-    return this.datastore.getObject<string[]>(SETTINGS_KEY_DISABLED_PROVIDERS, []) ?? [];
+    return this.disabledProviders.list();
   }
 
   public getDisabledRepositories(): string[] {
-    return this.datastore.getObject<string[]>(SETTINGS_KEY_DISABLED_REPOSITORIES, []) ?? [];
+    return this.disabledRepositories.list();
   }
 
   public getDisabledExtensions(): string[] {
-    return this.datastore.getObject<string[]>(SETTINGS_KEY_DISABLED_EXTENSIONS, []) ?? [];
+    return this.disabledExtensions.list();
   }
 
   /**
@@ -1799,49 +1814,28 @@ export class PluginManager {
    * as the toggle springing back instead of as a lie on screen.
    */
   public setRepositoryEnabled(repositoryId: string, enabled: boolean): string[] {
-    return this.setRepositoriesEnabled([repositoryId], enabled);
+    return this.disabledRepositories.set([repositoryId], enabled);
   }
 
   public setRepositoriesEnabled(repositoryIds: string[], enabled: boolean): string[] {
-    const disabled = new Set(this.getDisabledRepositories());
-    for (const id of repositoryIds) {
-      if (enabled) disabled.delete(id);
-      else disabled.add(id);
-    }
-    const next = [...disabled];
-    this.datastore.setObject(SETTINGS_KEY_DISABLED_REPOSITORIES, next);
-    return next;
+    return this.disabledRepositories.set(repositoryIds, enabled);
   }
 
   public setExtensionEnabled(internalName: string, enabled: boolean): string[] {
-    return this.setExtensionsEnabled([internalName], enabled);
+    return this.disabledExtensions.set([internalName], enabled);
   }
 
   public setExtensionsEnabled(internalNames: string[], enabled: boolean): string[] {
-    const disabled = new Set(this.getDisabledExtensions());
-    for (const name of internalNames) {
-      if (enabled) disabled.delete(name);
-      else disabled.add(name);
-    }
-    const next = [...disabled];
-    this.datastore.setObject(SETTINGS_KEY_DISABLED_EXTENSIONS, next);
-    return next;
+    return this.disabledExtensions.set(internalNames, enabled);
   }
 
   public setProviderEnabled(name: string, enabled: boolean): string[] {
-    return this.setProvidersEnabled([name], enabled);
+    return this.disabledProviders.set([name], enabled);
   }
 
   /** Bulk toggle, so enabling a whole repository is one write not twenty. */
   public setProvidersEnabled(names: string[], enabled: boolean): string[] {
-    const disabled = new Set(this.getDisabledProviders());
-    for (const name of names) {
-      if (enabled) disabled.delete(name);
-      else disabled.add(name);
-    }
-    const next = [...disabled];
-    this.datastore.setObject(SETTINGS_KEY_DISABLED_PROVIDERS, next);
-    return next;
+    return this.disabledProviders.set(names, enabled);
   }
 
   /** Public entry point for loading providers, used by the extension manager. */

@@ -1070,15 +1070,30 @@ export interface CloudStreamElectronAPI {
 
 export type { TorrentFileEntry };
 
+/**
+ * Subscribes to a pushed channel and hands back a disposer.
+ *
+ * Fourteen `on*` methods each wrote this out: name a listener so it can be
+ * removed, register it, close over it in a teardown function. The teardown is
+ * the part that matters and the part that is easy to leave out — an earlier
+ * version of this file registered listeners that accumulated on every React
+ * remount, which shows up as a snapshot handler firing five times for one
+ * update rather than as an error.
+ *
+ * The `IpcRendererEvent` is dropped on the way through: no subscriber in the
+ * app uses it, and every one of them had to write `_: unknown` to get past it.
+ */
+function subscribe<T>(channel: string, callback: (payload: T) => void): () => void {
+  const listener = (_event: unknown, payload: T) => callback(payload);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+}
+
 const api: CloudStreamElectronAPI = {
   searchAll: (query, options) => ipcRenderer.invoke('api:searchAll', query, options),
   startSearch: (query, options) => ipcRenderer.invoke('search:start', query, options),
   cancelSearch: (id) => ipcRenderer.invoke('search:cancel', id),
-  onSearchUpdate: (callback) => {
-    const listener = (_: unknown, snapshot: SearchSnapshot) => callback(snapshot);
-    ipcRenderer.on('search:update', listener);
-    return () => ipcRenderer.removeListener('search:update', listener);
-  },
+  onSearchUpdate: (callback) => subscribe('search:update', callback),
   browse: (query, provider) => ipcRenderer.invoke('api:browse', query, provider),
   getTitleOutcomes: () => ipcRenderer.invoke('api:getTitleOutcomes'),
   getDiagnostics: (limit, levels) => ipcRenderer.invoke('diagnostics:list', limit, levels),
@@ -1088,12 +1103,7 @@ const api: CloudStreamElectronAPI = {
   recordTitleOutcome: (url, kind, reason) =>
     ipcRenderer.invoke('api:recordTitleOutcome', url, kind, reason),
   loadMedia: (url) => ipcRenderer.invoke('api:loadMedia', url),
-  onDetailUpdate: (callback) => {
-    const listener = (_: unknown, payload: { url: string; detail: MetadataDetail }) =>
-      callback(payload);
-    ipcRenderer.on('detail:update', listener);
-    return () => ipcRenderer.removeListener('detail:update', listener);
-  },
+  onDetailUpdate: (callback) => subscribe('detail:update', callback),
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),
 
@@ -1128,21 +1138,13 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('playback:cancelSourceSearch', sessionId),
   stopPlayback: (sessionId, keepFiles) =>
     ipcRenderer.invoke('playback:stop', sessionId, keepFiles),
-  onPlaybackUpdate: (callback) => {
-    const listener = (_: unknown, snapshot: PlaybackSnapshot) => callback(snapshot);
-    ipcRenderer.on('playback:update', listener);
-    return () => ipcRenderer.removeListener('playback:update', listener);
-  },
+  onPlaybackUpdate: (callback) => subscribe('playback:update', callback),
 
   getSearchConcurrency: () => ipcRenderer.invoke('search:getConcurrency'),
   setSearchConcurrency: (value) => ipcRenderer.invoke('search:setConcurrency', value),
 
   getBootstrapProgress: () => ipcRenderer.invoke('extension:getBootstrapProgress'),
-  onBootstrapProgress: (callback) => {
-    const listener = (_: unknown, progress: BootstrapProgress) => callback(progress);
-    ipcRenderer.on('extension:bootstrapProgress', listener);
-    return () => ipcRenderer.removeListener('extension:bootstrapProgress', listener);
-  },
+  onBootstrapProgress: (callback) => subscribe('extension:bootstrapProgress', callback),
   getAdultAllowed: () => ipcRenderer.invoke('extension:getAdultAllowed'),
   setAdultAllowed: (enabled) => ipcRenderer.invoke('extension:setAdultAllowed', enabled),
 
@@ -1167,11 +1169,7 @@ const api: CloudStreamElectronAPI = {
   getSearchScopeOptions: (ensureLoaded = true) =>
     ipcRenderer.invoke('search:getScopeOptions', ensureLoaded),
   setSearchScope: (scope) => ipcRenderer.invoke('search:setScope', scope),
-  onProviderLoadProgress: (callback) => {
-    const listener = (_: unknown, progress: ProviderLoadProgress) => callback(progress);
-    ipcRenderer.on('extension:providerLoadProgress', listener);
-    return () => ipcRenderer.removeListener('extension:providerLoadProgress', listener);
-  },
+  onProviderLoadProgress: (callback) => subscribe('extension:providerLoadProgress', callback),
 
   inspectMediaSource: (request) => ipcRenderer.invoke('media:inspect', request),
   preparePlaybackStream: (request) => ipcRenderer.invoke('media:prepare', request),
@@ -1193,11 +1191,7 @@ const api: CloudStreamElectronAPI = {
   openControlledExternal: (playerId, url) => ipcRenderer.invoke('external:open', playerId, url),
   getExternalCapability: (playerId) => ipcRenderer.invoke('external:capability', playerId),
   getExternalSnapshot: () => ipcRenderer.invoke('external:snapshot'),
-  onExternalUpdate: (callback) => {
-    const listener = (_: unknown, snapshot: ExternalPlaybackSnapshot) => callback(snapshot);
-    ipcRenderer.on('external:update', listener);
-    return () => ipcRenderer.removeListener('external:update', listener);
-  },
+  onExternalUpdate: (callback) => subscribe('external:update', callback),
   externalSetPaused: (paused) => ipcRenderer.invoke('external:setPaused', paused),
   externalSeek: (seconds) => ipcRenderer.invoke('external:seek', seconds),
   externalSetVolume: (percent) => ipcRenderer.invoke('external:setVolume', percent),
@@ -1222,11 +1216,7 @@ const api: CloudStreamElectronAPI = {
   mpvSetSubtitleDelay: (seconds) => ipcRenderer.invoke('mpv:setSubtitleDelay', seconds),
   mpvStop: () => ipcRenderer.invoke('mpv:stop'),
   getMpvSnapshot: () => ipcRenderer.invoke('mpv:snapshot'),
-  onMpvUpdate: (callback) => {
-    const listener = (_: unknown, snapshot: MpvSnapshot) => callback(snapshot);
-    ipcRenderer.on('mpv:update', listener);
-    return () => ipcRenderer.removeListener('mpv:update', listener);
-  },
+  onMpvUpdate: (callback) => subscribe('mpv:update', callback),
   getNativeEnginePolicy: () => ipcRenderer.invoke('mpv:getPolicy'),
   setNativeEnginePolicy: (policy) => ipcRenderer.invoke('mpv:setPolicy', policy),
   setupMpv: () => ipcRenderer.invoke('binary:setupMpv'),
@@ -1263,22 +1253,12 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('download:setDeletePreference', preference),
   getDownloadQueue: () => ipcRenderer.invoke('download:getQueue'),
   revealInFolder: (filePath) => ipcRenderer.invoke('download:revealInFolder', filePath),
-  onDownloadProgress: (callback) => {
-    const listener = (_: unknown, tasks: DownloadTask[]) => callback(tasks);
-    ipcRenderer.on('download:progress', listener);
-    // Returning a disposer lets React effects clean up; the previous version
-    // registered listeners that accumulated on every remount.
-    return () => ipcRenderer.removeListener('download:progress', listener);
-  },
+  onDownloadProgress: (callback) => subscribe('download:progress', callback),
 
   startBatchDownload: (request) => ipcRenderer.invoke('download:startBatch', request),
   cancelBatchDownload: (batchId) => ipcRenderer.invoke('download:cancelBatch', batchId),
   getActiveBatches: () => ipcRenderer.invoke('download:getActiveBatches'),
-  onBatchProgress: (callback) => {
-    const listener = (_: unknown, progress: BatchProgress) => callback(progress);
-    ipcRenderer.on('download:batchProgress', listener);
-    return () => ipcRenderer.removeListener('download:batchProgress', listener);
-  },
+  onBatchProgress: (callback) => subscribe('download:batchProgress', callback),
 
   // Unified Components & Binaries
   getComponentStatus: () => ipcRenderer.invoke('components:getStatus'),
@@ -1290,14 +1270,7 @@ const api: CloudStreamElectronAPI = {
   setupYtDlp: () => ipcRenderer.invoke('binary:setupYtDlp'),
   setupAllBinaries: () => ipcRenderer.invoke('binary:setupAll'),
   setupFfmpeg: () => ipcRenderer.invoke('binary:setupFfmpeg'),
-  onBinarySetupProgress: (callback) => {
-    const listener = (
-      _: unknown,
-      progress: { component?: string; status: string; percent: number }
-    ) => callback(progress);
-    ipcRenderer.on('binary:setupProgress', listener);
-    return () => ipcRenderer.removeListener('binary:setupProgress', listener);
-  },
+  onBinarySetupProgress: (callback) => subscribe('binary:setupProgress', callback),
   setupBinaries: () => ipcRenderer.invoke('binary:setupBinaries'),
 
   // Plug-and-Play Runtime Provisioner
@@ -1306,19 +1279,11 @@ const api: CloudStreamElectronAPI = {
   repairSystemRuntime: () => ipcRenderer.invoke('runtime:repair'),
   testSystemRuntime: () => ipcRenderer.invoke('runtime:test'),
   cleanSystemRuntime: () => ipcRenderer.invoke('runtime:clean'),
-  onSystemRuntimeProgress: (callback) => {
-    const listener = (_: unknown, progress: RuntimeProgress) => callback(progress);
-    ipcRenderer.on('runtime:progress', listener);
-    return () => ipcRenderer.removeListener('runtime:progress', listener);
-  },
+  onSystemRuntimeProgress: (callback) => subscribe('runtime:progress', callback),
 
   prefetchSources: (request) => ipcRenderer.invoke('sources:prefetch', request),
   cancelSourcePrefetch: () => ipcRenderer.invoke('sources:cancelPrefetch'),
-  onSourcePrefetch: (callback) => {
-    const listener = (_: unknown, state: PrefetchState) => callback(state);
-    ipcRenderer.on('sources:prefetch', listener);
-    return () => ipcRenderer.removeListener('sources:prefetch', listener);
-  },
+  onSourcePrefetch: (callback) => subscribe('sources:prefetch', callback),
   getSourcePrefetchSetting: () => ipcRenderer.invoke('sources:getPrefetchSetting'),
   setSourcePrefetchSetting: (enabled) =>
     ipcRenderer.invoke('sources:setPrefetchSetting', enabled),
@@ -1368,11 +1333,7 @@ const api: CloudStreamElectronAPI = {
   getInstalledRepositories: () => ipcRenderer.invoke('extension:getInstalledRepositories'),
   removeRepository: (repoUrl) => ipcRenderer.invoke('extension:removeRepository', repoUrl),
   getInstalledPlugins: () => ipcRenderer.invoke('extension:getInstalledPlugins'),
-  onExtensionInstallProgress: (callback) => {
-    const listener = (_: unknown, progress: any) => callback(progress);
-    ipcRenderer.on('extension:installProgress', listener);
-    return () => ipcRenderer.removeListener('extension:installProgress', listener);
-  },
+  onExtensionInstallProgress: (callback) => subscribe('extension:installProgress', callback),
 
   checkExtensionUpdates: () => ipcRenderer.invoke('extension:checkUpdates'),
   getCachedExtensionUpdates: () => ipcRenderer.invoke('extension:getCachedUpdates'),
@@ -1381,6 +1342,12 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('extension:updateAll', internalNames),
   getUpdateSettings: () => ipcRenderer.invoke('extension:getUpdateSettings'),
   saveUpdateSettings: (patch) => ipcRenderer.invoke('extension:saveUpdateSettings', patch),
+  /**
+   * The one subscription that does not go through `subscribe`: it carries a
+   * discriminator alongside the payload rather than a single snapshot, and
+   * widening the helper to a variadic signature to absorb one caller would cost
+   * every other subscriber its argument type.
+   */
   onExtensionUpdateEvent: (callback) => {
     const listener = (_: unknown, event: string, payload: unknown) => callback(event, payload);
     ipcRenderer.on('extension:updateEvent', listener);

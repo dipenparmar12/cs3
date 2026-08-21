@@ -1,6 +1,6 @@
 import { app } from 'electron';
-import fs from 'fs';
 import path from 'path';
+import { JsonFileStore } from '../util/jsonFileStore';
 
 import type { FailureKind } from '../../src/types/analytics';
 import { classifyFailure, FAILURE_KIND_LABELS } from './failureTaxonomy';
@@ -106,8 +106,12 @@ const FILE_NAME = 'cs3-diagnostics.json';
 
 export class DiagnosticsLog {
   private records: DiagnosticRecord[] = [];
-  private file: string;
-  private writeTimer: NodeJS.Timeout | null = null;
+  /**
+   * Persisted on a one-second delay: a search across thirty providers can
+   * produce thirty records in a second, and writing the file thirty times would
+   * make the diagnostics the slowest part of the failure they are describing.
+   */
+  private store: JsonFileStore<DiagnosticRecord[]>;
   private nextId = 1;
   /**
    * Mirrors every record into the structured log.
@@ -120,44 +124,24 @@ export class DiagnosticsLog {
 
   constructor(directory?: string) {
     const base = directory ?? (app ? app.getPath('userData') : process.cwd());
-    this.file = path.join(base, FILE_NAME);
+    this.store = new JsonFileStore(path.join(base, FILE_NAME), 1_000, () => this.records);
     this.restore();
   }
 
   private restore(): void {
-    try {
-      const raw = fs.readFileSync(this.file, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        const cutoff = Date.now() - RETENTION_MS;
-        this.records = parsed
-          .filter((record) => typeof record?.at === 'number' && record.at >= cutoff)
-          .slice(0, MAX_RECORDS);
-      }
-    } catch {
-      // No log yet, or an unreadable one. Neither is worth reporting: this is
-      // the thing that reports problems, and it failing loudly would be absurd.
+    // An absent or unreadable log is not worth reporting: this is the thing
+    // that reports problems, and it failing loudly would be absurd.
+    const parsed = this.store.load();
+    if (Array.isArray(parsed)) {
+      const cutoff = Date.now() - RETENTION_MS;
+      this.records = parsed
+        .filter((record) => typeof record?.at === 'number' && record.at >= cutoff)
+        .slice(0, MAX_RECORDS);
     }
   }
 
-  /**
-   * Persisted on a short delay.
-   *
-   * A search across thirty providers can produce thirty records in a second,
-   * and writing the file thirty times would make the diagnostics the slowest
-   * part of the failure they are describing.
-   */
   private scheduleWrite(): void {
-    if (this.writeTimer) return;
-    this.writeTimer = setTimeout(() => {
-      this.writeTimer = null;
-      try {
-        fs.writeFileSync(this.file, JSON.stringify(this.records), 'utf8');
-      } catch {
-        // Losing the log is not worth surfacing an error over.
-      }
-    }, 1_000);
-    this.writeTimer.unref?.();
+    this.store.schedule();
   }
 
   public record(entry: Omit<DiagnosticRecord, 'id' | 'at'> & { at?: number }): void {
@@ -225,15 +209,7 @@ export class DiagnosticsLog {
    * arriving with no records in it.
    */
   public flush(): void {
-    if (this.writeTimer) {
-      clearTimeout(this.writeTimer);
-      this.writeTimer = null;
-    }
-    try {
-      fs.writeFileSync(this.file, JSON.stringify(this.records), 'utf8');
-    } catch {
-      // Shutdown is not the place to start reporting problems.
-    }
+    this.store.flush();
   }
 
   public clear(): void {
@@ -242,7 +218,7 @@ export class DiagnosticsLog {
   }
 
   public get filePath(): string {
-    return this.file;
+    return this.store.filePath;
   }
 
   /**
