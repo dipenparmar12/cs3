@@ -474,6 +474,45 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [externalSnapshot, externalControl?.capability]);
 
+  /**
+   * Saves the source that actually delivered this stream.
+   *
+   * The threshold is the whole point. A source is recorded as working only
+   * after playback has genuinely run for a few seconds — not when it was
+   * selected, and not when a URL was merely attached. A release that opens and
+   * dies on the second GOP looks identical to a good one at attach time, and
+   * saving it would send the viewer straight back to a stream that already
+   * failed them. Ten seconds is past every failure mode that presents as
+   * "it started and then stopped".
+   *
+   * Recorded once per stream. The effect re-runs on every timeupdate, so the
+   * ref is what stops this becoming an IPC call four times a second.
+   */
+  const recordedSourceFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!streamUrl || recordedSourceFor.current === streamUrl) return;
+    if (currentTime < 10) return;
+    if (!activeSource || !progress?.mediaUrl) return;
+
+    recordedSourceFor.current = streamUrl;
+    void window.cloudstream?.recordPlayedSource({
+      title,
+      year: progress.year,
+      mediaUrl: progress.mediaUrl,
+      episodeTitle,
+      season: progress.season,
+      episode: progress.episode,
+      source: activeSource,
+      positionSeconds: currentTime,
+      durationSeconds: duration || undefined,
+    });
+  }, [streamUrl, currentTime, activeSource, progress, title, episodeTitle, duration]);
+
+  // A new stream is a new question about which source works.
+  useEffect(() => {
+    recordedSourceFor.current = null;
+  }, [streamUrl]);
+
   const [showNativePlayerBtn, setShowNativePlayerBtn] = useState(true);
   const [externalPlayers, setExternalPlayers] = useState<Array<{ id: string; name: string }>>([]);
   const [extPlayerStatus, setExtPlayerStatus] = useState<string | null>(null);
