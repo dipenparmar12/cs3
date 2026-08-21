@@ -328,5 +328,35 @@
     "verified": true,
     "documentKind": "repository",
     "adult": true
+  },
+  {
+    "id": "cxxx",
+    "shortcode": "cxxx",
+    "name": "CXXX 18+ Repo",
+    "internalName": "CXXX",
+    "description": "Adult & 18+ provider extensions collection by Phisher98. Hidden unless adult content is enabled in Settings, never installed automatically, and disabled by default.",
+    "url": "https://github.com/phisher98/CXXX",
+    "rawRepoUrl": "https://raw.githubusercontent.com/phisher98/CXXX/builds/CXXX.json",
+    "communityUrl": "https://discord.com/invite/vkgrGWcm5m",
+    "category": "Adult",
+    "language": "Multilingual",
+    "verified": true,
+    "documentKind": "repository",
+    "adult": true
+  },
+  {
+    "id": "gizlikeyif",
+    "shortcode": "gizlikeyif",
+    "name": "Cs-GizliKeyif (+18)",
+    "internalName": "Cs-GizliKeyif",
+    "description": "Turkish & International 18+ adult provider extensions by Kraptor123. Hidden unless adult content is enabled in Settings, never installed automatically, and disabled by default.",
+    "url": "https://github.com/Kraptor123/Cs-GizliKeyif",
+    "rawRepoUrl": "https://raw.githubusercontent.com/Kraptor123/Cs-GizliKeyif/refs/heads/master/repo.json",
+    "iconUrl": "https://raw.githubusercontent.com/Kraptor123/Cs-GizliKeyif/refs/heads/master/.github/logo/gizlikeyif.png",
+    "category": "Adult",
+    "language": "Turkish (TR) / Multilingual",
+    "verified": true,
+    "documentKind": "repository",
+    "adult": true
   }
 ]
