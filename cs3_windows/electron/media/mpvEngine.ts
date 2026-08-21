@@ -460,11 +460,18 @@ export class MpvEngine {
        * would be invisible on every machine except theirs.
        */
       '--no-config',
-      /** Our UI is the controller; mpv's own OSD would be a second one. */
-      '--osc=no',
-      '--osd-level=0',
-      '--input-default-bindings=no',
-      '--input-vo-keyboard=no',
+      /**
+       * Enable mpv's built-in On-Screen Controller (OSC) and On-Screen Display (OSD),
+       * along with full keyboard and mouse bindings, so the MPV window has its own
+       * rich interactive controls (seek bar, play/pause, volume, tracks, shortcuts)
+       * without needing to switch windows.
+       */
+      '--osc=yes',
+      '--osd-level=1',
+      '--osd-on-seek=msg-bar',
+      '--input-default-bindings=yes',
+      '--input-vo-keyboard=yes',
+      '--input-cursor=yes',
       /**
        * mpv's youtube-dl hook is off: link resolution is this app's job and the
        * extensions have already done it. Left on, every failed load spends
@@ -473,7 +480,7 @@ export class MpvEngine {
        * itself had already diagnosed as HTTP 522.
        */
       '--ytdl=no',
-      '--load-scripts=no',
+      '--load-scripts=yes',
       /** The whole reason for this engine. `auto-safe` falls back on its own. */
       '--hwdec=auto-safe',
       `--vo=${videoOutput}`,
