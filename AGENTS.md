@@ -72,14 +72,14 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (216 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (217 tests, Node type-stripping — no framework) |
 | IPC envelope only | `cs3_windows/` | `bun run test:ipc` (13 cases, pure) |
 | Formatters only | `cs3_windows/` | `bun run test:format` (19 cases, pure) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Source export only | `cs3_windows/` | `bun run test:export` (13 cases, pure) |
 | Logging only | `cs3_windows/` | `bun run test:log` (17 cases, real files in a temp dir) |
 | Home providers only | `cs3_windows/` | `bun run test:home` (9 cases, pure) |
-| Media decisions only | `cs3_windows/` | `bun run test:media` (66 cases, no ffmpeg needed) |
+| Media decisions only | `cs3_windows/` | `bun run test:media` (67 cases, no ffmpeg needed) |
 | Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (17 cases, real ffmpeg; skips itself without it) |
 | Native engine only | `cs3_windows/` | `bun run test:native` (15 cases, spawns a real mpv; skips itself without it) |
 | Source liveness only | `cs3_windows/` | `bun run test:probe` (8 cases, pure) |
@@ -1893,8 +1893,10 @@ It is the exact mismatch the capability probe sets up. `VIDEO_CODEC_PROBES` asks
 `canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"')` — the **hvc1** form — so a build with
 platform HEVC decoders answers yes, the decision engine picks `REMUX_CONTAINER`, and the
 muxer then writes `hev1`. The app asked one question and delivered the other answer.
-Measured on the bundled ffmpeg: `-c:v copy` into `-f mp4` gives `hev1`; adding
-`-tag:v hvc1` gives `hvc1`.
+Measured on the bundled ffmpeg: `-c:v copy` into `-f mp4` gives `hev1` for both 8-bit and
+Main 10; adding `-tag:v hvc1` gives `hvc1`. The other copyable codecs were checked in the
+same pass and need nothing — AV1 tags as `av01` and VP9 as `vp09` on their own, which is
+why `videoTagFor` names HEVC alone rather than carrying a table.
 
 `TransformationPlan.videoTag` carries the decision, set by `decisionEngine` and applied by
 `mediaTranscoder`. It belongs to the **plan**, not the executor: the transcoder should not

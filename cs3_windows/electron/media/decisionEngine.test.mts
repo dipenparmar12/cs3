@@ -209,6 +209,22 @@ test("HEVC copied into MP4 is tagged hvc1, not ffmpeg's default hev1", () => {
   assert.equal(decision.plan.videoTag, 'hvc1');
 });
 
+test('10-bit HEVC is tagged too — the modal provider release', () => {
+  // The common case by a distance: 4K and 1080p releases are routinely HEVC
+  // Main 10. It takes the same copy path and needs the same sample entry, and
+  // measured on the bundled ffmpeg it defaults to `hev1` exactly as 8-bit does.
+  const decision = decide(
+    media({
+      formatName: 'matroska,webm',
+      video: video({ codec: 'hevc', bitDepth: 10, pixelFormat: 'yuv420p10le' }),
+    }),
+    'progressive',
+    HEVC_CAPABLE
+  );
+  assert.equal(decision.strategy, 'REMUX_CONTAINER');
+  assert.equal(decision.plan.videoTag, 'hvc1');
+});
+
 test('HEVC copied beside re-encoded audio is tagged too', () => {
   // The audio-only branch is a second copy path into MP4, and it had the same
   // hole. AC-3 forces the audio transcode; the video is still copied.
