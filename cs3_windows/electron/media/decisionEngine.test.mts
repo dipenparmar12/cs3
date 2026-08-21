@@ -185,6 +185,63 @@ test('MKV / H.264 / AAC is remuxed, both streams copied', () => {
   assert.equal(decision.plan.containerAction, 'mp4_fragmented');
 });
 
+test('HEVC copied into MP4 is tagged hvc1, not ffmpeg's default hev1', () => {
+  /**
+   * The difference between a stream that plays and one that does not, and it
+   * gives nothing away when it is wrong: ffmpeg exits 0, the MP4 is valid, both
+   * codecs are decodable, and the player shows nothing.
+   *
+   * HEVC has two MP4 sample entries — `hev1` carries parameter sets in-band,
+   * `hvc1` puts them in the sample description — and browsers accept only
+   * `hvc1`. ffmpeg's muxer defaults to `hev1` when copying.
+   *
+   * It is the exact mismatch the capability probe sets up: `VIDEO_CODEC_PROBES`
+   * asks `canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"')` — the *hvc1*
+   * form — so a build that answers yes is then handed `hev1`.
+   */
+  const decision = decide(
+    media({ formatName: 'matroska,webm', video: video({ codec: 'hevc' }) }),
+    'progressive',
+    HEVC_CAPABLE
+  );
+  assert.equal(decision.strategy, 'REMUX_CONTAINER');
+  assert.equal(decision.plan.videoAction, 'copy');
+  assert.equal(decision.plan.videoTag, 'hvc1');
+});
+
+test('HEVC copied beside re-encoded audio is tagged too', () => {
+  // The audio-only branch is a second copy path into MP4, and it had the same
+  // hole. AC-3 forces the audio transcode; the video is still copied.
+  const decision = decide(
+    media({
+      formatName: 'matroska,webm',
+      video: video({ codec: 'hevc' }),
+      audio: [audio({ codec: 'ac3', channels: 6 })],
+    }),
+    'progressive',
+    HEVC_CAPABLE
+  );
+  assert.equal(decision.plan.videoAction, 'copy');
+  assert.equal(decision.plan.videoTag, 'hvc1');
+});
+
+test('nothing but HEVC is tagged, and never in WebM', () => {
+  // H.264 already muxes as `avc1`; forcing a tag on it would be wrong. WebM has
+  // no sample entries at all, so the question does not arise.
+  assert.equal(decide(media({ formatName: 'matroska,webm' })).plan.videoTag, undefined);
+  const vp8 = decide(
+    media({
+      formatName: 'avi',
+      video: video({ codec: 'vp8' }),
+      audio: [audio({ codec: 'opus' })],
+    }),
+    'progressive',
+    { video: { vp8: true, vp9: true } }
+  );
+  assert.equal(vp8.plan.containerAction, 'webm');
+  assert.equal(vp8.plan.videoTag, undefined);
+});
+
 test('MP4 / H.264 / E-AC-3 transcodes audio only — the silent-audio bug', () => {
   const decision = decide(media({ audio: [audio({ codec: 'eac3', channels: 6 })] }));
   assert.equal(decision.strategy, 'AUDIO_TRANSCODE');

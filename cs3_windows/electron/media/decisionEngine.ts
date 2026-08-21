@@ -152,6 +152,24 @@ function audioCopyableIntoMp4(codec?: string): boolean {
 }
 
 /** Whether one stream alone could be copied into the container we would target. */
+/**
+ * The MP4 sample entry to write for a video stream being copied.
+ *
+ * HEVC is the only codec that needs saying. ffmpeg's MP4 muxer defaults to the
+ * `hev1` entry when copying HEVC, and browsers accept only `hvc1` — so a remux
+ * that looks perfect (exit 0, valid MP4, both codecs decodable) produces a
+ * player showing nothing. WebM has no sample entries, so the question does not
+ * arise there.
+ */
+function videoTagFor(
+  container: 'mp4_fragmented' | 'webm',
+  codec?: string
+): 'hvc1' | undefined {
+  if (container !== 'mp4_fragmented') return undefined;
+  const name = (codec ?? '').toLowerCase();
+  return name === 'hevc' || name === 'h265' ? 'hvc1' : undefined;
+}
+
 function videoCopyableInto(container: 'mp4_fragmented' | 'webm', codec?: string): boolean {
   if (!codec) return true;
   const lower = codec.toLowerCase();
@@ -593,6 +611,7 @@ function decideBrowserStrategy(
         audioAction: 'copy',
         selectedAudioIndex: audioIndex,
         containerAction: copyContainer,
+        videoTag: videoTagFor(copyContainer, video?.codec),
         subtitleAction,
       },
       explanation:
@@ -620,6 +639,7 @@ function decideBrowserStrategy(
         targetAudioCodec: 'aac',
         selectedAudioIndex: audioIndex,
         containerAction: 'mp4_fragmented',
+        videoTag: videoTagFor('mp4_fragmented', video?.codec),
         subtitleAction,
       },
       explanation: `Audio re-encoded, video copied untouched: ${reasons.join('; ')}.`,

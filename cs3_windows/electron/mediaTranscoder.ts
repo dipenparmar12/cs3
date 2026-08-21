@@ -339,6 +339,17 @@ export class MediaTranscoder {
     const videoArgs: string[] = [];
     if (plan.videoAction === 'copy') {
       videoArgs.push('-c:v', 'copy');
+      /**
+       * The sample entry, when the plan named one.
+       *
+       * Only HEVC needs it, and it is the difference between a stream that
+       * plays and one that does not: ffmpeg's MP4 muxer writes `hev1` by
+       * default and browsers accept only `hvc1`. The failure gives nothing away
+       * — exit 0, a valid MP4, both codecs decodable — so nothing downstream
+       * can catch it and the viewer gets a black player. See
+       * `TransformationPlan.videoTag`.
+       */
+      if (plan.videoTag) videoArgs.push('-tag:v', plan.videoTag);
     } else if (plan.videoAction === 'transcode' || plan.videoAction === 'downscale') {
       if (plan.videoAction === 'downscale' && plan.targetHeight) {
         /**
@@ -372,6 +383,7 @@ export class MediaTranscoder {
       }
     } else {
       videoArgs.push('-c:v', 'copy');
+      if (plan.videoTag) videoArgs.push('-tag:v', plan.videoTag);
     }
 
     const audioArgs: string[] = [];

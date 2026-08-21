@@ -144,6 +144,26 @@ export interface TransformationPlan {
   targetHeight?: number;
   hardwareAccelerator?: 'nvenc' | 'qsv' | 'amf' | 'mf' | 'videotoolbox' | 'cpu';
 
+  /**
+   * The MP4 sample entry to write when the video is **copied**.
+   *
+   * Only `hvc1` is ever set, and it is not cosmetic. HEVC has two sample entries
+   * in MP4 — `hev1`, which carries parameter sets in-band, and `hvc1`, which
+   * puts them in the sample description — and **browsers accept only `hvc1`**.
+   * ffmpeg's muxer defaults to `hev1` when copying, so this was the worst kind
+   * of bug: ffmpeg exited 0, the MP4 was valid, and the player showed nothing.
+   *
+   * It is the exact mismatch the capability probe sets up. `VIDEO_CODEC_PROBES`
+   * asks `canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"')` — the *hvc1*
+   * form — and a build that answers yes is then handed `hev1`. The app asked one
+   * question and delivered the other answer.
+   *
+   * Decided here rather than in the transcoder because it is a property of the
+   * plan, not of the process: the executor should not have to re-derive the
+   * source codec to know what to write.
+   */
+  videoTag?: 'hvc1';
+
   audioAction: 'copy' | 'transcode' | 'none';
   targetAudioCodec?: 'aac';
   /** Ordinal among audio streams; `-1` when the file has no audio. */
