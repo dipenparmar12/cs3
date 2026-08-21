@@ -52,7 +52,7 @@ interface Pending {
 const sidecarLog = scopedLogger('runtime', { component: 'sidecar' });
 
 /** `INFO PluginInstance: Adding X` — the JVM's own level, where it prints one. */
-const LEVEL_PREFIX = /^(TRACE|DEBUG|INFO|WARN|WARNING|ERROR|SEVERE|FATAL)[: ]?/;
+const LEVEL_PREFIX = /^(TRACE|DEBUG|INFO|WARN|WARNING|ERROR|SEVERE|FATAL)\b[: ]?\s*/;
 
 /**
  * A line that continues the record above rather than starting a new one.
