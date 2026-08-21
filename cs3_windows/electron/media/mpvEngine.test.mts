@@ -187,30 +187,38 @@ try {
   });
 
   /**
-   * Two opens that overlap, which is the normal case rather than an edge one.
+   * Two opens that overlap **on a cold engine**, which is the normal case
+   * rather than an edge one.
    *
    * The player opens the engine from an effect keyed on the stream URL. That
    * effect re-runs on every source change — a failover, another release, the
    * next episode — and React's StrictMode double-invokes it on every mount, so
    * a second `open` arriving mid-launch is what happens routinely.
    *
-   * It used to fail. `process` is assigned immediately after `spawn` while the
-   * control channel takes up to ten seconds to appear, and `open` keyed its
-   * "already running" check off that handle — so the second call skipped the
-   * launch it believed had happened and sent `loadfile` into a null socket.
-   * The answer was "The native engine is not running.", 86ms after the engine
-   * had decided to use mpv, and the renderer showed whichever call it made
-   * last. A launch that was about to succeed was reported as a missing engine.
+   * It used to fail, and only from cold. `process` is assigned immediately
+   * after `spawn` while the control channel takes up to ten seconds to appear,
+   * and `open` keyed its "already running" check off that handle — so a second
+   * call during that window skipped the launch it believed had happened and
+   * sent `loadfile` into a null socket. The answer was "The native engine is not
+   * running.", 86ms after the engine had decided to use mpv, and the renderer
+   * showed whichever call it made last: a launch that was about to succeed,
+   * reported as a missing engine.
    *
-   * Both calls must succeed. Asserting only the first would pass against the
-   * bug, because the first call was never the one that failed.
+   * **A fresh engine is the whole point of this case.** Run against the shared
+   * one above, both calls find a live socket and pass with or without the fix —
+   * which is exactly the false negative that let this ship.
    */
+  const cold = new MpvEngine({
+    resolveBinary: (name) => which(name),
+    onUpdate: () => undefined,
+  });
+
   const concurrent = await Promise.all([
-    engine.open({ url: fixture, title: 'race a' }),
-    engine.open({ url: fixture, title: 'race b' }),
+    cold.open({ url: fixture, title: 'race a' }),
+    cold.open({ url: fixture, title: 'race b' }),
   ]);
 
-  check('overlapping opens both succeed instead of racing the launch', () => {
+  check('overlapping opens on a cold engine both succeed', () => {
     for (const [index, result] of concurrent.entries()) {
       assert.equal(
         result.ok,
@@ -222,18 +230,21 @@ try {
 
   check('an overlapping open never reports the engine as not running', () => {
     // The exact sentence from the session logs. It is a lie whenever a process
-    // is being launched, and it is the one users saw.
+    // is mid-launch, and it is the one users saw.
     const notRunning = concurrent.find(
       (r) => !r.ok && (r.error ?? '').includes('not running')
     );
-    assert.equal(notRunning, undefined);
+    assert.equal(notRunning, undefined, 'the pre-fix failure is back');
   });
 
-  await waitFor((s) => s.state === 'playing' || s.state === 'paused', 12_000);
-
-  check('the stream from an overlapping open actually plays', () => {
-    assert.equal(engine.isRunning(), true);
+  check('exactly one process serves both overlapping opens', () => {
+    // Serialising must not mean launching twice; the second caller joins the
+    // first engine rather than spawning a rival that would fight for the window.
+    assert.equal(cold.isRunning(), true);
   });
+
+  await cold.shutdown();
+  await sleep(300);
 
   /**
    * The surface handshake, driven against a real process.

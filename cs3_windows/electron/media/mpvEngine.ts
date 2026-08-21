@@ -1183,8 +1183,31 @@ export class MpvEngine {
    * to the idle state, where the next `loadfile` costs a few hundred
    * milliseconds rather than a full start.
    */
-  public async stop(): Promise<MpvCommandResult> {
-    if (!this.process) return { ok: true };
+  public stop(): Promise<MpvCommandResult> {
+    /**
+     * Queued behind `open`, for ordering rather than for safety.
+     *
+     * The player's effect is keyed on the stream URL, and its cleanup fires this
+     * without awaiting it — so on any source change the sequence is *stop the
+     * old one, open the new one*, issued back to back. Left unqueued, the stop
+     * can overtake a launch still in progress and land after the new
+     * `loadfile`, stopping the stream that was just started. What the viewer
+     * sees is a player that opens and immediately goes idle, which reads as the
+     * source failing.
+     *
+     * Sharing the queue makes the engine act on these in the order they were
+     * called, which is the order the UI meant.
+     */
+    const result = this.opening.then(
+      () => this.stopExclusive(),
+      () => this.stopExclusive()
+    );
+    this.opening = result.catch(() => undefined);
+    return result;
+  }
+
+  private async stopExclusive(): Promise<MpvCommandResult> {
+    if (!this.isReady()) return { ok: true };
     const result = await this.command(['stop']);
     this.state = 'idle';
     this.emit();
