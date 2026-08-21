@@ -72,7 +72,7 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (194 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (205 tests, Node type-stripping — no framework) |
 | IPC envelope only | `cs3_windows/` | `bun run test:ipc` (13 cases, pure) |
 | Formatters only | `cs3_windows/` | `bun run test:format` (19 cases, pure) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
@@ -81,7 +81,8 @@ cs3/
 | Home providers only | `cs3_windows/` | `bun run test:home` (9 cases, pure) |
 | Media decisions only | `cs3_windows/` | `bun run test:media` (53 cases, no ffmpeg needed) |
 | Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
-| Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
+| Native engine only | `cs3_windows/` | `bun run test:native` (15 cases, spawns a real mpv; skips itself without it) |
+| Source liveness only | `cs3_windows/` | `bun run test:probe` (8 cases, pure) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
@@ -1745,6 +1746,79 @@ should not be: every failure worth catching lives in the seam between two proces
 JSON framing, `request_id` correlation, the property observations that drive the timeline,
 `end-file` telling a dead link apart from the credits — and a mock would only ever assert
 what we assumed mpv does.
+
+### The native engine failed "most of the time", and the log could not say why
+
+Reported 2026-08-21 and diagnosed from twenty-one recorded sessions. Two bugs, and the
+second is why the first took so long to find.
+
+**1. `MpvEngine.open` was not re-entrant.** `process` is assigned immediately after
+`spawn`; the IPC control channel opens up to ten seconds later. `open` keyed its
+"already running" check off that handle, so a second call arriving inside that window
+skipped the launch it believed had happened and sent `loadfile` into a null socket. The
+answer is `The native engine is not running.` — logged **86 ms** after the engine had
+decided to use mpv, which is the tell: a real launch attempt cannot fail that fast.
+
+Overlapping opens are the *normal* case, not an edge one. `NativeEngineStage` opens from an
+effect keyed on the stream URL, that effect re-runs on every source change — failover,
+another release, the next episode — its cleanup fires `mpvStop()` without awaiting, and
+**StrictMode double-invokes the whole thing on every mount**. The renderer reports whichever
+call it made last, so a launch that was about to succeed was displayed as a missing engine
+and the ladder dropped the stream to a full transcode.
+
+Three things fix it, and all three are load-bearing:
+
+- **`open` and `stop` share a queue.** A second caller waits for the first to settle
+  instead of racing it through a half-built engine. `stop` is queued for *ordering*: left
+  out, the cleanup's stop can overtake a launch and land after the new `loadfile`, stopping
+  the stream that was just started — which reads as the source failing.
+- **`isReady()` replaces `if (!this.process)`.** Readiness is a live socket, not a process
+  object. That makes the two states that matter — mid-launch, and dead-channel-but-not-yet-
+  reaped — relaunch rather than fail. A process found without a usable channel is killed
+  first, or a session accumulates one orphan per failed open.
+- **`exit` and `error` handlers ignore a superseded child.** `launch` walks the video-output
+  list killing each failed attempt, and `kill` is asynchronous, so a dead attempt's exit
+  event can land after its successor is connected — and `teardown()` would then destroy the
+  *working* process's socket.
+
+Pinned by three cases in `mpvEngine.test.mts` that open a **cold** engine twice
+concurrently. The cold part is the whole test: run against an engine that is already
+playing, both calls find a live socket and pass with or without the fix, which is exactly
+the false negative that let this ship. Verified by reverting the fix — `open #2 failed: The
+native engine is not running.`
+
+**2. Nine services logged into a void.** `const log = getLogger().child('mpv')` at module
+scope runs when `main.ts` imports the module, which is *before* `main.ts` reaches
+`setLogger()`. `child()` captured the instance, so all nine bound to the throwaway `Logger`
+that `getLogger()` lazily creates, writing to a directory nobody reads.
+
+The result was total and silent: twenty-one sessions contain `app` and `provider` records
+and **not one** from `mpv`, `playback`, `ffprobe`, `ffmpeg`, `sources`, `download` or
+`discovery`. Every choke point this document describes as instrumented was writing
+nowhere, so the engine failure above had to be diagnosed from a timestamp gap instead of
+from the log written to explain it.
+
+`ScopedLogger` now resolves the logger at write time when it was created without one, and
+`scopedLogger(scope)` is the export module-scope call sites should use.
+`logger.child(scope)` still binds, which is what tests and anything constructed after
+`setLogger` want. **If you add a module-scope logger, use `scopedLogger`.**
+
+### A buffering torrent is not a dead link
+
+Same investigation, second family of failures: forty-two of sixty-six playback attempts in
+those sessions were loopback URLs, and the timeouts were all on `/webtorrent/` paths.
+
+`describeUnreadableSource` asks the source for one byte and treats a transport failure as
+`dead`. That is right for a third-party CDN and wrong for **our own servers**: the torrent
+engine answers no byte until its first piece lands, and from a cold swarm that regularly
+takes longer than the probe waits. `dead` is not advisory — `PlaybackEngine.prepare`
+refuses outright and `VideoPlayer` skips to the next source — so the app walked the entire
+source list without playing anything.
+
+Loopback transport failures are no longer fatal. **Status codes still are, including from
+loopback**, because the media proxy forwards the upstream status: a 403 arriving on
+127.0.0.1 really is the CDN refusing. Excusing loopback wholesale would trade one wrong
+answer for its opposite. `unreadableSource.test.mts` (8 cases) pins both directions.
 
 ### FFmpeg 7.1 silently broke the image-segment fix
 
