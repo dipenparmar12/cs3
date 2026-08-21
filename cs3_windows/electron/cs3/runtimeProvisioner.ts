@@ -38,8 +38,16 @@ export interface SystemRuntimeStatus {
  * and `CloudflareKiller` bridge types, and the per-class fix to
  * `KotlinNameRepair` — every one of which shipped into `sidecar/runtime` while
  * installed apps kept serving the generation-1 copy out of `%APPDATA%`.
+ *
+ * Generation 3 adds `NewPipeBootstrap` to the bridge. NewPipeExtractor holds one
+ * global `Downloader` that must be installed before anything touches it, nothing
+ * was installing one, and every YouTube link a provider returned therefore died
+ * with `NullPointerException: downloader is null`. The bump is what carries the
+ * fix into an installed app: the copy under `%APPDATA%` is resolved ahead of
+ * every build location, so without it the old bridge keeps being served and the
+ * fix reaches nobody who already has the app.
  */
-const RUNTIME_GENERATION = 2;
+const RUNTIME_GENERATION = 3;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {

@@ -898,6 +898,56 @@ from everything above — Ultima is a host-UI replacement rather than a scraper,
 it means shimming the Android app itself. Left alone deliberately; one extension is not worth
 a fake `MainActivity`.
 
+### NewPipe had no downloader, so every YouTube link failed (2026-08-21)
+
+Found in a pasted sidecar trace, and it is the same category as `Plugin`, `DataStore` and
+`CloudflareKiller` before it: **something the Android `:app` module does at startup that
+the sidecar had never been told to do.**
+
+`NewPipeExtractor` ships inside `library-jvm`'s dependency closure and backs upstream's
+`YoutubeExtractor`, which `loadExtractor` reaches for on any `youtube.com` or `youtu.be`
+link — and plenty of providers hand those back, as the video or as a trailer. The library
+holds **one global `Downloader`**, installed with `NewPipe.init(...)`. Nothing installed
+one, so the first line of `Extractor.<init>` —
+`Objects.requireNonNull(downloader, "downloader is null")` — threw on every attempt:
+
+```
+java.lang.NullPointerException: downloader is null
+  at org.schabi.newpipe.extractor.Extractor.<init>(Extractor.java:41)
+  … YoutubeStreamExtractor … StreamInfo.getInfo …
+  at com.lagradost.cloudstream3.extractors.YoutubeExtractor.getUrl(YoutubeExtractor.jvmCommon.kt:28)
+  at com.lagradost.cloudstream3.utils.ExtractorApiKt.loadExtractor(ExtractorApi.kt:937)
+```
+
+The stack names NewPipe and okhttp and never mentions the missing call, so it reads as a
+broken extractor rather than an uninitialised library — which is why it survived.
+
+`bridge/NewPipeBootstrap.kt` installs an OkHttp-backed downloader from `ProviderBridge`'s
+initialiser: that object is the first bridge code the sidecar loads, so it runs once and
+before any `loadLinks` can reach `loadExtractor`. Three things in it are deliberate:
+
+- **OkHttp rather than the JDK client.** OkHttp is already on the shared runtime classpath
+  (NiceHttp wraps it), so this adds no jar and inherits the TLS behaviour the rest of the
+  corpus gets. A second HTTP stack with different defaults would make YouTube fail
+  differently from every other host.
+- **A desktop browser User-Agent.** YouTube serves a cut-down page to unrecognised clients
+  and NewPipe's parsers are written against the browser response. The library sends no
+  User-Agent of its own — that is the downloader's job, which is part of why one is
+  mandatory.
+- **`install()` never throws.** A bridge that failed to load over an optional extractor
+  would take every provider down with it.
+
+Verified end-to-end against the real video from the report
+(`youtube.com/watch?v=wPWUO1bAA8U`, which appears in the trace as an `embed` URL):
+without the bootstrap, `downloader=null` and the identical NPE; with it,
+`downloader=true` and `StreamInfo.getInfo` returns the title with 1 video and 3 audio
+streams.
+
+**`RUNTIME_GENERATION` is bumped to 3 for this.** The bridge changed, and the copy under
+`%APPDATA%/<app>/cs3-runtime/` is resolved ahead of every build location — without the bump
+an installed app keeps serving the old bridge and the fix reaches nobody who already has
+the app. This is exactly the trap in §3.
+
 ### Android vs Windows: where the two actually diverge now (2026-08-19)
 
 The recurring report is "this provider works in the Android app and fails here". Measured
