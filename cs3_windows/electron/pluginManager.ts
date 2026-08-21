@@ -416,6 +416,17 @@ function looksLikeRepository(value: unknown): boolean {
 async function resolveRepositoryDocument(
   repoUrl: string
 ): Promise<{ url: string; document: RepositoryJson | SitePlugin[] }> {
+  const trimmed = repoUrl.trim();
+  const known = OFFICIAL_REPOSITORIES.find(
+    (r) =>
+      r.id.toLowerCase() === trimmed.toLowerCase() ||
+      r.shortcode?.toLowerCase() === trimmed.toLowerCase() ||
+      r.internalName.toLowerCase() === trimmed.toLowerCase()
+  );
+  if (known) {
+    repoUrl = known.rawRepoUrl;
+  }
+
   let directError: unknown;
   try {
     const document = await fetchJson<RepositoryJson | SitePlugin[]>(repoUrl, {
