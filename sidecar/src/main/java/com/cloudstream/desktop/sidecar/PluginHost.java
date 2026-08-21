@@ -381,8 +381,9 @@ public final class PluginHost {
             try {
                 Class<?> commonAct = Class.forName("com.lagradost.cloudstream3.CommonActivity", false, loader);
                 Class<?> actClass = Class.forName("android.app.Activity", false, loader);
+                Object commonActInstance = commonAct.getField("INSTANCE").get(null);
                 Method setActivity = commonAct.getMethod("setActivity", actClass);
-                setActivity.invoke(null, shimCtx);
+                setActivity.invoke(commonActInstance, shimCtx);
             } catch (Throwable ignored) {
             }
             load.invoke(instance, shimCtx);
