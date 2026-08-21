@@ -55,6 +55,8 @@ import type { IndexerConfig, SourcePreferences, TorrentResult } from '../src/typ
 import type { SearchOptions } from '../src/types/api';
 import type { HistoryEvent, HistoryFilter } from '../src/types/history';
 import type { StoredSource } from '../src/types/library';
+import type { ExternalPlaybackSnapshot } from '../src/types/player';
+import type { MpvSnapshot } from '../src/types/mpv';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -134,9 +136,37 @@ mediaTranscoder.setDiagnostics(diagnostics);
  */
 const NATIVE_ENGINE_POLICY_KEY = 'native_engine_policy';
 
+function mpvToExternalSnapshot(snapshot: MpvSnapshot): ExternalPlaybackSnapshot {
+  return {
+    playerId: 'mpv',
+    capability: 'full',
+    state:
+      snapshot.state === 'loading' || snapshot.state === 'buffering'
+        ? 'loading'
+        : snapshot.state === 'playing'
+        ? 'playing'
+        : snapshot.state === 'paused'
+        ? 'paused'
+        : snapshot.state === 'ended'
+        ? 'ended'
+        : snapshot.state === 'error'
+        ? 'error'
+        : 'idle',
+    positionSeconds: snapshot.positionSeconds,
+    durationSeconds: snapshot.durationSeconds,
+    paused: snapshot.paused,
+    volume: Math.round(snapshot.volume),
+    muted: snapshot.muted,
+    error: snapshot.error,
+  };
+}
+
 const mpvEngine = new MpvEngine({
   resolveBinary: (name) => binaryDownloader.resolveBinary(name),
-  onUpdate: (snapshot) => mainWindow?.webContents.send('mpv:update', snapshot),
+  onUpdate: (snapshot) => {
+    mainWindow?.webContents.send('mpv:update', snapshot);
+    mainWindow?.webContents.send('external:update', mpvToExternalSnapshot(snapshot));
+  },
   diagnostics,
 });
 
@@ -1559,30 +1589,75 @@ ipcMain.handle('external:capability', async (_, playerId: string) => ({
   capability: playerId === 'mpv' ? (mpvEngine.isAvailable() ? 'full' : 'none') : externalPlayers.capabilityFor(playerId),
 }));
 
-ipcMain.handle('external:snapshot', async () => ({
-  ok: true,
-  snapshot: externalPlayers.controller()?.current() ?? null,
-}));
+ipcMain.handle('external:snapshot', async () => {
+  if (mpvEngine.isRunning()) {
+    return { ok: true, snapshot: mpvToExternalSnapshot(mpvEngine.snapshot()) };
+  }
+  return {
+    ok: true,
+    snapshot: externalPlayers.controller()?.current() ?? null,
+  };
+});
 
-ipcMain.handle('external:setPaused', async (_, paused: boolean) => ({
-  ok: (await externalPlayers.controller()?.setPaused(paused)) ?? false,
-}));
-ipcMain.handle('external:seek', async (_, seconds: number) => ({
-  ok: (await externalPlayers.controller()?.seek(seconds)) ?? false,
-}));
-ipcMain.handle('external:setVolume', async (_, percent: number) => ({
-  ok: (await externalPlayers.controller()?.setVolume(percent)) ?? false,
-}));
-ipcMain.handle('external:setMuted', async (_, muted: boolean) => ({
-  ok: (await externalPlayers.controller()?.setMuted(muted)) ?? false,
-}));
-ipcMain.handle('external:setSpeed', async (_, rate: number) => ({
-  ok: (await externalPlayers.controller()?.setSpeed(rate)) ?? false,
-}));
-ipcMain.handle('external:setFullscreen', async () => ({
-  ok: (await externalPlayers.controller()?.setFullscreen()) ?? false,
-}));
+ipcMain.handle('external:setPaused', async (_, paused: boolean) => {
+  if (mpvEngine.isRunning()) {
+    const res = await mpvEngine.setPaused(paused);
+    return { ok: res.ok };
+  }
+  return {
+    ok: (await externalPlayers.controller()?.setPaused(paused)) ?? false,
+  };
+});
+ipcMain.handle('external:seek', async (_, seconds: number) => {
+  if (mpvEngine.isRunning()) {
+    const res = await mpvEngine.seek(seconds);
+    return { ok: res.ok };
+  }
+  return {
+    ok: (await externalPlayers.controller()?.seek(seconds)) ?? false,
+  };
+});
+ipcMain.handle('external:setVolume', async (_, percent: number) => {
+  if (mpvEngine.isRunning()) {
+    const res = await mpvEngine.setVolume(percent);
+    return { ok: res.ok };
+  }
+  return {
+    ok: (await externalPlayers.controller()?.setVolume(percent)) ?? false,
+  };
+});
+ipcMain.handle('external:setMuted', async (_, muted: boolean) => {
+  if (mpvEngine.isRunning()) {
+    const res = await mpvEngine.setMuted(muted);
+    return { ok: res.ok };
+  }
+  return {
+    ok: (await externalPlayers.controller()?.setMuted(muted)) ?? false,
+  };
+});
+ipcMain.handle('external:setSpeed', async (_, rate: number) => {
+  if (mpvEngine.isRunning()) {
+    const res = await mpvEngine.setSpeed(rate);
+    return { ok: res.ok };
+  }
+  return {
+    ok: (await externalPlayers.controller()?.setSpeed(rate)) ?? false,
+  };
+});
+ipcMain.handle('external:setFullscreen', async () => {
+  if (mpvEngine.isRunning()) {
+    const s = mpvEngine.snapshot();
+    const res = await mpvEngine.setFullscreen(!s.fullscreen);
+    return { ok: res.ok };
+  }
+  return {
+    ok: (await externalPlayers.controller()?.setFullscreen()) ?? false,
+  };
+});
 ipcMain.handle('external:stop', async () => {
+  if (mpvEngine.isRunning()) {
+    await mpvEngine.stop();
+  }
   await externalPlayers.shutdown();
   return { ok: true };
 });

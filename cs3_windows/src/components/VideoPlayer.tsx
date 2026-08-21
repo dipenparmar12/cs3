@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
-import { NativeEngineStage } from './player/NativeEngineStage';
+import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
@@ -12,6 +12,7 @@ import type { TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
 import { AspectRatioMode } from '../types/player';
 import type { ExternalPlaybackSnapshot } from '../types/player';
+import type { MpvSnapshot } from '../types/mpv';
 import type { TorrentResult } from '../types/torrent';
 import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
@@ -461,9 +462,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   useEffect(() => {
     if (!externalSnapshot || externalControl?.capability !== 'full') return;
-    if (externalSnapshot.positionSeconds > 0) setCurrentTime(externalSnapshot.positionSeconds);
+    if (externalSnapshot.positionSeconds >= 0) setCurrentTime(externalSnapshot.positionSeconds);
     if (externalSnapshot.durationSeconds > 0) setDuration(externalSnapshot.durationSeconds);
-    setIsPlaying(!externalSnapshot.paused);
+    const playing = !externalSnapshot.paused && (externalSnapshot.state === 'playing' || externalSnapshot.state === 'loading');
+    setIsPlaying(playing);
+    if (typeof externalSnapshot.volume === 'number' && Number.isFinite(externalSnapshot.volume)) {
+      setVolume(externalSnapshot.volume / 100);
+    }
+    if (typeof externalSnapshot.muted === 'boolean') {
+      setIsMuted(externalSnapshot.muted);
+    }
   }, [externalSnapshot, externalControl?.capability]);
 
   const [showNativePlayerBtn, setShowNativePlayerBtn] = useState(true);
@@ -696,6 +704,74 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * that the element is empty rather than broken.
    */
   const isNativeEngine = prepared?.ok === true && capability?.requiredStrategy === 'NATIVE_MPV';
+
+  /**
+   * Synchronizes the native MPV engine's playback state with the player UI.
+   *
+   * Drives the timeline, play/pause state, volume, track list, and buffer
+   * directly from the engine's decoder clock over IPC.
+   */
+  useEffect(() => {
+    if (!isNativeEngine) return;
+
+    const dispose = window.cloudstream?.onMpvUpdate((snapshot: MpvSnapshot) => {
+      if (snapshot.state === 'playing') {
+        setIsPlaying(true);
+      } else if (snapshot.state === 'paused') {
+        setIsPlaying(false);
+      } else if (snapshot.state === 'ended') {
+        setIsPlaying(false);
+      }
+      if (snapshot.positionSeconds >= 0) {
+        setCurrentTime(snapshot.positionSeconds);
+      }
+      if (snapshot.durationSeconds > 0) {
+        setDuration(snapshot.durationSeconds);
+      }
+      if (snapshot.bufferedSeconds >= 0) {
+        setBuffered(snapshot.bufferedSeconds);
+      }
+      if (typeof snapshot.volume === 'number' && Number.isFinite(snapshot.volume)) {
+        setVolume(snapshot.volume / 100);
+      }
+      if (typeof snapshot.muted === 'boolean') {
+        setIsMuted(snapshot.muted);
+      }
+      if (typeof snapshot.speed === 'number' && snapshot.speed > 0) {
+        setSpeed(snapshot.speed);
+      }
+      if (snapshot.audioTracks && snapshot.audioTracks.length > 0) {
+        setAudioTracks(
+          snapshot.audioTracks.map((t, idx) => ({
+            id: t.id,
+            label: trackLabel(t, idx),
+            language: t.language,
+            active: t.selected || t.id === snapshot.selectedAudioId,
+          }))
+        );
+        if (snapshot.selectedAudioId != null) {
+          setActiveAudioTrack(snapshot.selectedAudioId);
+        }
+      }
+      if (snapshot.state === 'error' && snapshot.error) {
+        setError(snapshot.error);
+      }
+    });
+
+    void window.cloudstream?.getMpvSnapshot().then((res) => {
+      if (res?.ok && res.snapshot?.sessionId) {
+        const s = res.snapshot;
+        setIsPlaying(!s.paused && (s.state === 'playing' || s.state === 'loading'));
+        if (s.positionSeconds >= 0) setCurrentTime(s.positionSeconds);
+        if (s.durationSeconds > 0) setDuration(s.durationSeconds);
+        if (s.bufferedSeconds >= 0) setBuffered(s.bufferedSeconds);
+      }
+    });
+
+    return () => {
+      dispose?.();
+    };
+  }, [isNativeEngine]);
   const probeFailure = capability?.failure ?? null;
   const probeFailureRef = useRef<typeof probeFailure>(null);
   /**
@@ -1085,32 +1161,45 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setAudioTracks([]);
   }, []);
 
-  const selectAudioTrack = useCallback((trackId: string | number) => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    // 1. Native HTML5 audioTracks
-    const nativeList = (video as any).audioTracks;
-    if (nativeList && nativeList.length > 0) {
-      for (let i = 0; i < nativeList.length; i++) {
-        const t = nativeList[i];
-        const currentId = t.id !== undefined && t.id !== '' ? t.id : i;
-        const match = String(currentId) === String(trackId);
-        t.enabled = match;
+  const selectAudioTrack = useCallback(
+    (trackId: string | number) => {
+      if (isNativeEngine) {
+        const idNum = typeof trackId === 'number' ? trackId : parseInt(String(trackId), 10);
+        void window.cloudstream?.mpvSetAudioTrack(Number.isNaN(idNum) ? null : idNum);
+        setActiveAudioTrack(trackId);
+        setAudioTracks((prev) =>
+          prev.map((t) => ({ ...t, active: String(t.id) === String(trackId) }))
+        );
+        return;
       }
-    }
 
-    // 2. HLS.js audioTrack
-    const hls = hlsRef.current;
-    if (hls && typeof trackId === 'number') {
-      hls.audioTrack = trackId;
-    }
+      const video = videoRef.current;
+      if (!video) return;
 
-    setActiveAudioTrack(trackId);
-    setAudioTracks((prev) =>
-      prev.map((t) => ({ ...t, active: String(t.id) === String(trackId) }))
-    );
-  }, []);
+      // 1. Native HTML5 audioTracks
+      const nativeList = (video as any).audioTracks;
+      if (nativeList && nativeList.length > 0) {
+        for (let i = 0; i < nativeList.length; i++) {
+          const t = nativeList[i];
+          const currentId = t.id !== undefined && t.id !== '' ? t.id : i;
+          const match = String(currentId) === String(trackId);
+          t.enabled = match;
+        }
+      }
+
+      // 2. HLS.js audioTrack
+      const hls = hlsRef.current;
+      if (hls && typeof trackId === 'number') {
+        hls.audioTrack = trackId;
+      }
+
+      setActiveAudioTrack(trackId);
+      setAudioTracks((prev) =>
+        prev.map((t) => ({ ...t, active: String(t.id) === String(trackId) }))
+      );
+    },
+    [isNativeEngine]
+  );
 
   useEffect(() => {
     const video = videoRef.current;
@@ -1355,20 +1444,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const togglePlay = useCallback(() => {
     if (externalControl?.capability === 'full') {
-      void window.cloudstream?.externalSetPaused(externalSnapshot?.paused === false);
+      const nextPaused = isPlaying;
+      setIsPlaying(!nextPaused);
+      void window.cloudstream?.externalSetPaused(nextPaused);
       return;
     }
     if (isNativeEngine) {
-      void window.cloudstream?.getMpvSnapshot().then((response) => {
-        if (response?.ok) void window.cloudstream?.mpvSetPaused(!response.snapshot.paused);
-      });
+      const nextPaused = isPlaying;
+      setIsPlaying(!nextPaused);
+      void window.cloudstream?.mpvSetPaused(nextPaused);
       return;
     }
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) video.play().catch(() => undefined);
     else video.pause();
-  }, [externalControl?.capability, externalSnapshot?.paused, isNativeEngine]);
+  }, [externalControl?.capability, isPlaying, isNativeEngine]);
 
   /**
    * Seeks, accounting for a remuxed stream having no seekable range.
@@ -1385,10 +1476,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // The external player owns the playhead; seeking the empty local element
       // would move a timeline nobody is watching.
       if (externalControl?.capability === 'full') {
+        setCurrentTime(target);
         void window.cloudstream?.externalSeek(target);
         return;
       }
       if (isNativeEngine) {
+        setCurrentTime(target);
         void window.cloudstream?.mpvSeek(target);
         return;
       }
@@ -1411,11 +1504,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const seekBy = useCallback(
     (delta: number) => {
+      if (externalControl?.capability === 'full' || isNativeEngine) {
+        seekTo(currentTime + delta);
+        return;
+      }
       const video = videoRef.current;
       if (!video) return;
       seekTo((isConverted ? playbackOffset : 0) + video.currentTime + delta);
     },
-    [seekTo, isConverted, playbackOffset]
+    [seekTo, isConverted, playbackOffset, externalControl?.capability, isNativeEngine, currentTime]
   );
 
   const toggleFullscreen = useCallback(async () => {
@@ -2678,6 +2775,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setFetchedSubtitles((prev) => [...prev, { name: label, url }]);
           }
           setActiveSubtitle(url);
+
+          if (isNativeEngine) {
+            if (url) {
+              void window.cloudstream?.mpvAddSubtitle(url, label);
+            } else {
+              void window.cloudstream?.mpvSetSubtitleTrack(null);
+            }
+          }
 
           /**
            * The label carries the language; the URL is per-file and worthless

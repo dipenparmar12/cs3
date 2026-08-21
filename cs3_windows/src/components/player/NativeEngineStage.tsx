@@ -65,7 +65,7 @@ function formatTime(seconds: number): string {
 }
 
 /** mpv gives a track a title, a language, both or neither. All four read badly raw. */
-function trackLabel(track: MpvTrack, index: number): string {
+export function trackLabel(track: MpvTrack, index: number): string {
   const parts = [
     track.title,
     track.language && track.language !== 'und' ? track.language.toUpperCase() : null,
@@ -101,7 +101,6 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
   const [scrubbing, setScrubbing] = useState<number | null>(null);
 
   const endedRef = useRef(false);
-  const lastReportRef = useRef(0);
 
   useEffect(() => {
     const unsubscribe = window.cloudstream?.onMpvUpdate((next) => setSnapshot(next));
@@ -165,8 +164,7 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
       return;
     }
 
-    if (snapshot.positionSeconds > 0 && Date.now() - lastReportRef.current > 5000) {
-      lastReportRef.current = Date.now();
+    if (snapshot.positionSeconds >= 0) {
       onProgress?.(snapshot.positionSeconds, snapshot.durationSeconds);
     }
 
