@@ -1,10 +1,12 @@
 # Universal playback: closing the gap with the Android app
 
-> **Status: research, 2026-08-21.** Nothing here is built. It is the answer to
-> "why is CloudStream on Android seamless and this laggy?", researched against the
-> Android app's actual stack, this repository's code, and what the desktop ecosystem
-> ships in 2026. The recommendation is at the end; §1 is the mechanism, and it is the
-> part worth reading even if the plan changes.
+> **Status: steps 1, 2 and 4 built 2026-08-21** (commit `5086de2`). Step 3 was
+> **declined on inspection** — see the note in §5. Steps 5–7 are open.
+>
+> This began as the answer to "why is CloudStream on Android seamless and this
+> laggy?", researched against the Android app's actual stack, this repository's
+> code, and what the desktop ecosystem ships in 2026. §1 is the mechanism and is
+> the part worth reading even if the plan changes.
 
 ---
 
@@ -208,24 +210,50 @@ Widevine by name rather than as a broken file.
 
 Ordered by user-visible value per unit of effort, not by architectural appeal.
 
-1. **Bundle ffmpeg, ffprobe and mpv into `extraResources` for all three platforms.**
-   Turns the good path on by default for every user. No new code paths — the resolution
-   order already prefers a bundled copy. Adds roughly 120–170 MB to the installer,
-   which is ordinary for this class of app (Stremio and Jellyfin Media Player are in
-   the same range).
-2. **Set the Chromium feature switches** and re-measure `VIDEO_CODEC_PROBES` on a real
-   machine. Possibly removes the HEVC transcode entirely on modern hardware.
-3. **Default the native-engine policy to `aggressive`** once mpv is guaranteed, so
-   nothing Chromium cannot play natively is ever re-encoded.
-4. **Add Shaka Player** for DASH and DASH-under-DRM, replacing the FFmpeg DASH remux
-   and closing the last documented DRM gap.
+1. **~~Bundle ffmpeg, ffprobe and mpv~~ — done.** `tools/package/build-media-runtime.mjs`
+   stages them per platform; `extraResources` copies them to `resources/media/`;
+   `electron:build` runs it and **fails** rather than packaging an app without its
+   player. One correction to the assumption above: the resolution order did *not*
+   already prefer a bundled copy — it started at `userData/bin`, which is the
+   stale-runtime trap in §3 of `AGENTS.md`. It does now, with `yt-dlp` deliberately
+   excepted.
+2. **~~Set the Chromium feature switches~~ — done.** `PlatformHEVCDecoderSupport` is
+   requested. Still needs re-measuring on real hardware: this session cannot launch
+   Electron, so what the probe now answers is unverified.
+3. **Default the native-engine policy to `aggressive`** — **declined, and this item was
+   wrong.** Under `aggressive` a plain stereo H.264 MKV routes to mpv, which means the
+   video leaves the in-app window for a stream the browser plays perfectly after a
+   remux that costs a stream copy at ~27x realtime. That trades a working in-app
+   experience for CPU nobody was spending. `auto` already routes everything that
+   actually degrades — any video re-encode, anything above stereo, lossless and
+   object-based audio, and (since the 4K/8K work) any remux above 4K. The premise was
+   "mpv is better so use it more"; the measurement is that `auto` already covers every
+   case where it *is* better. Revisit when the video surface is embedded (step 5) and
+   routing stops costing a window.
+4. **~~Add Shaka Player~~ — done.** `DASH_NATIVE`, with ClearKey/Widevine/PlayReady
+   configuration. This turned out to require teaching `MediaProxy` to rewrite DASH
+   manifests, which **fixed an existing bug**: ffmpeg resolves relative segment URLs
+   the same way a player does, so the remux path was already broken for every manifest
+   that did not spell its segments out in full.
 5. **Embed the video surface — Option A+ first**, validated on a real desktop, with the
-   overlay-window compositing proved before committing to it.
+   overlay-window compositing proved before committing to it. **This is the next one**,
+   and it is the one that cannot be done here: it needs a machine with a screen.
 6. **Option B (libmpv addon)** once A+ has shown the compositing model works and the
    product needs the last increment of polish.
 7. **WebView bridge** — unchanged in priority and still the largest single cause of
    "this extension does not work". It belongs to a different subsystem
    (`docs/roadmap/support_ext_to.md`) but it outranks 5 and 6 by measured impact.
+
+### What was found while building 1–4
+
+- **The app did not build at all.** `src/components/extensions/` had been swallowed by
+  an unanchored `extensions/` ignore rule and never committed, so `App.tsx` imported a
+  module no clone contained. Both `tsc -b` and `vite build` failed on every fresh
+  checkout. The screen was reconstructed against the real IPC surface; the rule is
+  anchored.
+- **Subtitles were a second Android-parity gap in the same family as the codecs.**
+  ASS/SSA went through the SubRip converter, and every download was decoded as UTF-8
+  unconditionally. Both fail silently. Fixed in `electron/subtitles/convert.ts`.
 
 After 1–4, the transcoding ladder becomes what it should always have been: the fallback
 for a machine where the native engine failed to start, rather than the default path
