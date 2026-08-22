@@ -11,31 +11,18 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderTreeRepository, SitePlugin } from '../../types/plugin';
+import type { OfficialRepository } from '../../../electron/officialRepositories';
 
 /**
- * The catalogue entry, as `officialRepositories.ts` defines it.
+ * The catalogue entry, re-exported from where it is defined.
  *
- * Restated structurally rather than imported: this file is renderer code and
- * that module is main-process code. The fields used here are the ones the
- * screen renders; `rawRepoUrl` is the one that matters functionally, because
- * `url` is a project page that returns HTML.
+ * Imported from the main-process module rather than restated here, so there is
+ * one definition. A structural copy compiles happily and then drifts — the copy
+ * this replaced was missing `internalName` and `documentKind`, which is exactly
+ * the kind of divergence that only surfaces when something reads a field the
+ * copy never had.
  */
-export interface OfficialRepository {
-  id: string;
-  name: string;
-  shortcode?: string;
-  description: string;
-  url: string;
-  rawRepoUrl: string;
-  communityUrl?: string;
-  category: string;
-  language: string;
-  iconUrl?: string;
-  isInstalled?: boolean;
-  bundled?: boolean;
-  adult?: boolean;
-  verified?: boolean;
-}
+export type { OfficialRepository } from '../../../electron/officialRepositories';
 
 export interface CatalogState {
   tree: ProviderTreeRepository[];
@@ -104,7 +91,7 @@ export function useExtensionCatalog() {
         tree: treeResponse?.tree ?? [],
         installedRepositories: repositories ?? [],
         installedPlugins: plugins ?? [],
-        official: (official ?? []) as unknown as OfficialRepository[],
+        official: official ?? [],
         adultAllowed: Boolean(adultAllowed),
         loading: false,
         error: treeResponse?.ok === false ? (treeResponse.error ?? null) : null,
