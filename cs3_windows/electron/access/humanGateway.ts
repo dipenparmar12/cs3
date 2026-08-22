@@ -124,8 +124,12 @@ export interface ScopeStatus {
  * between sessions would silently invalidate every verification the user had
  * already completed.
  */
+const CHROME_VERSION =
+  typeof process !== 'undefined' && process.versions?.chrome ? process.versions.chrome : '133.0.0.0';
+const CHROME_MAJOR = CHROME_VERSION.split('.')[0] || '133';
+
 const USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36';
+  `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION} Safari/537.36`;
 
 /** Body prefix read to identify a challenge. Enough for any interstitial. */
 const SNIFF_BYTES = 128 * 1024;
@@ -211,7 +215,7 @@ export class HumanInteractionGateway {
   private sessionFor(scopeId: string): Session {
     const ses = session.fromPartition(partitionFor(scopeId));
 
-    if (!ses.getUserAgent().includes('Chrome/133')) {
+    if (!ses.getUserAgent().includes(`Chrome/${CHROME_MAJOR}`)) {
       // Sets the UA for both `ses.fetch` and any window on this partition, so
       // the two cannot drift apart. See the note on USER_AGENT.
       ses.setUserAgent(USER_AGENT, 'en-US,en;q=0.9');
@@ -282,9 +286,16 @@ export class HumanInteractionGateway {
       signal: options.signal,
       headers: {
         Accept:
-          'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+          'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
         'Accept-Language': 'en-US,en;q=0.9',
         'Upgrade-Insecure-Requests': '1',
+        'Sec-CH-UA': `"Chromium";v="${CHROME_MAJOR}", "Google Chrome";v="${CHROME_MAJOR}", "Not=A?Brand";v="99"`,
+        'Sec-CH-UA-Mobile': '?0',
+        'Sec-CH-UA-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
         ...options.headers,
       },
     });
@@ -431,6 +442,7 @@ export class HumanInteractionGateway {
       const finish = (value: boolean) => {
         if (settled) return;
         settled = true;
+        ses.cookies.removeListener('changed', onCookieChanged);
         clearInterval(backstop);
         clearTimeout(deadline);
         resolve(value);
@@ -452,6 +464,16 @@ export class HumanInteractionGateway {
             this.verifiedAt.set(scopeId, Date.now());
             this.emit({ scopeId, scopeName: scope.name, url, status: 'granted' });
             finish(true);
+            return;
+          }
+
+          // Also check if clearance cookie is present and response code was successful
+          const cookies = await ses.cookies.get({ url });
+          const hasClearance = cookies.some((c) => c.name === 'cf_clearance' || c.name === '__cf_bm');
+          if (hasClearance && current.statusCode && current.statusCode >= 200 && current.statusCode < 400) {
+            this.verifiedAt.set(scopeId, Date.now());
+            this.emit({ scopeId, scopeName: scope.name, url, status: 'granted' });
+            finish(true);
           }
         } catch {
           // A transport failure mid-verification is not an answer; the backstop
@@ -460,6 +482,19 @@ export class HumanInteractionGateway {
           probing = false;
         }
       };
+
+      const onCookieChanged = (
+        _event: unknown,
+        cookie: { name: string; domain?: string },
+        _cause: string,
+        removed: boolean
+      ) => {
+        if (!removed && (cookie.name === 'cf_clearance' || cookie.name.startsWith('__cf') || cookie.name.includes('clearance'))) {
+          setTimeout(check, 300);
+        }
+      };
+
+      ses.cookies.on('changed', onCookieChanged);
 
       window.webContents.on('did-navigate', () => {
         this.emit({ scopeId, scopeName: scope.name, url, status: 'checking' });
@@ -480,10 +515,23 @@ export class HumanInteractionGateway {
         finish(false);
       }, VERIFY_TIMEOUT_MS);
 
-      window.on('closed', () => {
-        // Closing the window is a decision. It is also how someone abandons a
-        // verification they cannot complete, so it must not be treated as an
-        // error worth reporting back to them.
+      window.on('closed', async () => {
+        if (settled) return;
+        try {
+          const cookies = await ses.cookies.get({ url });
+          const hasClearance = cookies.some((c) => c.name === 'cf_clearance' || c.name === '__cf_bm');
+          if (hasClearance) {
+            const { challenge: current } = await this.probe(scope, url, {});
+            if (current.type === 'NONE' || (current.statusCode && current.statusCode >= 200 && current.statusCode < 400)) {
+              this.verifiedAt.set(scopeId, Date.now());
+              this.emit({ scopeId, scopeName: scope.name, url, status: 'granted' });
+              finish(true);
+              return;
+            }
+          }
+        } catch {
+          // ignore
+        }
         if (!settled) {
           this.emit({ scopeId, scopeName: scope.name, url, status: 'cancelled' });
         }
