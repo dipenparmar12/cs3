@@ -7,6 +7,7 @@ import type {
 } from '../src/types/api';
 import type { DownloadTask } from '../src/types/download';
 import type { SwarmReport } from '../src/types/torrent';
+import type { ScopeStatus, VerificationPolicy, VerificationState } from './access/humanGateway';
 import type { SitePlugin, PluginCompatibilityReport, ProviderTreeRepository } from '../src/types/plugin';
 import type {
   IndexerConfig,
@@ -591,6 +592,27 @@ export interface CloudStreamElectronAPI {
    */
   getSwarmReport: (infoHash: string) => Promise<SwarmReport | null>;
 
+  /**
+   * Human-assisted access.
+   *
+   * `verifyAccess` is the only call that can put a browser window on screen,
+   * and it is deliberately reachable only from something the user pressed. A
+   * background source search that hits a challenge reports it in its outcome
+   * and stops — see the `verification` field on an indexer outcome — because a
+   * window that appears while someone is reading a synopsis is indefensible
+   * however useful it would have been.
+   */
+  getAccessScopes: () => Promise<ScopeStatus[]>;
+  verifyAccess: (scopeId: string, url?: string) => Promise<Envelope & { verified: boolean }>;
+  cancelAccessVerification: (scopeId: string) => Promise<Envelope>;
+  /** Forgets a site's session: the user's own "sign me out of that". */
+  clearAccessSession: (scopeId: string) => Promise<Envelope>;
+  getVerificationPolicy: () => Promise<VerificationPolicy>;
+  setVerificationPolicy: (
+    policy: VerificationPolicy
+  ) => Promise<Envelope & { policy: VerificationPolicy }>;
+  onAccessUpdate: (callback: (state: VerificationState) => void) => () => void;
+
   // Indexers and ranking preferences
   getIndexerConfigs: () => Promise<IndexerConfig[]>;
   saveIndexerConfig: (config: IndexerConfig) => Promise<IndexerConfig[]>;
@@ -1157,6 +1179,18 @@ const api: CloudStreamElectronAPI = {
   clearTorrentCache: () => ipcRenderer.invoke('torrent:clearCache'),
   getTorrentCachePath: () => ipcRenderer.invoke('torrent:getCachePath'),
   getSwarmReport: (infoHash) => ipcRenderer.invoke('torrent:getSwarmReport', infoHash),
+
+  getAccessScopes: () => ipcRenderer.invoke('access:getScopes'),
+  verifyAccess: (scopeId, url) => ipcRenderer.invoke('access:verify', scopeId, url),
+  cancelAccessVerification: (scopeId) => ipcRenderer.invoke('access:cancel', scopeId),
+  clearAccessSession: (scopeId) => ipcRenderer.invoke('access:clear', scopeId),
+  getVerificationPolicy: () => ipcRenderer.invoke('access:getPolicy'),
+  setVerificationPolicy: (policy) => ipcRenderer.invoke('access:setPolicy', policy),
+  onAccessUpdate: (callback) => {
+    const listener = (_: unknown, state: VerificationState) => callback(state);
+    ipcRenderer.on('access:update', listener);
+    return () => ipcRenderer.removeListener('access:update', listener);
+  },
 
   getIndexerConfigs: () => ipcRenderer.invoke('indexer:getConfigs'),
   saveIndexerConfig: (config) => ipcRenderer.invoke('indexer:saveConfig', config),

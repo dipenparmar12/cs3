@@ -7,6 +7,8 @@ import type { TorrentResult } from '../types/torrent';
 import type { SourceDiagnosis } from '../types/diagnostics';
 import { Resolution } from '../types/torrent';
 import { SourceFilterBar } from './SourceFilterBar';
+import { VerificationPrompt } from './access/VerificationPrompt';
+import { verificationRequests } from './access/verificationRequests';
 import { CopyErrorButton } from './CopyErrorButton';
 import {
   DEFAULT_FILTER_STATE,
@@ -25,6 +27,17 @@ export interface SourcePickerData {
     latencyMs: number;
     error?: string;
     skipped?: string;
+    /**
+     * Set when a source refused in a way a person could answer. Rendered as an
+     * offer rather than as a failure — see `VerificationPrompt`.
+     */
+    verification?: {
+      scopeId: string;
+      scopeName: string;
+      url: string;
+      intervention: string;
+      reason: string;
+    };
   }>;
   emptyReason?: string;
   /** The structured form of `emptyReason`, when the failure produced one. */
@@ -59,6 +72,12 @@ interface SourcePickerProps {
   onClose: () => void;
   onPlay: (source: TorrentResult) => void;
   onDownload: (source: TorrentResult) => void;
+  /**
+   * Runs the search again. Also what a completed verification triggers — without
+   * it, unblocking a site works and nothing visible happens, and the results
+   * the user just unlocked appear only on their next search, which reads as the
+   * verification having done nothing.
+   */
   onRetry: () => void;
 }
 
@@ -122,6 +141,7 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
   if (!isOpen) return null;
 
   const failedIndexers = data?.indexerOutcomes.filter((o) => !o.ok && !o.skipped) ?? [];
+  const pendingVerification = verificationRequests(data?.indexerOutcomes);
 
   return (
     <div className="modal-backdrop" onClick={onClose} role="presentation">
@@ -182,6 +202,15 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
               </div>
             )}
           </div>
+        )}
+
+        {/*
+          A site that is waiting on the user, shown above the results rather
+          than buried in the diagnostics list at the bottom. It is not a failure
+          — it is the one thing on this screen someone can act on.
+        */}
+        {pendingVerification.length > 0 && (
+          <VerificationPrompt requests={pendingVerification} onVerified={() => onRetry()} />
         )}
 
         {isLoading && (

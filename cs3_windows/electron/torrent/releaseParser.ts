@@ -3,7 +3,7 @@ import {
   ReleaseSource,
   VideoCodec,
   type ParsedRelease,
-} from '../../src/types/torrent';
+} from '../../src/types/torrent.ts';
 
 /**
  * Parses scene / P2P release names into structured metadata.

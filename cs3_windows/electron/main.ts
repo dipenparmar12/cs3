@@ -43,6 +43,9 @@ import { ProviderAnalytics } from './cs3/providerAnalytics';
 import { ProviderRanking } from './cs3/providerRanking';
 import { ProviderRecommender } from './cs3/providerRecommendations';
 import { ExternalPlayerService } from './externalPlayer';
+import { HumanInteractionGateway, type VerificationPolicy } from './access/humanGateway';
+import { ExtToProvider } from './extensions/providers/extTo';
+import { ExtensionIndexer } from './torrent/indexers/extensionIndexer';
 import { LibraryStore, type WatchStatus, canonicalKey, torrentResultToStoredSource } from './cs3/libraryStore';
 import { HistoryStore } from './cs3/historyStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
@@ -145,6 +148,25 @@ function nativeEnginePolicy(): NativeEngineCapability['policy'] {
   return stored === 'off' || stored === 'aggressive' ? stored : 'auto';
 }
 const network = new NetworkSettingsStore(datastore);
+
+/**
+ * Human-assisted access, and the first extension that needs it.
+ *
+ * The gateway owns the browser hand-off; the extension owns the site. Neither
+ * knows about the other beyond a scope id — which is the arrangement that lets
+ * the second extension be written without touching any of this.
+ *
+ * Registered on the indexer registry rather than anywhere new, so an
+ * extension's rows go through the same ranking, dedupe, cache and playback path
+ * as every other source. See `indexers/extensionIndexer.ts`.
+ */
+const accessGateway = new HumanInteractionGateway(datastore);
+const extToProvider = new ExtToProvider();
+accessGateway.registerScope(extToProvider.scope);
+contentService
+  .getRegistry()
+  .registerExtension(new ExtensionIndexer(extToProvider, accessGateway, datastore));
+accessGateway.onState((state) => mainWindow?.webContents.send('access:update', state));
 
 downloadService.setTorrentEngine(torrentEngine);
 downloadService.setContentService(contentService);
@@ -553,6 +575,10 @@ app.on('before-quit', async (event) => {
     await mpvEngine.shutdown();
     // A controlled VLC is our child process; without this it outlives the app.
     await externalPlayers.shutdown();
+    // A verification window is a real BrowserWindow; left open it keeps the
+    // process alive after the app is gone, showing a third-party page with no
+    // way back to anything.
+    accessGateway.shutdown();
     contentService.shutdown();
     await torrentEngine.destroy();
   } catch {
@@ -1865,6 +1891,52 @@ ipcMain.handle('torrent:getCachePath', async () => torrentEngine.getCachePath())
 ipcMain.handle('torrent:getSwarmReport', async (_, infoHash: string) =>
   torrentEngine.getSwarmReport(infoHash)
 );
+
+// --- human-assisted access -------------------------------------------------
+
+/**
+ * The verification hand-off, exposed to the renderer.
+ *
+ * `access:verify` is the only channel that can put a browser window on screen,
+ * and it is reachable only from a user action — which is the whole reason the
+ * policy defaults to `ask`. A background prefetch that hits a challenge reports
+ * it through the search outcome and stops; the window happens when someone
+ * presses the button.
+ */
+ipcMain.handle('access:getScopes', async () => accessGateway.getStatuses());
+
+ipcMain.handle('access:verify', async (_, scopeId: string, url?: string) => {
+  try {
+    const scope = accessGateway.getScopes().find((entry) => entry.id === scopeId);
+    if (!scope) return fail(new Error(`Unknown site "${scopeId}"`));
+    const granted = await accessGateway.verify(scopeId, url || scope.origins[0]);
+    return { ok: granted, verified: granted };
+  } catch (error) {
+    return { ...fail(error), verified: false };
+  }
+});
+
+ipcMain.handle('access:cancel', async (_, scopeId: string) => {
+  accessGateway.cancel(scopeId);
+  return { ok: true };
+});
+
+/** Forgets a site's session — the user's own "sign me out of that". */
+ipcMain.handle('access:clear', async (_, scopeId: string) => {
+  try {
+    await accessGateway.clear(scopeId);
+    return { ok: true };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('access:getPolicy', async () => accessGateway.getPolicy());
+
+ipcMain.handle('access:setPolicy', async (_, policy: VerificationPolicy) => {
+  accessGateway.setPolicy(policy);
+  return { ok: true, policy: accessGateway.getPolicy() };
+});
 
 // --- indexers and source preferences -------------------------------------
 

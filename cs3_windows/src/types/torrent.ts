@@ -172,6 +172,17 @@ export interface IndexerQuery {
   imdbId?: string;
   /** Result cap applied per indexer, before merging. */
   limit?: number;
+  /**
+   * Whether this search may put a verification window on screen.
+   *
+   * A source that is behind a browser challenge can only answer once a person
+   * has completed it, and a background prefetch — which starts a second after a
+   * detail page settles — must never steal focus to ask. So the flag travels
+   * with the query rather than being decided deeper down, where the difference
+   * between "the user pressed search" and "the app guessed they might" is no
+   * longer visible. See `access/humanGateway.ts`.
+   */
+  interactive?: boolean;
 }
 
 export const IndexerKind = {

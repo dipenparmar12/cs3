@@ -29,6 +29,8 @@ import {
 } from './indexers/aggregators';
 import { BitSearchIndexer, TheRarbgIndexer, X1337Indexer } from './indexers/scrapers';
 import { TorznabIndexer } from './indexers/torznab';
+import { ExtensionIndexer } from './indexers/extensionIndexer';
+import { AccessBlocked } from '../extensions/providers/extTo';
 import { dedupeByInfoHash, rankResults, type RankContext } from './ranker';
 import type { DatastoreManager } from '../datastore';
 
@@ -115,10 +117,20 @@ export const DEFAULT_INDEXER_CONFIGS: IndexerConfig[] = [
   { id: 'bitsearch', name: 'BitSearch', kind: IndexerKind.Builtin, enabled: true },
   { id: 'therarbg', name: 'TheRARBG', kind: IndexerKind.Builtin, enabled: true },
   { id: 'mediafusion', name: 'MediaFusion', kind: IndexerKind.Builtin, enabled: false },
+  /**
+   * The first desktop extension, and the reason the extension runtime exists.
+   *
+   * Enabled by default despite sitting behind a Cloudflare browser check,
+   * because the check costs nothing until it fires: a background search that
+   * hits it reports "waiting for you to verify access" and moves on, with no
+   * window and no delay beyond one request. Shipping it disabled would mean
+   * nobody discovers the feature that was built for it.
+   */
+  { id: 'extto', name: 'EXT Torrents', kind: IndexerKind.Builtin, enabled: true },
 ];
 
 /** Schema version for the stored indexer list, so defaults can be re-seeded. */
-const INDEXER_CONFIG_VERSION = 4;
+const INDEXER_CONFIG_VERSION = 5;
 
 interface CircuitState {
   consecutiveFailures: number;
@@ -141,6 +153,20 @@ export interface AggregateSearchResult {
     latencyMs: number;
     error?: string;
     skipped?: string;
+    /**
+     * Set when this source refused the request in a way a person could answer.
+     *
+     * The reason it is a field rather than an error string: "the indexer
+     * failed" is true, useless, and makes a site that one click would open look
+     * permanently broken. This carries what the UI needs to offer that click.
+     */
+    verification?: {
+      scopeId: string;
+      scopeName: string;
+      url: string;
+      intervention: string;
+      reason: string;
+    };
   }>;
 }
 
@@ -167,6 +193,16 @@ export interface SearchProgress {
 export class IndexerRegistry {
   private configs: IndexerConfig[] = [];
   private circuits = new Map<string, CircuitState>();
+  /**
+   * Desktop extensions, registered by `main.ts` at wiring time.
+   *
+   * They live here rather than being constructed in `buildAdapter` because an
+   * extension needs the gateway and the datastore, and the registry is not the
+   * place to reach for either. Registering is also what keeps an extension's
+   * row out of the list entirely on a build where it was not wired up, instead
+   * of showing a source that can never answer.
+   */
+  private extensions = new Map<string, ExtensionIndexer>();
   private datastore: DatastoreManager;
 
   constructor(datastore: DatastoreManager) {
@@ -240,7 +276,14 @@ export class IndexerRegistry {
 
   // --- adapter construction ------------------------------------------------
 
+  public registerExtension(indexer: ExtensionIndexer): void {
+    this.extensions.set(indexer.id, indexer);
+  }
+
   private buildAdapter(config: IndexerConfig): TorrentIndexer | null {
+    const extension = this.extensions.get(config.id);
+    if (extension) return extension;
+
     if (config.kind === IndexerKind.Torznab) return new TorznabIndexer(config);
     if (config.kind === IndexerKind.Stremio) return StremioAddonIndexer.fromConfig(config);
 
@@ -569,6 +612,35 @@ export class IndexerRegistry {
         return normalised;
       } catch (error) {
         const latency = Date.now() - started;
+
+        /**
+         * A site asking for a person is not a broken indexer.
+         *
+         * It must not trip the circuit breaker, or the source the user is one
+         * click away from enabling gets disabled for five minutes for having
+         * asked a question. And it must not be reported as an error, because
+         * "the indexer failed" hides the only action that helps.
+         */
+        if (error instanceof AccessBlocked && adapter instanceof ExtensionIndexer) {
+          outcomes.push({
+            id: config.id,
+            name: config.name,
+            ok: true,
+            count: 0,
+            latencyMs: latency,
+            skipped: 'Waiting for you to verify access',
+            verification: {
+              scopeId: adapter.scopeId,
+              scopeName: adapter.scopeName,
+              url: adapter.verifyUrl,
+              intervention: error.intervention,
+              reason: error.message,
+            },
+          });
+          report(config.name, true);
+          return [] as TorrentResult[];
+        }
+
         this.recordFailure(config.id, error, latency);
         outcomes.push({
           id: config.id,

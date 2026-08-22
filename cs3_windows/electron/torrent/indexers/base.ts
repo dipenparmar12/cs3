@@ -1,5 +1,5 @@
 import type { IndexerConfig, IndexerQuery, TorrentResult } from '../../../src/types/torrent';
-import { parseReleaseName } from '../releaseParser';
+import { parseReleaseName } from '../releaseParser.ts';
 
 /**
  * Everything an adapter must produce. Normalisation to `TorrentResult`

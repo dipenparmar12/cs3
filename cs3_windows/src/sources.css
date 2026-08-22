@@ -4966,3 +4966,98 @@
 .player__external-banner strong { font-size: .88rem; color: #fff; }
 .player__external-banner span { font-size: .78rem; color: var(--text-muted); }
 .player--mini .player__external-banner { display: none; }
+
+/*
+  A site waiting on the user.
+
+  Toned as an offer rather than an error — amber, not red — because it is the
+  one thing on this screen someone can act on, and a red banner beside "no
+  sources found" reads as another thing that has gone wrong.
+*/
+.verify-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.7rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(245, 176, 65, 0.08);
+}
+.verify-prompt--compact {
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border-bottom: none;
+}
+.verify-prompt__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+.verify-prompt__icon {
+  flex: none;
+  margin-top: 0.15rem;
+  color: #f5b041;
+}
+.verify-prompt__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--text-muted, rgba(255, 255, 255, 0.75));
+}
+.verify-prompt__text strong {
+  color: #fff;
+}
+.verify-prompt__detail {
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+.verify-prompt__error {
+  font-size: 0.75rem;
+  color: #ff8a80;
+}
+.verify-prompt__action {
+  flex: none;
+  margin-left: auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/*
+  The sites this install holds a session for. One row each, and a way to forget
+  one — a session granted to a site the user no longer wants is not something
+  they should have to clear a whole profile to remove.
+*/
+.access-scopes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.access-scope {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+}
+.access-scope__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.access-scope__text strong {
+  font-size: 0.86rem;
+}
+.access-scope__state {
+  font-size: 0.75rem;
+  color: var(--text-muted, rgba(255, 255, 255, 0.7));
+}
+.access-scope__actions {
+  margin-left: auto;
+  display: flex;
+  gap: 0.4rem;
+}

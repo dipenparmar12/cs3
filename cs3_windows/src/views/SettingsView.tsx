@@ -22,6 +22,7 @@ import { ProviderRankingPanel } from '../components/settings/ProviderRankingPane
 import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
 import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
+import { SiteAccessPanel } from '../components/settings/SiteAccessPanel';
 import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
 
 type TabId = 'general' | 'player' | 'components' | 'sources' | 'downloads' | 'network' | 'advanced';
@@ -352,7 +353,18 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
         </>
       )}
 
-      {tab === 'network' && <NetworkSettings />}
+      {tab === 'network' && (
+        <>
+          <NetworkSettings />
+          {/*
+            Site access sits under Connection rather than under Sources because
+            it is about how this app reaches the internet, not about which
+            sources are enabled — and because the session it holds is a
+            connection-level fact the user should be able to find and remove.
+          */}
+          <SiteAccessPanel />
+        </>
+      )}
 
       {tab === 'advanced' && (
         <>

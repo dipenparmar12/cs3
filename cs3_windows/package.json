@@ -11,7 +11,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "typecheck": "tsc -b",
-    "test:electron": "node --experimental-strip-types electron/sharedDiscovery.test.mts && node --experimental-strip-types electron/sourceCache.test.mts && node --experimental-strip-types electron/cs3/providerLinks.test.mts && node --experimental-strip-types electron/cs3/sourceScope.test.mts && node --experimental-strip-types electron/torrent/swarmHealth.test.mts && node --experimental-strip-types electron/mediaProxy.test.mts && node --experimental-strip-types electron/subtitles/convert.test.mts && node --experimental-strip-types electron/media/decisionEngine.test.mts && node --experimental-strip-types electron/media/pipeline.test.mts && node --experimental-strip-types electron/media/mpvEngine.test.mts",
+    "test:electron": "node --experimental-strip-types electron/sharedDiscovery.test.mts && node --experimental-strip-types electron/sourceCache.test.mts && node --experimental-strip-types electron/cs3/providerLinks.test.mts && node --experimental-strip-types electron/cs3/sourceScope.test.mts && node --experimental-strip-types electron/torrent/swarmHealth.test.mts && node --experimental-strip-types electron/access/accessChallenge.test.mts && node --experimental-strip-types electron/extensions/providers/extToParser.test.mts && node --experimental-strip-types electron/mediaProxy.test.mts && node --experimental-strip-types electron/subtitles/convert.test.mts && node --experimental-strip-types electron/media/decisionEngine.test.mts && node --experimental-strip-types electron/media/pipeline.test.mts && node --experimental-strip-types electron/media/mpvEngine.test.mts",
     "test:media": "node --experimental-strip-types electron/media/decisionEngine.test.mts",
     "test:pipeline": "node --experimental-strip-types electron/media/pipeline.test.mts",
     "preview": "vite preview",
@@ -27,7 +27,10 @@
     "test:proxy": "node --experimental-strip-types electron/mediaProxy.test.mts",
     "test:subtitles": "node --experimental-strip-types electron/subtitles/convert.test.mts",
     "test:scope": "node --experimental-strip-types electron/cs3/sourceScope.test.mts",
-    "test:swarm": "node --experimental-strip-types electron/torrent/swarmHealth.test.mts"
+    "test:swarm": "node --experimental-strip-types electron/torrent/swarmHealth.test.mts",
+    "test:access": "node --experimental-strip-types electron/access/accessChallenge.test.mts",
+    "test:extto": "node --experimental-strip-types electron/extensions/providers/extToParser.test.mts",
+    "e2e:extensions": "node --experimental-strip-types ../tools/e2e/extension-e2e.mjs"
   },
   "build": {
     "appId": "com.lagradost.cloudstream3.desktop",

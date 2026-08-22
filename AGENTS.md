@@ -73,10 +73,13 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (159 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (216 tests, Node type-stripping — no framework) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Provider links only | `cs3_windows/` | `bun run test:links` (15 cases, no ffmpeg needed) |
 | Source scope only | `cs3_windows/` | `bun run test:scope` (9 cases) |
+| Swarm health only | `cs3_windows/` | `bun run test:swarm` (18 cases) |
+| Access challenges only | `cs3_windows/` | `bun run test:access` (20 cases) |
+| ext.to parser only | `cs3_windows/` | `bun run test:extto` (19 cases) |
 | Media proxy only | `cs3_windows/` | `bun run test:proxy` (11 cases, stubbed origin) |
 | Subtitles only | `cs3_windows/` | `bun run test:subtitles` (16 cases) |
 | Media decisions only | `cs3_windows/` | `bun run test:media` (71 cases, no ffmpeg needed) |
@@ -84,6 +87,7 @@ cs3/
 | Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
+| ext.to end-to-end | repo root | `node --experimental-strip-types tools/e2e/extension-e2e.mjs` — see §5.3 |
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
 | Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
 
@@ -257,6 +261,13 @@ succeeds with correct codec names over undecodable payload.
 `download:getDeletePreference` / `download:setDeletePreference` hold the delete behaviour, and
 `extension:rollback` puts back the archive an update replaced.
 
+`access:*` is human-assisted access: `access:getScopes` lists the sites this install
+holds a session for, `access:verify` opens the site's own verification page, `access:cancel`
+and `access:clear` close and forget one, `access:getPolicy` / `access:setPolicy` hold how
+eagerly a window may appear, and `access:update` pushes hand-off state. **`access:verify` is
+the only channel in the app that can put a browser window on screen**, and it is reachable
+only from a user action — see "Human-assisted access" in §5.
+
 `mpv:*` drives the native engine — `mpv:open` (a *prepared* URL only), transport and track
 controls, `mpv:update` snapshots pushed like `playback:*`, and `mpv:getPolicy`/`mpv:setPolicy`
 for how eagerly it is used. It has no channel that takes a raw link either, for the same reason.
@@ -314,7 +325,13 @@ not a layering mistake.
 | `cs3/failureTaxonomy.ts` | `classifyFailure` — one closed set of causes, shared by the ranking and the diagnostics. Counting free text produces a tally with one entry per failure; grouping by cause is what showed 113 load failures came from six missing classes. |
 | `cs3/discovery.ts` | The home screen's catalogues. Stale-while-revalidate over Stremio's keyless Cinemeta catalogs (`top`/`year`/`imdbRating`, filterable by 19 genres, pageable) plus AniList for anime. Finds **nothing playable** — sources are resolved by providers when an item is opened. |
 | `cs3/titleEnricher.ts` | Resolves `Avengers End Game 720p Hindi Dubbed` to the film it is about. Conservative on purpose: a disagreeing year is disqualifying and the similarity bar is high enough that `Avengers` does not match `Avengers: Endgame`. An unenriched row is a small loss; a mislabelled one reads as data corruption. |
-| `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. |
+| `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces **for streams only**; the player only ever sees `http://127.0.0.1:PORT/…`. |
+| `torrent/swarmHealth.ts` | Why a torrent is slow, and which half of the answer is fixable. Pure and tested. |
+| `access/accessChallenge.ts` | `classifyAccess` — is this refusal something a person could answer? Pure and tested. |
+| `access/humanGateway.ts` | The browser hand-off, and the per-site Electron session both it and the scraper share. |
+| `extensions/runtime.ts` | The `ProviderExtension` contract and the context an extension is called with. |
+| `extensions/providers/extTo.ts` | The reference extension, and the reason the gateway exists. |
+| `torrent/indexers/extensionIndexer.ts` | Lets a desktop extension answer a source search like any other indexer. |
 | `torrent/indexerRegistry.ts`, `indexers/*` | 7 built-in public indexers, Torznab (Jackett/Prowlarr), and aggregators (Torrentio, apibay). |
 | `torrent/ranker.ts`, `releaseParser.ts` | Release-name parsing (quality/codec/group/season/episode) and result ranking. |
 | `externalPlayerControl.ts` | Two-way control of VLC over its HTTP interface. Capability is declared per player, never assumed — see below. |
@@ -1728,6 +1745,183 @@ cases cluster — dual-audio Matroska with per-language 5.1 AC-3/E-AC-3, 10-bit 
 the multi-track files the audio-selection logic exists for — so a matrix of English titles
 alone reports a compatibility story that is true for half the catalogue.
 
+### Torrent throughput: three parts, and only two are ours (2026-08-22)
+
+The report was that the same magnet which saturates a seedbox delivers a trickle here.
+Worth taking seriously rather than dismissing — the peers are identical on both ends. What
+differs is how each side is connected to the swarm, and it splits into three.
+
+1. **Reachability, which no app can fix and this one used to hide.** A seedbox has a public
+   IP with its port open, so peers dial *it*. Behind NAT — and behind CGNAT, where port
+   forwarding does not help — we only dial out, and a large share of the swarm is behind NAT
+   too. Two unreachable peers can never connect, so the *reachable* subset of a 500-peer
+   swarm can be well under half of it. `numPeers`, which was all the engine reported, cannot
+   express this at all: `torrent._peers` carries a `type` (`tcpIncoming` / `utpOutgoing` / …)
+   and the incoming/outgoing split is the entire diagnosis. One incoming connection proves
+   reachability; none after 90s is strong evidence against it.
+   **The listening port is now pinned to 6881** rather than OS-assigned, because an
+   ephemeral port makes a router forwarding rule impossible to write and forces UPnP to
+   re-map every launch. The fallback is not optional: `ConnPool` reports a failed TCP bind
+   as a **client-level error that destroys the client**, so a port already in use would take
+   torrents out entirely. A uTP bind failure is *not* fatal — WebTorrent carries on TCP-only
+   — so `client.destroyed` is what separates the two, and rejecting on both would throw away
+   a working client and retry on a random port for a problem the port never caused.
+2. **Concurrency.** Aggregate BitTorrent speed is the sum of many slow peers, and
+   WebTorrent's per-peer pipeline is `2 + ceil(duration × wire.downloadSpeed() / 16 KB)` —
+   it starts at two outstanding blocks and grows with *that peer's* measured speed. A
+   connection cap is therefore a speed cap: 100 → **200 per torrent** (WebTorrent's own
+   default is 55). Web seeds get **12** connections instead of the default 4 — a web seed is
+   plain HTTP whose throughput scales with parallel requests, and it is the one peer that is
+   never NAT-limited and never choking.
+3. **Piece order, which was an outright bug.** Downloads went through `startStream` and
+   inherited `strategy: 'sequential'` — the setting that makes playback start in seconds by
+   refusing anything but the next piece. A background download has no playhead and was
+   paying for one: every peer holding some *other* part of the file contributed nothing.
+   Downloads now run **rarest-first**, and a stream promoted to a download switches in place
+   through `setMode` — WebTorrent reads `strategy` on every request round, so no bytes are
+   lost and the torrent is not re-added.
+
+`swarmHealth.ts` holds the arithmetic and the words, pure so the thresholds are testable.
+Two of them matter most: **reachability is not judged for 90 seconds**, because a tracker
+announce and a DHT bootstrap both have to finish first and judging early reports every
+healthy torrent as firewalled; and **a web seed never counts as proof of reachability**,
+since it is a server we dialled. A thin swarm is named as *the swarm* — "try a different
+source" — not as a setting to change.
+
+The player shows **one** limit, and only a `limit`, in the buffering overlay. That is the
+moment the answer is worth something, and the notes ("fetching in order so playback can
+start early") are true but are not what someone staring at a spinner needs.
+
+**Not measured here.** This container has no swarm access, so the throughput change rests on
+the reasoning above rather than on a before/after number. Measure it before quoting one.
+
+### Human-assisted access, and the desktop extension standard (2026-08-22)
+
+A separate ecosystem from `.cs3`, beside it rather than replacing it. `.cs3` archives keep
+working exactly as they do — that is the JVM sidecar's job and none of this touches it. This
+is the **desktop-native** provider standard, for the sites an Android provider cannot reach
+at all, and it starts with the ones behind a browser challenge.
+
+**ext.to is the reference implementation, and it was chosen because it is hard.** It sits
+behind Cloudflare: a plain HTTP client gets `403` with `cf-mitigated: challenge` rather than
+a results page. That is the one thing this ecosystem exists to provide and the one thing no
+`.cs3` provider can do here.
+
+#### What it is, and what it deliberately is not
+
+It is **not** an anti-bot bypass. Nothing solves a challenge, forges a token, or imitates a
+browser it is not. When a site asks whether a person is present, the site's own page is shown
+to the person who is in fact present, they answer it in a real Chromium with a real profile,
+and the session that results is the one the scraper uses. The site gets exactly the answer it
+asked for. That is why the window is **visible and unavoidable** rather than hidden and
+automated, and any change that makes it headless has changed what this is.
+
+#### The one thing that makes it work
+
+**The browser and the scraper must be the same session.** A clearance cookie is bound to the
+session that earned it — and for Cloudflare, to the User-Agent and IP as well. Solving in one
+context and fetching from another produces exactly the failure this exists to avoid: the user
+completes the verification, it appears to work, and the next request is refused again, which
+reads as the feature being broken.
+
+So each scope gets one `persist:extension-<id>` partition; the window and the scraper's fetch
+both go through it; and the **User-Agent is set on the session** so the two cannot drift.
+`Session.fetch` is what makes that possible without reimplementing a cookie jar. Keeping the
+UA *stable across restarts* matters as much: a UA that changed between launches would
+silently invalidate every verification the user had already completed.
+
+#### `AccessIntervention` is a closed set, and `requiresUserInteraction` is the honest half
+
+`classifyAccess` (`access/accessChallenge.ts`, pure, 20 cases) answers **what a person would
+have to do**, never "is it Cloudflare?" — the next site will be behind DataDome or Imperva or
+a login wall, and a detector written around one vendor has to be rewritten for each. The rule
+that keeps the window meaningful:
+
+| Intervention | Opens a window? | Why |
+|---|---|---|
+| `HUMAN_VERIFICATION`, `BOT_CHALLENGE`, `LOGIN_REQUIRED`, `CONSENT_REQUIRED`, `UNKNOWN` | yes | a person can change the answer |
+| `RATE_LIMITED` | **no** | the site is counting, not asking. Waiting is the answer |
+| `ACCESS_DENIED` | **no** | a legal block or a machine-readable refusal. Nothing changes it |
+
+Showing someone a page they cannot act on teaches them the window is noise, and the one time
+it matters they will close it. That is a worse outcome than never having built this.
+
+Two ordering decisions are load-bearing. **429 outranks a vendor fingerprint** — Cloudflare
+rate-limiting is still rate-limiting. And **a body marker is only trusted on HTML**, plus a
+`200` is only a challenge when the body is *too small to be the content* (<60 KB): a working
+results page that embeds a Turnstile widget for a login form further down would otherwise
+stop a scrape that had already succeeded.
+
+#### Policy: a surprise window is its own bug
+
+`sourcePrefetcher` runs discovery a second after a detail page settles. A browser window
+stealing focus during that would be indefensible. So `verificationPolicy` defaults to **`ask`**:
+a background caller that hits a challenge gets the challenge *back*, the search reports it as
+a `verification` outcome (never as an error — that would trip the circuit breaker on a source
+the user is one click from enabling), the UI offers the button, and only pressing it opens
+anything. `interactive` therefore travels **on `IndexerQuery`**, because the difference
+between "the user pressed search" and "the app guessed they might" is invisible further down.
+
+#### Read how little `extTo.ts` knows about any of it
+
+`search()` asks `context.http.get` for a URL and parses the reply. No Cloudflare code, no
+cookies, no browser, no retries, no session, no User-Agent. That is the whole architectural
+claim — **extensions own provider-specific knowledge; the platform owns networking, browser
+intervention, session management, caching, security and lifecycle** — and that file is the
+evidence for it. An `ExtensionIndexer` then makes its rows indistinguishable from 1337x's to
+everything downstream: ranking, infohash dedupe, the source cache, the torrent engine, the
+player. An extension is a *source of rows*, not a new kind of thing to special-case.
+
+Two rules inside the provider worth keeping: **a challenge is not a reason to try the next
+mirror** (the site is up and asking; walking on asks the same question at three domains and
+opens three windows), and **page one and mirror selection are the same request** — probing a
+mirror then asking it again doubles every search against a site already suspicious of us,
+which is how a scraper earns the rate limit that costs the *next* search too.
+
+#### What is deliberately not built: downloadable extension code
+
+The PRD is explicit that arbitrary JavaScript must not be fetched and executed in the main
+process, and it is right — that is a remote code execution channel with the user's filesystem
+behind it. Doing it properly needs a sandboxed runtime with an integrity check, and that is a
+subsystem, not a detail. So the interface is real and **the extensions implementing it are
+first-party and compiled in**. Building the API against a concrete provider first is the
+PRD's own instruction, and it is what makes the eventual sandbox a change of *loader* rather
+than a redesign. Nothing weakens the boundary meanwhile: an extension already gets no `fs`,
+no `child_process`, no Electron object and no `BrowserWindow` — only `ExtensionContext`.
+
+#### The selectors have not been checked against the live site
+
+`ext.to` is blocked by the egress policy of the environment this was built in — the proxy
+answers 403 to CONNECT — so **no selector in `extToParser.ts` has been verified against the
+real markup.** That is why the parser is written to the structure every torrent index shares
+(a row that points at a torrent, a cell that parses as a size, integers beside it) rather
+than to guessed class names: it degrades to "no rows" rather than to a wrong answer. But
+"degrades safely" is not "verified" — run §5.3 from a machine that can reach it.
+
+Two parser details were found by tests rather than reasoned about, and both are the kind that
+would have shipped silently: **the raw HTML is searched for a bare infohash, not the rendered
+text**, because `text()` concatenates adjacent elements (`<dt>Info hash</dt><dd>aaa…</dd>`
+becomes `Info hashaaa…` and a `\b` boundary never matches); and **only a run of exactly forty
+hex characters counts**, because a `\b`-anchored match happily takes the first forty
+characters of a 64-character SHA-256 and produces a magnet for a torrent that does not exist.
+
+### 5.3 The extension harness — `tools/e2e/extension-e2e.mjs`
+
+```
+node --experimental-strip-types tools/e2e/extension-e2e.mjs
+node --experimental-strip-types tools/e2e/extension-e2e.mjs --html saved-page.html --raw
+```
+
+The first mode requests the search page directly and classifies whatever comes back. Against
+a challenged site the **expected** result is `BOT_CHALLENGE`, not results — seeing that is
+itself confirmation the detector reads the site correctly.
+
+The second is the one that matters: parse a page saved from a browser that has already been
+verified. A plain HTTP client cannot get a results page out of a site like this by design, so
+"Save page as" is the offline equivalent of what the verified session delivers in the app. It
+reports **playable identity / size / seeders per row**, because counting rows alone passes
+happily on a page of navigation links.
+
 ### When we cannot play it, hand it to something that can
 
 `externalPlayer.ts` detects VLC, mpv, MPC-HC/BE and PotPlayer and offers to open
@@ -1938,6 +2132,12 @@ the protection.
 Enforced — plugin cannot reach sidecar internals (`PluginClassLoader`, tested);
 `System.exit` cannot kill the app (process boundary); `System.loadLibrary` blocked via
 empty `java.library.path`; per-plugin scoped storage.
+Desktop extensions (§5, human-assisted access) are a *separate* sandbox question and are
+first-party and compiled in for exactly that reason: they get no `fs`, no `child_process`, no
+Electron object and no `BrowserWindow`, only `ExtensionContext` — but nothing stops a
+compiled-in extension from importing whatever it likes, which is why downloadable extension
+code is not built.
+
 **Not enforced** — raw network egress, process creation. Both need an OS-level sandbox
 (Windows job object + restricted token). They are reported by `status` as `sandboxGaps`
 and surfaced in the UI on purpose: a named gap can be closed; an implied-covered gap never
