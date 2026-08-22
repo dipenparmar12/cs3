@@ -1,5 +1,5 @@
 import React from 'react';
-import { Loader2, Play, AlertTriangle, RefreshCw, ListVideo } from 'lucide-react';
+import { Loader2, Play, AlertTriangle, RefreshCw, ListVideo, Globe } from 'lucide-react';
 import type { TorrentResult } from '../../types/torrent';
 
 /**
@@ -28,6 +28,16 @@ interface SourceResolveOverlayProps {
   onPlayNow: () => void;
   onOpenSources: () => void;
   onRetry: () => void;
+  /**
+   * Ask every other provider and the torrent indexers.
+   *
+   * This is the most valuable place to offer it: the scoped search has just
+   * come up short, and the sentence above says the providers this title came
+   * from had nothing. Making the reader go and find a menu item at that moment
+   * is what turns a one-click recovery into a dead end.
+   */
+  onWiden?: () => void;
+  canWiden?: boolean;
   onBack: () => void;
 }
 
@@ -45,6 +55,8 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
   onPlayNow,
   onOpenSources,
   onRetry,
+  onWiden,
+  canWiden,
   onBack,
 }) => {
   if (phase === 'error') {
@@ -69,6 +81,11 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
               <ListVideo size={16} /> Choose a source ({sources.length})
             </button>
           )}
+          {onWiden && canWiden ? (
+            <button className="btn btn-primary" onClick={onWiden}>
+              <Globe size={16} /> Search all sources
+            </button>
+          ) : null}
           <button className="btn" onClick={onRetry}>
             <RefreshCw size={16} /> Search again
           </button>

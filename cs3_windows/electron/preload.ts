@@ -290,8 +290,17 @@ export interface CloudStreamElectronAPI {
     sessionId: string,
     infoHash: string
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
+  /**
+   * Re-runs discovery for a live session.
+   *
+   * `widen` is the difference between "ask again" and "ask everyone". The
+   * default re-asks the providers this title was found on — the Android
+   * behaviour — and widening reaches every enabled provider and every torrent
+   * indexer, which is a deliberate choice rather than the default.
+   */
   playbackRefreshSources: (
-    sessionId: string
+    sessionId: string,
+    widen?: boolean
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
   /**
    * Finds sources without starting one — the detail screen's picker.
@@ -1019,8 +1028,8 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('playback:skipSource', sessionId, reason),
   playbackSelectSource: (sessionId, infoHash) =>
     ipcRenderer.invoke('playback:selectSource', sessionId, infoHash),
-  playbackRefreshSources: (sessionId) =>
-    ipcRenderer.invoke('playback:refreshSources', sessionId),
+  playbackRefreshSources: (sessionId, widen) =>
+    ipcRenderer.invoke('playback:refreshSources', sessionId, widen ?? false),
   startSourceDiscovery: (request, title, episodeTitle, options) =>
     ipcRenderer.invoke('playback:startDiscovery', request, title, episodeTitle, options),
   playbackCancelSourceSearch: (sessionId) =>

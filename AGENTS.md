@@ -73,9 +73,10 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (150 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (159 tests, Node type-stripping — no framework) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Provider links only | `cs3_windows/` | `bun run test:links` (15 cases, no ffmpeg needed) |
+| Source scope only | `cs3_windows/` | `bun run test:scope` (9 cases) |
 | Media proxy only | `cs3_windows/` | `bun run test:proxy` (11 cases, stubbed origin) |
 | Subtitles only | `cs3_windows/` | `bun run test:subtitles` (16 cases) |
 | Media decisions only | `cs3_windows/` | `bun run test:media` (71 cases, no ffmpeg needed) |
@@ -1169,6 +1170,57 @@ metadata API and a **hardcoded demo video**. That was removed deliberately, and 
 codebase now carries comments saying so. **Never reintroduce a synthetic/placeholder
 source.** When nothing real is found, return an empty list *and a reason*. A system that
 cannot run must say so, not return empty results dressed up as "no matches found".
+
+### Source discovery asks the originating provider first (2026-08-22)
+
+The recurring report is "some of the sources didn't work". The cause was not the
+sources; it was how many were being asked.
+
+**Android returns one search row per provider.** Opening a row binds you to the
+provider that produced it, and pressing play calls `loadLinks` on that provider
+alone. There is no fan-out and no torrent-indexer step at all.
+
+This app merges search rows, and that merge is right — four providers and three
+catalogues returning one film should be one row, not seven. What it lost was the
+binding. `searchMerge.primacy()` makes the *catalogue* row win, so the merged row
+is addressed by its `cs3meta://` URL, and `runDiscovery` took that as licence to
+ask **every enabled provider and every enabled indexer**. A title carried by two
+providers drew answers from two hundred sources: most had nothing, some were
+slow, some were dead, and all of them appeared in the list as sources that did
+not work.
+
+`cs3/sourceScope.ts` restores the binding without undoing the merge. The
+providers whose rows were merged are already recorded as `alternates`, and
+`ContentService.alternateRoutes` already remembered them — they were simply being
+used as *one more* input to a full fan-out rather than as the scope.
+
+| Scope | Who is asked |
+|---|---|
+| `origin` (default) | Only the providers whose search results produced this row. No indexers. |
+| `all` (explicit) | Every enabled provider and every enabled indexer. |
+
+Four things are worth keeping straight:
+
+- **A `cs3ext://` row was always right.** It is a provider's own result and has
+  always resolved from that provider alone. The divergence only ever existed on
+  the merged catalogue row.
+- **`origin` widens on its own when there is nothing to scope to.** A title
+  opened from the home screen was never searched for, so no provider claimed it.
+  Narrowing to an empty set there would return zero sources for every catalogue
+  item in the app, so it widens and reports `scopeUsed: 'all'` — which is what
+  stops the UI offering to widen a search that already did.
+- **Widening asks every provider even when routes are known.** The old condition
+  skipped the provider search whenever routes existed, which was correct while
+  routes were the only way to reach a provider. Under widening it makes "search
+  all sources" re-ask the same two providers and appear to do nothing. Already-
+  known providers are skipped per result instead, and the merged list is deduped
+  on `infoHash`.
+- **The scope is part of the cache key and the in-flight key.** Without that a
+  widened run is answered by the scoped result that just landed.
+
+The offer appears in two places and only when `canWiden` is true: the source
+panel, and the failure overlay — which is where it matters, because the sentence
+above it has just said the providers this title came from had nothing.
 
 ### Search scope: selecting a source is a filter, not a preference
 
