@@ -42,6 +42,13 @@ declare module 'webtorrent' {
     strategy: 'rarest' | 'sequential';
     path: string;
     ready: boolean;
+    /**
+     * Every peer this torrent knows, keyed by address. Internal, and read here
+     * for one reason nothing public offers: `numPeers` cannot tell an incoming
+     * connection from an outgoing one, and that distinction is the whole
+     * reachability diagnosis. See `swarmHealth.ts`.
+     */
+    _peers?: Map<string, { type?: string }> | null;
 
     select(start: number, end: number, priority?: number, notify?: () => void): void;
     deselect(start: number, end: number): void;
@@ -93,8 +100,17 @@ declare module 'webtorrent' {
   }
 
   export default class WebTorrent {
+    /** False when the optional `utp-native` binding could not be loaded. */
+    static UTP_SUPPORT: boolean;
+
     constructor(opts?: WebTorrentOptions);
     torrents: Torrent[];
+    /** The port actually bound, which is not the requested one after a fallback. */
+    torrentPort: number;
+    /** Cleared by the client itself if the uTP server errors after starting. */
+    utp: boolean;
+    listening: boolean;
+    maxConns: number;
     downloadSpeed: number;
     uploadSpeed: number;
     progress: number;
@@ -115,5 +131,9 @@ declare module 'webtorrent' {
     destroy(cb?: (err?: Error) => void): void;
     on(event: 'error', listener: (err: Error | string) => void): this;
     on(event: 'torrent', listener: (torrent: Torrent) => void): this;
+    on(event: 'listening', listener: () => void): this;
+    once(event: 'error', listener: (err: Error | string) => void): this;
+    once(event: 'listening', listener: () => void): this;
+    removeListener(event: string, listener: (...args: never[]) => void): this;
   }
 }

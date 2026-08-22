@@ -395,7 +395,16 @@ export class DownloadService {
         // redirect every *later* torrent — including live streams — into this
         // task's folder.
         downloadPath: outputDir,
+        // A download has no playhead. Sequential fetching is what makes a
+        // stream playable in seconds and it costs real throughput — a peer
+        // holding anything but the exact next piece contributes nothing — so a
+        // download that inherits it is slower for no benefit at all.
+        mode: 'download',
       });
+
+      // The torrent may already be live from a stream the user was watching,
+      // in which case `add` never ran and the strategy is still sequential.
+      await this.torrentEngine.setMode(handle.infoHash, 'download');
       this.torrentTasks.set(task.id, handle.infoHash);
       task.totalBytes = handle.fileSize;
       // Multi-file releases nest the episode inside the torrent's own folder,

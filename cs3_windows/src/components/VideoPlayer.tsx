@@ -8,7 +8,7 @@ import {
   HardDriveDownload, FolderDown, GripHorizontal, Maximize2, Minimize2, X,
   Search,
 } from 'lucide-react';
-import type { TorrentStreamStats } from '../types/torrent';
+import type { SwarmReport, TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
 import { AspectRatioMode } from '../types/player';
 import type { ExternalPlaybackSnapshot } from '../types/player';
@@ -258,6 +258,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isHoveringControls, setIsHoveringControls] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<TorrentStreamStats | null>(null);
+  const [swarm, setSwarm] = useState<SwarmReport | null>(null);
   const [activeSubtitle, setActiveSubtitle] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
@@ -1179,13 +1180,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (active && next) setStats(next);
     };
 
+    /**
+     * Why the swarm is as fast or slow as it is, polled far more slowly.
+     *
+     * The peer census walks every connection and its most useful finding —
+     * whether anything has ever dialled *us* — cannot change between seconds.
+     * Asking every second would spend work to redraw the same sentence.
+     */
+    const pollSwarm = async () => {
+      const report = await window.cloudstream?.getSwarmReport(infoHash);
+      if (active) setSwarm(report ?? null);
+    };
+
     poll();
+    pollSwarm();
     const timer = window.setInterval(poll, 1000);
+    const swarmTimer = window.setInterval(pollSwarm, 5000);
     return () => {
       active = false;
       window.clearInterval(timer);
+      window.clearInterval(swarmTimer);
     };
   }, [infoHash]);
+
+  /**
+   * The one limitation worth putting in front of someone who is waiting.
+   *
+   * Only a `limit` is shown, and only one. A buffering overlay that lists every
+   * observation about the swarm is a wall of text over a film that has not
+   * started, and the notes ("fetching in order so playback can start early")
+   * are true but are not what the person staring at a spinner needs.
+   */
+  const swarmLimit = useMemo(
+    () => swarm?.findings.find((finding) => finding.tone === 'limit') ?? null,
+    [swarm]
+  );
 
   // --- timeline previews ---------------------------------------------------
 
@@ -2431,6 +2460,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {stats && !stats.isStalled && stats.peers === 0 && (
                 <span className="muted">
                   No peers yet. If this persists the swarm may be dead — try a source with more seeders.
+                </span>
+              )}
+              {/*
+                Shown while the viewer is already waiting, which is the only
+                moment the answer is worth anything. Most of it is not something
+                the app can fix — a four-seeder swarm is a four-seeder swarm —
+                but an unnamed limit reads as "this app is slow", and that was
+                the report.
+              */}
+              {swarmLimit && !stats?.isStalled && (
+                <span className="muted">
+                  {swarmLimit.summary}
+                  {swarmLimit.advice ? `. ${swarmLimit.advice}` : '.'}
                 </span>
               )}
             </>
