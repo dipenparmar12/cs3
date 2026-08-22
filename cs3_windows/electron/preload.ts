@@ -7,6 +7,7 @@ import type {
   SearchSuggestion,
 } from '../src/types/api';
 import type { DownloadTask } from '../src/types/download';
+import type { SwarmReport } from '../src/types/torrent';
 import type { SitePlugin, PluginCompatibilityReport, ProviderTreeRepository } from '../src/types/plugin';
 import type {
   IndexerConfig,
@@ -585,6 +586,11 @@ export interface CloudStreamElectronAPI {
   getActiveStreams: () => Promise<TorrentStreamStats[]>;
   clearTorrentCache: () => Promise<Envelope & { removed: number }>;
   getTorrentCachePath: () => Promise<string>;
+  /**
+   * Why this torrent is as fast or as slow as it is, including the part no
+   * setting can change. See `torrent/swarmHealth.ts`.
+   */
+  getSwarmReport: (infoHash: string) => Promise<SwarmReport | null>;
 
   // Indexers and ranking preferences
   getIndexerConfigs: () => Promise<IndexerConfig[]>;
@@ -1236,6 +1242,7 @@ const api: CloudStreamElectronAPI = {
   getActiveStreams: () => ipcRenderer.invoke('torrent:getActiveStreams'),
   clearTorrentCache: () => ipcRenderer.invoke('torrent:clearCache'),
   getTorrentCachePath: () => ipcRenderer.invoke('torrent:getCachePath'),
+  getSwarmReport: (infoHash) => ipcRenderer.invoke('torrent:getSwarmReport', infoHash),
 
   getIndexerConfigs: () => ipcRenderer.invoke('indexer:getConfigs'),
   saveIndexerConfig: (config) => ipcRenderer.invoke('indexer:saveConfig', config),

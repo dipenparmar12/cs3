@@ -2096,6 +2096,19 @@ ipcMain.handle('torrent:clearCache', async () => {
 
 ipcMain.handle('torrent:getCachePath', async () => torrentEngine.getCachePath());
 
+/**
+ * Why this torrent is as fast or as slow as it is.
+ *
+ * Surfaced rather than logged because most of the answer is not something the
+ * app can change — a swarm with four seeders is a swarm with four seeders, and
+ * a machine that no peer can dial stays that way until a router is configured.
+ * An unnamed limitation reads as "this app is slow"; a named one can be worked
+ * around or knowingly accepted.
+ */
+ipcMain.handle('torrent:getSwarmReport', async (_, infoHash: string) =>
+  torrentEngine.getSwarmReport(infoHash)
+);
+
 // --- indexers and source preferences -------------------------------------
 
 ipcMain.handle('indexer:getConfigs', async () => contentService.getRegistry().getConfigs());
