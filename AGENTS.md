@@ -1254,8 +1254,13 @@ claiming one name is a genuine collision: the first keeps it and the loser is re
 ### The extensions screen: `src/components/extensions/`
 
 **Reconstructed 2026-08-21**, after the ignore-rule bug below meant the 2026-08-14 rebuild
-was never committed. What follows describes the current files; the reasoning is preserved
-from the original because the constraints have not changed.
+was never committed. Six of the originals — `primitives`, `FilterBar`, `BulkActionBar`,
+`ProvenancePanel`, `CompatibilityReport` and `useExtensionFilters` — were restored from the
+author's machine on 2026-08-22 and are now what the screen is built from; the container
+(`ExtensionsScreen`), the three views and `useExtensionCatalog` are the reconstruction.
+Where the two overlapped **the originals won**: `Toggle` carrying a `suppressedReason` says
+something the reconstruction's plain switch could not, and `TriStateCheckbox` has an
+`indeterminate` state a boolean cannot express. What follows describes the current files.
 
 Originally rebuilt 2026-08-14. It was one 2,689-line component — 25 `useState` hooks, four tabs and
 ~2,000 lines of inline-styled JSX in a single function body — replaced by a container plus
