@@ -141,6 +141,13 @@ interface VideoPlayerProps {
      */
     onSourceUnplayable?: (reason: string) => void;
     onRefresh: () => void;
+    /**
+     * Look beyond the providers this title was found on — every other
+     * installed provider, plus the torrent indexers.
+     */
+    onWiden?: () => void;
+    /** True while that would ask something the scoped search did not. */
+    canWiden?: boolean;
     /** Stops waiting for the remaining providers, keeping what has arrived. */
     onCancelSearch?: () => void;
     onDownloadSource?: (source: TorrentResult) => void;
@@ -2449,6 +2456,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onPlayNow={sourceSession.onPlayNow}
           onOpenSources={() => setSourcePanelOpen(true)}
           onRetry={sourceSession.onRefresh}
+          onWiden={sourceSession.onWiden}
+          canWiden={sourceSession.canWiden}
           onBack={onBack}
         />
       )}
@@ -2790,6 +2799,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setSourcePanelOpen(false);
           }}
           onRefresh={sourceSession.onRefresh}
+          onWiden={sourceSession.onWiden}
+          canWiden={sourceSession.canWiden}
           onCancelSearch={sourceSession.onCancelSearch}
           onDownload={sourceSession.onDownloadSource}
         />

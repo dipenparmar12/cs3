@@ -31,6 +31,7 @@ import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
 import { SharedDiscovery } from './sharedDiscovery';
 import { isTorrentLink } from './cs3/providerLinks';
+import { planSourceScope } from './cs3/sourceScope';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -74,6 +75,32 @@ export interface AutoStreamResult {
   attempts: StreamAttempt[];
 }
 
+/**
+ * How wide to cast when looking for something to play.
+ *
+ * The default is `origin`, and that is the Android behaviour rather than a
+ * conservative choice. On Android a search returns one row **per provider**, so
+ * opening a row binds you to the provider that produced it and pressing play
+ * calls `loadLinks` on that provider alone. Nothing fans out.
+ *
+ * This app merges those rows — four providers and three catalogues returning
+ * one film should be one row, not seven — and merging lost the binding: the
+ * merged row is addressed by its catalogue URL, so opening it asked *every*
+ * enabled provider and *every* torrent indexer. That is a superset of Android,
+ * and supersets are not free. A title carried by two providers was drawing
+ * answers from two hundred, most of which have nothing and some of which are
+ * slow, dead or blocked — which is what "some of the sources didn't work" is.
+ *
+ * So the merge stays and the binding comes back: the providers that actually
+ * returned this title are remembered as its alternates, and those are who gets
+ * asked first.
+ */
+export type SourceScope =
+  /** Only the providers whose search results produced this row. */
+  | 'origin'
+  /** Every enabled provider and every enabled indexer. An explicit choice. */
+  | 'all';
+
 export interface SourceQuery {
   /** A `cs3meta://` URL, a magnet, or a direct http(s) media URL. */
   mediaUrl: string;
@@ -81,6 +108,8 @@ export interface SourceQuery {
   episode?: number;
   /** Overrides the title derived from metadata. */
   titleOverride?: string;
+  /** Defaults to `origin`. See {@link SourceScope}. */
+  scope?: SourceScope;
 }
 
 export interface SourceResponse {
@@ -99,6 +128,17 @@ export interface SourceResponse {
    */
   diagnosis?: SourceDiagnosis;
   query: { title: string; season?: number; episode?: number; imdbId?: string };
+  /**
+   * The scope this answer was actually produced at.
+   *
+   * Not always the one that was asked for: a title opened from the home screen
+   * has no originating provider to scope to, so `origin` widens on its own. The
+   * UI needs to know which happened, or it offers "search everywhere" for a
+   * search that already did.
+   */
+  scopeUsed: SourceScope;
+  /** True when widening to `all` would ask anything that has not been asked. */
+  canWiden: boolean;
 }
 
 /** Extracts `?s=1&e=2` appended to episode URLs by the metadata provider. */
@@ -463,7 +503,22 @@ export class ContentService {
       stripQuery(request.mediaUrl),
       request.season ?? fromUrl.season ?? '',
       request.episode ?? fromUrl.episode ?? '',
+      // The scope is part of the identity, not a detail of it. Without this a
+      // scoped run and a widened one share an in-flight slot and a cache entry,
+      // so "search everywhere" would be answered by the narrow result that just
+      // came back — the button would appear to do nothing.
+      request.scope ?? 'origin',
     ].join('|');
+  }
+
+  /**
+   * The cache key for a scope.
+   *
+   * The widened set is stored beside the scoped one rather than replacing it,
+   * so widening once does not silently make every later play widened too.
+   */
+  private cacheUrlFor(base: string, scope: SourceScope): string {
+    return scope === 'all' ? `${base}#all` : base;
   }
 
   /**
@@ -544,6 +599,7 @@ export class ContentService {
     const season = request.season ?? fromUrl.season;
     const episode = request.episode ?? fromUrl.episode;
     const base = stripQuery(request.mediaUrl);
+    const requestedScope: SourceScope = request.scope ?? 'origin';
 
     /**
      * A cache hit answers instantly, which is the whole difference between
@@ -553,7 +609,7 @@ export class ContentService {
      * dropped here and re-resolved below.
      */
     if (!options.bypassCache) {
-      const cached = this.cache.read(base, season, episode);
+      const cached = this.cache.read(this.cacheUrlFor(base, requestedScope), season, episode);
       if (cached.hit && cached.fresh.length > 0) {
         onProgress?.({
           results: cached.fresh,
@@ -567,6 +623,8 @@ export class ContentService {
           filtered: [],
           indexerOutcomes: [],
           query: { title: request.titleOverride ?? '', season, episode },
+          scopeUsed: requestedScope,
+          canWiden: requestedScope === 'origin',
         };
       }
     }
@@ -604,13 +662,16 @@ export class ContentService {
         filtered: [],
         indexerOutcomes: [],
         query: { title, season, episode },
+        // A magnet is the source. There is no wider search to offer.
+        scopeUsed: 'origin',
+        canWiden: false,
       };
     }
 
     // An extension provider already knows its own links; there is nothing to
     // search for. Asking indexers for a title the provider serves directly
     // would be slower and worse than what the provider just handed us.
-    if (base.startsWith('cs3ext://')) {
+    if (base.startsWith('cs3ext://') && requestedScope === 'origin') {
       // Season and episode are forwarded because the URL may address the show
       // rather than the episode — the detail view hands over an episode handle,
       // but a quick-play straight from a search row does not.
@@ -637,6 +698,14 @@ export class ContentService {
             : undefined,
         diagnosis: sources.length === 0 ? diagnosis : undefined,
         query: { title: request.titleOverride ?? '', season, episode },
+        /**
+         * This row *is* a provider's own result, which is the Android shape
+         * exactly: one provider, its own links, nothing else consulted. It has
+         * always behaved this way — the divergence was only ever on the merged
+         * catalogue row.
+         */
+        scopeUsed: 'origin',
+        canWiden: true,
       };
     }
 
@@ -657,6 +726,8 @@ export class ContentService {
         indexerOutcomes: [],
         emptyReason: 'Could not determine a title to search for.',
         query: { title: '', season, episode },
+        scopeUsed: requestedScope,
+        canWiden: false,
       };
     }
 
@@ -695,18 +766,42 @@ export class ContentService {
     );
     const allowedProviders = new Set(providerScope.allowed);
 
-    const routes = (this.alternateRoutes.get(base) ?? []).filter((route) => {
+    /**
+     * The providers this row came from.
+     *
+     * A `cs3ext://` base is itself one of them — widening from a provider row
+     * must still include that provider, or "search everywhere" would return
+     * everywhere *except* the one place already known to have it.
+     */
+    const routes = [
+      ...(base.startsWith('cs3ext://') ? [base] : []),
+      ...(this.alternateRoutes.get(base) ?? []),
+    ].filter((route) => {
       if (!providerScope.narrowed) return true;
       const ref = parseExtensionUrl(route);
       return ref ? allowedProviders.has(ref.provider) : false;
     });
 
-    const needProviderSearch =
-      routes.length === 0 && title && !(providerScope.narrowed && allowedProviders.size === 0);
+    // The decision itself is pure and lives in `cs3/sourceScope.ts`, where it
+    // can be tested — every wrong answer here still plays something, so a
+    // regression shows up months later as "the app got slower again".
+    const plan = planSourceScope({
+      requested: requestedScope,
+      routes,
+      hasTitle: Boolean(title),
+      providersNarrowedToNothing: providerScope.narrowed && allowedProviders.size === 0,
+    });
+    const { scopeUsed, askIndexers } = plan;
+    const needProviderSearch = plan.searchAllProviders;
     const targetProviders = providerScope.narrowed ? providerScope.allowed : undefined;
     const providerList = needProviderSearch
       ? this.plugins.narrowToEnabled(targetProviders)
       : [];
+    /** Providers already reachable through a route, so the search can skip them. */
+    const routeProviders = new Set(
+      routes.map((route) => parseExtensionUrl(route)?.provider).filter(Boolean) as string[]
+    );
+
     const totalExtensionsToAsk = routes.length + (needProviderSearch ? providerList.length : 0);
 
     const fromExtensions: TorrentResult[] = [];
@@ -718,7 +813,7 @@ export class ContentService {
       if (options.signal?.aborted) return;
       const indexerResults = progress?.results ?? [];
       const indexerSettled = progress?.settled ?? 0;
-      const indexerTotal = progress?.totalRelevant ?? allowedIndexers.size;
+      const indexerTotal = progress?.totalRelevant ?? (askIndexers ? allowedIndexers.size : 0);
       const done =
         (progress?.done ?? false) && extensionsSettled >= totalExtensionsToAsk;
 
@@ -749,7 +844,9 @@ export class ContentService {
           }),
         // Source discovery honours the same scope the search did, so narrowing
         // to one site does not quietly widen again the moment you press play.
-        (id) => allowedIndexers.has(id)
+        // At `origin` scope no indexer is asked at all: the question is "what
+        // does this provider have", and an indexer cannot answer it.
+        (id) => askIndexers && allowedIndexers.has(id)
       ),
       ...routes.map(async (route) => {
         if (options.signal?.aborted) return;
@@ -773,9 +870,13 @@ export class ContentService {
               async (providerOutcome) => {
                 if (options.signal?.aborted) return;
                 try {
-                  const extMatches = (providerOutcome.results ?? []).filter((m) =>
-                    m.url && m.url.startsWith('cs3ext://')
-                  );
+                  const extMatches = (providerOutcome.results ?? []).filter((m) => {
+                    if (!m.url || !m.url.startsWith('cs3ext://')) return false;
+                    // Already asked through a route; asking again would double
+                    // the work and the results.
+                    const ref = parseExtensionUrl(m.url);
+                    return ref ? !routeProviders.has(ref.provider) : true;
+                  });
                   if (extMatches.length > 0) {
                     for (const match of extMatches.slice(0, 2)) {
                       if (options.signal?.aborted) break;
@@ -799,8 +900,23 @@ export class ContentService {
         : []),
     ]);
 
+    /**
+     * One row per source, even when two paths found the same one.
+     *
+     * `infoHash` is the identity for both halves — a real infohash for a
+     * torrent, a hash of the URL for a provider link — so a provider reached
+     * both through a route and through the widened search collapses here rather
+     * than appearing twice in the list.
+     */
+    const seen = new Set<string>();
+    const deduped = [...fromExtensions, ...outcome.results].filter((source) => {
+      if (seen.has(source.infoHash)) return false;
+      seen.add(source.infoHash);
+      return true;
+    });
+
     const response: SourceResponse = {
-      sources: [...fromExtensions, ...outcome.results],
+      sources: deduped,
       filtered: outcome.rejected.slice(0, 50).map((r) => ({
         title: r.result.title,
         reason: r.reason,
@@ -808,12 +924,14 @@ export class ContentService {
       })),
       indexerOutcomes: outcome.indexerOutcomes,
       query: { title, season, episode, imdbId: detail?.imdbId },
+      scopeUsed,
+      canWiden: plan.canWiden,
     };
 
     if (response.sources.length === 0) {
-      response.emptyReason = this.explainEmptyResult(outcome, routes.length);
+      response.emptyReason = this.explainEmptyResult(outcome, routes.length, scopeUsed);
     } else {
-      this.cache.write(base, response.sources, season, episode);
+      this.cache.write(this.cacheUrlFor(base, scopeUsed), response.sources, season, episode);
     }
     return response;
   }
@@ -1058,8 +1176,23 @@ export class ContentService {
   private explainEmptyResult(
     outcome: AggregateSearchResult,
     /** Extension providers that also carry this title and were asked too. */
-    extensionRoutes = 0
+    extensionRoutes = 0,
+    scopeUsed: SourceScope = 'all'
   ): string {
+    /**
+     * A scoped search that found nothing is a different sentence entirely.
+     *
+     * It asked the providers that had this title and they had no playable
+     * links — which says nothing about the rest of the app, and the next step
+     * is a button rather than a diagnosis. Reporting an indexer failure here
+     * would describe indexers that were deliberately never asked.
+     */
+    if (scopeUsed === 'origin') {
+      return extensionRoutes === 1
+        ? 'The provider this title came from has no playable links for it right now. Search all sources to ask everything else.'
+        : `The ${extensionRoutes} providers this title came from have no playable links for it right now. Search all sources to ask everything else.`;
+    }
+
     const attempted = outcome.indexerOutcomes.filter((o) => !o.skipped);
     const failed = attempted.filter((o) => !o.ok);
 

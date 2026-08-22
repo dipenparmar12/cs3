@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   X, Play, RefreshCw, Loader2, Users, HardDrive, Radio, Check, AlertTriangle, Download, Filter,
-  Square,
+  Square, Globe,
 } from 'lucide-react';
 import type { TorrentResult } from '../../types/torrent';
 import { SourceFilterBar } from '../SourceFilterBar';
@@ -41,6 +41,16 @@ interface SourcePanelProps {
   onClose: () => void;
   onSelect: (source: TorrentResult) => void;
   onRefresh: () => void;
+  /**
+   * Look beyond the providers this title was found on.
+   *
+   * Absent, or present with `canWiden` false, when there is nothing wider to
+   * ask — a title opened from the home screen was never bound to a provider, so
+   * its first search already looked everywhere.
+   */
+  onWiden?: () => void;
+  /** True when widening would reach providers and indexers not yet asked. */
+  canWiden?: boolean;
   /** Stops waiting for the rest; the sources already found stay on the list. */
   onCancelSearch?: () => void;
   /** Offered per source, so a viewer can grab the release they are watching. */
@@ -82,6 +92,8 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
   onClose,
   onSelect,
   onRefresh,
+  onWiden,
+  canWiden,
   onCancelSearch,
   onDownload,
 }) => {
@@ -183,11 +195,29 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
             )}
           </>
         ) : (
-          <button className="player-panel__search-action" onClick={onRefresh}>
-            <RefreshCw size={13} />
-            Search again
-            <span className="muted">re-checks providers, ignores cached links</span>
-          </button>
+          <>
+            <button className="player-panel__search-action" onClick={onRefresh}>
+              <RefreshCw size={13} />
+              Search again
+              <span className="muted">re-checks this title&apos;s providers</span>
+            </button>
+            {/*
+              Offered only when it would ask something new.
+              
+              The default search asks the providers this title was actually
+              found on, which is what the Android app does. This is the step
+              beyond that — every other installed provider, plus the torrent
+              indexers — and it is a separate button because it is a different
+              question, not a harder version of the same one.
+            */}
+            {onWiden && canWiden && (
+              <button className="player-panel__search-action" onClick={onWiden}>
+                <Globe size={13} />
+                Search all sources
+                <span className="muted">every provider and torrent indexer</span>
+              </button>
+            )}
+          </>
         )}
       </div>
 

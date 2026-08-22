@@ -1612,13 +1612,24 @@ ipcMain.handle('playback:selectSource', async (_, sessionId: string, infoHash: s
   }
 });
 
-ipcMain.handle('playback:refreshSources', async (_, sessionId: string) => {
-  try {
-    return { ok: true, snapshot: await playbackSessions.refresh(sessionId) };
-  } catch (error) {
-    return { ...fail(error), snapshot: null };
+ipcMain.handle(
+  'playback:refreshSources',
+  /**
+   * `widen` is what turns a refresh into "look everywhere".
+   *
+   * Without it a refresh re-asks the providers this title was found on, which
+   * is the right default and the Android behaviour. With it the search reaches
+   * every enabled provider and every torrent indexer — the superset, entered
+   * deliberately rather than by accident.
+   */
+  async (_, sessionId: string, widen = false) => {
+    try {
+      return { ok: true, snapshot: await playbackSessions.refresh(sessionId, { widen }) };
+    } catch (error) {
+      return { ...fail(error), snapshot: null };
+    }
   }
-});
+);
 
 /**
  * Stops waiting for the remaining providers, keeping the sources already found.

@@ -635,6 +635,20 @@ export const App: React.FC = () => {
     window.cloudstream?.playbackRefreshSources(sessionRef.current.id);
   }, []);
 
+  /**
+   * Ask beyond the providers this title was found on.
+   *
+   * A separate action from refresh, because it is a different question. The
+   * default search asks the providers whose results produced this row — what
+   * the Android app does — and this reaches every other installed provider plus
+   * the torrent indexers. Once asked, the session keeps the wider scope, so a
+   * later refresh does not quietly narrow back.
+   */
+  const handleWidenSources = useCallback(() => {
+    if (!sessionRef.current) return;
+    window.cloudstream?.playbackRefreshSources(sessionRef.current.id, true);
+  }, []);
+
   const handleCancelSourceSearch = useCallback(() => {
     if (!sessionRef.current) return;
     window.cloudstream?.playbackCancelSourceSearch(sessionRef.current.id);
@@ -918,6 +932,8 @@ export const App: React.FC = () => {
                 onPlayNow: handlePlayNow,
                 onSelectSource: handleSelectSource,
                 onRefresh: handleRefreshSources,
+                onWiden: handleWidenSources,
+                canWiden: session.snapshot.canWiden,
                 onCancelSearch: handleCancelSourceSearch,
                 onSourceUnplayable: handleSourceUnplayable,
                 onDownloadSource: session.context.onDownloadSource,
