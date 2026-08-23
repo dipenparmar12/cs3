@@ -2165,6 +2165,12 @@ gets fixed. Java's `SecurityManager` is not an option (JEP 411/486 removal).
   paths from the author's Windows machine.
 - `docs/PRD/34` torrent architecture · `35` translation spike results · `36` the remaining
   work to actually execute providers.
+- `docs/PRD/39-native-extension-and-playback-standards.md` — **proposed, nothing built**:
+  our own extension standard alongside `.cs3` (four lanes — `.cs3`, a QuickJS-sandboxed
+  `.csx` bundle, a Stremio-compatible addon URL, and yt-dlp), the `Source`/manifest wire
+  formats, repository signing, the engine ladder and format matrix, and the TLS/challenge
+  layer that actually decides how many sites work. It replaces doc 27 §6–§9. Read it
+  before designing anything plugin-shaped; do not treat it as as-built.
 - `docs/docs_cs3/` — the Android app's architecture, 9 documents, written from source.
 
 Requirement ids appear throughout code comments — `ARCH-2`, `SEC-7`, `DROP-12`, `DSK-57`,
@@ -2260,6 +2266,37 @@ extensions losing their providers again. The jar is rebuilt from the union of bo
 sources instead, and `RUNTIME_GENERATION` is bumped so installed copies under
 `%APPDATA%` are replaced. **Never take a prebuilt jar from a branch whose sources you
 have not compared.**
+
+### Android parity: what was measured and what was closed (2026-08-23)
+
+`docs/roadmap/android-parity.md` records a source-level comparison against the checked-out
+Android tree at `a72f9e6c`. Four gaps were closed in that pass and are described there; the
+one that matters most is the one that was *not*:
+
+**`WebViewResolver` on the JVM is `TODO("Not yet implemented")`.** `library-jvm` ships a JVM
+variant whose `intercept` is a pass-through and whose `resolveUsingWebView` throws
+`NotImplementedError`. So a provider needing a browser does not degrade — it throws, or it
+silently receives a Cloudflare interstitial as though it were the page it asked for. **This
+is invisible to a class-resolution audit, because the class resolves perfectly**, which is
+why four rounds of shim work never surfaced it. 45 plugin directories across 11 repositories
+reference it or `CloudflareKiller`.
+
+The blocker is direction, not capability: the stdio RPC runs main → sidecar only, so the JVM
+cannot ask Electron to open a window. Electron *is* Chromium; the engine is already in the
+box. If you are about to write another shim, read that document first — the counting says the
+class problem is solved and the network layer is not.
+
+Two smaller rules came out of the same pass and are easy to undo by accident:
+
+- **`SourcePrefetcher.schedule` is safe to call from anywhere**, including the player. It
+  declines when background loading is off, returns immediately when the cache can answer,
+  dedupes by target and supersedes rather than stacking. The player calls it at 70% of an
+  episode so the next one is not resolved from cold.
+- **Subtitle appearance is one record and two renderers.** `src/utils/subtitleStyle.ts` maps
+  the stored settings to both `::cue` variables and mpv properties, and it is tested against
+  itself because the failure is silent: the engine routes 4K HEVC to mpv on its own, so
+  styling only the element loses every setting on exactly the files that need them. Note
+  `sub-pos` counts down from 100 where the CSS lift counts up.
 
 ## 8. Working agreements for agents
 
