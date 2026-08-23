@@ -2215,6 +2215,52 @@ Where they disagree, trust the code and fix the doc.
 
 ---
 
+### What was merged from `claude/refine` and `claude/android-media-desktop-dybtml`, and what was not (2026-08-23)
+
+Both branches were merged selectively onto `dev/feature-4`. The rule applied: take
+features and refinements, leave anything that changes playback behaviour, request
+headers, or the native engine — this branch streams the corpus well and that is the
+asset being protected.
+
+**The structural fact that governs any future merge from `refine`: it forked at
+`881456a`, before this branch's streaming stack landed.** Its tree has no
+`providerLinks.ts`, no `subtitles/convert.ts`, no `clearKey`/`shakaSession`, no
+`build-media-runtime.mjs`, and — because it still carries the unanchored
+`extensions/` ignore rule described above — no extensions screen at all. Anything
+on that branch which *rewrites* `main.ts` or `preload.ts` wholesale is therefore
+written against a tree that never knew about those modules, and applying it would
+delete them. Cherry-pick additively from `refine`; never take a whole-file rewrite.
+
+That is why **the 25-commit IPC refactor (`main.ts` → 24 `ipc/*` modules) was not
+merged.** It is a genuine improvement and it is not lost — it can be re-derived
+against the current `main.ts`, using those modules as a template. What it cannot be
+is cherry-picked, because `60da305` replaces `main.ts` with a version assembled from
+a 188-channel surface that predates this branch's 222.
+
+Merged: provider-first source scope (`sourceScope.ts`), out-of-order torrent fetch
+and swarm-limit reporting (`swarmHealth.ts`), the rebuilt extensions screen, the
+formatter consolidation (`utils/format.ts`), `util/jsonFileStore.ts` and
+`util/disabledSet.ts`, the pluggable health-checked home catalogue
+(`homeProviders.ts`, `homeProviderRegistry.ts`), source provenance and export, and
+the NewPipe downloader fix.
+
+Not merged, deliberately: `ext.to` and the human-assisted access gateway; mpv
+embedding and the native-engine integration (`mpvSurface.ts`, `40e3d72`); the
+concurrent-open and end-of-playback changes to `MpvEngine`; the HEVC `hvc1` tagging
+and remux-container changes; `unreadableSource`'s loopback-failure split; and the
+logging-init changes that touch the media modules. Each is a behaviour change to a
+path that currently works.
+
+**One trap worth naming, because it would have shipped silently.** `refine`'s
+prebuilt `cs3-provider-bridge.jar` predates the `:app` activity shims on this branch
+(`CommonActivity`, `MainActivity`, `CloudStreamApp`, `AcraApplication`). Taking that
+binary to get the NewPipe fix would have carried the fix in and taken the shims back
+out — a regression with no compile error and no failing test, surfacing only as
+extensions losing their providers again. The jar is rebuilt from the union of both
+sources instead, and `RUNTIME_GENERATION` is bumped so installed copies under
+`%APPDATA%` are replaced. **Never take a prebuilt jar from a branch whose sources you
+have not compared.**
+
 ## 8. Working agreements for agents
 
 - **Branching**: cloud/agent sessions develop on their assigned `claude/*` branch and push
