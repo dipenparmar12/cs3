@@ -19,6 +19,7 @@ import {
 import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
 import { HomeSettings } from '../components/settings/HomeSettings';
+import { SubtitleSettings } from '../components/settings/SubtitleSettings';
 import { PlayerSettings } from '../components/PlayerSettings';
 import { ProviderRankingPanel } from '../components/settings/ProviderRankingPanel';
 import { NetworkSettings } from '../components/NetworkSettings';
@@ -273,7 +274,14 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
         </>
       )}
 
-      {tab === 'player' && <PlayerSettings />}
+      {tab === 'player' && (
+        <>
+          <PlayerSettings />
+          {/* Sits under the player tab rather than with subtitle *sources*,
+              because this is about reading them, not finding them. */}
+          <SubtitleSettings />
+        </>
+      )}
 
       {tab === 'components' && <UnifiedComponentManager />}
 

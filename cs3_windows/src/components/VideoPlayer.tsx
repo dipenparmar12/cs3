@@ -32,6 +32,12 @@ import { useMiniFrame } from './player/useMiniFrame';
 import { PlayerCopyMenu } from './player/PlayerCopyMenu';
 import { PlaybackErrorPanel } from './player/PlaybackErrorPanel';
 import { formatTimecode, formatTransferRate } from '../utils/format';
+import {
+  DEFAULT_SUBTITLE_STYLE,
+  subtitleCssVariables,
+  subtitleMpvProperties,
+  type SubtitleStyle,
+} from '../utils/subtitleStyle';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -1709,6 +1715,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const preferencesLoaded = useRef(false);
 
+  /**
+   * How subtitles are drawn, held in state because `::cue` cannot be styled
+   * inline — the rules live in the stylesheet and read these as custom
+   * properties off the player root.
+   */
+  const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
+
+  /**
+   * The native engine gets the same appearance as the element does.
+   *
+   * Without this, routing a 4K HEVC file to mpv — which the engine does on its
+   * own, without the viewer asking — would silently discard every subtitle
+   * setting and show mpv's defaults instead. Re-applied on each open because
+   * properties do not survive a `loadfile`.
+   */
+  useEffect(() => {
+    if (!isNativeEngine) return;
+    void window.cloudstream?.mpvSetSubtitleStyle?.(subtitleMpvProperties(subtitleStyle));
+  }, [isNativeEngine, subtitleStyle, streamUrl]);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -1724,6 +1750,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setSpeed(preferences.speed);
       if (preferences.subtitleLanguage) preferredSubtitleLanguage.current = preferences.subtitleLanguage;
       if (preferences.audioLanguage) preferredAudioLanguage.current = preferences.audioLanguage;
+      setSubtitleStyle({
+        scale: preferences.subtitleScale ?? DEFAULT_SUBTITLE_STYLE.scale,
+        color: preferences.subtitleColor ?? DEFAULT_SUBTITLE_STYLE.color,
+        background: preferences.subtitleBackground ?? DEFAULT_SUBTITLE_STYLE.background,
+        weight: preferences.subtitleWeight ?? DEFAULT_SUBTITLE_STYLE.weight,
+        position: preferences.subtitlePosition ?? DEFAULT_SUBTITLE_STYLE.position,
+      });
       preferencesLoaded.current = true;
     })();
     return () => {
@@ -2285,7 +2318,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
       // `display: none` rather than unmounting: see the `hidden` prop. The
       // element keeps its buffer, its position and its decoder.
-      style={hidden ? { display: 'none' } : miniStyle}
+      //
+      // The subtitle tokens ride along here because `::cue` is not reachable
+      // from an inline style — the stylesheet owns those rules and reads these
+      // custom properties from the player root.
+      style={
+        hidden
+          ? { display: 'none' }
+          : { ...(miniStyle ?? {}), ...subtitleCssVariables(subtitleStyle) }
+      }
       aria-hidden={hidden || undefined}
       onMouseMove={revealControls}
       onMouseEnter={handlePlayerEnter}

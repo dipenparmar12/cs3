@@ -5454,3 +5454,82 @@
   border-radius: 999px;
 }
 .detail-facts__rail::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
+
+/* --- Subtitle appearance ---------------------------------------------------
+   Driven entirely by custom properties set on `.player` from stored
+   preferences, because `::cue` cannot be reached from an inline style — the
+   rule has to live in a stylesheet and read the tokens from an ancestor.
+
+   Default `<track>` rendering is small white text with no separation from the
+   picture, which vanishes over snow, a white wall, or light credits. Android
+   has had a caption editor for years; this is the desktop equivalent. */
+.player video::cue {
+  /* `em` against the element's own font size, so the browser's viewport-based
+     default scaling still applies and this multiplies it rather than replacing
+     it with a fixed pixel size that would be wrong on every other window. */
+  font-size: calc(1em * var(--cue-scale, 1));
+  color: var(--cue-color, #fff);
+  font-weight: var(--cue-weight, 400);
+  background: var(--cue-bg, transparent);
+  text-shadow: var(--cue-shadow, none);
+  line-height: 1.35;
+  white-space: pre-line;
+}
+
+/* Lifting cues clear of hard-subbed text burned into the picture, which is
+   common on the releases where an external subtitle is most wanted. The
+   element has no property for this, so the track container is moved instead —
+   `::cue` positioning is ignored by Chromium for anything but line. */
+.player video::-webkit-media-text-track-container {
+  transform: translateY(calc(-1 * var(--cue-lift, 0%)));
+}
+
+/* --- Subtitle appearance settings ------------------------------------------ */
+.sub-choices { display: flex; flex-wrap: wrap; gap: 0.35rem; justify-content: flex-end; }
+
+.sub-choice { font-size: 0.75rem; padding: 0.28rem 0.6rem; }
+.sub-choice--on {
+  border-color: var(--accent-light, #60a5fa);
+  color: var(--accent-light, #60a5fa);
+}
+
+.sub-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  outline: 1px solid rgba(255, 255, 255, 0.25);
+  cursor: pointer;
+  padding: 0;
+}
+.sub-swatch--on { border-color: var(--accent-light, #60a5fa); }
+.sub-swatch:focus-visible { outline: 2px solid var(--accent-light, #60a5fa); outline-offset: 2px; }
+
+/* A light gradient, not the panel's own surface. Every setting here is judged
+   against a moving picture, and the case that actually decides between an
+   outline and a box is bright content — so that is what the sample sits on. */
+.sub-preview {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  min-height: 96px;
+  width: 100%;
+  padding: 0.9rem 1rem;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #dfe6ef 0%, #f7fafc 45%, #b9c6d4 100%);
+  overflow: hidden;
+}
+
+.sub-preview__cue {
+  text-align: center;
+  max-width: 90%;
+  transform: translateY(calc(-1 * var(--cue-lift, 0%)));
+  font-size: calc(1rem * var(--cue-scale, 1));
+  color: var(--cue-color, #fff);
+  font-weight: var(--cue-weight, 400);
+  background: var(--cue-bg, transparent);
+  text-shadow: var(--cue-shadow, none);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  line-height: 1.35;
+}

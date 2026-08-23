@@ -2120,6 +2120,14 @@ ipcMain.handle('mpv:addSubtitle', async (_, url: string, title?: string, languag
 ipcMain.handle('mpv:setSubtitleDelay', async (_, seconds: number) =>
   mpvEngine.setSubtitleDelay(seconds)
 );
+/**
+ * The renderer sends already-translated mpv properties rather than the
+ * preference record, so the mapping from one stored setting to two very
+ * different renderers lives in exactly one module.
+ */
+ipcMain.handle('mpv:setSubtitleStyle', async (_, properties: Record<string, unknown>) =>
+  mpvEngine.setSubtitleStyle(properties)
+);
 ipcMain.handle('mpv:stop', async () => mpvEngine.stop());
 
 /** A pull for the current state, for a player that mounted mid-playback. */
@@ -2277,13 +2285,43 @@ interface StoredPlayerPreferences {
   speed: number;
   audioLanguage?: string;
   subtitleLanguage?: string;
+  /**
+   * How subtitles are drawn.
+   *
+   * Default `<track>` rendering is small white text with no outline, which
+   * disappears completely over a bright scene — snow, a white wall, credits on
+   * a light background. Android has shipped a caption editor for years and it
+   * is the single most-adjusted screen in that app; having none here made
+   * subtitles something to endure rather than read.
+   *
+   * Stored as plain numbers and enum strings rather than a composed CSS string,
+   * because the same settings have to drive two very different renderers: CSS
+   * `::cue` for the browser path and mpv properties for the native one.
+   */
+  subtitleScale: number;
+  subtitleColor: string;
+  subtitleBackground: 'none' | 'shadow' | 'outline' | 'box';
+  subtitleWeight: 'normal' | 'bold';
+  subtitlePosition: number;
 }
 
 const DEFAULT_PLAYER_PREFERENCES: StoredPlayerPreferences = {
   volume: 1,
   muted: false,
   speed: 1,
+  subtitleScale: 1,
+  subtitleColor: '#ffffff',
+  // Outline rather than a box: a box is the most legible and the most
+  // intrusive, and an outline reads cleanly over almost everything without
+  // covering the picture.
+  subtitleBackground: 'outline',
+  subtitleWeight: 'normal',
+  subtitlePosition: 0,
 };
+
+/** Only these values mean anything to either renderer. */
+const SUBTITLE_BACKGROUNDS = new Set(['none', 'shadow', 'outline', 'box']);
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
 ipcMain.handle('player:getPreferences', async () => {
   const stored = datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null);
@@ -2299,6 +2337,17 @@ ipcMain.handle('player:getPreferences', async () => {
   preferences.volume = Math.min(1, Math.max(0, Number(preferences.volume) || 0));
   preferences.speed = Math.min(4, Math.max(0.25, Number(preferences.speed) || 1));
   preferences.muted = preferences.muted === true;
+  // Same rule as volume, for the same reason: a scale of 0 renders nothing at
+  // all and looks exactly like subtitles failing to load.
+  preferences.subtitleScale = Math.min(3, Math.max(0.5, Number(preferences.subtitleScale) || 1));
+  preferences.subtitlePosition = Math.min(40, Math.max(0, Number(preferences.subtitlePosition) || 0));
+  if (!HEX_COLOR.test(String(preferences.subtitleColor))) {
+    preferences.subtitleColor = DEFAULT_PLAYER_PREFERENCES.subtitleColor;
+  }
+  if (!SUBTITLE_BACKGROUNDS.has(String(preferences.subtitleBackground))) {
+    preferences.subtitleBackground = DEFAULT_PLAYER_PREFERENCES.subtitleBackground;
+  }
+  if (preferences.subtitleWeight !== 'bold') preferences.subtitleWeight = 'normal';
   return { ok: true, preferences };
 });
 

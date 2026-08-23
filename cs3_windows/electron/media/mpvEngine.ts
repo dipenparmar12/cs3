@@ -957,6 +957,31 @@ export class MpvEngine {
   }
 
   /**
+   * Applies the viewer's subtitle appearance to this engine.
+   *
+   * The same stored record drives the browser path's `::cue` rules, because a
+   * viewer who sets 1.4x and then opens a 4K HEVC file — which routes here —
+   * must not watch the subtitles change size on them. `src/utils/subtitleStyle`
+   * owns the translation both ways; this method only carries the result.
+   *
+   * Properties are set one at a time and failures are tolerated: `sub-bold` and
+   * `sub-back-color` have moved between mpv releases, and a portable build that
+   * does not know one of them must not lose the rest of the styling with it.
+   */
+  public async setSubtitleStyle(
+    properties: Record<string, unknown>
+  ): Promise<MpvCommandResult> {
+    let applied = 0;
+    for (const [name, value] of Object.entries(properties)) {
+      const result = await this.command(['set_property', name, value]);
+      if (result.ok) applied += 1;
+    }
+    return applied > 0
+      ? { ok: true }
+      : { ok: false, error: 'mpv accepted none of the subtitle style properties.' };
+  }
+
+  /**
    * Stops playback without killing the process.
    *
    * The instance is kept idle on purpose — see {@link open}. `stop` returns it

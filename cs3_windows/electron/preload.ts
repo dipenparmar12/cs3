@@ -564,6 +564,8 @@ export interface CloudStreamElectronAPI {
   mpvSetSubtitleTrack: (id: number | null) => Promise<MpvCommandResult>;
   mpvAddSubtitle: (url: string, title?: string, language?: string) => Promise<MpvCommandResult>;
   mpvSetSubtitleDelay: (seconds: number) => Promise<MpvCommandResult>;
+  /** Appearance, already translated to mpv property names. */
+  mpvSetSubtitleStyle: (properties: Record<string, unknown>) => Promise<MpvCommandResult>;
   mpvStop: () => Promise<MpvCommandResult>;
   /** A pull, for a player that mounted while something was already playing. */
   getMpvSnapshot: () => Promise<Envelope & { snapshot: MpvSnapshot }>;
@@ -624,6 +626,15 @@ export interface CloudStreamElectronAPI {
         speed: number;
         audioLanguage?: string;
         subtitleLanguage?: string;
+        /** Multiplier on the base cue size, 0.5–3. */
+        subtitleScale: number;
+        /** `#rrggbb`; anything else is replaced with the default on read. */
+        subtitleColor: string;
+        /** How a cue is separated from the picture behind it. */
+        subtitleBackground: 'none' | 'shadow' | 'outline' | 'box';
+        subtitleWeight: 'normal' | 'bold';
+        /** Percent of frame height to lift cues by, for hard-subbed releases. */
+        subtitlePosition: number;
       };
     }
   >;
@@ -633,6 +644,11 @@ export interface CloudStreamElectronAPI {
     speed?: number;
     audioLanguage?: string;
     subtitleLanguage?: string;
+    subtitleScale?: number;
+    subtitleColor?: string;
+    subtitleBackground?: 'none' | 'shadow' | 'outline' | 'box';
+    subtitleWeight?: 'normal' | 'bold';
+    subtitlePosition?: number;
   }) => Promise<Envelope>;
   getDeleteDownloadPreference: () => Promise<
     Envelope & { preference: 'ask' | 'list-only' | 'list-and-file' }
@@ -1261,6 +1277,7 @@ const api: CloudStreamElectronAPI = {
   mpvAddSubtitle: (url, title, language) =>
     ipcRenderer.invoke('mpv:addSubtitle', url, title, language),
   mpvSetSubtitleDelay: (seconds) => ipcRenderer.invoke('mpv:setSubtitleDelay', seconds),
+  mpvSetSubtitleStyle: (properties) => ipcRenderer.invoke('mpv:setSubtitleStyle', properties),
   mpvStop: () => ipcRenderer.invoke('mpv:stop'),
   getMpvSnapshot: () => ipcRenderer.invoke('mpv:snapshot'),
   onMpvUpdate: (callback) => subscribe('mpv:update', callback),
