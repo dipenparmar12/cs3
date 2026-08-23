@@ -51,8 +51,16 @@ export interface SystemRuntimeStatus {
  * `MainActivity`, `CloudStreamApp`, `AcraApplication`) so plugins that read
  * preferences through `CommonActivity.activity` (e.g. `StreamingCommunity`) load
  * without NoClassDefFoundError.
+ *
+ * Generation 5 adds `NewPipeBootstrap` to the bridge. NewPipeExtractor holds one
+ * global `Downloader` that must be installed before anything touches it, nothing
+ * was installing one, and every YouTube link a provider returned therefore died
+ * with `NullPointerException: downloader is null`. The bump is what carries the
+ * fix into an installed app: the copy under `%APPDATA%` is resolved ahead of
+ * every build location, so without it the old bridge keeps being served and the
+ * fix reaches nobody who already has the app.
  */
-const RUNTIME_GENERATION = 4;
+const RUNTIME_GENERATION = 5;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {
