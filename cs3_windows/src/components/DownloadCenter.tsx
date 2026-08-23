@@ -42,6 +42,14 @@ interface DownloadCenterProps {
    * back to episodes, other sources and playback existed and was not reachable.
    */
   onOpenTitle?: (task: DownloadTask) => void;
+  /**
+   * Plays a finished download in our own player.
+   *
+   * Until this existed, a completed film could only be handed to the OS
+   * default player, which meant losing resume position, subtitle search, track
+   * selection and the compatibility engine for a file already on disk.
+   */
+  onPlayFile?: (task: DownloadTask) => void;
 }
 
 interface TaskGroup {
@@ -55,6 +63,7 @@ interface TaskGroup {
 
 interface SingleTaskRowProps {
   task: DownloadTask;
+  onPlayFile?: (task: DownloadTask) => void;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onRemove: (id: string, deleteFile?: boolean) => void;
@@ -65,6 +74,7 @@ interface SingleTaskRowProps {
 
 const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
   task,
+  onPlayFile,
   onPause,
   onResume,
   onRemove,
@@ -298,6 +308,15 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
             {task.state === DownloadState.Failed ? <RotateCw size={15} /> : <Play size={15} />}
           </button>
         )}
+        {onPlayFile && task.state === DownloadState.Completed && (
+          <button
+            onClick={() => onPlayFile(task)}
+            className="btn btn-primary btn-icon"
+            title="Play here"
+          >
+            <Play size={15} />
+          </button>
+        )}
         {onReveal && (
           <button
             onClick={() => onReveal(task.targetFilePath)}
@@ -331,6 +350,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   onReveal,
   onOpenBinarySetup,
   onOpenTitle,
+  onPlayFile,
 }) => {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [activeFilter, setActiveFilter] = useState<DownloadFilterTab>('all');
@@ -1112,6 +1132,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                           onResume={onResume}
                           onRemove={(id) => requestDelete([id], group.title)}
                           onReveal={onReveal}
+                          onPlayFile={onPlayFile}
                           onOpenTitle={onOpenTitle}
                           isEpisode
                         />
@@ -1131,6 +1152,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                 onResume={onResume}
                 onRemove={(id) => requestDelete([id], group.title)}
                 onReveal={onReveal}
+                onPlayFile={onPlayFile}
                 onOpenTitle={onOpenTitle}
               />
             );

@@ -65,6 +65,14 @@ export const App: React.FC = () => {
   const [playback, setPlayback] = useState<PlaybackRequest | null>(null);
   const [switchingTo, setSwitchingTo] = useState<Episode | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
+  /**
+   * A failure that has no screen of its own yet.
+   *
+   * Opening a downloaded file can fail before any player exists — the file was
+   * moved or deleted since it finished — and the alternative to saying so is a
+   * button that does nothing when clicked.
+   */
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
 
   /**
    * The instant-play path: the player opens on this state before any stream
@@ -1174,6 +1182,52 @@ export const App: React.FC = () => {
                       posterUrl: task.posterUrl,
                     });
                   }}
+                  /* Plays the file we already have, in our own player.
+
+                     The stream URL is a loopback address rather than the path,
+                     so the file is inspected and classified by `media:prepare`
+                     exactly like a provider link — a downloaded 10-bit HEVC
+                     file needs the same routing decision a streamed one does.
+                     Subtitles recorded alongside the download come with it. */
+                  onPlayFile={(task) => {
+                    void (async () => {
+                      const served = await window.cloudstream?.getPlayableDownloadUrl(
+                        task.targetFilePath
+                      );
+                      if (!served?.ok || !served.url) {
+                        setActionNotice(
+                          served?.error ?? 'That file could not be opened. It may have been moved.'
+                        );
+                        return;
+                      }
+                      setPlayerHidden(false);
+                      setPlayerMini(false);
+                      setPlayback({
+                        streamUrl: served.url,
+                        mimeType: 'video/mp4',
+                        title: task.title,
+                        episodeTitle:
+                          task.episodeNumber !== undefined
+                            ? `Episode ${task.episodeNumber}`
+                            : undefined,
+                        infoHash: `download:${task.id}`,
+                        // `SubtitleFile` carries a language, not a display
+                        // name, and the player's list is labelled by name.
+                        subtitles: (task.subtitles ?? []).map((sub) => ({
+                          name: sub.lang,
+                          url: sub.url,
+                        })),
+                        progress: task.mediaUrl
+                          ? {
+                              mediaUrl: task.mediaUrl,
+                              posterUrl: task.posterUrl,
+                              season: task.seasonNumber,
+                              episode: task.episodeNumber,
+                            }
+                          : undefined,
+                      });
+                    })();
+                  }}
                 />
               )}
               {activeTab === 'extensions' && (
@@ -1207,6 +1261,19 @@ export const App: React.FC = () => {
         onClose={() => setIsBinaryModalOpen(false)}
         onSuccess={handleBinarySetupSuccess}
       />
+
+      {/* Dismissed by clicking it, because it reports something the viewer
+          asked for and may want to read twice — not a status that ages out. */}
+      {actionNotice && (
+        <div
+          className="toast"
+          role="status"
+          onClick={() => setActionNotice(null)}
+          style={{ cursor: 'pointer' }}
+        >
+          {actionNotice}
+        </div>
+      )}
     </div>
   );
 };

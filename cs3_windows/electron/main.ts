@@ -2381,6 +2381,31 @@ ipcMain.handle('download:setDeletePreference', async (_, preference: DeletePrefe
 });
 ipcMain.handle('download:getQueue', async () => downloadService.getTasks());
 
+/**
+ * Hands a finished download back as something the player can open.
+ *
+ * A completed film used to leave the app entirely — `shell.openPath` to the
+ * OS default player — costing the viewer resume position, subtitle search,
+ * track selection and the compatibility engine, for a file already on their
+ * disk. The engine was built for local input all along: `mediaInspector`
+ * has always withheld `-user_agent` for non-HTTP paths precisely because a
+ * local file was expected to arrive one day.
+ *
+ * A loopback URL rather than the path itself, so everything downstream —
+ * ffprobe, the media element, mpv — takes it through the same door as a
+ * stream, and so `media:prepare` still classifies it before anything is
+ * attached. INV-RACE-1 applies here exactly as it does to a provider link.
+ */
+ipcMain.handle('download:getPlayableUrl', async (_, filePath: string) => {
+  try {
+    if (!filePath) return { ok: false, error: 'That download has no file path recorded.' };
+    return { ok: true, url: await contentService.serveLocalFile(filePath) };
+  } catch (error) {
+    logger.warn('download', 'local_playback_failed', { error: String(error) });
+    return fail(error);
+  }
+});
+
 // Season and series downloads. Resolution runs here rather than in the
 // renderer so a long season survives the user navigating away mid-run.
 ipcMain.handle('download:startBatch', async (_, request: BatchDownloadRequest) => {

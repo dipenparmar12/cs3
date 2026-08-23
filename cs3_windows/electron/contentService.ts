@@ -231,6 +231,18 @@ export class ContentService {
    */
   private proxy = new MediaProxy((input, init) => rawFetch(input, init));
   private details = new DetailCache();
+
+  /**
+   * Serves a downloaded file over the same loopback origin a stream uses.
+   *
+   * Exposed here rather than reaching for the proxy directly from `main`
+   * because the proxy is this service's, and one owner for the loopback origin
+   * is what stops a second server appearing on another port.
+   */
+  public async serveLocalFile(filePath: string): Promise<string> {
+    return this.proxy.serveFile(filePath);
+  }
+
   /** Base URLs with a background refresh already running. */
   private revalidating = new Set<string>();
   /** Notified when a background refresh produced new metadata. */

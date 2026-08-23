@@ -657,6 +657,14 @@ export interface CloudStreamElectronAPI {
     preference: 'ask' | 'list-only' | 'list-and-file'
   ) => Promise<Envelope & { preference?: string }>;
   getDownloadQueue: () => Promise<DownloadTask[]>;
+  /**
+   * A finished download, as a URL the player can open.
+   *
+   * Served from loopback rather than handed over as a path, so the file goes
+   * through `media:prepare` like any other source and is classified before
+   * anything is attached to it.
+   */
+  getPlayableDownloadUrl: (filePath: string) => Promise<Envelope & { url?: string }>;
   revealInFolder: (filePath?: string) => Promise<void>;
   onDownloadProgress: (callback: (tasks: DownloadTask[]) => void) => () => void;
 
@@ -1316,6 +1324,7 @@ const api: CloudStreamElectronAPI = {
   setDeleteDownloadPreference: (preference) =>
     ipcRenderer.invoke('download:setDeletePreference', preference),
   getDownloadQueue: () => ipcRenderer.invoke('download:getQueue'),
+  getPlayableDownloadUrl: (filePath) => ipcRenderer.invoke('download:getPlayableUrl', filePath),
   revealInFolder: (filePath) => ipcRenderer.invoke('download:revealInFolder', filePath),
   onDownloadProgress: (callback) => subscribe('download:progress', callback),
 
