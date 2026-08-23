@@ -1102,6 +1102,10 @@ export const App: React.FC = () => {
               onStartSession={startSession}
               onEnqueueDownload={handleEnqueueDownload}
               onSearch={handleSearchFromDetail}
+              // Opening a related title is the same navigation as opening a
+              // search result, so it reuses the same handler and the same
+              // scroll-restore behaviour.
+              onSelectMedia={handleSelectMedia}
               // Recorded on a bookmark, so a saved page remembers the search
               // that found it and can be reached that way again.
               searchQuery={searchQuery}

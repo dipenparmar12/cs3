@@ -2137,6 +2137,17 @@ export class PluginManager {
         typeof detail.duration === 'number' ? `${detail.duration} min` : undefined,
       episodes,
       actors: Array.isArray(detail.actors) ? (detail.actors as string[]) : undefined,
+      /*
+       * Related titles, re-addressed exactly like search results.
+       *
+       * They arrive as whole search responses, and a recommendation is only
+       * useful if it can be opened — which means its URL has to carry the
+       * provider that produced it, the same way every other row does.
+       * `mapProviderResults` is that rule, so it is reused rather than
+       * restated; it also drops entries missing a name or url, which providers
+       * do emit.
+       */
+      recommendations: mapProviderResults(ref.provider, detail.recommendations),
       // A film has no episode list; its `dataUrl` is the playable handle and is
       // re-addressed the same way an episode's is.
       id: undefined,

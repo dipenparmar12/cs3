@@ -205,6 +205,15 @@ const AUTO_QUALITY = -1;
 /** How long before the end the up-next card appears, and how long it counts down. */
 const UP_NEXT_LEAD_SECONDS = 40;
 
+/**
+ * How far into an episode the next one's sources start being looked for.
+ *
+ * A fraction rather than a countdown, because episode lengths across the corpus
+ * run from 22 minutes to feature length and a fixed lead that suits one is
+ * either far too early or useless for the other.
+ */
+const NEXT_EPISODE_PRELOAD_RATIO = 0.7;
+
 export interface AudioTrackInfo {
   id: string | number;
   label: string;
@@ -886,6 +895,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       duration > 0 &&
       secondsLeft <= UP_NEXT_LEAD_SECONDS
   );
+
+  /**
+   * Finds the next episode's sources while this one is still playing.
+   *
+   * Without this, an episode boundary starts from cold: pressing Play on
+   * episode 2 begins a fifteen-provider scrape from nothing, which is the exact
+   * multi-second stall the prefetcher exists to remove — reappearing at the one
+   * moment a viewer working through a season feels it most. Android has done
+   * this since forever (`PlayerGeneratorViewModel.preLoadNextLinks`); the
+   * machinery was already here and simply had no caller on this path.
+   *
+   * Seventy percent, not the last thirty seconds. The scrape itself takes tens
+   * of seconds against the slower providers, so starting it as the credits roll
+   * would finish after the viewer had already pressed Next and waited anyway.
+   *
+   * Everything that makes this safe lives in `SourcePrefetcher.schedule`: it
+   * declines when background loading is switched off, returns immediately when
+   * the cache can already answer, dedupes by target, and supersedes rather than
+   * stacking. Pressing Play during the run joins it instead of starting a
+   * second scrape.
+   */
+  const preloadedEpisodeFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!nextEpisode || !progress?.mediaUrl || duration <= 0) return;
+    if (currentTime / duration < NEXT_EPISODE_PRELOAD_RATIO) return;
+    if (preloadedEpisodeFor.current === nextEpisode.url) return;
+
+    preloadedEpisodeFor.current = nextEpisode.url;
+    void window.cloudstream?.prefetchSources?.({
+      mediaUrl: progress.mediaUrl,
+      season: nextEpisode.season,
+      episode: nextEpisode.episode,
+      titleOverride: title,
+    });
+  }, [nextEpisode, progress?.mediaUrl, currentTime, duration, title]);
 
   // --- source attachment ---------------------------------------------------
 

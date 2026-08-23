@@ -5389,3 +5389,68 @@
 
 /* The mini player is 420px of mostly video; any of these would cover the film. */
 .player--mini .player__messages { display: none; }
+
+/* --- Detail page: cast and related titles ----------------------------------
+   Both come from fields the provider already sends and that this screen used
+   to drop. They sit below the episode list because they are context, not the
+   reason the page was opened — a viewer who came here to press Play should not
+   have to scroll past a cast list to reach the episodes. */
+.detail-facts {
+  margin-top: 1.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.detail-facts__heading {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  margin: 0 0 0.85rem;
+}
+
+/* Wraps rather than scrolls: a cast list has no meaningful order past the
+   first few names, so hiding the tail behind a sideways scroll buys nothing. */
+.detail-facts__people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.detail-facts__person {
+  font-size: 0.82rem;
+  color: var(--text-main);
+  background: var(--surface-raised, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 999px;
+  padding: 0.22rem 0.7rem;
+}
+
+/* Same rail geometry as the home screen, so a poster is the same size and
+   behaves the same way wherever it appears. */
+.detail-facts__rail {
+  display: flex;
+  gap: 0.85rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.4rem;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+
+.detail-facts__rail > * {
+  flex: 0 0 auto;
+  width: 158px;
+  scroll-snap-align: start;
+}
+
+.detail-facts__rail::-webkit-scrollbar { height: 7px; }
+.detail-facts__rail::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+.detail-facts__rail::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
