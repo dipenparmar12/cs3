@@ -198,6 +198,62 @@ export class PlaybackEngine {
     return model;
   }
 
+  /**
+   * Measures multiple candidate sources in parallel with bounded concurrency.
+   */
+  public async inspectMultiple(
+    requests: Array<Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh'>>,
+    concurrency = 4
+  ): Promise<SourceCapabilityModel[]> {
+    if (requests.length === 0) return [];
+    const results: SourceCapabilityModel[] = new Array(requests.length);
+    let cursor = 0;
+
+    const worker = async () => {
+      while (cursor < requests.length) {
+        const i = cursor++;
+        try {
+          results[i] = await this.inspect(requests[i]);
+        } catch (error) {
+          // Fallback model on unexpected inspection throw
+          results[i] = this.unmeasured(
+            requests[i].url,
+            transportFromUrl(requests[i].url, requests[i].isM3u8),
+            error instanceof Error ? error.message : 'Inspection failed'
+          );
+        }
+      }
+    };
+
+    const workerCount = Math.min(Math.max(1, concurrency), requests.length);
+    const workers = Array.from({ length: workerCount }, () => worker());
+    await Promise.all(workers);
+    return results;
+  }
+
+  /**
+   * Inspects a stream with exponential backoff retry for transient network/probe hiccups.
+   */
+  private async inspectWithRetry(resolvedUrl: string, isM3u8?: boolean): Promise<any> {
+    const MAX_RETRIES = 2;
+    let lastResult = await this.inspector.inspect(resolvedUrl, isM3u8);
+    if (lastResult.metadata) return lastResult;
+
+    // Retry only on timeouts or transient network glitches
+    const isRetryable =
+      lastResult.timedOut ||
+      Boolean(lastResult.error && /timeout|ECONNRESET|ETIMEDOUT|socket hang up/i.test(lastResult.error));
+    if (!isRetryable) return lastResult;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+      const retryResult = await this.inspector.inspect(resolvedUrl, isM3u8);
+      if (retryResult.metadata) return retryResult;
+      lastResult = retryResult;
+    }
+    return lastResult;
+  }
+
   private async measure(
     resolvedUrl: string,
     originUrl: string,
@@ -272,7 +328,7 @@ export class PlaybackEngine {
     const remembered = this.deps.inspections?.read(originUrl);
     const inspection = remembered
       ? { ...remembered, error: undefined, timedOut: false, latencyMs: 0 }
-      : await this.inspector.inspect(resolvedUrl, isM3u8);
+      : await this.inspectWithRetry(resolvedUrl, isM3u8);
 
     if (!remembered && inspection.metadata) {
       this.deps.inspections?.write(

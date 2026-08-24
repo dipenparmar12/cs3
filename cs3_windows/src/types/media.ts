@@ -193,6 +193,8 @@ export type DrmType =
   | 'clearkey'
   | 'widevine'
   | 'playready'
+  | 'fairplay'
+  | 'marlin'
   /**
    * Encrypted by a system this build has no name for.
    *
@@ -210,6 +212,39 @@ export interface DrmConfiguration {
   clearKeys?: Record<string, string>;
   licenseUrl?: string;
   licenseHeaders?: Record<string, string>;
+}
+
+export type PlaybackErrorStage = 'probe' | 'proxy' | 'ffmpeg' | 'transcode' | 'playback' | 'network' | 'renderer';
+
+export type PlaybackErrorCode =
+  | 'PROBE_TIMEOUT'
+  | 'PROBE_FAILED'
+  | 'PROBE_UNREADABLE'
+  | 'DRM_UNSUPPORTED'
+  | 'DRM_CDM_REQUIRED'
+  | 'PROXY_PATH_DENIED'
+  | 'PROXY_UPSTREAM_ERROR'
+  | 'PROXY_RATE_LIMITED'
+  | 'TRANSCODE_FAILED'
+  | 'COMPONENTS_MISSING'
+  | 'STREAM_STALL'
+  | 'UNKNOWN_ERROR';
+
+export interface PlaybackErrorData {
+  stage: PlaybackErrorStage;
+  code: PlaybackErrorCode;
+  message: string;
+  retryable: boolean;
+  detail?: string;
+  statusCode?: number;
+}
+
+export interface BufferHealthMetrics {
+  bufferedSeconds: number;
+  stallsCount: number;
+  lastStallAt?: number;
+  underrunDetected: boolean;
+  currentBitrate?: number;
 }
 
 export interface SourceCapabilityModel {

@@ -3,6 +3,7 @@ import type { TorrentResult } from '../src/types/torrent';
 import type { ContentService, SourceQuery, StreamAttempt } from './contentService';
 import type { StreamHandle } from './torrent/torrentEngine';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
+import type { BufferHealthMetrics } from '../src/types/media';
 
 /**
  * Owns one "the user pressed play" interaction, from the first click to the
@@ -56,6 +57,8 @@ export interface PlaybackSnapshot {
   emptyReason?: string;
   /** The structured form of `emptyReason`, when the failure produced one. */
   diagnosis?: SourceDiagnosis;
+  /** Buffer health monitoring metrics for adaptive playback telemetry. */
+  bufferHealth?: BufferHealthMetrics;
   /**
    * True when this list came from the providers the title was found on, and
    * asking everything else would ask something new. The player offers the wider
@@ -101,6 +104,7 @@ interface Session {
   error?: string;
   emptyReason?: string;
   diagnosis?: SourceDiagnosis;
+  bufferHealth?: BufferHealthMetrics;
   canWiden: boolean;
   /**
    * Bumped on every start attempt. A start that loses the race — because the
@@ -144,6 +148,7 @@ export class PlaybackSessionManager {
       error: session.error,
       emptyReason: session.emptyReason,
       diagnosis: session.diagnosis,
+      bufferHealth: session.bufferHealth,
       canWiden: session.canWiden,
       title: session.title,
       episodeTitle: session.episodeTitle,
@@ -637,6 +642,44 @@ export class PlaybackSessionManager {
       session.started = Boolean(previousInfoHash);
       this.emit(session);
     }
+  }
+
+  /**
+   * Records buffer heartbeat metrics from the player element for adaptive monitoring.
+   */
+  public recordBufferHeartbeat(
+    sessionId: string,
+    bufferedSeconds: number,
+    currentBitrate?: number
+  ): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.disposed) return;
+
+    session.bufferHealth = {
+      bufferedSeconds: Math.max(0, bufferedSeconds),
+      stallsCount: session.bufferHealth?.stallsCount ?? 0,
+      lastStallAt: session.bufferHealth?.lastStallAt,
+      underrunDetected: bufferedSeconds < 1.0,
+      currentBitrate,
+    };
+  }
+
+  /**
+   * Records a playback stall or buffer underrun event from the player.
+   */
+  public recordBufferStall(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.disposed) return;
+
+    const stallsCount = (session.bufferHealth?.stallsCount ?? 0) + 1;
+    session.bufferHealth = {
+      bufferedSeconds: 0,
+      stallsCount,
+      lastStallAt: Date.now(),
+      underrunDetected: true,
+      currentBitrate: session.bufferHealth?.currentBitrate,
+    };
+    this.emit(session);
   }
 
   public get(sessionId: string): PlaybackSnapshot | null {

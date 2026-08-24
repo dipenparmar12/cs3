@@ -50,17 +50,34 @@ import type { DiagnosticsSink } from './pluginManager.ts';
  * headers, and must never be reachable from off the machine.
  */
 
+import os from 'os';
+
 /** Attempts to resume a broken stream before giving up on it. */
 const MAX_RESUME_ATTEMPTS = 4;
 
 /** Pause before a resume, so a CDN having a moment is not hammered. */
 const RESUME_DELAY_MS = 400;
 
+/** LRU cache limits to prevent memory accumulation in long-running sessions. */
+const MAX_ROUTES = 1000;
+const ROUTE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+/** Rate limiting thresholds per stream token to prevent flood loops. */
+const RATE_LIMIT_WINDOW_MS = 5000;
+const RATE_LIMIT_MAX_REQUESTS = 250;
+
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 interface Route {
   url: string;
   headers: Record<string, string>;
+  key?: string;
+  lastAccess?: number;
+}
+
+interface LocalRoute {
+  file: string;
+  lastAccess: number;
 }
 
 /** Response headers worth passing through; the rest are the proxy's own business. */
@@ -72,6 +89,20 @@ const FORWARDED_RESPONSE_HEADERS = [
   'last-modified',
   'etag',
 ];
+
+/** Forbidden and hop-by-hop headers that must never be forwarded. */
+const FORBIDDEN_REQUEST_HEADERS = new Set([
+  'host',
+  'content-length',
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
 
 /** Playlist attributes whose quoted value is a URL. */
 const URI_ATTRIBUTE = /URI="([^"]+)"/g;
@@ -189,14 +220,46 @@ export class MediaProxy {
   /** Reverse index so a playlist's hundred segments do not mint a token each. */
   private tokensByKey = new Map<string, string>();
   /** Files served from disk, and the reverse map that keeps tokens stable. */
-  private localRoutes = new Map<string, string>();
+  private localRoutes = new Map<string, LocalRoute>();
   private localTokensByPath = new Map<string, string>();
+  /** Allowed directory paths for local file serving. */
+  private allowedDirectories = new Set<string>();
+  /** Request rate tracking for flood protection. */
+  private rateLimits = new Map<string, { count: number; windowStart: number }>();
   private nextToken = 1;
   private fetchImpl: FetchLike;
   private diagnostics: DiagnosticsSink | null = null;
 
   constructor(fetchImpl: FetchLike) {
     this.fetchImpl = fetchImpl;
+    // Default safe directory whitelist
+    this.allowedDirectories.add(path.resolve(os.tmpdir()));
+    try {
+      this.allowedDirectories.add(path.resolve(process.cwd()));
+    } catch {}
+  }
+
+  /**
+   * Adds an allowed base directory for serving local files (e.g. userData, downloads).
+   */
+  public addAllowedDirectory(dirPath: string): void {
+    if (!dirPath) return;
+    this.allowedDirectories.add(path.resolve(dirPath));
+  }
+
+  /**
+   * Validates whether a path is located within allowed directory trees.
+   */
+  public isPathAllowed(filePath: string): boolean {
+    if (!filePath || filePath.includes('\0')) return false;
+    const resolved = path.resolve(filePath);
+    for (const allowed of this.allowedDirectories) {
+      const normalizedAllowed = allowed.endsWith(path.sep) ? allowed : allowed + path.sep;
+      if (resolved === allowed || resolved.startsWith(normalizedAllowed)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -252,17 +315,29 @@ export class MediaProxy {
    * work, and it is the whole reason this cannot be a plain `readFile`.
    */
   public async serveFile(filePath: string): Promise<string> {
+    if (!filePath || filePath.includes('\0')) {
+      throw new Error(`Invalid file path: ${filePath}`);
+    }
+
     const resolved = path.resolve(filePath);
+
+    // Whitelist path verification to prevent path traversal
+    if (this.allowedDirectories.size > 0 && !this.isPathAllowed(resolved)) {
+      throw new Error(`Access denied: path outside allowed directories: ${resolved}`);
+    }
+
     // Checked here rather than at play time so a moved or deleted file is a
     // clear failure now instead of an empty player later.
     const stat = await fs.promises.stat(resolved);
     if (!stat.isFile()) throw new Error(`Not a file: ${resolved}`);
 
     await this.ensureServer();
+    this.evictExpiredRoutes();
+
     const existing = this.localTokensByPath.get(resolved);
     const token = existing ?? String(this.nextToken++);
     this.localTokensByPath.set(resolved, token);
-    this.localRoutes.set(token, resolved);
+    this.localRoutes.set(token, { file: resolved, lastAccess: Date.now() });
     return `http://127.0.0.1:${this.port}/local/${token}`;
   }
 
@@ -316,7 +391,7 @@ export class MediaProxy {
   }
 
   /**
-   * Drops headers the proxy sets itself or must not forward.
+   * Drops headers the proxy sets itself or must not forward, and sanitizes against header injection.
    *
    * `Host` and `Content-Length` describe the hop, not the request, and
    * forwarding a provider's stale values produces requests the origin rejects.
@@ -325,20 +400,70 @@ export class MediaProxy {
     const out: Record<string, string> = {};
     for (const [key, value] of Object.entries(headers ?? {})) {
       if (!value) continue;
-      const name = key.toLowerCase();
-      if (name === 'host' || name === 'content-length' || name === 'connection') continue;
-      out[key] = value;
+      // Sanitize header key & value against CRLF / null-byte injection
+      const cleanKey = key.replace(/[\r\n\0]/g, '').trim();
+      const cleanValue = value.replace(/[\r\n\0]/g, '').trim();
+      if (!cleanKey || !cleanValue) continue;
+
+      const name = cleanKey.toLowerCase();
+      if (FORBIDDEN_REQUEST_HEADERS.has(name)) continue;
+      out[cleanKey] = cleanValue;
     }
     return out;
   }
 
+  /**
+   * Evicts expired or excess routes to maintain bounded memory consumption.
+   */
+  private evictExpiredRoutes(): void {
+    const now = Date.now();
+
+    // 1. Evict expired routes
+    for (const [token, route] of this.routes.entries()) {
+      if (route.lastAccess && now - route.lastAccess > ROUTE_TTL_MS) {
+        if (route.key) this.tokensByKey.delete(route.key);
+        this.routes.delete(token);
+      }
+    }
+
+    for (const [token, prefix] of this.prefixes.entries()) {
+      if (prefix.lastAccess && now - prefix.lastAccess > ROUTE_TTL_MS) {
+        if (prefix.key) this.tokensByKey.delete(prefix.key);
+        this.prefixes.delete(token);
+      }
+    }
+
+    for (const [token, local] of this.localRoutes.entries()) {
+      if (now - local.lastAccess > ROUTE_TTL_MS) {
+        this.localTokensByPath.delete(local.file);
+        this.localRoutes.delete(token);
+      }
+    }
+
+    // 2. Trim excess if still over capacity (LRU)
+    if (this.routes.size > MAX_ROUTES) {
+      const sorted = [...this.routes.entries()].sort(
+        (a, b) => (a[1].lastAccess ?? 0) - (b[1].lastAccess ?? 0)
+      );
+      const toRemove = sorted.slice(0, this.routes.size - MAX_ROUTES);
+      for (const [token, route] of toRemove) {
+        if (route.key) this.tokensByKey.delete(route.key);
+        this.routes.delete(token);
+      }
+    }
+  }
+
   private routeFor(url: string, headers: Record<string, string>): string {
+    this.evictExpiredRoutes();
     const key = `${url} ${JSON.stringify(headers)}`;
     let token = this.tokensByKey.get(key);
     if (!token) {
       token = String(this.nextToken++);
       this.tokensByKey.set(key, token);
-      this.routes.set(token, { url, headers });
+      this.routes.set(token, { url, headers, key, lastAccess: Date.now() });
+    } else {
+      const existing = this.routes.get(token);
+      if (existing) existing.lastAccess = Date.now();
     }
     return `http://127.0.0.1:${this.port}/stream/${token}`;
   }
@@ -357,13 +482,17 @@ export class MediaProxy {
    * replacing the last path element.
    */
   private prefixRouteFor(baseUrl: string, headers: Record<string, string>): string {
+    this.evictExpiredRoutes();
     const normalised = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
     const key = `base ${normalised} ${JSON.stringify(headers)}`;
     let token = this.tokensByKey.get(key);
     if (!token) {
       token = String(this.nextToken++);
       this.tokensByKey.set(key, token);
-      this.prefixes.set(token, { url: normalised, headers });
+      this.prefixes.set(token, { url: normalised, headers, key, lastAccess: Date.now() });
+    } else {
+      const existing = this.prefixes.get(token);
+      if (existing) existing.lastAccess = Date.now();
     }
     return `http://127.0.0.1:${this.port}/base/${token}/`;
   }
@@ -379,6 +508,7 @@ export class MediaProxy {
   private resolvePrefixed(token: string, rest: string): Route | null {
     const prefix = this.prefixes.get(token);
     if (!prefix) return null;
+    prefix.lastAccess = Date.now();
     try {
       const target = new URL(rest, prefix.url);
       const base = new URL(prefix.url);
@@ -388,6 +518,17 @@ export class MediaProxy {
     } catch {
       return null;
     }
+  }
+
+  private isRateLimited(key: string): boolean {
+    const now = Date.now();
+    const tracker = this.rateLimits.get(key);
+    if (!tracker || now - tracker.windowStart > RATE_LIMIT_WINDOW_MS) {
+      this.rateLimits.set(key, { count: 1, windowStart: now });
+      return false;
+    }
+    tracker.count++;
+    return tracker.count > RATE_LIMIT_MAX_REQUESTS;
   }
 
   private async ensureServer(): Promise<void> {
@@ -421,17 +562,28 @@ export class MediaProxy {
      */
     const local = req.url?.match(/^\/local\/(\d+)/)?.[1];
     if (local) {
-      const file = this.localRoutes.get(local);
-      if (!file) {
+      if (this.isRateLimited(`local_${local}`)) {
+        res.writeHead(429, { 'Retry-After': '1' }).end('Too Many Requests');
+        return;
+      }
+      const entry = this.localRoutes.get(local);
+      if (!entry) {
         res.writeHead(404).end('Unknown file');
         return;
       }
-      this.serveLocal(req, res, file);
+      entry.lastAccess = Date.now();
+      this.serveLocal(req, res, entry.file);
       return;
     }
 
     const direct = req.url?.match(/^\/stream\/(\d+)/)?.[1];
     const prefixed = req.url?.match(/^\/base\/(\d+)\/(.*)$/);
+    const routeToken = direct ?? prefixed?.[1];
+    if (routeToken && this.isRateLimited(`route_${routeToken}`)) {
+      res.writeHead(429, { 'Retry-After': '1' }).end('Too Many Requests');
+      return;
+    }
+
     const route = direct
       ? this.routes.get(direct)
       : prefixed
@@ -441,6 +593,7 @@ export class MediaProxy {
       res.writeHead(404).end('Unknown stream');
       return;
     }
+    route.lastAccess = Date.now();
 
     const CHROME_USER_AGENT =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
@@ -873,6 +1026,9 @@ export class MediaProxy {
     this.routes.clear();
     this.prefixes.clear();
     this.tokensByKey.clear();
+    this.localRoutes.clear();
+    this.localTokensByPath.clear();
+    this.rateLimits.clear();
     this.server?.close();
     this.server = null;
   }

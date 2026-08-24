@@ -249,6 +249,25 @@ test('serving a file that does not exist fails now rather than at play time', as
   await assert.rejects(() => proxy.serveFile(path.join(os.tmpdir(), 'cs3-absent-file.bin')));
 });
 
+test('serving a file outside allowed directories is rejected for path traversal protection', async () => {
+  // A path outside allowedDirectories (such as C:\Windows\System32\drivers\etc\hosts or /etc/passwd)
+  const outsidePath = process.platform === 'win32' ? 'C:\\Windows\\System32\\drivers\\etc\\hosts' : '/etc/passwd';
+  await assert.rejects(
+    () => proxy.serveFile(outsidePath),
+    /Access denied: path outside allowed directories/
+  );
+});
+
+test('header injection with CRLF is sanitized when forwarded', async () => {
+  const wrapped = await proxy.wrap('https://cdn.origin.test/rel.mpd', {
+    'Referer': 'https://provider.test/\r\nInjected-Header: evil',
+    'Bad\r\nHeader': 'value',
+  });
+  seen.length = 0;
+  await fetch(wrapped);
+  assert.equal(seen.at(-1)?.referer, 'https://provider.test/Injected-Header: evil');
+});
+
 // --- runner ----------------------------------------------------------------
 
 let failed = 0;

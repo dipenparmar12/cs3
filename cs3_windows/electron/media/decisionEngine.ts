@@ -254,20 +254,86 @@ export function canPlayContainer(
 }
 
 /**
- * Picks the audio track to play.
+ * Known language name and code aliases for ISO 639-1 / 639-2 matching.
+ */
+const LANGUAGE_ALIASES: Record<string, string> = {
+  en: 'eng', eng: 'eng', english: 'eng',
+  es: 'spa', spa: 'spa', spanish: 'spa',
+  hi: 'hin', hin: 'hin', hindi: 'hin',
+  ja: 'jpn', jpn: 'jpn', japanese: 'jpn',
+  ko: 'kor', kor: 'kor', korean: 'kor',
+  fr: 'fra', fra: 'fra', fre: 'fra', french: 'fra',
+  de: 'deu', deu: 'deu', ger: 'deu', german: 'deu',
+  it: 'ita', ita: 'ita', italian: 'ita',
+  pt: 'por', por: 'por', portuguese: 'por',
+  ru: 'rus', rus: 'rus', russian: 'rus',
+  zh: 'zho', zho: 'zho', chi: 'zho', chinese: 'zho',
+  ar: 'ara', ara: 'ara', arabic: 'ara',
+  bn: 'ben', ben: 'ben', bengali: 'ben',
+  ta: 'tam', tam: 'tam', tamil: 'tam',
+  te: 'tel', tel: 'tel', telugu: 'tel',
+  tr: 'tur', tur: 'tur', turkish: 'tur',
+  vi: 'vie', vie: 'vie', vietnamese: 'vie',
+  id: 'ind', ind: 'ind', indonesian: 'ind',
+  th: 'tha', tha: 'tha', thai: 'tha',
+  pl: 'pol', pol: 'pol', polish: 'pol',
+  nl: 'nld', nld: 'nld', dut: 'nld', dutch: 'nld',
+  sv: 'swe', swe: 'swe', swedish: 'swe',
+};
+
+export function normalizeLanguageCode(lang?: string): string {
+  if (!lang) return '';
+  const clean = lang.trim().toLowerCase();
+  return LANGUAGE_ALIASES[clean] || clean;
+}
+
+export function languagesMatch(lang1?: string, lang2?: string): boolean {
+  if (!lang1 || !lang2) return false;
+  const n1 = normalizeLanguageCode(lang1);
+  const n2 = normalizeLanguageCode(lang2);
+  return n1 === n2;
+}
+
+/**
+ * Picks the audio track to play, considering user preferences and release defaults.
  *
- * Starts from the file's own default, which is what Android does and what the
- * releaser intended. The one refinement: when the default cannot be decoded but
- * a track **in the same language** can, the playable one wins — PRD-38 measured
- * Movies4u shipping three E-AC-3 5.1 tracks beside an AAC stereo track of the
- * same film, and copying the AAC is free where transcoding the E-AC-3 is not.
+ * Starts from the user's preferred language when specified. Falls back to the
+ * file's own default, which is what Android does and what the releaser intended.
+ * The refinement: when the default cannot be decoded but a track **in the same
+ * language** can, the playable one wins — PRD-38 measured Movies4u shipping
+ * three E-AC-3 5.1 tracks beside an AAC stereo track of the same film, and
+ * copying the AAC is free where transcoding the E-AC-3 is not.
  *
  * Language is required to match. Silently swapping an English default for a
  * Hindi AAC track because it happened to be cheaper would be a far worse bug
  * than a few percent of one CPU core.
  */
-export function selectAudioTrack(audio: AudioStreamMetadata[]): AudioStreamMetadata | null {
+export function selectAudioTrack(
+  audio: AudioStreamMetadata[],
+  preferredLanguage?: string
+): AudioStreamMetadata | null {
   if (audio.length === 0) return null;
+
+  // 1. User preferred language matching
+  if (preferredLanguage) {
+    const matchingTracks = audio.filter((track) => languagesMatch(track.language, preferredLanguage));
+    if (matchingTracks.length > 0) {
+      // Best case: playable in stereo/direct channels
+      const directPlayable = matchingTracks.find(
+        (t) => t.playable && t.channels > 0 && t.channels <= MAX_DIRECT_CHANNELS
+      );
+      if (directPlayable) return directPlayable;
+
+      // Any playable track in this language
+      const playable = matchingTracks.find((t) => t.playable);
+      if (playable) return playable;
+
+      // Default or first in this language
+      return matchingTracks.find((t) => t.isDefault) ?? matchingTracks[0];
+    }
+  }
+
+  // 2. Default track logic
   const preferred = audio.find((track) => track.isDefault) ?? audio[0];
   if (preferred.playable && preferred.channels <= MAX_DIRECT_CHANNELS) return preferred;
 
@@ -278,7 +344,7 @@ export function selectAudioTrack(audio: AudioStreamMetadata[]): AudioStreamMetad
       track.channels > 0 &&
       track.channels <= MAX_DIRECT_CHANNELS &&
       Boolean(track.language) &&
-      track.language === preferred.language
+      languagesMatch(track.language, preferred.language)
   );
   return sameLanguage ?? preferred;
 }
@@ -390,6 +456,8 @@ export function requiresEmeDecryption(drm: DrmConfiguration): boolean {
     drm.type === 'clearkey' ||
     drm.type === 'widevine' ||
     drm.type === 'playready' ||
+    drm.type === 'fairplay' ||
+    drm.type === 'marlin' ||
     drm.type === 'unknown'
   );
 }
@@ -425,8 +493,20 @@ function explainEme(drm: DrmConfiguration, transport: MediaTransport): string {
     );
   }
 
-  if (drm.type === 'widevine' || drm.type === 'playready') {
-    const system = drm.type === 'widevine' ? 'Widevine' : 'PlayReady';
+  if (
+    drm.type === 'widevine' ||
+    drm.type === 'playready' ||
+    drm.type === 'fairplay' ||
+    drm.type === 'marlin'
+  ) {
+    const system =
+      drm.type === 'widevine'
+        ? 'Widevine'
+        : drm.type === 'playready'
+          ? 'PlayReady'
+          : drm.type === 'fairplay'
+            ? 'FairPlay'
+            : 'Marlin';
     /**
      * Shaka performs the licence exchange, but only a CDM can answer it. On a
      * stock Electron build there is none, so this reports the limit by name
@@ -467,10 +547,11 @@ function decideBrowserStrategy(
   transport: MediaTransport,
   capabilities: RendererCapabilities | null,
   host: HostEncodeCapability,
-  drm: DrmConfiguration
+  drm: DrmConfiguration,
+  preferredAudioLanguage?: string
 ): StrategyDecision {
   const video = metadata.video;
-  const track = selectAudioTrack(metadata.audio);
+  const track = selectAudioTrack(metadata.audio, preferredAudioLanguage);
   const audioIndex = track?.index ?? -1;
 
   const hasTextSubtitles = metadata.subtitles.some((sub) => isTextSubtitle(sub.codec));
@@ -909,9 +990,17 @@ export function decideStrategy(
    * concerned, because hls.js decrypts them itself.
    */
   drm: DrmConfiguration = NO_DRM,
-  native: NativeEngineCapability = NO_NATIVE_ENGINE
+  native: NativeEngineCapability = NO_NATIVE_ENGINE,
+  preferredAudioLanguage?: string
 ): StrategyDecision {
-  const browser = decideBrowserStrategy(metadata, transport, capabilities, host, drm);
+  const browser = decideBrowserStrategy(
+    metadata,
+    transport,
+    capabilities,
+    host,
+    drm,
+    preferredAudioLanguage
+  );
   const decision = withFfmpegExtras(browser, metadata, drm, transport);
   if (!shouldRouteToNativeEngine(decision, metadata, native)) return decision;
 
@@ -942,6 +1031,21 @@ export function decideStrategy(
       `${decision.explanation.replace(/\.$/, '')}. Nothing is re-encoded, so the ` +
       'resolution, HDR and full channel layout are preserved.',
   };
+}
+
+/**
+ * Evaluates available bitrate/resolution options for adaptive source selection.
+ */
+export function selectAdaptiveRendition(
+  options: Array<{ bitrate?: number; height?: number; url: string }>,
+  maxBandwidthBps?: number
+): { bitrate?: number; height?: number; url: string } | null {
+  if (!options || options.length === 0) return null;
+  const sorted = [...options].sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+  if (!maxBandwidthBps || maxBandwidthBps <= 0) return sorted[0];
+
+  const suitable = sorted.find((opt) => (opt.bitrate ?? 0) <= maxBandwidthBps);
+  return suitable ?? sorted[sorted.length - 1];
 }
 
 export const DECISION_CONSTANTS = {

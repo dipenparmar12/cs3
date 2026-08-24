@@ -321,6 +321,12 @@ export interface CloudStreamElectronAPI {
     sessionId: string
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
   stopPlayback: (sessionId: string, keepFiles?: boolean) => Promise<Envelope>;
+  recordBufferHeartbeat: (
+    sessionId: string,
+    bufferedSeconds: number,
+    currentBitrate?: number
+  ) => Promise<Envelope>;
+  recordBufferStall: (sessionId: string) => Promise<Envelope>;
   onPlaybackUpdate: (callback: (snapshot: PlaybackSnapshot) => void) => () => void;
 
   /** Resolved-source cache: how much is stored, and a way to drop it. */
@@ -1209,6 +1215,10 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('playback:cancelSourceSearch', sessionId),
   stopPlayback: (sessionId, keepFiles) =>
     ipcRenderer.invoke('playback:stop', sessionId, keepFiles),
+  recordBufferHeartbeat: (sessionId, bufferedSeconds, currentBitrate) =>
+    ipcRenderer.invoke('playback:recordBufferHeartbeat', sessionId, bufferedSeconds, currentBitrate),
+  recordBufferStall: (sessionId) =>
+    ipcRenderer.invoke('playback:recordBufferStall', sessionId),
   onPlaybackUpdate: (callback) => subscribe('playback:update', callback),
 
   getSearchConcurrency: () => ipcRenderer.invoke('search:getConcurrency'),

@@ -35,6 +35,7 @@ import {
   decideStrategy,
   isPlayableAudioCodec,
   isTenBitOrDeeper,
+  selectAdaptiveRendition,
   selectAudioTrack,
 } from './decisionEngine.ts';
 
@@ -378,6 +379,25 @@ test('a cheaper track in a different language is never substituted', () => {
   assert.equal(track?.index, 0);
 });
 
+test('user preferred audio language wins over default track', () => {
+  const tracks = [
+    audio({ index: 0, codec: 'aac', language: 'eng', isDefault: true }),
+    audio({ index: 1, codec: 'aac', language: 'spa', isDefault: false }),
+  ];
+  // Preferred Spanish track wins
+  const selected = selectAudioTrack(tracks, 'es');
+  assert.equal(selected?.index, 1);
+});
+
+test('language code normalization matches 2-letter and 3-letter codes', () => {
+  const tracks = [
+    audio({ index: 0, codec: 'aac', language: 'hin', isDefault: false }),
+    audio({ index: 1, codec: 'aac', language: 'eng', isDefault: true }),
+  ];
+  const hindi = selectAudioTrack(tracks, 'hi');
+  assert.equal(hindi?.index, 0);
+});
+
 test('a file with no audio maps no audio stream', () => {
   const decision = decide(media({ formatName: 'matroska,webm', audio: [] }));
   assert.equal(decision.plan.selectedAudioIndex, -1);
@@ -506,6 +526,35 @@ test('ClearKey DASH over an undecodable codec has nowhere to go, and says so', (
   );
   assert.equal(decision.strategy, 'EME_NATIVE');
   assert.equal(decision.plan.decryptionKeys, undefined);
+});
+
+test('FairPlay and Marlin DRM route to EME/Shaka and bypass FFmpeg', () => {
+  const fairplay = decide(media(), 'hls', PLAIN, GPU, { type: 'fairplay' });
+  assert.equal(fairplay.strategy, 'EME_NATIVE');
+  assert.match(fairplay.explanation, /FairPlay-protected stream/);
+
+  const marlinProgressive = decide(media(), 'progressive', PLAIN, GPU, { type: 'marlin' });
+  assert.equal(marlinProgressive.strategy, 'EME_NATIVE');
+  assert.match(marlinProgressive.explanation, /Marlin-protected stream/);
+
+  const marlinDash = decide(media({ formatName: 'dash' }), 'dash', PLAIN, GPU, { type: 'marlin' });
+  assert.equal(marlinDash.strategy, 'DASH_NATIVE');
+  assert.match(marlinDash.explanation, /Marlin-protected stream/);
+});
+
+test('selectAdaptiveRendition chooses highest bitrate under bandwidth limit', () => {
+  const options = [
+    { bitrate: 1_000_000, height: 720, url: 'http://cdn/720p.mp4' },
+    { bitrate: 3_000_000, height: 1080, url: 'http://cdn/1080p.mp4' },
+    { bitrate: 8_000_000, height: 2160, url: 'http://cdn/4k.mp4' },
+  ];
+  // Unlimited bandwidth picks 4K
+  const unconstrained = selectAdaptiveRendition(options);
+  assert.equal(unconstrained?.height, 2160);
+
+  // Bandwidth capped at 4Mbps picks 1080p
+  const constrained = selectAdaptiveRendition(options, 4_000_000);
+  assert.equal(constrained?.height, 1080);
 });
 
 test('a DRM system we cannot name still keeps FFmpeg off the stream', () => {

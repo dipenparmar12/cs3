@@ -25,19 +25,28 @@ import { scopedLogger } from '../logging/logger.ts';
  * downloaded. Measured 250 ms–3 s depending on how far the CDN is.
  */
 
-/** A slow answer is worse than no answer, but a hasty one restarts the ladder. */
-const PROBE_TIMEOUT_MS = 20_000;
+/** Configurable probe settings with optimized fast-switch defaults. */
+export interface ProbeConfig {
+  /** How much of the file ffprobe may read before deciding (defaults to 2MB). */
+  probeSizeBytes: number;
+  /** Max timeout for ffprobe execution. */
+  probeTimeoutMs: number;
+}
 
-/**
- * How much of the file ffprobe may read before deciding.
- *
- * 8 MB rather than the 5 the earlier version used, for one measured reason: a
- * Matroska file written with its cues at the end and four audio tracks can put
- * the fourth track's first packet well past 5 MB, and a track ffprobe never saw
- * is a track the user cannot select. It is a read bound, not a download — the
- * HTTP demuxer stops pulling once it has enough.
- */
-const PROBE_SIZE_BYTES = 8_000_000;
+const DEFAULT_PROBE_CONFIG: ProbeConfig = {
+  probeSizeBytes: 2_000_000, // 2MB for fast source switching
+  probeTimeoutMs: 20_000,
+};
+
+let currentProbeConfig: ProbeConfig = { ...DEFAULT_PROBE_CONFIG };
+
+export function setProbeConfig(config: Partial<ProbeConfig>): void {
+  currentProbeConfig = { ...currentProbeConfig, ...config };
+}
+
+export function getProbeConfig(): ProbeConfig {
+  return { ...currentProbeConfig };
+}
 
 /**
  * Providers that disguise their segments as images (PRD-38 E-03).
@@ -91,7 +100,7 @@ export function setFfmpegExtensionPicky(supported: boolean): void {
 }
 
 export function hlsDemuxerOptions(): string[] {
-  return extensionPickySupported
+  return extensionPickySupported === true
     ? [...HLS_BASE_OPTIONS, '-extension_picky', '0']
     : HLS_BASE_OPTIONS;
 }
@@ -112,7 +121,8 @@ export async function detectExtensionPicky(
     const supported = /-extension_picky\b/.test(`${result.stdout}${result.stderr}`);
     setFfmpegExtensionPicky(supported);
     return supported;
-  } catch {
+  } catch (error) {
+    log.warn('detect_extension_picky_failed', { error: error instanceof Error ? error.message : String(error) });
     setFfmpegExtensionPicky(false);
     return false;
   }
@@ -254,11 +264,36 @@ export function classifyBody(head: string): MediaTransport | null {
  */
 export function detectDrm(manifest: string, transport: MediaTransport): DrmConfiguration {
   if (transport === 'hls') {
+    // FairPlay in HLS (KEYFORMAT com.apple.streamingkeydelivery/fps, KEYFORMATVERSIONS, or skd:// URI)
+    if (
+      /KEYFORMAT="com\.apple\.(streamingkeydelivery|fps(\.1_0)?)"/i.test(manifest) ||
+      (/KEYFORMATVERSIONS=/i.test(manifest) && /METHOD=(SAMPLE-AES|SAMPLE-AES-CTR)/i.test(manifest)) ||
+      /URI="skd:\/\//i.test(manifest)
+    ) {
+      return { type: 'fairplay' };
+    }
     // SAMPLE-AES-CTR is the FairPlay/Widevine-in-HLS spelling; plain AES-128 and
     // SAMPLE-AES are hls.js's own job and are deliberately not reported here.
-    if (/METHOD=SAMPLE-AES-CTR/i.test(manifest)) return { type: 'widevine' };
-    if (/#EXT-X-SESSION-KEY[^\n]*KEYFORMAT="urn:uuid:edef8ba9/i.test(manifest)) {
+    if (
+      /METHOD=SAMPLE-AES-CTR/i.test(manifest) ||
+      /#EXT-X-(SESSION-)?KEY[^\n]*KEYFORMAT="urn:uuid:edef8ba9/i.test(manifest) ||
+      /KEYFORMAT="com\.widevine(\.alpha)?"/i.test(manifest)
+    ) {
       return { type: 'widevine' };
+    }
+    // PlayReady in HLS
+    if (
+      /#EXT-X-(SESSION-)?KEY[^\n]*KEYFORMAT="urn:uuid:9a04f079/i.test(manifest) ||
+      /KEYFORMAT="com\.microsoft\.playready"/i.test(manifest)
+    ) {
+      return { type: 'playready' };
+    }
+    // ClearKey in HLS
+    if (
+      /KEYFORMAT="org\.w3\.clearkey"/i.test(manifest) ||
+      /#EXT-X-(SESSION-)?KEY[^\n]*KEYFORMAT="urn:uuid:e2719d58/i.test(manifest)
+    ) {
+      return { type: 'clearkey' };
     }
     if (/METHOD=(SAMPLE-)?AES/i.test(manifest)) {
       return { type: /METHOD=SAMPLE-AES\b/i.test(manifest) ? 'sample-aes' : 'aes-128' };
@@ -269,7 +304,15 @@ export function detectDrm(manifest: string, transport: MediaTransport): DrmConfi
   if (transport === 'dash') {
     if (/edef8ba9-79d6-4ace-a3c8-27dcd51d21ed/i.test(manifest)) return { type: 'widevine' };
     if (/9a04f079-9840-4286-ab92-e65be0885f95/i.test(manifest)) return { type: 'playready' };
-    if (/e2719d58-a985-b3c9-781a-b030af78d30e/i.test(manifest)) return { type: 'clearkey' };
+    if (/94ce86fb-07ff-4f43-adb8-93d2fa968ca2/i.test(manifest)) return { type: 'fairplay' };
+    if (
+      /e2719d58-a985-b3c9-781a-b030af78d30e/i.test(manifest) ||
+      /1077efec-c0b2-4d02-ace3-3c1e52e2fb4b/i.test(manifest) ||
+      /org\.w3\.clearkey/i.test(manifest)
+    ) {
+      return { type: 'clearkey' };
+    }
+    if (/5e629af5-38da-40e1-80e9-74d72f9f2522/i.test(manifest)) return { type: 'marlin' };
     if (/<ContentProtection/i.test(manifest)) return { type: 'clearkey' };
     return { type: 'none' };
   }
@@ -532,12 +575,12 @@ export class MediaInspector {
         '-print_format', 'json',
         '-show_streams',
         '-show_entries', 'format=duration,format_name,format_long_name,bit_rate,size',
-        '-probesize', String(PROBE_SIZE_BYTES),
-        '-analyzeduration', String(PROBE_SIZE_BYTES),
+        '-probesize', String(currentProbeConfig.probeSizeBytes),
+        '-analyzeduration', String(currentProbeConfig.probeSizeBytes),
         ...inputOptionsFor(url, transport),
         url,
       ],
-      PROBE_TIMEOUT_MS
+      currentProbeConfig.probeTimeoutMs
     );
 
     if (!result.ok) {
@@ -546,7 +589,7 @@ export class MediaInspector {
         transport,
         drm,
         error: result.timedOut
-          ? `ffprobe timed out after ${PROBE_TIMEOUT_MS}ms`
+          ? `ffprobe timed out after ${currentProbeConfig.probeTimeoutMs}ms`
           : result.stderr.trim() || `ffprobe exited ${result.code ?? 'with no code'}`,
         timedOut: result.timedOut,
         latencyMs: Date.now() - startedAt,

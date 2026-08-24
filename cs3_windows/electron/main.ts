@@ -28,8 +28,14 @@ import { SubtitleService } from './subtitleService';
 import { MediaTranscoder, VIDEO_CODEC_PROBES } from './mediaTranscoder';
 import { PlaybackEngine } from './media/playbackEngine';
 import { InspectionStore } from './media/inspectionStore';
-import { detectExtensionPicky, detectToneMapSupport } from './media/mediaInspector';
 import { runTool } from './media/runTool';
+import {
+  detectExtensionPicky,
+  detectToneMapSupport,
+  setProbeConfig,
+  getProbeConfig,
+  type ProbeConfig,
+} from './media/mediaInspector';
 import type {
   NativeEngineCapability,
   PlaybackStreamRequest,
@@ -189,6 +195,10 @@ downloadService.setAnalytics(providerAnalytics);
 // Stream failures are otherwise invisible: the request succeeded, and the break
 // happens minutes later with nothing watching.
 contentService.getProxy().setDiagnostics(diagnostics);
+try {
+  contentService.getProxy().addAllowedDirectory(app.getPath('userData'));
+  contentService.getProxy().addAllowedDirectory(app.getPath('downloads'));
+} catch {}
 const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
@@ -1757,6 +1767,27 @@ ipcMain.handle('playback:stop', async (_, sessionId: string, keepFiles?: boolean
   }
 });
 
+ipcMain.handle(
+  'playback:recordBufferHeartbeat',
+  (_, sessionId: string, bufferedSeconds: number, currentBitrate?: number) => {
+    try {
+      playbackSessions.recordBufferHeartbeat(sessionId, bufferedSeconds, currentBitrate);
+      return { ok: true };
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+ipcMain.handle('playback:recordBufferStall', (_, sessionId: string) => {
+  try {
+    playbackSessions.recordBufferStall(sessionId);
+    return { ok: true };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
 // --- audio compatibility ---------------------------------------------------
 
 /**
@@ -1780,6 +1811,19 @@ ipcMain.handle('media:setCapabilities', async (_, capabilities: RendererCapabili
 });
 
 ipcMain.handle('media:getCodecProbes', async () => VIDEO_CODEC_PROBES);
+
+ipcMain.handle('media:setProbeConfig', async (_, config: Partial<ProbeConfig>) => {
+  try {
+    setProbeConfig(config);
+    return { ok: true, config: getProbeConfig() };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('media:getProbeConfig', async () => {
+  return { ok: true, config: getProbeConfig() };
+});
 
 // --- external players -----------------------------------------------------
 
