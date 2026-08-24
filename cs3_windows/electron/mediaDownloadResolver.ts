@@ -2,6 +2,7 @@ import path from 'path';
 import os from 'os';
 import type { DownloadTask } from '../src/types/download';
 import { Aria2Engine } from './aria2Engine';
+import { variantPathSegment } from '../src/utils/downloadIdentity.ts';
 
 export class MediaDownloadResolver {
   private aria2: Aria2Engine;
@@ -54,6 +55,19 @@ export class MediaDownloadResolver {
     return match ? `.${match[1].toLowerCase()}` : '.mp4';
   }
 
+  /**
+   * Where a download writes, including which variant of the title it is.
+   *
+   * The variant folder is the other half of the duplicate fix. Without it the
+   * 2160p and the 1080p release of one film both resolve to
+   * `Movies/The Incredible Hulk/The Incredible Hulk.mp4` — so allowing two
+   * downloads to coexist in the queue would merely have moved the collision
+   * onto the disk, where two engines write interleaved bytes into one file and
+   * both "succeed". A corrupt file that finishes is worse than a refusal.
+   *
+   * Absent for a task with nothing to distinguish (no provider, no resolution),
+   * which keeps the layout unchanged for the ordinary single-source case.
+   */
   public generateTargetFilePath(task: Partial<DownloadTask>, customBaseDir?: string): string {
     const base = customBaseDir || this.defaultDownloadDir;
     // Episodes belong in a series folder; a film is a single file, not a show.
@@ -72,7 +86,21 @@ export class MediaDownloadResolver {
     }
 
     fileName += this.extensionFor(task);
-    return path.join(base, category, folderName, fileName);
+
+    const variant = this.variantFolder(task);
+    return variant
+      ? path.join(base, category, folderName, variant, fileName)
+      : path.join(base, category, folderName, fileName);
+  }
+
+  /** `2160p WEB-DL Gdshine`, or nothing when the task describes no variant. */
+  private variantFolder(task: Partial<DownloadTask>): string {
+    return variantPathSegment({
+      providerName: task.providerName,
+      resolution: task.resolution,
+      quality: task.quality,
+      languages: task.languages,
+    });
   }
 
   public async dispatchDownload(task: DownloadTask): Promise<string> {

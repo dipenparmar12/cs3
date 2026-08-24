@@ -4,8 +4,8 @@ import {
 } from 'lucide-react';
 import type { SearchResponse, Episode } from '../types/api';
 import { TvType } from '../types/api';
-import { DownloadState } from '../types/download';
-import type { DownloadTask } from '../types/download';
+import type { DownloadRequestResult, DownloadTask } from '../types/download';
+import { buildDownloadTask } from '../utils/downloadIdentity';
 import type { TorrentResult } from '../types/torrent';
 import { SourcePicker, type SourcePickerData } from '../components/SourcePicker';
 import {
@@ -116,7 +116,8 @@ interface DetailViewProps {
   onPlay: (request: PlaybackRequest) => void;
   /** Opens the player immediately and resolves a source into it. */
   onStartSession: (context: PlaybackSessionRequest) => void;
-  onEnqueueDownload: (task: DownloadTask) => void;
+  /** Resolves with what the press actually did — see `DownloadRequestResult`. */
+  onEnqueueDownload: (task: DownloadTask) => Promise<DownloadRequestResult>;
   onSearch?: (query: string) => void;
   /** Opens another title — a related one from this page's recommendations. */
   onSelectMedia?: (item: SearchResponse) => void;
@@ -684,36 +685,30 @@ export const DetailView: React.FC<DetailViewProps> = ({
     (source: TorrentResult, episode: Episode | null) => {
       if (!detail) return;
 
-      const url = source.directUrl || source.magnet || source.torrentUrl || source.infoHash;
-      const task: DownloadTask = {
-        id: `${source.infoHash}-${episode?.episode ?? 'movie'}`,
-        parentId: detail.url,
+      const task = buildDownloadTask(source, {
         title: detail.name,
-        episodeNumber: episode?.episode,
-        seasonNumber: episode?.season,
-        posterUrl: detail.posterUrl,
-        targetFilePath: '',
-        link: {
-          source: source.indexerName,
-          name: source.title,
-          url,
-          referer: source.directHeaders?.Referer || source.directHeaders?.referer || '',
-          quality: source.parsed.resolution || 720,
-        },
-        headers: source.directHeaders || {},
-        bytesDownloaded: 0,
-        totalBytes: source.sizeBytes,
-        downloadSpeed: 0,
-        etaSeconds: 0,
-        state: DownloadState.Queued,
-        providerName: source.providerName || source.indexerName,
-        createdTime: Date.now(),
         mediaUrl: episode?.url || detail.url,
-        resolution: source.parsed.resolution,
-      };
+        posterUrl: detail.posterUrl,
+        season: episode?.season,
+        episode: episode?.episode,
+        // A source with no address at all is not downloadable; `infoHash` was
+        // used here and is not a URL, so it produced a task that could only
+        // fail once it reached an engine.
+        fallbackUrl: undefined,
+      });
+      if (!task) {
+        flash('That source carries no address to download from.');
+        return;
+      }
 
-      onEnqueueDownload(task);
-      flash(`Added “${detail.name}” to downloads.`);
+      /**
+       * The answer says what the press did. Every one of these was previously
+       * `Added to downloads`, including the presses that added nothing because
+       * a different release of the same film was already in the list.
+       */
+      void onEnqueueDownload(task).then((result) => {
+        flash(result?.message ?? `Added “${detail.name}” to downloads.`);
+      });
     },
     [detail, onEnqueueDownload, flash]
   );

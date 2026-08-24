@@ -24,6 +24,7 @@ import {
   ArrowUpDown,
 } from 'lucide-react';
 import { formatDownloadSize, formatTransferRate } from '../utils/format';
+import { variantFromTask, variantLabel } from '../utils/downloadIdentity';
 
 interface DownloadCenterProps {
   tasks: DownloadTask[];
@@ -200,9 +201,16 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
                 `${task.title} ${task.episodeNumber ? `• Ep ${task.episodeNumber}` : ''}`
               )}
             </h4>
+            {/*
+              Which variant this row is, because the title no longer identifies
+              it. Two releases of one film are two rows now, and without the
+              resolution, source and provider on each they render identically —
+              leaving the viewer to guess which of two 40%-complete transfers
+              they are about to pause.
+            */}
             <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
-              Provider: {task.providerName || 'aria2c'}
-              {task.resolution ? ` • ${task.resolution}p` : ''}
+              {variantLabel(variantFromTask(task)) || `Provider: ${task.providerName || 'aria2c'}`}
+              {task.totalBytes > 0 ? ` • ${formatDownloadSize(task.totalBytes)}` : ''}
             </span>
           </div>
 

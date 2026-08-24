@@ -1,7 +1,13 @@
 import fs from 'fs';
 import path from 'path';
-import type { DownloadTask } from '../src/types/download';
-import { DownloadState } from '../src/types/download';
+import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
+import { DownloadAction, DownloadState } from '../src/types/download';
+import {
+  downloadTaskId,
+  downloadVariantKey,
+  variantFromSource,
+  variantFromTask,
+} from '../src/utils/downloadIdentity.ts';
 import type { DatastoreManager } from './datastore';
 import type { Aria2Engine } from './aria2Engine';
 import { MediaDownloadResolver } from './mediaDownloadResolver';
@@ -162,6 +168,12 @@ export class DownloadService {
         task.downloadSpeed = 0;
         task.etaSeconds = 0;
       }
+      /**
+       * Queues written before downloads had a variant identity are given one
+       * from what they already carry. The id is left alone: rewriting it would
+       * orphan the `.part` file beside it and lose the bytes already fetched.
+       */
+      if (!task.variantKey) task.variantKey = downloadVariantKey(variantFromTask(task));
       this.queue.set(task.id, task);
     }
   }
@@ -331,13 +343,61 @@ export class DownloadService {
     }
   }
 
+  /**
+   * The task already holding this variant, if there is one.
+   *
+   * Keyed on the variant rather than the title, which is the whole fix: the
+   * 2160p and the 1080p release of one film are two entries here, and pressing
+   * Download on the second no longer finds the first.
+   */
+  public findByVariant(variantKey: string): DownloadTask | undefined {
+    if (!variantKey) return undefined;
+    for (const task of this.queue.values()) {
+      if ((task.variantKey ?? downloadVariantKey(variantFromTask(task))) === variantKey) {
+        return task;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * A path no other task in the queue is writing to.
+   *
+   * `variantPathSegment` keeps the folder readable, which means it can collide:
+   * two different releases from one provider at one resolution produce the same
+   * label. Only this class can see the rest of the queue, so the disambiguation
+   * belongs here rather than in the pure module. A numbered suffix beats a hash
+   * because the common case stays `1080p` — the point of a readable name.
+   */
+  private claimTargetPath(task: DownloadTask): string {
+    const base = this.resolver.generateTargetFilePath(task);
+    const taken = new Set<string>();
+    for (const other of this.queue.values()) {
+      if (other.id !== task.id && other.targetFilePath) {
+        taken.add(other.targetFilePath.toLowerCase());
+      }
+    }
+    if (!taken.has(base.toLowerCase())) return base;
+
+    const dir = path.dirname(base);
+    const ext = path.extname(base);
+    const stem = path.basename(base, ext);
+    for (let n = 2; n < 100; n++) {
+      const candidate = path.join(dir, `${stem} (${n})${ext}`);
+      if (!taken.has(candidate.toLowerCase())) return candidate;
+    }
+    return base;
+  }
+
   public async enqueue(task: DownloadTask): Promise<string> {
     task.state = DownloadState.Queued;
     task.createdTime = task.createdTime || Date.now();
     task.errorMessage = undefined;
+    if (!task.variantKey) task.variantKey = downloadVariantKey(variantFromTask(task));
+    if (!task.id) task.id = downloadTaskId(variantFromTask(task));
 
     if (!task.targetFilePath) {
-      task.targetFilePath = this.resolver.generateTargetFilePath(task);
+      task.targetFilePath = this.claimTargetPath(task);
     }
 
     this.recordHistory(task, 'download_started', 'Attempted');
@@ -345,6 +405,109 @@ export class DownloadService {
     this.saveQueueToStorage();
     this.pump();
     return task.id;
+  }
+
+  /**
+   * "The viewer pressed Download", answered according to what already exists.
+   *
+   * The reported behaviour was that every press on a title with any entry in
+   * the list answered `Already downloading` — including when that entry was
+   * paused, or had failed, or was a completely different release. Two separate
+   * faults: the match was on the title (fixed by the variant key above), and
+   * the only outcome was a refusal.
+   *
+   * A press is a request for the file to make progress. Six states, six useful
+   * answers, and only one of them is "nothing to do".
+   */
+  public async request(task: DownloadTask): Promise<DownloadRequestResult> {
+    const variantKey = task.variantKey || downloadVariantKey(variantFromTask(task));
+    task.variantKey = variantKey;
+    const existing = this.findByVariant(variantKey);
+
+    if (!existing) {
+      const id = await this.enqueue(task);
+      return { ok: true, action: DownloadAction.Started, taskId: id, message: 'Download started' };
+    }
+
+    switch (existing.state) {
+      case DownloadState.Downloading:
+      case DownloadState.Retrying:
+      case DownloadState.RefreshingSource:
+        return {
+          ok: true,
+          action: DownloadAction.Active,
+          taskId: existing.id,
+          message: 'Already downloading this source',
+        };
+
+      case DownloadState.Queued:
+        return {
+          ok: true,
+          action: DownloadAction.Queued,
+          taskId: existing.id,
+          message: 'Already queued — it starts when a slot frees up',
+        };
+
+      case DownloadState.Completed: {
+        /**
+         * "Completed" is a claim about a file, so it is checked against one.
+         * A download whose file the user has since deleted or moved must be
+         * startable again — reporting it as finished would leave the only
+         * useful action unavailable, with the reason invisible.
+         */
+        if (existing.targetFilePath && fs.existsSync(existing.targetFilePath)) {
+          return {
+            ok: true,
+            action: DownloadAction.Completed,
+            taskId: existing.id,
+            message: 'Already downloaded — open Downloads to find it',
+          };
+        }
+        existing.bytesDownloaded = 0;
+        existing.retryCount = 0;
+        existing.errorMessage = undefined;
+        existing.targetFilePath = this.claimTargetPath(existing);
+        await this.enqueue(existing);
+        return {
+          ok: true,
+          action: DownloadAction.Started,
+          taskId: existing.id,
+          message: 'The file was gone — downloading it again',
+        };
+      }
+
+      case DownloadState.Paused:
+        await this.resume(existing.id);
+        return {
+          ok: true,
+          action: DownloadAction.Resumed,
+          taskId: existing.id,
+          message: 'Download resumed',
+        };
+
+      case DownloadState.Failed:
+        /**
+         * `resume` is the recovery path, not a second start: for a direct link
+         * it clears the retry budget and re-resolves the source through the
+         * provider before retrying. That is what stops the viewer having to
+         * delete a failed task by hand and rebuild it from the source list.
+         */
+        await this.resume(existing.id);
+        return {
+          ok: true,
+          action: DownloadAction.Recovering,
+          taskId: existing.id,
+          message: 'Retrying — finding the source again',
+        };
+
+      default:
+        return {
+          ok: true,
+          action: DownloadAction.Active,
+          taskId: existing.id,
+          message: `Already in the download list (${existing.state})`,
+        };
+    }
   }
 
   /** Dispatches one task to whichever engine can actually fetch its URL. */
@@ -596,8 +759,43 @@ export class DownloadService {
     task: DownloadTask,
     sources: TorrentResult[]
   ): TorrentResult | null {
+    const context = {
+      mediaUrl: task.mediaUrl,
+      season: task.seasonNumber,
+      episode: task.episodeNumber,
+    };
     const directSources = sources.filter((s) => Boolean(s.directUrl));
     if (directSources.length === 0) return null;
+
+    /**
+     * Recovery is per download, so it must find *this* release again.
+     *
+     * The variant key is exactly the durable description of what was being
+     * downloaded — provider, release name, resolution, language — and it
+     * survives the re-signed URL that caused the failure in the first place.
+     * Asking for it first means the 2160p task recovers the 2160p file even
+     * when the 1080p one is listed above it and within the size tolerance.
+     */
+    const exact = task.variantKey
+      ? directSources.find(
+          (s) => downloadVariantKey(variantFromSource(s, context)) === task.variantKey
+        )
+      : undefined;
+    if (exact) return exact;
+
+    /**
+     * Below this line the match is a guess, and the guard is what keeps it an
+     * acceptable one: a different **resolution** is a different file, not a
+     * mirror of the same one. Without it the last tiers would hand a 4K task a
+     * 480p rip of similar size, write it to the folder labelled 2160p, and
+     * report a successful download of something the viewer did not ask for.
+     */
+    const sameResolution = (s: TorrentResult): boolean => {
+      const wanted = task.resolution;
+      const got = s.parsed?.resolution;
+      if (!wanted || !got) return true;
+      return String(wanted) === String(got);
+    };
 
     const isSizeCompatible = (s: TorrentResult): boolean => {
       if (!task.totalBytes || task.totalBytes <= 0 || !s.sizeBytes || s.sizeBytes <= 0) {
@@ -608,11 +806,25 @@ export class DownloadService {
       return diff / task.totalBytes <= 0.10;
     };
 
+    /**
+     * Either name may be the one recorded. `providerName` is the extension's
+     * provider and `indexerName` is the extractor it chose — a file host, which
+     * changes between resolves of the same release — and the four call sites
+     * that built these tasks did not previously agree on which to store.
+     */
+    const matchesProvider = (s: TorrentResult): boolean => {
+      const wanted = (task.providerName ?? '').toLowerCase();
+      if (!wanted) return false;
+      return (
+        s.indexerName?.toLowerCase() === wanted ||
+        s.providerName?.toLowerCase() === wanted ||
+        Boolean(s.title && s.title.toLowerCase().includes(wanted))
+      );
+    };
+
     // Tier 1: Exact match on providerName AND resolution AND size compatibility
     let best = directSources.find((s) => {
-      const providerMatch =
-        s.indexerName === task.providerName ||
-        (s.title && s.title.toLowerCase().includes(task.providerName.toLowerCase()));
+      const providerMatch = matchesProvider(s);
       const resStr = s.parsed?.resolution ? String(s.parsed.resolution) : '';
       const qualityMatch =
         (task.quality && (resStr === String(task.quality) || resStr === `${task.quality}p`)) ||
@@ -623,15 +835,14 @@ export class DownloadService {
 
     // Tier 2: Match on providerName AND size compatibility
     best = directSources.find((s) => {
-      const providerMatch =
-        s.indexerName === task.providerName ||
-        (s.title && s.title.toLowerCase().includes(task.providerName.toLowerCase()));
-      return providerMatch && isSizeCompatible(s);
+      const providerMatch = matchesProvider(s);
+      return providerMatch && sameResolution(s) && isSizeCompatible(s);
     });
     if (best) return best;
 
     // Tier 3: Match on quality / resolution AND size compatibility
     best = directSources.find((s) => {
+      if (!sameResolution(s)) return false;
       const resStr = s.parsed?.resolution ? String(s.parsed.resolution) : '';
       const qualityMatch =
         (task.quality && (resStr === String(task.quality) || resStr === `${task.quality}p`)) ||
@@ -640,12 +851,17 @@ export class DownloadService {
     });
     if (best) return best;
 
-    // Tier 4: Any direct source matching size compatibility
-    best = directSources.find(isSizeCompatible);
+    // Tier 4: Any direct source of the same resolution and compatible size
+    best = directSources.find((s) => sameResolution(s) && isSizeCompatible(s));
     if (best) return best;
 
-    // Fallback: Top direct source
-    return directSources[0];
+    /**
+     * Last resort, and still resolution-bound. Returning `directSources[0]`
+     * unconditionally — which is what this used to do — is how a recovery came
+     * to substitute an unrelated release; a task that finds nothing of its own
+     * resolution is better left Failed with its reason than silently rebound.
+     */
+    return directSources.find(sameResolution) ?? null;
   }
 
   private async markFailed(task: DownloadTask, message: string): Promise<void> {

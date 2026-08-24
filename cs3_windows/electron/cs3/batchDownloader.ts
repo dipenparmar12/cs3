@@ -1,8 +1,8 @@
 import type { ContentService } from '../contentService';
 import type { DownloadService } from '../downloadService';
 import type { DownloadTask } from '../../src/types/download';
-import { DownloadState } from '../../src/types/download';
 import type { TorrentResult } from '../../src/types/torrent';
+import { buildDownloadTask } from '../../src/utils/downloadIdentity.ts';
 
 /**
  * Queues a whole season — or a whole series — from a single choice.
@@ -141,10 +141,23 @@ export class BatchDownloader {
             reason: response.emptyReason ?? 'No source matched the requested quality.',
           });
         } else {
-          await this.downloads.enqueue(
-            buildTask(request, episode, choice, batchId)
-          );
-          progress.queued++;
+          const task = buildTask(request, episode, choice);
+          if (task) {
+            /**
+             * `request`, not `enqueue`: re-running a season download after a
+             * few episodes failed is the common case, and this way the ones
+             * already on disk are recognised and the failed ones are recovered
+             * rather than duplicated.
+             */
+            await this.downloads.request(task);
+            progress.queued++;
+          } else {
+            progress.failed++;
+            progress.failures.push({
+              episode: label,
+              reason: 'That source carries no address to download from.',
+            });
+          }
         }
       } catch (error) {
         progress.failed++;
@@ -208,37 +221,25 @@ function pickSource(sources: TorrentResult[], maxResolution?: number): TorrentRe
   return withinCap[0] ?? sources[0];
 }
 
+/**
+ * One episode's task, built exactly as a single download would be.
+ *
+ * The version this replaced also stamped the batch id into `providerName`
+ * (`Gdshine (batch-1755…)`), which nothing ever read and which broke two things
+ * that do read it: source recovery compares that field against a provider name
+ * and never matched, and the download's identity changed on every batch run, so
+ * re-running a season queued a second copy of every episode already in it.
+ */
 function buildTask(
   request: BatchDownloadRequest,
   episode: EpisodeRef,
-  source: TorrentResult,
-  batchId: string
-): DownloadTask {
-  const url = source.directUrl || source.magnet || source.torrentUrl || source.infoHash;
-  return {
-    id: `${source.infoHash}-s${episode.season ?? 0}e${episode.episode ?? 0}`,
-    parentId: request.parentUrl,
+  source: TorrentResult
+): DownloadTask | null {
+  return buildDownloadTask(source, {
     title: request.title,
-    episodeNumber: episode.episode,
-    seasonNumber: episode.season,
-    posterUrl: request.posterUrl,
-    targetFilePath: '',
-    link: {
-      source: source.indexerName,
-      name: source.title,
-      url,
-      referer: source.directHeaders?.Referer || source.directHeaders?.referer || '',
-      quality: source.parsed.resolution || 720,
-    },
-    headers: source.directHeaders || {},
-    bytesDownloaded: 0,
-    totalBytes: source.sizeBytes,
-    downloadSpeed: 0,
-    etaSeconds: 0,
-    state: DownloadState.Queued,
-    providerName: `${source.indexerName} (${batchId})`,
-    createdTime: Date.now(),
     mediaUrl: episode.url,
-    resolution: source.parsed.resolution,
-  };
+    posterUrl: request.posterUrl,
+    season: episode.season,
+    episode: episode.episode,
+  });
 }

@@ -6,7 +6,7 @@ import type {
   SearchResponse,
   SearchSuggestion,
 } from '../src/types/api';
-import type { DownloadTask } from '../src/types/download';
+import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
 import type { SwarmReport } from '../src/types/torrent';
 import type { SitePlugin, PluginCompatibilityReport, ProviderTreeRepository } from '../src/types/plugin';
 import type {
@@ -611,6 +611,14 @@ export interface CloudStreamElectronAPI {
 
   // Downloads
   enqueueDownload: (task: DownloadTask) => Promise<string>;
+  /**
+   * Asks for a variant to make progress, and says what that meant.
+   *
+   * Prefer this to {@link enqueueDownload} for anything a person clicked: it
+   * resumes a paused transfer, recovers a failed one and refuses only a genuine
+   * duplicate, where enqueue would create a second task for all three.
+   */
+  requestDownload: (task: DownloadTask) => Promise<DownloadRequestResult>;
   pauseDownload: (id: string) => Promise<void>;
   resumeDownload: (id: string) => Promise<void>;
   /**
@@ -1325,6 +1333,7 @@ const api: CloudStreamElectronAPI = {
   saveSourcePreferences: (prefs) => ipcRenderer.invoke('sources:savePreferences', prefs),
 
   enqueueDownload: (task) => ipcRenderer.invoke('download:enqueue', task),
+  requestDownload: (task) => ipcRenderer.invoke('download:request', task),
   pauseDownload: (id) => ipcRenderer.invoke('download:pause', id),
   resumeDownload: (id) => ipcRenderer.invoke('download:resume', id),
   removeDownload: (id, deleteFile) => ipcRenderer.invoke('download:remove', id, deleteFile),

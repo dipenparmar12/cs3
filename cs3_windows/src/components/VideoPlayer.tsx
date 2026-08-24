@@ -16,6 +16,11 @@ import type { MpvSnapshot } from '../types/mpv';
 import type { TorrentResult } from '../types/torrent';
 import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
+import {
+  buildDownloadTask,
+  downloadVariantKey,
+  variantFromSource,
+} from '../utils/downloadIdentity';
 import { HoverMenu } from './player/HoverMenu';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
@@ -408,17 +413,43 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, []);
 
-  const currentDownload = useMemo(() => {
-    const norm = (s?: string) => s?.toLowerCase().trim() || '';
-    const normTitle = norm(title);
-    return downloadQueue.find(
-      (t) =>
-        (normTitle && (norm(t.title) === normTitle || norm(t.title).startsWith(normTitle))) ||
-        (t.mediaUrl && progress?.mediaUrl && t.mediaUrl === progress.mediaUrl) ||
-        (t.link?.url && streamUrl && t.link.url === streamUrl) ||
-        (infoHash && t.id.includes(infoHash))
+  /** The task for the variant on screen, if the queue holds one. */
+  const currentVariantKey = useMemo(() => {
+    if (!activeSource) return '';
+    return downloadVariantKey(
+      variantFromSource(activeSource, {
+        mediaUrl: progress?.mediaUrl,
+        season: subtitleContext?.season,
+        episode: subtitleContext?.episode,
+      })
     );
-  }, [downloadQueue, title, progress?.mediaUrl, streamUrl, infoHash]);
+    // Keyed on the serialised source identity, not the object — see
+    // `activeSourceKey`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSourceKey, progress?.mediaUrl, subtitleContext?.season, subtitleContext?.episode]);
+
+  /**
+   * The download for *this* source, not for anything sharing its title.
+   *
+   * The version this replaced matched on a title prefix, a shared `mediaUrl` or
+   * a substring of the task id, so every release of one film resolved to the
+   * first entry in the queue. That is what made the Download button report
+   * `Already downloading` for a 1080p release while the 2160p one was running,
+   * and what made the progress badge show the wrong transfer's percentage.
+   */
+  const currentDownload = useMemo(() => {
+    if (currentVariantKey) {
+      const exact = downloadQueue.find((t) => t.variantKey === currentVariantKey);
+      if (exact) return exact;
+    }
+    /**
+     * Nothing has been resolved yet — no source list, so no variant. Falling
+     * back to the stream's own address is safe in a way the title never was:
+     * it identifies one file rather than every release of one film.
+     */
+    if (!streamUrl) return undefined;
+    return downloadQueue.find((t) => t.link?.url === streamUrl);
+  }, [downloadQueue, currentVariantKey, streamUrl]);
 
   /**
    * Lightweight acknowledgement for actions taken during playback.
@@ -631,86 +662,44 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const handleDownloadCurrentMedia = useCallback(async () => {
     /**
-     * A second press on something already downloading is not a second download.
+     * A press is a request for this file to make progress, and the main process
+     * decides what that means from the task's actual state — resume a paused
+     * one, recover a failed one, refuse only a genuinely running one.
      *
-     * This is the other half of the silence problem: without feedback people
-     * pressed again, and every press enqueued another copy of the same file.
-     * Saying what is already happening is both the acknowledgement and the
-     * guard — and "Completed" is called out separately, because "already
-     * downloading" would be a lie about a file that is sitting on disk.
+     * This block used to answer for it, and answered wrongly in two of the
+     * three cases it handled: a paused transfer was reported as already
+     * downloading and left paused, and a failed one told the viewer to go and
+     * find the download panel. Both are now one press.
      */
-    if (currentDownload) {
-      if (currentDownload.state === DownloadState.Completed) {
-        notify('Already downloaded — open Downloads to find it', 'good');
-      } else if (currentDownload.state === DownloadState.Failed) {
-        notify('That download failed. Retry it from the download panel.', 'bad');
-      } else {
-        notify(`Already downloading — ${title}`);
-      }
-      return;
-    }
-
-    notify(`Download started — ${episodeTitle || title}`, 'good');
-
     if (onDownloadCurrent) {
       onDownloadCurrent();
       return;
     }
 
-    const activeSource =
-      sourceSession?.sources?.find(
-        (s) => s.infoHash === (sourceSession.activeInfoHash || infoHash)
-      ) ?? sourceSession?.sources?.[0];
-
+    // The same source the player is rendering, which `activeSource` already
+    // resolves; recomputing it here is how the two came to disagree on which
+    // row `infoHash` referred to.
     if (activeSource && sourceSession?.onDownloadSource) {
       sourceSession.onDownloadSource(activeSource);
       return;
     }
 
-    const downloadUrl =
-      activeSource?.directUrl ||
-      activeSource?.magnet ||
-      activeSource?.torrentUrl ||
-      streamUrl;
-    if (!downloadUrl) return;
+    const task = buildDownloadTask(activeSource, {
+      title,
+      episodeTitle,
+      mediaUrl: progress?.mediaUrl,
+      posterUrl: progress?.posterUrl,
+      season: subtitleContext?.season,
+      episode: subtitleContext?.episode,
+      fallbackUrl: streamUrl,
+    });
+    if (!task) return;
 
-    const taskTitle = title + (episodeTitle ? ` - ${episodeTitle}` : '');
-    const taskId = `dl-${infoHash || Date.now()}-${taskTitle}`.replace(
-      /[^a-zA-Z0-9-_]/g,
-      '_'
+    const result = await window.cloudstream?.requestDownload?.(task);
+    notify(
+      result?.message ?? `Download started — ${episodeTitle || title}`,
+      result && result.action !== 'active' && result.action !== 'queued' ? 'good' : 'info'
     );
-
-    const task: DownloadTask = {
-      id: taskId,
-      parentId: progress?.mediaUrl || '',
-      title: taskTitle,
-      episodeNumber: subtitleContext?.episode,
-      seasonNumber: subtitleContext?.season,
-      posterUrl: progress?.posterUrl || '',
-      targetFilePath: '',
-      link: {
-        source: activeSource?.indexerName || 'Player Stream',
-        name: activeSource?.title || taskTitle,
-        url: downloadUrl,
-        referer:
-          activeSource?.directHeaders?.Referer ||
-          activeSource?.directHeaders?.referer ||
-          '',
-        quality: activeSource?.parsed?.resolution || 1080,
-      },
-      headers: activeSource?.directHeaders || {},
-      bytesDownloaded: 0,
-      totalBytes: activeSource?.sizeBytes || 0,
-      downloadSpeed: 0,
-      etaSeconds: 0,
-      state: DownloadState.Queued,
-      providerName: activeSource?.providerName || activeSource?.indexerName || 'Current Stream',
-      createdTime: Date.now(),
-      mediaUrl: progress?.mediaUrl || streamUrl,
-      resolution: activeSource?.parsed?.resolution,
-    };
-
-    await window.cloudstream?.enqueueDownload?.(task);
     try {
       await window.cloudstream?.recordHistoryEvent?.({
         title: task.title,
@@ -736,11 +725,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [
     onDownloadCurrent,
     sourceSession,
-    infoHash,
+    activeSource,
     streamUrl,
     title,
     episodeTitle,
+    notify,
     progress?.mediaUrl,
+    progress?.posterUrl,
     subtitleContext,
   ]);
 

@@ -25,7 +25,8 @@ import { FirstRunBanner } from './components/FirstRunBanner';
 
 import type { Episode, SearchOptions, SearchResponse } from './types/api';
 import type { HistoryEvent } from './types/history';
-import { type DownloadTask, DownloadState } from './types/download';
+import type { DownloadRequestResult, DownloadTask } from './types/download';
+import { buildDownloadTask } from './utils/downloadIdentity';
 import type { TorrentResult } from './types/torrent';
 import type { PlaybackSnapshot } from '../electron/playbackSession';
 import type { SearchSnapshot } from '../electron/searchSession';
@@ -774,32 +775,45 @@ export const App: React.FC = () => {
     window.cloudstream?.playbackPlayNow(sessionRef.current.id);
   }, []);
 
-  const handleEnqueueDownload = async (task: DownloadTask) => {
-    if (window.cloudstream) {
-      await window.cloudstream.enqueueDownload(task);
-      try {
-        await window.cloudstream.recordHistoryEvent?.({
-          title: task.title,
-          mediaUrl: task.mediaUrl || task.link.url,
-          posterUrl: task.posterUrl,
-          season: task.seasonNumber,
-          episode: task.episodeNumber,
-          action: 'download_started',
-          status: 'Attempted',
-          source: {
-            providerName: task.providerName,
-            sourceName: task.link.name,
-            directUrl: task.link.url,
-            directHeaders: task.headers,
-            quality: task.quality ? `${task.quality}p` : undefined,
-            resolution: task.resolution,
-            sizeBytes: task.totalBytes,
-          },
-        });
-      } catch {}
-      const queue = await window.cloudstream.getDownloadQueue();
-      setDownloadQueue(queue);
+  /**
+   * The one place a user-initiated download goes.
+   *
+   * `requestDownload` rather than `enqueueDownload` because a press is a
+   * request for the file to make progress, not a command to create a task: it
+   * resumes a paused transfer and recovers a failed one where enqueue would
+   * have silently created a second task pointing at the same bytes. The result
+   * is returned so the caller can say which of those happened.
+   */
+  const handleEnqueueDownload = async (task: DownloadTask): Promise<DownloadRequestResult> => {
+    if (!window.cloudstream) {
+      return { ok: false, action: 'started', message: 'Desktop bridge unavailable.' };
     }
+    const result = await window.cloudstream.requestDownload(task);
+
+    try {
+      await window.cloudstream.recordHistoryEvent?.({
+        title: task.title,
+        mediaUrl: task.mediaUrl || task.link.url,
+        posterUrl: task.posterUrl,
+        season: task.seasonNumber,
+        episode: task.episodeNumber,
+        action: 'download_started',
+        status: 'Attempted',
+        source: {
+          providerName: task.providerName,
+          sourceName: task.link.name,
+          directUrl: task.link.url,
+          directHeaders: task.headers,
+          quality: task.quality ? `${task.quality}p` : undefined,
+          resolution: task.resolution,
+          sizeBytes: task.totalBytes,
+        },
+      });
+    } catch {}
+
+    const queue = await window.cloudstream.getDownloadQueue();
+    setDownloadQueue(queue);
+    return result;
   };
 
   const handlePauseDownload = async (id: string) => {
@@ -884,43 +898,16 @@ export const App: React.FC = () => {
                   return;
                 }
 
-                const streamUrl = session.snapshot.handle?.streamUrl;
-                const downloadUrl = active?.directUrl || active?.magnet || active?.torrentUrl || streamUrl;
-                if (downloadUrl) {
-                  const taskTitle =
-                    session.context.title +
-                    (session.context.episodeTitle ? ` - ${session.context.episodeTitle}` : '');
-                  const task: DownloadTask = {
-                    id: `dl-${session.snapshot.activeInfoHash || Date.now()}-${taskTitle}`.replace(
-                      /[^a-zA-Z0-9-_]/g,
-                      '_'
-                    ),
-                    parentId: session.context.progress?.mediaUrl || '',
-                    title: taskTitle,
-                    episodeNumber: session.context.subtitleContext?.episode,
-                    seasonNumber: session.context.subtitleContext?.season,
-                    posterUrl: session.context.progress?.posterUrl || '',
-                    targetFilePath: '',
-                    link: {
-                      source: active?.indexerName || active?.providerName || 'Player Stream',
-                      name: active?.title || taskTitle,
-                      url: downloadUrl,
-                      referer: active?.directHeaders?.Referer || active?.directHeaders?.referer || '',
-                      quality: active?.parsed?.resolution || 1080,
-                    },
-                    headers: active?.directHeaders || {},
-                    bytesDownloaded: 0,
-                    totalBytes: active?.sizeBytes || 0,
-                    downloadSpeed: 0,
-                    etaSeconds: 0,
-                    state: DownloadState.Queued,
-                    providerName: active?.indexerName || active?.providerName || 'Current Stream',
-                    createdTime: Date.now(),
-                    mediaUrl: session.context.progress?.mediaUrl || streamUrl,
-                    resolution: active?.parsed?.resolution,
-                  };
-                  void handleEnqueueDownload(task);
-                }
+                const task = buildDownloadTask(active, {
+                  title: session.context.title,
+                  episodeTitle: session.context.episodeTitle,
+                  mediaUrl: session.context.progress?.mediaUrl,
+                  posterUrl: session.context.progress?.posterUrl,
+                  season: session.context.subtitleContext?.season,
+                  episode: session.context.subtitleContext?.episode,
+                  fallbackUrl: session.snapshot.handle?.streamUrl,
+                });
+                if (task) void handleEnqueueDownload(task);
               }}
               onSelectEpisode={
                 session.context.onRequestEpisode
@@ -1018,38 +1005,16 @@ export const App: React.FC = () => {
                     return;
                   }
                 }
-                if (playback.streamUrl) {
-                  const taskTitle =
-                    playback.title +
-                    (playback.episodeTitle ? ` - ${playback.episodeTitle}` : '');
-                  const task: DownloadTask = {
-                    id: `dl-${playback.infoHash || Date.now()}-${taskTitle}`.replace(
-                      /[^a-zA-Z0-9-_]/g,
-                      '_'
-                    ),
-                    parentId: playback.progress?.mediaUrl || '',
-                    title: taskTitle,
-                    posterUrl: '',
-                    targetFilePath: '',
-                    link: {
-                      source: 'Player Stream',
-                      name: taskTitle,
-                      url: playback.streamUrl,
-                      referer: '',
-                      quality: 1080,
-                    },
-                    headers: {},
-                    bytesDownloaded: 0,
-                    totalBytes: 0,
-                    downloadSpeed: 0,
-                    etaSeconds: 0,
-                    state: DownloadState.Queued,
-                    providerName: 'Current Stream',
-                    createdTime: Date.now(),
-                    mediaUrl: playback.progress?.mediaUrl || playback.streamUrl,
-                  };
-                  void handleEnqueueDownload(task);
-                }
+                const task = buildDownloadTask(null, {
+                  title: playback.title,
+                  episodeTitle: playback.episodeTitle,
+                  mediaUrl: playback.progress?.mediaUrl,
+                  posterUrl: playback.progress?.posterUrl,
+                  season: playback.progress?.season,
+                  episode: playback.progress?.episode,
+                  fallbackUrl: playback.streamUrl,
+                });
+                if (task) void handleEnqueueDownload(task);
               }}
               sourceSession={
                 playback.sources

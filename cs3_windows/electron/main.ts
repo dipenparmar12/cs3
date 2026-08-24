@@ -2330,6 +2330,26 @@ ipcMain.handle('sources:savePreferences', async (_, prefs: Partial<SourcePrefere
 // --- downloads -----------------------------------------------------------
 
 ipcMain.handle('download:enqueue', async (_, task: DownloadTask) => downloadService.enqueue(task));
+/**
+ * The state-aware Download press.
+ *
+ * `download:enqueue` still exists and still means "create this task" — the
+ * season batcher wants exactly that. This one means "make this variant make
+ * progress", which is what a button press actually is, and answers with which
+ * of six things happened rather than leaving the renderer to guess from a list
+ * it matched on the title.
+ */
+ipcMain.handle('download:request', async (_, task: DownloadTask) => {
+  try {
+    return await downloadService.request(task);
+  } catch (error) {
+    return {
+      ...fail(error),
+      action: 'started',
+      message: 'Could not start that download.',
+    };
+  }
+});
 ipcMain.handle('download:pause', async (_, id: string) => downloadService.pause(id));
 ipcMain.handle('download:resume', async (_, id: string) => downloadService.resume(id));
 ipcMain.handle('download:remove', async (_, id: string, deleteFile?: boolean) =>
