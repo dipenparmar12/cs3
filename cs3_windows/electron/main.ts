@@ -1785,8 +1785,19 @@ ipcMain.handle('playback:cancelSourceSearch', (_, sessionId: string) => {
 
 ipcMain.handle('playback:stop', async (_, sessionId: string, keepFiles?: boolean) => {
   try {
+    /**
+     * mpv is deliberately *not* stopped here.
+     *
+     * Not every session owns a stream: the detail page's source picker starts
+     * one through `startSourceDiscovery` purely to scrape, and stops it when the
+     * picker closes. Quitting mpv on that would kill the film the viewer is
+     * watching in the mini player from a screen that never played anything.
+     *
+     * Closing the player is the event that must close mpv, and it is handled
+     * where it is known: `handleClosePlayer`, `VideoPlayer`'s unmount, and
+     * `NativeEngineStage`'s teardown all call `mpv:stop` directly.
+     */
     await playbackSessions.stop(sessionId, keepFiles ?? true);
-    await mpvEngine.stop();
     return { ok: true };
   } catch (error) {
     return fail(error);

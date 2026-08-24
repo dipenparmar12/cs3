@@ -185,6 +185,50 @@ try {
   check('the process is reused across files rather than respawned', () => {
     assert.equal(engine.isRunning(), true);
   });
+
+  /**
+   * The source switch, exactly as the renderer issues it.
+   *
+   * `NativeEngineStage`'s effect cleanup fires `mpv:stop` and its body fires
+   * `mpv:open` in the same tick, neither awaiting the other. `stop` now quits
+   * the process rather than idling it — an idle mpv leaves a blank OS window
+   * over the app — so without serialisation the quit's teardown and its kill
+   * land on the process the open has just started, and the second film never
+   * plays. That was reported as "the first media plays and nothing after it".
+   *
+   * Deliberately not awaited in order: interleaving is the whole test.
+   */
+  const stopping = engine.stop();
+  const reopening = engine.open({ url: fixture, title: 'switched source' });
+  await Promise.all([stopping, reopening]);
+
+  const switched = await waitFor(
+    (s) => s.state === 'playing' && s.positionSeconds > 0,
+    20_000,
+    'the switched-to source to play'
+  );
+  check('a stop racing the open that follows it does not kill the new stream', () => {
+    assert.equal(switched.state, 'playing');
+    assert.equal(engine.isRunning(), true);
+  });
+
+  /**
+   * And it stays alive: the old implementation scheduled `kill()` on a detached
+   * 1.5s timer, so the new stream died about a second and a half in — long
+   * enough to look like a stream that "started and then stopped".
+   */
+  await sleep(2500);
+  check('the new stream survives the stopped process being reaped', () => {
+    assert.equal(engine.isRunning(), true);
+    assert.notEqual(engine.snapshot().state, 'idle');
+  });
+
+  /** An explicit stop is not the credits; reporting `ended` advances an episode. */
+  await engine.stop();
+  check('an explicit stop reports idle rather than ended', () => {
+    assert.equal(engine.snapshot().state, 'idle');
+    assert.equal(engine.isRunning(), false);
+  });
 } finally {
   await engine.shutdown();
   await sleep(300);

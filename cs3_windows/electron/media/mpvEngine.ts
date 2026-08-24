@@ -149,6 +149,23 @@ export class MpvEngine {
   private cachedPath: string | null = null;
   private hardwareDecoders: string[] | null = null;
 
+  /**
+   * Serialises the operations that create or destroy the process.
+   *
+   * `open` and `shutdown` are both several awaits long and they arrive from the
+   * renderer as two independent IPC calls that are issued in the same tick:
+   * `NativeEngineStage`'s effect cleanup stops the old stream and its body
+   * immediately opens the new one. Interleaved, the shutdown's `teardown()` — and
+   * the `kill()` behind it — lands on the process the open has just started, and
+   * the second film never plays. That is not a rare race; it is the ordinary
+   * source switch.
+   *
+   * Everything else (`seek`, `setVolume`, track selection) goes straight to
+   * {@link command} and is deliberately not queued: those are cheap, idempotent
+   * and must not sit behind a process launch.
+   */
+  private lifecycle: Promise<unknown> = Promise.resolve();
+
   constructor(deps: MpvEngineDeps) {
     this.deps = deps;
   }
@@ -244,6 +261,17 @@ export class MpvEngine {
 
   // --- session lifecycle ---------------------------------------------------
 
+  /** Runs `operation` after every lifecycle operation queued before it. */
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.lifecycle.then(operation, operation);
+    // A rejection must not poison the queue for the operations behind it.
+    this.lifecycle = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
   /**
    * Starts playback of one stream, replacing whatever was playing.
    *
@@ -252,8 +280,16 @@ export class MpvEngine {
    * milliseconds where a cold start costs a window creation and a GPU context.
    * Binge-watching is the common case and it is the one that would otherwise
    * have felt slowest.
+   *
+   * That reuse only holds while nobody has asked for a stop in between — and a
+   * source switch does exactly that, because an idle mpv window must not be
+   * left on screen. {@link serialize} is what makes the two orderings safe.
    */
-  public async open(request: MpvOpenRequest): Promise<MpvCommandResult> {
+  public open(request: MpvOpenRequest): Promise<MpvCommandResult> {
+    return this.serialize(() => this.openNow(request));
+  }
+
+  private async openNow(request: MpvOpenRequest): Promise<MpvCommandResult> {
     const binary = this.resolvePath();
     if (!binary) {
       return { ok: false, error: 'The native playback engine (mpv) is not installed.' };
@@ -987,31 +1023,74 @@ export class MpvEngine {
    * Closing the player or switching media must close the mpv window immediately
    * rather than leaving an idle or frozen external window floating on screen.
    */
-  public async stop(): Promise<MpvCommandResult> {
-    if (!this.process) return { ok: true };
-    await this.shutdown();
-    this.state = 'idle';
-    this.emit();
-    return { ok: true };
+  public stop(): Promise<MpvCommandResult> {
+    return this.serialize(async () => {
+      if (!this.process) return { ok: true };
+      await this.shutdownNow();
+      this.state = 'idle';
+      this.emit();
+      return { ok: true };
+    });
   }
 
   /** Ends the process. Wired into `before-quit`; otherwise mpv outlives the app. */
-  public async shutdown(): Promise<void> {
+  public shutdown(): Promise<void> {
+    return this.serialize(() => this.shutdownNow());
+  }
+
+  /**
+   * Quits the process and does not return until it is gone.
+   *
+   * Waiting is what makes this safe to run immediately before an `open`. The
+   * version this replaced scheduled `kill()` on a detached 1.5s timer, so a
+   * source switch left a kill in flight aimed at a child that had already been
+   * replaced by the new one — the second stream died about a second and a half
+   * after it started. Waiting on `exit` normally costs ~100ms; the timeout is
+   * the ceiling for an mpv that has stopped answering, not the usual price.
+   */
+  private async shutdownNow(): Promise<void> {
     if (!this.process) return;
     const child = this.process;
+
+    /**
+     * An explicit stop is not the end of a film.
+     *
+     * `child.on('exit')` reports `ended` when the process dies while it was
+     * playing, and `NativeEngineStage` turns an `ended` snapshot into
+     * `onEnded()` — which is the next-episode advance. Switching source or
+     * closing the player would therefore silently skip an episode. Clearing the
+     * state before the quit makes this exit an ordinary one.
+     */
+    this.state = 'idle';
+
+    const exited = new Promise<void>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) return resolve();
+      child.once('exit', () => resolve());
+    });
+
     try {
       await this.command(['quit']);
     } catch {
       /* the process is going away regardless */
     }
     this.teardown();
-    setTimeout(() => {
+
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      exited,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, 1500);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+
+    if (child.exitCode === null && child.signalCode === null) {
       try {
-        if (child.exitCode === null) child.kill();
+        child.kill();
       } catch {
         /* already gone */
       }
-    }, 1500);
+    }
   }
 
   private teardown(): void {

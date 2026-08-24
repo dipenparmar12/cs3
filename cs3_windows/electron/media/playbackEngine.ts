@@ -174,9 +174,17 @@ export class PlaybackEngine {
   /**
    * Measures a source and classifies it, without starting anything.
    *
-   * Cached by proxied URL: the detail screen, the player and the failover ladder
-   * all ask about the same stream, and inspecting a remote 4K file three times
-   * costs three round trips to a CDN that is already the slow part.
+   * Cached by the **upstream** URL and headers, never by the proxied address:
+   * the detail screen, the player and the failover ladder all ask about the same
+   * stream, and inspecting a remote 4K file three times costs three round trips
+   * to a CDN that is already the slow part.
+   *
+   * The loopback address cannot be the key. Its token is minted per process, so
+   * `/stream/1` is one film this run and a different one the next — and the
+   * persistent {@link InspectionStore} behind this cache then answers the second
+   * film with the first one's codecs, which is how an HEVC release came to be
+   * attached as though it were H.264. `getTargetRoute` unwraps it back to what
+   * the provider actually gave us.
    */
   public async inspect(
     request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh'>

@@ -124,9 +124,11 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
     return () => {
       cancelled = true;
       /**
-       * Stopped, not quit. The process stays idle so the next episode loads in a
-       * few hundred milliseconds instead of paying for a window and a GPU
-       * context again — see `MpvEngine.open`.
+       * Quit, not merely stopped. mpv renders into its own OS window, so an
+       * idle process leaves a blank window floating over the app for every
+       * source that is *not* routed here — and for the player being closed.
+       * The cost is a cold start on the next file; `MpvEngine` serialises the
+       * quit against the open that follows it so the two cannot interleave.
        */
       void window.cloudstream?.mpvStop();
     };

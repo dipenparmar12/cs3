@@ -275,6 +275,48 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     );
   }, [sourceSession]);
 
+  /**
+   * A serialised identity for the active source, and the reason it exists.
+   *
+   * `sourceSession` is rebuilt from a `playback:update` snapshot, and every
+   * field under it — including `directHeaders` and `drm` — is a *new object*
+   * each time one arrives, because it crossed an IPC boundary. Snapshots are
+   * not rare: discovery pushes one per settled source and `recordBufferStall`
+   * pushes one on every buffer underrun.
+   *
+   * So an effect that depends on `activeSource.directHeaders` re-runs while
+   * nothing about the source has changed. For the preparation effect below
+   * that means tearing the stream down and re-preparing it mid-playback, which
+   * turns one stall into the next one. Identity has to come from the *values*.
+   */
+  const activeSourceKey = useMemo(() => {
+    if (!activeSource) return '';
+    return JSON.stringify([
+      activeSource.infoHash ?? null,
+      activeSource.directUrl ?? activeSource.magnet ?? activeSource.torrentUrl ?? null,
+      activeSource.isDash ?? null,
+      activeSource.drm ?? null,
+      activeSource.directHeaders ?? null,
+    ]);
+  }, [activeSource]);
+
+  /**
+   * The three fields `media:prepare` takes from the source, held stable.
+   *
+   * Recomputed only when {@link activeSourceKey} changes, so this object can be
+   * an effect dependency where `activeSource` itself cannot.
+   */
+  const sourceConfig = useMemo(
+    () => ({
+      headers: activeSource?.directHeaders,
+      isDash: activeSource?.isDash,
+      drm: activeSource?.drm,
+    }),
+    // Deliberately keyed on the serialised identity rather than the object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeSourceKey]
+  );
+
   const [resolvedProvenance, setResolvedProvenance] = useState<{
     provider?: string;
     repositoryName?: string;
@@ -2020,13 +2062,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     void (async () => {
       const response = await window.cloudstream?.preparePlaybackStream({
         url: streamUrl,
-        headers: activeSource?.directHeaders,
+        headers: sourceConfig.headers,
         isM3u8: mimeType === 'application/x-mpegURL',
-        isDash: activeSource?.isDash,
+        isDash: sourceConfig.isDash,
         // What the provider said about encryption, which outranks the probe —
         // and arrives before it, so an encrypted stream is never sent to
         // ffprobe to be misdiagnosed as a corrupt file.
-        drm: activeSource?.drm,
+        drm: sourceConfig.drm,
         provider: providerProvenance?.provider,
       });
       if (cancelled || !response) return;
@@ -2072,15 +2114,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // The ffmpeg process outlives the component otherwise.
       if (openedSession) void window.cloudstream?.closePlaybackStream(openedSession);
     };
-  }, [
-    streamUrl,
-    mimeType,
-    providerProvenance?.provider,
-    activeSource?.directHeaders,
-    activeSource?.isDash,
-    activeSource?.drm,
-    activeSource?.infoHash,
-  ]);
+  }, [streamUrl, mimeType, providerProvenance?.provider, sourceConfig]);
 
   useEffect(() => {
     preparedRef.current = prepared;
@@ -2115,10 +2149,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         const response = await window.cloudstream?.preparePlaybackStream({
           url: streamUrl,
-          headers: activeSource?.directHeaders,
+          headers: sourceConfig.headers,
           isM3u8: mimeType === 'application/x-mpegURL',
-          isDash: activeSource?.isDash,
-          drm: activeSource?.drm,
+          isDash: sourceConfig.isDash,
+          drm: sourceConfig.drm,
           provider: providerProvenance?.provider,
           // The cached verdict is the one that was wrong; measure again and then
           // override it anyway.
@@ -2145,9 +2179,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     isConverted,
     playbackOffset,
     providerProvenance?.provider,
-    activeSource?.directHeaders,
-    activeSource?.isDash,
-    activeSource?.drm,
+    sourceConfig,
   ]);
 
   useEffect(() => {
