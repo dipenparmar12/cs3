@@ -1,8 +1,7 @@
 import { createHash } from 'crypto';
-import type { Source } from '../../src/types/plugin.ts';
 import { scopedLogger } from '../logging/logger.ts';
 
-const log = scopedLogger('source-lease');
+const log = scopedLogger('sources');
 
 /**
  * PRD-40 / PRD-40.1 §4.1: Signed-URL lifecycle management.
@@ -15,6 +14,15 @@ const log = scopedLogger('source-lease');
  * Reconnect (TCP reset/drop on same URL) and Refresh (re-resolving a fresh signed URL)
  * are strictly separate recovery paths with separate state transitions and budgets.
  */
+
+export interface SourceLike {
+  url?: string;
+  name?: string;
+  provider?: string;
+  quality?: number;
+  headers?: Record<string, string>;
+  expiresAt?: number;
+}
 
 export interface ResolvedSource {
   url: string;
@@ -48,7 +56,7 @@ export type LeaseLifecycleState =
 
 export interface SourceLeaseOptions {
   sourceId?: string;
-  initialSource: Source | ResolvedSource;
+  initialSource: SourceLike | ResolvedSource;
   resolve?: () => Promise<ResolvedSource>;
   retryPolicy?: Partial<SourceLeaseRetryPolicy>;
 }
@@ -57,7 +65,7 @@ export interface SourceLeaseOptions {
  * Generates a stable logical source identity from release metadata
  * so identity survives URL re-resolutions.
  */
-export function generateStableSourceId(source: Source | ResolvedSource, fallbackProvider = 'unknown'): string {
+export function generateStableSourceId(source: SourceLike | ResolvedSource, fallbackProvider = 'unknown'): string {
   if ('provider' in source && source.provider && source.name) {
     const hash = createHash('sha256')
       .update(`${source.provider}:${source.name}:${source.quality ?? 0}`)
@@ -87,17 +95,17 @@ export class SourceLease {
   private hasStreamedSuccessfully = false;
 
   constructor(options: SourceLeaseOptions) {
-    this.current = 'headers' in options.initialSource
+    this.current = 'headers' in options.initialSource && options.initialSource.headers
       ? {
-          url: options.initialSource.url,
-          headers: options.initialSource.headers || {},
-          cookies: 'cookies' in options.initialSource ? options.initialSource.cookies : undefined,
+          url: options.initialSource.url || '',
+          headers: options.initialSource.headers,
+          cookies: 'cookies' in options.initialSource ? (options.initialSource as ResolvedSource).cookies : undefined,
           expiresAt: options.initialSource.expiresAt,
         }
       : {
-          url: (options.initialSource as Source).url || '',
-          headers: (options.initialSource as Source).headers || {},
-          expiresAt: (options.initialSource as Source).expiresAt,
+          url: options.initialSource.url || '',
+          headers: options.initialSource.headers || {},
+          expiresAt: options.initialSource.expiresAt,
         };
 
     this.sourceId = options.sourceId || generateStableSourceId(options.initialSource);

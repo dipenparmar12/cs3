@@ -7,6 +7,7 @@ import type { AddressInfo } from 'net';
 // indifferent and `allowImportingTsExtensions` is already set in both tsconfigs.
 import { classifyNetworkError } from './networkResilience.ts';
 import type { DiagnosticsSink } from './pluginManager.ts';
+import type { SourceLease } from './media/sourceLease.ts';
 
 /**
  * Serves a provider's stream with the headers that provider requires.
@@ -186,6 +187,8 @@ export class MediaProxy {
   private routes = new Map<string, Route>();
   /** Directory routes, for DASH — see {@link prefixRouteFor}. */
   private prefixes = new Map<string, Route>();
+  /** Leases held by token, for signed URL re-resolution per PRD-40.1 §4.1. */
+  private leases = new Map<string, SourceLease>();
   /** Reverse index so a playlist's hundred segments do not mint a token each. */
   private tokensByKey = new Map<string, string>();
   /** Files served from disk, and the reverse map that keeps tokens stable. */
@@ -235,6 +238,21 @@ export class MediaProxy {
 
     await this.ensureServer();
     return this.routeFor(url, cleaned);
+  }
+
+  /**
+   * PRD-40.1 §4.1: Wraps a SourceLease with stable loopback endpoint.
+   *
+   * The proxy holds the lease, not just the raw URL. When token expiration occurs,
+   * the proxy re-resolves the fresh URL beneath the same loopback token.
+   */
+  public async wrapLease(lease: SourceLease): Promise<string> {
+    const loopbackUrl = await this.wrap(lease.url, lease.headers);
+    const token = loopbackUrl.match(/\/stream\/(\d+)/)?.[1];
+    if (token) {
+      this.leases.set(token, lease);
+    }
+    return loopbackUrl;
   }
 
   /**
@@ -466,11 +484,43 @@ export class MediaProxy {
     });
 
     try {
-      const upstream = await this.fetchImpl(route.url, {
+      let upstream = await this.fetchImpl(route.url, {
         method: req.method === 'HEAD' ? 'HEAD' : 'GET',
         headers: requestHeaders,
         redirect: 'follow',
       });
+
+      const lease = direct ? this.leases.get(direct) : undefined;
+
+      // PRD-40.1 §4.1: Signed-URL token expiry pattern detection and refresh.
+      if (
+        lease &&
+        (upstream.status === 401 || upstream.status === 403) &&
+        lease.shouldTriggerRefresh(upstream.status)
+      ) {
+        try {
+          const fresh = await lease.refreshSource();
+          route.url = fresh.url;
+          route.headers = this.clean(fresh.headers);
+          const refreshedHeaders = alignRefererScheme(route.url, {
+            ...(hasUserAgent ? {} : { 'User-Agent': CHROME_USER_AGENT }),
+            ...(hasReferer ? {} : { Referer: defaultReferer }),
+            ...route.headers,
+            ...(req.headers.range ? { Range: String(req.headers.range) } : {}),
+          });
+          upstream = await this.fetchImpl(route.url, {
+            method: req.method === 'HEAD' ? 'HEAD' : 'GET',
+            headers: refreshedHeaders,
+            redirect: 'follow',
+          });
+        } catch (refreshErr) {
+          this.recordFailure(
+            route.url,
+            refreshErr,
+            `SourceLease refresh failed on token ${direct} (status ${upstream.status})`
+          );
+        }
+      }
 
       const contentType = upstream.headers.get('content-type');
 
@@ -575,7 +625,7 @@ export class MediaProxy {
         return;
       }
 
-      await this.stream(upstream, res, route, requestHeaders);
+      await this.stream(upstream, res, route, requestHeaders, lease);
     } catch (error) {
       this.recordFailure(route.url, error, 'Upstream request failed before any body was sent');
       if (!res.headersSent) res.writeHead(502);
@@ -601,7 +651,8 @@ export class MediaProxy {
     first: Response,
     res: http.ServerResponse,
     route: Route,
-    requestHeaders: Record<string, string>
+    requestHeaders: Record<string, string>,
+    lease?: SourceLease
   ): Promise<void> {
     /**
      * Where this response started in the file.
@@ -633,6 +684,9 @@ export class MediaProxy {
       try {
         await this.pump(response, res, () => clientGone, (n) => {
           sent += n;
+          if (sent > 0 && lease) {
+            lease.markStreamSuccess();
+          }
         });
         res.end();
         return;
@@ -643,6 +697,10 @@ export class MediaProxy {
 
         const failure = classifyNetworkError(error);
         const canResume = resumable && failure.retryable && attempt < MAX_RESUME_ATTEMPTS;
+
+        if (lease && canResume) {
+          lease.recordReconnect();
+        }
 
         this.recordFailure(
           route.url,
