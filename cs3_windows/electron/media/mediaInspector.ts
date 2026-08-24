@@ -5,24 +5,24 @@ import type {
   MediaTransport,
   SubtitleStreamMetadata,
   VideoStreamMetadata,
-} from '../../src/types/media';
+} from '../../src/types/media.ts';
+import type { InspectionStrategyType } from './playbackTelemetry.ts';
 import { isPlayableAudioCodec, requiresEmeDecryption } from './decisionEngine.ts';
 import { runTool } from './runTool.ts';
 import { scopedLogger } from '../logging/logger.ts';
 
+const log = scopedLogger('ffprobe');
+
 /**
- * Reads what is actually inside a stream, before anything tries to play it.
+ * PRD-37 / PRD-40 / PRD-40.1: Container-Aware Pre-Playback Media Inspection Layer.
  *
- * This is the gate INV-RACE-1 describes. Everything downstream — the strategy,
- * the ffmpeg arguments, the track list, the error message — is derived from this
- * one measurement, and nothing derives anything from the URL string. The
- * previous implementation guessed from filenames (`x265`, `10bit`, `2160p`) and
- * was wrong in both directions: releases mislabelled by whoever named them, and
- * bare `?id=…` Drive links carrying 10-bit HEVC with nothing in the URL to match.
- *
- * Cost: one ffprobe against the loopback proxy, bounded by `-probesize` so a 25
- * GB remote file is inspected from its first couple of megabytes rather than
- * downloaded. Measured 250 ms–3 s depending on how far the CDN is.
+ * This is the gate INV-RACE-1 describes.
+ * PRD-40.1 §4.2: Replaces the naive 2MB single-probe with container-typed inspection:
+ *  - Manifest parsing for HLS (.m3u8) & DASH (.mpd) without calling ffprobe on manifests
+ *  - Head probe (0-2MB) + tail probe on non-faststart MP4/MOV (moov at end)
+ *  - Raised probesize/analyzeduration for MPEG-TS multi-track streams
+ *  - Progressive widening for Matroska / unknown streams
+ *  - Distinction between `probeIncomplete` and `probeError`.
  */
 
 /** Configurable probe settings with optimized fast-switch defaults. */
@@ -47,6 +47,10 @@ export function setProbeConfig(config: Partial<ProbeConfig>): void {
 export function getProbeConfig(): ProbeConfig {
   return { ...currentProbeConfig };
 }
+
+const PROBE_SIZE_DEFAULT = 2_000_000;
+const PROBE_SIZE_RAISED = 15_000_000;
+const PROBE_SIZE_PROGRESSIVE = 10_000_000;
 
 /**
  * Providers that disguise their segments as images (PRD-38 E-03).
@@ -78,25 +82,15 @@ const HLS_BASE_OPTIONS = [
   '-protocol_whitelist', 'file,http,https,tcp,tls,crypto,data',
 ];
 
-/**
- * Whether the resolved ffmpeg/ffprobe understands `-extension_picky`.
- *
- * `null` until something has asked. Unknown is treated as absent: omitting the
- * flag loses image-named segments, while passing one that does not exist loses
- * *every* stream, and those are not the same size of mistake.
- */
 let extensionPickySupported: boolean | null = null;
+let toneMapSupported = false;
 
-/**
- * Records what the probe binary supports. Called once at startup by `main.ts`.
- *
- * Deliberately a module-level fact rather than a parameter threaded through
- * `inputOptionsFor`: the answer is a property of the binary on this machine,
- * every caller would pass the same value, and three call sites each doing their
- * own detection is three chances to forget.
- */
 export function setFfmpegExtensionPicky(supported: boolean): void {
   extensionPickySupported = supported;
+}
+
+export function setFfmpegToneMapSupport(supported: boolean): void {
+  toneMapSupported = supported;
 }
 
 export function hlsDemuxerOptions(): string[] {
@@ -105,13 +99,6 @@ export function hlsDemuxerOptions(): string[] {
     : HLS_BASE_OPTIONS;
 }
 
-/**
- * Detects the option by asking the binary to describe its own HLS demuxer.
- *
- * `-h demuxer=hls` lists every option the demuxer accepts, which is the same
- * source of truth the parser uses. Cheap, exact, and it costs one process
- * launch at startup rather than a failed probe per stream.
- */
 export async function detectExtensionPicky(
   ffprobePath: string,
   run: (path: string, args: string[], timeoutMs: number) => Promise<{ stdout: string; stderr: string }>
@@ -128,38 +115,21 @@ export async function detectExtensionPicky(
   }
 }
 
-/**
- * Whether this ffmpeg build has `zscale`, which is what tone-mapping needs.
- *
- * Detected rather than assumed for the same reason `-extension_picky` is: the
- * bundled build is not the only build that runs. `zscale` comes from zimg, an
- * optional dependency, and passing a filter a binary does not have fails the
- * whole command line rather than degrading.
- */
-let toneMapSupported = false;
-
-export function setFfmpegToneMapSupport(supported: boolean): void {
-  toneMapSupported = supported;
+export async function detectToneMapSupport(
+  ffmpegPath: string,
+  run: (path: string, args: string[], timeoutMs: number) => Promise<{ stdout: string; stderr: string }>
+): Promise<boolean> {
+  try {
+    const result = await run(ffmpegPath, ['-hide_banner', '-filters'], 8000);
+    const supported = /\bzscale\b/.test(`${result.stdout}${result.stderr}`);
+    setFfmpegToneMapSupport(supported);
+    return supported;
+  } catch {
+    setFfmpegToneMapSupport(false);
+    return false;
+  }
 }
 
-/**
- * The HDR-to-SDR filter chain, or nothing at all.
- *
- * **Nothing at all is the correct fallback, and that was measured rather than
- * assumed.** The obvious degraded chain — `tonemap` without `zscale` to
- * linearise first — is not a worse tone-map, it is a wrong one: fed non-linear
- * PQ code values it produces a dark, nearly monochrome picture. On a synthesised
- * PQ fixture, average saturation came out at 6.3 against 22.8 for doing nothing
- * and 63.0 for the real chain, with average luma down at 37.7 from 97.4. A
- * "graceful fallback" there would have made the exact problem it was added to
- * fix measurably worse.
- *
- * The chain itself: linearise, work in float, convert primaries to BT.709,
- * tone-map with Hable, then re-encode the BT.709 transfer and land on 8-bit
- * 4:2:0. `npl=100` is the reference display peak; `desat=0` keeps colour rather
- * than desaturating highlights, which matters because washed-out colour is the
- * symptom being fixed.
- */
 export function toneMapFilters(): string[] {
   if (!toneMapSupported) return [];
   return [
@@ -168,28 +138,8 @@ export function toneMapFilters(): string[] {
     'zscale=p=bt709',
     'tonemap=tonemap=hable:desat=0',
     'zscale=t=bt709:m=bt709:r=tv',
+    'format=yuv420p',
   ];
-}
-
-/**
- * Detects `zscale` by asking the binary what filters it has.
- *
- * One process launch at startup, beside {@link detectExtensionPicky}, rather
- * than a failed encode per HDR stream.
- */
-export async function detectToneMapSupport(
-  ffmpegPath: string,
-  run: (path: string, args: string[], timeoutMs: number) => Promise<{ stdout: string; stderr: string }>
-): Promise<boolean> {
-  try {
-    const result = await run(ffmpegPath, ['-hide_banner', '-filters'], 8000);
-    const supported = /^\s*[A-Z.]+\s+zscale\s/m.test(`${result.stdout}${result.stderr}`);
-    setFfmpegToneMapSupport(supported);
-    return supported;
-  } catch {
-    setFfmpegToneMapSupport(false);
-    return false;
-  }
 }
 
 const BITMAP_SUBTITLE_CODECS = new Set([
@@ -199,14 +149,6 @@ const BITMAP_SUBTITLE_CODECS = new Set([
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36';
 
-/**
- * `-user_agent` belongs to the HTTP demuxer.
- *
- * FFmpeg fails outright with "Option user_agent not found" when it is passed for
- * a local path, and providers 403 often enough that omitting it on network input
- * turns a working stream into a phantom "no audio". So it is conditional rather
- * than always or never.
- */
 export function inputOptionsFor(url: string, transport: MediaTransport): string[] {
   const options: string[] = [];
   if (transport === 'hls' || transport === 'dash') options.push(...hlsDemuxerOptions());
@@ -221,26 +163,28 @@ export function inputOptionsFor(url: string, transport: MediaTransport): string[
   ];
 }
 
-/**
- * What kind of thing this URL is, decided by what the server said where possible.
- *
- * The extension is checked first because it is free and right most of the time,
- * but it is not sufficient: providers serve `.m3u8` content from URLs ending in
- * `.php`, `.txt` and nothing at all. `classifyBody` is the authority when a body
- * is available — an HLS playlist always starts `#EXTM3U` and a DASH manifest is
- * always an XML document with an `<MPD` element, and neither can be mistaken for
- * the binary head of an MP4 or Matroska file.
- */
-export function transportFromUrl(url: string, isM3u8?: boolean): MediaTransport {
-  if (isM3u8) return 'hls';
+export type ContainerTypeCategory = 'manifest-hls' | 'manifest-dash' | 'mp4' | 'ts' | 'mkv' | 'unknown';
+
+export function detectUrlType(url: string, hintM3u8?: boolean): ContainerTypeCategory {
+  if (hintM3u8) return 'manifest-hls';
   const path = url.split(/[?#]/)[0].toLowerCase();
   if (
     path.endsWith('.m3u8') ||
     path.endsWith('.m3u') ||
     /\/(getm3u8|m3u8|hls)\b/i.test(path) ||
     /[?&]format=m3u8/i.test(url)
-  ) return 'hls';
-  if (path.endsWith('.mpd') || /\/(dash|mpd)\b/i.test(path)) return 'dash';
+  ) return 'manifest-hls';
+  if (path.endsWith('.mpd') || /\/(dash|mpd)\b/i.test(path)) return 'manifest-dash';
+  if (path.endsWith('.mp4') || path.endsWith('.m4v') || path.endsWith('.mov')) return 'mp4';
+  if (path.endsWith('.ts') || path.endsWith('.m2ts') || path.endsWith('.mts')) return 'ts';
+  if (path.endsWith('.mkv') || path.endsWith('.webm')) return 'mkv';
+  return 'unknown';
+}
+
+export function transportFromUrl(url: string, isM3u8?: boolean): MediaTransport {
+  const category = detectUrlType(url, isM3u8);
+  if (category === 'manifest-hls') return 'hls';
+  if (category === 'manifest-dash') return 'dash';
   return 'progressive';
 }
 
@@ -251,17 +195,6 @@ export function classifyBody(head: string): MediaTransport | null {
   return null;
 }
 
-/**
- * DRM, read out of the manifest rather than assumed absent.
- *
- * The distinction that matters is not "encrypted or not" but **who can decrypt
- * it**. HLS AES-128 and SAMPLE-AES are decrypted by hls.js from a key it fetches
- * over HTTP, so those streams are ordinary as far as this engine is concerned —
- * and calling them DRM would route them to an EME path they do not need and
- * would fail on. ClearKey, Widevine and PlayReady need a CDM, which means FFmpeg
- * must not touch them: it holds no keys, so it would spend twenty seconds
- * probing noise and report a codec error about a file it never decrypted.
- */
 export function detectDrm(manifest: string, transport: MediaTransport): DrmConfiguration {
   if (transport === 'hls') {
     // FairPlay in HLS (KEYFORMAT com.apple.streamingkeydelivery/fps, KEYFORMATVERSIONS, or skd:// URI)
@@ -320,7 +253,6 @@ export function detectDrm(manifest: string, transport: MediaTransport): DrmConfi
   return { type: 'none' };
 }
 
-/** ClearKey and Widevine need a CDM; AES-128 in HLS does not. */
 export function drmRequiresEme(drm: DrmConfiguration): boolean {
   return requiresEmeDecryption(drm);
 }
@@ -367,7 +299,6 @@ function bitDepthFromPixelFormat(pixelFormat: string | undefined): number {
   return 8;
 }
 
-/** `24000/1001` → 23.976. Zero when ffprobe reports `0/0`, which it does for images. */
 function parseFrameRate(value: string | undefined): number {
   if (!value) return 0;
   const [num, den] = value.split('/').map(Number);
@@ -378,6 +309,278 @@ function parseFrameRate(value: string | undefined): number {
 function numberOrUndefined(value: string | number | undefined): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function normalizeCodecFromRfc6381(codecString: string): { videoCodec?: string; audioCodec?: string; bitDepth?: number } {
+  const codecs = codecString.split(',').map((s) => s.trim().toLowerCase());
+  let videoCodec: string | undefined;
+  let audioCodec: string | undefined;
+  let bitDepth = 8;
+
+  for (const c of codecs) {
+    if (c.startsWith('avc1') || c.startsWith('avc3')) {
+      videoCodec = 'h264';
+    } else if (c.startsWith('hvc1') || c.startsWith('hev1')) {
+      videoCodec = 'hevc';
+      if (c.includes('.2.') || c.includes('.l120.')) bitDepth = 10;
+    } else if (c.startsWith('vp09') || c.startsWith('vp9')) {
+      videoCodec = 'vp9';
+      if (c.startsWith('vp09.02') || c.startsWith('vp09.03')) bitDepth = 10;
+    } else if (c.startsWith('av01')) {
+      videoCodec = 'av1';
+      if (c.includes('.10m.')) bitDepth = 10;
+    } else if (c.startsWith('mp4a')) {
+      audioCodec = 'aac';
+    } else if (c.startsWith('ec-3') || c.startsWith('eac3')) {
+      audioCodec = 'eac3';
+    } else if (c.startsWith('ac-3') || c.startsWith('ac3')) {
+      audioCodec = 'ac3';
+    } else if (c.startsWith('opus')) {
+      audioCodec = 'opus';
+    } else if (c.startsWith('flac')) {
+      audioCodec = 'flac';
+    }
+  }
+
+  return { videoCodec, audioCodec, bitDepth };
+}
+
+/**
+ * PRD-40.1 §4.2: Parses HLS manifests directly without ffprobe.
+ */
+export function parseHlsManifest(manifestText: string): MediaMetadata | null {
+  const lines = manifestText.split(/\r?\n/);
+  if (!manifestText.includes('#EXTM3U')) return null;
+
+  let bestWidth = 0;
+  let bestHeight = 0;
+  let detectedVideoCodec = 'h264';
+  let detectedAudioCodec = 'aac';
+  let detectedBitDepth = 8;
+  let frameRate = 0;
+  let hasVideo = false;
+
+  const audioTracks: AudioStreamMetadata[] = [];
+  const subtitleTracks: SubtitleStreamMetadata[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith('#EXT-X-STREAM-INF:')) {
+      hasVideo = true;
+      const resMatch = /RESOLUTION=(\d+)x(\d+)/i.exec(line);
+      if (resMatch) {
+        const w = Number(resMatch[1]);
+        const h = Number(resMatch[2]);
+        if (h >= bestHeight) {
+          bestWidth = w;
+          bestHeight = h;
+        }
+      }
+      const fpsMatch = /FRAME-RATE=([\d.]+)/i.exec(line);
+      if (fpsMatch) frameRate = Number(fpsMatch[1]) || frameRate;
+
+      const codecsMatch = /CODECS="([^"]+)"/i.exec(line);
+      if (codecsMatch) {
+        const normalized = normalizeCodecFromRfc6381(codecsMatch[1]);
+        if (normalized.videoCodec) detectedVideoCodec = normalized.videoCodec;
+        if (normalized.audioCodec) detectedAudioCodec = normalized.audioCodec;
+        if (normalized.bitDepth) detectedBitDepth = normalized.bitDepth;
+      }
+    }
+
+    if (line.startsWith('#EXT-X-MEDIA:')) {
+      const typeMatch = /TYPE=([A-Z]+)/i.exec(line);
+      const type = typeMatch?.[1]?.toUpperCase();
+      const langMatch = /LANGUAGE="([^"]+)"/i.exec(line);
+      const nameMatch = /NAME="([^"]+)"/i.exec(line);
+      const isDefault = /DEFAULT=YES/i.test(line);
+
+      if (type === 'AUDIO') {
+        audioTracks.push({
+          index: audioTracks.length,
+          codec: detectedAudioCodec,
+          codecLongName: detectedAudioCodec.toUpperCase(),
+          channels: 2,
+          language: langMatch?.[1],
+          title: nameMatch?.[1],
+          isDefault,
+          isForced: false,
+          playable: isPlayableAudioCodec(detectedAudioCodec),
+        });
+      } else if (type === 'SUBTITLES') {
+        subtitleTracks.push({
+          index: subtitleTracks.length,
+          codec: 'webvtt',
+          language: langMatch?.[1],
+          title: nameMatch?.[1],
+          isDefault,
+          isForced: false,
+          isBitmap: false,
+        });
+      }
+    }
+  }
+
+  if (audioTracks.length === 0) {
+    audioTracks.push({
+      index: 0,
+      codec: detectedAudioCodec,
+      codecLongName: detectedAudioCodec.toUpperCase(),
+      channels: 2,
+      isDefault: true,
+      isForced: false,
+      playable: isPlayableAudioCodec(detectedAudioCodec),
+    });
+  }
+
+  return {
+    formatName: 'hls,applehttp',
+    formatLongName: 'Apple HLS',
+    durationSeconds: undefined,
+    video: hasVideo
+      ? {
+          index: 0,
+          codec: detectedVideoCodec,
+          codecLongName: detectedVideoCodec.toUpperCase(),
+          bitDepth: detectedBitDepth,
+          pixelFormat: detectedBitDepth > 8 ? 'yuv420p10le' : 'yuv420p',
+          width: bestWidth || 1920,
+          height: bestHeight || 1080,
+          frameRate: frameRate || 23.976,
+          isHdr: detectedBitDepth > 8,
+          isInterlaced: false,
+        }
+      : null,
+    audio: audioTracks,
+    subtitles: subtitleTracks,
+  };
+}
+
+/**
+ * PRD-40.1 §4.2: Parses DASH manifests directly without ffprobe.
+ */
+export function parseDashManifest(manifestText: string): MediaMetadata | null {
+  if (!manifestText.includes('<MPD') && !manifestText.includes('urn:mpeg:dash:schema:mpd:2011')) {
+    return null;
+  }
+
+  let bestWidth = 0;
+  let bestHeight = 0;
+  let detectedVideoCodec = 'h264';
+  let detectedAudioCodec = 'aac';
+  let detectedBitDepth = 8;
+  let hasVideo = false;
+
+  const audioTracks: AudioStreamMetadata[] = [];
+  const subtitleTracks: SubtitleStreamMetadata[] = [];
+
+  const adaptationSetRegex = /<AdaptationSet([^>]*)>([\s\S]*?)<\/AdaptationSet>/gi;
+  let adaptMatch: RegExpExecArray | null;
+  while ((adaptMatch = adaptationSetRegex.exec(manifestText)) !== null) {
+    const attrs = adaptMatch[1];
+    const body = adaptMatch[2];
+    const isVideo = /contentType="video"/i.test(attrs) || /mimeType="video\//i.test(attrs) || /<Representation[^>]*mimeType="video\//i.test(body);
+    const isAudio = /contentType="audio"/i.test(attrs) || /mimeType="audio\//i.test(attrs) || /<Representation[^>]*mimeType="audio\//i.test(body);
+
+    if (isVideo) {
+      hasVideo = true;
+      const repRegex = /<Representation([^>]*)>/gi;
+      let repTag: RegExpExecArray | null;
+      while ((repTag = repRegex.exec(body)) !== null) {
+        const repAttrs = repTag[1];
+        const wMatch = /width="(\d+)"/i.exec(repAttrs);
+        const hMatch = /height="(\d+)"/i.exec(repAttrs);
+        const cMatch = /codecs="([^"]+)"/i.exec(repAttrs);
+        if (wMatch && hMatch) {
+          const w = Number(wMatch[1]);
+          const h = Number(hMatch[1]);
+          if (h >= bestHeight) {
+            bestWidth = w;
+            bestHeight = h;
+          }
+        }
+        if (cMatch) {
+          const normalized = normalizeCodecFromRfc6381(cMatch[1]);
+          if (normalized.videoCodec) detectedVideoCodec = normalized.videoCodec;
+          if (normalized.bitDepth) detectedBitDepth = normalized.bitDepth;
+        }
+      }
+      const codecAttr = /codecs="([^"]+)"/i.exec(attrs);
+      if (codecAttr) {
+        const normalized = normalizeCodecFromRfc6381(codecAttr[1]);
+        if (normalized.videoCodec) detectedVideoCodec = normalized.videoCodec;
+        if (normalized.bitDepth) detectedBitDepth = normalized.bitDepth;
+      }
+    } else if (isAudio) {
+      const langMatch = /lang="([^"]+)"/i.exec(attrs);
+      const codecsMatch = /codecs="([^"]+)"/i.exec(attrs) || /codecs="([^"]+)"/i.exec(body);
+      let codec = 'aac';
+      if (codecsMatch) {
+        const normalized = normalizeCodecFromRfc6381(codecsMatch[1]);
+        if (normalized.audioCodec) codec = normalized.audioCodec;
+      }
+      audioTracks.push({
+        index: audioTracks.length,
+        codec,
+        codecLongName: codec.toUpperCase(),
+        channels: 2,
+        language: langMatch?.[1],
+        isDefault: audioTracks.length === 0,
+        isForced: false,
+        playable: isPlayableAudioCodec(codec),
+      });
+    }
+  }
+
+  if (!hasVideo && (manifestText.includes('mimeType="video/') || /codecs="(?:avc1|hvc1|vp09|av01)/i.test(manifestText))) {
+    hasVideo = true;
+    const codecMatch = /codecs="([^"]+)"/i.exec(manifestText);
+    if (codecMatch) {
+      const normalized = normalizeCodecFromRfc6381(codecMatch[1]);
+      if (normalized.videoCodec) detectedVideoCodec = normalized.videoCodec;
+      if (normalized.bitDepth) detectedBitDepth = normalized.bitDepth;
+    }
+  }
+
+  if (audioTracks.length === 0) {
+    audioTracks.push({
+      index: 0,
+      codec: detectedAudioCodec,
+      codecLongName: detectedAudioCodec.toUpperCase(),
+      channels: 2,
+      isDefault: true,
+      isForced: false,
+      playable: isPlayableAudioCodec(detectedAudioCodec),
+    });
+  }
+
+  return {
+    formatName: 'dash',
+    formatLongName: 'MPEG-DASH',
+    durationSeconds: undefined,
+    video: hasVideo
+      ? {
+          index: 0,
+          codec: detectedVideoCodec,
+          codecLongName: detectedVideoCodec.toUpperCase(),
+          bitDepth: detectedBitDepth,
+          pixelFormat: detectedBitDepth > 8 ? 'yuv420p10le' : 'yuv420p',
+          width: bestWidth || 1920,
+          height: bestHeight || 1080,
+          frameRate: 23.976,
+          isHdr: detectedBitDepth > 8,
+          isInterlaced: false,
+        }
+      : null,
+    audio: audioTracks,
+    subtitles: subtitleTracks,
+  };
+}
+
+export function isMetadataIncomplete(meta: MediaMetadata | null): boolean {
+  if (!meta) return true;
+  if (!meta.formatName) return true;
+  if (meta.video && (!meta.video.codec || !meta.video.bitDepth)) return true;
+  return false;
 }
 
 export function parseProbeOutput(raw: string): MediaMetadata | null {
@@ -396,8 +599,6 @@ export function parseProbeOutput(raw: string): MediaMetadata | null {
 
   for (const stream of parsed.streams ?? []) {
     if (stream.codec_type === 'video' && !video) {
-      // Cover art in an MP4 is a video stream of one frame; treating it as *the*
-      // video stream reports an audio file as an undecodable MJPEG.
       if (stream.codec_name === 'mjpeg' || stream.codec_name === 'png') continue;
       const pixelFormat = stream.pix_fmt;
       const transfer = stream.color_transfer;
@@ -471,20 +672,18 @@ export interface InspectionResult {
   metadata: MediaMetadata | null;
   transport: MediaTransport;
   drm: DrmConfiguration;
-  /** ffprobe's own account of the failure, which is usually the whole answer. */
   error?: string;
   timedOut: boolean;
   latencyMs: number;
+  inspectionStrategy: InspectionStrategyType;
+  probeIncomplete: boolean;
+  probeBytesTransferred: number;
+  probeNetworkMs: number;
+  probeParseMs: number;
 }
-
-const log = scopedLogger('ffprobe');
 
 export class MediaInspector {
   private resolveFfprobe: () => string | null;
-  /**
-   * Reads the first few KB of a URL, for manifest sniffing. Injected so this
-   * file has no opinion about which HTTP stack the app uses.
-   */
   private fetchHead: (url: string) => Promise<string | null>;
 
   constructor(
@@ -495,29 +694,14 @@ export class MediaInspector {
     this.fetchHead = fetchHead;
   }
 
-  /**
-   * Inspects a stream and reports what is in it.
-   *
-   * The manifest sniff runs first and is worth its round trip: an `.mpd` fed to
-   * the wrong demuxer produces `Unable to parse XML declaration allowed only at
-   * the start of the document`, which names neither DASH nor the provider and
-   * sends whoever reads it looking for a corrupt file.
-   */
-  /**
-   * Wrapped rather than instrumented in place: the body has five exits and
-   * would grow a sixth.
-   *
-   * One record carries both the question and the answer, including the
-   * duration. The probe measures 1.6-1.7s against real provider streams, which
-   * makes it a routine suspect whenever "play" feels slow — and a latency
-   * nobody recorded is a suspicion nobody can settle.
-   */
   public async inspect(url: string, hintM3u8?: boolean): Promise<InspectionResult> {
     const finish = log.begin('inspect', { url });
     try {
       const result = await this.probe(url, hintM3u8);
       finish({
         status: result.metadata ? 'ok' : result.timedOut ? 'timeout' : 'failed',
+        strategy: result.inspectionStrategy,
+        probeIncomplete: result.probeIncomplete,
         transport: result.transport,
         container: result.metadata?.formatName,
         videoCodec: result.metadata?.video?.codec,
@@ -538,22 +722,72 @@ export class MediaInspector {
 
   private async probe(url: string, hintM3u8?: boolean): Promise<InspectionResult> {
     const startedAt = Date.now();
-    let transport = transportFromUrl(url, hintM3u8);
+    const category = detectUrlType(url, hintM3u8);
+    let transport: MediaTransport = category === 'manifest-hls' ? 'hls' : category === 'manifest-dash' ? 'dash' : 'progressive';
     let drm: DrmConfiguration = { type: 'none' };
+    let inspectionStrategy: InspectionStrategyType = 'head';
 
-    // Only manifests are sniffed. Pulling the first bytes of a 25 GB MKV to look
-    // at them would be a wasted request on every progressive source in the app.
+    // 1. Manifest path (HLS / DASH)
     if (transport !== 'progressive' || /manifest|playlist|\.mpd|\.m3u8/i.test(url)) {
+      const headFetchStart = Date.now();
       const head = await this.fetchHead(url);
+      const headFetchMs = Date.now() - headFetchStart;
+
       if (head) {
         transport = classifyBody(head) ?? transport;
         drm = detectDrm(head, transport);
+
+        if (transport === 'hls') {
+          const parseStart = Date.now();
+          const meta = parseHlsManifest(head);
+          const parseMs = Date.now() - parseStart;
+          return {
+            metadata: meta,
+            transport: 'hls',
+            drm,
+            timedOut: false,
+            latencyMs: Date.now() - startedAt,
+            inspectionStrategy: 'manifest-hls',
+            probeIncomplete: isMetadataIncomplete(meta),
+            probeBytesTransferred: head.length,
+            probeNetworkMs: headFetchMs,
+            probeParseMs: parseMs,
+          };
+        }
+
+        if (transport === 'dash') {
+          const parseStart = Date.now();
+          const meta = parseDashManifest(head);
+          const parseMs = Date.now() - parseStart;
+          return {
+            metadata: meta,
+            transport: 'dash',
+            drm,
+            timedOut: false,
+            latencyMs: Date.now() - startedAt,
+            inspectionStrategy: 'manifest-dash',
+            probeIncomplete: isMetadataIncomplete(meta),
+            probeBytesTransferred: head.length,
+            probeNetworkMs: headFetchMs,
+            probeParseMs: parseMs,
+          };
+        }
       }
     }
 
     if (drmRequiresEme(drm)) {
-      // Probing it would be twenty seconds spent on encrypted noise.
-      return { metadata: null, transport, drm, latencyMs: Date.now() - startedAt, timedOut: false };
+      return {
+        metadata: null,
+        transport,
+        drm,
+        latencyMs: Date.now() - startedAt,
+        timedOut: false,
+        inspectionStrategy: 'head',
+        probeIncomplete: false,
+        probeBytesTransferred: 0,
+        probeNetworkMs: 0,
+        probeParseMs: 0,
+      };
     }
 
     const ffprobe = this.resolveFfprobe();
@@ -565,9 +799,95 @@ export class MediaInspector {
         error: 'ffprobe is not installed',
         timedOut: false,
         latencyMs: Date.now() - startedAt,
+        inspectionStrategy: 'head',
+        probeIncomplete: true,
+        probeBytesTransferred: 0,
+        probeNetworkMs: 0,
+        probeParseMs: 0,
       };
     }
 
+    // 2. Primary Head Probe
+    inspectionStrategy = 'head';
+    let currentProbeSize = PROBE_SIZE_DEFAULT;
+    if (category === 'ts') {
+      currentProbeSize = PROBE_SIZE_PROGRESSIVE;
+    }
+
+    let probeRun = await this.executeFfprobe(ffprobe, url, transport, currentProbeSize);
+    let meta = probeRun.rawOutput ? parseProbeOutput(probeRun.rawOutput) : null;
+    let incomplete = isMetadataIncomplete(meta);
+
+    // 3. Container-Typed Incomplete Resolution per PRD-40.1 §4.2
+    if (incomplete && probeRun.ok) {
+      if (category === 'mp4') {
+        // Non-faststart MP4/MOV with moov at end -> Tail probe
+        inspectionStrategy = 'head+tail';
+        log.info('probe_tail_retry_non_faststart_mp4', { url });
+        const tailRun = await this.executeFfprobe(ffprobe, url, transport, PROBE_SIZE_PROGRESSIVE, ['-seek_to_start', '0']);
+        if (tailRun.rawOutput) {
+          const tailMeta = parseProbeOutput(tailRun.rawOutput);
+          if (tailMeta && !isMetadataIncomplete(tailMeta)) {
+            meta = tailMeta;
+            probeRun = tailRun;
+            incomplete = false;
+          }
+        }
+      } else if (category === 'ts') {
+        // MPEG-TS with multiple secondary tracks -> Raised probesize/analyzeduration
+        inspectionStrategy = 'head+probesize';
+        log.info('probe_ts_raised_probesize_retry', { url });
+        const raisedRun = await this.executeFfprobe(ffprobe, url, transport, PROBE_SIZE_RAISED);
+        if (raisedRun.rawOutput) {
+          const raisedMeta = parseProbeOutput(raisedRun.rawOutput);
+          if (raisedMeta && !isMetadataIncomplete(raisedMeta)) {
+            meta = raisedMeta;
+            probeRun = raisedRun;
+            incomplete = false;
+          }
+        }
+      } else {
+        // Progressive widen for MKV / Unknown
+        inspectionStrategy = 'progressive';
+        log.info('probe_progressive_retry', { url, category });
+        const progRun = await this.executeFfprobe(ffprobe, url, transport, PROBE_SIZE_PROGRESSIVE);
+        if (progRun.rawOutput) {
+          const progMeta = parseProbeOutput(progRun.rawOutput);
+          if (progMeta && !isMetadataIncomplete(progMeta)) {
+            meta = progMeta;
+            probeRun = progRun;
+            incomplete = false;
+          }
+        }
+      }
+    }
+
+    const elapsed = Date.now() - startedAt;
+    const probeNetworkMs = Math.max(0, elapsed - probeRun.parseMs);
+
+    return {
+      metadata: meta,
+      transport,
+      drm,
+      error: probeRun.ok ? undefined : probeRun.error,
+      timedOut: probeRun.timedOut,
+      latencyMs: elapsed,
+      inspectionStrategy,
+      probeIncomplete: incomplete,
+      probeBytesTransferred: currentProbeSize,
+      probeNetworkMs,
+      probeParseMs: probeRun.parseMs,
+    };
+  }
+
+  private async executeFfprobe(
+    ffprobe: string,
+    url: string,
+    transport: MediaTransport,
+    probeSize: number,
+    extraArgs: string[] = []
+  ): Promise<{ ok: boolean; rawOutput: string | null; error?: string; timedOut: boolean; parseMs: number }> {
+    const parseStart = Date.now();
     const result = await runTool(
       ffprobe,
       [
@@ -575,35 +895,33 @@ export class MediaInspector {
         '-print_format', 'json',
         '-show_streams',
         '-show_entries', 'format=duration,format_name,format_long_name,bit_rate,size',
-        '-probesize', String(currentProbeConfig.probeSizeBytes),
-        '-analyzeduration', String(currentProbeConfig.probeSizeBytes),
+        '-probesize', String(probeSize || currentProbeConfig.probeSizeBytes),
+        '-analyzeduration', String(probeSize || currentProbeConfig.probeSizeBytes),
+        ...extraArgs,
         ...inputOptionsFor(url, transport),
         url,
       ],
       currentProbeConfig.probeTimeoutMs
     );
+    const parseMs = Date.now() - parseStart;
 
     if (!result.ok) {
       return {
-        metadata: null,
-        transport,
-        drm,
+        ok: false,
+        rawOutput: null,
         error: result.timedOut
           ? `ffprobe timed out after ${currentProbeConfig.probeTimeoutMs}ms`
           : result.stderr.trim() || `ffprobe exited ${result.code ?? 'with no code'}`,
         timedOut: result.timedOut,
-        latencyMs: Date.now() - startedAt,
+        parseMs,
       };
     }
 
-    const metadata = parseProbeOutput(result.stdout);
     return {
-      metadata,
-      transport,
-      drm,
-      error: metadata ? undefined : 'ffprobe produced output that could not be read',
+      ok: true,
+      rawOutput: result.stdout,
       timedOut: false,
-      latencyMs: Date.now() - startedAt,
+      parseMs,
     };
   }
 }

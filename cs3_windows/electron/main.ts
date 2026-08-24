@@ -1761,6 +1761,7 @@ ipcMain.handle('playback:cancelSourceSearch', (_, sessionId: string) => {
 ipcMain.handle('playback:stop', async (_, sessionId: string, keepFiles?: boolean) => {
   try {
     await playbackSessions.stop(sessionId, keepFiles ?? true);
+    await mpvEngine.stop();
     return { ok: true };
   } catch (error) {
     return fail(error);

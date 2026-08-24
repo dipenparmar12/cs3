@@ -110,8 +110,8 @@ test('referer field from provider is merged into headers when headers has no Ref
     },
     'Fake'
   );
-  assert.equal(link.headers['Referer'], 'https://embed.streamprovider.test/watch');
-  assert.equal(link.headers['User-Agent'], 'CustomUA/1.0');
+  assert.equal(link.headers?.['Referer'], 'https://embed.streamprovider.test/watch');
+  assert.equal(link.headers?.['User-Agent'], 'CustomUA/1.0');
 });
 
 test('a half-filled extractor result is not mistaken for DRM', () => {

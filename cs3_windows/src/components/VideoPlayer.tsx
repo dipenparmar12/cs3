@@ -520,6 +520,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     recordedSourceFor.current = null;
   }, [streamUrl]);
 
+  // Ensure native mpv engine and any lingering external windows are stopped when player unmounts
+  useEffect(() => {
+    return () => {
+      void window.cloudstream?.mpvStop?.();
+    };
+  }, []);
+
   const [showNativePlayerBtn, setShowNativePlayerBtn] = useState(true);
   const [externalPlayers, setExternalPlayers] = useState<Array<{ id: string; name: string }>>([]);
   const [extPlayerStatus, setExtPlayerStatus] = useState<string | null>(null);
@@ -2065,7 +2072,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // The ffmpeg process outlives the component otherwise.
       if (openedSession) void window.cloudstream?.closePlaybackStream(openedSession);
     };
-  }, [streamUrl, mimeType, providerProvenance?.provider]);
+  }, [
+    streamUrl,
+    mimeType,
+    providerProvenance?.provider,
+    activeSource?.directHeaders,
+    activeSource?.isDash,
+    activeSource?.drm,
+    activeSource?.infoHash,
+  ]);
 
   useEffect(() => {
     preparedRef.current = prepared;
@@ -2123,7 +2138,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         setPrepared({ ...response, playbackUrl: atTime(response.playbackUrl, at) });
       })();
     };
-  }, [streamUrl, mimeType, prepared, isConverted, playbackOffset, providerProvenance?.provider]);
+  }, [
+    streamUrl,
+    mimeType,
+    prepared,
+    isConverted,
+    playbackOffset,
+    providerProvenance?.provider,
+    activeSource?.directHeaders,
+    activeSource?.isDash,
+    activeSource?.drm,
+  ]);
 
   useEffect(() => {
     const skip = sourceSession?.onSourceUnplayable;

@@ -1,5 +1,5 @@
-import type { DatastoreManager } from '../datastore';
-import type { DrmConfiguration, MediaMetadata, MediaTransport } from '../../src/types/media';
+import type { DatastoreManager } from '../datastore.ts';
+import type { DrmConfiguration, MediaMetadata, MediaTransport } from '../../src/types/media.ts';
 
 /**
  * Remembers what is *inside* a stream, so opening it again does not re-measure it.
@@ -38,6 +38,15 @@ const TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** Bounded like every other cache here; this one holds a few KB per entry. */
 const MAX_ENTRIES = 400;
 
+function isLoopback(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
 interface StoredInspection {
   /** The provider's URL, before proxying. See {@link InspectionStore.keyFor}. */
   key: string;
@@ -75,12 +84,14 @@ export class InspectionStore {
 
   private load(): StoredInspection[] {
     const stored = this.datastore.getObject<StoredInspection[]>(KEY, []);
-    return Array.isArray(stored) ? stored : [];
+    if (!Array.isArray(stored)) return [];
+    // Reject loopback entries so old corrupted tokens cannot pollute real media
+    return stored.filter((entry) => entry && entry.key && !isLoopback(entry.key));
   }
 
   private save(entries: StoredInspection[]): void {
     const now = Date.now();
-    const live = entries.filter((entry) => now - entry.at < TTL_MS);
+    const live = entries.filter((entry) => now - entry.at < TTL_MS && !isLoopback(entry.key));
     const pruned =
       live.length > MAX_ENTRIES
         ? [...live].sort((a, b) => b.lastUsedAt - a.lastUsedAt).slice(0, MAX_ENTRIES)
@@ -91,6 +102,7 @@ export class InspectionStore {
   public read(
     originUrl: string
   ): { metadata: MediaMetadata; transport: MediaTransport; drm: DrmConfiguration } | null {
+    if (!originUrl || isLoopback(originUrl)) return null;
     const key = InspectionStore.keyFor(originUrl);
     const entries = this.load();
     const entry = entries.find((candidate) => candidate.key === key);
@@ -112,9 +124,9 @@ export class InspectionStore {
      * Only a successful measurement is stored. A failed probe says nothing
      * about the file — it says the link was refused, timed out, or expired —
      * and remembering that for a month would keep a working source unplayable
-     * long after the host recovered.
+     * long after the host recovered. Loopback URLs are never stored.
      */
-    if (!metadata) return;
+    if (!metadata || !originUrl || isLoopback(originUrl)) return;
 
     const key = InspectionStore.keyFor(originUrl);
     const now = Date.now();
@@ -125,6 +137,7 @@ export class InspectionStore {
 
   /** Drops one entry, for a link that turned out not to be what it claimed. */
   public invalidate(originUrl: string): void {
+    if (!originUrl || isLoopback(originUrl)) return;
     const key = InspectionStore.keyFor(originUrl);
     this.save(this.load().filter((entry) => entry.key !== key));
   }
