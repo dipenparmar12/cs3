@@ -85,6 +85,7 @@ cs3/
 | Main-process tests | `cs3_windows/` | `bun run test:electron` (124 tests, Node type-stripping — no framework) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Source export only | `cs3_windows/` | `bun run test:export` (13 cases, pure) |
+| Download identity only | `cs3_windows/` | `bun run test:download-identity` (18 cases, pure) |
 | Media decisions only | `cs3_windows/` | `bun run test:media` (53 cases, no ffmpeg needed) |
 | Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
 | Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
@@ -272,6 +273,11 @@ succeeds with correct codec names over undecodable payload.
 `player:setPreferences` hold volume, mute, speed and track languages.
 `download:getDeletePreference` / `download:setDeletePreference` hold the delete behaviour, and
 `extension:rollback` puts back the archive an update replaced.
+
+`download:request` is the channel a **button press** uses; `download:enqueue` remains for
+callers that genuinely mean "create this task". The difference is that `request` reads the
+state of whatever already holds that variant and resumes, recovers, or refuses accordingly,
+answering with which of those it did — see the downloads section below.
 
 `mpv:*` drives the native engine — `mpv:open` (a *prepared* URL only), transport and track
 controls, `mpv:update` snapshots pushed like `playback:*`, and `mpv:getPolicy`/`mpv:setPolicy`
@@ -1552,6 +1558,85 @@ learned from one click is one nobody knows they set) and Settings → Downloads 
 prompt back, because a preference settable only inside a dialog you opted out of seeing
 cannot otherwise be undone.
 
+### A download is addressed by its source variant, not by its title
+
+Reported as: downloading *The Incredible Hulk* in 2160p and then asking for the 1080p
+release answered `Already downloading` and did nothing. Two independent mistakes about
+identity sat underneath it, and each would have been enough on its own.
+
+**Duplicate detection matched on the title, by prefix.** `VideoPlayer`'s `currentDownload`
+did `norm(t.title).startsWith(norm(title))`, plus a shared `mediaUrl` and a substring test
+on the task id. Every release of one film satisfies all three, so a viewer could hold
+exactly one copy of a title no matter which source produced it — and the progress badge in
+the player showed whichever transfer happened to be first in the queue.
+
+**And the target path was derived from the title too**, so allowing two to start would
+merely have moved the collision onto the disk: `Movies/The Incredible Hulk/The Incredible
+Hulk.mp4` for both, two engines interleaving bytes into one file, and both reporting
+success. A corrupt file that finishes is worse than a refusal.
+
+`src/utils/downloadIdentity.ts` owns the rule, and it is pure and tested because both
+halves fail *silently* and in opposite directions:
+
+| Too coarse | Too fine |
+|---|---|
+| The 1080p release is refused as a duplicate of the 2160p one | Every recovery starts a second download of bytes already on disk |
+| Visible, and reads as a broken button | Invisible, and reads as working |
+
+**The key has to be durable, not merely unique** — which is the same problem
+`cs3/playedSource.ts` solves for resuming, and it is solved the same way. A provider
+stream's `infoHash` is *synthesised* by `ContentService` from its URL, so a re-resolved link
+is a different id for a byte-identical file; keying on it produces the right-hand column
+above. So torrents key on their real infohash and everything else keys on the durable
+description: media + season + episode + provider + release name + resolution + quality +
+language + audio.
+
+Four things follow, and each is load-bearing:
+
+- **The provider is stored, not the extractor.** `indexerName` on an extension link is the
+  file host the provider picked ("Voe", "Server 3") and it changes between resolves of one
+  release. Two of the four call sites that built tasks stored it as `providerName` and two
+  stored the provider — which is also why `findMatchingSource`'s tier-1 match so often
+  missed.
+- **Recovery matches the variant key first, and is resolution-bound after that.** Its last
+  tier used to `return directSources[0]` unconditionally, so a failed 2160p download could
+  be silently rebound to an unrelated 480p rip, written into the folder labelled 2160p and
+  reported as complete. A task that finds nothing of its own resolution is now left
+  `Failed` with its reason.
+- **The target path carries the variant** (`Movies/<Title>/2160p · WEB-DL · Gdshine/…`).
+  `variantPathSegment` keeps it readable — this is a folder a person opens — so it can
+  collide between two releases from one provider at one resolution; `DownloadService`
+  resolves that at enqueue time with a numbered suffix, because only it can see the rest of
+  the queue.
+- **The batch downloader stamped its batch id into `providerName`** (`Gdshine
+  (batch-1755…)`). Nothing read it, and two things that do read that field broke: recovery
+  never matched a provider, and the identity changed on every run — so re-running a season
+  queued a second copy of every episode already in it.
+
+### Pressing Download is a request, not a command
+
+The other half of the same report. Every press on a title with any entry in the list
+answered `Already downloading`, including when that entry was paused (left paused), had
+failed (told to go and find the download panel), or had had its file deleted.
+
+`download:request` → `DownloadService.request` answers from the task's actual state and
+returns which of six things it did, so the renderer no longer phrases the outcome from a
+list it matched itself:
+
+| State | What a press does |
+|---|---|
+| `Downloading` / `Retrying` / `RefreshingSource` | nothing, and says so |
+| `Queued` | nothing; says it starts when a slot frees |
+| `Paused` — including every task after a restart, which `loadQueueFromStorage` parks there | resumes |
+| `Failed` | recovers: clears the retry budget, re-resolves the source, retries |
+| `Completed` | reports it — **after checking the file is still there**, and re-downloading if it is not |
+| nothing yet | starts one |
+
+`Completed` is checked against the filesystem rather than trusted because it is a claim
+about a file: a download whose file the viewer has since deleted or moved must be startable
+again, and reporting it as finished leaves the only useful action unavailable with the
+reason invisible.
+
 ### The player: three bugs that all looked like "nothing happened"
 
 **`onRefresh` was `() => {}` on two of three player mount points.** Only the live
@@ -1887,7 +1972,55 @@ inside the Electron window needs libmpv's render API through a native addon (Opt
 `MpvOpenRequest.windowHandle` exists and is passed to `--wid` for when that lands; nothing
 sets it today.
 
-`electron/media/mpvEngine.test.mts` (12 cases, `bun run test:native`) drives a real mpv
+### The second film would not play (2026-08-24)
+
+Reported as: the first title plays, and after that nothing does — a different film, a
+different source, or the same one again. Four causes, and none of them is the one the
+symptom points at.
+
+1. **The persistent probe cache was keyed on the loopback address.** `ContentService` wraps
+   a provider link through `MediaProxy` to attach its headers, producing
+   `http://127.0.0.1:<port>/stream/1`, and `PlaybackEngine.inspect` handed *that* to
+   `InspectionStore` — which persists. The token is minted per process, so `/stream/1` is
+   one film this run and a different one the next: the second film was decided from the
+   first film's codecs, and an HEVC release was attached as though it were H.264.
+   `MediaProxy.getTargetRoute` unwraps a loopback URL back to the upstream one, the
+   capability cache and the store are keyed on **that plus the headers**, and the store now
+   refuses loopback keys outright and prunes the ones already written.
+
+2. **An idle mpv left its window on screen.** `stop()` sent `['stop']` and left the process
+   alive under `--idle=yes`, so a blank standalone window floated over the app for every
+   source that was not routed to mpv, and for the player being closed. It quits now.
+
+3. **Which immediately created a race, and it is the ordinary source switch.**
+   `NativeEngineStage`'s effect cleanup fires `mpv:stop` and its body fires `mpv:open` in
+   the same tick, neither awaiting the other. Interleaved, the quit's `teardown()` — and the
+   `kill()` that used to be scheduled on a detached 1.5s timer — landed on the process the
+   open had just started. `MpvEngine.serialize` puts `open`, `stop` and `shutdown` on one
+   queue, and `shutdownNow` waits for the child's `exit` (~100ms typically) instead of
+   arming a timer at a process that may no longer be the one it meant. Pinned by three cases
+   in `mpvEngine.test.mts`; the pre-fix engine fails the first of them by timing out waiting
+   for the switched-to source to play.
+
+   Two smaller rules fell out of it. An explicit stop clears `state` **before** the quit,
+   because `child.on('exit')` reports `ended` when the process dies while playing and
+   `NativeEngineStage` turns an `ended` snapshot into `onEnded()` — the next-episode
+   advance. And `playback:stop` no longer stops mpv at all: not every session owns a stream,
+   and the detail page's source picker starts one through `startSourceDiscovery` purely to
+   scrape, so closing the picker killed the film playing in the mini player. Closing the
+   player is what must close mpv, and `handleClosePlayer`, `VideoPlayer`'s unmount and
+   `NativeEngineStage`'s teardown all do it directly.
+
+4. **The preparation effect depended on object identity, so playback restarted itself.**
+   `VideoPlayer`'s `media:prepare` effect listed `activeSource?.directHeaders` and
+   `activeSource?.drm` in its dependencies. Those come off a `playback:update` snapshot and
+   are therefore **new objects every time one arrives** — and `recordBufferStall` pushes one
+   on every buffer underrun. So a stall tore the stream down and re-prepared it, which
+   caused the next stall. Identity now comes from a serialised `activeSourceKey`, and the
+   effect depends on a `sourceConfig` memo keyed on that. **If you add a source field to
+   that effect, add it to the key, not to the dependency array.**
+
+`electron/media/mpvEngine.test.mts` (15 cases, `bun run test:native`) drives a real mpv
 process against a synthesised HEVC 10-bit / AC-3 5.1 Matroska fixture. It is not pure and
 should not be: every failure worth catching lives in the seam between two processes — the
 JSON framing, `request_id` correlation, the property observations that drive the timeline,
