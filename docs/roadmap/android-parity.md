@@ -16,6 +16,14 @@ conclusion about the network layer from the other direction.
 
 ## 1. The one that explains most "works on Android, fails here"
 
+> **Closed 2026-08-24.** Built as described in "the shape of the fix" below — a reverse-call
+> frame on the stdio protocol, `WebViewResolver` supplied from `sidecar/bridge/` so it
+> shadows the library stub, and an offscreen `BrowserWindow` in the main process.
+> `AGENTS.md` § "The browser, finally" carries the as-built design, the traps, and the one
+> thing still unmeasured: whether the providers this was supposed to rescue are actually
+> rescued. The analysis below is left as written, because its *method* — a gap that a
+> missing-class count cannot see — is the part worth keeping.
+
 **`WebViewResolver` on the JVM is a method that throws.**
 
 Extensions reach Cloudflare-protected sites and JavaScript-driven extractors through

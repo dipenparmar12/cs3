@@ -73,9 +73,21 @@ public final class PluginHost {
     private String classpathProblem;
     private Class<?> bridgeClass;
 
+    /**
+     * The channel back to the desktop app, installed into the bridge once the
+     * shared loader exists. Held rather than passed because {@link #shared()}
+     * is lazy and may run long after {@code Main} has built the channel.
+     */
+    private HostChannel hostChannel;
+
     public PluginHost(DexTranslator translator, Path runtimeClasspathDir) {
         this.translator = translator;
         this.runtimeClasspathDir = runtimeClasspathDir;
+    }
+
+    public synchronized void setHostChannel(HostChannel channel) {
+        this.hostChannel = channel;
+        if (shared != null) installHostChannel();
     }
 
     /**
@@ -90,16 +102,47 @@ public final class PluginHost {
     public synchronized ClassLoader shared() {
         if (shared != null) return shared;
 
-        List<URL> urls = new ArrayList<>();
+        List<Path> jars = new ArrayList<>();
         boolean hasApi = false;
         if (Files.isDirectory(runtimeClasspathDir)) {
             try (DirectoryStream<Path> ds = Files.newDirectoryStream(runtimeClasspathDir, "*.jar")) {
                 for (Path p : ds) {
-                    urls.add(p.toUri().toURL());
+                    jars.add(p);
                     if (p.getFileName().toString().startsWith("library-jvm")) hasApi = true;
                 }
             } catch (IOException e) {
                 classpathProblem = "Runtime classpath unreadable: " + e;
+            }
+        }
+
+        /*
+         * The bridge goes first, and that ordering is load-bearing.
+         *
+         * A URLClassLoader searches its URLs in order, and until now nothing
+         * cared: every type the bridge supplied — `Plugin`, `DataStore`,
+         * `CloudflareKiller`, the syncproviders cluster — was a class
+         * `library-jvm` does not publish, so whichever jar was reached first
+         * held the only copy. `WebViewResolver` is the first class the bridge
+         * *overrides* rather than adds: library-jvm ships a JVM variant whose
+         * `resolveUsingWebView` is `TODO("Not yet implemented")`, and the copy
+         * that wins decides whether a provider gets a browser or an exception.
+         *
+         * `Files.newDirectoryStream` returns entries in an unspecified order.
+         * Leaving it to that would make which implementation loads a property of
+         * the filesystem — working on the machine it was built on and throwing
+         * NotImplementedError on a user's, with nothing in the diff to explain
+         * why. Sorted after the bridge so the rest stays reproducible too.
+         */
+        jars.sort(Comparator
+                .comparing((Path p) -> !p.getFileName().toString().startsWith("cs3-provider-bridge"))
+                .thenComparing(p -> p.getFileName().toString()));
+
+        List<URL> urls = new ArrayList<>();
+        for (Path jar : jars) {
+            try {
+                urls.add(jar.toUri().toURL());
+            } catch (java.net.MalformedURLException e) {
+                classpathProblem = "Runtime classpath entry unusable: " + jar + " (" + e + ")";
             }
         }
 
@@ -113,7 +156,81 @@ public final class PluginHost {
 
         shared = new URLClassLoader("cs3-shared", urls.toArray(new URL[0]),
                 PluginHost.class.getClassLoader());
+        installHostChannel();
         return shared;
+    }
+
+    /**
+     * Hands the bridge a way to call the desktop app.
+     *
+     * <p>Reflective and one-way on purpose, in the same shape as {@link #bridge()}:
+     * primitives and JSON strings across, nothing else. A direct dependency would
+     * have to point <em>from</em> the bridge <em>into</em> the sidecar, which
+     * inverts the layering the whole module exists to keep — and would put a
+     * sidecar type on a class loader that plugin code can reach through, which
+     * DROP-12 rules out.
+     *
+     * <p>{@code BiFunction} rather than an interface of our own because both
+     * loaders must resolve the identical type, and only {@code java.*} is
+     * guaranteed to come from the bootstrap loader in both. The timeout travels
+     * inside the params document rather than as a third argument for the same
+     * reason: there is no three-argument functional interface in the JDK that
+     * takes a {@code long}.
+     *
+     * <p>Absence is not an error. A runtime provisioned before this existed has
+     * no {@code HostBridge}, and the right behaviour there is the behaviour that
+     * shipped before: providers that need a browser report no results.
+     */
+    private void installHostChannel() {
+        HostChannel channel = this.hostChannel;
+        if (channel == null || shared == null) return;
+        try {
+            Class<?> hostBridge = Class.forName(
+                    "com.cloudstream.desktop.bridge.HostBridge", true, shared);
+            Method setter = hostBridge.getMethod("setHandler", java.util.function.BiFunction.class);
+            setter.invoke(null, (java.util.function.BiFunction<String, String, String>)
+                    (method, paramsJson) -> dispatchHostCall(channel, method, paramsJson));
+        } catch (ClassNotFoundException | NoSuchMethodException e) {
+            // An older bridge jar. Say so once; the fallbacks are correct.
+            System.err.println("[cs3-sidecar] the provider bridge has no host channel ("
+                    + e.getClass().getSimpleName() + "), so extensions needing a browser will"
+                    + " report no results. Rebuild cs3-provider-bridge.jar.");
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.err.println("[cs3-sidecar] could not install the host channel: " + Main.describe(e));
+        }
+    }
+
+    /**
+     * One reverse call, rendered as the answer document the bridge parses.
+     *
+     * <p>A transport failure is turned into the same {@code {"ok":false,…}} shape
+     * the host itself would send, so the bridge has one document to read rather
+     * than a value and an out-of-band error. {@code null} is never returned:
+     * every caller over there would have to check for it, and the one that
+     * forgot would throw inside a provider and be reported as a plugin bug.
+     */
+    private static String dispatchHostCall(HostChannel channel, String method, String paramsJson) {
+        Integer declared = null;
+        try {
+            declared = Json.integer(paramsJson, "timeoutMs");
+        } catch (RuntimeException ignored) {
+            // Malformed params are the host's problem to report, not ours to
+            // refuse; the default deadline still bounds the call.
+        }
+        long timeout = declared == null ? 60_000L : declared.longValue();
+
+        try {
+            HostChannel.Reply reply = channel.call(method, paramsJson, timeout);
+            if (reply.ok() && reply.json() != null) return reply.json();
+            StringBuilder sb = new StringBuilder("{\"ok\":false,\"error\":");
+            Json.writeTo(sb, reply.error() == null ? "The desktop app returned no answer." : reply.error());
+            return sb.append('}').toString();
+        } catch (InterruptedException e) {
+            // Restored rather than swallowed: this call was cancelled, and code
+            // further up is entitled to see that and stop too.
+            Thread.currentThread().interrupt();
+            return "{\"ok\":false,\"error\":\"The request was cancelled.\"}";
+        }
     }
 
     public String classpathProblem() {

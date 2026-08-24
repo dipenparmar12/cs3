@@ -59,8 +59,17 @@ export interface SystemRuntimeStatus {
  * fix into an installed app: the copy under `%APPDATA%` is resolved ahead of
  * every build location, so without it the old bridge keeps being served and the
  * fix reaches nobody who already has the app.
+ *
+ * Generation 6 is the WebView bridge (PRD-36 step 7). Both halves change: the
+ * sidecar gains a reverse-call frame, and the bridge gains a `WebViewResolver`
+ * that shadows `library-jvm`'s `TODO("Not yet implemented")` stub. This one has
+ * a failure mode the earlier bumps did not — the two halves must agree, and a
+ * provisioned copy that pairs a new sidecar with an old bridge has a channel
+ * with nothing on the far end of it. There is a handshake for exactly that
+ * (`hostCapabilities`, and the sidecar says so once on stderr), but the bump is
+ * what makes it not happen.
  */
-const RUNTIME_GENERATION = 5;
+const RUNTIME_GENERATION = 6;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {
