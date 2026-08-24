@@ -114,7 +114,7 @@ const OBSERVED = [
  * Everything mpv changes this way is already in {@link OBSERVED}, so our own
  * control bar follows along without a second sync path.
  */
-const NATIVE_KEY_BINDINGS: ReadonlyArray<readonly [key: string, command: string]> = [
+export const NATIVE_KEY_BINDINGS: ReadonlyArray<readonly [key: string, command: string]> = [
   ['SPACE', 'cycle pause'],
   ['k', 'cycle pause'],
   ['MBTN_LEFT_DBL', 'cycle fullscreen'],

@@ -89,6 +89,16 @@ export interface ProviderAnalyticsRecord {
 export type FailureKind =
   | 'timeout'
   | 'runtime-unavailable'
+  /**
+   * The runtime is fine; *this provider* is not registered in it.
+   *
+   * Deliberately not folded into `runtime-unavailable`, whose hint sends the
+   * reader to the runtime status in Settings — which is working, and which
+   * cannot tell them anything. A saved page, bookmark or cached source outlives
+   * the extension that produced it, and what the reader needs is the name of
+   * that extension and whether it is disabled, gone, or failing to load.
+   */
+  | 'provider-missing'
   | 'blocked'
   | 'not-found'
   | 'server-error'

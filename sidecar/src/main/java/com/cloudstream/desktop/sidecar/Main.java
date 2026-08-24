@@ -213,6 +213,14 @@ public final class Main {
     private static String errorKind(Throwable t) {
         for (Throwable c = t; c != null; c = c.getCause()) {
             String n = c.getClass().getName();
+            /**
+             * Named so the host can recognise it structurally. Matching on the
+             * message would break the moment the sentence is reworded, and this
+             * is the one failure the host can genuinely explain better than the
+             * runtime can — it knows whether the extension is disabled,
+             * uninstalled or blocked, and the runtime only knows it is absent.
+             */
+            if (c instanceof PluginHost.ProviderNotLoadedException) return "PROVIDER_NOT_LOADED";
             if (n.equals("android.content.UnsupportedAndroidApiException")) return "UNSUPPORTED_ANDROID_API";
             if (c instanceof NoClassDefFoundError || c instanceof ClassNotFoundException) return "LINKAGE_FAILED";
             if (c instanceof OutOfMemoryError) return "OUT_OF_MEMORY";
