@@ -399,11 +399,44 @@ public final class PluginHost {
         return new LinkedHashSet<>(providersByName.keySet());
     }
 
+    /**
+     * A provider name that is not registered, reported as its own condition.
+     *
+     * Extends {@link IllegalArgumentException} so nothing that already catches
+     * that changes behaviour, but it is a distinct type because the host has to
+     * be able to *recognise* this case rather than match on a sentence: only the
+     * host knows whether the extension behind the name is disabled, uninstalled,
+     * blocked at load, or simply not there any more, and only it can say what to
+     * do about it. See `PluginManager.explainMissingProvider`.
+     */
+    public static final class ProviderNotLoadedException extends IllegalArgumentException {
+        private final String providerName;
+
+        ProviderNotLoadedException(String providerName) {
+            super("No loaded provider is named \"" + providerName + "\".");
+            this.providerName = providerName;
+        }
+
+        public String providerName() {
+            return providerName;
+        }
+    }
+
     private Object requireProvider(String name) {
         Object provider = providersByName.get(name);
         if (provider == null) {
-            throw new IllegalArgumentException(
-                    "No loaded provider is named \"" + name + "\". Loaded: " + providersByName.keySet());
+            /**
+             * The loaded set goes to stderr, not into the message.
+             *
+             * It used to be appended to the exception text, and with a
+             * bootstrapped install that is a hundred provider names — which the
+             * app then rendered at the viewer as the explanation for why one
+             * title would not open. A list of everything that *did* work is
+             * diagnostics; it is not an answer to "why did this fail?".
+             */
+            System.err.println("[sidecar] provider \"" + name + "\" is not loaded; loaded: "
+                    + providersByName.keySet());
+            throw new ProviderNotLoadedException(name);
         }
         return provider;
     }

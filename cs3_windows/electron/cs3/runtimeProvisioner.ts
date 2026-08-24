@@ -68,8 +68,16 @@ export interface SystemRuntimeStatus {
  * with nothing on the far end of it. There is a handshake for exactly that
  * (`hostCapabilities`, and the sidecar says so once on stderr), but the bump is
  * what makes it not happen.
+ *
+ * Generation 7 is `ProviderNotLoadedException` and the `PROVIDER_NOT_LOADED`
+ * error kind. The host now explains a missing provider itself — which extension
+ * owned the name, and whether it is disabled, uninstalled or failing to load —
+ * and it recognises the case by that kind rather than by the sentence. An
+ * already-provisioned sidecar never sends it, so without the bump the host's
+ * new branch is unreachable and the viewer keeps being shown the runtime's own
+ * `IllegalArgumentException` with a hundred provider names appended.
  */
-const RUNTIME_GENERATION = 6;
+const RUNTIME_GENERATION = 7;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {

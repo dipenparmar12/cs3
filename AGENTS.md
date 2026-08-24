@@ -72,7 +72,7 @@ cs3/
 | Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
-| Sidecar tests | `sidecar/` | `mvn test` (31 tests) |
+| Sidecar tests | `sidecar/` | `mvn test` (32 tests) |
 | Main-process tests | `cs3_windows/` | `bun run test:electron` (159 tests, Node type-stripping — no framework) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Provider links only | `cs3_windows/` | `bun run test:links` (15 cases, no ffmpeg needed) |
@@ -1196,6 +1196,63 @@ why the next unit of effort went into the WebView bridge rather than into more s
 that closed, the remaining named divergence is TLS strictness (1 above) — **and its frequency
 is still unmeasured**. Count it before spending anything on it.
 
+### A provider that is gone has to say which extension owned it (2026-08-24)
+
+Reported as a raw runtime exception on screen:
+
+```
+IllegalArgumentException: No loaded provider is named "EinschaltenIn".
+Loaded: [Aniworld, Serienstream, Cinevood, … 100 more]
+```
+
+Two separate faults, and the visible one is the smaller.
+
+**The runtime appended its whole loaded set to the message**, and the host passed it
+through to the viewer. On a bootstrapped install that is a hundred provider names offered
+as the explanation for the one that did not work — a list of everything that *did* work,
+which is diagnostics and not an answer. `requireProvider` now throws
+`PluginHost.ProviderNotLoadedException` with a one-line message and prints the loaded set
+to stderr, where a diagnosis can find it.
+
+**And the host was not answering the question it is uniquely able to answer.** The runtime
+knows only that a name is absent. The host knows *why*, and each reason is a different
+action for the reader:
+
+| Cause | What the viewer is told |
+|---|---|
+| Provider, extension or repository switched off | which switch, and that Extensions is where it is |
+| Adult provider with the gate off | that, and where the gate is |
+| Two extensions claiming one name | which one lost it (`providerNameClashes`) |
+| Extension uninstalled | which extension it was, and to search again |
+| Extension installed but blocked at load | the `runtimeReports` reason verbatim |
+| Providers not loaded yet | that, rather than a failure |
+
+`PluginManager.explainMissingProvider` is that table, reached from `loadMedia` and
+`loadLinksDetailed` when the reply carries `errorKind: 'PROVIDER_NOT_LOADED'` — recognised
+by kind rather than by matching the sentence, which is why the sidecar has a named
+exception at all.
+
+Three supporting pieces, each of which was a gap on its own:
+
+- **Provider origins are persisted** (`cs3_provider_origins`), because this is read exactly
+  when the live tables cannot answer. A bookmark, a library entry, a cached source or an
+  open detail page addresses `cs3ext://EinschaltenIn/…` long after the extension behind it
+  was disabled or removed, and without a stored `provider name → extension` map the app can
+  only say the name is unknown.
+- **An installed archive that is missing from disk now gets a runtime report.**
+  `ensureProvidersLoaded` filtered those out of `pending` and said nothing, so the extension
+  ceased to exist with no report anywhere and every saved reference to its providers failed
+  by naming a *provider* rather than the missing file that caused it.
+- **`provider-missing` is its own `FailureKind`, and it is not scored.** Folding it into
+  `runtime-unavailable` would send the reader to the runtime status in Settings, which is
+  working and has nothing to tell them. And recording it as a provider failure would rank an
+  extension down for having been switched off — the silently-punitive behaviour the ranking
+  exists to avoid.
+
+`RUNTIME_GENERATION` is bumped to 7: an already-provisioned sidecar never sends the new
+error kind, so without it the host's branch is unreachable and the viewer keeps seeing the
+hundred-name exception.
+
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 
 Run it before believing anything about extension health:
@@ -1966,6 +2023,42 @@ Things that will bite:
 - **mpv is a child process with its own window** and is wired into `before-quit`. Without
   that it outlives the app and keeps playing with nothing left on screen to stop it.
 
+### mpv's window draws its own controls (2026-08-24)
+
+`--osc=no`, `--osd-level=0`, `--input-default-bindings=no` and
+`--input-vo-keyboard=no` were all set on the reasoning that our control bar is the
+controller and mpv's would be a second one. That reasoning holds for an *embedded*
+surface and does not hold for what is actually built: mpv renders into a **separate OS
+window**, so the viewer looking at the picture was looking at a window with no controls
+in it, while the bar that drives it sat behind in a different window.
+
+So `--osc=yes` and `--osd-level=1` are on — mpv's built-in on-screen controller gives
+play/pause, a seek bar, volume and fullscreen — and `--input-vo-keyboard=yes` lets keys
+reach the window. Verified that the OSC still loads under `--no-config --load-scripts=no`:
+it is an internal script, and `--load-scripts` only governs the user's own script
+directory. None of this touches decode or network.
+
+**`--input-default-bindings` stays `no`, and the bindings are enumerated instead**
+(`NATIVE_KEY_BINDINGS`, applied with mpv's `keybind` command after the IPC channel is up).
+mpv's default set quits on `q`, `Q` and `Ctrl+q` — and an exit while playing is reported
+as `ended`, which `NativeEngineStage` turns into `onEnded()`, so a viewer pressing `q` to
+stop watching would be handed the next episode. The defaults also bind `s` to a screenshot
+written beside the working directory. Every enumerated binding matches what the same key
+already does in `VideoPlayer` (`SKIP_SECONDS` is 10 in both), because the two windows are
+one player and a key that seeks 10 in one and 60 in the other is worse than a dead key.
+
+Two consequences worth keeping:
+
+- **Nothing new syncs.** `pause`, `volume`, `mute`, `speed` and `fullscreen` are already in
+  `OBSERVED`, so whatever the viewer changes in mpv's window arrives back as a
+  `property-change` and our own control bar follows it. Adding a control that mpv can
+  change without an `OBSERVED` entry behind it would be the first thing here to need a
+  second sync path.
+- **`end-file` with reason `quit` now reports `idle`.** Closing mpv's window — or any
+  binding that quits — used to reach `child.on('exit')` while `state` was still `playing`,
+  which is the credits as far as that handler is concerned. The next episode started in a
+  new window. Same rule as `shutdownNow`, reached from mpv's side instead of ours.
+
 **What is not built: embedding.** mpv renders in its own window, driven over IPC — the
 roadmap's Option A, which it calls the recommended first step. Putting the video surface
 inside the Electron window needs libmpv's render API through a native addon (Option B).
@@ -2020,7 +2113,7 @@ symptom points at.
    effect depends on a `sourceConfig` memo keyed on that. **If you add a source field to
    that effect, add it to the key, not to the dependency array.**
 
-`electron/media/mpvEngine.test.mts` (15 cases, `bun run test:native`) drives a real mpv
+`electron/media/mpvEngine.test.mts` (17 cases, `bun run test:native`) drives a real mpv
 process against a synthesised HEVC 10-bit / AC-3 5.1 Matroska fixture. It is not pure and
 should not be: every failure worth catching lives in the seam between two processes — the
 JSON framing, `request_id` correlation, the property observations that drive the timeline,

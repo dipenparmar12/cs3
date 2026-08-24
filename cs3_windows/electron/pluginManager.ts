@@ -265,6 +265,18 @@ const SETTINGS_KEY_DISABLED_EXTENSIONS = 'cs3_disabled_extensions';
 const SETTINGS_KEY_ADULT_ENABLED = 'cs3_adult_content_enabled';
 
 /**
+ * Which extension last registered each provider name.
+ *
+ * Persisted, and that is the whole point: it is read precisely when the
+ * provider is *not* loaded, which is exactly when the live tables cannot answer.
+ * A bookmark, a library entry, a cached source or an open detail page addresses
+ * `cs3ext://EinschaltenIn/...` long after the extension behind it was disabled,
+ * uninstalled or broken by an update — and without this the app can only say
+ * that the name is unknown, which is true and useless.
+ */
+const SETTINGS_KEY_PROVIDER_ORIGINS = 'cs3_provider_origins';
+
+/**
  * Whether a provider serves adult content.
  *
  * `NSFW` is upstream's own `TvType`, which providers declare themselves, so
@@ -655,6 +667,9 @@ export class PluginManager {
   private providers = new Map<string, ExtensionProvider>();
   /** Names an extension tried to register that another extension already held. */
   private providerNameClashes = new Map<string, string[]>();
+
+  /** Provider name to the extension that registered it. See the key's comment. */
+  private providerOrigins = new Map<string, { internalName: string; pluginName: string }>();
   private providersLoaded = false;
   private providersLoading: Promise<void> | null = null;
 
@@ -1584,6 +1599,107 @@ export class PluginManager {
   }
 
   /** Why an installed extension contributed nothing selectable. */
+  /**
+   * Loads the persisted provider origins on first use.
+   *
+   * Lazy rather than eager because the common path never needs it: origins are
+   * only consulted when a provider is missing, which is the exceptional case.
+   */
+  private providerOriginsLoaded = false;
+
+  private loadProviderOrigins(): Map<string, { internalName: string; pluginName: string }> {
+    if (!this.providerOriginsLoaded) {
+      const stored = this.datastore.getObject<Record<string, { internalName: string; pluginName: string }>>(
+        SETTINGS_KEY_PROVIDER_ORIGINS,
+        {}
+      );
+      if (stored && typeof stored === 'object') {
+        for (const [name, origin] of Object.entries(stored)) {
+          if (origin?.internalName) this.providerOrigins.set(name, origin);
+        }
+      }
+      this.providerOriginsLoaded = true;
+    }
+    return this.providerOrigins;
+  }
+
+  private rememberProviderOrigin(name: string, internalName: string, pluginName: string): void {
+    const origins = this.loadProviderOrigins();
+    const existing = origins.get(name);
+    if (existing?.internalName === internalName && existing.pluginName === pluginName) return;
+    origins.set(name, { internalName, pluginName });
+    this.datastore.setObject(SETTINGS_KEY_PROVIDER_ORIGINS, Object.fromEntries(origins));
+  }
+
+  /**
+   * Why a provider name the app is still using no longer answers.
+   *
+   * The reported failure was a raw runtime exception reaching the screen —
+   * `IllegalArgumentException: No loaded provider is named "EinschaltenIn".
+   * Loaded: [Aniworld, Serienstream, …]` — a hundred provider names offered as
+   * the explanation for one that did not work. It named the one thing the
+   * reader already knew and none of the things they could act on.
+   *
+   * Every branch below is a different action, which is the reason they are told
+   * apart at all: turn it back on, reinstall it, wait for the runtime, or stop
+   * expecting this address to work and search again.
+   */
+  public explainMissingProvider(name: string): string {
+    if (!this.providersLoaded) {
+      return `The extension runtime has not finished loading providers, so ${name} could not be asked yet.`;
+    }
+
+    /**
+     * Registered but gated off. This is the case a bare "not loaded" hides
+     * worst: the extension is installed and working, and one switch — possibly
+     * on its repository rather than on it — is why nothing happens.
+     */
+    const known = this.providers.get(name);
+    if (known) {
+      if (this.getDisabledProviders().includes(name)) {
+        return `${name} is switched off. Turn it back on in Extensions to open this again.`;
+      }
+      if (this.getDisabledExtensions().includes(known.pluginInternalName)) {
+        return `${name} comes from ${known.pluginName}, which is switched off. Turn that extension back on in Extensions.`;
+      }
+      const repositoryId = this.repositoryIdOf(known.pluginInternalName);
+      if (this.getDisabledRepositories().includes(repositoryId)) {
+        return `${name} comes from ${known.pluginName}, whose repository is switched off. Turn that repository back on in Extensions.`;
+      }
+      if (isAdultProvider(known) && !this.adultAllowed()) {
+        return `${name} is an adult-content provider and adult content is turned off in Settings.`;
+      }
+      return `${name} is installed but the extension runtime does not have it loaded. Restarting the app usually restores it.`;
+    }
+
+    /** A name another extension took. The tree reports this; the address cannot. */
+    for (const [internalName, clashes] of this.providerNameClashes.entries()) {
+      if (clashes.some((entry) => entry.startsWith(`${name} (`))) {
+        const record = this.installedPlugins.get(internalName);
+        return `${name} is registered by more than one extension, and ${record?.meta?.name ?? internalName} lost the name. Uninstall one of them to use this address.`;
+      }
+    }
+
+    /**
+     * Not registered at all — so the live tables know nothing, and the stored
+     * origin is the only thing that can name the extension responsible.
+     */
+    const origin = this.loadProviderOrigins().get(name);
+    if (origin) {
+      const record = this.installedPlugins.get(origin.internalName);
+      if (!record) {
+        return `${name} came from ${origin.pluginName}, which is no longer installed. Reinstall it in Extensions, or search again to find this title elsewhere.`;
+      }
+      const report = this.runtimeReports.get(origin.internalName);
+      if (report?.reason) {
+        return `${name} comes from ${origin.pluginName}, which did not load: ${report.reason}`;
+      }
+      return `${name} comes from ${origin.pluginName}, which loaded but no longer registers it — the extension has probably changed. Search again to find this title elsewhere.`;
+    }
+
+    return `No installed extension provides ${name} any more. Search again to find this title elsewhere.`;
+  }
+
   private explainNoProviders(internalName: string): string {
     const clashes = this.providerNameClashes.get(internalName);
     if (clashes && clashes.length > 0) {
@@ -1650,9 +1766,31 @@ export class PluginManager {
       // and a stale entry would keep blaming an extension that is now fine.
       this.providerNameClashes.clear();
 
-      const pending = [...this.installedPlugins.values()].filter(
-        (record) => record.filePath && fs.existsSync(record.filePath)
-      );
+      /**
+       * An installed record whose archive is not on disk any more.
+       *
+       * These used to be filtered out and nothing else, so the extension simply
+       * ceased to exist with no report anywhere — and every saved reference to
+       * its providers then failed with "no loaded provider is named …", naming
+       * a provider rather than the missing file that actually caused it. The
+       * archive goes missing for ordinary reasons: a half-finished uninstall, a
+       * cleaned `%APPDATA%`, an install copied between machines.
+       */
+      const pending: Array<PluginData & { meta: SitePlugin }> = [];
+      for (const record of this.installedPlugins.values()) {
+        if (record.filePath && fs.existsSync(record.filePath)) {
+          pending.push(record);
+          continue;
+        }
+        this.runtimeReports.set(record.internalName, {
+          tier: 'T4_BLOCKED',
+          reason: record.filePath
+            ? `Its archive is missing from disk (${record.filePath}). Reinstall the extension.`
+            : 'No archive is recorded for this extension. Reinstall it.',
+          translated: false,
+          failureKind: 'ARCHIVE_MISSING',
+        });
+      }
       this.emitLoadProgress({ loaded: 0, total: pending.length, running: true });
 
       for (const record of pending) {
@@ -1708,6 +1846,7 @@ export class PluginManager {
             continue;
           }
 
+          this.rememberProviderOrigin(name, record.internalName, record.meta?.name ?? record.internalName);
           this.providers.set(name, {
             name,
             pluginInternalName: record.internalName,
@@ -2065,25 +2204,42 @@ export class PluginManager {
      */
     /** Records the failure and hands back the error to throw. */
     const fail = (message: string, detail?: string): Error => {
+      // A provider that is not loaded was never asked, so it is a warning about
+      // the app's state rather than an error the provider committed.
+      const absent = detail === 'PROVIDER_NOT_LOADED';
       this.diagnostics?.record({
-        level: 'error',
+        level: absent ? 'warn' : 'error',
         stage: 'detail',
         source: ref.provider,
         url,
         message,
         detail,
       });
-      this.analytics?.observe({
-        provider: ref.provider,
-        stage: 'detail',
-        outcome: 'failure',
-        latencyMs,
-        error: detail ? `${detail}: ${message}` : message,
-      });
+      // Not scored: ranking a provider down for having been switched off is the
+      // silently-punitive behaviour the ranking is built to avoid.
+      if (!absent) {
+        this.analytics?.observe({
+          provider: ref.provider,
+          stage: 'detail',
+          outcome: 'failure',
+          latencyMs,
+          error: detail ? `${detail}: ${message}` : message,
+        });
+      }
       return new Error(message);
     };
 
     if (!response.ok) {
+      /**
+       * A provider the runtime does not have is the one failure this side can
+       * explain better than the runtime can. The runtime knows only that the
+       * name is absent; the host knows whether the extension behind it is
+       * switched off, uninstalled, blocked at load, or beaten to its own name —
+       * and each of those is a different thing for the reader to do.
+       */
+      if (response.errorKind === 'PROVIDER_NOT_LOADED') {
+        throw fail(this.explainMissingProvider(ref.provider), response.errorKind);
+      }
       throw fail(response.error ?? 'The extension runtime did not answer.', response.errorKind);
     }
 
@@ -2216,16 +2372,26 @@ export class PluginManager {
         message: summary,
         detail: options.error,
       });
-      this.analytics?.observe({
-        provider: ref.provider,
-        stage: 'links',
-        // A provider that ran and has nothing is `empty`; one that broke is
-        // `failure`. The ranking treats them differently and the distinction
-        // is only available here.
-        outcome: kind === 'no-links' ? 'empty' : 'failure',
-        latencyMs,
-        error: options.error ?? summary,
-      });
+      /**
+       * A provider that was never asked is not a provider that failed.
+       *
+       * `provider-missing` means the extension is switched off, uninstalled or
+       * blocked — nothing about the scraper was exercised. Recording a failure
+       * would rank it down for having been turned off, and the ranking is
+       * meant never to be silently punitive.
+       */
+      if (kind !== 'provider-missing') {
+        this.analytics?.observe({
+          provider: ref.provider,
+          stage: 'links',
+          // A provider that ran and has nothing is `empty`; one that broke is
+          // `failure`. The ranking treats them differently and the distinction
+          // is only available here.
+          outcome: kind === 'no-links' ? 'empty' : 'failure',
+          latencyMs,
+          error: options.error ?? summary,
+        });
+      }
       return {
         links: [],
         diagnosis: {
@@ -2250,6 +2416,21 @@ export class PluginManager {
 
     if (!response.ok) {
       const error = response.error ?? 'The extension runtime did not answer.';
+
+      /** See the matching branch in `loadMedia` for why this is answered here. */
+      if (response.errorKind === 'PROVIDER_NOT_LOADED') {
+        const explanation = this.explainMissingProvider(ref.provider);
+        return nothing('provider-missing', explanation, {
+          error,
+          // Not `failure`: the provider did not fail, it was not there to try.
+          // Counting it against the provider's score would rank an extension
+          // down for having been switched off.
+          level: 'warn',
+          extra: [{ label: 'errorKind', value: 'PROVIDER_NOT_LOADED' }],
+          hint: FAILURE_KIND_LABELS['provider-missing'].hint,
+        });
+      }
+
       const kind: DiagnosisKind =
         response.errorKind === 'TIMEOUT'
           ? 'timeout'

@@ -28,6 +28,12 @@ const RULES: Rule[] = [
   { kind: 'blocked', test: /cloudflare|cf-ray|challenge|captcha|bot protection|access denied|just a moment/i },
   { kind: 'blocked', test: /\b(403|401)\b|forbidden|unauthori[sz]ed/i },
 
+  /**
+   * Ahead of `runtime-unavailable`, which would otherwise claim it: the two
+   * share vocabulary and only this one is about a single provider.
+   */
+  { kind: 'provider-missing', test: /PROVIDER_NOT_LOADED|no loaded provider is named|no longer installed|no installed extension provides/i },
+
   { kind: 'runtime-unavailable', test: /sidecar|extension runtime|SIDECAR_[A-Z]+|NoClassDefFoundError|UnsupportedClassVersionError|ClassNotFoundException/i },
   { kind: 'timeout', test: /timeout|timed out|deadline|ETIMEDOUT/i },
 
@@ -67,6 +73,10 @@ export const FAILURE_KIND_LABELS: Record<FailureKind, { label: string; hint: str
   'runtime-unavailable': {
     label: 'Extension runtime',
     hint: 'The JVM sidecar could not run the extension. This one is ours — check the runtime status in Settings.',
+  },
+  'provider-missing': {
+    label: 'Provider not loaded',
+    hint: 'The extension that provided this is disabled, uninstalled, or failed to load. Open Extensions to turn it back on, or search again to find the title elsewhere.',
   },
   blocked: {
     label: 'Blocked by the host',
