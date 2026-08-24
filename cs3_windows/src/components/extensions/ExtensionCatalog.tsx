@@ -8,16 +8,20 @@
  * "Translating DEX bytecode to JVM…" for 250 ms whether or not that was
  * happening.
  */
-import React, { useMemo, useState } from 'react';
-import { Search, Download, Trash2, Loader2, AlertTriangle, Check } from 'lucide-react';
-import type { SitePlugin } from '../../types/plugin';
+import React, { useCallback, useMemo, useState } from 'react';
+import { Download, Trash2, Loader2, AlertTriangle, ShieldQuestion } from 'lucide-react';
+import { Badge, ProgressBar } from './primitives';
+import { CompatibilityReport } from './CompatibilityReport';
+import { matchesQuery, matchesTags, tagLabel, type FilterState } from './useExtensionFilters';
+import type { PluginCompatibilityReport, SitePlugin } from '../../types/plugin';
 import type { InstallProgress } from './useExtensionCatalog';
 
 interface ExtensionCatalogProps {
   repository: { name: string; url: string } | null;
   plugins: SitePlugin[];
   warnings: string[];
-  installed: SitePlugin[];
+  installedNames: Set<string>;
+  filters: FilterState;
   loading: boolean;
   error: string | null;
   busy: string | null;
@@ -27,22 +31,23 @@ interface ExtensionCatalogProps {
 }
 
 /**
- * Upstream's plugin status, which is the maintainer's own claim about the
- * extension rather than anything we measured. Shown as they meant it: `0` is
- * down, and installing one of those is usually a wasted download.
+ * Upstream's plugin status — the maintainer's own claim about the extension,
+ * not anything measured here. Shown as they meant it: `0` is down, and
+ * installing one of those is usually a wasted download.
  */
-const STATUS: Record<number, { label: string; tone: string }> = {
-  0: { label: 'down', tone: 'bad' },
-  1: { label: 'ok', tone: 'good' },
-  2: { label: 'slow', tone: 'warn' },
-  3: { label: 'beta', tone: 'warn' },
+const STATUS: Record<number, { label: string; tone: 'success' | 'warning' | 'danger' }> = {
+  0: { label: 'down', tone: 'danger' },
+  1: { label: 'ok', tone: 'success' },
+  2: { label: 'slow', tone: 'warning' },
+  3: { label: 'beta', tone: 'warning' },
 };
 
 export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
   repository,
   plugins,
   warnings,
-  installed,
+  installedNames,
+  filters,
   loading,
   error,
   busy,
@@ -50,32 +55,47 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
   onInstall,
   onUninstall,
 }) => {
-  const [query, setQuery] = useState('');
-  const [type, setType] = useState<string>('All');
+  const [reports, setReports] = useState<Record<string, PluginCompatibilityReport | 'loading'>>({});
 
-  const installedNames = useMemo(
-    () => new Set(installed.map((plugin) => plugin.internalName)),
-    [installed]
+  /**
+   * Analysis is on demand, not on render.
+   *
+   * `analyzePlugin` downloads the archive and resolves every type it references
+   * against the runtime classpath. Doing that for a hundred catalogue rows on
+   * arrival would download a hundred archives to answer a question about one.
+   */
+  const analyse = useCallback(async (plugin: SitePlugin) => {
+    setReports((current) => ({ ...current, [plugin.internalName]: 'loading' }));
+    try {
+      const report = await window.cloudstream?.analyzePlugin(plugin);
+      if (report) setReports((current) => ({ ...current, [plugin.internalName]: report }));
+    } catch {
+      setReports((current) => {
+        const next = { ...current };
+        delete next[plugin.internalName];
+        return next;
+      });
+    }
+  }, []);
+
+  const visible = useMemo(
+    () =>
+      plugins.filter((plugin) => {
+        if (!matchesTags(plugin.tvTypes, filters.tags)) return false;
+        if (
+          filters.languages.size > 0 &&
+          !(plugin.language && filters.languages.has(plugin.language.toLowerCase()))
+        ) {
+          return false;
+        }
+        const here = installedNames.has(plugin.internalName);
+        if (filters.status === 'installed' && !here) return false;
+        if (filters.status === 'available' && here) return false;
+        if (filters.status === 'problems' && plugin.status !== 0) return false;
+        return matchesQuery(filters.query, plugin.name, plugin.description);
+      }),
+    [plugins, filters, installedNames]
   );
-
-  /** Counted from what this repository actually offers — see RepositoryCatalog. */
-  const types = useMemo(() => {
-    const counts = new Set<string>();
-    for (const plugin of plugins) for (const tvType of plugin.tvTypes ?? []) counts.add(tvType);
-    return ['All', ...[...counts].sort()];
-  }, [plugins]);
-
-  const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return plugins.filter((plugin) => {
-      if (type !== 'All' && !(plugin.tvTypes ?? []).includes(type as never)) return false;
-      if (!needle) return true;
-      return (
-        plugin.name.toLowerCase().includes(needle) ||
-        (plugin.description ?? '').toLowerCase().includes(needle)
-      );
-    });
-  }, [plugins, query, type]);
 
   if (!repository) {
     return (
@@ -89,7 +109,7 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
     <div className="ext-panel">
       <div className="ext-panel__head">
         <h4>{repository.name}</h4>
-        <span className="ext-node__origin">{repository.url}</span>
+        <span className="ext-row__subtitle">{repository.url}</span>
       </div>
 
       {warnings.length > 0 ? (
@@ -106,113 +126,105 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
 
       {loading ? (
         <p className="ext-empty">
-          <Loader2 size={14} className="ext-spin" /> Reading the plugin list…
+          <Loader2 size={14} className="spin" /> Reading the plugin list…
         </p>
       ) : null}
 
       {!loading && plugins.length > 0 ? (
-        <>
-          <div className="ext-filterbar">
-            <div className="ext-search">
-              <Search size={14} />
-              <input
-                type="search"
-                value={query}
-                placeholder={`Search ${plugins.length} extensions`}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </div>
-            <div className="ext-facets" role="group" aria-label="Content type">
-              {types.map((name) => (
-                <button
-                  key={name}
-                  type="button"
-                  className={`ext-facet${type === name ? ' ext-facet--on' : ''}`}
-                  onClick={() => setType(name)}
-                >
-                  {name}
-                </button>
-              ))}
-            </div>
-          </div>
+        <ul className="ext-cards">
+          {visible.map((plugin) => {
+            const here = installedNames.has(plugin.internalName);
+            const status = STATUS[plugin.status];
+            const working = busy === `install:${plugin.internalName}`;
+            const report = reports[plugin.internalName];
 
-          <ul className="ext-cards">
-            {visible.map((plugin) => {
-              const here = installedNames.has(plugin.internalName);
-              const status = STATUS[plugin.status];
-              const working = busy === `install:${plugin.internalName}`;
-              return (
-                <li key={plugin.internalName} className="ext-card">
-                  <div className="ext-card__head">
-                    <span className="ext-card__name">{plugin.name}</span>
-                    {status ? (
-                      <span className={`ext-chip ext-chip--${status.tone}`}>{status.label}</span>
-                    ) : null}
-                    {here ? (
-                      <span className="ext-chip ext-chip--installed">
-                        <Check size={11} /> installed
-                      </span>
-                    ) : null}
-                  </div>
-                  {plugin.description ? (
-                    <p className="ext-card__description">{plugin.description}</p>
+            return (
+              <li key={plugin.internalName} className="ext-card">
+                <div className="ext-row__title">
+                  {plugin.name}
+                  {status ? <Badge tone={status.tone}>{status.label}</Badge> : null}
+                  {here ? <Badge tone="accent">installed</Badge> : null}
+                </div>
+
+                {plugin.description ? (
+                  <p className="ext-card__description">{plugin.description}</p>
+                ) : null}
+
+                <div className="ext-row__subtitle">
+                  {plugin.version ? <span>v{plugin.version}</span> : null}
+                  {plugin.language ? <span>{plugin.language}</span> : null}
+                  {(plugin.tvTypes ?? []).length > 0 ? (
+                    <span>{(plugin.tvTypes ?? []).map(tagLabel).join(', ')}</span>
                   ) : null}
-                  <div className="ext-card__meta">
-                    {plugin.version ? <span className="ext-chip">v{plugin.version}</span> : null}
-                    {plugin.language ? <span className="ext-chip">{plugin.language}</span> : null}
-                    {(plugin.tvTypes ?? []).slice(0, 4).map((tvType) => (
-                      <span key={tvType} className="ext-chip ext-chip--type">
-                        {tvType}
-                      </span>
-                    ))}
-                    {plugin.authors?.length ? (
-                      <span className="ext-chip">{plugin.authors.join(', ')}</span>
-                    ) : null}
-                  </div>
+                  {plugin.authors?.length ? <span>{plugin.authors.join(', ')}</span> : null}
+                </div>
 
-                  {working && progress?.internalName === plugin.internalName ? (
-                    <div className="ext-progress">
-                      <div
-                        className="ext-progress__bar"
-                        style={{ width: `${Math.max(2, progress.percent)}%` }}
-                      />
-                      <span className="ext-progress__label">
-                        {progress.message ?? progress.step}
-                      </span>
-                    </div>
+                {working && progress?.internalName === plugin.internalName ? (
+                  <ProgressBar
+                    step={progress.message ?? progress.step}
+                    percent={progress.percent}
+                    failed={progress.step === 'error'}
+                  />
+                ) : null}
+
+                {report && report !== 'loading' ? (
+                  <CompatibilityReport
+                    report={report}
+                    onClose={() =>
+                      setReports((current) => {
+                        const next = { ...current };
+                        delete next[plugin.internalName];
+                        return next;
+                      })
+                    }
+                  />
+                ) : null}
+
+                <div className="ext-card__actions">
+                  {here ? (
+                    <button
+                      type="button"
+                      className="ext-btn ext-btn--danger"
+                      disabled={busy !== null}
+                      onClick={() => onUninstall(plugin.internalName)}
+                    >
+                      <Trash2 size={13} /> Uninstall
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="ext-btn ext-btn--primary"
+                      disabled={busy !== null}
+                      onClick={() => onInstall(plugin)}
+                    >
+                      {working ? <Loader2 size={13} className="spin" /> : <Download size={13} />}
+                      Install
+                    </button>
+                  )}
+                  {!report ? (
+                    <button
+                      type="button"
+                      className="ext-btn"
+                      title="Check what this archive needs before installing it"
+                      onClick={() => void analyse(plugin)}
+                    >
+                      <ShieldQuestion size={13} /> Check compatibility
+                    </button>
                   ) : null}
+                  {report === 'loading' ? (
+                    <span className="ext-row__subtitle">
+                      <Loader2 size={12} className="spin" /> analysing…
+                    </span>
+                  ) : null}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
 
-                  <div className="ext-card__actions">
-                    {here ? (
-                      <button
-                        type="button"
-                        className="ext-button ext-button--danger"
-                        disabled={busy !== null}
-                        onClick={() => onUninstall(plugin.internalName)}
-                      >
-                        <Trash2 size={13} /> Uninstall
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="ext-button ext-button--primary"
-                        disabled={busy !== null}
-                        onClick={() => onInstall(plugin)}
-                      >
-                        {working ? (
-                          <Loader2 size={13} className="ext-spin" />
-                        ) : (
-                          <Download size={13} />
-                        )}
-                        Install
-                      </button>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </>
+      {!loading && plugins.length > 0 && visible.length === 0 ? (
+        <p className="ext-empty">Nothing in this repository matches those filters.</p>
       ) : null}
 
       {!loading && plugins.length === 0 && !error ? (

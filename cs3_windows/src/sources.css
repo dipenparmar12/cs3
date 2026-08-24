@@ -1168,6 +1168,19 @@
 .player__video--Crop { object-fit: cover; }
 .player__video--Stretch { object-fit: fill; }
 
+/*
+   One overlay at a time, and above every stage.
+
+   `z-index: 4` is chosen against two neighbours, not picked for headroom. It
+   has to beat `.native-stage` (3), which is opaque and full-bleed — an overlay
+   under it was simply invisible, which is how a failed mpv stream could report
+   nothing at all. It must stay under `.player__top` (5) so Back and Minimise
+   remain reachable while an overlay is up, and under `.player-panel` (7) so
+   "Choose another source" opens the list *over* the error that offered it.
+
+   Two of these on screen at once double the scrim and render each message
+   through the other, so the conditions that gate them in `VideoPlayer` are
+   mutually exclusive by construction rather than by luck. */
 .player__overlay {
   position: absolute;
   inset: 0;
@@ -1176,9 +1189,13 @@
   align-items: center;
   justify-content: center;
   gap: 0.7rem;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(6px);
   text-align: center;
   padding: 2rem;
+  z-index: 4;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 .player__overlay p { color: #fff; font-weight: 600; }
 .player__overlay span { font-size: 0.82rem; color: var(--text-muted); max-width: 48ch; }
@@ -2532,11 +2549,6 @@
 /* --- Player: audio compatibility notice --------------------------------- */
 
 .player__audio-notice {
-  position: absolute;
-  top: 4.2rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 6;
   display: flex;
   align-items: center;
   gap: 0.45rem;
@@ -2557,11 +2569,6 @@
    — and overlapping them would leave one unreadable. Pointer events are off
    because it covers the picture, and nothing here is clickable. */
 .player__strategy-note {
-  position: absolute;
-  bottom: 5.5rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 5;
   pointer-events: none;
   max-width: min(620px, 88vw);
   padding: 0.45rem 0.8rem;
@@ -4704,10 +4711,21 @@
   flex-direction: column;
   background: linear-gradient(160deg, #10131a 0%, #05070b 100%);
   z-index: 3;
+  /* Nothing may spill out of the stage. Without this the control row's overflow
+     escaped the player and produced a horizontal scrollbar on a surface with
+     nothing to scroll to — a bar the viewer could drag that moved nothing, over
+     controls it covered. */
+  overflow: hidden;
+  min-width: 0;
 }
 
 .native-stage__surface {
-  flex: 1;
+  flex: 1 1 auto;
+  /* `min-height: 0` is load-bearing, not defensive. A flex item defaults to
+     `min-height: auto`, so this refused to shrink below its own text and pushed
+     the control row off the bottom of the player — the reported "cannot click
+     the controls". It shrinks now, and scrolls only if it genuinely has to. */
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -4716,6 +4734,9 @@
   padding: 2rem;
   text-align: center;
   color: #fff;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 .native-stage__surface p { font-weight: 600; margin: 0; }
 .native-stage__detail {
@@ -4725,62 +4746,58 @@
 }
 .native-stage__why { font-size: 0.8rem; color: var(--text-muted); max-width: 52ch; }
 
-.native-stage__error { z-index: 4; }
 
-.native-stage__controls {
+/* Audio and subtitle pickers, and fullscreening mpv's own window — the only
+   things the player's control bar cannot do for this engine. They live in the
+   surface rather than in a bar of their own: a second bar along the bottom was
+   covered by `.player__controls` and could not be clicked at all. */
+.native-stage__tracks {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.75rem 1rem;
-  background: rgba(0, 0, 0, 0.6);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+  max-width: 100%;
 }
-
-.native-stage__time {
-  font-variant-numeric: tabular-nums;
-  font-size: 0.78rem;
+.native-stage__field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
   color: var(--text-muted);
-  min-width: 4.2ch;
 }
-
-/* The buffer bar sits under the seek input rather than beside it, so the two
-   read as one control — the demuxer cache ahead of the playhead is the same
-   information `<video>`'s buffered ranges give on the other path. */
-.native-stage__seek { position: relative; flex: 1; display: flex; align-items: center; }
-.native-stage__seek input { width: 100%; position: relative; z-index: 2; background: transparent; }
-.native-stage__buffer {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  height: 4px;
-  width: 100%;
-  border: 0;
-  appearance: none;
-  background: rgba(255, 255, 255, 0.12);
-}
-.native-stage__buffer::-webkit-progress-bar { background: rgba(255, 255, 255, 0.12); }
-.native-stage__buffer::-webkit-progress-value { background: rgba(255, 255, 255, 0.3); }
-
-.native-stage__volume { width: 84px; }
-
+.native-stage__field svg { flex-shrink: 0; }
 .native-stage__select {
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
-  padding: 0.25rem 0.4rem;
+  padding: 0.3rem 0.45rem;
   font-size: 0.78rem;
-  max-width: 200px;
+  max-width: 220px;
+  /* Shrinkable: a track named "Hindi 5.1 Commentary · EAC3" must give way
+     before it forces the row wider than the player. */
+  min-width: 0;
+  flex: 0 1 auto;
+  text-overflow: ellipsis;
 }
 
-/* At 420px the full control row is unusable, and the mini player's own smaller
-   set is what the viewer gets — same rule the `<video>` path already follows. */
-.player--mini .native-stage__controls { padding: 0.4rem 0.5rem; gap: 0.35rem; }
+/* At 420px there is room for the fact that mpv has the stream and nothing
+   else — same rule the `<video>` path already follows for its own chrome. */
 .player--mini .native-stage__why,
-.player--mini .native-stage__select,
-.player--mini .native-stage__volume { display: none; }
+.player--mini .native-stage__tracks { display: none; }
+.player--mini .native-stage__surface { padding: 0.75rem; gap: 0.3rem; }
+
+/* The control bar's gradient is drawn for video, and over the stage's flat
+   panel it reads as a smudge. Given a real edge instead. */
+.native-stage ~ .player__controls {
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.92) 45%, rgba(0, 0, 0, 0.7));
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+/* The stage is a panel, not a picture: leave room for the bar that drives it
+   so the decoder note is never behind the seek control. */
+.native-stage__surface { padding-bottom: 5.5rem; }
 
 /* --- delete-download confirmation ----------------------------------------
    Two choices presented as equal-weight targets rather than an OK/Cancel pair,
@@ -4851,15 +4868,10 @@
    the silence it replaces. Positioned above the control bar so it never covers
    the seek bar, which is the one control people reach for blind. */
 .player__toasts {
-  position: absolute;
-  left: 50%;
-  bottom: 6.5rem;
-  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: .4rem;
-  z-index: 6;
   pointer-events: none;
   max-width: min(90%, 460px);
 }
@@ -4887,8 +4899,6 @@
   .player__toast { animation: none; }
 }
 
-/* The mini player is 420px of mostly video; a toast would cover the film. */
-.player--mini .player__toasts { display: none; }
 
 /* --- player copy menu -----------------------------------------------------
    One quiet affordance for everything technical. Seven copy buttons along the
@@ -4947,10 +4957,6 @@
    connected will use them, and a viewer told they are not will go to the other
    window instead of concluding the app is broken. */
 .player__external-banner {
-  position: absolute;
-  top: 4.5rem;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: .85rem;
@@ -4959,10 +4965,571 @@
   background: rgba(18, 20, 24, .94);
   border: 1px solid rgba(255, 255, 255, .14);
   box-shadow: 0 12px 32px -14px rgba(0, 0, 0, .85);
-  z-index: 7;
   max-width: min(92%, 620px);
 }
 .player__external-banner div { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
 .player__external-banner strong { font-size: .88rem; color: #fff; }
 .player__external-banner span { font-size: .78rem; color: var(--text-muted); }
 .player--mini .player__external-banner { display: none; }
+
+/* --- Continue watching: management -----------------------------------------
+   Removal is per card and quiet: revealed on hover, in the corner furthest
+   from the play affordance, so tidying the row and starting a film are never
+   the same gesture aimed slightly wrong. */
+.poster-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(8, 10, 16, 0.82);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.poster-card:hover .poster-dismiss,
+.poster-dismiss:focus-visible { opacity: 1; }
+.poster-dismiss:hover { background: rgba(190, 60, 60, 0.9); color: #fff; }
+
+.home-row__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+  padding: 0.2rem 0.45rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-subtle);
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.home-row__action:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+
+.home-row__confirm {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-left: auto;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  max-width: 46ch;
+}
+
+/* --- Played source panel --------------------------------------------------- */
+.played-source { display: flex; flex-direction: column; gap: .5rem; }
+
+.played-source__section { display: flex; flex-direction: column; gap: .5rem; }
+.played-source__section h4,
+.played-source__section-heading {
+  margin: 0;
+  font-size: .72rem;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--text-subtle, #8b95a5);
+}
+.played-source__section-heading { margin-top: .9rem; }
+
+.played-source__empty { margin: 0; font-size: .82rem; color: var(--text-muted); display: flex; align-items: center; gap: .4rem; }
+
+.played-source__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .8rem .9rem;
+  border-radius: 8px;
+  /* Green rather than the list's blue: this row is a fact, not a candidate. */
+  border: 1px solid rgba(74, 222, 128, .28);
+  background: rgba(74, 222, 128, .07);
+}
+.played-source__row--gone {
+  border-color: rgba(229, 83, 75, .3);
+  background: rgba(229, 83, 75, .07);
+}
+
+.played-source__what { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.played-source__what strong { font-size: .86rem; color: #fff; word-break: break-word; }
+.played-source__episode {
+  display: inline-flex; align-items: center; gap: .3rem;
+  font-size: .68rem; font-weight: 700; letter-spacing: .04em;
+  color: var(--text-subtle);
+}
+.played-source__detail { font-size: .76rem; color: var(--text-muted); }
+.played-source__origin { font-size: .72rem; color: var(--text-subtle); }
+.played-source__when { font-size: .72rem; color: var(--text-subtle); }
+
+.played-source__actions { display: flex; align-items: center; gap: .4rem; flex: none; }
+
+.played-source__message {
+  display: flex; align-items: center; gap: .4rem;
+  margin: 0; font-size: .78rem;
+  color: var(--text-muted);
+}
+.played-source__message--bad { color: var(--status-error, #e5534b); }
+
+/* --- Continue watching: management -----------------------------------------
+   Removal is per card and quiet: revealed on hover, in the corner furthest
+   from the play affordance, so tidying the row and starting a film are never
+   the same gesture aimed slightly wrong. */
+.poster-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(8, 10, 16, 0.82);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.poster-card:hover .poster-dismiss,
+.poster-dismiss:focus-visible { opacity: 1; }
+.poster-dismiss:hover { background: rgba(190, 60, 60, 0.9); color: #fff; }
+
+.home-row__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+  padding: 0.2rem 0.45rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-subtle);
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.home-row__action:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+
+.home-row__confirm {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-left: auto;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  max-width: 46ch;
+}
+
+
+/* --- Home catalogue picker -------------------------------------------------
+   Radio rows rather than a `<select>`, because the choice is not just a name:
+   which catalogues a provider publishes and whether it is answering are what
+   the decision actually turns on, and neither fits in an option label. */
+.home-settings__providers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.5rem 0 1rem;
+}
+.home-settings__provider {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+}
+.home-settings__provider:hover { background: rgba(255, 255, 255, 0.05); }
+.home-settings__provider--selected { border-color: rgba(96, 165, 250, 0.5); }
+/* Unselectable, and visibly so — but still listed with its reason, because
+   "unavailable" and "does not exist" are different facts. */
+.home-settings__provider--unavailable { opacity: 0.62; cursor: not-allowed; }
+.home-settings__provider input { margin-top: 0.25rem; flex-shrink: 0; }
+.home-settings__provider-body { min-width: 0; flex: 1; }
+.home-settings__provider-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.home-settings__provider-body p { margin: 0.15rem 0 0; font-size: 0.76rem; line-height: 1.4; }
+
+.home-settings__status { font-size: 0.7rem; font-weight: 700; white-space: nowrap; }
+.home-settings__status--healthy { color: #5fc28c; }
+.home-settings__status--degraded { color: #e0b341; }
+.home-settings__status--unavailable { color: #e58f86; }
+.home-settings__status--unchecked { color: var(--text-subtle); }
+
+.home-settings__reason { color: #e0b341 !important; }
+.home-settings__catalogs { color: var(--text-subtle) !important; font-size: 0.7rem !important; }
+
+.home-settings__field { display: flex; gap: 0.4rem; align-items: center; min-width: 0; }
+.home-settings__field input {
+  flex: 1 1 180px;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+.home-settings__message {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.76rem;
+  color: #5fc28c;
+}
+.home-settings__message--bad { color: #e58f86; }
+
+/* --- Playback failure: one surface, every way out --------------------------
+   The panel is a bounded card inside the overlay rather than free-floating
+   text, because it now carries actions and a report — and centred prose with
+   six buttons under it reads as a crash screen instead of a choice. */
+.playback-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.55rem;
+  width: min(560px, 100%);
+  max-height: 100%;
+  padding: 1.25rem 1.4rem;
+  border-radius: 12px;
+  background: rgba(12, 15, 23, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.playback-error__icon { color: #fbbf24; flex-shrink: 0; }
+.playback-error__headline { margin: 0; font-size: 1.02rem; font-weight: 700; color: #fff; }
+.playback-error__message {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.86);
+  /* Provider messages arrive as one long unbroken token often enough
+     (`matroska,webm cannot be demuxed…`) that this has to be said explicitly. */
+  overflow-wrap: anywhere;
+}
+.playback-error__attempts,
+.playback-error__origin,
+.playback-error__note {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  max-width: 52ch;
+}
+.playback-error__origin { font-weight: 600; color: rgba(147, 197, 253, 0.9); }
+.playback-error__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-top: 0.25rem;
+}
+.playback-error__copy {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+  padding-top: 0.6rem;
+  margin-top: 0.2rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  width: 100%;
+}
+.playback-error__copy .link-button { font-size: 0.75rem; gap: 0.3rem; }
+
+/* --- Copying a source list ------------------------------------------------
+   A split control: the primary click copies CSV, the caret opens the two other
+   destinations. CSV is the default because the useful operation on thirty rows
+   is sorting them, and every machine already has something that does that. */
+.source-export { position: relative; display: inline-flex; align-items: stretch; }
+.source-export__main,
+.source-export__more {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.source-export__main { border-radius: 6px 0 0 6px; border-right: 0; }
+.source-export__more { border-radius: 0 6px 6px 0; padding-inline: 0.3rem; }
+.source-export__main:hover,
+.source-export__more:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.source-export__main--compact span { display: none; }
+@media (min-width: 480px) { .source-export__main--compact span { display: inline; } }
+
+.source-export__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 250px;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+  background: rgba(12, 15, 23, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+.source-export__menu button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  padding: 0.45rem 0.55rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+}
+.source-export__menu button:hover { background: rgba(255, 255, 255, 0.08); }
+.source-export__menu button span { font-size: 0.7rem; color: var(--text-subtle); font-weight: 400; }
+
+/* --- Where a source came from, on the row --------------------------------
+   `indexerName` beside the seeders is the *extractor* for an extension link —
+   a file host the provider picked. This is the chain that names something the
+   user can actually act on: the repository, the extension, the provider. */
+.player-panel__source-origin {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.2rem;
+  font-size: 0.68rem;
+  color: rgba(147, 197, 253, 0.82);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.player-panel__source-origin svg { flex-shrink: 0; }
+
+.player-panel__source-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  align-self: stretch;
+  border: 0;
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.player-panel__source-link:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+
+.source-row__origin {
+  margin: 0.2rem 0 0;
+  font-size: 0.7rem;
+  color: rgba(147, 197, 253, 0.8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.source-picker__toolbar-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+
+
+/* --- Player message stacks -------------------------------------------------
+   Two anchors, each a flow column: transient messages sit beside each other
+   instead of on top of each other.
+
+   They used to position themselves individually — the external banner at
+   `top: 4.5rem`, the components notice at `top: 4.2rem`, the strategy note at
+   `bottom: 5.5rem`, the toasts at `bottom: 6.5rem`. Any two that were true at
+   the same time overlapped, and none of them is opaque, so the two messages
+   rendered through each other. They *can* all be true at once, so the fix is
+   layout rather than suppression.
+
+   `pointer-events: none` on the stack with `auto` restored on each child keeps
+   the gaps between messages click-through: the stack spans the width of the
+   player and would otherwise swallow a click on the picture behind it. */
+.player__messages {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  width: max-content;
+  max-width: min(92%, 640px);
+  pointer-events: none;
+}
+.player__messages > * { pointer-events: auto; }
+.player__messages:empty { display: none; }
+.player__messages--top { top: 4.2rem; }
+/* Clear of the control bar: the seek bar is the one control people reach for
+   without looking, and a message over it is worse than no message. */
+.player__messages--bottom { bottom: 5.5rem; }
+
+/* The mini player is 420px of mostly video; any of these would cover the film. */
+.player--mini .player__messages { display: none; }
+
+/* --- Detail page: cast and related titles ----------------------------------
+   Both come from fields the provider already sends and that this screen used
+   to drop. They sit below the episode list because they are context, not the
+   reason the page was opened — a viewer who came here to press Play should not
+   have to scroll past a cast list to reach the episodes. */
+.detail-facts {
+  margin-top: 1.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.detail-facts__heading {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  margin: 0 0 0.85rem;
+}
+
+/* Wraps rather than scrolls: a cast list has no meaningful order past the
+   first few names, so hiding the tail behind a sideways scroll buys nothing. */
+.detail-facts__people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.detail-facts__person {
+  font-size: 0.82rem;
+  color: var(--text-main);
+  background: var(--surface-raised, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 999px;
+  padding: 0.22rem 0.7rem;
+}
+
+/* Same rail geometry as the home screen, so a poster is the same size and
+   behaves the same way wherever it appears. */
+.detail-facts__rail {
+  display: flex;
+  gap: 0.85rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.4rem;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+
+.detail-facts__rail > * {
+  flex: 0 0 auto;
+  width: 158px;
+  scroll-snap-align: start;
+}
+
+.detail-facts__rail::-webkit-scrollbar { height: 7px; }
+.detail-facts__rail::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+.detail-facts__rail::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
+
+/* --- Subtitle appearance ---------------------------------------------------
+   Driven entirely by custom properties set on `.player` from stored
+   preferences, because `::cue` cannot be reached from an inline style — the
+   rule has to live in a stylesheet and read the tokens from an ancestor.
+
+   Default `<track>` rendering is small white text with no separation from the
+   picture, which vanishes over snow, a white wall, or light credits. Android
+   has had a caption editor for years; this is the desktop equivalent. */
+.player video::cue {
+  /* `em` against the element's own font size, so the browser's viewport-based
+     default scaling still applies and this multiplies it rather than replacing
+     it with a fixed pixel size that would be wrong on every other window. */
+  font-size: calc(1em * var(--cue-scale, 1));
+  color: var(--cue-color, #fff);
+  font-weight: var(--cue-weight, 400);
+  background: var(--cue-bg, transparent);
+  text-shadow: var(--cue-shadow, none);
+  line-height: 1.35;
+  white-space: pre-line;
+}
+
+/* Lifting cues clear of hard-subbed text burned into the picture, which is
+   common on the releases where an external subtitle is most wanted. The
+   element has no property for this, so the track container is moved instead —
+   `::cue` positioning is ignored by Chromium for anything but line. */
+.player video::-webkit-media-text-track-container {
+  transform: translateY(calc(-1 * var(--cue-lift, 0%)));
+}
+
+/* --- Subtitle appearance settings ------------------------------------------ */
+.sub-choices { display: flex; flex-wrap: wrap; gap: 0.35rem; justify-content: flex-end; }
+
+.sub-choice { font-size: 0.75rem; padding: 0.28rem 0.6rem; }
+.sub-choice--on {
+  border-color: var(--accent-light, #60a5fa);
+  color: var(--accent-light, #60a5fa);
+}
+
+.sub-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  outline: 1px solid rgba(255, 255, 255, 0.25);
+  cursor: pointer;
+  padding: 0;
+}
+.sub-swatch--on { border-color: var(--accent-light, #60a5fa); }
+.sub-swatch:focus-visible { outline: 2px solid var(--accent-light, #60a5fa); outline-offset: 2px; }
+
+/* A light gradient, not the panel's own surface. Every setting here is judged
+   against a moving picture, and the case that actually decides between an
+   outline and a box is bright content — so that is what the sample sits on. */
+.sub-preview {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  min-height: 96px;
+  width: 100%;
+  padding: 0.9rem 1rem;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #dfe6ef 0%, #f7fafc 45%, #b9c6d4 100%);
+  overflow: hidden;
+}
+
+.sub-preview__cue {
+  text-align: center;
+  max-width: 90%;
+  transform: translateY(calc(-1 * var(--cue-lift, 0%)));
+  font-size: calc(1rem * var(--cue-scale, 1));
+  color: var(--cue-color, #fff);
+  font-weight: var(--cue-weight, 400);
+  background: var(--cue-bg, transparent);
+  text-shadow: var(--cue-shadow, none);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  line-height: 1.35;
+}

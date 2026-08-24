@@ -286,3 +286,54 @@ export interface TorrentFileEntry {
   /** Set on the file the engine selected for playback. */
   isSelected: boolean;
 }
+
+// --- swarm health ----------------------------------------------------------
+
+/**
+ * What a torrent is being fetched *for*, which is the only input that should
+ * change the piece strategy. See `electron/torrent/swarmHealth.ts`.
+ */
+export type SwarmMode = 'stream' | 'download';
+
+/** How a peer came to be connected. The incoming/outgoing split is the point. */
+export type PeerClass = 'incoming' | 'outgoing' | 'webSeed' | 'webrtc';
+
+export interface PeerCensus {
+  total: number;
+  incoming: number;
+  outgoing: number;
+  webSeed: number;
+  webrtc: number;
+}
+
+export type SwarmFindingId =
+  | 'unreachable'
+  | 'reachable'
+  | 'reachability-unknown'
+  | 'thin-swarm'
+  | 'connection-ceiling'
+  | 'no-utp'
+  | 'sequential-cost';
+
+export interface SwarmFinding {
+  id: SwarmFindingId;
+  /** `limit` costs speed now; `note` is context; `good` is a confirmation. */
+  tone: 'limit' | 'note' | 'good';
+  summary: string;
+  /** What the user can actually do, when anything. */
+  advice?: string;
+}
+
+/** Everything known about how one torrent is connected, and what limits it. */
+export interface SwarmReport {
+  infoHash: string;
+  census: PeerCensus;
+  findings: SwarmFinding[];
+  summary: string;
+  mode: SwarmMode;
+  /** The port peers would dial to reach us; 0 when the client is not started. */
+  listenPort: number;
+  utpAvailable: boolean;
+  downloadSpeed: number;
+  uploadSpeed: number;
+}

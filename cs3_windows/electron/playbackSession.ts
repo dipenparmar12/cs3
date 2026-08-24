@@ -56,6 +56,13 @@ export interface PlaybackSnapshot {
   emptyReason?: string;
   /** The structured form of `emptyReason`, when the failure produced one. */
   diagnosis?: SourceDiagnosis;
+  /**
+   * True when this list came from the providers the title was found on, and
+   * asking everything else would ask something new. The player offers the wider
+   * search only then — offering it after a search that already looked
+   * everywhere is a button that cannot do anything.
+   */
+  canWiden: boolean;
   title: string;
   episodeTitle?: string;
 }
@@ -94,6 +101,7 @@ interface Session {
   error?: string;
   emptyReason?: string;
   diagnosis?: SourceDiagnosis;
+  canWiden: boolean;
   /**
    * Bumped on every start attempt. A start that loses the race — because the
    * viewer picked a different source while the previous one was still
@@ -136,6 +144,7 @@ export class PlaybackSessionManager {
       error: session.error,
       emptyReason: session.emptyReason,
       diagnosis: session.diagnosis,
+      canWiden: session.canWiden,
       title: session.title,
       episodeTitle: session.episodeTitle,
     };
@@ -168,6 +177,10 @@ export class PlaybackSessionManager {
       searchDone: false,
       searchCancelled: false,
       attempts: [],
+      // False until discovery answers. The player shows nothing to widen while
+      // it is still searching — the offer only means something once a scoped
+      // search has finished and come up short.
+      canWiden: false,
       unplayable: new Set<string>(),
       generation: 0,
       started: false,
@@ -211,6 +224,10 @@ export class PlaybackSessionManager {
       searchDone: false,
       searchCancelled: false,
       attempts: [],
+      // False until discovery answers. The player shows nothing to widen while
+      // it is still searching — the offer only means something once a scoped
+      // search has finished and come up short.
+      canWiden: false,
       unplayable: new Set<string>(),
       generation: 0,
       // Nothing will auto-start, and nothing should: the viewer opened this to
@@ -236,7 +253,7 @@ export class PlaybackSessionManager {
    */
   private async discover(
     session: Session,
-    options: { autoStartWhenDone: boolean; bypassCache?: boolean }
+    options: { autoStartWhenDone: boolean; bypassCache?: boolean; widen?: boolean }
   ): Promise<void> {
     // A refresh started while one is already running supersedes it, rather than
     // both writing into the same session's source list.
@@ -253,7 +270,13 @@ export class PlaybackSessionManager {
 
     try {
       const response = await this.content.getSources(
-        session.request,
+        /**
+         * Widening replaces the retained query's scope for this run and for the
+         * ones after it. Once the viewer has asked to look everywhere, going
+         * back to the originating provider on the next refresh would discard
+         * what they just asked for.
+         */
+        options.widen ? { ...session.request, scope: 'all' as const } : session.request,
         (progress) => {
           if (session.disposed || controller.signal.aborted) return;
           session.sources = progress.results;
@@ -279,6 +302,7 @@ export class PlaybackSessionManager {
       session.sources = response.sources;
       session.emptyReason = response.emptyReason;
       session.diagnosis = response.diagnosis;
+      session.canWiden = response.canWiden;
     } catch (error) {
       if (session.disposed || controller.signal.aborted) return;
       session.emptyReason = error instanceof Error ? error.message : String(error);
@@ -446,10 +470,25 @@ export class PlaybackSessionManager {
    * the cached answer is wrong, and serving it back would make the button
    * appear broken.
    */
-  public async refresh(sessionId: string): Promise<PlaybackSnapshot | null> {
+  public async refresh(
+    sessionId: string,
+    /**
+     * Look beyond the providers this title came from.
+     *
+     * Distinct from a plain refresh, which re-asks the same sources. This is
+     * the viewer saying "that was not enough", and it is the only thing that
+     * reaches torrent indexers and providers that never claimed this title.
+     */
+    options: { widen?: boolean } = {}
+  ): Promise<PlaybackSnapshot | null> {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
-    await this.discover(session, { autoStartWhenDone: false, bypassCache: true });
+    if (options.widen) session.request = { ...session.request, scope: 'all' };
+    await this.discover(session, {
+      autoStartWhenDone: false,
+      bypassCache: true,
+      widen: options.widen,
+    });
     return this.snapshot(session);
   }
 

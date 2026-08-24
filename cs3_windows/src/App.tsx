@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { PlayedSource } from './types/library';
 import { Sidebar } from './components/Sidebar';
 import type { ActiveTab } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
@@ -64,6 +65,14 @@ export const App: React.FC = () => {
   const [playback, setPlayback] = useState<PlaybackRequest | null>(null);
   const [switchingTo, setSwitchingTo] = useState<Episode | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
+  /**
+   * A failure that has no screen of its own yet.
+   *
+   * Opening a downloaded file can fail before any player exists — the file was
+   * moved or deleted since it finished — and the alternative to saying so is a
+   * button that does nothing when clicked.
+   */
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
 
   /**
    * The instant-play path: the player opens on this state before any stream
@@ -254,6 +263,47 @@ export const App: React.FC = () => {
     const previous = lastQuery.current;
     if (previous?.query) void handleSearch(previous.query, previous.options);
   }, [handleSearch]);
+
+  /**
+   * Plays the exact source the library saved as working.
+   *
+   * The panel has already done the hard half — reused the stored link or
+   * re-resolved the same release through its provider — so this is the ordinary
+   * "start a stream from this source" path, the same one the detail screen uses
+   * when the viewer picks from a list. Going straight to a known-good source is
+   * the whole point: no discovery, no ranking, no waiting on fifteen scrapers.
+   */
+  const handlePlaySavedSource = useCallback(
+    async (source: TorrentResult, record: PlayedSource) => {
+      const response = await window.cloudstream?.startStream(
+        source,
+        record.season,
+        record.episode
+      );
+      if (!response?.handle?.streamUrl) return;
+
+      setPlayback({
+        streamUrl: response.handle.streamUrl,
+        mimeType: response.handle.mimeType,
+        title: record.origin.title,
+        episodeTitle: record.origin.episodeTitle,
+        infoHash: response.handle.infoHash,
+        subtitles: response.handle.subtitleUrls ?? [],
+        progress: {
+          mediaUrl: record.origin.mediaUrl,
+          year: record.origin.year,
+          season: record.season,
+          episode: record.episode,
+          // Straight back to where they stopped, which is the other half of
+          // "take me back to what was working".
+          resumeAt: record.positionSeconds,
+        },
+      });
+      setPlayerHidden(false);
+      setPlayerMini(false);
+    },
+    []
+  );
 
   /**
    * Search from inside the player.
@@ -593,6 +643,20 @@ export const App: React.FC = () => {
     window.cloudstream?.playbackRefreshSources(sessionRef.current.id);
   }, []);
 
+  /**
+   * Ask beyond the providers this title was found on.
+   *
+   * A separate action from refresh, because it is a different question. The
+   * default search asks the providers whose results produced this row — what
+   * the Android app does — and this reaches every other installed provider plus
+   * the torrent indexers. Once asked, the session keeps the wider scope, so a
+   * later refresh does not quietly narrow back.
+   */
+  const handleWidenSources = useCallback(() => {
+    if (!sessionRef.current) return;
+    window.cloudstream?.playbackRefreshSources(sessionRef.current.id, true);
+  }, []);
+
   const handleCancelSourceSearch = useCallback(() => {
     if (!sessionRef.current) return;
     window.cloudstream?.playbackCancelSourceSearch(sessionRef.current.id);
@@ -876,6 +940,8 @@ export const App: React.FC = () => {
                 onPlayNow: handlePlayNow,
                 onSelectSource: handleSelectSource,
                 onRefresh: handleRefreshSources,
+                onWiden: handleWidenSources,
+                canWiden: session.snapshot.canWiden,
                 onCancelSearch: handleCancelSourceSearch,
                 onSourceUnplayable: handleSourceUnplayable,
                 onDownloadSource: session.context.onDownloadSource,
@@ -1044,6 +1110,10 @@ export const App: React.FC = () => {
               onStartSession={startSession}
               onEnqueueDownload={handleEnqueueDownload}
               onSearch={handleSearchFromDetail}
+              // Opening a related title is the same navigation as opening a
+              // search result, so it reuses the same handler and the same
+              // scroll-restore behaviour.
+              onSelectMedia={handleSelectMedia}
               // Recorded on a bookmark, so a saved page remembers the search
               // that found it and can be reached that way again.
               searchQuery={searchQuery}
@@ -1080,6 +1150,7 @@ export const App: React.FC = () => {
                   <LibraryView
                     onSelectMedia={handleSelectMedia}
                     onSearch={handleSearchFromDetail}
+                    onPlaySavedSource={handlePlaySavedSource}
                   />
                 </ErrorBoundary>
               )}
@@ -1110,6 +1181,52 @@ export const App: React.FC = () => {
                       apiName: task.providerName ?? 'Downloads',
                       posterUrl: task.posterUrl,
                     });
+                  }}
+                  /* Plays the file we already have, in our own player.
+
+                     The stream URL is a loopback address rather than the path,
+                     so the file is inspected and classified by `media:prepare`
+                     exactly like a provider link — a downloaded 10-bit HEVC
+                     file needs the same routing decision a streamed one does.
+                     Subtitles recorded alongside the download come with it. */
+                  onPlayFile={(task) => {
+                    void (async () => {
+                      const served = await window.cloudstream?.getPlayableDownloadUrl(
+                        task.targetFilePath
+                      );
+                      if (!served?.ok || !served.url) {
+                        setActionNotice(
+                          served?.error ?? 'That file could not be opened. It may have been moved.'
+                        );
+                        return;
+                      }
+                      setPlayerHidden(false);
+                      setPlayerMini(false);
+                      setPlayback({
+                        streamUrl: served.url,
+                        mimeType: 'video/mp4',
+                        title: task.title,
+                        episodeTitle:
+                          task.episodeNumber !== undefined
+                            ? `Episode ${task.episodeNumber}`
+                            : undefined,
+                        infoHash: `download:${task.id}`,
+                        // `SubtitleFile` carries a language, not a display
+                        // name, and the player's list is labelled by name.
+                        subtitles: (task.subtitles ?? []).map((sub) => ({
+                          name: sub.lang,
+                          url: sub.url,
+                        })),
+                        progress: task.mediaUrl
+                          ? {
+                              mediaUrl: task.mediaUrl,
+                              posterUrl: task.posterUrl,
+                              season: task.seasonNumber,
+                              episode: task.episodeNumber,
+                            }
+                          : undefined,
+                      });
+                    })();
                   }}
                 />
               )}
@@ -1144,6 +1261,19 @@ export const App: React.FC = () => {
         onClose={() => setIsBinaryModalOpen(false)}
         onSuccess={handleBinarySetupSuccess}
       />
+
+      {/* Dismissed by clicking it, because it reports something the viewer
+          asked for and may want to read twice — not a status that ages out. */}
+      {actionNotice && (
+        <div
+          className="toast"
+          role="status"
+          onClick={() => setActionNotice(null)}
+          style={{ cursor: 'pointer' }}
+        >
+          {actionNotice}
+        </div>
+      )}
     </div>
   );
 };

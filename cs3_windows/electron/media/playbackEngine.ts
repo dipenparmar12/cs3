@@ -23,6 +23,9 @@ import {
 import { MediaInspector, drmRequiresEme, transportFromUrl } from './mediaInspector.ts';
 import { drmFromProvider } from '../cs3/providerLinks.ts';
 import type { InspectionStore } from './inspectionStore.ts';
+import { scopedLogger } from '../logging/logger.ts';
+
+const log = scopedLogger('playback');
 
 /**
  * The Universal Media Compatibility Engine (PRD-37), assembled.
@@ -615,6 +618,34 @@ export class PlaybackEngine {
     const audio = capability.metadata?.audio.find(
       (track) => track.index === capability.transformationPlan.selectedAudioIndex
     );
+
+    /**
+     * The structured mirror of this event.
+     *
+     * Emitted here rather than at each `return` because `record` is the one
+     * place every outcome of `prepare` passes through — success, dead link,
+     * missing transcoder, every strategy. Instrumenting the returns instead
+     * would mean six call sites and, reliably, a seventh added later without
+     * one.
+     */
+    log.write(error ? 'warn' : 'info', 'playback_prepared', {
+      url: request.url,
+      provider: request.provider,
+      engine: strategy === 'NATIVE_MPV' ? 'mpv' : strategy === 'DIRECT' ? 'element' : 'ffmpeg',
+      operation: 'prepare',
+      status: error ? 'failed' : 'ok',
+      strategy,
+      container: capability.metadata?.formatName ?? capability.transport,
+      videoCodec: capability.metadata?.video?.codec,
+      videoBitDepth: capability.metadata?.video?.bitDepth,
+      audioCodec: audio?.codec,
+      audioChannels: audio?.channels,
+      directPlayable: capability.directPlayable,
+      probeLatencyMs: capability.probeLatencyMs,
+      durationMs: Date.now() - startedAt,
+      errorStage: error?.stage,
+      error: error?.message,
+    });
 
     const event: PlaybackDiagnosticEvent = {
       timestamp: new Date().toISOString(),

@@ -46,8 +46,21 @@ export interface SystemRuntimeStatus {
  * those fields, and the desktop half added for them sits inert. That is exactly
  * the failure this counter exists to prevent: a working install quietly missing
  * a capability the build believes it shipped.
+ *
+ * Generation 4 adds the `:app` lifecycle and activity shims (`CommonActivity`,
+ * `MainActivity`, `CloudStreamApp`, `AcraApplication`) so plugins that read
+ * preferences through `CommonActivity.activity` (e.g. `StreamingCommunity`) load
+ * without NoClassDefFoundError.
+ *
+ * Generation 5 adds `NewPipeBootstrap` to the bridge. NewPipeExtractor holds one
+ * global `Downloader` that must be installed before anything touches it, nothing
+ * was installing one, and every YouTube link a provider returned therefore died
+ * with `NullPointerException: downloader is null`. The bump is what carries the
+ * fix into an installed app: the copy under `%APPDATA%` is resolved ahead of
+ * every build location, so without it the old bridge keeps being served and the
+ * fix reaches nobody who already has the app.
  */
-const RUNTIME_GENERATION = 3;
+const RUNTIME_GENERATION = 5;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {

@@ -2,7 +2,18 @@ import React from 'react';
 import { ChevronRight, Users, Tag, AlertTriangle, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { Badge, ExternalLink } from './primitives';
 import { tagLabel, isAdultTag, languageLabel } from './useExtensionFilters';
-import { formatCompactBytes } from '../../utils/format';
+
+function formatCompactBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
 
 /**
  * Where a thing came from and who is responsible for it.

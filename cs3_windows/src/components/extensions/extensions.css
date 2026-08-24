@@ -5,12 +5,16 @@
  * Every class is prefixed `ext-`. The screen renders a deep tree with several
  * nested lists, and unprefixed names like `.card` or `.node` collide with the
  * app's shared styles in ways that only appear at one nesting depth.
+ *
+ * The vocabulary here is the one the primitives use — `ext-toggle`,
+ * `ext-check`, `ext-badge`, `ext-chip`, `ext-row__*`, `ext-provenance__*` — so
+ * the components own their markup and this file only says how it looks.
  */
 
 .ext-screen {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 1.15rem;
   padding: 1.5rem;
   max-width: 1100px;
   margin: 0 auto;
@@ -18,25 +22,9 @@
 
 /* --- header --- */
 
-.ext-header {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.ext-header__title {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  color: var(--accent-light);
-}
-
-.ext-header__title h2 {
-  margin: 0;
-  font-size: 1.15rem;
-  color: var(--text-main);
-}
+.ext-header { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.ext-header__title { display: flex; align-items: center; gap: 0.5rem; color: var(--accent-light); }
+.ext-header__title h2 { margin: 0; font-size: 1.15rem; color: var(--text-main); }
 
 .ext-header__summary {
   margin: 0;
@@ -48,17 +36,11 @@
   font-size: 0.85rem;
 }
 
-.ext-header__summary strong {
-  color: var(--text-main);
-}
+.ext-header__summary strong { color: var(--text-main); }
 
 /* --- tabs --- */
 
-.ext-tabs {
-  display: flex;
-  gap: 0.4rem;
-  border-bottom: 1px solid var(--border-color);
-}
+.ext-tabs { display: flex; gap: 0.4rem; border-bottom: 1px solid var(--border-color); }
 
 .ext-tab {
   display: flex;
@@ -74,24 +56,38 @@
   transition: var(--transition);
 }
 
-.ext-tab:hover {
+.ext-tab:hover { color: var(--text-main); }
+.ext-tab--on { color: var(--text-main); border-bottom-color: var(--accent-primary); }
+.ext-tab__label { font-size: 0.9rem; font-weight: 600; }
+.ext-tab__hint { font-size: 0.72rem; color: var(--text-subtle); }
+
+/* --- rows, shared by the tree and the cards --- */
+
+.ext-row__head { display: flex; align-items: center; gap: 0.5rem; }
+.ext-row__grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.12rem; }
+
+.ext-row__title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
   color: var(--text-main);
+  font-size: 0.88rem;
+  font-weight: 500;
 }
 
-.ext-tab--on {
-  color: var(--text-main);
-  border-bottom-color: var(--accent-primary);
-}
-
-.ext-tab__label {
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-
-.ext-tab__hint {
-  font-size: 0.72rem;
+.ext-row__subtitle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.73rem;
   color: var(--text-subtle);
+  min-width: 0;
 }
+
+.ext-row__subtitle > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ext-warn { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--status-warning); }
 
 /* --- tree --- */
 
@@ -102,12 +98,12 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.3rem;
 }
 
 .ext-children {
   /* The rail makes the three levels readable without indenting off the page. */
-  margin: 0.35rem 0 0.25rem 1.4rem;
+  margin: 0.3rem 0 0.2rem 1.5rem;
   padding-left: 0.85rem;
   border-left: 1px solid var(--border-color);
 }
@@ -119,191 +115,121 @@
   padding: 0.55rem 0.7rem;
 }
 
+.ext-node--extension,
 .ext-node--provider {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
   background: transparent;
   border-color: transparent;
-  padding: 0.3rem 0.4rem;
+  padding: 0.25rem 0.3rem;
 }
 
-.ext-node--provider:hover {
-  background: var(--bg-card-hover);
-}
+.ext-node--provider:hover,
+.ext-node--extension:hover { background: var(--bg-card-hover); }
+.ext-node__icon { color: var(--text-subtle); flex-shrink: 0; }
 
-.ext-node--extension {
-  background: transparent;
-  border-color: transparent;
-  padding: 0.25rem 0;
-}
+/* --- primitives --- */
 
-/*
- * A node silenced by an ancestor is dimmed but its own toggle stays live and
- * stays *on*. Showing it as off would make the switch look broken: clicking it
- * would change nothing visible, because the ancestor is what is deciding.
- */
-.ext-node--inherited > .ext-node__row,
-.ext-node--inherited.ext-node--provider {
-  opacity: 0.55;
-}
-
-.ext-node__row {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-}
-
-.ext-node__disclose {
-  display: flex;
+.ext-check,
+.ext-disclosure,
+.ext-toggle,
+.ext-icon-button {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.25rem;
-  height: 1.25rem;
-  padding: 0;
-  background: transparent;
+  padding: 0.2rem;
   border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.ext-node__disclose-spacer {
-  width: 14px;
-}
-
-.ext-node__icon {
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-subtle);
+  cursor: pointer;
+  transition: var(--transition);
   flex-shrink: 0;
 }
 
-.ext-node__body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
+.ext-check:hover,
+.ext-disclosure:hover,
+.ext-icon-button:hover:not(:disabled) { color: var(--text-main); background: var(--bg-input); }
 
-.ext-node__name {
-  color: var(--text-main);
-  font-size: 0.88rem;
-  font-weight: 500;
-}
+.ext-check--on { color: var(--accent-primary); }
+.ext-check__partial { display: inline-flex; align-items: center; justify-content: center; border: 1.5px solid currentColor; border-radius: 3px; }
 
-.ext-node__meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
+/*
+ * A disclosure with nothing to disclose keeps its space rather than
+ * disappearing: without it every childless row shifts left by 20px and the
+ * column of names stops being a column.
+ */
+.ext-disclosure--placeholder { visibility: hidden; pointer-events: none; }
+
+.ext-toggle { color: var(--text-subtle); }
+.ext-toggle--on { color: var(--accent-primary); }
+.ext-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
+.ext-toggle:focus-visible,
+.ext-check:focus-visible,
+.ext-disclosure:focus-visible { outline: 2px solid var(--accent-light); outline-offset: 1px; }
+
+.ext-icon-button--danger:hover:not(:disabled) { color: var(--status-error); }
+.ext-icon-button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ext-badge {
+  display: inline-flex;
   align-items: center;
-}
-
-.ext-node__origin {
-  font-size: 0.7rem;
-  color: var(--text-subtle);
-  overflow: hidden;
-  text-overflow: ellipsis;
+  gap: 0.2rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-size: 0.67rem;
   white-space: nowrap;
 }
 
-.ext-node__reason {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  font-size: 0.72rem;
-  color: var(--text-subtle);
-}
-
-.ext-node__reason--warn {
-  color: var(--status-warning);
-}
-
-/* --- chips --- */
+.ext-badge--accent { background: rgba(59, 130, 246, 0.16); color: var(--accent-light); }
+.ext-badge--success { background: rgba(16, 185, 129, 0.16); color: var(--status-success); }
+.ext-badge--warning { background: rgba(245, 158, 11, 0.16); color: var(--status-warning); }
+.ext-badge--danger { background: rgba(239, 68, 68, 0.16); color: var(--status-error); }
 
 .ext-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.2rem;
-  padding: 0.08rem 0.36rem;
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
-  color: var(--text-muted);
-  font-size: 0.68rem;
-  white-space: nowrap;
-}
-
-.ext-chip--type { color: var(--accent-light); }
-.ext-chip--adult { background: rgba(239, 68, 68, 0.15); color: var(--status-error); }
-.ext-chip--bundled { color: var(--text-subtle); }
-.ext-chip--verified { background: rgba(16, 185, 129, 0.15); color: var(--status-success); }
-.ext-chip--unverified { background: rgba(245, 158, 11, 0.15); color: var(--status-warning); }
-.ext-chip--installed { background: rgba(59, 130, 246, 0.15); color: var(--accent-light); }
-.ext-chip--good { background: rgba(16, 185, 129, 0.15); color: var(--status-success); }
-.ext-chip--warn { background: rgba(245, 158, 11, 0.15); color: var(--status-warning); }
-.ext-chip--bad { background: rgba(239, 68, 68, 0.15); color: var(--status-error); }
-
-/* --- toggle --- */
-
-.ext-toggle {
-  position: relative;
-  display: inline-flex;
-  flex-shrink: 0;
-  cursor: pointer;
-}
-
-.ext-toggle input {
-  position: absolute;
-  opacity: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  cursor: pointer;
-}
-
-.ext-toggle__track {
-  width: 32px;
-  height: 18px;
+  gap: 0.3rem;
+  padding: 0.26rem 0.55rem;
   border-radius: var(--radius-full);
-  background: var(--bg-input);
   border: 1px solid var(--border-color);
-  transition: var(--transition);
-  position: relative;
-}
-
-.ext-toggle__track::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  border-radius: var(--radius-full);
-  background: var(--text-subtle);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  cursor: pointer;
   transition: var(--transition);
 }
 
-.ext-toggle input:checked + .ext-toggle__track {
-  background: var(--accent-primary);
-  border-color: var(--accent-primary);
+.ext-chip:hover { color: var(--text-main); }
+.ext-chip[aria-pressed='true'] { background: var(--accent-primary); border-color: var(--accent-primary); color: #fff; }
+.ext-chip--adult[aria-pressed='true'] { background: var(--status-error); border-color: var(--status-error); }
+.ext-chip__count { opacity: 0.7; font-variant-numeric: tabular-nums; font-size: 0.68rem; }
+
+.ext-progress { display: flex; flex-direction: column; gap: 0.25rem; }
+.ext-progress__label { font-size: 0.72rem; color: var(--text-muted); }
+.ext-progress__track { height: 4px; border-radius: var(--radius-full); background: var(--bg-input); overflow: hidden; }
+.ext-progress__fill { height: 100%; background: var(--accent-primary); transition: width 0.25s ease; }
+
+.ext-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--text-subtle);
+  font-size: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 22rem;
 }
 
-.ext-toggle input:checked + .ext-toggle__track::after {
-  transform: translateX(14px);
-  background: #fff;
-}
-
-.ext-toggle input:disabled + .ext-toggle__track {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.ext-toggle input:focus-visible + .ext-toggle__track {
-  outline: 2px solid var(--accent-light);
-  outline-offset: 2px;
-}
+.ext-link:hover { color: var(--accent-light); }
 
 /* --- buttons --- */
 
-.ext-button {
+.ext-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -317,42 +243,26 @@
   transition: var(--transition);
 }
 
-.ext-button:hover:not(:disabled) { background: var(--bg-card-hover); }
-.ext-button:disabled { opacity: 0.5; cursor: not-allowed; }
-.ext-button--primary { background: var(--accent-primary); border-color: var(--accent-primary); color: #fff; }
-.ext-button--primary:hover:not(:disabled) { background: var(--accent-hover); }
-.ext-button--danger { color: var(--status-error); }
+.ext-btn:hover:not(:disabled) { background: var(--bg-card-hover); }
+.ext-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.ext-btn--primary { background: var(--accent-primary); border-color: var(--accent-primary); color: #fff; }
+.ext-btn--primary:hover:not(:disabled) { background: var(--accent-hover); }
+.ext-btn--danger { color: var(--status-error); }
 
-.ext-icon-button {
-  display: inline-flex;
-  padding: 0.3rem;
-  border-radius: var(--radius-sm);
-  border: none;
-  background: transparent;
-  color: var(--text-subtle);
-  cursor: pointer;
-  transition: var(--transition);
-}
+/* --- filter bar --- */
 
-.ext-icon-button:hover:not(:disabled) { color: var(--status-error); background: var(--bg-input); }
-.ext-icon-button:disabled { opacity: 0.4; cursor: not-allowed; }
-
-.ext-link { display: inline-flex; padding: 0.3rem; color: var(--text-subtle); }
-.ext-link:hover { color: var(--accent-light); }
-
-/* --- panels, filters, cards --- */
-
-.ext-panel { display: flex; flex-direction: column; gap: 0.9rem; }
-
-.ext-panel__head { display: flex; flex-direction: column; gap: 0.15rem; }
-.ext-panel__head h4 { margin: 0; color: var(--text-main); font-size: 0.98rem; }
-
-.ext-filterbar {
+.ext-filters {
   display: flex;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.7rem 0.8rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
 }
+
+.ext-filters__row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+.ext-filters__label { font-size: 0.7rem; color: var(--text-subtle); text-transform: uppercase; letter-spacing: 0.05em; }
 
 .ext-search {
   display: flex;
@@ -362,35 +272,85 @@
   border-radius: var(--radius-sm);
   background: var(--bg-input);
   border: 1px solid var(--border-color);
-  color: var(--text-subtle);
   flex: 1;
   min-width: 190px;
 }
 
-.ext-search input {
+.ext-search__icon { color: var(--text-subtle); flex-shrink: 0; }
+
+.ext-search__input {
   flex: 1;
   background: transparent;
   border: none;
   outline: none;
   color: var(--text-main);
   font-size: 0.83rem;
+  min-width: 0;
 }
 
-.ext-facets { display: flex; gap: 0.3rem; flex-wrap: wrap; }
-
-.ext-facet {
-  padding: 0.28rem 0.55rem;
-  border-radius: var(--radius-full);
+.ext-select {
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
   border: 1px solid var(--border-color);
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 0.74rem;
+  color: var(--text-main);
+  font-size: 0.8rem;
   cursor: pointer;
-  transition: var(--transition);
 }
 
-.ext-facet:hover { color: var(--text-main); }
-.ext-facet--on { background: var(--accent-primary); border-color: var(--accent-primary); color: #fff; }
+/* --- bulk action bar --- */
+
+.ext-bulk {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-card-hover);
+  border: 1px solid var(--accent-primary);
+}
+
+.ext-bulk__count { font-size: 0.83rem; color: var(--text-main); }
+.ext-bulk__spacer { flex: 1; }
+
+/* --- provenance --- */
+
+.ext-provenance {
+  margin-top: 0.5rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ext-provenance__chain {
+  font-size: 0.74rem;
+  color: var(--accent-light);
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.ext-provenance__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.4rem 1rem;
+}
+
+.ext-provenance__field { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.ext-provenance__key { font-size: 0.66rem; color: var(--text-subtle); text-transform: uppercase; letter-spacing: 0.05em; }
+.ext-provenance__value { font-size: 0.78rem; color: var(--text-main); overflow-wrap: anywhere; }
+.ext-provenance__tags { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+
+/* --- panels and cards --- */
+
+.ext-panel { display: flex; flex-direction: column; gap: 0.85rem; }
+.ext-panel--pad { padding: 0.75rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); }
+.ext-panel__head { display: flex; flex-direction: column; gap: 0.15rem; }
+.ext-panel__head h4 { margin: 0; color: var(--text-main); font-size: 0.98rem; }
 
 .ext-custom-url { display: flex; gap: 0.5rem; }
 
@@ -415,7 +375,7 @@
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
   gap: 0.7rem;
 }
 
@@ -429,44 +389,10 @@
   border-radius: var(--radius-md);
 }
 
-.ext-card__head { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-.ext-card__name { color: var(--text-main); font-weight: 600; font-size: 0.88rem; }
+.ext-card__description { margin: 0; font-size: 0.78rem; color: var(--text-muted); line-height: 1.45; }
+.ext-card__actions { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; margin-top: auto; }
 
-.ext-card__description {
-  margin: 0;
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  line-height: 1.45;
-}
-
-.ext-card__meta { display: flex; gap: 0.3rem; flex-wrap: wrap; }
-.ext-card__actions { display: flex; gap: 0.4rem; align-items: center; margin-top: auto; }
-
-/* --- progress, messages --- */
-
-.ext-progress {
-  position: relative;
-  height: 1.15rem;
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
-  overflow: hidden;
-}
-
-.ext-progress__bar {
-  height: 100%;
-  background: var(--accent-primary);
-  transition: width 0.25s ease;
-}
-
-.ext-progress__label {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.68rem;
-  color: var(--text-main);
-}
+/* --- messages --- */
 
 .ext-empty {
   margin: 0;
@@ -505,13 +431,7 @@
   gap: 0.25rem;
 }
 
-.ext-warnings li {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.76rem;
-  color: var(--status-warning);
-}
+.ext-warnings li { display: flex; align-items: center; gap: 0.35rem; font-size: 0.76rem; color: var(--status-warning); }
 
 /* --- footer --- */
 
@@ -530,21 +450,12 @@
 .ext-adult span { display: flex; flex-direction: column; gap: 0.15rem; }
 .ext-adult em { font-style: normal; font-size: 0.72rem; color: var(--text-subtle); }
 
-/* --- motion --- */
-
-.ext-spin { animation: ext-spin 1s linear infinite; }
-
-@keyframes ext-spin {
-  to { transform: rotate(360deg); }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .ext-spin { animation: none; }
-  .ext-button,
-  .ext-facet,
-  .ext-toggle__track,
-  .ext-toggle__track::after,
-  .ext-progress__bar {
+  .ext-btn,
+  .ext-chip,
+  .ext-toggle,
+  .ext-check,
+  .ext-progress__fill {
     transition: none;
   }
 }

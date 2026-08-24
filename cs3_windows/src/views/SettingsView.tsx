@@ -14,9 +14,12 @@ import {
   AlertTriangle,
   Play,
   Trash2,
+  Home,
 } from 'lucide-react';
 import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
+import { HomeSettings } from '../components/settings/HomeSettings';
+import { SubtitleSettings } from '../components/settings/SubtitleSettings';
 import { PlayerSettings } from '../components/PlayerSettings';
 import { ProviderRankingPanel } from '../components/settings/ProviderRankingPanel';
 import { NetworkSettings } from '../components/NetworkSettings';
@@ -260,11 +263,25 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
             </SettingRow>
           </SettingGroup>
 
+          {/* The home screen: where its catalogue comes from, and what shows on
+              it. Grouped with Search under General because both are about what
+              the app puts in front of you before you have asked for anything. */}
+          <SettingGroup title="Home screen" icon={<Home size={15} />}>
+            <HomeSettings />
+          </SettingGroup>
+
           <AdultContentSetting />
         </>
       )}
 
-      {tab === 'player' && <PlayerSettings />}
+      {tab === 'player' && (
+        <>
+          <PlayerSettings />
+          {/* Sits under the player tab rather than with subtitle *sources*,
+              because this is about reading them, not finding them. */}
+          <SubtitleSettings />
+        </>
+      )}
 
       {tab === 'components' && <UnifiedComponentManager />}
 

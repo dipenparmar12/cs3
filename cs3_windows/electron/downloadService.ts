@@ -13,6 +13,9 @@ import type { AnalyticsSink } from './pluginManager';
 import type { TorrentResult } from '../src/types/torrent';
 import type { HistoryStore } from './cs3/historyStore';
 import type { HistoryAction, HistoryStatus } from '../src/types/history';
+import { scopedLogger } from './logging/logger.ts';
+
+const log = scopedLogger('download');
 
 /**
  * The download queue, across every kind of source the app can play.
@@ -395,7 +398,16 @@ export class DownloadService {
         // redirect every *later* torrent — including live streams — into this
         // task's folder.
         downloadPath: outputDir,
+        // A download has no playhead. Sequential fetching is what makes a
+        // stream playable in seconds and it costs real throughput — a peer
+        // holding anything but the exact next piece contributes nothing — so a
+        // download that inherits it is slower for no benefit at all.
+        mode: 'download',
       });
+
+      // The torrent may already be live from a stream the user was watching,
+      // in which case `add` never ran and the strategy is still sequential.
+      await this.torrentEngine.setMode(handle.infoHash, 'download');
       this.torrentTasks.set(task.id, handle.infoHash);
       task.totalBytes = handle.fileSize;
       // Multi-file releases nest the episode inside the torrent's own folder,
@@ -478,6 +490,14 @@ export class DownloadService {
    */
   private finalizeCompletion(task: DownloadTask, reportedBytes: number): void {
     this.handles.delete(task.id);
+    log.info('download_finalising', {
+      mediaTitle: task.title,
+      provider: task.providerName,
+      sourceId: task.id,
+      reportedBytes,
+      expectedBytes: task.totalBytes,
+      target: task.targetFilePath,
+    });
 
     const expected = reportedBytes || task.totalBytes || 0;
     let actual = 0;

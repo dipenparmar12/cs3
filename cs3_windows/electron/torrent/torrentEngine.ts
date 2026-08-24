@@ -5,6 +5,17 @@ import WebTorrent, { type NodeServer, type Torrent, type TorrentFile } from 'web
 import type { TorrentFileEntry, TorrentStreamStats } from '../../src/types/torrent';
 import { parseReleaseName } from './releaseParser';
 import { DEFAULT_TRACKERS } from './indexers/base';
+import {
+  censusPeers,
+  diagnoseSwarm,
+  summariseSwarm,
+  DEFAULT_TORRENT_PORT,
+  MAX_CONNS_PER_TORRENT,
+  MAX_WEB_CONNS,
+  SWARM_PROFILES,
+  type SwarmMode,
+} from './swarmHealth';
+import type { SwarmReport } from '../../src/types/torrent';
 
 /**
  * Streaming torrent engine.
@@ -29,6 +40,12 @@ import { DEFAULT_TRACKERS } from './indexers/base';
  *  - **Honest stall reporting.** A swarm that never produces a byte is a
  *    different problem from a slow one, and only the former should trigger a
  *    failover to another source.
+ *  - **Streaming and downloading are not the same job.** Sequential fetching is
+ *    what makes playback start in seconds, and it costs throughput: a peer that
+ *    does not hold the exact next piece contributes nothing. A background
+ *    download has no playhead and no reason to pay that, so it runs
+ *    rarest-first. See `swarmHealth.ts` for the whole argument, including the
+ *    part no client-side setting can fix.
  */
 
 const VIDEO_EXTENSIONS = new Set([
@@ -53,6 +70,9 @@ const METADATA_TIMEOUT_MS = 45_000;
 /** No new bytes for this long, with the file incomplete, counts as stalled. */
 const STALL_THRESHOLD_MS = 45_000;
 
+/** Give up waiting for the listening socket, so callers never hang on startup. */
+const LISTEN_TIMEOUT_MS = 10_000;
+
 export interface StreamRequest {
   /** Magnet URI, `.torrent` URL, or bare infohash. */
   torrentId: string;
@@ -65,6 +85,12 @@ export interface StreamRequest {
   expectedFileName?: string;
   /** Overrides the engine-wide cache directory for this torrent only. */
   downloadPath?: string;
+  /**
+   * What the bytes are for. Defaults to `stream`, because that is the path a
+   * mistake is least damaging on: a download fetched in order is merely slower,
+   * where a stream fetched out of order does not play at all.
+   */
+  mode?: SwarmMode;
 }
 
 export interface StreamHandle {
@@ -128,6 +154,8 @@ export class TorrentEngine {
   private selectedFile = new Map<string, number>();
   private lastError = new Map<string, string>();
   private watches = new Map<string, StreamWatch>();
+  /** infoHash → what the bytes are for, which decides the piece strategy. */
+  private modes = new Map<string, SwarmMode>();
 
   constructor(downloadPath?: string) {
     this.downloadPath =
@@ -159,15 +187,100 @@ export class TorrentEngine {
     return this.starting;
   }
 
-  private async startOnce(): Promise<{ client: WebTorrent; port: number }> {
-    fs.mkdirSync(this.downloadPath, { recursive: true });
+  /**
+   * Builds the client, preferring a pinned listening port.
+   *
+   * An OS-assigned port changes on every launch, which makes a router
+   * forwarding rule impossible to write and forces UPnP to re-map each start.
+   * Pinning one is the only thing this app can do about inbound reachability,
+   * which is the largest single difference between a home connection and a
+   * seedbox — see `swarmHealth.ts`.
+   *
+   * The fallback is not optional. `ConnPool` reports a failed `listen` as a
+   * **client-level error that destroys the client**, so a port already in use
+   * (a second copy of this app, or any other BitTorrent client) would take
+   * torrents out entirely. A random port is strictly better than none.
+   */
+  private async createClient(): Promise<WebTorrent> {
+    try {
+      return await this.listenOn(DEFAULT_TORRENT_PORT);
+    } catch (error) {
+      console.warn(
+        `[torrent] port ${DEFAULT_TORRENT_PORT} unavailable (${
+          error instanceof Error ? error.message : String(error)
+        }); falling back to an OS-assigned port`
+      );
+      return this.listenOn(0);
+    }
+  }
 
+  private listenOn(torrentPort: number): Promise<WebTorrent> {
     const client = new WebTorrent({
-      maxConns: 100,
+      // Per torrent, not global. WebTorrent's default of 55 is conservative for
+      // a desktop client: aggregate speed on BitTorrent is the sum of many slow
+      // peers, and the per-peer request pipeline starts at two outstanding
+      // blocks, so a connection cap is a speed cap.
+      maxConns: MAX_CONNS_PER_TORRENT,
       dht: true,
       lsd: true,
       webSeeds: true,
+      torrentPort,
     });
+
+    return new Promise<WebTorrent>((resolve, reject) => {
+      let settled = false;
+
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        client.removeListener('listening', onListening);
+        client.removeListener('error', onError);
+        fn();
+      };
+
+      const onListening = () => finish(() => resolve(client));
+
+      /**
+       * Only a *fatal* startup error may reject.
+       *
+       * A uTP server that cannot start emits `error` and then carries on
+       * TCP-only — the client is still perfectly usable. Only a failed TCP
+       * bind destroys the client, so `destroyed` is what separates the two.
+       * Rejecting on both would throw away a working client and, worse, retry
+       * on a random port for a problem the port never caused.
+       */
+      const onError = (err: Error | string) => {
+        if (!client.destroyed) {
+          console.warn(
+            '[torrent] non-fatal startup error:',
+            err instanceof Error ? err.message : err
+          );
+          return;
+        }
+        finish(() => reject(err instanceof Error ? err : new Error(String(err))));
+      };
+
+      // A bind that neither succeeds nor errors would leave every caller of
+      // `startStream` pending forever.
+      const timer = setTimeout(
+        () =>
+          finish(() => {
+            client.destroy();
+            reject(new Error(`Timed out binding the torrent port (${torrentPort || 'automatic'})`));
+          }),
+        LISTEN_TIMEOUT_MS
+      );
+
+      client.on('listening', onListening);
+      client.on('error', onError);
+    });
+  }
+
+  private async startOnce(): Promise<{ client: WebTorrent; port: number }> {
+    fs.mkdirSync(this.downloadPath, { recursive: true });
+
+    const client = await this.createClient();
 
     client.on('error', (err) => {
       // Client-level errors are usually per-torrent and non-fatal; a throw here
@@ -290,7 +403,7 @@ export class TorrentEngine {
    * never reaches the trailing `moov` atom that MP4s muxed for disk need before
    * the first frame can be decoded.
    */
-  private focusOn(torrent: Torrent, target: TorrentFile): void {
+  private focusOn(torrent: Torrent, target: TorrentFile, mode: SwarmMode): void {
     for (const file of torrent.files) {
       if (file !== target) {
         try {
@@ -301,6 +414,12 @@ export class TorrentEngine {
       }
     }
     target.select(1);
+
+    const profile = SWARM_PROFILES[mode];
+    // Settable at runtime and read live by WebTorrent's request loop, so a
+    // stream promoted to a download switches without re-adding the torrent.
+    torrent.strategy = profile.strategy;
+    if (!profile.prioritiseHeadAndTail) return;
 
     const pieceLength = torrent.pieceLength;
     if (!pieceLength || pieceLength <= 0) return;
@@ -357,7 +476,9 @@ export class TorrentEngine {
       throw new Error(`This torrent does not contain ${wanted}.`);
     }
 
-    this.focusOn(torrent, file);
+    const mode = request.mode ?? 'stream';
+    this.focusOn(torrent, file, mode);
+    this.modes.set(torrent.infoHash, mode);
     this.selectedFile.set(torrent.infoHash, torrent.files.indexOf(file));
     this.lastError.delete(torrent.infoHash);
     this.watches.set(torrent.infoHash, {
@@ -472,8 +593,13 @@ export class TorrentEngine {
     try {
       torrent = client.add(torrentId, {
         path: request.downloadPath ?? this.downloadPath,
-        strategy: 'sequential',
+        strategy: SWARM_PROFILES[request.mode ?? 'stream'].strategy,
         announce: [...DEFAULT_TRACKERS],
+        // WebTorrent's default is 4. A web seed is plain HTTP and its
+        // throughput scales with parallel requests like any other download, so
+        // 4 is a ceiling the server never asked for — and a web seed is the one
+        // peer that is never NAT-limited and never choking.
+        maxWebConns: MAX_WEB_CONNS,
         // Nothing is downloaded until `focusOn` picks a file. Without this the
         // client starts pulling every file in a season pack the moment metadata
         // lands, and the episode the user asked for gets a fraction of the swarm.
@@ -669,7 +795,7 @@ export class TorrentEngine {
     const file = torrent.files[fileIndex];
     if (!file || !isVideoFile(file)) return null;
 
-    this.focusOn(torrent, file);
+    this.focusOn(torrent, file, this.modes.get(infoHash) ?? 'stream');
     this.selectedFile.set(infoHash, fileIndex);
     // Switching files restarts the liveness clock; the new file has no bytes yet.
     this.watches.set(infoHash, {
@@ -679,6 +805,70 @@ export class TorrentEngine {
     });
 
     return this.describeHandle(torrent, file, this.serverPort);
+  }
+
+  /**
+   * Changes what a live torrent is being fetched for.
+   *
+   * The case this exists for is a stream the user then chooses to download.
+   * Nothing about the swarm has changed, but the ordering requirement has
+   * disappeared, and staying sequential would keep paying for a playhead that
+   * no longer exists. WebTorrent reads `strategy` on every request round, so
+   * this takes effect without re-adding the torrent or losing a byte.
+   */
+  public async setMode(infoHash: string, mode: SwarmMode): Promise<boolean> {
+    if (!this.client) return false;
+
+    const torrent = await Promise.resolve(this.client.get(infoHash));
+    if (!torrent) return false;
+
+    this.modes.set(infoHash, mode);
+
+    const index = this.selectedFile.get(infoHash);
+    const file = index !== undefined ? torrent.files[index] : undefined;
+    if (file) this.focusOn(torrent, file, mode);
+    else torrent.strategy = SWARM_PROFILES[mode].strategy;
+
+    return true;
+  }
+
+  /**
+   * How this torrent is connected, and what is limiting it.
+   *
+   * The peer census is the part worth having. `numPeers` cannot tell a peer we
+   * dialled from one that dialled us, and that difference is the answer to the
+   * question people actually ask — why the same magnet is faster on a seedbox.
+   * See `swarmHealth.ts`; the reasoning lives there so it can be tested.
+   */
+  public async getSwarmReport(infoHash: string): Promise<SwarmReport | null> {
+    if (!this.client) return null;
+
+    const torrent = await Promise.resolve(this.client.get(infoHash));
+    if (!torrent) return null;
+
+    const census = censusPeers(torrent._peers?.values() ?? []);
+    const mode = this.modes.get(infoHash) ?? 'stream';
+    const watch = this.watches.get(infoHash);
+    const findings = diagnoseSwarm({
+      census,
+      ageMs: watch ? Date.now() - watch.startedAt : 0,
+      mode,
+      utpAvailable: WebTorrent.UTP_SUPPORT !== false && this.client.utp !== false,
+      listenPort: this.client.torrentPort,
+      maxConns: this.client.maxConns,
+    });
+
+    return {
+      infoHash,
+      census,
+      findings,
+      summary: summariseSwarm(findings, census),
+      mode,
+      listenPort: this.client.torrentPort,
+      utpAvailable: WebTorrent.UTP_SUPPORT !== false && this.client.utp !== false,
+      downloadSpeed: torrent.downloadSpeed,
+      uploadSpeed: torrent.uploadSpeed,
+    };
   }
 
   public async pause(infoHash: string): Promise<void> {
@@ -709,6 +899,7 @@ export class TorrentEngine {
     this.selectedFile.delete(infoHash);
     this.lastError.delete(infoHash);
     this.watches.delete(infoHash);
+    this.modes.delete(infoHash);
 
     await new Promise<void>((resolve) => {
       this.client?.remove(torrent, { destroyStore: !keepFiles }, () => resolve());
@@ -756,6 +947,7 @@ export class TorrentEngine {
     this.serverPort = 0;
     this.selectedFile.clear();
     this.watches.clear();
+    this.modes.clear();
 
     await new Promise<void>((resolve) => {
       if (!server) return resolve();

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import type { DownloadTask } from '../../types/download';
 import { DownloadState } from '../../types/download';
+import { formatPanelSize, formatTransferRate } from '../../utils/format';
 
 /**
  * The download summary shown over the player.
@@ -125,20 +126,6 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
 
   if (!open) return null;
 
-  const formatSize = (bytes: number): string => {
-    if (bytes <= 0) return '0 MB';
-    const mb = bytes / (1024 * 1024);
-    if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
-    return `${mb.toFixed(0)} MB`;
-  };
-
-  const formatSpeed = (bytesPerSec: number): string => {
-    if (bytesPerSec <= 0) return '0 KB/s';
-    const mb = bytesPerSec / (1024 * 1024);
-    if (mb >= 1) return `${mb.toFixed(1)} MB/s`;
-    return `${(bytesPerSec / 1024).toFixed(0)} KB/s`;
-  };
-
   const copyTaskMeta = (t: DownloadTask) => {
     const percent =
       t.totalBytes > 0 ? Math.min(100, Math.floor((t.bytesDownloaded / t.totalBytes) * 100)) : 0;
@@ -148,8 +135,8 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
       `Provider:    ${t.providerName || 'Built-in'}`,
       `Quality:     ${t.quality || t.resolution ? `${t.quality || t.resolution}p` : 'Unknown'}`,
       `State:       ${t.state}`,
-      `Progress:    ${formatSize(t.bytesDownloaded)} / ${formatSize(t.totalBytes)} (${percent}%)`,
-      `Speed:       ${formatSpeed(t.downloadSpeed)}`,
+      `Progress:    ${formatPanelSize(t.bytesDownloaded)} / ${formatPanelSize(t.totalBytes)} (${percent}%)`,
+      `Speed:       ${formatTransferRate(t.downloadSpeed)}`,
       `Retry Count: ${t.retryCount || 0}/4`,
       t.errorMessage ? `Last Status: ${t.errorMessage}` : null,
       `Source Link: ${t.link.url}`,
@@ -395,7 +382,7 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
                   </div>
                   <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent-light, #60a5fa)', flexShrink: 0 }}>
                     {isDownloading ? (
-                      formatSpeed(task.downloadSpeed)
+                      formatTransferRate(task.downloadSpeed)
                     ) : isRefreshing ? (
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
                         <RotateCw size={12} className="spin" /> Retrying...
@@ -431,7 +418,7 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted, #aaa)' }}>
                   <span>
-                    {formatSize(task.bytesDownloaded)} / {formatSize(task.totalBytes)} ({percent}%)
+                    {formatPanelSize(task.bytesDownloaded)} / {formatPanelSize(task.totalBytes)} ({percent}%)
                   </span>
                   <span>{task.etaSeconds > 0 ? `ETA: ${task.etaSeconds}s` : ''}</span>
                 </div>

@@ -35,6 +35,7 @@ import type {
   HistoryStats,
   HistoryStatus,
 } from '../types/history';
+import { formatHistorySize, formatRuntime } from '../utils/format';
 
 interface HistoryViewProps {
   onSelectMedia: (item: SearchResponse) => void;
@@ -108,23 +109,6 @@ function formatRelativeTime(timestamp: number): string {
   if (days < 7) return `${days}d ago`;
   const date = new Date(timestamp);
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-function formatDuration(seconds?: number): string | null {
-  if (!seconds || seconds <= 0) return null;
-  const mins = Math.floor(seconds / 60);
-  if (mins < 60) return `${mins} min`;
-  const hrs = Math.floor(mins / 60);
-  const remMins = mins % 60;
-  return `${hrs}h ${remMins}m`;
-}
-
-function formatSize(bytes?: number): string {
-  if (!bytes || bytes <= 0) return 'Unknown size';
-  const gb = bytes / (1024 * 1024 * 1024);
-  if (gb >= 1) return `${gb.toFixed(2)} GB`;
-  const mb = bytes / (1024 * 1024);
-  return `${mb.toFixed(1)} MB`;
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayDirect }) => {
@@ -332,9 +316,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
       `Quality:        ${source?.quality || (source?.resolution ? `${source.resolution}p` : 'Unknown')}`,
       source?.videoCodec ? `Video Codec:    ${source.videoCodec}` : null,
       source?.audioCodecs?.length ? `Audio Codecs:   ${source.audioCodecs.join(', ')}` : null,
-      source?.sizeBytes ? `File Size:      ${formatSize(source.sizeBytes)}` : null,
+      source?.sizeBytes ? `File Size:      ${formatHistorySize(source.sizeBytes)}` : null,
       source?.seeders !== undefined ? `Seeders:        ${source.seeders}` : null,
-      item.durationSeconds ? `Watched / Dur:  ${formatDuration(item.durationSeconds)}` : null,
+      item.durationSeconds ? `Watched / Dur:  ${formatRuntime(item.durationSeconds)}` : null,
       item.failureReason ? `Failure Reason: ${item.failureReason}` : null,
       source?.directUrl ? `Source Link:    ${source.directUrl}` : null,
       source?.magnet ? `Magnet Link:    ${source.magnet}` : null,
@@ -931,7 +915,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                     </span>
                     {item.durationSeconds ? (
                       <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                        {formatDuration(item.durationSeconds)}
+                        {formatRuntime(item.durationSeconds)}
                       </span>
                     ) : null}
                   </div>
@@ -1142,7 +1126,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                     <span>Action: <strong style={{ color: 'var(--text-primary)' }}>{inspectingItem.action}</strong></span>
                     <span>Timestamp: <strong style={{ color: 'var(--text-primary)' }}>{new Date(inspectingItem.timestamp).toLocaleString()}</strong></span>
                     {inspectingItem.durationSeconds ? (
-                      <span>Duration: <strong style={{ color: 'var(--text-primary)' }}>{formatDuration(inspectingItem.durationSeconds)}</strong></span>
+                      <span>Duration: <strong style={{ color: 'var(--text-primary)' }}>{formatRuntime(inspectingItem.durationSeconds)}</strong></span>
                     ) : null}
                   </div>
                 </div>

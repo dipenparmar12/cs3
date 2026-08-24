@@ -1,15 +1,19 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   X, Play, RefreshCw, Loader2, Users, HardDrive, Radio, Check, AlertTriangle, Download, Filter,
-  Square,
+  Square, Globe, Link2, Package,
 } from 'lucide-react';
 import type { TorrentResult } from '../../types/torrent';
 import { SourceFilterBar } from '../SourceFilterBar';
+import { SourceExportButton } from '../SourceExportButton';
+import { useSourceProvenance } from '../useSourceProvenance';
+import { provenanceChain, sourceAddress, sourceHost } from '../../utils/sourceExport';
 import {
   DEFAULT_FILTER_STATE,
   filterAndSortSources,
   type SourceFilterState,
 } from '../../utils/sourceFilter';
+import { formatReleaseSize } from '../../utils/format';
 
 /**
  * In-player source switcher.
@@ -41,16 +45,20 @@ interface SourcePanelProps {
   onClose: () => void;
   onSelect: (source: TorrentResult) => void;
   onRefresh: () => void;
+  /**
+   * Look beyond the providers this title was found on.
+   *
+   * Absent, or present with `canWiden` false, when there is nothing wider to
+   * ask — a title opened from the home screen was never bound to a provider, so
+   * its first search already looked everywhere.
+   */
+  onWiden?: () => void;
+  /** True when widening would reach providers and indexers not yet asked. */
+  canWiden?: boolean;
   /** Stops waiting for the rest; the sources already found stay on the list. */
   onCancelSearch?: () => void;
   /** Offered per source, so a viewer can grab the release they are watching. */
   onDownload?: (source: TorrentResult) => void;
-}
-
-function formatSize(bytes: number): string {
-  if (!bytes) return '—';
-  const gb = bytes / 1e9;
-  return gb >= 1 ? `${gb.toFixed(2)} GB` : `${(bytes / 1e6).toFixed(0)} MB`;
 }
 
 /** The tags that decide whether a release is the one you want, in one line. */
@@ -82,11 +90,35 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
   onClose,
   onSelect,
   onRefresh,
+  onWiden,
+  canWiden,
   onCancelSearch,
   onDownload,
 }) => {
   const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);
   const [showFilterBar, setShowFilterBar] = useState(true);
+  const [copiedLink, setCopiedLink] = useState<string | null>(null);
+  const { provenanceFor } = useSourceProvenance(sources);
+
+  /**
+   * One source's address, copied.
+   *
+   * Offered per row rather than only in bulk because the common need is
+   * singular: this release will not play here and the viewer wants to give
+   * *this* link to a downloader or a browser. The address copied is the
+   * provider's, not the loopback proxy the player is using.
+   */
+  const copyLink = useCallback(async (source: TorrentResult) => {
+    const address = sourceAddress(source);
+    if (!address) return;
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopiedLink(source.infoHash);
+      setTimeout(() => setCopiedLink(null), 1800);
+    } catch {
+      // Refused clipboard access loses nothing — the bulk export is still there.
+    }
+  }, []);
 
   const displayedSources = useMemo(
     () => filterAndSortSources(sources, filterState),
@@ -120,6 +152,14 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
           </div>
         </div>
         <div className="player-panel__head-actions">
+          {/* Every source, with its provider, extension, repository and link —
+              for feeding a downloader, or for saying which provider is broken. */}
+          <SourceExportButton
+            sources={displayedSources}
+            provenanceFor={provenanceFor}
+            heading={`Sources (${displayedSources.length})`}
+            compact
+          />
           <button
             className={`icon-button${showFilterBar ? ' active' : ''}`}
             onClick={() => setShowFilterBar((v) => !v)}
@@ -183,11 +223,29 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
             )}
           </>
         ) : (
-          <button className="player-panel__search-action" onClick={onRefresh}>
-            <RefreshCw size={13} />
-            Search again
-            <span className="muted">re-checks providers, ignores cached links</span>
-          </button>
+          <>
+            <button className="player-panel__search-action" onClick={onRefresh}>
+              <RefreshCw size={13} />
+              Search again
+              <span className="muted">re-checks this title&apos;s providers</span>
+            </button>
+            {/*
+              Offered only when it would ask something new.
+              
+              The default search asks the providers this title was actually
+              found on, which is what the Android app does. This is the step
+              beyond that — every other installed provider, plus the torrent
+              indexers — and it is a separate button because it is a different
+              question, not a harder version of the same one.
+            */}
+            {onWiden && canWiden && (
+              <button className="player-panel__search-action" onClick={onWiden}>
+                <Globe size={13} />
+                Search all sources
+                <span className="muted">every provider and torrent indexer</span>
+              </button>
+            )}
+          </>
         )}
       </div>
 
@@ -237,6 +295,9 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
             displayedSources.findIndex((candidate) => candidate.infoHash === activeInfoHash) ===
               rowIndex;
           const isSwitching = switchingTo === source.infoHash;
+          const chain = provenanceChain(source, provenanceFor(source));
+          const host = sourceHost(source);
+          const address = sourceAddress(source);
 
           return (
             <li
@@ -276,14 +337,41 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
                     <Users size={12} /> {source.seeders}
                   </span>
                   <span title="Size">
-                    <HardDrive size={12} /> {formatSize(source.sizeBytes)}
+                    <HardDrive size={12} /> {formatReleaseSize(source.sizeBytes)}
                   </span>
-                  <span title="Indexer">
-                    <Radio size={12} /> {source.indexerName}
+                  <span title="Host or extractor this link points at">
+                    <Radio size={12} /> {host ?? source.indexerName}
                   </span>
                   {isActive && <span className="player-panel__now">Playing</span>}
                 </div>
+
+                {/*
+                  Where this actually came from.
+
+                  `indexerName` above is the *extractor* for an extension link —
+                  a file host the provider chose, like "Voe" or "Server 3". It
+                  is not the provider, and showing only it means a source that
+                  starts failing cannot be traced to whose code or whose
+                  repository to turn off. The chain answers that.
+                */}
+                {chain && (
+                  <div className="player-panel__source-origin" title={chain}>
+                    <Package size={11} />
+                    <span>{chain}</span>
+                  </div>
+                )}
               </button>
+
+              {address && (
+                <button
+                  className="player-panel__source-link"
+                  onClick={() => void copyLink(source)}
+                  title={`Copy this link — ${address.slice(0, 120)}`}
+                  aria-label={`Copy the link for ${source.title}`}
+                >
+                  {copiedLink === source.infoHash ? <Check size={14} /> : <Link2 size={14} />}
+                </button>
+              )}
 
               {onDownload && (
                 <button

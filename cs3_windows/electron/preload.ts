@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { LogLevel } from './logging/logger';
 import type {
   SearchHistoryEntry,
   SearchOptions,
@@ -6,6 +7,7 @@ import type {
   SearchSuggestion,
 } from '../src/types/api';
 import type { DownloadTask } from '../src/types/download';
+import type { SwarmReport } from '../src/types/torrent';
 import type { SitePlugin, PluginCompatibilityReport, ProviderTreeRepository } from '../src/types/plugin';
 import type {
   IndexerConfig,
@@ -48,7 +50,7 @@ import type {
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
 import type { BootstrapProgress } from './cs3/bootstrap';
 import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
-import type { StoredSource } from '../src/types/library';
+import type { StoredSource, PlayedSource } from '../src/types/library';
 import type {
   HistoryEvent,
   HistoryFilter,
@@ -290,8 +292,17 @@ export interface CloudStreamElectronAPI {
     sessionId: string,
     infoHash: string
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
+  /**
+   * Re-runs discovery for a live session.
+   *
+   * `widen` is the difference between "ask again" and "ask everyone". The
+   * default re-asks the providers this title was found on — the Android
+   * behaviour — and widening reaches every enabled provider and every torrent
+   * indexer, which is a deliberate choice rather than the default.
+   */
   playbackRefreshSources: (
-    sessionId: string
+    sessionId: string,
+    widen?: boolean
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
   /**
    * Finds sources without starting one — the detail screen's picker.
@@ -553,6 +564,8 @@ export interface CloudStreamElectronAPI {
   mpvSetSubtitleTrack: (id: number | null) => Promise<MpvCommandResult>;
   mpvAddSubtitle: (url: string, title?: string, language?: string) => Promise<MpvCommandResult>;
   mpvSetSubtitleDelay: (seconds: number) => Promise<MpvCommandResult>;
+  /** Appearance, already translated to mpv property names. */
+  mpvSetSubtitleStyle: (properties: Record<string, unknown>) => Promise<MpvCommandResult>;
   mpvStop: () => Promise<MpvCommandResult>;
   /** A pull, for a player that mounted while something was already playing. */
   getMpvSnapshot: () => Promise<Envelope & { snapshot: MpvSnapshot }>;
@@ -575,6 +588,11 @@ export interface CloudStreamElectronAPI {
   getActiveStreams: () => Promise<TorrentStreamStats[]>;
   clearTorrentCache: () => Promise<Envelope & { removed: number }>;
   getTorrentCachePath: () => Promise<string>;
+  /**
+   * Why this torrent is as fast or as slow as it is, including the part no
+   * setting can change. See `torrent/swarmHealth.ts`.
+   */
+  getSwarmReport: (infoHash: string) => Promise<SwarmReport | null>;
 
   // Indexers and ranking preferences
   getIndexerConfigs: () => Promise<IndexerConfig[]>;
@@ -608,6 +626,15 @@ export interface CloudStreamElectronAPI {
         speed: number;
         audioLanguage?: string;
         subtitleLanguage?: string;
+        /** Multiplier on the base cue size, 0.5–3. */
+        subtitleScale: number;
+        /** `#rrggbb`; anything else is replaced with the default on read. */
+        subtitleColor: string;
+        /** How a cue is separated from the picture behind it. */
+        subtitleBackground: 'none' | 'shadow' | 'outline' | 'box';
+        subtitleWeight: 'normal' | 'bold';
+        /** Percent of frame height to lift cues by, for hard-subbed releases. */
+        subtitlePosition: number;
       };
     }
   >;
@@ -617,6 +644,11 @@ export interface CloudStreamElectronAPI {
     speed?: number;
     audioLanguage?: string;
     subtitleLanguage?: string;
+    subtitleScale?: number;
+    subtitleColor?: string;
+    subtitleBackground?: 'none' | 'shadow' | 'outline' | 'box';
+    subtitleWeight?: 'normal' | 'bold';
+    subtitlePosition?: number;
   }) => Promise<Envelope>;
   getDeleteDownloadPreference: () => Promise<
     Envelope & { preference: 'ask' | 'list-only' | 'list-and-file' }
@@ -625,6 +657,14 @@ export interface CloudStreamElectronAPI {
     preference: 'ask' | 'list-only' | 'list-and-file'
   ) => Promise<Envelope & { preference?: string }>;
   getDownloadQueue: () => Promise<DownloadTask[]>;
+  /**
+   * A finished download, as a URL the player can open.
+   *
+   * Served from loopback rather than handed over as a path, so the file goes
+   * through `media:prepare` like any other source and is classified before
+   * anything is attached to it.
+   */
+  getPlayableDownloadUrl: (filePath: string) => Promise<Envelope & { url?: string }>;
   revealInFolder: (filePath?: string) => Promise<void>;
   onDownloadProgress: (callback: (tasks: DownloadTask[]) => void) => () => void;
 
@@ -760,6 +800,48 @@ export interface CloudStreamElectronAPI {
         extensionInternalName?: string;
         extensionName?: string;
       };
+    }
+  >;
+
+  // The structured log. Deliberately a thin surface — the log's job is to be on
+  // disk when something goes wrong, not to be browsed.
+  queryLog: (filter?: {
+    level?: LogLevel;
+    scopes?: string[];
+    event?: string;
+    search?: string;
+    since?: number;
+    limit?: number;
+  }) => Promise<
+    Envelope & {
+      records: Array<Record<string, unknown>>;
+      session: string;
+      level: LogLevel;
+      file: string;
+    }
+  >;
+  listLogSessions: () => Promise<
+    Envelope & {
+      sessions: Array<{ file: string; bytes: number; modified: number; current: boolean }>;
+      directory: string;
+    }
+  >;
+  setLogLevel: (level: LogLevel) => Promise<Envelope & { level: LogLevel }>;
+  revealLogFile: () => Promise<Envelope>;
+  exportLogSession: () => Promise<Envelope & { text: string; file: string }>;
+  /**
+   * The same mapping for many providers at once.
+   *
+   * A source list routinely holds thirty rows drawn from a dozen providers, and
+   * every row wants its origin chain. Asking one at a time is thirty IPC round
+   * trips to read from one in-memory Map, so the whole list is answered in one.
+   */
+  getProviderProvenanceMap: (providerNames: string[]) => Promise<
+    Envelope & {
+      provenance: Record<
+        string,
+        { provider: string; repositoryName?: string; extensionName?: string }
+      >;
     }
   >;
 
@@ -915,7 +997,97 @@ export interface CloudStreamElectronAPI {
   }) => Promise<WatchProgress | null>;
   getProgressForKey: (key: string) => Promise<WatchProgress[]>;
   getContinueWatching: (limit?: number) => Promise<WatchProgress[]>;
+  // The home screen's catalogue source. Only a provider that is actually
+  // answering can be selected — see `home:selectProvider`.
+  listHomeProviders: (force?: boolean) => Promise<
+    Envelope & {
+      providers: Array<{
+        id: string;
+        name: string;
+        description: string;
+        requiresKey: boolean;
+        catalogs: string[];
+        genres: number;
+        selectable: boolean;
+        active: boolean;
+        health: {
+          status: 'healthy' | 'degraded' | 'unavailable' | 'unchecked';
+          latencyMs?: number;
+          items?: number;
+          withArtwork?: number;
+          reason?: string;
+          needsKey?: boolean;
+          checkedAt: number;
+        } | null;
+      }>;
+      selected: string;
+      tmdbKeySet: boolean;
+      customUrl: string;
+    }
+  >;
+  selectHomeProvider: (id: string) => Promise<Envelope & { id: string }>;
+  setTmdbKey: (key: string) => Promise<Envelope & { health: unknown }>;
+  setCustomCatalogUrl: (url: string) => Promise<Envelope & { health: unknown }>;
+
+  /** Takes one title off the row. The watch position is kept. */
+  dismissContinueWatching: (key: string) => Promise<Envelope & { removed: boolean }>;
+  /** Empties the row. Nothing is deleted; positions survive. */
+  clearContinueWatching: () => Promise<Envelope & { cleared: number }>;
+  getContinueWatchingEnabled: () => Promise<Envelope & { enabled: boolean }>;
+  setContinueWatchingEnabled: (enabled: boolean) => Promise<Envelope & { enabled: boolean }>;
   clearWatchProgress: (key: string, season?: number, episode?: number) => Promise<boolean>;
+
+  // --- the source that actually played ---
+  /**
+   * Saves the exact stream that delivered playback, with the query to rebuild it.
+   *
+   * Distinct from `rememberSource`, which records what the viewer *picked*. A
+   * release that is chosen and then fails to start is not one that works, and
+   * saving it as one sends them straight back to a stream that already failed.
+   */
+  recordPlayedSource: (input: {
+    title: string;
+    year?: number;
+    mediaUrl: string;
+    episodeTitle?: string;
+    season?: number;
+    episode?: number;
+    source: TorrentResult;
+    positionSeconds?: number;
+    durationSeconds?: number;
+  }) => Promise<Envelope & { record: PlayedSource | null }>;
+  getPlayedSource: (
+    key: string,
+    season?: number,
+    episode?: number
+  ) => Promise<Envelope & { record: PlayedSource | null }>;
+  listPlayedSources: (limit?: number) => Promise<Envelope & { records: PlayedSource[] }>;
+  getPlayedSourcesForKey: (key: string) => Promise<Envelope & { records: PlayedSource[] }>;
+  forgetPlayedSource: (
+    key: string,
+    season?: number,
+    episode?: number
+  ) => Promise<Envelope & { removed: boolean }>;
+  /**
+   * Hands back a playable source for a saved record, refreshing a dead link.
+   *
+   * `resolution` says which happened — `reused` (the stored link still holds),
+   * `refreshed` (the same release re-resolved), or `unavailable` (the provider
+   * no longer offers it, and `sources` carries the alternatives).
+   */
+  resolvePlayedSource: (
+    key: string,
+    season?: number,
+    episode?: number
+  ) => Promise<
+    Envelope & {
+      resolution: 'reused' | 'refreshed' | 'unavailable' | null;
+      record?: PlayedSource;
+      source?: TorrentResult;
+      sources: TorrentResult[];
+    }
+  >;
+
   rememberSource: (input: Omit<SourceMemory, 'chosenAt'>) => Promise<void>;
   recallSource: (key: string, season?: number, episode?: number) => Promise<SourceMemory | null>;
   exportLibrary: () => Promise<{
@@ -969,15 +1141,30 @@ export interface CloudStreamElectronAPI {
 
 export type { TorrentFileEntry };
 
+/**
+ * Subscribes to a pushed channel and hands back a disposer.
+ *
+ * Fourteen `on*` methods each wrote this out: name a listener so it can be
+ * removed, register it, close over it in a teardown function. The teardown is
+ * the part that matters and the part that is easy to leave out — an earlier
+ * version of this file registered listeners that accumulated on every React
+ * remount, which shows up as a snapshot handler firing five times for one
+ * update rather than as an error.
+ *
+ * The `IpcRendererEvent` is dropped on the way through: no subscriber in the
+ * app uses it, and every one of them had to write `_: unknown` to get past it.
+ */
+function subscribe<T>(channel: string, callback: (payload: T) => void): () => void {
+  const listener = (_event: unknown, payload: T) => callback(payload);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+}
+
 const api: CloudStreamElectronAPI = {
   searchAll: (query, options) => ipcRenderer.invoke('api:searchAll', query, options),
   startSearch: (query, options) => ipcRenderer.invoke('search:start', query, options),
   cancelSearch: (id) => ipcRenderer.invoke('search:cancel', id),
-  onSearchUpdate: (callback) => {
-    const listener = (_: unknown, snapshot: SearchSnapshot) => callback(snapshot);
-    ipcRenderer.on('search:update', listener);
-    return () => ipcRenderer.removeListener('search:update', listener);
-  },
+  onSearchUpdate: (callback) => subscribe('search:update', callback),
   browse: (query, provider) => ipcRenderer.invoke('api:browse', query, provider),
   getTitleOutcomes: () => ipcRenderer.invoke('api:getTitleOutcomes'),
   getDiagnostics: (limit, levels) => ipcRenderer.invoke('diagnostics:list', limit, levels),
@@ -987,12 +1174,7 @@ const api: CloudStreamElectronAPI = {
   recordTitleOutcome: (url, kind, reason) =>
     ipcRenderer.invoke('api:recordTitleOutcome', url, kind, reason),
   loadMedia: (url) => ipcRenderer.invoke('api:loadMedia', url),
-  onDetailUpdate: (callback) => {
-    const listener = (_: unknown, payload: { url: string; detail: MetadataDetail }) =>
-      callback(payload);
-    ipcRenderer.on('detail:update', listener);
-    return () => ipcRenderer.removeListener('detail:update', listener);
-  },
+  onDetailUpdate: (callback) => subscribe('detail:update', callback),
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),
 
@@ -1019,29 +1201,21 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('playback:skipSource', sessionId, reason),
   playbackSelectSource: (sessionId, infoHash) =>
     ipcRenderer.invoke('playback:selectSource', sessionId, infoHash),
-  playbackRefreshSources: (sessionId) =>
-    ipcRenderer.invoke('playback:refreshSources', sessionId),
+  playbackRefreshSources: (sessionId, widen) =>
+    ipcRenderer.invoke('playback:refreshSources', sessionId, widen ?? false),
   startSourceDiscovery: (request, title, episodeTitle, options) =>
     ipcRenderer.invoke('playback:startDiscovery', request, title, episodeTitle, options),
   playbackCancelSourceSearch: (sessionId) =>
     ipcRenderer.invoke('playback:cancelSourceSearch', sessionId),
   stopPlayback: (sessionId, keepFiles) =>
     ipcRenderer.invoke('playback:stop', sessionId, keepFiles),
-  onPlaybackUpdate: (callback) => {
-    const listener = (_: unknown, snapshot: PlaybackSnapshot) => callback(snapshot);
-    ipcRenderer.on('playback:update', listener);
-    return () => ipcRenderer.removeListener('playback:update', listener);
-  },
+  onPlaybackUpdate: (callback) => subscribe('playback:update', callback),
 
   getSearchConcurrency: () => ipcRenderer.invoke('search:getConcurrency'),
   setSearchConcurrency: (value) => ipcRenderer.invoke('search:setConcurrency', value),
 
   getBootstrapProgress: () => ipcRenderer.invoke('extension:getBootstrapProgress'),
-  onBootstrapProgress: (callback) => {
-    const listener = (_: unknown, progress: BootstrapProgress) => callback(progress);
-    ipcRenderer.on('extension:bootstrapProgress', listener);
-    return () => ipcRenderer.removeListener('extension:bootstrapProgress', listener);
-  },
+  onBootstrapProgress: (callback) => subscribe('extension:bootstrapProgress', callback),
   getAdultAllowed: () => ipcRenderer.invoke('extension:getAdultAllowed'),
   setAdultAllowed: (enabled) => ipcRenderer.invoke('extension:setAdultAllowed', enabled),
 
@@ -1066,11 +1240,7 @@ const api: CloudStreamElectronAPI = {
   getSearchScopeOptions: (ensureLoaded = true) =>
     ipcRenderer.invoke('search:getScopeOptions', ensureLoaded),
   setSearchScope: (scope) => ipcRenderer.invoke('search:setScope', scope),
-  onProviderLoadProgress: (callback) => {
-    const listener = (_: unknown, progress: ProviderLoadProgress) => callback(progress);
-    ipcRenderer.on('extension:providerLoadProgress', listener);
-    return () => ipcRenderer.removeListener('extension:providerLoadProgress', listener);
-  },
+  onProviderLoadProgress: (callback) => subscribe('extension:providerLoadProgress', callback),
 
   inspectMediaSource: (request) => ipcRenderer.invoke('media:inspect', request),
   preparePlaybackStream: (request) => ipcRenderer.invoke('media:prepare', request),
@@ -1092,11 +1262,7 @@ const api: CloudStreamElectronAPI = {
   openControlledExternal: (playerId, url) => ipcRenderer.invoke('external:open', playerId, url),
   getExternalCapability: (playerId) => ipcRenderer.invoke('external:capability', playerId),
   getExternalSnapshot: () => ipcRenderer.invoke('external:snapshot'),
-  onExternalUpdate: (callback) => {
-    const listener = (_: unknown, snapshot: ExternalPlaybackSnapshot) => callback(snapshot);
-    ipcRenderer.on('external:update', listener);
-    return () => ipcRenderer.removeListener('external:update', listener);
-  },
+  onExternalUpdate: (callback) => subscribe('external:update', callback),
   externalSetPaused: (paused) => ipcRenderer.invoke('external:setPaused', paused),
   externalSeek: (seconds) => ipcRenderer.invoke('external:seek', seconds),
   externalSetVolume: (percent) => ipcRenderer.invoke('external:setVolume', percent),
@@ -1119,13 +1285,10 @@ const api: CloudStreamElectronAPI = {
   mpvAddSubtitle: (url, title, language) =>
     ipcRenderer.invoke('mpv:addSubtitle', url, title, language),
   mpvSetSubtitleDelay: (seconds) => ipcRenderer.invoke('mpv:setSubtitleDelay', seconds),
+  mpvSetSubtitleStyle: (properties) => ipcRenderer.invoke('mpv:setSubtitleStyle', properties),
   mpvStop: () => ipcRenderer.invoke('mpv:stop'),
   getMpvSnapshot: () => ipcRenderer.invoke('mpv:snapshot'),
-  onMpvUpdate: (callback) => {
-    const listener = (_: unknown, snapshot: MpvSnapshot) => callback(snapshot);
-    ipcRenderer.on('mpv:update', listener);
-    return () => ipcRenderer.removeListener('mpv:update', listener);
-  },
+  onMpvUpdate: (callback) => subscribe('mpv:update', callback),
   getNativeEnginePolicy: () => ipcRenderer.invoke('mpv:getPolicy'),
   setNativeEnginePolicy: (policy) => ipcRenderer.invoke('mpv:setPolicy', policy),
   setupMpv: () => ipcRenderer.invoke('binary:setupMpv'),
@@ -1141,6 +1304,7 @@ const api: CloudStreamElectronAPI = {
   getActiveStreams: () => ipcRenderer.invoke('torrent:getActiveStreams'),
   clearTorrentCache: () => ipcRenderer.invoke('torrent:clearCache'),
   getTorrentCachePath: () => ipcRenderer.invoke('torrent:getCachePath'),
+  getSwarmReport: (infoHash) => ipcRenderer.invoke('torrent:getSwarmReport', infoHash),
 
   getIndexerConfigs: () => ipcRenderer.invoke('indexer:getConfigs'),
   saveIndexerConfig: (config) => ipcRenderer.invoke('indexer:saveConfig', config),
@@ -1160,23 +1324,14 @@ const api: CloudStreamElectronAPI = {
   setDeleteDownloadPreference: (preference) =>
     ipcRenderer.invoke('download:setDeletePreference', preference),
   getDownloadQueue: () => ipcRenderer.invoke('download:getQueue'),
+  getPlayableDownloadUrl: (filePath) => ipcRenderer.invoke('download:getPlayableUrl', filePath),
   revealInFolder: (filePath) => ipcRenderer.invoke('download:revealInFolder', filePath),
-  onDownloadProgress: (callback) => {
-    const listener = (_: unknown, tasks: DownloadTask[]) => callback(tasks);
-    ipcRenderer.on('download:progress', listener);
-    // Returning a disposer lets React effects clean up; the previous version
-    // registered listeners that accumulated on every remount.
-    return () => ipcRenderer.removeListener('download:progress', listener);
-  },
+  onDownloadProgress: (callback) => subscribe('download:progress', callback),
 
   startBatchDownload: (request) => ipcRenderer.invoke('download:startBatch', request),
   cancelBatchDownload: (batchId) => ipcRenderer.invoke('download:cancelBatch', batchId),
   getActiveBatches: () => ipcRenderer.invoke('download:getActiveBatches'),
-  onBatchProgress: (callback) => {
-    const listener = (_: unknown, progress: BatchProgress) => callback(progress);
-    ipcRenderer.on('download:batchProgress', listener);
-    return () => ipcRenderer.removeListener('download:batchProgress', listener);
-  },
+  onBatchProgress: (callback) => subscribe('download:batchProgress', callback),
 
   // Unified Components & Binaries
   getComponentStatus: () => ipcRenderer.invoke('components:getStatus'),
@@ -1188,14 +1343,7 @@ const api: CloudStreamElectronAPI = {
   setupYtDlp: () => ipcRenderer.invoke('binary:setupYtDlp'),
   setupAllBinaries: () => ipcRenderer.invoke('binary:setupAll'),
   setupFfmpeg: () => ipcRenderer.invoke('binary:setupFfmpeg'),
-  onBinarySetupProgress: (callback) => {
-    const listener = (
-      _: unknown,
-      progress: { component?: string; status: string; percent: number }
-    ) => callback(progress);
-    ipcRenderer.on('binary:setupProgress', listener);
-    return () => ipcRenderer.removeListener('binary:setupProgress', listener);
-  },
+  onBinarySetupProgress: (callback) => subscribe('binary:setupProgress', callback),
   setupBinaries: () => ipcRenderer.invoke('binary:setupBinaries'),
 
   // Plug-and-Play Runtime Provisioner
@@ -1204,19 +1352,11 @@ const api: CloudStreamElectronAPI = {
   repairSystemRuntime: () => ipcRenderer.invoke('runtime:repair'),
   testSystemRuntime: () => ipcRenderer.invoke('runtime:test'),
   cleanSystemRuntime: () => ipcRenderer.invoke('runtime:clean'),
-  onSystemRuntimeProgress: (callback) => {
-    const listener = (_: unknown, progress: RuntimeProgress) => callback(progress);
-    ipcRenderer.on('runtime:progress', listener);
-    return () => ipcRenderer.removeListener('runtime:progress', listener);
-  },
+  onSystemRuntimeProgress: (callback) => subscribe('runtime:progress', callback),
 
   prefetchSources: (request) => ipcRenderer.invoke('sources:prefetch', request),
   cancelSourcePrefetch: () => ipcRenderer.invoke('sources:cancelPrefetch'),
-  onSourcePrefetch: (callback) => {
-    const listener = (_: unknown, state: PrefetchState) => callback(state);
-    ipcRenderer.on('sources:prefetch', listener);
-    return () => ipcRenderer.removeListener('sources:prefetch', listener);
-  },
+  onSourcePrefetch: (callback) => subscribe('sources:prefetch', callback),
   getSourcePrefetchSetting: () => ipcRenderer.invoke('sources:getPrefetchSetting'),
   setSourcePrefetchSetting: (enabled) =>
     ipcRenderer.invoke('sources:setPrefetchSetting', enabled),
@@ -1229,6 +1369,14 @@ const api: CloudStreamElectronAPI = {
 
   getProviderProvenance: (providerName) =>
     ipcRenderer.invoke('api:getProviderProvenance', providerName),
+  getProviderProvenanceMap: (providerNames) =>
+    ipcRenderer.invoke('api:getProviderProvenanceMap', providerNames),
+
+  queryLog: (filter) => ipcRenderer.invoke('log:query', filter),
+  listLogSessions: () => ipcRenderer.invoke('log:sessions'),
+  setLogLevel: (level) => ipcRenderer.invoke('log:setLevel', level),
+  revealLogFile: () => ipcRenderer.invoke('log:reveal'),
+  exportLogSession: () => ipcRenderer.invoke('log:exportSession'),
 
   listBookmarks: () => ipcRenderer.invoke('bookmarks:list'),
   getBookmark: (mediaUrl) => ipcRenderer.invoke('bookmarks:get', mediaUrl),
@@ -1260,11 +1408,7 @@ const api: CloudStreamElectronAPI = {
   getInstalledRepositories: () => ipcRenderer.invoke('extension:getInstalledRepositories'),
   removeRepository: (repoUrl) => ipcRenderer.invoke('extension:removeRepository', repoUrl),
   getInstalledPlugins: () => ipcRenderer.invoke('extension:getInstalledPlugins'),
-  onExtensionInstallProgress: (callback) => {
-    const listener = (_: unknown, progress: any) => callback(progress);
-    ipcRenderer.on('extension:installProgress', listener);
-    return () => ipcRenderer.removeListener('extension:installProgress', listener);
-  },
+  onExtensionInstallProgress: (callback) => subscribe('extension:installProgress', callback),
 
   checkExtensionUpdates: () => ipcRenderer.invoke('extension:checkUpdates'),
   getCachedExtensionUpdates: () => ipcRenderer.invoke('extension:getCachedUpdates'),
@@ -1273,6 +1417,12 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('extension:updateAll', internalNames),
   getUpdateSettings: () => ipcRenderer.invoke('extension:getUpdateSettings'),
   saveUpdateSettings: (patch) => ipcRenderer.invoke('extension:saveUpdateSettings', patch),
+  /**
+   * The one subscription that does not go through `subscribe`: it carries a
+   * discriminator alongside the payload rather than a single snapshot, and
+   * widening the helper to a variadic signature to absorb one caller would cost
+   * every other subscriber its argument type.
+   */
   onExtensionUpdateEvent: (callback) => {
     const listener = (_: unknown, event: string, payload: unknown) => callback(event, payload);
     ipcRenderer.on('extension:updateEvent', listener);
@@ -1288,8 +1438,27 @@ const api: CloudStreamElectronAPI = {
   recordWatchProgress: (input) => ipcRenderer.invoke('library:recordProgress', input),
   getProgressForKey: (key) => ipcRenderer.invoke('library:getProgressForKey', key),
   getContinueWatching: (limit) => ipcRenderer.invoke('library:getContinueWatching', limit),
+  listHomeProviders: (force) => ipcRenderer.invoke('home:listProviders', force),
+  selectHomeProvider: (id) => ipcRenderer.invoke('home:selectProvider', id),
+  setTmdbKey: (key) => ipcRenderer.invoke('home:setTmdbKey', key),
+  setCustomCatalogUrl: (url) => ipcRenderer.invoke('home:setCustomCatalogUrl', url),
+
+  dismissContinueWatching: (key) => ipcRenderer.invoke('library:dismissContinueWatching', key),
+  clearContinueWatching: () => ipcRenderer.invoke('library:clearContinueWatching'),
+  getContinueWatchingEnabled: () => ipcRenderer.invoke('library:getContinueWatchingEnabled'),
+  setContinueWatchingEnabled: (enabled) =>
+    ipcRenderer.invoke('library:setContinueWatchingEnabled', enabled),
   clearWatchProgress: (key, season, episode) =>
     ipcRenderer.invoke('library:clearProgress', key, season, episode),
+  recordPlayedSource: (input) => ipcRenderer.invoke('library:recordPlayedSource', input),
+  getPlayedSource: (key, season, episode) =>
+    ipcRenderer.invoke('library:getPlayedSource', key, season, episode),
+  listPlayedSources: (limit) => ipcRenderer.invoke('library:listPlayedSources', limit),
+  getPlayedSourcesForKey: (key) => ipcRenderer.invoke('library:getPlayedSourcesForKey', key),
+  forgetPlayedSource: (key, season, episode) =>
+    ipcRenderer.invoke('library:forgetPlayedSource', key, season, episode),
+  resolvePlayedSource: (key, season, episode) =>
+    ipcRenderer.invoke('library:resolvePlayedSource', key, season, episode),
   rememberSource: (input) => ipcRenderer.invoke('library:rememberSource', input),
   recallSource: (key, season, episode) =>
     ipcRenderer.invoke('library:recallSource', key, season, episode),

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
-import { NativeEngineStage } from './player/NativeEngineStage';
+import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
@@ -8,10 +8,11 @@ import {
   HardDriveDownload, FolderDown, GripHorizontal, Maximize2, Minimize2, X,
   Search,
 } from 'lucide-react';
-import type { TorrentStreamStats } from '../types/torrent';
+import type { SwarmReport, TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
 import { AspectRatioMode } from '../types/player';
 import type { ExternalPlaybackSnapshot } from '../types/player';
+import type { MpvSnapshot } from '../types/mpv';
 import type { TorrentResult } from '../types/torrent';
 import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
@@ -28,9 +29,15 @@ import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
 import { useMiniFrame } from './player/useMiniFrame';
-import { CopyErrorButton } from './CopyErrorButton';
 import { PlayerCopyMenu } from './player/PlayerCopyMenu';
-import { ExternalPlayerFallback } from './player/ExternalPlayerFallback';
+import { PlaybackErrorPanel } from './player/PlaybackErrorPanel';
+import { formatTimecode, formatTransferRate } from '../utils/format';
+import {
+  DEFAULT_SUBTITLE_STYLE,
+  subtitleCssVariables,
+  subtitleMpvProperties,
+  type SubtitleStyle,
+} from '../utils/subtitleStyle';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -140,6 +147,13 @@ interface VideoPlayerProps {
      */
     onSourceUnplayable?: (reason: string) => void;
     onRefresh: () => void;
+    /**
+     * Look beyond the providers this title was found on — every other
+     * installed provider, plus the torrent indexers.
+     */
+    onWiden?: () => void;
+    /** True while that would ask something the scoped search did not. */
+    canWiden?: boolean;
     /** Stops waiting for the remaining providers, keeping what has arrived. */
     onCancelSearch?: () => void;
     onDownloadSource?: (source: TorrentResult) => void;
@@ -194,24 +208,17 @@ function atTime(url: string, seconds: number): string {
 /** Sentinel for HLS automatic level selection, which hls.js represents as -1. */
 const AUTO_QUALITY = -1;
 
-function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  return h > 0
-    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-    : `${m}:${String(s).padStart(2, '0')}`;
-}
-
-function formatSpeed(bytesPerSecond: number): string {
-  if (bytesPerSecond <= 0) return '0 KB/s';
-  const mb = bytesPerSecond / 1e6;
-  return mb >= 1 ? `${mb.toFixed(1)} MB/s` : `${(bytesPerSecond / 1e3).toFixed(0)} KB/s`;
-}
-
 /** How long before the end the up-next card appears, and how long it counts down. */
 const UP_NEXT_LEAD_SECONDS = 40;
+
+/**
+ * How far into an episode the next one's sources start being looked for.
+ *
+ * A fraction rather than a countdown, because episode lengths across the corpus
+ * run from 22 minutes to feature length and a fixed lead that suits one is
+ * either far too early or useless for the other.
+ */
+const NEXT_EPISODE_PRELOAD_RATIO = 0.7;
 
 export interface AudioTrackInfo {
   id: string | number;
@@ -251,6 +258,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isHoveringControls, setIsHoveringControls] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<TorrentStreamStats | null>(null);
+  const [swarm, setSwarm] = useState<SwarmReport | null>(null);
   const [activeSubtitle, setActiveSubtitle] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
@@ -461,10 +469,56 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   useEffect(() => {
     if (!externalSnapshot || externalControl?.capability !== 'full') return;
-    if (externalSnapshot.positionSeconds > 0) setCurrentTime(externalSnapshot.positionSeconds);
+    if (externalSnapshot.positionSeconds >= 0) setCurrentTime(externalSnapshot.positionSeconds);
     if (externalSnapshot.durationSeconds > 0) setDuration(externalSnapshot.durationSeconds);
-    setIsPlaying(!externalSnapshot.paused);
+    const playing = !externalSnapshot.paused && (externalSnapshot.state === 'playing' || externalSnapshot.state === 'loading');
+    setIsPlaying(playing);
+    if (typeof externalSnapshot.volume === 'number' && Number.isFinite(externalSnapshot.volume)) {
+      setVolume(externalSnapshot.volume / 100);
+    }
+    if (typeof externalSnapshot.muted === 'boolean') {
+      setIsMuted(externalSnapshot.muted);
+    }
   }, [externalSnapshot, externalControl?.capability]);
+
+  /**
+   * Saves the source that actually delivered this stream.
+   *
+   * The threshold is the whole point. A source is recorded as working only
+   * after playback has genuinely run for a few seconds — not when it was
+   * selected, and not when a URL was merely attached. A release that opens and
+   * dies on the second GOP looks identical to a good one at attach time, and
+   * saving it would send the viewer straight back to a stream that already
+   * failed them. Ten seconds is past every failure mode that presents as
+   * "it started and then stopped".
+   *
+   * Recorded once per stream. The effect re-runs on every timeupdate, so the
+   * ref is what stops this becoming an IPC call four times a second.
+   */
+  const recordedSourceFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!streamUrl || recordedSourceFor.current === streamUrl) return;
+    if (currentTime < 10) return;
+    if (!activeSource || !progress?.mediaUrl) return;
+
+    recordedSourceFor.current = streamUrl;
+    void window.cloudstream?.recordPlayedSource({
+      title,
+      year: progress.year,
+      mediaUrl: progress.mediaUrl,
+      episodeTitle,
+      season: progress.season,
+      episode: progress.episode,
+      source: activeSource,
+      positionSeconds: currentTime,
+      durationSeconds: duration || undefined,
+    });
+  }, [streamUrl, currentTime, activeSource, progress, title, episodeTitle, duration]);
+
+  // A new stream is a new question about which source works.
+  useEffect(() => {
+    recordedSourceFor.current = null;
+  }, [streamUrl]);
 
   const [showNativePlayerBtn, setShowNativePlayerBtn] = useState(true);
   const [externalPlayers, setExternalPlayers] = useState<Array<{ id: string; name: string }>>([]);
@@ -696,6 +750,74 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * that the element is empty rather than broken.
    */
   const isNativeEngine = prepared?.ok === true && capability?.requiredStrategy === 'NATIVE_MPV';
+
+  /**
+   * Synchronizes the native MPV engine's playback state with the player UI.
+   *
+   * Drives the timeline, play/pause state, volume, track list, and buffer
+   * directly from the engine's decoder clock over IPC.
+   */
+  useEffect(() => {
+    if (!isNativeEngine) return;
+
+    const dispose = window.cloudstream?.onMpvUpdate((snapshot: MpvSnapshot) => {
+      if (snapshot.state === 'playing') {
+        setIsPlaying(true);
+      } else if (snapshot.state === 'paused') {
+        setIsPlaying(false);
+      } else if (snapshot.state === 'ended') {
+        setIsPlaying(false);
+      }
+      if (snapshot.positionSeconds >= 0) {
+        setCurrentTime(snapshot.positionSeconds);
+      }
+      if (snapshot.durationSeconds > 0) {
+        setDuration(snapshot.durationSeconds);
+      }
+      if (snapshot.bufferedSeconds >= 0) {
+        setBuffered(snapshot.bufferedSeconds);
+      }
+      if (typeof snapshot.volume === 'number' && Number.isFinite(snapshot.volume)) {
+        setVolume(snapshot.volume / 100);
+      }
+      if (typeof snapshot.muted === 'boolean') {
+        setIsMuted(snapshot.muted);
+      }
+      if (typeof snapshot.speed === 'number' && snapshot.speed > 0) {
+        setSpeed(snapshot.speed);
+      }
+      if (snapshot.audioTracks && snapshot.audioTracks.length > 0) {
+        setAudioTracks(
+          snapshot.audioTracks.map((t, idx) => ({
+            id: t.id,
+            label: trackLabel(t, idx),
+            language: t.language,
+            active: t.selected || t.id === snapshot.selectedAudioId,
+          }))
+        );
+        if (snapshot.selectedAudioId != null) {
+          setActiveAudioTrack(snapshot.selectedAudioId);
+        }
+      }
+      if (snapshot.state === 'error' && snapshot.error) {
+        setError(snapshot.error);
+      }
+    });
+
+    void window.cloudstream?.getMpvSnapshot().then((res) => {
+      if (res?.ok && res.snapshot?.sessionId) {
+        const s = res.snapshot;
+        setIsPlaying(!s.paused && (s.state === 'playing' || s.state === 'loading'));
+        if (s.positionSeconds >= 0) setCurrentTime(s.positionSeconds);
+        if (s.durationSeconds > 0) setDuration(s.durationSeconds);
+        if (s.bufferedSeconds >= 0) setBuffered(s.bufferedSeconds);
+      }
+    });
+
+    return () => {
+      dispose?.();
+    };
+  }, [isNativeEngine]);
   const probeFailure = capability?.failure ?? null;
   const probeFailureRef = useRef<typeof probeFailure>(null);
   /**
@@ -779,6 +901,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       duration > 0 &&
       secondsLeft <= UP_NEXT_LEAD_SECONDS
   );
+
+  /**
+   * Finds the next episode's sources while this one is still playing.
+   *
+   * Without this, an episode boundary starts from cold: pressing Play on
+   * episode 2 begins a fifteen-provider scrape from nothing, which is the exact
+   * multi-second stall the prefetcher exists to remove — reappearing at the one
+   * moment a viewer working through a season feels it most. Android has done
+   * this since forever (`PlayerGeneratorViewModel.preLoadNextLinks`); the
+   * machinery was already here and simply had no caller on this path.
+   *
+   * Seventy percent, not the last thirty seconds. The scrape itself takes tens
+   * of seconds against the slower providers, so starting it as the credits roll
+   * would finish after the viewer had already pressed Next and waited anyway.
+   *
+   * Everything that makes this safe lives in `SourcePrefetcher.schedule`: it
+   * declines when background loading is switched off, returns immediately when
+   * the cache can already answer, dedupes by target, and supersedes rather than
+   * stacking. Pressing Play during the run joins it instead of starting a
+   * second scrape.
+   */
+  const preloadedEpisodeFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!nextEpisode || !progress?.mediaUrl || duration <= 0) return;
+    if (currentTime / duration < NEXT_EPISODE_PRELOAD_RATIO) return;
+    if (preloadedEpisodeFor.current === nextEpisode.url) return;
+
+    preloadedEpisodeFor.current = nextEpisode.url;
+    void window.cloudstream?.prefetchSources?.({
+      mediaUrl: progress.mediaUrl,
+      season: nextEpisode.season,
+      episode: nextEpisode.episode,
+      titleOverride: title,
+    });
+  }, [nextEpisode, progress?.mediaUrl, currentTime, duration, title]);
 
   // --- source attachment ---------------------------------------------------
 
@@ -1085,32 +1242,45 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setAudioTracks([]);
   }, []);
 
-  const selectAudioTrack = useCallback((trackId: string | number) => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    // 1. Native HTML5 audioTracks
-    const nativeList = (video as any).audioTracks;
-    if (nativeList && nativeList.length > 0) {
-      for (let i = 0; i < nativeList.length; i++) {
-        const t = nativeList[i];
-        const currentId = t.id !== undefined && t.id !== '' ? t.id : i;
-        const match = String(currentId) === String(trackId);
-        t.enabled = match;
+  const selectAudioTrack = useCallback(
+    (trackId: string | number) => {
+      if (isNativeEngine) {
+        const idNum = typeof trackId === 'number' ? trackId : parseInt(String(trackId), 10);
+        void window.cloudstream?.mpvSetAudioTrack(Number.isNaN(idNum) ? null : idNum);
+        setActiveAudioTrack(trackId);
+        setAudioTracks((prev) =>
+          prev.map((t) => ({ ...t, active: String(t.id) === String(trackId) }))
+        );
+        return;
       }
-    }
 
-    // 2. HLS.js audioTrack
-    const hls = hlsRef.current;
-    if (hls && typeof trackId === 'number') {
-      hls.audioTrack = trackId;
-    }
+      const video = videoRef.current;
+      if (!video) return;
 
-    setActiveAudioTrack(trackId);
-    setAudioTracks((prev) =>
-      prev.map((t) => ({ ...t, active: String(t.id) === String(trackId) }))
-    );
-  }, []);
+      // 1. Native HTML5 audioTracks
+      const nativeList = (video as any).audioTracks;
+      if (nativeList && nativeList.length > 0) {
+        for (let i = 0; i < nativeList.length; i++) {
+          const t = nativeList[i];
+          const currentId = t.id !== undefined && t.id !== '' ? t.id : i;
+          const match = String(currentId) === String(trackId);
+          t.enabled = match;
+        }
+      }
+
+      // 2. HLS.js audioTrack
+      const hls = hlsRef.current;
+      if (hls && typeof trackId === 'number') {
+        hls.audioTrack = trackId;
+      }
+
+      setActiveAudioTrack(trackId);
+      setAudioTracks((prev) =>
+        prev.map((t) => ({ ...t, active: String(t.id) === String(trackId) }))
+      );
+    },
+    [isNativeEngine]
+  );
 
   useEffect(() => {
     const video = videoRef.current;
@@ -1172,13 +1342,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (active && next) setStats(next);
     };
 
+    /**
+     * Why the swarm is as fast or slow as it is, polled far more slowly.
+     *
+     * The peer census walks every connection and its most useful finding —
+     * whether anything has ever dialled *us* — cannot change between seconds.
+     * Asking every second would spend work to redraw the same sentence.
+     */
+    const pollSwarm = async () => {
+      const report = await window.cloudstream?.getSwarmReport(infoHash);
+      if (active) setSwarm(report ?? null);
+    };
+
     poll();
+    pollSwarm();
     const timer = window.setInterval(poll, 1000);
+    const swarmTimer = window.setInterval(pollSwarm, 5000);
     return () => {
       active = false;
       window.clearInterval(timer);
+      window.clearInterval(swarmTimer);
     };
   }, [infoHash]);
+
+  /**
+   * The one limitation worth putting in front of someone who is waiting.
+   *
+   * Only a `limit` is shown, and only one. A buffering overlay that lists every
+   * observation about the swarm is a wall of text over a film that has not
+   * started, and the notes ("fetching in order so playback can start early")
+   * are true but are not what the person staring at a spinner needs.
+   */
+  const swarmLimit = useMemo(
+    () => swarm?.findings.find((finding) => finding.tone === 'limit') ?? null,
+    [swarm]
+  );
 
   // --- timeline previews ---------------------------------------------------
 
@@ -1355,20 +1553,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const togglePlay = useCallback(() => {
     if (externalControl?.capability === 'full') {
-      void window.cloudstream?.externalSetPaused(externalSnapshot?.paused === false);
+      const nextPaused = isPlaying;
+      setIsPlaying(!nextPaused);
+      void window.cloudstream?.externalSetPaused(nextPaused);
       return;
     }
     if (isNativeEngine) {
-      void window.cloudstream?.getMpvSnapshot().then((response) => {
-        if (response?.ok) void window.cloudstream?.mpvSetPaused(!response.snapshot.paused);
-      });
+      const nextPaused = isPlaying;
+      setIsPlaying(!nextPaused);
+      void window.cloudstream?.mpvSetPaused(nextPaused);
       return;
     }
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) video.play().catch(() => undefined);
     else video.pause();
-  }, [externalControl?.capability, externalSnapshot?.paused, isNativeEngine]);
+  }, [externalControl?.capability, isPlaying, isNativeEngine]);
 
   /**
    * Seeks, accounting for a remuxed stream having no seekable range.
@@ -1385,10 +1585,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // The external player owns the playhead; seeking the empty local element
       // would move a timeline nobody is watching.
       if (externalControl?.capability === 'full') {
+        setCurrentTime(target);
         void window.cloudstream?.externalSeek(target);
         return;
       }
       if (isNativeEngine) {
+        setCurrentTime(target);
         void window.cloudstream?.mpvSeek(target);
         return;
       }
@@ -1411,11 +1613,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const seekBy = useCallback(
     (delta: number) => {
+      if (externalControl?.capability === 'full' || isNativeEngine) {
+        seekTo(currentTime + delta);
+        return;
+      }
       const video = videoRef.current;
       if (!video) return;
       seekTo((isConverted ? playbackOffset : 0) + video.currentTime + delta);
     },
-    [seekTo, isConverted, playbackOffset]
+    [seekTo, isConverted, playbackOffset, externalControl?.capability, isNativeEngine, currentTime]
   );
 
   const toggleFullscreen = useCallback(async () => {
@@ -1509,6 +1715,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const preferencesLoaded = useRef(false);
 
+  /**
+   * How subtitles are drawn, held in state because `::cue` cannot be styled
+   * inline — the rules live in the stylesheet and read these as custom
+   * properties off the player root.
+   */
+  const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
+
+  /**
+   * The native engine gets the same appearance as the element does.
+   *
+   * Without this, routing a 4K HEVC file to mpv — which the engine does on its
+   * own, without the viewer asking — would silently discard every subtitle
+   * setting and show mpv's defaults instead. Re-applied on each open because
+   * properties do not survive a `loadfile`.
+   */
+  useEffect(() => {
+    if (!isNativeEngine) return;
+    void window.cloudstream?.mpvSetSubtitleStyle?.(subtitleMpvProperties(subtitleStyle));
+  }, [isNativeEngine, subtitleStyle, streamUrl]);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -1524,6 +1750,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setSpeed(preferences.speed);
       if (preferences.subtitleLanguage) preferredSubtitleLanguage.current = preferences.subtitleLanguage;
       if (preferences.audioLanguage) preferredAudioLanguage.current = preferences.audioLanguage;
+      setSubtitleStyle({
+        scale: preferences.subtitleScale ?? DEFAULT_SUBTITLE_STYLE.scale,
+        color: preferences.subtitleColor ?? DEFAULT_SUBTITLE_STYLE.color,
+        background: preferences.subtitleBackground ?? DEFAULT_SUBTITLE_STYLE.background,
+        weight: preferences.subtitleWeight ?? DEFAULT_SUBTITLE_STYLE.weight,
+        position: preferences.subtitlePosition ?? DEFAULT_SUBTITLE_STYLE.position,
+      });
       preferencesLoaded.current = true;
     })();
     return () => {
@@ -2085,7 +2318,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
       // `display: none` rather than unmounting: see the `hidden` prop. The
       // element keeps its buffer, its position and its decoder.
-      style={hidden ? { display: 'none' } : miniStyle}
+      //
+      // The subtitle tokens ride along here because `::cue` is not reachable
+      // from an inline style — the stylesheet owns those rules and reads these
+      // custom properties from the player root.
+      style={
+        hidden
+          ? { display: 'none' }
+          : { ...(miniStyle ?? {}), ...subtitleCssVariables(subtitleStyle) }
+      }
       aria-hidden={hidden || undefined}
       onMouseMove={revealControls}
       onMouseEnter={handlePlayerEnter}
@@ -2163,7 +2404,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {isMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
             </button>
             <span className="player-mini__time">
-              {formatTime(currentTime)} / {formatTime(duration)}
+              {formatTimecode(currentTime)} / {formatTimecode(duration)}
             </span>
             <div className="player-mini__spacer" />
             {onExpand && (
@@ -2206,41 +2447,59 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         ))}
       </video>
 
-      {externalControl && (
-        <div className="player__external-banner">
-          <MonitorPlay size={18} />
-          <div>
-            <strong>Playing in {externalControl.playerName}</strong>
+      {/*
+        One stack per anchor, laid out in flow.
+
+        These were four independently positioned `absolute` boxes — the external
+        banner at `top: 4.5rem`, the components notice at `top: 4.2rem`, the
+        strategy note at `bottom: 5.5rem`, the toasts at `bottom: 6.5rem`. Any
+        two that were true at once overlapped, and since none of them paints an
+        opaque background the two messages rendered *through each other*: the
+        reported "two messages one layer upon the other". They can genuinely
+        co-occur — a stream being converted, on a machine missing the components
+        that would convert it, while a download finishes — so suppressing one
+        was never the answer. Stacked in a column they simply sit beside each
+        other, and the stack itself carries the blur.
+      */}
+      <div className="player__messages player__messages--top">
+        {externalControl && (
+          <div className="player__external-banner">
+            <MonitorPlay size={18} />
+            <div>
+              <strong>Playing in {externalControl.playerName}</strong>
+              <span>
+                {externalControl.capability === 'full'
+                  ? 'The controls below are connected to it.'
+                  : 'This player cannot be controlled from here — use its own window.'}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                void window.cloudstream?.externalStop();
+                setExternalControl(null);
+                setExternalSnapshot(null);
+              }}
+            >
+              Bring playback back here
+            </button>
+          </div>
+        )}
+        {/* Silence with no error is the worst possible failure mode: the volume
+            control works, the video plays, and nothing says why. If the audio
+            cannot be decoded and the components that would fix it are missing,
+            say so on screen. */}
+        {audioNeedsComponents && (
+          <div className="player__audio-notice">
+            <AlertTriangle size={14} />
             <span>
-              {externalControl.capability === 'full'
-                ? 'The controls below are connected to it.'
-                : 'This player cannot be controlled from here — use its own window.'}
+              This stream needs conversion to play here, and the media components are
+              missing. Install them in Settings to enable Matroska, HEVC and Dolby audio.
             </span>
           </div>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => {
-              void window.cloudstream?.externalStop();
-              setExternalControl(null);
-              setExternalSnapshot(null);
-            }}
-          >
-            Bring playback back here
-          </button>
-        </div>
-      )}
-
-      {/* Above the controls, clear of the seek bar, gone in four seconds. */}
-      {toasts.length > 0 && (
-        <div className="player__toasts" role="status" aria-live="polite">
-          {toasts.map((toast) => (
-            <div key={toast.id} className={`player__toast player__toast--${toast.tone}`}>
-              {toast.text}
-            </div>
-          ))}
-        </div>
-      )}
+        )}
+      </div>
 
       {isNativeEngine && capability && prepared?.playbackUrl && (
         <NativeEngineStage
@@ -2259,6 +2518,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setCurrentTime(position);
             if (total > 0) setDuration(total);
           }}
+          /* The player's control bar is the only transport for this engine, and
+             it has no element to learn from — so the engine tells it. Without
+             this the button read "Play" over a film that was playing, and the
+             first press paused it. */
+          onPausedChange={(paused) => setIsPlaying(!paused)}
           onEnded={() => {
             if (nextEpisode && onSelectEpisode && !upNextDismissed) onSelectEpisode(nextEpisode);
           }}
@@ -2313,6 +2577,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onPlayNow={sourceSession.onPlayNow}
           onOpenSources={() => setSourcePanelOpen(true)}
           onRetry={sourceSession.onRefresh}
+          onWiden={sourceSession.onWiden}
+          canWiden={sourceSession.canWiden}
           onBack={onBack}
         />
       )}
@@ -2343,105 +2609,101 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         converted because Chromium has no Dolby decoder". It clears itself once
         the picture is up.
       */}
-      {showStrategyNote && capability && (
-        <div className="player__strategy-note">{capability.explanation}</div>
+
+      {/*
+        Playback failed. One surface, one owner — see `PlaybackErrorPanel` for
+        why there used to be two and what that looked like.
+      */}
+      {error && !switchingTo && !switchError && !isResolving && !isInspecting && (
+        <PlaybackErrorPanel
+          message={error}
+          title={title}
+          episodeTitle={episodeTitle}
+          streamUrl={streamUrl}
+          capability={capability}
+          activeSource={activeSource}
+          provenance={resolvedProvenance ?? providerProvenance ?? undefined}
+          attempts={
+            sourceSession && sourceSession.attempts.length > 0
+              ? { tried: sourceSession.attempts.length, total: sourceSession.sources.length }
+              : undefined
+          }
+          isNativeEngine={isNativeEngine}
+          dead={probeFailure?.dead}
+          onDownload={() => void handleDownloadCurrentMedia()}
+          onChooseAnother={() => {
+            // The in-player list, not `onBack` — leaving the player to change
+            // source loses the position and the place in the series, which is
+            // the whole reason the in-player switcher exists.
+            if (sourceSession && sourceSession.sources.length > 0) setSourcePanelOpen(true);
+            else onBack();
+          }}
+          onConvertHere={() => forceTranscodeRef.current?.()}
+        />
       )}
 
-      {(isBuffering || error) && !switchingTo && !switchError && !isResolving && !isInspecting && (
+      {isBuffering && !error && !switchingTo && !switchError && !isResolving && !isInspecting && (
         <div className="player__overlay">
-          {error ? (
+          <Loader2 className="spin" size={36} />
+          <p>Buffering from peers…</p>
+          {stats && (
+            <span className="muted">
+              {formatTransferRate(stats.downloadSpeed)} · {stats.peers} peer
+              {stats.peers === 1 ? '' : 's'} · {(stats.progress * 100).toFixed(1)}%
+            </span>
+          )}
+          {stats?.isStalled && (
             <>
-              <AlertTriangle size={36} />
-              <p>{error}</p>
-              {/* Failover is silent otherwise, and a viewer watching a dead
-                  frame has no way to tell trying-the-next from given-up. */}
-              {sourceSession && sourceSession.attempts.length > 0 && (
-                <span className="muted">
-                  Tried {sourceSession.attempts.length} of {sourceSession.sources.length} source
-                  {sourceSession.sources.length === 1 ? '' : 's'}
-                  {sourceSession.attempts.length < sourceSession.sources.length
-                    ? ' — trying the next…'
-                    : ''}
-                </span>
-              )}
-              {/* Codecs and stream URL, because a playback failure is the least
-                  reproducible thing in the app: the stream is transient and the
-                  viewer has no way to describe it afterwards. */}
-              <div className="player__error-actions">
-                <button className="btn" onClick={onBack}>Choose another source</button>
-                <CopyErrorButton
-                  compact
-                  context={{
-                    title: episodeTitle ? `${title} — ${episodeTitle}` : title,
-                    url: streamUrl,
-                    source: capability
-                      ? [
-                          `strategy=${capability.requiredStrategy}`,
-                          `container=${capability.metadata?.formatName ?? capability.transport}`,
-                          capability.metadata?.video
-                            ? `video=${capability.metadata.video.codec}/${capability.metadata.video.bitDepth}bit@${capability.metadata.video.width}x${capability.metadata.video.height}`
-                            : null,
-                          capability.metadata?.audio[0]
-                            ? `audio=${capability.metadata.audio[0].codec}/${capability.metadata.audio[0].channels}ch`
-                            : null,
-                        ]
-                          .filter(Boolean)
-                          .join(' ')
-                      : undefined,
-                    message: error ?? undefined,
-                  }}
-                />
+              <span className="muted">
+                Nothing has arrived for {Math.round(stats.stalledMs / 1000)}s
+                {stats.peers === 0 ? ' and no peers have connected' : ''}. This swarm
+                is probably dead.
+              </span>
+              <div className="player__overlay-actions">
+                {/* A dead swarm is the case where downloading is *also* the
+                    honest suggestion: the same bytes are not arriving either
+                    way, and another source is the real fix. */}
+                <button className="btn btn-primary" onClick={() => setSourcePanelOpen(true)}>
+                  <List size={16} /> Choose another source
+                </button>
               </div>
-              {/*
-                Offered only when the source is actually there. A dead link
-                plays no better in VLC, and suggesting it would send the viewer
-                to fetch a player that cannot help.
-              */}
-              {!probeFailure?.dead && <ExternalPlayerFallback streamUrl={streamUrl} compact />}
             </>
-          ) : (
-            <>
-              <Loader2 className="spin" size={36} />
-              <p>Buffering from peers…</p>
-              {stats && (
-                <span className="muted">
-                  {formatSpeed(stats.downloadSpeed)} · {stats.peers} peer
-                  {stats.peers === 1 ? '' : 's'} · {(stats.progress * 100).toFixed(1)}%
-                </span>
-              )}
-              {stats?.isStalled && (
-                <>
-                  <span className="muted">
-                    Nothing has arrived for {Math.round(stats.stalledMs / 1000)}s
-                    {stats.peers === 0 ? ' and no peers have connected' : ''}. This swarm
-                    is probably dead.
-                  </span>
-                  <button className="btn" onClick={onBack}>Choose another source</button>
-                </>
-              )}
-              {stats && !stats.isStalled && stats.peers === 0 && (
-                <span className="muted">
-                  No peers yet. If this persists the swarm may be dead — try a source with more seeders.
-                </span>
-              )}
-            </>
+          )}
+          {stats && !stats.isStalled && stats.peers === 0 && (
+            <span className="muted">
+              No peers yet. If this persists the swarm may be dead — try a source with more seeders.
+            </span>
+          )}
+          {/*
+            Shown while the viewer is already waiting, which is the only moment
+            the answer is worth anything. Most of it is not something the app can
+            fix — a four-seeder swarm is a four-seeder swarm — but an unnamed
+            limit reads as "this app is slow", and that was the report.
+          */}
+          {swarmLimit && !stats?.isStalled && (
+            <span className="muted">
+              {swarmLimit.summary}
+              {swarmLimit.advice ? `. ${swarmLimit.advice}` : '.'}
+            </span>
           )}
         </div>
       )}
 
-      {/* Silence with no error is the worst possible failure mode: the volume
-          control works, the video plays, and nothing says why. If the audio
-          cannot be decoded and the components that would fix it are missing,
-          say so on screen. */}
-      {audioNeedsComponents && (
-        <div className="player__audio-notice">
-          <AlertTriangle size={14} />
-          <span>
-            This stream needs conversion to play here, and the media components are
-            missing. Install them in Settings to enable Matroska, HEVC and Dolby audio.
-          </span>
-        </div>
-      )}
+      <div className="player__messages player__messages--bottom">
+        {showStrategyNote && capability && (
+          <div className="player__strategy-note">{capability.explanation}</div>
+        )}
+        {/* Above the controls, clear of the seek bar, gone in four seconds. */}
+        {toasts.length > 0 && (
+          <div className="player__toasts" role="status" aria-live="polite">
+            {toasts.map((toast) => (
+              <div key={toast.id} className={`player__toast player__toast--${toast.tone}`}>
+                {toast.text}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <header
         className={`player__top${controlsVisible || keepControls ? '' : ' hidden'}`}
@@ -2605,7 +2867,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {stats && (
           <div className="player__stats">
             <span title="Peers"><Users size={14} /> {stats.peers}</span>
-            <span title="Download speed"><Gauge size={14} /> {formatSpeed(stats.downloadSpeed)}</span>
+            <span title="Download speed"><Gauge size={14} /> {formatTransferRate(stats.downloadSpeed)}</span>
           </div>
         )}
       </header>
@@ -2654,6 +2916,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setSourcePanelOpen(false);
           }}
           onRefresh={sourceSession.onRefresh}
+          onWiden={sourceSession.onWiden}
+          canWiden={sourceSession.canWiden}
           onCancelSearch={sourceSession.onCancelSearch}
           onDownload={sourceSession.onDownloadSource}
         />
@@ -2678,6 +2942,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setFetchedSubtitles((prev) => [...prev, { name: label, url }]);
           }
           setActiveSubtitle(url);
+
+          if (isNativeEngine) {
+            if (url) {
+              void window.cloudstream?.mpvAddSubtitle(url, label);
+            } else {
+              void window.cloudstream?.mpvSetSubtitleTrack(null);
+            }
+          }
 
           /**
            * The label carries the language; the URL is per-file and worthless
@@ -2748,7 +3020,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   {preview.loading ? <Loader2 className="spin" size={18} /> : <MonitorPlay size={18} />}
                 </div>
               )}
-              <span>{formatTime(hoverTime)}</span>
+              <span>{formatTimecode(hoverTime)}</span>
             </div>
           )}
 
@@ -2814,7 +3086,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           )}
 
           <span className="player__time">
-            {formatTime(currentTime)} / {formatTime(duration)}
+            {formatTimecode(currentTime)} / {formatTimecode(duration)}
           </span>
 
           <button className="icon-button" onClick={() => setIsMuted((v) => !v)} aria-label="Mute">

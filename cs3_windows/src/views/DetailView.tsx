@@ -15,6 +15,7 @@ import {
 } from '../components/player/seriesContext';
 import { SeasonDownloadDialog } from '../components/SeasonDownloadDialog';
 import { LibraryBucketSelector } from '../components/LibraryBucketSelector';
+import { PosterCard } from '../components/PosterCard';
 import { CopyErrorButton } from '../components/CopyErrorButton';
 import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
 import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
@@ -117,6 +118,8 @@ interface DetailViewProps {
   onStartSession: (context: PlaybackSessionRequest) => void;
   onEnqueueDownload: (task: DownloadTask) => void;
   onSearch?: (query: string) => void;
+  /** Opens another title — a related one from this page's recommendations. */
+  onSelectMedia?: (item: SearchResponse) => void;
   /** The query that produced this item, recorded on a bookmark so it can be re-run. */
   searchQuery?: string;
 }
@@ -135,6 +138,16 @@ interface DetailData {
   imdbId?: string;
   /** A live channel: no duration to seek within and no position worth keeping. */
   isLive?: boolean;
+  /**
+   * Cast and related titles, both of which the provider already sent.
+   *
+   * `ProviderBridge` has encoded these since the link-surface work and every
+   * layer between it and here carried them; this screen was simply the one that
+   * never read them. Scraping them again would have been the expensive way to
+   * fix a field that was already arriving.
+   */
+  actors?: string[];
+  recommendations?: SearchResponse[];
 }
 
 /**
@@ -205,6 +218,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
   onStartSession,
   onEnqueueDownload,
   onSearch,
+  onSelectMedia,
   searchQuery,
 }) => {
   const [detail, setDetail] = useState<DetailData | null>(null);
@@ -1078,6 +1092,46 @@ export const DetailView: React.FC<DetailViewProps> = ({
               </li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {/*
+        Cast and related titles, from data the provider already sent.
+
+        Both fields cross the bridge on every `load` and were dropped at this
+        last step, so the page showed less than the scrape had already paid for.
+        Rendered only when non-empty: most providers send neither, and an empty
+        "Cast" heading reads as a failed lookup rather than an absent field.
+      */}
+      {(detail.actors?.length ?? 0) > 0 && (
+        <section className="detail-facts">
+          <h2 className="detail-facts__heading">Cast</h2>
+          <ul className="detail-facts__people">
+            {detail.actors!.map((actor) => (
+              <li key={actor} className="detail-facts__person">
+                {actor}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {(detail.recommendations?.length ?? 0) > 0 && onSelectMedia && (
+        <section className="detail-facts">
+          <h2 className="detail-facts__heading">More like this</h2>
+          <div className="detail-facts__rail">
+            {detail.recommendations!.map((item) => (
+              <PosterCard
+                key={`${item.apiName}:${item.url}`}
+                item={item}
+                onSelectMedia={onSelectMedia}
+                // The bucket control needs a library identity this row does not
+                // reliably have — a recommendation is a pointer, not a result
+                // the user searched for.
+                showBucketButton={false}
+              />
+            ))}
+          </div>
         </section>
       )}
 

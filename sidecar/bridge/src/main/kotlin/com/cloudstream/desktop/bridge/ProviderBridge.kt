@@ -48,6 +48,20 @@ import kotlinx.coroutines.withTimeout
  */
 object ProviderBridge {
 
+    init {
+        /**
+         * NewPipeExtractor needs a downloader installed before anything touches
+         * it, and nothing was installing one — so every YouTube link a provider
+         * returned failed with `NullPointerException: downloader is null`.
+         *
+         * Done here because this object is the first bridge code the sidecar
+         * loads, so it runs exactly once and before any `loadLinks` can reach
+         * `loadExtractor`. `install()` never throws: a bridge that failed to
+         * load over an optional extractor would take every provider with it.
+         */
+        NewPipeBootstrap.install()
+    }
+
     /**
      * A provider that does not override an optional method inherits a base
      * implementation that throws this. It means "unsupported", not "broken" —

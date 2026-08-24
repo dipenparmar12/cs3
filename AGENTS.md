@@ -73,13 +73,19 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (150 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (159 tests, Node type-stripping — no framework) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Provider links only | `cs3_windows/` | `bun run test:links` (15 cases, no ffmpeg needed) |
+| Source scope only | `cs3_windows/` | `bun run test:scope` (9 cases) |
 | Media proxy only | `cs3_windows/` | `bun run test:proxy` (11 cases, stubbed origin) |
 | Subtitles only | `cs3_windows/` | `bun run test:subtitles` (16 cases) |
 | Media decisions only | `cs3_windows/` | `bun run test:media` (71 cases, no ffmpeg needed) |
 | Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (17 cases, real ffmpeg; skips itself without it) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (124 tests, Node type-stripping — no framework) |
+| Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
+| Source export only | `cs3_windows/` | `bun run test:export` (13 cases, pure) |
+| Media decisions only | `cs3_windows/` | `bun run test:media` (53 cases, no ffmpeg needed) |
+| Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
 | Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
@@ -319,6 +325,61 @@ not a layering mistake.
 | `externalPlayerControl.ts` | Two-way control of VLC over its HTTP interface. Capability is declared per player, never assumed — see below. |
 | `media/inspectionStore.ts` | Persists what a probe found, keyed on the origin URL. The measurement only; the verdict is recomputed. |
 | `downloadService.ts`, `aria2Engine.ts`, `ytdlpEngine.ts`, `binaryDownloader.ts` | Downloads via aria2c RPC with an HTTP fallback; portable `aria2c`/`yt-dlp` binaries are fetched on first use. |
+
+### Shared primitives, and the duplication they replaced
+
+Four patterns had each been written out repeatedly. They are one implementation now, and
+the thing worth knowing about each is *why the copies differed*.
+
+**`src/utils/format.ts` — six byte formatters that disagreed.** Not copies:
+
+| Call site | zero answers | base | MB decimals |
+|---|---|---|---|
+| `DownloadCenter` | `Unknown` | 1024 | 0 |
+| `PlayerDownloadPanel` | `0 MB` | 1024 | 0 |
+| `SourcePanel` | `—` | **1000** | 0 |
+| `HistoryView` | `Unknown size` | 1024 | 1 |
+| `SourcePicker` | `—` | 1024 | adaptive |
+| `ProvenancePanel` | `0 B` | 1024 | 2 |
+
+A single `formatBytes` would have been shorter and would have changed what six screens
+display, so the differences are **parameters** and every one is preserved exactly.
+`format.test.mts` computes its expectations from the old implementations, including the
+ones that look wrong.
+
+Two of those differences are deliberate and must survive any future tidy-up. **Release
+sizes use base 1000** because providers and trackers quote SI: a torrent listed as "4.3 GB"
+upstream must not be redrawn as "4.00 GB", or a viewer comparing our list against the site
+it came from reads them as different releases. **Download progress uses base 1024**, so the
+figure matches what the file manager will say about the same file once it lands. The test
+asserts both renderings of one byte count side by side so the divergence is visible.
+
+The zero placeholders are *not* deliberate, and neither is 1000-vs-1024 for what is
+arguably the same quantity. Both are flagged in the module header as a UI decision nobody
+has made.
+
+**`electron/util/jsonFileStore.ts` — five debounced-persistence implementations.** Owns
+coalescing, the unref'd timer, the explicit shutdown flush, and the rule that losing a
+cache is never worth throwing over. It deliberately does **not** own the data shape:
+`detailCache` drops entries past a TTL on load and `diagnostics` filters by retention, and
+those are real per-store policies rather than one sameness worth inventing.
+
+**`electron/util/disabledSet.ts` — three copies of the enable cascade's toggle.** The list
+stores *exceptions*, so a newly installed extension works without anyone opting it in;
+every mutation returns the whole stored list, so a failed write shows up as the toggle
+springing back rather than as a lie on screen; and bulk is the primitive, because enabling
+a repository is one write rather than twenty flushes to disk.
+
+**`preload.ts`'s `subscribe()` — fourteen listener/teardown pairs.** The teardown is the
+part that matters and the part easy to leave out: an earlier version of that file
+registered listeners that accumulated on every React remount, which reads as a handler
+firing five times for one update rather than as an error. `onExtensionUpdateEvent` keeps
+its own listener because it carries a discriminator beside the payload, and widening the
+helper to absorb one caller would cost every other subscriber its argument type.
+
+Note that `util/disabledSet.ts` writes its fields out longhand rather than using
+constructor parameter properties. `erasableSyntaxOnly` is set across this project so Node
+can strip types and run the suites directly, and that syntax is not erasable.
 
 ### Codecs: Chromium cannot decode a lot of what people actually stream
 
@@ -1170,6 +1231,57 @@ codebase now carries comments saying so. **Never reintroduce a synthetic/placeho
 source.** When nothing real is found, return an empty list *and a reason*. A system that
 cannot run must say so, not return empty results dressed up as "no matches found".
 
+### Source discovery asks the originating provider first (2026-08-22)
+
+The recurring report is "some of the sources didn't work". The cause was not the
+sources; it was how many were being asked.
+
+**Android returns one search row per provider.** Opening a row binds you to the
+provider that produced it, and pressing play calls `loadLinks` on that provider
+alone. There is no fan-out and no torrent-indexer step at all.
+
+This app merges search rows, and that merge is right — four providers and three
+catalogues returning one film should be one row, not seven. What it lost was the
+binding. `searchMerge.primacy()` makes the *catalogue* row win, so the merged row
+is addressed by its `cs3meta://` URL, and `runDiscovery` took that as licence to
+ask **every enabled provider and every enabled indexer**. A title carried by two
+providers drew answers from two hundred sources: most had nothing, some were
+slow, some were dead, and all of them appeared in the list as sources that did
+not work.
+
+`cs3/sourceScope.ts` restores the binding without undoing the merge. The
+providers whose rows were merged are already recorded as `alternates`, and
+`ContentService.alternateRoutes` already remembered them — they were simply being
+used as *one more* input to a full fan-out rather than as the scope.
+
+| Scope | Who is asked |
+|---|---|
+| `origin` (default) | Only the providers whose search results produced this row. No indexers. |
+| `all` (explicit) | Every enabled provider and every enabled indexer. |
+
+Four things are worth keeping straight:
+
+- **A `cs3ext://` row was always right.** It is a provider's own result and has
+  always resolved from that provider alone. The divergence only ever existed on
+  the merged catalogue row.
+- **`origin` widens on its own when there is nothing to scope to.** A title
+  opened from the home screen was never searched for, so no provider claimed it.
+  Narrowing to an empty set there would return zero sources for every catalogue
+  item in the app, so it widens and reports `scopeUsed: 'all'` — which is what
+  stops the UI offering to widen a search that already did.
+- **Widening asks every provider even when routes are known.** The old condition
+  skipped the provider search whenever routes existed, which was correct while
+  routes were the only way to reach a provider. Under widening it makes "search
+  all sources" re-ask the same two providers and appear to do nothing. Already-
+  known providers are skipped per result instead, and the merged list is deduped
+  on `infoHash`.
+- **The scope is part of the cache key and the in-flight key.** Without that a
+  widened run is answered by the scoped result that just landed.
+
+The offer appears in two places and only when `canWiden` is true: the source
+panel, and the failure overlay — which is where it matters, because the sentence
+above it has just said the providers this title came from had nothing.
+
 ### Search scope: selecting a source is a filter, not a preference
 
 `searchScope.ts` used to widen back to *every* source whenever the stored selection matched
@@ -1202,8 +1314,13 @@ claiming one name is a genuine collision: the first keeps it and the loser is re
 ### The extensions screen: `src/components/extensions/`
 
 **Reconstructed 2026-08-21**, after the ignore-rule bug below meant the 2026-08-14 rebuild
-was never committed. What follows describes the current files; the reasoning is preserved
-from the original because the constraints have not changed.
+was never committed. Six of the originals — `primitives`, `FilterBar`, `BulkActionBar`,
+`ProvenancePanel`, `CompatibilityReport` and `useExtensionFilters` — were restored from the
+author's machine on 2026-08-22 and are now what the screen is built from; the container
+(`ExtensionsScreen`), the three views and `useExtensionCatalog` are the reconstruction.
+Where the two overlapped **the originals won**: `Toggle` carrying a `suppressedReason` says
+something the reconstruction's plain switch could not, and `TriStateCheckbox` has an
+`indeterminate` state a boolean cannot express. What follows describes the current files.
 
 Originally rebuilt 2026-08-14. It was one 2,689-line component — 25 `useState` hooks, four tabs and
 ~2,000 lines of inline-styled JSX in a single function body — replaced by a container plus
@@ -1486,6 +1603,154 @@ and is re-probed.
 
 Measured: 97 ms saved on a local multi-track MKV, and the probe was 1.6–1.7 s per source
 against real provider streams in the vendor matrix — which is where it actually pays.
+
+### The library remembers which source actually played
+
+The library remembered *what* was watched and `bookmarkStore` remembered *which page* it
+came from. Neither remembered **which of thirty sources delivered it**, so returning to a
+title meant picking from the list again with nothing recording that the fourth row down is
+the only one that ever produced a frame.
+
+`PlayedSource` (in `src/types/library.ts`, stored by `libraryStore`) is one slot per
+(title, season, episode) — per episode, because keying on the title alone would have episode
+6 overwrite what played episode 5. It holds the full `StoredSource` (provider, repository,
+extension, quality, capabilities, the link and its deadline) plus an `origin` query.
+
+**The link is stored but is never the identity.** A provider URL is a signed address on
+someone else's CDN, good for minutes; the durable half is `origin`, which is replayed to get
+a fresh link for the same release. That is why both are there.
+
+**It is recorded on playback, not on selection.** `SourceMemory` already covers "what the
+viewer picked", and the two are different claims — a release chosen and then abandoned
+because it would not start is not one that works. `VideoPlayer` records after **10 seconds**
+of real playback, which is past every failure that presents as "it started and then stopped".
+
+`library:resolvePlayedSource` returns one of three outcomes, and the caller is told which
+because they mean different things:
+
+- `reused` — the stored link still holds; no provider contacted.
+- `refreshed` — it had expired, so the same release was re-resolved and the record updated
+  in place. Surfaced in the UI, because it explains the pause the viewer just sat through.
+- `unavailable` — the provider no longer offers it. The record is **marked, not deleted**
+  ("the one that used to work is gone" beats an entry that silently vanishes) and the
+  alternatives come back so it is a choice rather than a dead end.
+
+#### Matching a saved source after its link dies
+
+`cs3/playedSource.ts`, and the reason it is its own tested module: **a provider source has
+no durable id.** Torrents do — an infohash addresses content. A provider stream's
+`infoHash` is *synthesised* by `ContentService` as the SHA-1 of its URL, purely so the
+ranker and the dedupe key have something to work with. Re-resolve that release an hour later,
+get a freshly signed URL, and the id is different for the identical file. **Matching on it
+alone can never re-find a provider source, which is the case this feature exists for.**
+
+So: torrents match on infohash; everything else matches on the durable triple — provider,
+normalised release name, resolution. Strict on purpose, because returning the wrong release
+is worse than returning nothing: the viewer asked to resume *this* stream, and quietly
+starting a different cut, dub or a 480p rip is a failure they will attribute to the app
+losing their place. The one concession is containment in either direction, since providers
+append and drop decorations (a size, a mirror name, `[Dual Audio]`) between refreshes.
+
+A direct link with **no recorded deadline is treated as expired**, deliberately. The costs
+are asymmetric: guessing "still good" spends the ffmpeg startup and the player's timeout
+before failing over, while guessing "expired" costs one provider call and produces a stream
+that works.
+
+Pinned by `cs3/playedSource.test.mts` (12 cases), including that a provider source is
+re-found despite its synthetic id changing, and that nothing matching returns null rather
+than a nearby release.
+
+### A source list has to say where it came from, and hand over its link
+
+The in-player list and the detail page both showed a release name, a size, a
+seeder count and `indexerName`. For an extension link **`indexerName` is the
+extractor** — "Gdshine", "Voe", "Server 3" — a file host the provider picked. It
+is not the provider, so a source that started failing could not be traced to
+whose code or whose repository to turn off, which is the only action a user can
+actually take. Both lists now carry the `repository ▸ extension ▸ provider`
+chain beside the host, resolved through `api:getProviderProvenanceMap` — batched
+because a thirty-row list asking one at a time is thirty IPC round trips to read
+one in-memory Map.
+
+`src/utils/sourceExport.ts` is the shared format, used by the in-player panel,
+the detail page and the player's copy menu. **CSV is the default**: the useful
+operation on thirty sources is sorting and filtering them, and every machine
+already has something that does that. Text and links-only are the other two
+destinations — a chat window, and a downloader that wants one URL per line.
+
+**The exported address is always the provider's, never the loopback one.** By
+the time a stream is playing its URL is `http://127.0.0.1:<ephemeral>/…`, which
+names our own proxy and is dead when the app closes — a link that *looks* like
+it should work in a downloader and cannot. `sourceAddress` is the only way to
+get it, and `sourceExport.test.mts` (13 cases) pins that along with RFC 4180
+quoting, which matters more than it looks: a release called `Dune, Part Two`
+does not break an unquoted CSV, it silently shifts every later column by one and
+produces a spreadsheet of plausible rows with every link attributed to the wrong
+provider.
+
+### Playback failure is one surface, and it offers a download
+
+There were two overlays, and they stacked. `NativeEngineStage` rendered its own
+full-bleed `.player__overlay` on an mpv failure **and** reported the same failure
+through `onError`, so `VideoPlayer` rendered its error overlay as well — two
+translucent black panels, each dimming the other, with two different sentences
+about one failure legible through each other. Both also sat under `.native-stage`
+(`z-index: 3`) while carrying no `z-index` of their own, so on the engine that
+fails most interestingly neither could be read at all.
+
+`player/PlaybackErrorPanel.tsx` is the single owner now; the engine reports and
+the player renders. `.player__overlay` is `z-index: 4` — chosen against its
+neighbours, not for headroom: above `.native-stage` (3), below `.player__top` (5)
+so Back stays reachable, and below `.player-panel` (7) so "Choose another source"
+opens the list *over* the error that offered it.
+
+**The first action is Download, deliberately.** Decoding and fetching are
+different capabilities: a 10-bit HEVC file with Dolby audio can be undecodable
+here and completely ordinary to download, and every report of "it will not play"
+from a source that would have downloaded fine was a dead end the app put there
+itself. Offered only when the source is alive — `describeUnreadableSource`
+reporting `dead` suppresses the download, the external players and everything
+else that cannot help a 404.
+
+### Four messages that positioned themselves independently
+
+`.player__external-banner` at `top: 4.5rem`, `.player__audio-notice` at
+`top: 4.2rem`, `.player__strategy-note` at `bottom: 5.5rem`, `.player__toasts` at
+`bottom: 6.5rem` — four absolutely positioned boxes, none of them opaque. Any two
+that were true at once overlapped and rendered *through each other*. They can
+genuinely co-occur (a stream being converted, on a machine missing the components
+that would convert it, while a download finishes), so suppressing one was never
+the answer. They are two flow columns now — `.player__messages--top` and
+`--bottom` — and the stack carries the blur. `pointer-events: none` on the stack
+with `auto` on each child keeps the gaps click-through; the stack spans the width
+of the player and would otherwise swallow clicks on the picture.
+
+### The native stage drew a control bar nobody could click
+
+`NativeEngineStage` had a full transport row along its bottom edge: play, seek,
+volume, mute, track menus, fullscreen. Every one of those except the track menus
+was a duplicate — `VideoPlayer`'s own bar already routes `togglePlay`, `seekTo`
+and volume to mpv. And the duplicate was **unreachable**: `.player__controls` is
+`z-index: 5` and pinned to the bottom, the stage is `z-index: 3`, so the row sat
+underneath it receiving no clicks at all. Its overflow is also what produced the
+reported horizontal scrollbar with nothing to scroll to.
+
+Two flexbox faults were behind that overflow, and both are the same trap:
+`.native-stage__surface` had `flex: 1` with the default `min-height: auto`, so it
+refused to shrink below its own text and pushed the control row off the bottom of
+the player; `.native-stage__seek` had `flex: 1` with `min-width: auto`, so the
+range input's intrinsic width forced the row wider than the player. **A flex item
+does not shrink below its content unless you say so.**
+
+What is left in the stage is what the player's bar genuinely cannot do — mpv
+track selection and fullscreening mpv's own window — sitting in the surface where
+nothing covers it. Transport state now flows the other way: `onPausedChange`
+reports the engine's own `paused` up, because the play button reads the
+`<video>` element's events and those never fire here. It showed "Play" over a
+film that was playing, and the first press paused it. Buffering is deliberately
+*not* forwarded into `isBuffering` — that flag drives an overlay reading
+"Buffering from peers…", which is a torrent's story and a lie about an HTTP
+stream.
 
 ### The source cache learns from playback
 
@@ -1900,6 +2165,12 @@ gets fixed. Java's `SecurityManager` is not an option (JEP 411/486 removal).
   paths from the author's Windows machine.
 - `docs/PRD/34` torrent architecture · `35` translation spike results · `36` the remaining
   work to actually execute providers.
+- `docs/PRD/39-native-extension-and-playback-standards.md` — **proposed, nothing built**:
+  our own extension standard alongside `.cs3` (four lanes — `.cs3`, a QuickJS-sandboxed
+  `.csx` bundle, a Stremio-compatible addon URL, and yt-dlp), the `Source`/manifest wire
+  formats, repository signing, the engine ladder and format matrix, and the TLS/challenge
+  layer that actually decides how many sites work. It replaces doc 27 §6–§9. Read it
+  before designing anything plugin-shaped; do not treat it as as-built.
 - `docs/docs_cs3/` — the Android app's architecture, 9 documents, written from source.
 
 Requirement ids appear throughout code comments — `ARCH-2`, `SEC-7`, `DROP-12`, `DSK-57`,
@@ -1949,6 +2220,83 @@ Where they disagree, trust the code and fix the doc.
   are forced to stderr. Keep it that way.
 
 ---
+
+### What was merged from `claude/refine` and `claude/android-media-desktop-dybtml`, and what was not (2026-08-23)
+
+Both branches were merged selectively onto `dev/feature-4`. The rule applied: take
+features and refinements, leave anything that changes playback behaviour, request
+headers, or the native engine — this branch streams the corpus well and that is the
+asset being protected.
+
+**The structural fact that governs any future merge from `refine`: it forked at
+`881456a`, before this branch's streaming stack landed.** Its tree has no
+`providerLinks.ts`, no `subtitles/convert.ts`, no `clearKey`/`shakaSession`, no
+`build-media-runtime.mjs`, and — because it still carries the unanchored
+`extensions/` ignore rule described above — no extensions screen at all. Anything
+on that branch which *rewrites* `main.ts` or `preload.ts` wholesale is therefore
+written against a tree that never knew about those modules, and applying it would
+delete them. Cherry-pick additively from `refine`; never take a whole-file rewrite.
+
+That is why **the 25-commit IPC refactor (`main.ts` → 24 `ipc/*` modules) was not
+merged.** It is a genuine improvement and it is not lost — it can be re-derived
+against the current `main.ts`, using those modules as a template. What it cannot be
+is cherry-picked, because `60da305` replaces `main.ts` with a version assembled from
+a 188-channel surface that predates this branch's 222.
+
+Merged: provider-first source scope (`sourceScope.ts`), out-of-order torrent fetch
+and swarm-limit reporting (`swarmHealth.ts`), the rebuilt extensions screen, the
+formatter consolidation (`utils/format.ts`), `util/jsonFileStore.ts` and
+`util/disabledSet.ts`, the pluggable health-checked home catalogue
+(`homeProviders.ts`, `homeProviderRegistry.ts`), source provenance and export, and
+the NewPipe downloader fix.
+
+Not merged, deliberately: `ext.to` and the human-assisted access gateway; mpv
+embedding and the native-engine integration (`mpvSurface.ts`, `40e3d72`); the
+concurrent-open and end-of-playback changes to `MpvEngine`; the HEVC `hvc1` tagging
+and remux-container changes; `unreadableSource`'s loopback-failure split; and the
+logging-init changes that touch the media modules. Each is a behaviour change to a
+path that currently works.
+
+**One trap worth naming, because it would have shipped silently.** `refine`'s
+prebuilt `cs3-provider-bridge.jar` predates the `:app` activity shims on this branch
+(`CommonActivity`, `MainActivity`, `CloudStreamApp`, `AcraApplication`). Taking that
+binary to get the NewPipe fix would have carried the fix in and taken the shims back
+out — a regression with no compile error and no failing test, surfacing only as
+extensions losing their providers again. The jar is rebuilt from the union of both
+sources instead, and `RUNTIME_GENERATION` is bumped so installed copies under
+`%APPDATA%` are replaced. **Never take a prebuilt jar from a branch whose sources you
+have not compared.**
+
+### Android parity: what was measured and what was closed (2026-08-23)
+
+`docs/roadmap/android-parity.md` records a source-level comparison against the checked-out
+Android tree at `a72f9e6c`. Four gaps were closed in that pass and are described there; the
+one that matters most is the one that was *not*:
+
+**`WebViewResolver` on the JVM is `TODO("Not yet implemented")`.** `library-jvm` ships a JVM
+variant whose `intercept` is a pass-through and whose `resolveUsingWebView` throws
+`NotImplementedError`. So a provider needing a browser does not degrade — it throws, or it
+silently receives a Cloudflare interstitial as though it were the page it asked for. **This
+is invisible to a class-resolution audit, because the class resolves perfectly**, which is
+why four rounds of shim work never surfaced it. 45 plugin directories across 11 repositories
+reference it or `CloudflareKiller`.
+
+The blocker is direction, not capability: the stdio RPC runs main → sidecar only, so the JVM
+cannot ask Electron to open a window. Electron *is* Chromium; the engine is already in the
+box. If you are about to write another shim, read that document first — the counting says the
+class problem is solved and the network layer is not.
+
+Two smaller rules came out of the same pass and are easy to undo by accident:
+
+- **`SourcePrefetcher.schedule` is safe to call from anywhere**, including the player. It
+  declines when background loading is off, returns immediately when the cache can answer,
+  dedupes by target and supersedes rather than stacking. The player calls it at 70% of an
+  episode so the next one is not resolved from cold.
+- **Subtitle appearance is one record and two renderers.** `src/utils/subtitleStyle.ts` maps
+  the stored settings to both `::cue` variables and mpv properties, and it is tested against
+  itself because the failure is silent: the engine routes 4K HEVC to mpv on its own, so
+  styling only the element loses every setting on exactly the files that need them. Note
+  `sub-pos` counts down from 100 where the CSS lift counts up.
 
 ## 8. Working agreements for agents
 

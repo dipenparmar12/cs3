@@ -23,6 +23,7 @@ import {
   AlertCircle,
   ArrowUpDown,
 } from 'lucide-react';
+import { formatDownloadSize, formatTransferRate } from '../utils/format';
 
 interface DownloadCenterProps {
   tasks: DownloadTask[];
@@ -41,6 +42,14 @@ interface DownloadCenterProps {
    * back to episodes, other sources and playback existed and was not reachable.
    */
   onOpenTitle?: (task: DownloadTask) => void;
+  /**
+   * Plays a finished download in our own player.
+   *
+   * Until this existed, a completed film could only be handed to the OS
+   * default player, which meant losing resume position, subtitle search, track
+   * selection and the compatibility engine for a file already on disk.
+   */
+  onPlayFile?: (task: DownloadTask) => void;
 }
 
 interface TaskGroup {
@@ -54,25 +63,23 @@ interface TaskGroup {
 
 interface SingleTaskRowProps {
   task: DownloadTask;
+  onPlayFile?: (task: DownloadTask) => void;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onRemove: (id: string, deleteFile?: boolean) => void;
   onReveal?: (filePath: string) => void;
   onOpenTitle?: (task: DownloadTask) => void;
-  formatSpeed: (bytesPerSec: number) => string;
-  formatSize: (bytes: number) => string;
   isEpisode?: boolean;
 }
 
 const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
   task,
+  onPlayFile,
   onPause,
   onResume,
   onRemove,
   onReveal,
   onOpenTitle,
-  formatSpeed,
-  formatSize,
   isEpisode = false,
 }) => {
   const [copiedMeta, setCopiedMeta] = useState(false);
@@ -101,8 +108,8 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
       `Provider:       ${task.providerName || 'Extension / Built-in'}`,
       `Quality:        ${task.quality || task.resolution ? `${task.quality || task.resolution}p` : 'Unknown'}`,
       `State:          ${task.state}`,
-      `Progress:       ${formatSize(task.bytesDownloaded)} / ${formatSize(task.totalBytes)} (${percent}%)`,
-      `Speed:          ${formatSpeed(task.downloadSpeed)}`,
+      `Progress:       ${formatDownloadSize(task.bytesDownloaded)} / ${formatDownloadSize(task.totalBytes)} (${percent}%)`,
+      `Speed:          ${formatTransferRate(task.downloadSpeed)}`,
       `ETA:            ${task.etaSeconds > 0 ? `${task.etaSeconds}s` : 'N/A'}`,
       `Retry Count:    ${task.retryCount || 0}/4`,
       task.errorMessage ? `Last Status:    ${task.errorMessage}` : null,
@@ -214,7 +221,7 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
               <RotateCw size={13} className="spin" style={{ color: 'var(--accent-light)' }} />
             )}
             {isDownloading
-              ? formatSpeed(task.downloadSpeed)
+              ? formatTransferRate(task.downloadSpeed)
               : task.state === DownloadState.RefreshingSource
               ? 'Refreshing Expired Link...'
               : task.state === DownloadState.Retrying
@@ -255,7 +262,7 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
           }}
         >
           <span>
-            {formatSize(task.bytesDownloaded)} / {formatSize(task.totalBytes)} ({percent}%)
+            {formatDownloadSize(task.bytesDownloaded)} / {formatDownloadSize(task.totalBytes)} ({percent}%)
           </span>
           <span>{task.etaSeconds > 0 ? `ETA: ${task.etaSeconds}s` : ''}</span>
         </div>
@@ -301,6 +308,15 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
             {task.state === DownloadState.Failed ? <RotateCw size={15} /> : <Play size={15} />}
           </button>
         )}
+        {onPlayFile && task.state === DownloadState.Completed && (
+          <button
+            onClick={() => onPlayFile(task)}
+            className="btn btn-primary btn-icon"
+            title="Play here"
+          >
+            <Play size={15} />
+          </button>
+        )}
         {onReveal && (
           <button
             onClick={() => onReveal(task.targetFilePath)}
@@ -334,6 +350,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   onReveal,
   onOpenBinarySetup,
   onOpenTitle,
+  onPlayFile,
 }) => {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [activeFilter, setActiveFilter] = useState<DownloadFilterTab>('all');
@@ -345,20 +362,6 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
       ...prev,
       [groupKey]: !prev[groupKey],
     }));
-  };
-
-  const formatSpeed = (bytesPerSec: number): string => {
-    if (bytesPerSec <= 0) return '0 KB/s';
-    const mb = bytesPerSec / (1024 * 1024);
-    if (mb >= 1) return `${mb.toFixed(1)} MB/s`;
-    return `${(bytesPerSec / 1024).toFixed(0)} KB/s`;
-  };
-
-  const formatSize = (bytes: number): string => {
-    if (bytes <= 0) return 'Unknown';
-    const mb = bytes / (1024 * 1024);
-    if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
-    return `${mb.toFixed(0)} MB`;
   };
 
   // Status counts for tabs
@@ -817,7 +820,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
             <span style={{ fontWeight: 600, color: '#fff' }}>
               {counts.downloading > 0 ? (
                 <span style={{ color: 'var(--accent-light)', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-                  <RotateCw size={12} className="spin" /> Total Speed: {formatSpeed(totalActiveSpeed)}
+                  <RotateCw size={12} className="spin" /> Total Speed: {formatTransferRate(totalActiveSpeed)}
                 </span>
               ) : (
                 'Queue Idle'
@@ -836,7 +839,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
           </div>
           <div className="download-stats-bar__item">
             <span>
-              {formatSize(totalDownloaded)} {totalBytes > 0 ? `/ ${formatSize(totalBytes)}` : 'downloaded'}
+              {formatDownloadSize(totalDownloaded)} {totalBytes > 0 ? `/ ${formatDownloadSize(totalBytes)}` : 'downloaded'}
             </span>
           </div>
         </div>
@@ -1027,7 +1030,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                         >
                           {retryingCount > 0 && <RotateCw size={14} className="spin" />}
                           {isAnyDownloading
-                            ? formatSpeed(totalSpeed)
+                            ? formatTransferRate(totalSpeed)
                             : isAllComplete
                             ? 'Completed'
                             : statusText}
@@ -1065,7 +1068,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                         }}
                       >
                         <span>
-                          {formatSize(bytesDownloaded)} / {formatSize(totalBytes)} ({overallPercent}%) • {statusText}
+                          {formatDownloadSize(bytesDownloaded)} / {formatDownloadSize(totalBytes)} ({overallPercent}%) • {statusText}
                         </span>
                         <span>{maxEta > 0 && isAnyDownloading ? `ETA: ${maxEta}s` : ''}</span>
                       </div>
@@ -1129,9 +1132,8 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                           onResume={onResume}
                           onRemove={(id) => requestDelete([id], group.title)}
                           onReveal={onReveal}
+                          onPlayFile={onPlayFile}
                           onOpenTitle={onOpenTitle}
-                          formatSpeed={formatSpeed}
-                          formatSize={formatSize}
                           isEpisode
                         />
                       ))}
@@ -1150,9 +1152,8 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                 onResume={onResume}
                 onRemove={(id) => requestDelete([id], group.title)}
                 onReveal={onReveal}
+                onPlayFile={onPlayFile}
                 onOpenTitle={onOpenTitle}
-                formatSpeed={formatSpeed}
-                formatSize={formatSize}
               />
             );
           })}

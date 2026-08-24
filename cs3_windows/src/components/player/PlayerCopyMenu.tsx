@@ -3,6 +3,13 @@ import { Check, ClipboardCopy, MoreHorizontal } from 'lucide-react';
 import type { SourceCapabilityModel } from '../../types/media';
 import type { TorrentResult } from '../../types/torrent';
 import type { DownloadTask } from '../../types/download';
+import {
+  provenanceChain,
+  sourceAddress,
+  toSourceCsv,
+  toSourceText,
+  type SourceProvenance,
+} from '../../utils/sourceExport';
 
 /**
  * Copy actions for the player, grouped into one menu.
@@ -51,23 +58,6 @@ function block(heading: string, lines: Array<[string, unknown]>): string {
   return body ? `${heading}\n${body}` : '';
 }
 
-function describeSource(source: TorrentResult, index?: number): string {
-  const parsed = source.parsed;
-  const parts = [
-    source.title,
-    parsed?.resolution ? `${parsed.resolution}` : null,
-    parsed?.source,
-    parsed?.videoCodec,
-    parsed?.audioCodecs?.length ? parsed.audioCodecs.join('/') : null,
-    parsed?.languages?.length ? parsed.languages.join('/') : null,
-    parsed?.hdr?.length ? parsed.hdr.join('/') : null,
-    source.sizeBytes ? `${(source.sizeBytes / 1e9).toFixed(2)} GB` : null,
-    source.indexerName,
-    source.directUrl ? 'direct' : 'torrent',
-    source.seeders ? `${source.seeders} seeders` : null,
-  ].filter(Boolean);
-  return `${index !== undefined ? `${index + 1}. ` : ''}${parts.join(' · ')}`;
-}
 
 export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
   title,
@@ -161,34 +151,33 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
         ['Explanation', capability?.explanation],
       ]),
       block('Provider', [
-        ['Provider', provenance?.provider ?? activeSource?.indexerName],
+        ['Provider', provenance?.provider ?? activeSource?.providerName],
         ['Extension', provenance?.extensionName],
         ['Repository', provenance?.repositoryName],
+        /** The extractor the provider picked — a file host, not the provider. */
+        ['Host/extractor', activeSource?.indexerName],
+        ['Chain', activeSource ? provenanceChain(activeSource, provenance) : undefined],
       ]),
     ]
       .filter(Boolean)
       .join('\n\n');
 
-  const allSourcesInfo = () => {
-    const list = allSources ?? [];
-    /**
-     * Deduplicated the same way the diagnostics report is: two providers
-     * scraping the same file host hand back the same URL, and a list that
-     * repeats it five times says nothing the count does not.
-     */
-    const seen = new Map<string, { line: string; count: number }>();
-    list.forEach((source) => {
-      const line = describeSource(source);
-      const existing = seen.get(line);
-      if (existing) existing.count += 1;
-      else seen.set(line, { line, count: 1 });
-    });
-
-    const lines = [...seen.values()].map(
-      (entry, index) => `${index + 1}. ${entry.line}${entry.count > 1 ? ` (x${entry.count})` : ''}`
-    );
-    return `Sources found (${list.length}${lines.length !== list.length ? `, ${lines.length} unique` : ''})\n${lines.join('\n')}`;
+  /**
+   * The origin chain, for whichever provider a row names.
+   *
+   * Only the *active* source's ancestry is resolved here — that is what the
+   * player was given. For the rest the provider's own name is what we have, and
+   * it is still the fact that matters: `indexerName` is the extractor a
+   * provider chose, not the provider.
+   */
+  const provenanceForSource = (source: TorrentResult): SourceProvenance | undefined => {
+    if (activeSource && source.infoHash === activeSource.infoHash && provenance) return provenance;
+    return source.providerName ? { provider: source.providerName } : undefined;
   };
+
+  const sourcesHeading = `${episodeTitle ? `${title} — ${episodeTitle}` : title} — sources (${
+    allSources?.length ?? 0
+  })`;
 
   const downloadInfo = () =>
     download
@@ -209,8 +198,29 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
   const items: Array<{ label: string; run: () => void }> = [
     { label: 'Copy media info', run: () => void write('media', mediaInfo()) },
     { label: 'Copy source', run: () => void write('source', sourceInfo()) },
+    /**
+     * Three destinations, because a source list goes to three different places
+     * and each wants a different shape. CSV leads: the useful operation on
+     * thirty rows is sorting and filtering them, and the links are what let a
+     * viewer hand a stream we cannot play to something that can.
+     */
     ...(allSources && allSources.length > 0
-      ? [{ label: `Copy all sources (${allSources.length})`, run: () => void write('sources', allSourcesInfo()) }]
+      ? [
+          {
+            label: `Copy all sources as CSV (${allSources.length})`,
+            run: () => void write('sources', toSourceCsv(allSources, provenanceForSource)),
+          },
+          {
+            label: 'Copy all sources as text',
+            run: () =>
+              void write('sources', toSourceText(allSources, provenanceForSource, sourcesHeading)),
+          },
+          {
+            label: 'Copy source links only',
+            run: () =>
+              void write('links', allSources.map(sourceAddress).filter(Boolean).join('\n')),
+          },
+        ]
       : []),
     ...(download ? [{ label: 'Copy download info', run: () => void write('download', downloadInfo()) }] : []),
     {

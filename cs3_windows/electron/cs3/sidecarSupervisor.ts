@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import { RuntimeProvisioner } from './runtimeProvisioner';
+import { scopedLogger } from '../logging/logger';
+import { SidecarStderrReader } from './sidecarStderr';
 
 export interface RpcResult {
   ok: boolean;
@@ -36,8 +38,26 @@ interface Pending {
   method: string;
 }
 
+/**
+ * The sidecar's stderr, as records rather than console noise.
+ *
+ * The folding rules live in `sidecarStderr.ts`, which stays free of `electron`
+ * so it can be tested; this file owns the pipe and nothing else.
+ */
+const sidecarLog = scopedLogger('runtime', { component: 'sidecar' });
+
 export class SidecarSupervisor {
   private proc: ChildProcessWithoutNullStreams | null = null;
+
+  /**
+   * Folds stderr lines into one record per event. Flushed on a short timer as
+   * well as on the next line, because the last trace of a session has nothing
+   * after it to trigger a flush and is the one worth having.
+   */
+  private readonly stderr = new SidecarStderrReader((record) =>
+    sidecarLog.write(record.level, 'sidecar_stderr', { ...record, level: undefined })
+  );
+  private stderrTimer: NodeJS.Timeout | null = null;
   private pending = new Map<string, Pending>();
   private nextId = 1;
   private restarts = 0;
@@ -143,7 +163,10 @@ export class SidecarSupervisor {
     this.proc.stderr.setEncoding('utf8');
     this.proc.stderr.on('data', (chunk: string) => {
       for (const line of chunk.split('\n')) {
-        if (line.trim()) console.warn(`[cs3-sidecar] ${line}`);
+        if (!line.trim()) continue;
+        // Kept: a terminal is still the fastest way to watch a plugin load.
+        console.warn(`[cs3-sidecar] ${line}`);
+        this.absorbStderr(line);
       }
     });
 
@@ -229,6 +252,13 @@ export class SidecarSupervisor {
   }
 
   // --- protocol ------------------------------------------------------------
+
+  private absorbStderr(line: string): void {
+    this.stderr.push(line);
+    if (this.stderrTimer) clearTimeout(this.stderrTimer);
+    this.stderrTimer = setTimeout(() => this.stderr.flush(), 250);
+    this.stderrTimer.unref?.();
+  }
 
   private onStdout(chunk: string): void {
     this.stdoutBuffer += chunk;

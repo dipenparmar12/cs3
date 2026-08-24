@@ -377,7 +377,16 @@ public final class PluginHost {
         try {
             Class<?> ctx = Class.forName("android.content.Context", false, loader);
             Method load = instance.getClass().getMethod("load", ctx);
-            load.invoke(instance, newShimContext(loader));
+            Object shimCtx = newShimContext(loader);
+            try {
+                Class<?> commonAct = Class.forName("com.lagradost.cloudstream3.CommonActivity", false, loader);
+                Class<?> actClass = Class.forName("android.app.Activity", false, loader);
+                Object commonActInstance = commonAct.getField("INSTANCE").get(null);
+                Method setActivity = commonAct.getMethod("setActivity", actClass);
+                setActivity.invoke(commonActInstance, shimCtx);
+            } catch (Throwable ignored) {
+            }
+            load.invoke(instance, shimCtx);
             return;
         } catch (ClassNotFoundException | NoSuchMethodException e) {
             // Falls through to the cross-platform entry point.

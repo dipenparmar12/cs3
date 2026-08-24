@@ -1,4 +1,6 @@
 import http from 'http';
+import fs from 'fs';
+import path from 'path';
 import type { AddressInfo } from 'net';
 // `.ts` is load-bearing: the test suite runs under Node's type stripping, which
 // is an ESM loader and will not resolve an extensionless specifier. Rollup is
@@ -186,6 +188,9 @@ export class MediaProxy {
   private prefixes = new Map<string, Route>();
   /** Reverse index so a playlist's hundred segments do not mint a token each. */
   private tokensByKey = new Map<string, string>();
+  /** Files served from disk, and the reverse map that keeps tokens stable. */
+  private localRoutes = new Map<string, string>();
+  private localTokensByPath = new Map<string, string>();
   private nextToken = 1;
   private fetchImpl: FetchLike;
   private diagnostics: DiagnosticsSink | null = null;
@@ -230,6 +235,84 @@ export class MediaProxy {
 
     await this.ensureServer();
     return this.routeFor(url, cleaned);
+  }
+
+  /**
+   * Serves a file from disk over the same loopback origin.
+   *
+   * A finished download used to be handed to `shell.openPath` — the OS default
+   * player — so the viewer lost resume position, subtitle search, track
+   * selection, the next-episode flow and the compatibility engine, all for a
+   * file already sitting on their disk.
+   *
+   * Routed through HTTP rather than handed over as a `file://` URL because
+   * every consumer downstream already speaks this origin: ffprobe, the media
+   * element, hls.js and mpv all take a loopback URL today, and `file://` in a
+   * `contextIsolation` renderer does not. Range support is what makes seeking
+   * work, and it is the whole reason this cannot be a plain `readFile`.
+   */
+  public async serveFile(filePath: string): Promise<string> {
+    const resolved = path.resolve(filePath);
+    // Checked here rather than at play time so a moved or deleted file is a
+    // clear failure now instead of an empty player later.
+    const stat = await fs.promises.stat(resolved);
+    if (!stat.isFile()) throw new Error(`Not a file: ${resolved}`);
+
+    await this.ensureServer();
+    const existing = this.localTokensByPath.get(resolved);
+    const token = existing ?? String(this.nextToken++);
+    this.localTokensByPath.set(resolved, token);
+    this.localRoutes.set(token, resolved);
+    return `http://127.0.0.1:${this.port}/local/${token}`;
+  }
+
+  /**
+   * Answers a range request over a local file.
+   *
+   * Kept apart from `stream()` deliberately: that method exists to survive a
+   * flaky origin mid-transfer — resuming, re-requesting, counting bytes — and
+   * none of that applies to a local disk, where a short read is a real error
+   * rather than something to paper over.
+   */
+  private serveLocal(req: http.IncomingMessage, res: http.ServerResponse, file: string): void {
+    let size: number;
+    try {
+      size = fs.statSync(file).size;
+    } catch {
+      res.writeHead(404).end('That file is no longer on disk.');
+      return;
+    }
+
+    const match = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''));
+    const start = match && match[1] ? Number(match[1]) : 0;
+    const end = match && match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+
+    if (start >= size || start > end) {
+      // The header the spec requires with a 416; without it a player retries
+      // the same bad range forever instead of correcting itself.
+      res.writeHead(416, { 'Content-Range': `bytes */${size}` }).end();
+      return;
+    }
+
+    const partial = Boolean(match);
+    res.writeHead(partial ? 206 : 200, {
+      'Content-Type': 'video/mp4',
+      'Content-Length': String(end - start + 1),
+      'Accept-Ranges': 'bytes',
+      ...(partial ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}),
+      'Access-Control-Allow-Origin': '*',
+    });
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
+
+    const stream = fs.createReadStream(file, { start, end });
+    stream.on('error', () => res.destroy());
+    // Seeking abandons the response mid-flight, and an undestroyed read stream
+    // holds the file handle open for the life of the process.
+    res.on('close', () => stream.destroy());
+    stream.pipe(res);
   }
 
   /**
@@ -336,6 +419,17 @@ export class MediaProxy {
      * Two shapes: `/stream/<token>` is one file, `/base/<token>/<rest>` is a
      * path inside a directory route. Only DASH mints the second kind.
      */
+    const local = req.url?.match(/^\/local\/(\d+)/)?.[1];
+    if (local) {
+      const file = this.localRoutes.get(local);
+      if (!file) {
+        res.writeHead(404).end('Unknown file');
+        return;
+      }
+      this.serveLocal(req, res, file);
+      return;
+    }
+
     const direct = req.url?.match(/^\/stream\/(\d+)/)?.[1];
     const prefixed = req.url?.match(/^\/base\/(\d+)\/(.*)$/);
     const route = direct

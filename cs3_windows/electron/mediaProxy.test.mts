@@ -17,6 +17,9 @@
  * mistake worth only making once. Requests to the proxy itself are real HTTP.
  */
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { MediaProxy } from './mediaProxy.ts';
 
 const MPD_RELATIVE = `<?xml version="1.0"?>
@@ -172,6 +175,80 @@ test('a loopback URL is returned untouched rather than wrapped again', async () 
   assert.equal(await proxy.wrap(already, { Referer: 'x' }), already);
 });
 
+// --- local files -----------------------------------------------------------
+//
+// A finished download is served over the same loopback origin a stream is, so
+// ffprobe, the media element and mpv all reach it through one door. Range
+// support is the whole point: without it the file plays and cannot be seeked,
+// which reads as a corrupt download rather than a missing HTTP feature.
+
+const localFixture = (() => {
+  const file = path.join(os.tmpdir(), `cs3-proxy-local-${process.pid}.bin`);
+  // Recognisable bytes, so a wrong offset is visible rather than merely plausible.
+  const bytes = Buffer.alloc(300_000);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = i % 251;
+  fs.writeFileSync(file, bytes);
+  return { file, bytes };
+})();
+
+test('a local file is served whole, and says it accepts ranges', async () => {
+  const url = await proxy.serveFile(localFixture.file);
+  const response = await fetch(url);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('accept-ranges'), 'bytes');
+  const body = Buffer.from(await response.arrayBuffer());
+  assert.ok(body.equals(localFixture.bytes), 'body must match the file byte for byte');
+});
+
+test('a mid-file range returns those exact bytes — this is what seeking does', async () => {
+  const url = await proxy.serveFile(localFixture.file);
+  const response = await fetch(url, { headers: { Range: 'bytes=100000-100099' } });
+  assert.equal(response.status, 206);
+  assert.equal(
+    response.headers.get('content-range'),
+    `bytes 100000-100099/${localFixture.bytes.length}`
+  );
+  const slice = Buffer.from(await response.arrayBuffer());
+  assert.ok(
+    slice.equals(localFixture.bytes.subarray(100000, 100100)),
+    'ranged bytes must come from the requested offset'
+  );
+});
+
+test('an open-ended range is honoured, which is the form ffmpeg sends', async () => {
+  const url = await proxy.serveFile(localFixture.file);
+  const response = await fetch(url, { headers: { Range: 'bytes=299900-' } });
+  assert.equal(response.status, 206);
+  assert.equal((await response.arrayBuffer()).byteLength, 100);
+});
+
+test('a range past the end is refused with the header a player can recover from', async () => {
+  const url = await proxy.serveFile(localFixture.file);
+  const response = await fetch(url, { headers: { Range: 'bytes=999999-' } });
+  // Without `Content-Range` on a 416 a player retries the same bad range
+  // forever instead of correcting itself.
+  assert.equal(response.status, 416);
+  assert.equal(response.headers.get('content-range'), `bytes */${localFixture.bytes.length}`);
+});
+
+test('one token is minted per file, not one per request', async () => {
+  const first = await proxy.serveFile(localFixture.file);
+  const second = await proxy.serveFile(localFixture.file);
+  // Otherwise every re-open of the same download leaks another route for the
+  // life of the process.
+  assert.equal(first, second);
+});
+
+test('an unknown local token is a 404, not a way to read arbitrary files', async () => {
+  const url = await proxy.serveFile(localFixture.file);
+  const response = await fetch(url.replace(/\/local\/\d+$/, '/local/999999'));
+  assert.equal(response.status, 404);
+});
+
+test('serving a file that does not exist fails now rather than at play time', async () => {
+  await assert.rejects(() => proxy.serveFile(path.join(os.tmpdir(), 'cs3-absent-file.bin')));
+});
+
 // --- runner ----------------------------------------------------------------
 
 let failed = 0;
@@ -186,5 +263,6 @@ for (const [name, fn] of tests) {
   }
 }
 proxy.shutdown();
+fs.rmSync(localFixture.file, { force: true });
 console.log(failed === 0 ? `\n${tests.length} passed` : `\n${failed} of ${tests.length} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

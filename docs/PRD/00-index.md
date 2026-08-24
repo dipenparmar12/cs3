@@ -139,6 +139,7 @@ Content identity is `url.replace(mainUrl,"").replace("/","").hashCode()` (`app/.
 | 36 | [36-enabling-provider-execution.md](36-enabling-provider-execution.md) | **Enabling provider execution work plan** — classpath setup, bridge compilation, coroutine bindings |
 | 37 | [37-universal-media-compatibility-and-adaptive-playback-engine.md](37-universal-media-compatibility-and-adaptive-playback-engine.md) | **Universal Media Compatibility & Adaptive Playback Engine** — pre-playback inspection, capability modeling, progressive remux/transcode pipelines, 4K HEVC 10-bit & audio matrix |
 | 38 | [38-multi-provider-streaming-matrix-and-test-spec.md](38-multi-provider-streaming-matrix-and-test-spec.md) | **Multi-Provider Streaming Matrix & Empirical Compatibility Test Specification** — empirical 23-provider English/Hindi benchmark, codec/container matrix, failure taxonomy, and automated test suite |
+| 39 | [39-native-extension-and-playback-standards.md](39-native-extension-and-playback-standards.md) | **Our own extension standard, and the playback contract behind it** — the four-lane provider model (.cs3 / .csx / addon URL / yt-dlp), the Source and manifest wire formats, repository signing, the engine ladder and format matrix, and the TLS/challenge layer that actually decides site coverage |
 
 
 ---
