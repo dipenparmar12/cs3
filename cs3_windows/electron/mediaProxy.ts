@@ -256,6 +256,19 @@ export class MediaProxy {
   }
 
   /**
+   * Returns the underlying target URL and headers for a loopback stream token.
+   */
+  public getTargetRoute(loopbackUrl: string): Route | null {
+    if (!isLoopback(loopbackUrl)) return null;
+    const direct = loopbackUrl.match(/\/stream\/(\d+)/)?.[1];
+    if (direct) {
+      const route = this.routes.get(direct);
+      if (route) return { url: route.url, headers: { ...route.headers } };
+    }
+    return null;
+  }
+
+  /**
    * Serves a file from disk over the same loopback origin.
    *
    * A finished download used to be handed to `shell.openPath` — the OS default

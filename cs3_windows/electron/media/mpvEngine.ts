@@ -982,18 +982,17 @@ export class MpvEngine {
   }
 
   /**
-   * Stops playback without killing the process.
+   * Stops playback and cleans up the process and window.
    *
-   * The instance is kept idle on purpose — see {@link open}. `stop` returns it
-   * to the idle state, where the next `loadfile` costs a few hundred
-   * milliseconds rather than a full start.
+   * Closing the player or switching media must close the mpv window immediately
+   * rather than leaving an idle or frozen external window floating on screen.
    */
   public async stop(): Promise<MpvCommandResult> {
     if (!this.process) return { ok: true };
-    const result = await this.command(['stop']);
+    await this.shutdown();
     this.state = 'idle';
     this.emit();
-    return result;
+    return { ok: true };
   }
 
   /** Ends the process. Wired into `before-quit`; otherwise mpv outlives the app. */

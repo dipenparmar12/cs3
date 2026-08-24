@@ -181,27 +181,38 @@ export class PlaybackEngine {
   public async inspect(
     request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh'>
   ): Promise<SourceCapabilityModel> {
-    const resolvedUrl = await this.deps.proxy.wrap(request.url, request.headers);
+    const targetRoute = this.deps.proxy.getTargetRoute(request.url);
+    const originUrl = targetRoute ? targetRoute.url : request.url;
+    const effectiveHeaders = {
+      ...(targetRoute?.headers ?? {}),
+      ...(request.headers ?? {}),
+    };
+    const resolvedUrl = await this.deps.proxy.wrap(originUrl, effectiveHeaders);
+
+    const cacheKey = `${originUrl} ${JSON.stringify(effectiveHeaders)}`;
 
     if (!request.refresh) {
-      const hit = this.cache.get(resolvedUrl);
+      const hit = this.cache.get(cacheKey);
       if (hit && Date.now() - hit.at < CAPABILITY_TTL_MS) return hit.model;
     }
 
-    const model = await this.measure(resolvedUrl, request.url, request);
+    const model = await this.measure(resolvedUrl, originUrl, {
+      ...request,
+      headers: effectiveHeaders,
+    });
 
     if (this.cache.size >= MAX_CACHED_CAPABILITIES) {
       const oldest = this.cache.keys().next().value;
       if (oldest !== undefined) this.cache.delete(oldest);
     }
-    this.cache.set(resolvedUrl, { model, at: Date.now() });
+    this.cache.set(cacheKey, { model, at: Date.now() });
     return model;
   }
 
   private async measure(
     resolvedUrl: string,
     originUrl: string,
-    request: Pick<PlaybackStreamRequest, 'isM3u8' | 'isDash' | 'drm'>
+    request: Pick<PlaybackStreamRequest, 'isM3u8' | 'isDash' | 'drm' | 'headers'>
   ): Promise<SourceCapabilityModel> {
     const host = await this.hostCapability();
     const { isM3u8 } = request;

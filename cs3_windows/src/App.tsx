@@ -438,6 +438,7 @@ export const App: React.FC = () => {
     // The teardown effect above stops the stream once `playback` clears; a
     // session owns its own stream, so it is ended explicitly instead.
     if (session) window.cloudstream?.stopPlayback(session.id, true);
+    void window.cloudstream?.mpvStop?.();
     setSession(null);
     setPreparing(null);
     setPlayback(null);
