@@ -31,6 +31,17 @@ const CALL_TIMEOUT_MS = 60_000;
 /** Beyond this many restarts in a session the sidecar is treated as unusable. */
 const MAX_RESTARTS = 3;
 
+/**
+ * Answers a call the *sidecar* made. Registered by `main.ts`.
+ *
+ * Returns the document the JVM will hand straight to the bridge, so it must be
+ * the shape that end binds to — see `WebViewAnswer` in `webViewHost.ts`.
+ */
+export type HostCallHandler = (
+  method: string,
+  params: Record<string, unknown>
+) => Promise<unknown>;
+
 /** One pending JSON-RPC call. */
 interface Pending {
   resolve: (value: RpcResult) => void;
@@ -66,6 +77,7 @@ export class SidecarSupervisor {
   private lastStatus: { canExecute: boolean; reason?: string; sandboxGaps: string[] } | null = null;
   private starting: Promise<boolean> | null = null;
   private provisioner: RuntimeProvisioner;
+  private hostCallHandler: HostCallHandler | null = null;
 
   private readonly dataDir: string;
 
@@ -79,6 +91,18 @@ export class SidecarSupervisor {
 
   public getProvisioner(): RuntimeProvisioner {
     return this.provisioner;
+  }
+
+  /**
+   * Registers what answers the sidecar's own calls.
+   *
+   * Must be set before `ensureStarted`, because the capability handshake that
+   * tells the JVM a browser exists is sent as part of starting. Registered
+   * after, the first session's providers would each spend a full browser
+   * timeout discovering that nothing was listening.
+   */
+  public setHostCallHandler(handler: HostCallHandler | null): void {
+    this.hostCallHandler = handler;
   }
 
   // --- lifecycle -----------------------------------------------------------
@@ -181,6 +205,12 @@ export class SidecarSupervisor {
       this.startFailure = status.error ?? 'The extension runtime did not respond to a status probe.';
       return false;
     }
+    // Tell the JVM whether a browser is on offer. Until this lands every reverse
+    // call there fails at once with a reason, which is the honest answer for a
+    // host that is not listening — and much better than each provider spending a
+    // 60-second browser timeout to find out.
+    await this.call('hostCapabilities', { webview: this.hostCallHandler !== null }, 10_000);
+
     this.lastStatus = {
       canExecute: Boolean(status.result?.canExecute),
       reason: status.result?.reason ? String(status.result.reason) : undefined,
@@ -273,11 +303,28 @@ export class SidecarSupervisor {
   }
 
   private onFrame(line: string): void {
-    let frame: { id?: string; ok?: boolean; result?: Record<string, unknown>; error?: string; errorKind?: string };
+    let frame: {
+      id?: string;
+      ok?: boolean;
+      result?: Record<string, unknown>;
+      error?: string;
+      errorKind?: string;
+      hostCall?: string;
+      hostId?: string;
+      params?: Record<string, unknown>;
+    };
     try {
       frame = JSON.parse(line);
     } catch {
       console.warn(`[cs3-sidecar] unparsable frame: ${line.slice(0, 200)}`);
+      return;
+    }
+
+    // The pipe run backwards: the sidecar asking us for something. Told apart by
+    // a key rather than a version field, so a runtime provisioned before this
+    // existed still speaks the frames it always did.
+    if (typeof frame.hostCall === 'string') {
+      void this.onHostCall(frame.hostCall, String(frame.hostId ?? ''), frame.params ?? {});
       return;
     }
 
@@ -293,6 +340,50 @@ export class SidecarSupervisor {
       error: frame.error,
       errorKind: frame.errorKind,
     });
+  }
+
+  /**
+   * Serves one call from the sidecar and answers it.
+   *
+   * Every failure is answered, never dropped. The JVM side has its own deadline,
+   * so a dropped frame is not a hang — but it is a provider waiting the full
+   * browser timeout to be told something we already knew, on every link it
+   * tries.
+   */
+  private async onHostCall(
+    method: string,
+    hostId: string,
+    params: Record<string, unknown>
+  ): Promise<void> {
+    const reply = (payload: Record<string, unknown>) => {
+      if (!this.proc || this.proc.killed) return;
+      try {
+        // The answer travels as a JSON *string* under `json`, matching the way
+        // `providerLoad` carries the bridge's document in the other direction:
+        // it is already shaped for its reader, and re-parsing it through the
+        // sidecar's minimal writer would only add a place to lose fields.
+        this.proc.stdin.write(
+          `${JSON.stringify({ hostReply: hostId, ok: true, json: JSON.stringify(payload) })}\n`
+        );
+      } catch (error) {
+        sidecarLog.warn('host_call_reply_failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+
+    const handler = this.hostCallHandler;
+    if (!handler) {
+      reply({ ok: false, error: `The desktop app cannot serve ${method}.` });
+      return;
+    }
+
+    try {
+      const result = await handler(method, params);
+      reply((result ?? { ok: false, error: `${method} produced no answer.` }) as Record<string, unknown>);
+    } catch (error) {
+      reply({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   /**

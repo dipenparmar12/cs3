@@ -59,6 +59,19 @@ public final class Json {
         }
     }
 
+    /**
+     * Appends {@code s} as a quoted, escaped JSON string.
+     *
+     * <p>Public because {@link HostChannel} assembles one frame by hand: its
+     * {@code params} is already a JSON document, so passing the whole frame
+     * through {@link #write} would escape that document into a string literal
+     * and the host would receive a quoted blob instead of an object. The fields
+     * around it still have to be escaped by exactly these rules.
+     */
+    public static void writeTo(StringBuilder sb, String s) {
+        writeString(sb, s);
+    }
+
     private static void writeString(StringBuilder sb, String s) {
         sb.append('"');
         for (int i = 0; i < s.length(); i++) {

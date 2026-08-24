@@ -1,61 +1,59 @@
 package com.lagradost.cloudstream3.network
 
+import com.cloudstream.desktop.bridge.HostBridge
+import com.cloudstream.desktop.bridge.json
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import okhttp3.Headers
 import okhttp3.Interceptor
 import okhttp3.Response
 import java.net.URI
 
 /**
- * `com.lagradost.cloudstream3.network.CloudflareKiller` — 16 load failures named
- * this class, and none of them was a plugin trying to bypass Cloudflare.
+ * `com.lagradost.cloudstream3.network.CloudflareKiller` — and since the WebView
+ * bridge landed, it actually kills Cloudflare.
  *
- * ## The failure was not where it looked
+ * ## The failure was originally not where it looked
  *
- * Every recorded trace ends in `PluginHost.describeProvider` → `Class.getMethod`,
- * not in a request. `getMethod` resolves the parameter and return types of
- * *every* public method on the class, so a provider that merely declares
+ * 16 load failures named this class, and none of them was a plugin trying to
+ * bypass anything. Every recorded trace ends in `PluginHost.describeProvider` →
+ * `Class.getMethod`, which resolves the parameter and return types of *every*
+ * public method on a class — so a provider that merely declares
+ * `override val interceptor = CloudflareKiller()` could not be asked its own
+ * name. That half was fixed in `PluginHost` (its catch includes `LinkageError`
+ * now); this class had to exist as well, or the same providers failed again at
+ * their first request instead of at load.
  *
- * ```kotlin
- * val cfKiller = CloudflareKiller()
- * override val interceptor = cfKiller
- * ```
+ * ## What changed
  *
- * could not have its `getName()` read. The provider had already registered
- * successfully; asking it its own name is what killed the load. That half is
- * fixed in `PluginHost` — the catch there now includes `LinkageError` — but the
- * type still has to exist, or the same providers fail again at their first
- * request instead.
+ * This used to forward the request unchanged and return whatever the host said,
+ * because there was no WebView in the sidecar and a proof-of-work interstitial
+ * cannot be answered by an HTTP client. There is a browser now — Chromium, in
+ * the Electron process, one reverse RPC away — so the challenge is solved for
+ * real and `cf_clearance` comes back with the answer.
  *
- * Another `:app` type, like [com.lagradost.cloudstream3.plugins.Plugin] and
- * [com.lagradost.cloudstream3.utils.DataStore]. `library-jvm` publishes
- * `WebViewResolver` from this same package but not this class, which is why the
- * gap survived the original survey.
+ * The shape is upstream's, deliberately, so extensions did not have to change:
  *
- * ## Why this forwards instead of bypassing
+ * 1. No saved cookies for the host -> send the request. If the reply is not a
+ *    Cloudflare challenge, that is the answer and no browser is opened.
+ * 2. A challenge -> solve it in the browser, save the cookies, re-send.
+ * 3. Saved cookies -> send with them attached from the start.
  *
- * The real implementation drives a `WebView`: it loads the challenge page,
- * lets Cloudflare's JavaScript run, and harvests `cf_clearance` from the
- * `CookieManager`. There is no WebView in the sidecar — that is docs/PRD/36
- * step 7, still outstanding — and there is no way to solve the challenge
- * without one. A proof-of-work interstitial cannot be answered by an HTTP
- * client.
+ * **A browser is only opened when a real challenge came back.** The corpus
+ * attaches this interceptor defensively — set once on the provider, covering
+ * every request it makes, protected or not — so opening one per request would
+ * put a Chromium page behind every scrape in the app.
  *
- * So this forwards the request unchanged and returns whatever the host says. A
- * site behind Cloudflare answers 403 and the provider reports no results, which
- * is the truth. The alternatives are both worse:
+ * ## Two things kept from the forwarding version
  *
- * - **Throwing** would break providers that attach a `CloudflareKiller`
- *   defensively and mostly talk to hosts that never challenge them. That is the
- *   common case in the corpus — the interceptor is set once on the provider and
- *   covers every request it makes, protected or not.
- * - **Retrying or forging a `cf_clearance`** would be a lie to plugin code about
- *   what happened, and DROP-9 rules it out for the same reason
- *   `PackageManager.getPackagesForUid` returns null rather than a plausible
- *   package name.
+ * When no browser is reachable — an older runtime, or a JVM whose host has gone
+ * — this still forwards rather than throwing. A site behind Cloudflare then
+ * answers 403 and the provider reports no results, which is the truth and is
+ * exactly what shipped before.
  *
- * When the WebView bridge lands, this class is where it plugs in: the shape
- * below is upstream's, so a real `bypassCloudflare` can replace the forward
- * without touching a single extension.
+ * And nothing is ever forged. DROP-9 rules out inventing a `cf_clearance` for
+ * the same reason `PackageManager.getPackagesForUid` returns null rather than a
+ * plausible package name: lying to plugin code about its platform makes every
+ * downstream bug undiagnosable.
  */
 @Suppress("unused")
 class CloudflareKiller : Interceptor {
@@ -63,10 +61,17 @@ class CloudflareKiller : Interceptor {
     companion object {
         const val TAG = "CloudflareKiller"
 
+        /** Upstream's pair. A challenge is *both* of these, never one. */
+        private val ERROR_CODES = listOf(403, 503)
+        private val CLOUDFLARE_SERVERS = listOf("cloudflare-nginx", "cloudflare")
+
+        /** The only cookie that matters, and the signal the challenge is done. */
+        private const val CLEARANCE = "cf_clearance"
+
         /**
          * Pure string work and identical to upstream, so it is implemented
          * rather than stubbed — extensions call it on cookie headers they
-         * obtained themselves, which has nothing to do with the WebView.
+         * obtained themselves, which has nothing to do with the browser.
          */
         fun parseCookieMap(cookie: String): Map<String, String> {
             return cookie.split(";").associate {
@@ -79,37 +84,130 @@ class CloudflareKiller : Interceptor {
     /**
      * Real and mutable, because extensions treat it as their own store: the
      * corpus reads it, calls `containsKey` on it, and clears it between
-     * requests. Nothing populates it here — no challenge is ever solved — so it
-     * stays empty unless an extension puts something in it, and an extension
-     * that does gets its own entries back.
+     * requests. A solved challenge writes here, and an extension that puts its
+     * own entries in gets them back.
      */
     val savedCookies: MutableMap<String, Map<String, String>> = mutableMapOf()
 
     /**
-     * Cookies for [url]'s host, as request headers.
+     * Cookies for [url]'s host, as request headers, with the browser's user
+     * agent attached.
      *
-     * Six call sites in the corpus pass `mainUrl` here and splice the result
-     * into a request. Empty headers are the correct answer for a host we hold no
-     * cookies for, and merging empty headers is a no-op — so those call sites
-     * behave exactly as they would on Android before the first challenge.
+     * The agent is not decoration. A `cf_clearance` is issued against the agent
+     * that earned it, and replaying it under a different one is a reliable way
+     * to be challenged again — which is why upstream includes it here too.
      */
     fun getCookieHeaders(url: String): Headers {
         val host = runCatching { URI(url).host }.getOrNull()
-        val cookies = savedCookies[host] ?: return Headers.headersOf()
-        if (cookies.isEmpty()) return Headers.headersOf()
-        val cookie = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
-        return Headers.headersOf("Cookie", cookie)
+        val cookies = host?.let { savedCookies[it] }.orEmpty()
+        val builder = Headers.Builder()
+        if (cookies.isNotEmpty()) {
+            builder.add("Cookie", cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
+        }
+        WebViewResolver.webViewUserAgent?.takeIf { it.isNotBlank() }
+            ?.let { builder.add("user-agent", it) }
+        return builder.build()
     }
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        val cookies = savedCookies[request.url.host]
-        if (cookies.isNullOrEmpty()) return chain.proceed(request)
+        val host = request.url.host
 
-        // An extension that populated the map itself gets its cookies sent.
-        val merged = request.newBuilder()
+        savedCookies[host]?.takeIf { it.isNotEmpty() }?.let { known ->
+            return chain.proceed(withCookies(chain, known))
+        }
+
+        val response = chain.proceed(request)
+        if (!isChallenge(response)) return response
+
+        // Upstream closes before re-issuing, and it matters: the body is an
+        // interstitial nobody will read, and leaving it open holds the
+        // connection out of the pool for the retry that is about to need one.
+        response.close()
+
+        val solved = solve(request.url.toString(), host)
+        if (solved.isEmpty()) {
+            System.err.println("[$TAG] could not clear Cloudflare for ${request.url}")
+            // The original request again, so the caller sees the site's own 403
+            // rather than a failure invented here.
+            return chain.proceed(request)
+        }
+
+        savedCookies[host] = solved
+        return chain.proceed(withCookies(chain, solved))
+    }
+
+    /**
+     * Rebuilds the request with the cookies and the browser's agent.
+     *
+     * `chain.proceed` rather than upstream's `app.baseClient.newCall`: this is
+     * an application interceptor, so proceeding again is allowed and keeps the
+     * request inside the chain it started in — every other interceptor the
+     * provider installed still applies. Going out through a second client would
+     * also risk re-entering this interceptor, which upstream avoids only by
+     * reaching for a client that does not have it attached.
+     */
+    private fun withCookies(chain: Interceptor.Chain, cookies: Map<String, String>) =
+        chain.request().newBuilder()
             .header("Cookie", cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
+            .apply {
+                WebViewResolver.webViewUserAgent
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { header("user-agent", it) }
+            }
             .build()
-        return chain.proceed(merged)
+
+    /**
+     * Both conditions, as upstream has it.
+     *
+     * A bare 403 is not a challenge — it is far more often hotlink protection or
+     * an expired signed URL, neither of which a browser can help with, and both
+     * of which are common enough that opening one on every 403 would put a
+     * Chromium page behind a large share of ordinary scraping failures.
+     */
+    private fun isChallenge(response: Response): Boolean =
+        response.header("Server") in CLOUDFLARE_SERVERS && response.code in ERROR_CODES
+
+    /**
+     * Solves the challenge in the host's browser and returns its cookies.
+     *
+     * No intercept pattern is sent. Upstream passes the deliberately unmatchable
+     * `.^` for the same reason: there is no URL to wait for here, only a cookie,
+     * so the host is told to finish the moment `cf_clearance` appears rather
+     * than to run out its timeout.
+     */
+    private fun solve(url: String, host: String): Map<String, String> {
+        if (!HostBridge.isAvailable()) return emptyMap()
+
+        val params = json {
+            field("url", url)
+            field("method", "GET")
+            // Cloudflare fingerprints the agent, and upstream passes `null` here
+            // with the comment "Cloudflare needs default user agent". Omitting
+            // it leaves the browser's own, which is the point.
+            field("awaitCookie", CLEARANCE)
+            field("interceptUrl", ".^")
+            field("useOkhttp", false)
+            field("timeoutMs", 60_000L)
+        }
+
+        val answer = runCatching {
+            parseJson<HostWebViewAnswer>(HostBridge.call("webview.resolve", params))
+        }.getOrElse {
+            System.err.println("[$TAG] unreadable answer while clearing $host: ${it.message}")
+            return emptyMap()
+        }
+
+        answer.userAgent?.takeIf { it.isNotBlank() }?.let { WebViewResolver.webViewUserAgent = it }
+        if (!answer.ok) {
+            System.err.println("[$TAG] ${answer.error}")
+            return emptyMap()
+        }
+
+        // Only a real clearance counts. Saving whatever cookies the page happened
+        // to set would make the next request take the "already solved" path and
+        // send an ordinary session cookie into a challenge it cannot answer —
+        // failing in a way that no longer even tries the browser.
+        return if (answer.cookies.containsKey(CLEARANCE)) answer.cookies else emptyMap()
     }
 }

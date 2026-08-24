@@ -66,6 +66,7 @@ import {
 import { deadlineFromUrl } from './sourceCache';
 import { HistoryStore } from './cs3/historyStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
+import { WebViewHost, type WebViewResolveRequest } from './cs3/webViewHost';
 import { DiscoveryService } from './cs3/discovery';
 import { SourcePrefetcher } from './cs3/sourcePrefetcher';
 import { TitleEnricher } from './cs3/titleEnricher';
@@ -139,6 +140,27 @@ diagnostics.setListener((record) => {
 const aria2 = new Aria2Engine();
 const downloadService = new DownloadService(datastore, aria2);
 const pluginManager = new PluginManager(datastore);
+
+/*
+ * The browser extensions could never open for themselves (PRD-36 step 7).
+ *
+ * Registered before anything starts the sidecar, because the handshake that
+ * tells the JVM a browser exists is sent while starting: register it after and
+ * the first session's providers each spend a full browser timeout finding out
+ * that nothing was listening.
+ *
+ * The handler is the whole reverse-RPC surface. It is deliberately a closed set
+ * of named methods rather than anything general — this is plugin code reaching
+ * into the app, and "run this in a browser" is a large enough capability to
+ * grant without also granting whatever the next method would be.
+ */
+const webViewHost = new WebViewHost();
+pluginManager.getSidecar().setHostCallHandler(async (method, params) => {
+  if (method === 'webview.resolve') {
+    return webViewHost.resolve(params as unknown as WebViewResolveRequest);
+  }
+  return { ok: false, error: `The desktop app does not implement ${method}.` };
+});
 const binaryDownloader = new BinaryDownloader();
 const torrentEngine = new TorrentEngine(
   datastore.getString('torrent_cache_path', '', true) || undefined
@@ -672,6 +694,9 @@ app.on('before-quit', async (event) => {
     // A controlled VLC is our child process; without this it outlives the app.
     await externalPlayers.shutdown();
     contentService.shutdown();
+    // Hidden windows keep running their pages — timers, requests and all — with
+    // nothing on screen to reveal them.
+    webViewHost.destroy();
     await torrentEngine.destroy();
   } catch (error) {
     // Shutdown is best-effort; never block quit on it. It is still worth

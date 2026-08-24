@@ -56,9 +56,16 @@ public final class Main {
     /** stdout is the control channel and nothing else may write to it. */
     private final PrintStream out;
 
+    /**
+     * The same pipe, run backwards. Created here because it needs {@link #emitRaw},
+     * and handed to the bridge so {@code WebViewResolver} can ask for a browser.
+     */
+    private final HostChannel hostChannel = new HostChannel(this::emitRaw);
+
     private Main(PluginHost host, PrintStream out) {
         this.host = host;
         this.out = out;
+        host.setHostChannel(hostChannel);
     }
 
     public static void main(String[] args) throws Exception {
@@ -105,6 +112,9 @@ public final class Main {
             waiters.shutdownNow();
         }
         pool.shutdownNow();
+        // Anything still waiting on the host will never be answered now.
+        hostChannel.shutdown(
+                "The desktop app closed the connection while the request was in flight.");
     }
 
     private void handle(String line) {
@@ -115,6 +125,12 @@ public final class Main {
             emit(Map.of("id", "", "ok", false, "error", "Malformed request: " + e.getMessage()));
             return;
         }
+
+        // An answer to something *we* asked the host for. Completed inline, on
+        // the reader thread, because the worker pool is bounded: once every
+        // worker is blocked waiting for a browser, there is no worker left to
+        // deliver the reply that would release one. See HostChannel.
+        if (hostChannel.complete(req)) return;
 
         Object id = req.getOrDefault("id", "");
         String method = String.valueOf(req.getOrDefault("method", ""));
@@ -218,6 +234,7 @@ public final class Main {
                 m.put("reason", host.classpathProblem());
                 m.put("loadedPlugins", host.loadedPluginIds());
                 m.put("sandboxGaps", new ArrayList<>(PluginClassLoader.SANDBOX_GAPS));
+                m.put("hostChannel", hostChannel.describe());
                 yield m;
             }
 
@@ -241,6 +258,21 @@ public final class Main {
             }
 
             case "unload" -> Map.of("unloaded", host.unload(str(params, "pluginId")));
+
+            /*
+             * The host declaring what it can do for us (PRD 36 step 7).
+             *
+             * Until this arrives every reverse call fails immediately with a
+             * reason, which is the honest answer for a host that is not
+             * listening — an older build, or one whose window has gone. Waiting
+             * out a 60s browser timeout to discover the same thing would turn a
+             * missing feature into a hung provider.
+             */
+            case "hostCapabilities" -> {
+                boolean webview = Boolean.TRUE.equals(params.get("webview"));
+                hostChannel.setAvailable(webview);
+                yield Map.of("webview", webview);
+            }
 
             /*
              * Provider execution (PRD 36 step 4).
@@ -294,6 +326,20 @@ public final class Main {
 
     private synchronized void emit(Map<String, Object> reply) {
         out.println(Json.write(reply));
+    }
+
+    /**
+     * Writes one pre-rendered frame.
+     *
+     * <p>Shares {@link #emit}'s monitor rather than merely being thread-safe on its
+     * own: host calls are emitted from worker threads while replies are emitted
+     * from the waiter pool, and two interleaved {@code println}s would put half of
+     * one frame inside another. There is no recovering from that — the host
+     * discards the unparsable line and the call it belonged to hangs until it
+     * times out.
+     */
+    private synchronized void emitRaw(String frame) {
+        out.println(frame);
     }
 
     private static Map<String, String> parseArgs(String[] args) {

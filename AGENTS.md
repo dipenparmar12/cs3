@@ -72,10 +72,11 @@ cs3/
 | Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
-| Sidecar tests | `sidecar/` | `mvn test` (20 tests) |
+| Sidecar tests | `sidecar/` | `mvn test` (31 tests) |
 | Main-process tests | `cs3_windows/` | `bun run test:electron` (159 tests, Node type-stripping — no framework) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Provider links only | `cs3_windows/` | `bun run test:links` (15 cases, no ffmpeg needed) |
+| WebView matching only | `cs3_windows/` | `bun run test:webview` (21 cases, pure) |
 | Source scope only | `cs3_windows/` | `bun run test:scope` (9 cases) |
 | Media proxy only | `cs3_windows/` | `bun run test:proxy` (11 cases, stubbed origin) |
 | Subtitles only | `cs3_windows/` | `bun run test:subtitles` (16 cases) |
@@ -91,6 +92,7 @@ cs3/
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
 | Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
+| Provider bridge, no JitPack | repo root | `node tools/package/build-bridge.mjs` — same jar, compiled against `sidecar/runtime/` |
 
 On a fresh clone run all three **in that order**: the sidecar build produces the android
 shim the bridge compiles against, runtime-deps puts `library-jvm` in place, and the bridge
@@ -98,11 +100,20 @@ needs both. Nothing can execute an extension until all three have run.
 
 **The bridge build needs jitpack.io, which some cloud sessions cannot reach** —
 `library-jvm` is published there and nowhere else, and a blocked egress policy fails the
-build at dependency resolution before a line is compiled. The jars are already vendored in
-`sidecar/runtime/`, so the module can be compiled against that directory directly with
-`kotlin-compiler-embeddable` (it resolves from Central) and packaged with `jar`. That
-produces the same classpath the pom does; it is a workaround for the network, not for the
-build.
+build at dependency resolution before a line is compiled (a 403 on a POM, with nothing about
+the Kotlin at fault). The jars are already vendored in `sidecar/runtime/`, so the module can
+be compiled against that directory directly with `kotlin-compiler-embeddable` (it resolves
+from Central) and packaged with `jar`. **`tools/package/build-bridge.mjs` does exactly that**
+— it is a workaround for the network, not for the build, and the pom stays the reference.
+
+Two things about that script are not obvious and cost an afternoon each. The compiler is
+itself compiled Kotlin, so running it needs `kotlin-stdlib`, `kotlin-reflect`,
+`kotlin-script-runtime`, `kotlin-daemon-embeddable`, `trove4j`, coroutines **and**
+`annotations-13.0` on its *own* classpath — codegen resolves `@Nullable` from there and fails
+inside `FunctionCodegen` without it, which reads like a version conflict and is not one. And
+the previous `cs3-provider-bridge.jar` is excluded from the compile classpath, or the sources
+compile against last build's copy of themselves and a changed signature is invisible until
+something fails to link at runtime.
 
 The sidecar needs **Java 21 or newer** — it is compiled to class file 65. An older
 `JAVA_HOME` is detected and named rather than crashing the runtime at startup, and
@@ -305,7 +316,9 @@ not a layering mistake.
 | `pluginManager.ts` | `.cs3` repository discovery, plugin-list parsing (mirrors upstream `RepositoryManager.kt`), download + SHA-256 verification, Android-style install paths, then hands archives to the sidecar. Also owns the enable/disable cascade — see the extensions-screen section. |
 | `cs3/providerLinks.ts` | Reads a provider's reply without guessing: link type, DRM, playlist parts, audio-track headers. Pure and tested — every wrong answer here looks like a bad provider rather than a bad routing decision. |
 | `pluginAnalyzer.ts` | Static compatibility classification of a plugin before it is trusted. |
-| `cs3/sidecarSupervisor.ts` | Spawns and supervises the JVM child process; line-delimited JSON-RPC over stdio; never throws on a missing/broken sidecar. |
+| `cs3/sidecarSupervisor.ts` | Spawns and supervises the JVM child process; line-delimited JSON-RPC over stdio; never throws on a missing/broken sidecar. Also routes the *reverse* frames — see `webViewHost.ts`. |
+| `cs3/webViewHost.ts` | The browser the JVM cannot open for itself. Offscreen `BrowserWindow` per resolve, `webRequest` watching for the provider's intercept pattern, cookies harvested for `CloudflareKiller`. |
+| `cs3/webViewMatch.ts` | What a page's subrequests mean. Pure and tested, because every wrong answer here is attributed to the provider instead. |
 | `cs3/extensionUpdater.ts` | Over-the-air extension updates on a schedule, so a provider fix does not wait for an app release. |
 | `cs3/bootstrap.ts` | First-run install of the bundled repositories, and the adult-content opt-in. |
 | `cs3/diagnostics.ts` | Provider failures with the context that makes them reproducible. See below. |
@@ -629,8 +642,8 @@ Also fixed while getting there, both real bugs on the load path:
 **Never reintroduce a synthetic/placeholder source.** That rule is unchanged and still
 load-bearing. When nothing real is found, return an empty list *and a reason*.
 
-Still outstanding from doc 36: step 5 (jlink a JRE), step 6 (OS-level sandbox), step 7 (the
-WebView bridge, needed by ~7% of providers).
+Still outstanding from doc 36: step 5 (jlink a JRE) and step 6 (OS-level sandbox). Step 7,
+the WebView bridge, landed 2026-08-24 — see "The browser, finally" below.
 
 ### Community extensions: five defects found by running them (2026-08-13)
 
@@ -1157,11 +1170,12 @@ The divergences that remain are runtime and platform, not translation:
    sidecar stderr, so the occurrences seen are a signal, not a rate. Count it properly before
    spending effort on it.
 
-2. **No WebView.** Still doc 36 step 7, still the largest single gap, and now the dominant
-   one. Android providers get a real browser for Cloudflare challenges and for extractors
-   that need JavaScript to run; `CloudflareKiller` here forwards rather than bypasses.
-   Aniworld's Google 403 and the Voe/Vidsonic extractor failures are all this. This is the
-   thing to build next if the goal is parity — not more shims.
+2. **No WebView — closed 2026-08-24.** This was the dominant gap and the recommended next
+   unit of work in three separate documents. Providers now get a real browser: the sidecar
+   can call back into the main process, the bridge supplies a `WebViewResolver` that
+   *shadows* `library-jvm`'s `TODO("Not yet implemented")` stub, and `CloudflareKiller`
+   solves challenges rather than forwarding them. See "The browser, finally" below for the
+   design and for what still differs from Android.
 
 3. **Host-side reality, which is not a divergence at all.** Expired signed URLs, hotlink
    403s, dead swarms and slow sites fail identically on both platforms. The vendor matrix
@@ -1171,8 +1185,10 @@ The divergences that remain are runtime and platform, not translation:
    are not there.
 
 **Count before fixing.** That rule produced the six-classes finding in the third round and it
-applies here in the other direction: the counting now says the class problem is solved, so
-the next unit of effort belongs in the WebView bridge.
+applies here in the other direction: the counting says the class problem is solved, which is
+why the next unit of effort went into the WebView bridge rather than into more shims. With
+that closed, the remaining named divergence is TLS strictness (1 above) — **and its frequency
+is still unmeasured**. Count it before spending anything on it.
 
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 
@@ -2267,24 +2283,142 @@ sources instead, and `RUNTIME_GENERATION` is bumped so installed copies under
 `%APPDATA%` are replaced. **Never take a prebuilt jar from a branch whose sources you
 have not compared.**
 
+### The browser, finally: the WebView bridge (2026-08-24)
+
+PRD-36 step 7, PRD-39 §7, and `docs/roadmap/android-parity.md` all named this as the
+highest-value outstanding work, independently. It is built.
+
+**The class that resolves perfectly and does nothing.** Unlike `Plugin`, `DataStore` or
+`CloudflareKiller`, `com.lagradost.cloudstream3.network.WebViewResolver` is **not** missing
+from `library-jvm` 4.8.0. It is published, it links, and a compatibility audit that counts
+`NoClassDefFoundError` sees nothing wrong with it — its JVM variant simply has a pass-through
+`intercept` and a `resolveUsingWebView` that is `TODO("Not yet implemented")`. So a provider
+needing a browser did not degrade: it threw `NotImplementedError`, or it silently took a
+Cloudflare interstitial for the page it asked for and reported no results. **That is why four
+rounds of counting missing classes never surfaced it**, and it is the standing argument for
+not treating "zero NoClassDefFoundError" as "zero compatibility gaps".
+
+Three pieces, and the first is the only hard one:
+
+| Piece | File |
+|---|---|
+| The stdio protocol, run backwards | `sidecar/.../HostChannel.java` + `Main.handle` |
+| The handler the sidecar installs into the bridge | `bridge/.../HostBridge.kt` |
+| `WebViewResolver`, shadowing the library stub | `bridge/.../network/WebViewResolver.kt` |
+| The browser | `cs3_windows/electron/cs3/webViewHost.ts` |
+| What a subrequest means (pure, tested) | `cs3_windows/electron/cs3/webViewMatch.ts` |
+
+**Frames are told apart by a key, never a version.** The sidecar emits
+`{"hostCall":"webview.resolve","hostId":"h1","params":{…}}` and the host answers
+`{"hostReply":"h1","ok":true,"json":"…"}`. Both sides route on the presence of `hostCall` /
+`hostReply`, so a runtime provisioned before this existed still speaks the frames it always
+did. The payload travels as a JSON *string* under `json`, the same choice `providerLoad`
+makes in the other direction and for the same reason: it is already shaped for its reader,
+and re-parsing it through the sidecar's minimal writer would only add a place to lose fields.
+
+**Host replies complete on the stdin reader thread, and that is not an optimisation.** The
+sidecar runs plugin calls on a *bounded* pool. A provider waiting on a browser holds one of
+those threads; if delivering the reply also needed one, enough concurrent resolves would fill
+the pool with threads each waiting for a reply no remaining thread could deliver. That
+deadlock appears only under load, which is to say only in front of a user.
+
+**Classpath order in `PluginHost.shared()` is now load-bearing.** Every type the bridge
+supplied before was one `library-jvm` does not publish, so whichever jar was reached first
+held the only copy. `WebViewResolver` is the first class the bridge *overrides*, a
+`URLClassLoader` searches its URLs in order, and `Files.newDirectoryStream` specifies none —
+so which implementation won would have been a property of the filesystem: correct on the
+machine it was built on, throwing `NotImplementedError` on a user's. The bridge is sorted to
+the front, and `WebViewBridgeTest` asserts both directions (with the bridge, ours loads;
+without it, the stub does — which is also where a future `library-jvm` that ships a real
+implementation would announce itself).
+
+**The shadow is a strict superset of the stub, verified with `javap`.** Every constructor,
+overload, synthetic `$default` bridge and static accessor matches descriptor-for-descriptor.
+It adds the property getters and `getWebViewUserAgent1` that the *Android* artifact has and
+the JVM one does not — the archives we load were compiled against Android, so a member
+missing here fails at a call site with `NoSuchMethodError` long after the class has linked.
+
+**A browser is opened only when something actually needs one.** `CloudflareKiller` follows
+upstream's order: send the request, and open a browser only if the reply is a genuine
+challenge — `Server: cloudflare` **and** 403/503, both, never one. A bare 403 is far more
+often hotlink protection or an expired signed URL, neither of which a browser can help with.
+The corpus attaches this interceptor defensively, so opening a page per request would put a
+Chromium instance behind every scrape in the app.
+
+Things that will bite:
+
+- **`backgroundThrottling: false` is mandatory.** A hidden window has its timers throttled,
+  and a challenge page is mostly timers. Left on, it takes minutes or never finishes — and
+  that reads as the site being slow rather than as our own setting.
+- **`cf_clearance` is `HttpOnly`**, so cookies are read from the session, never from
+  `document.cookie`, which comes back without the only cookie that matters. The bypass also
+  ends on that cookie *arriving* (`awaitCookie`) rather than on a URL match: upstream passes
+  the deliberately unmatchable `.^`, so without it every bypass runs its full 60s timeout.
+- **Certificate errors are ignored, for this partition only.** Android's resolver does
+  `handler.proceed()` on every SSL error and a real share of scraper hosts have bad certs.
+  What bounds it: the session is used only to solve challenges and watch URLs, never to
+  carry credentials, and the stream it finds is fetched afterwards through the ordinary path
+  with ordinary verification. Widening this to the app's default session would be a
+  different and much worse decision.
+- **`webRequest` handlers are per session and there is exactly one of each.** Registering
+  them per resolve means the second concurrent resolve silently unhooks the first — which
+  reads as a provider that intermittently finds nothing, but only when another provider
+  happens to be scraping at the same time. They are installed once and dispatch on
+  `webContentsId`.
+- **Java regexes are translated escape-aware, and refused when they cannot be.** JavaScript
+  accepts `\A` and `\p{Alpha}` as *identity escapes* — no error, and a pattern that matches
+  nothing a browser will ever request. A naive `replace(/\\A/g, '^')` is just as bad: it
+  also rewrites the `\A` inside `\\A`. A pattern silently treated as "never matches" spends
+  the full timeout on every link and comes back looking exactly like a host that is down,
+  attributed to the provider rather than to us.
+- **The blacklist reads the path, never the whole URL.** `?poster=…jpg` and `?v=….ts` cache
+  busters are routine, and cancelling the script they decorate breaks the page that was
+  about to solve the challenge. `/cdn-cgi/` and `recaptcha` are never blocked at all — that
+  is the challenge machinery itself.
+- **`RUNTIME_GENERATION` is 6.** Both halves changed and they must agree; a provisioned copy
+  pairing a new sidecar with an old bridge has a channel with nothing on the far end.
+
+**What still differs from Android, honestly.** Android streams every intercepted request to
+`requestCallBack` as it happens, and returning `true` destroys the view mid-load. Here the
+browser is one RPC away and the answer arrives as a batch, so the callback runs afterwards in
+observation order and a `true` truncates the list at that point — which reconstructs what the
+list *would* have held. What it cannot do is stop the page loading any sooner. Every corpus
+call site uses the callback to collect or to filter, both of which survive; the early stop is
+a saving, not a semantic. `useOkhttp` is likewise carried and used only as the hint upstream
+documents it as: the browser has its own stack and its own cookie jar, and re-issuing every
+subrequest across a process boundary would cost more than it buys.
+
+**Not yet measured: whether this actually rescues the providers it should.** `Aniworld`'s
+Google 403 and the Voe/Vidsonic extractor failures were all attributed to this gap. The
+harnesses that would settle it — `tools/e2e/provider-e2e.mjs` and
+`tools/e2e/native-engine-matrix.mjs` — drive the sidecar over stdio with **no Electron in the
+way**, which is exactly what makes them useful and exactly why neither can exercise this: no
+Electron means no browser, so `hostCapabilities` reports none and every resolve declines with
+a reason. Verified here are the seams (31 sidecar tests, 21 for the matcher, `javap` on the
+shadow); the corpus claim is not, and should not be made until someone runs the app. Closing
+that properly means teaching one harness to host the channel — the cheapest version is a
+headless Electron main process that answers `webview.resolve` and nothing else.
+
 ### Android parity: what was measured and what was closed (2026-08-23)
 
 `docs/roadmap/android-parity.md` records a source-level comparison against the checked-out
 Android tree at `a72f9e6c`. Four gaps were closed in that pass and are described there; the
 one that matters most is the one that was *not*:
 
-**`WebViewResolver` on the JVM is `TODO("Not yet implemented")`.** `library-jvm` ships a JVM
-variant whose `intercept` is a pass-through and whose `resolveUsingWebView` throws
-`NotImplementedError`. So a provider needing a browser does not degrade — it throws, or it
-silently receives a Cloudflare interstitial as though it were the page it asked for. **This
-is invisible to a class-resolution audit, because the class resolves perfectly**, which is
+**`WebViewResolver` on the JVM was `TODO("Not yet implemented")` — closed 2026-08-24**, and
+the audit's reasoning is worth keeping even though the finding is gone. `library-jvm` ships a
+JVM variant whose `intercept` is a pass-through and whose `resolveUsingWebView` throws
+`NotImplementedError`, so a provider needing a browser did not degrade — it threw, or it
+silently received a Cloudflare interstitial as though it were the page it asked for. **This
+was invisible to a class-resolution audit, because the class resolves perfectly**, which is
 why four rounds of shim work never surfaced it. 45 plugin directories across 11 repositories
 reference it or `CloudflareKiller`.
 
-The blocker is direction, not capability: the stdio RPC runs main → sidecar only, so the JVM
-cannot ask Electron to open a window. Electron *is* Chromium; the engine is already in the
-box. If you are about to write another shim, read that document first — the counting says the
-class problem is solved and the network layer is not.
+The blocker was direction, not capability: the stdio RPC ran main → sidecar only, so the JVM
+could not ask Electron to open a window. Electron *is* Chromium; the engine was already in
+the box. See "The browser, finally" in §5 for what was built and what still differs. The
+lesson generalises and is the reason to read that document before writing another shim: a
+gap that a missing-class count cannot see is not a gap that does not exist.
 
 Two smaller rules came out of the same pass and are easy to undo by accident:
 
