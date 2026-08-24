@@ -100,6 +100,20 @@ test('audio tracks keep their headers, which is what makes them fetchable', () =
   assert.equal(link.audioTracks?.[0].headers?.Referer, 'https://p.test/');
 });
 
+test('referer field from provider is merged into headers when headers has no Referer', () => {
+  const link = mapProviderLink(
+    {
+      type: 'VIDEO',
+      url: 'https://cdn.test/v.mp4',
+      referer: 'https://embed.streamprovider.test/watch',
+      headers: { 'User-Agent': 'CustomUA/1.0' },
+    },
+    'Fake'
+  );
+  assert.equal(link.headers['Referer'], 'https://embed.streamprovider.test/watch');
+  assert.equal(link.headers['User-Agent'], 'CustomUA/1.0');
+});
+
 test('a half-filled extractor result is not mistaken for DRM', () => {
   assert.equal(mapProviderLink({ url: 'https://x.test/a.mp4', drm: {} }, 'Fake').drm, undefined);
   assert.equal(linkRequiresEme({ drm: undefined }), false);

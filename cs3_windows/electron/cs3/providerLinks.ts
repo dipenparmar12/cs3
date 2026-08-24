@@ -127,12 +127,18 @@ export function mapProviderLink(
 ): ExtractorLink {
   const url = String(raw.url ?? '');
   const declared = LINK_TYPES.find((name) => name === raw.type);
+  const referer = raw.referer ? String(raw.referer) : '';
+  const rawHeaders = (raw.headers as Record<string, string> | undefined) ?? {};
+  const headers = { ...rawHeaders };
+  if (referer && !Object.keys(headers).some((k) => k.toLowerCase() === 'referer')) {
+    headers['Referer'] = referer;
+  }
 
   return {
     source: raw.source ? String(raw.source) : providerName,
     name: raw.name ? String(raw.name) : providerName,
     url,
-    referer: raw.referer ? String(raw.referer) : '',
+    referer,
     quality: typeof raw.quality === 'number' ? raw.quality : 0,
     linkType: declared,
     mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : undefined,
@@ -141,7 +147,7 @@ export function mapProviderLink(
     isM3u8: declared === 'M3U8' || Boolean(raw.isM3u8) || (!declared && looksLikeHls(url)),
     isDash: declared === 'DASH' || Boolean(raw.isDash) || (!declared && looksLikeDash(url)),
     extractorData: typeof raw.extractorData === 'string' ? raw.extractorData : undefined,
-    headers: (raw.headers as Record<string, string> | undefined) ?? {},
+    headers,
     audioTracks: readAudioTracks(raw.audioTracks),
     drm: readDrm(raw.drm),
     playlist: readPlaylist(raw.playlist),

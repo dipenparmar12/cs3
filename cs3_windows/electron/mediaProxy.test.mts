@@ -268,6 +268,13 @@ test('header injection with CRLF is sanitized when forwarded', async () => {
   assert.equal(seen.at(-1)?.referer, 'https://provider.test/Injected-Header: evil');
 });
 
+test('direct streams without Referer header do not inject synthetic Referer to origin', async () => {
+  const wrapped = await proxy.wrap('https://cdn.origin.test/noext', {});
+  seen.length = 0;
+  await fetch(wrapped);
+  assert.equal(seen.at(-1)?.referer, undefined);
+});
+
 // --- runner ----------------------------------------------------------------
 
 let failed = 0;
