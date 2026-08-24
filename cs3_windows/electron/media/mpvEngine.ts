@@ -90,6 +90,53 @@ const OBSERVED = [
 ] as const;
 
 /**
+ * What the keys do in mpv's own window.
+ *
+ * Bound one at a time over IPC rather than by turning on
+ * `--input-default-bindings`, and the difference is not tidiness.
+ *
+ * mpv's default set includes `q`, `Q` and `Ctrl+q`, all of which **quit the
+ * process**. That is not "the viewer closed the video" to this app: the child
+ * exits, and an exit while playing is the credits as far as `child.on('exit')`
+ * is concerned — so `NativeEngineStage` would receive `ended`, call `onEnded()`
+ * and start the next episode. Someone pressing `q` to stop watching would be
+ * given episode 4. The defaults also include `s`, which writes a screenshot
+ * next to the working directory, and a dozen bindings for features this window
+ * does not own.
+ *
+ * So the set is enumerated. Every entry matches what the same key already does
+ * in `VideoPlayer` — `SKIP_SECONDS` is 10 there and 10 here — because the two
+ * windows belong to one player and a key that seeks 10 seconds in one and 60 in
+ * the other is worse than a key that does nothing.
+ *
+ * Volume and mute are here rather than only on the OSC slider because the
+ * request was for volume control and a slider is the fiddliest way to offer it.
+ * Everything mpv changes this way is already in {@link OBSERVED}, so our own
+ * control bar follows along without a second sync path.
+ */
+const NATIVE_KEY_BINDINGS: ReadonlyArray<readonly [key: string, command: string]> = [
+  ['SPACE', 'cycle pause'],
+  ['k', 'cycle pause'],
+  ['MBTN_LEFT_DBL', 'cycle fullscreen'],
+  ['RIGHT', 'seek 10'],
+  ['LEFT', 'seek -10'],
+  ['l', 'seek 30'],
+  ['j', 'seek -30'],
+  ['UP', 'add volume 5'],
+  ['DOWN', 'add volume -5'],
+  ['WHEEL_UP', 'add volume 5'],
+  ['WHEEL_DOWN', 'add volume -5'],
+  ['m', 'cycle mute'],
+  ['f', 'cycle fullscreen'],
+  /**
+   * Leaves fullscreen and never quits. `ESC` is the reflex for "get me out of
+   * this", and in mpv's default set that is exactly what it does — quitting is
+   * `q`, which is not bound at all.
+   */
+  ['ESC', 'set fullscreen no'],
+] as const;
+
+/**
  * Video outputs tried in order, and why there is more than one.
  *
  * `gpu-next` is mpv's current output and the one that does HDR properly, but it
@@ -464,6 +511,7 @@ export class MpvEngine {
     }
 
     await this.observeProperties();
+    await this.applyKeyBindings();
     return { ok: true };
   }
 
@@ -496,11 +544,36 @@ export class MpvEngine {
        * would be invisible on every machine except theirs.
        */
       '--no-config',
-      /** Our UI is the controller; mpv's own OSD would be a second one. */
-      '--osc=no',
-      '--osd-level=0',
+      /**
+       * mpv draws its own controls, because mpv owns its own window.
+       *
+       * This was `--osc=no`, on the reasoning that our control bar is the
+       * controller and a second one would be redundant. That holds for an
+       * *embedded* surface and does not hold here: mpv renders into a separate
+       * OS window (the roadmap's Option A — see "What is not built" below), so
+       * the viewer looking at the picture is looking at a window with no
+       * controls in it at all, and our bar is behind it in a different window.
+       * Redundancy is the wrong thing to optimise when the alternative is a
+       * video you cannot pause without finding another window first.
+       *
+       * Nothing about this reaches the decode or network path — the OSC is a
+       * built-in Lua overlay and `--osd-level` is text on top of the picture.
+       * `--load-scripts=no` still applies to the user's own script directory;
+       * the OSC is internal and is not loaded from there.
+       */
+      '--osc=yes',
+      /**
+       * 1, not 2 or 3: the OSD appears on interaction and then goes away. The
+       * higher levels pin the timer over the picture permanently.
+       */
+      '--osd-level=1',
+      /**
+       * No default bindings, and this stays `no` deliberately — see
+       * {@link NATIVE_KEY_BINDINGS}. Keyboard input has to reach the window
+       * before any binding can fire, which is what changed here.
+       */
       '--input-default-bindings=no',
-      '--input-vo-keyboard=no',
+      '--input-vo-keyboard=yes',
       /**
        * mpv's youtube-dl hook is off: link resolution is this app's job and the
        * extensions have already done it. Left on, every failed load spends
@@ -596,6 +669,18 @@ export class MpvEngine {
       socket.once('connect', () => done(socket));
       socket.once('error', () => done(null));
     });
+  }
+
+  /**
+   * Registers {@link NATIVE_KEY_BINDINGS} on the running process.
+   *
+   * Per process, not per file: bindings survive `loadfile`, so this belongs
+   * beside `observeProperties` in the launch path rather than in `open`.
+   */
+  private async applyKeyBindings(): Promise<void> {
+    await Promise.all(
+      NATIVE_KEY_BINDINGS.map(([key, command]) => this.command(['keybind', key, command]))
+    );
   }
 
   private async observeProperties(): Promise<void> {
@@ -716,6 +801,19 @@ export class MpvEngine {
           this.fail(`The native engine could not play this source: ${detail}.`);
         } else if (reason === 'eof') {
           this.state = 'ended';
+          this.emit();
+        } else if (reason === 'quit') {
+          /**
+           * The viewer closed mpv's window, or pressed a key bound to quit.
+           *
+           * Reported as idle rather than left alone, because the process exit
+           * that follows reads `state` to decide what happened: `playing` there
+           * becomes `ended`, which `NativeEngineStage` turns into `onEnded()`
+           * and the next-episode advance. Closing the window would start the
+           * next episode in a new one. Same rule as `shutdownNow`, reached from
+           * mpv's side instead of ours.
+           */
+          this.state = 'idle';
           this.emit();
         }
         break;
