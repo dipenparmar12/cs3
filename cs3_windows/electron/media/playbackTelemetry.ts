@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import type { PlaybackStrategyType } from '../../src/types/media.ts';
 import { scopedLogger } from '../logging/logger.ts';
 
-const log = scopedLogger('telemetry');
+const log = scopedLogger('playback');
 
 /**
  * PRD-40 / PRD-40.1 §4.3: Per-Session Playback Telemetry & Observability.
