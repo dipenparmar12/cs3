@@ -126,9 +126,19 @@ export class MediaTranscoder {
   private videoEncoder: VideoEncoder | null = null;
   /** Extracted WebVTT, keyed by `${url}#${index}` — extraction is not cheap. */
   private subtitleCache = new Map<string, string>();
+  /** PRD-40.1 §4.4: Tracked restart-on-seek samples in milliseconds. */
+  private seekRestartSamples: number[] = [];
 
   constructor(binaries: BinaryDownloader) {
     this.binaries = binaries;
+  }
+
+  public getSeekRestartSamples(): number[] {
+    return [...this.seekRestartSamples];
+  }
+
+  public clearSeekRestartSamples(): void {
+    this.seekRestartSamples = [];
   }
 
   public setDiagnostics(sink: NonNullable<MediaTranscoder['diagnostics']>): void {
@@ -522,6 +532,22 @@ export class MediaTranscoder {
      */
     proc.stdout.on('error', () => this.kill(token));
     res.on('error', () => this.kill(token));
+
+    const seekStartTime = Date.now();
+    let firstChunkMeasured = false;
+    proc.stdout.once('data', () => {
+      if (seek > 0 && !firstChunkMeasured) {
+        firstChunkMeasured = true;
+        const restartMs = Date.now() - seekStartTime;
+        this.seekRestartSamples.push(restartMs);
+        if (this.seekRestartSamples.length > 100) this.seekRestartSamples.shift();
+        log.info('transcode_seek_restart_completed', {
+          seekSeconds: seek,
+          restartMs,
+          operation: session.plan.videoAction,
+        });
+      }
+    });
 
     proc.stdout.pipe(res);
 
