@@ -1264,6 +1264,57 @@ Three supporting pieces, each of which was a gap on its own:
 error kind, so without it the host's branch is unreachable and the viewer keeps seeing the
 hundred-name exception.
 
+### The forced retry never asked the engine that could have played it (2026-08-26)
+
+Reported as: none of a title's sources play or download, while the Android app plays the
+same list. Measured against the captured source list (`.temp/RRR_sources.md`, 54 sources):
+most of them are **healthy** — 206 with `Content-Range` and `video/x-matroska`, or a valid
+`.mpd`/`.m3u8` with no DRM — and five of a representative seven play through this app's own
+`MediaProxy` into mpv in about a second, including the CloudFront-signed DASH that needs a
+`Cookie` and the googleusercontent link that ignores `Range`. So the sources were not the
+variable, and neither was the proxy.
+
+**`PlaybackEngine.prepare` hard-set `FULL_TRANSCODE` on the forced pass and never consulted
+`shouldRouteToNativeEngine`.** `decideStrategy` routes to mpv properly; this path bypasses
+the decision entirely. The consequence is precise and backwards: the forced pass runs
+*exactly* when the element has already failed on a source — which is the definition of what
+the native engine exists for — and it was the one path guaranteed to answer with a software
+re-encode instead.
+
+Traced through a session log on MovieBox's DASH:
+
+```
+ffprobe  /stream/17  container=dash videoCodec=hevc audioCodec=aac   1736ms   ok
+prepare  /stream/17  engine=ffmpeg  strategy=REMUX_CONTAINER
+prepare  /stream/17  engine=ffmpeg  strategy=FULL_TRANSCODE  probeLatencyMs=0
+```
+
+An `hev1` 1080p stream probes as `dash`/`hevc`, is remuxed, fails in the element, and comes
+back here to be re-encoded frame by frame. The same URL handed to mpv opens with `d3d11va`
+in about a second — mpv carries its own FFmpeg and the platform's hardware decoders, so a
+bitstream that defeated Chromium is usually ordinary to it.
+
+The forced pass now routes to `NATIVE_MPV` when the engine is available and the policy is
+not `off`, and falls back to the re-encode when it is not. Two exclusions: `EME_NATIVE` and
+anything `requiresEmeDecryption`, because mpv holds no CDM and routing an encrypted stream
+to it converts a playable source into an unplayable one.
+
+**The returned capability is rewritten with it, and that half is load-bearing.**
+`VideoPlayer` reads `capability.requiredStrategy` to choose between the `<video>` element
+and `mpv:open`. Returning the pre-force model would hand the URL back to the element that
+had just failed on it — which fails, forces again, and spins the retry ladder on a source
+the native engine was ready to play.
+
+**What is genuinely dead in that list, and worth recognising rather than re-debugging:**
+`workers.dev` mirrors answering `500` or `403 Quota exceeded`, `r2.cloudflarestorage`
+answering `403 NotEntitled`, pixeldrain `404`, and `hcdn3.hakunaymatata.com` failing to
+resolve at all (`ENOTFOUND`/`EAI_AGAIN`) — a DNS answer, not an app failure, and one the
+DNS-over-HTTPS setting can change.
+
+**One measurement trap.** Probing a manifest with `Range: bytes=1000000-` returns `416`,
+because an `.mpd` is a few kilobytes. Nine sources looked dead that way and every one was
+fine; a liveness scan has to ask for a range the file can actually satisfy, or none at all.
+
 ### The timeline drew and never moved (2026-08-26)
 
 Reported as: the film downloads perfectly, and streaming the same link shows a timeline
