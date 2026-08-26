@@ -90,6 +90,16 @@ interface DetailHeroProps {
   onPlay: () => void;
   onToggleSave: () => void;
   onChooseSource: () => void;
+  /**
+   * Opens the list of what has already been found.
+   *
+   * The same action as "Choose source" in the overflow menu, promoted to a
+   * visible button once the prefetch reports sources in hand. A viewer told
+   * "12 sources ready" on the artwork had no way to look at those twelve
+   * without opening a menu whose other two entries throw them away and search
+   * again — so the readiness badge announced work the page would not show.
+   */
+  onViewSources?: () => void;
   onDownload: () => void;
   onFindMoreSources: () => void;
   onRefreshSources: () => void;
@@ -118,6 +128,7 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   onPlay,
   onToggleSave,
   onChooseSource,
+  onViewSources,
   onDownload,
   onFindMoreSources,
   onRefreshSources,
@@ -327,6 +338,20 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
           </button>
 
           {libraryControl}
+
+          {onViewSources && sourceReadiness && sourceReadiness.count > 0 && (
+            <button
+              type="button"
+              className="detail-action"
+              onClick={onViewSources}
+              title="Show the sources already found for this title"
+            >
+              <ListVideo size={15} />
+              <span>
+                View {sourceReadiness.count} source{sourceReadiness.count === 1 ? '' : 's'}
+              </span>
+            </button>
+          )}
 
           <button type="button" className="detail-action" onClick={onDownload}>
             <Download size={15} />

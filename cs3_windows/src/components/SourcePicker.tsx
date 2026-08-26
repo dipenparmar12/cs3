@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   X, Users, HardDrive, Loader2, AlertTriangle, Filter, ChevronDown,
   ChevronRight, Play, Download, Info, Zap, ShieldAlert, Square, Link2, Check,
+  ClipboardCopy,
 } from 'lucide-react';
 import type { TorrentResult } from '../types/torrent';
 import type { SourceDiagnosis } from '../types/diagnostics';
@@ -10,7 +11,12 @@ import { SourceFilterBar } from './SourceFilterBar';
 import { CopyErrorButton } from './CopyErrorButton';
 import { SourceExportButton } from './SourceExportButton';
 import { useSourceProvenance } from './useSourceProvenance';
-import { provenanceChain, sourceAddress, sourceHost } from '../utils/sourceExport';
+import {
+  provenanceChain,
+  sourceAddress,
+  sourceHost,
+  toSourceDetails,
+} from '../utils/sourceExport';
 import {
   DEFAULT_FILTER_STATE,
   filterAndSortSources,
@@ -103,6 +109,7 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [expandedHash, setExpandedHash] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
+  const [copiedDetails, setCopiedDetails] = useState<string | null>(null);
   const { provenanceFor } = useSourceProvenance(data?.sources ?? []);
 
   /** The provider's address, not the loopback one the player would be using. */
@@ -117,6 +124,27 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
       // Nothing is lost when the clipboard refuses — the bulk export remains.
     }
   }, []);
+  /**
+   * Everything the row knows, not just its address.
+   *
+   * A link on its own cannot be reported: it names no provider, no extension
+   * and no repository, so a source that stops working arrives at a maintainer
+   * with nothing identifying whose code produced it. The same columns the bulk
+   * export uses, for the one row the viewer is actually looking at.
+   */
+  const copyDetails = useCallback(
+    async (source: TorrentResult) => {
+      try {
+        await navigator.clipboard.writeText(toSourceDetails(source, provenanceFor(source)));
+        setCopiedDetails(source.infoHash);
+        setTimeout(() => setCopiedDetails(null), 1800);
+      } catch {
+        // Same as the link: the clipboard refusing loses nothing recoverable.
+      }
+    },
+    [provenanceFor]
+  );
+
   const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);
 
   const best = useMemo(() => data?.sources[0] ?? null, [data]);
@@ -402,6 +430,16 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                           {copiedLink === source.infoHash ? <Check size={15} /> : <Link2 size={15} />}
                         </button>
                       )}
+                      <button
+                        className="icon-button"
+                        onClick={() => void copyDetails(source)}
+                        aria-label={`Copy the details for ${source.title}`}
+                        title="Copy this source's details"
+                      >
+                        {copiedDetails === source.infoHash
+                          ? <Check size={15} />
+                          : <ClipboardCopy size={15} />}
+                      </button>
                       <button
                         className="icon-button"
                         onClick={() => setExpandedHash(isExpanded ? null : source.infoHash)}

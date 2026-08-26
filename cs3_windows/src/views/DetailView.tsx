@@ -7,6 +7,7 @@ import { TvType } from '../types/api';
 import type { DownloadRequestResult, DownloadTask } from '../types/download';
 import { buildDownloadTask } from '../utils/downloadIdentity';
 import type { TorrentResult } from '../types/torrent';
+import type { PlaybackSnapshot } from '../../electron/playbackSession';
 import { SourcePicker, type SourcePickerData } from '../components/SourcePicker';
 import {
   episodeKey,
@@ -439,6 +440,58 @@ export const DetailView: React.FC<DetailViewProps> = ({
     void window.cloudstream?.stopPlayback(id, true);
   }, []);
 
+  /**
+   * Feeds the picker from the running session.
+   *
+   * Subscribed for the life of the page, and buffered by session id, because a
+   * cache hit answers faster than React can render. `startSourceDiscovery`
+   * returns after the session has already emitted its opening snapshot, its
+   * cached results and its `searchDone` — all within a millisecond — so a
+   * listener attached in an effect keyed on the resulting state misses the
+   * entire life of the session and leaves the picker searching forever with
+   * nothing in it. That is invisible while every search is slow, and it is the
+   * *normal* case for "View sources", which exists to serve what is already
+   * found.
+   *
+   * Snapshots are still matched by id: a session that has just been replaced —
+   * the viewer switched episodes, or pressed refresh — can emit once more
+   * before it notices, and those results belong to a different question.
+   */
+  const snapshotsById = useRef(new Map<string, PlaybackSnapshot>());
+  const pendingEpisodeRef = useRef<Episode | null>(null);
+  pendingEpisodeRef.current = pendingEpisode;
+
+  const applySnapshot = useCallback((snapshot: PlaybackSnapshot) => {
+    setDiscovery((current) =>
+      current && current.id === snapshot.sessionId
+        ? {
+            ...current,
+            searched: snapshot.searched,
+            total: snapshot.totalIndexers,
+            done: snapshot.searchDone,
+            cancelled: snapshot.searchCancelled,
+          }
+        : current
+    );
+
+    setPickerData({
+      sources: snapshot.sources,
+      // Neither is reported by the session: `filtered` and `indexerOutcomes`
+      // are batch summaries produced after everything settles, and this list
+      // is deliberately being shown before that point.
+      filtered: [],
+      indexerOutcomes: [],
+      emptyReason: snapshot.searchDone ? snapshot.emptyReason : undefined,
+      diagnosis: snapshot.searchDone ? snapshot.diagnosis : undefined,
+      query: {
+        title: snapshot.title,
+        season: pendingEpisodeRef.current?.season,
+        episode: pendingEpisodeRef.current?.episode,
+      },
+    });
+  }, []);
+
+
   const openSources = useCallback(
     async (episode: Episode | null, options: { refresh?: boolean } = {}) => {
       if (!window.cloudstream || !detail) return;
@@ -469,62 +522,42 @@ export const DetailView: React.FC<DetailViewProps> = ({
         return;
       }
 
-      discoveryRef.current = response.snapshot.sessionId;
+      const sessionId = response.snapshot.sessionId;
+      discoveryRef.current = sessionId;
       setDiscovery({
-        id: response.snapshot.sessionId,
-        searched: 0,
-        total: 0,
-        done: false,
-        cancelled: false,
+        id: sessionId,
+        searched: response.snapshot.searched,
+        total: response.snapshot.totalIndexers,
+        done: response.snapshot.searchDone,
+        cancelled: response.snapshot.searchCancelled,
       });
+
+      // Anything this session emitted while the invoke was in flight. For a
+      // cache hit that is the whole answer, already complete.
+      const buffered = snapshotsById.current.get(sessionId);
+      if (buffered) applySnapshot(buffered);
     },
-    [detail, stopDiscovery]
+    [applySnapshot, detail, stopDiscovery]
   );
 
-  /**
-   * Feeds the picker from the running session.
-   *
-   * Snapshots are filtered by id because a session that has just been replaced —
-   * the viewer switched episodes, or pressed refresh — can still emit once more
-   * before it notices, and those results belong to a different question.
-   */
   useEffect(() => {
-    if (!discovery) return;
-
+    const buffered = snapshotsById.current;
     const dispose = window.cloudstream?.onPlaybackUpdate((snapshot) => {
-      if (snapshot.sessionId !== discoveryRef.current) return;
-
-      setDiscovery((current) =>
-        current && current.id === snapshot.sessionId
-          ? {
-              ...current,
-              searched: snapshot.searched,
-              total: snapshot.totalIndexers,
-              done: snapshot.searchDone,
-              cancelled: snapshot.searchCancelled,
-            }
-          : current
-      );
-
-      setPickerData({
-        sources: snapshot.sources,
-        // Neither is reported by the session: `filtered` and `indexerOutcomes`
-        // are batch summaries produced after everything settles, and this list
-        // is deliberately being shown before that point.
-        filtered: [],
-        indexerOutcomes: [],
-        emptyReason: snapshot.searchDone ? snapshot.emptyReason : undefined,
-        diagnosis: snapshot.searchDone ? snapshot.diagnosis : undefined,
-        query: {
-          title: snapshot.title,
-          season: pendingEpisode?.season,
-          episode: pendingEpisode?.episode,
-        },
-      });
+      /*
+       * Kept even when it is not ours yet. The id of the session we started is
+       * only known once the invoke resolves, and by then its snapshots have
+       * been and gone; one entry per session is enough, because each supersedes
+       * the last.
+       */
+      buffered.set(snapshot.sessionId, snapshot);
+      if (buffered.size > 8) buffered.delete(buffered.keys().next().value as string);
+      if (snapshot.sessionId === discoveryRef.current) applySnapshot(snapshot);
     });
-
-    return dispose;
-  }, [discovery?.id, pendingEpisode]);
+    return () => {
+      dispose?.();
+      buffered.clear();
+    };
+  }, [applySnapshot]);
 
   // A picker left open when the view goes away would leave its session running.
   useEffect(() => stopDiscovery, [stopDiscovery]);
@@ -1001,6 +1034,9 @@ export const DetailView: React.FC<DetailViewProps> = ({
         onPlay={() => playNow(isSeries ? (episodesInSeason[0] ?? null) : null)}
         onToggleSave={() => void toggleSaved()}
         onChooseSource={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
+        // Deliberately not a cache bypass: the badge beside it says these were
+        // already found, so re-asking every provider would contradict it.
+        onViewSources={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
         onDownload={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
         // "Find more" and "Refresh" are the same search with the cache bypassed,
         // and they stay two entries because they answer two questions people
