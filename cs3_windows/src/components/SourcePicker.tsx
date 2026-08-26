@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   X, Users, HardDrive, Loader2, AlertTriangle, Filter, ChevronDown,
   ChevronRight, Play, Download, Info, Zap, ShieldAlert, Square, Link2, Check,
-  ClipboardCopy,
+  ClipboardCopy, Globe, RefreshCw,
 } from 'lucide-react';
 import type { TorrentResult } from '../types/torrent';
 import type { SourceDiagnosis } from '../types/diagnostics';
@@ -69,7 +69,18 @@ interface SourcePickerProps {
   onClose: () => void;
   onPlay: (source: TorrentResult) => void;
   onDownload: (source: TorrentResult) => void;
+  /** Asks this title's own providers again, ignoring the cache. */
   onRetry: () => void;
+  /**
+   * Look beyond the providers this title was found on.
+   *
+   * Absent, or present with `canWiden` false, when there is nothing wider to
+   * ask — a title opened from the home screen was never bound to a provider, so
+   * its first search already looked everywhere.
+   */
+  onWiden?: () => void;
+  /** True when widening would reach providers and indexers not yet asked. */
+  canWiden?: boolean;
 }
 
 /** Seeder count is the strongest predictor of whether a stream will actually start. */
@@ -104,6 +115,7 @@ function resolutionLabel(resolution: number): string {
 export const SourcePicker: React.FC<SourcePickerProps> = ({
   isOpen, isLoading, data, error, contextLabel, onClose, onPlay, onDownload, onRetry,
   searching = false, searched = 0, totalSources = 0, cancelled = false, onCancelSearch,
+  onWiden, canWiden = false,
 }) => {
   const [showFiltered, setShowFiltered] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -289,6 +301,11 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
 
             <div className="source-picker__state-actions">
               <button className="btn" onClick={onRetry}>Search again</button>
+              {onWiden && canWiden && (
+                <button className="btn" onClick={onWiden}>
+                  <Globe size={15} /> Search all sources
+                </button>
+              )}
               {data.filtered.length > 0 && (
                 <button className="btn" onClick={() => setShowFiltered(true)}>
                   Show {data.filtered.length} filtered
@@ -325,6 +342,39 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                   heading={`${data.query?.title ?? 'Sources'} (${displayedSources.length})`}
                   compact
                 />
+                {/*
+                  Re-scraping is reachable from the list, not only from the
+                  empty state.
+
+                  A list that is present but stale is the common case — expired
+                  provider links look exactly like working ones until they are
+                  played — and until now the only way to ask again was to close
+                  this and find the page's overflow menu.
+                */}
+                <button
+                  className="btn"
+                  onClick={onRetry}
+                  disabled={searching}
+                  title="Ask this title's own providers again, ignoring the cache"
+                >
+                  <RefreshCw size={15} /> Refresh
+                </button>
+                {/*
+                  A different question, not a harder version of the same one:
+                  the default search asks the providers this title was found on,
+                  and this asks every other installed provider plus the torrent
+                  indexers.
+                */}
+                {onWiden && canWiden && (
+                  <button
+                    className="btn"
+                    onClick={onWiden}
+                    disabled={searching}
+                    title="Every enabled provider and torrent indexer, not just this title's own"
+                  >
+                    <Globe size={15} /> Search all sources
+                  </button>
+                )}
                 {best && (
                   <button className="btn btn-primary" onClick={() => onPlay(best)}>
                     <Zap size={15} /> Play best

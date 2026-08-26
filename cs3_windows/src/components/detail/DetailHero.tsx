@@ -34,11 +34,14 @@ import {
  * 1. **Play lives on the artwork.** It is the reason the page exists, and the
  *    poster is the largest, most obviously clickable thing on it. The whole
  *    artwork is the target, not a small button on top of it.
- * 2. **One row of small secondary actions.** Save, library, download — the ones
- *    people reach for often enough to want visible.
- * 3. **The rest go in an overflow menu.** Choose source, find more sources,
- *    refresh, search title, download season. None is rare enough to remove and
- *    none is common enough to earn permanent space.
+ * 2. **One row of small secondary actions.** Save, library, view sources,
+ *    download — the ones people reach for often enough to want visible.
+ *    "View sources" came back out of the menu because looking at what is
+ *    available is how anyone decides what to play; it is the second most
+ *    common thing done on this page, not an overflow action.
+ * 3. **The rest go in an overflow menu.** Find more sources, refresh, search
+ *    title, download season. Each re-scrapes or leaves the page, so none is
+ *    rare enough to remove and none is common enough to earn permanent space.
  *
  * Provenance is on the page rather than buried, because a title that will not
  * play is a question about *which* provider served it — and that was previously
@@ -89,17 +92,18 @@ interface DetailHeroProps {
 
   onPlay: () => void;
   onToggleSave: () => void;
-  onChooseSource: () => void;
   /**
-   * Opens the list of what has already been found.
+   * Opens the list of sources for this title.
    *
-   * The same action as "Choose source" in the overflow menu, promoted to a
-   * visible button once the prefetch reports sources in hand. A viewer told
-   * "12 sources ready" on the artwork had no way to look at those twelve
-   * without opening a menu whose other two entries throw them away and search
-   * again — so the readiness badge announced work the page would not show.
+   * A first-class button rather than an overflow entry, and shown whether or
+   * not anything has been found yet. Seeing what is available *is* the way
+   * someone chooses what to play, so hiding it behind a menu — beside two
+   * entries that throw the found sources away and scrape again — made the
+   * readiness badge announce work the page would not show. When the list comes
+   * up empty the picker says why and offers to search again, which is the same
+   * action the menu used to offer and a better place to be offered it.
    */
-  onViewSources?: () => void;
+  onChooseSource: () => void;
   onDownload: () => void;
   onFindMoreSources: () => void;
   onRefreshSources: () => void;
@@ -128,7 +132,6 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   onPlay,
   onToggleSave,
   onChooseSource,
-  onViewSources,
   onDownload,
   onFindMoreSources,
   onRefreshSources,
@@ -339,19 +342,19 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
 
           {libraryControl}
 
-          {onViewSources && sourceReadiness && sourceReadiness.count > 0 && (
-            <button
-              type="button"
-              className="detail-action"
-              onClick={onViewSources}
-              title="Show the sources already found for this title"
-            >
-              <ListVideo size={15} />
-              <span>
-                View {sourceReadiness.count} source{sourceReadiness.count === 1 ? '' : 's'}
-              </span>
-            </button>
-          )}
+          <button
+            type="button"
+            className="detail-action"
+            onClick={onChooseSource}
+            title="Show every source found for this title"
+          >
+            <ListVideo size={15} />
+            <span>
+              {sourceReadiness && sourceReadiness.count > 0
+                ? `View ${sourceReadiness.count} source${sourceReadiness.count === 1 ? '' : 's'}`
+                : 'View sources'}
+            </span>
+          </button>
 
           <button type="button" className="detail-action" onClick={onDownload}>
             <Download size={15} />
@@ -373,13 +376,6 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
 
             {menuOpen && (
               <div className="detail-menu" role="menu">
-                <button role="menuitem" onClick={run(onChooseSource)}>
-                  <ListVideo size={14} />
-                  <span>
-                    <strong>Choose source</strong>
-                    <em>Pick from what has already been found.</em>
-                  </span>
-                </button>
                 <button role="menuitem" onClick={run(onFindMoreSources)}>
                   <SearchCheck size={14} />
                   <span>

@@ -260,6 +260,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
     total: number;
     done: boolean;
     cancelled: boolean;
+    /** Whether asking every provider and indexer would reach anything new. */
+    canWiden: boolean;
   } | null>(null);
   const discoveryRef = useRef<string | null>(null);
   const [pendingEpisode, setPendingEpisode] = useState<Episode | null>(null);
@@ -470,6 +472,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
             total: snapshot.totalIndexers,
             done: snapshot.searchDone,
             cancelled: snapshot.searchCancelled,
+            // Only meaningful once the scoped search has finished and come up
+            // short; offering it mid-search invites widening a run that was
+            // about to answer.
+            canWiden: snapshot.canWiden,
           }
         : current
     );
@@ -491,6 +497,22 @@ export const DetailView: React.FC<DetailViewProps> = ({
     });
   }, []);
 
+
+  /**
+   * Asks every provider and indexer, not just the ones this title came from.
+   *
+   * Driven through the *running* session rather than by starting a new one:
+   * `refreshSources(widen)` replaces the retained query's scope, so the widened
+   * answer is also what a later refresh from this picker asks for. Starting a
+   * fresh discovery here would go back to `origin` on the next press and make
+   * the button look like it had done nothing.
+   */
+  const widenSources = useCallback(() => {
+    const id = discoveryRef.current;
+    if (!id) return;
+    setDiscovery((current) => (current ? { ...current, done: false, cancelled: false } : current));
+    void window.cloudstream?.playbackRefreshSources?.(id, true);
+  }, []);
 
   const openSources = useCallback(
     async (episode: Episode | null, options: { refresh?: boolean } = {}) => {
@@ -530,6 +552,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         total: response.snapshot.totalIndexers,
         done: response.snapshot.searchDone,
         cancelled: response.snapshot.searchCancelled,
+        canWiden: response.snapshot.canWiden,
       });
 
       // Anything this session emitted while the invoke was in flight. For a
@@ -1033,10 +1056,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
         sourceReadiness={prefetch}
         onPlay={() => playNow(isSeries ? (episodesInSeason[0] ?? null) : null)}
         onToggleSave={() => void toggleSaved()}
-        onChooseSource={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
         // Deliberately not a cache bypass: the badge beside it says these were
-        // already found, so re-asking every provider would contradict it.
-        onViewSources={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
+        // already found, so re-asking every provider would contradict it. An
+        // empty answer is not a dead end either — the picker explains it and
+        // offers the bypassing search from there.
+        onChooseSource={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
         onDownload={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
         // "Find more" and "Refresh" are the same search with the cache bypassed,
         // and they stay two entries because they answer two questions people
@@ -1189,6 +1213,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
         onPlay={handlePlaySource}
         onDownload={handleDownloadSource}
         onRetry={() => openSources(pendingEpisode, { refresh: true })}
+        onWiden={widenSources}
+        canWiden={discovery?.canWiden ?? false}
         onCancelSearch={() => {
           if (discoveryRef.current) {
             void window.cloudstream?.playbackCancelSourceSearch(discoveryRef.current);
