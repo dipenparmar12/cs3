@@ -74,6 +74,14 @@ interface Route {
   headers: Record<string, string>;
   key?: string;
   lastAccess?: number;
+  /**
+   * Whether this origin honoured a `Range`, once it has been asked one.
+   *
+   * Remembered per route rather than re-derived per request because a player
+   * asks the question once, at open, and every later decision it makes about
+   * seeking rests on that first answer.
+   */
+  rangeSupport?: 'yes' | 'no';
 }
 
 interface LocalRoute {
@@ -658,6 +666,10 @@ export class MediaProxy {
           const fresh = await lease.refreshSource();
           route.url = fresh.url;
           route.headers = this.clean(fresh.headers);
+          // A refreshed link can land on a different host in the same CDN pool,
+          // and the two halves of that pool do not always agree about ranges.
+          // The old verdict describes a URL that is gone.
+          route.rangeSupport = undefined;
           const freshHasUserAgent = Object.keys(route.headers).some(
             (k) => k.toLowerCase() === 'user-agent'
           );
@@ -766,6 +778,68 @@ export class MediaProxy {
         return;
       }
 
+      /**
+       * Whether the origin honours `Range`, decided from what it just did.
+       *
+       * This proxy is the only component that ever sees the origin's answer, so
+       * it is the only one that can tell the player the truth — and passing the
+       * origin's headers through unexamined told it two different lies.
+       *
+       * The hosts in the corpus fall into three shapes and only one of them
+       * describes itself correctly:
+       *
+       *  - `206` + `Content-Range` + `Accept-Ranges: bytes` (sssrr.org) — honest.
+       *  - `206` + `Content-Range` and **no** `Accept-Ranges` (the gdflix
+       *    `workers.dev` mirrors) — seekable, but nothing in the reply says so,
+       *    so a player reading only `Accept-Ranges` concludes it cannot seek.
+       *  - `200` + the whole file from byte zero whatever was asked for
+       *    (`video-downloads.googleusercontent.com`, the GDFlix "Instant
+       *    Download" link) — **not** seekable, and it does not say that either;
+       *    it simply ignores the header and sends 3.2 GB from the start.
+       *
+       * A reply carrying `Content-Range` proves the origin honoured the range.
+       * A ranged request answered `200` proves it did not. Either way the client
+       * is told explicitly, so it never has to guess and never has to be forced.
+       */
+      const rangeRequested = offsetFromRange(requestHeaders.Range) !== null;
+      const honouredRange =
+        upstream.status === 206 || Boolean(upstream.headers.get('content-range'));
+      if (rangeRequested) {
+        route.rangeSupport = honouredRange ? 'yes' : 'no';
+      }
+
+      /**
+       * The origin ignored a seek, so the body it is holding starts at byte zero
+       * while the client is expecting byte `requestedOffset`.
+       *
+       * Forwarding it is the silent-corruption case: the player is handed the
+       * opening of the film labelled as its middle, and every byte after that is
+       * misattributed. `416` says the one true thing — this offset cannot be
+       * served — and leaves the player to carry on from where it already is
+       * rather than resyncing onto rubbish.
+       */
+      const requestedOffset = offsetFromRange(String(req.headers.range ?? '')) ?? 0;
+      if (requestedOffset > 0 && !honouredRange && upstream.status === 200) {
+        this.recordFailure(
+          route.url,
+          new Error(`origin ignored Range: bytes=${requestedOffset}- and answered HTTP 200`),
+          'Refused to serve byte-zero data as a mid-file range'
+        );
+        try {
+          await upstream.body?.cancel();
+        } catch {
+          // The origin hung up first; nothing left to release.
+        }
+        const total = upstream.headers.get('content-length');
+        res.writeHead(416, {
+          'Cache-Control': 'no-store',
+          'Access-Control-Allow-Origin': '*',
+          'Accept-Ranges': 'none',
+          ...(total ? { 'Content-Range': `bytes */${total}` } : {}),
+        }).end();
+        return;
+      }
+
       const headers: Record<string, string> = {
         'Cache-Control': 'no-store',
         'Access-Control-Allow-Origin': '*',
@@ -776,6 +850,19 @@ export class MediaProxy {
         const value = upstream.headers.get(name);
         if (value) headers[name] = value;
       }
+
+      /**
+       * Stated rather than forwarded, and stated in both directions.
+       *
+       * Saying `bytes` for the `workers.dev` shape is what restores seeking on a
+       * source that always supported it; saying `none` for the googleusercontent
+       * shape is what stops a player attempting a seek that can only be answered
+       * by reading the file from the beginning — which on a 3.2 GB link is the
+       * frozen timeline this whole path was reported for.
+       */
+      const support = route.rangeSupport ?? (honouredRange ? 'yes' : undefined);
+      if (support) headers['Accept-Ranges'] = support === 'yes' ? 'bytes' : 'none';
+
       res.writeHead(upstream.status, headers);
 
       if (req.method === 'HEAD' || !upstream.body) {

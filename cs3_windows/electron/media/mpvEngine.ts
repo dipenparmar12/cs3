@@ -593,7 +593,25 @@ export class MpvEngine {
       '--cache=yes',
       '--demuxer-max-bytes=256MiB',
       '--demuxer-readahead-secs=30',
-      '--force-seekable=yes',
+      /**
+       * Seekability is read from the stream, never forced.
+       *
+       * `--force-seekable=yes` was here from this engine's first commit as a
+       * blanket default, and on a source whose origin ignores `Range` it is
+       * fatal rather than optimistic: mpv accepts the seek, cannot ask for the
+       * offset, and satisfies it by reading and discarding from byte zero. On a
+       * 3.2 GB link that never arrives, so the tracks parse, the window opens
+       * with a timeline on it, and the position never moves — reported as
+       * "I can see the timeline but it is frozen", and indistinguishable from a
+       * dead source. Every resume from Continue Watching hit it, because a
+       * resume *is* a seek before the first frame.
+       *
+       * Measured against both origin shapes: a host that honours `Range` seeks
+       * correctly without this flag (`MediaProxy` now states `Accept-Ranges`
+       * explicitly, so nothing has to be inferred), and a host that ignores it
+       * starts at zero and plays instead of grinding. Forcing it only ever
+       * converts a correct "cannot seek" into a hang.
+       */
       /** Nothing is written next to the source; these are other people's URLs. */
       '--sub-auto=no',
       '--audio-file-auto=no',
