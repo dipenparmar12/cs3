@@ -73,12 +73,33 @@ const bodies: Record<string, { body: string; type?: string; length?: boolean }> 
  * from byte zero** no matter what was asked for, and never sends `Accept-Ranges`.
  * Nothing in its reply says the range was refused; it simply is not there.
  */
+const ENDLESS = 'https://cdn.origin.test/endless.mkv';
+/** What the endless body did, so a test can see the transfer actually stop. */
+const endless = { pulls: 0, cancelled: false, aborted: false };
+
 const RANGE_HONOURING = 'https://cdn.origin.test/seekable.mkv';
 const RANGE_IGNORING = 'https://cdn.origin.test/unseekable.mkv';
 const FILE_SIZE = 1_000_000;
 
-const stubFetch = (async (url: string, init?: { headers?: Record<string, string> }) => {
+const stubFetch = (async (url: string, init?: { headers?: Record<string, string>; signal?: AbortSignal }) => {
   seen.push({ url, referer: init?.headers?.Referer ?? init?.headers?.referer });
+
+  if (url === ENDLESS) {
+    // A film-sized body that never ends on its own, the way a 3.24 GB link does
+    // not. `pull` is only called while something is still reading.
+    init?.signal?.addEventListener('abort', () => { endless.aborted = true; });
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        endless.pulls++;
+        controller.enqueue(new Uint8Array(64 * 1024));
+      },
+      cancel() { endless.cancelled = true; },
+    });
+    return new Response(body, {
+      status: 200,
+      headers: new Headers({ 'Content-Type': 'video/x-matroska', 'Content-Length': String(5e9) }),
+    });
+  }
 
   if (url === RANGE_HONOURING || url === RANGE_IGNORING) {
     const asked = /bytes=(\d+)-/.exec(init?.headers?.Range ?? '')?.[1];
@@ -242,6 +263,37 @@ test('byte-zero data is never served as though it were a mid-file range', async 
   assert.equal(res.status, 416);
   assert.equal(res.headers.get('accept-ranges'), 'none');
   assert.equal(await res.text(), '');
+});
+
+test('a client that walks away takes the upstream transfer with it', async () => {
+  /**
+   * `releaseLock()` detaches the reader and leaves the body running. On an
+   * origin that ignores `Range` and answers everything with the whole file,
+   * every abandoned probe was a multi-gigabyte download still in flight —
+   * against a link the viewer is often already downloading. That is how a
+   * source which probes in two seconds on an idle machine times out at twenty
+   * in the app.
+   */
+  endless.pulls = 0; endless.cancelled = false; endless.aborted = false;
+  const wrapped = await proxy.wrap(ENDLESS, {});
+
+  const controller = new AbortController();
+  const res = await fetch(wrapped, { headers: { Range: 'bytes=0-' }, signal: controller.signal });
+  const reader = res.body!.getReader();
+  let got = 0;
+  while (got < 200_000) {
+    const next = await reader.read();
+    if (next.done) break;
+    got += next.value!.byteLength;
+  }
+  controller.abort();           // the viewer switched source, or ffprobe gave up
+  await new Promise((r) => setTimeout(r, 200));
+
+  const settled = endless.pulls;
+  await new Promise((r) => setTimeout(r, 400));
+
+  assert.ok(endless.cancelled || endless.aborted, 'upstream body was neither cancelled nor aborted');
+  assert.equal(endless.pulls, settled, 'upstream kept being read after the client left');
 });
 
 // --- route capacity --------------------------------------------------------

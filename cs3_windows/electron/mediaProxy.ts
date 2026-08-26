@@ -808,11 +808,31 @@ export class MediaProxy {
       ...(req.headers.range ? { Range: String(req.headers.range) } : {}),
     });
 
+    /**
+     * Tears the upstream request down when the client walks away.
+     *
+     * Cancelling the body stream is the standards-shaped way to stop a transfer
+     * and it is enough under Node's fetch, but the main process runs on
+     * Electron's `net.fetch` — Chromium's stack, where the request lives in the
+     * network service and a detached body does not reliably stop it. An abort
+     * signal does, and it is the only thing that reaches a request still
+     * blocked in DNS or TLS, before there is any body to cancel at all.
+     *
+     * Guarded on `writableEnded` because `close` also fires on the ordinary
+     * completion of a response, and aborting there would cancel a request that
+     * has already delivered everything it was asked for.
+     */
+    const abort = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) abort.abort();
+    });
+
     try {
       let upstream = await this.fetchImpl(route.url, {
         method: req.method === 'HEAD' ? 'HEAD' : 'GET',
         headers: requestHeaders,
         redirect: 'follow',
+        signal: abort.signal,
       });
 
       const lease = direct ? this.leases.get(direct) : undefined;
@@ -843,6 +863,7 @@ export class MediaProxy {
             method: req.method === 'HEAD' ? 'HEAD' : 'GET',
             headers: refreshedHeaders,
             redirect: 'follow',
+            signal: abort.signal,
           });
         } catch (refreshErr) {
           this.recordFailure(
@@ -1085,7 +1106,8 @@ export class MediaProxy {
         res,
         route,
         requestHeaders,
-        lease
+        lease,
+        abort.signal
       );
     } catch (error) {
       this.recordFailure(route.url, error, 'Upstream request failed before any body was sent');
@@ -1113,7 +1135,8 @@ export class MediaProxy {
     res: http.ServerResponse,
     route: Route,
     requestHeaders: Record<string, string>,
-    lease?: SourceLease
+    lease?: SourceLease,
+    signal?: AbortSignal
   ): Promise<void> {
     /**
      * Where this response started in the file.
@@ -1191,6 +1214,7 @@ export class MediaProxy {
           method: 'GET',
           headers: { ...requestHeaders, Range: `bytes=${startedAt + sent}-` },
           redirect: 'follow',
+          signal,
         });
 
         // An origin that answers a resume with 200 is about to send the file
@@ -1245,10 +1269,24 @@ export class MediaProxy {
         }
       }
     } finally {
-      // Releasing the lock lets the underlying connection be torn down; without
-      // it a cancelled stream holds its socket until GC.
+      /**
+       * Cancelled, not merely released — the difference is a whole film.
+       *
+       * `releaseLock()` detaches the reader and leaves the body open, so the
+       * transfer carries on into a buffer nobody will ever read. On an origin
+       * that honours `Range` that is a wasted connection; on one that ignores it
+       * and answers every request with the whole file, **each abandoned probe is
+       * a 3.24 GB download still running**. Three ffprobe attempts across three
+       * sources is nine of them, against a link the viewer is often already
+       * downloading — which is how a source that probes in two seconds on an
+       * idle machine times out at twenty in the app, and why playback that had
+       * started buffered until the engine gave up.
+       *
+       * Same shape as the `FastChunkDownloader.probeUrl` bug: `resume()` there
+       * discarded the data without stopping the transfer either.
+       */
       try {
-        reader.releaseLock();
+        await reader.cancel();
       } catch {
         // Already released by the error that brought us here.
       }
