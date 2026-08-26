@@ -1332,6 +1332,30 @@ long and no longer a media file. It survived because media requests almost alway
 small segment was hit, and it read as a bad source. The body is read as bytes now and
 decoded only to look at.
 
+
+**4. An abandoned request left the whole file downloading.** Found from a later session
+log, after the three above were fixed: `ffprobe timed out after 20000ms` three times on
+each googleusercontent source, then `The source could not be reached: The operation was
+aborted due to timeout` — while the same file probed in 2.4 s standalone. `pump`'s cleanup
+called `reader.releaseLock()`, which detaches the reader and **leaves the body open**.
+Under Node's fetch the transfer stops anyway; the main process runs on Electron's
+`net.fetch`, where the request lives in Chromium's network service and a detached body does
+not reliably stop it. On an origin that ignores `Range` and answers everything with the
+whole file, each abandoned probe is therefore a 3.24 GB download still running — three
+attempts across three sources is nine of them, against a link the viewer was already
+downloading at 4.2 MB/s. That is how a two-second probe becomes a twenty-second timeout,
+and why playback that had started buffered until the engine exited. The reader is cancelled
+now, and every upstream fetch carries an `AbortSignal` tied to the client socket — the
+signal is what reaches a request still blocked in DNS or TLS, before there is a body to
+cancel at all. Guarded on `writableEnded`, because `close` also fires on a normal finish.
+
+**Two traps worth not repeating.** `MediaProxy.wrap` returns loopback URLs *untouched* by
+design, so a test origin listening on 127.0.0.1 is never proxied and measures nothing —
+the test file's header says so, and it is still easy to do. And a regression test for this
+class of bug has to be checked by breaking the fix again: the assertions pass trivially
+against a stub that ends its own body, so the upstream in `mediaProxy.test.mts` is endless
+and the test is verified to FAIL with `releaseLock()` restored.
+
 **Segments disguised as images are unwrapped.** HDHub4U's playlists point at TikTok's image
 CDN, which serves only images, so each segment is a **real 70-byte PNG header with the
 MPEG-TS glued on behind it** — `Content-Type: image/png` and a valid PNG signature. This is
