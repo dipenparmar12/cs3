@@ -65,8 +65,39 @@ const bodies: Record<string, { body: string; type?: string; length?: boolean }> 
   'https://cdn.origin.test/list.m3u8': { body: HLS_PLAYLIST, type: 'application/vnd.apple.mpegurl' },
 };
 
+/**
+ * The two shapes a real origin takes when handed a `Range`, as measured.
+ *
+ * `honours` is an ordinary CDN. `ignores` is `video-downloads.googleusercontent.com`
+ * — the GDFlix "Instant Download" link — which answers **200 with the whole file
+ * from byte zero** no matter what was asked for, and never sends `Accept-Ranges`.
+ * Nothing in its reply says the range was refused; it simply is not there.
+ */
+const RANGE_HONOURING = 'https://cdn.origin.test/seekable.mkv';
+const RANGE_IGNORING = 'https://cdn.origin.test/unseekable.mkv';
+const FILE_SIZE = 1_000_000;
+
 const stubFetch = (async (url: string, init?: { headers?: Record<string, string> }) => {
   seen.push({ url, referer: init?.headers?.Referer ?? init?.headers?.referer });
+
+  if (url === RANGE_HONOURING || url === RANGE_IGNORING) {
+    const asked = /bytes=(\d+)-/.exec(init?.headers?.Range ?? '')?.[1];
+    const headers = new Headers({ 'Content-Type': 'video/x-matroska' });
+    if (url === RANGE_IGNORING || asked === undefined) {
+      // Whole file from zero, no Accept-Ranges — the header is simply ignored.
+      // Content-Length matches the body so the client is not left waiting; the
+      // sniff path is skipped anyway, because these requests carry a Range.
+      headers.set('Content-Length', String(Buffer.byteLength('BODY-FROM-ZERO')));
+      return new Response('BODY-FROM-ZERO', { status: 200, headers });
+    }
+    // Note: no `Accept-Ranges` here either. The gdflix workers.dev mirrors
+    // answer 206 with a Content-Range and omit it, so a client reading only
+    // that header concludes it cannot seek a source that seeks perfectly.
+    headers.set('Content-Range', `bytes ${asked}-${FILE_SIZE - 1}/${FILE_SIZE}`);
+    headers.set('Content-Length', String(Buffer.byteLength('BODY-FROM-OFFSET')));
+    return new Response('BODY-FROM-OFFSET', { status: 206, headers });
+  }
+
   const entry = bodies[url];
   const body = entry ? entry.body : 'SEGMENT';
   const headers = new Headers({ 'Content-Type': entry?.type ?? 'video/mp4' });
@@ -173,6 +204,61 @@ test('HLS playlists are still rewritten line by line', async () => {
 test('a loopback URL is returned untouched rather than wrapped again', async () => {
   const already = 'http://127.0.0.1:9/stream/1';
   assert.equal(await proxy.wrap(already, { Referer: 'x' }), already);
+});
+
+// --- range semantics -------------------------------------------------------
+//
+// The proxy is the only component that sees how an origin answers a `Range`, so
+// it is the only one that can tell the player. Passing the origin's headers
+// through unexamined understated one shape and misreported the other, and both
+// failures land on the player as something else entirely: a source that cannot
+// be seeked, or a frozen timeline.
+
+test('an origin that honours ranges is reported seekable even when it never says so', async () => {
+  const wrapped = await proxy.wrap(RANGE_HONOURING, {});
+  const res = await fetch(wrapped, { headers: { Range: 'bytes=0-' } });
+  assert.equal(res.status, 206);
+  // The origin sent Content-Range and no Accept-Ranges; we state it outright.
+  assert.equal(res.headers.get('accept-ranges'), 'bytes');
+  await res.arrayBuffer();
+});
+
+test('an origin that ignores ranges is reported unseekable rather than silently', async () => {
+  const wrapped = await proxy.wrap(RANGE_IGNORING, {});
+  const res = await fetch(wrapped, { headers: { Range: 'bytes=0-' } });
+  assert.equal(res.status, 200);
+  // Without this the player has nothing to read, assumes it may seek, and
+  // satisfies the seek by reading the file from the beginning — which on a
+  // multi-gigabyte link never arrives.
+  assert.equal(res.headers.get('accept-ranges'), 'none');
+  await res.arrayBuffer();
+});
+
+test('byte-zero data is never served as though it were a mid-file range', async () => {
+  const wrapped = await proxy.wrap(RANGE_IGNORING, {});
+  const res = await fetch(wrapped, { headers: { Range: 'bytes=500000-' } });
+  // The origin answered 200 with the opening of the file. Forwarding that would
+  // hand the player the start of the film labelled as its middle.
+  assert.equal(res.status, 416);
+  assert.equal(res.headers.get('accept-ranges'), 'none');
+  assert.equal(await res.text(), '');
+});
+
+// --- route capacity --------------------------------------------------------
+
+test('a route handed to the player survives a burst of newer ones', async () => {
+  // Rewriting one HLS media playlist mints a route per segment — ~1200 for a
+  // two-hour film, in a single burst. Under a plain LRU those evicted the
+  // oldest routes, which are the master playlist and the video variants it had
+  // just named: mpv read the master, asked for the variant, and got a 404 from
+  // us. The variant is unfetched, not stale, and must outlive the segments.
+  const variant = await proxy.wrap('https://cdn.origin.test/variant-playlist.m3u8', {});
+  for (let i = 0; i < 3000; i++) {
+    await proxy.wrap(`https://cdn.origin.test/seg-${i}.ts`, {});
+  }
+  const res = await fetch(variant);
+  assert.notEqual(res.status, 404);
+  await res.arrayBuffer();
 });
 
 // --- local files -----------------------------------------------------------
