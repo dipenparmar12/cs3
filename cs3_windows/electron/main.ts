@@ -115,6 +115,17 @@ logger.info('app', 'session_started', {
   logFile: logger.logFile,
 });
 
+/**
+ * How long after the window opens the background provider warm-up begins.
+ *
+ * Long enough that the first frame and the home screen's own fetches are done
+ * competing for the machine; short enough that a viewer who goes straight to
+ * the search box still benefits. Same reasoning as `SourcePrefetcher`'s settle
+ * delay, and the same failure if it is too short — speculative work in front of
+ * what the user is actually looking at.
+ */
+const PROVIDER_WARMUP_DELAY_MS = 4_000;
+
 const diagnostics = new DiagnosticsLog();
 
 /**
@@ -667,6 +678,38 @@ app.whenReady().then(async () => {
     }
   });
   bootstrap.start();
+
+  /**
+   * The cold JVM load, moved off the path where anyone is waiting for it.
+   *
+   * Providers are addressable the moment the app starts — they hydrate from
+   * `cs3-provider-registry.json` — but calling one still needs its archive live
+   * in the JVM, and that is where the real cost is: **57 seconds of class
+   * loading across a 124-archive install**, almost none of it the plugins' own
+   * work. `ensureProviderActive` will pay it per-archive on demand, which is
+   * already far better than the 66.8s the first search used to cost. This is
+   * better again: the same work, done while the viewer is reading the home
+   * screen, so by the time they search most of it is done.
+   *
+   * Deliberately late and deliberately not awaited. It must not delay the first
+   * frame, and it must not delay `bootstrap` above it — on a first run there is
+   * nothing installed yet to warm, and the archives bootstrap installs are
+   * loaded by bootstrap's own pass.
+   *
+   * The delay is not tuning. It is the same reasoning as `SourcePrefetcher`'s
+   * settle: a window that has just opened is still laying out, and starting a
+   * JVM plus 56 jars of class loading underneath it competes with exactly the
+   * thing the user is looking at.
+   */
+  setTimeout(() => {
+    void pluginManager.warmProviders().catch((error) => {
+      // A warm-up that fails costs latency on the next search and nothing else,
+      // so it is recorded rather than surfaced.
+      logger.warn('extension', 'provider_warmup_failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, PROVIDER_WARMUP_DELAY_MS).unref?.();
 
   /**
    * A stale title refreshed behind the viewer's back reaches them here.

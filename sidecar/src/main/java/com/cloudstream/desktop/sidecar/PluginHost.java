@@ -50,6 +50,37 @@ public final class PluginHost {
     private final Map<String, Object> instances = new LinkedHashMap<>();
 
     /**
+     * Held across {@code snapshot -> load() -> diff}, which cannot be concurrent.
+     *
+     * Providers do not return themselves; they self-register into the single
+     * global {@code APIHolder.allProviders} list, so registration is observed by
+     * remembering that list's size before {@code load()} and reading everything
+     * appended after it. Two loads overlapping therefore both read from the same
+     * mark and each claims the other's providers.
+     *
+     * <p><b>Measured rather than assumed</b>, against the real 124-archive corpus
+     * on this machine:
+     *
+     * <pre>
+     *   concurrency=1   61.0s   132 providers   0 mis-attributions
+     *   concurrency=8   43.5s   307 providers   176 mis-attributions, 1 provider lost
+     * </pre>
+     *
+     * So overlapping loads buy 1.4x and corrupt the registry — every affected
+     * provider is credited to the wrong extension, which is invisible until a
+     * user disables one extension and a different one goes quiet. Nothing
+     * enforced this before; the host merely happened to issue loads in series,
+     * which made it a latent bug rather than an absent one. Lazy activation
+     * makes concurrent loads reachable, so the invariant is now stated here
+     * instead of being a property of one caller's loop.
+     *
+     * <p>It is deliberately <em>not</em> {@code synchronized} on {@code this}:
+     * {@link #shared()} and {@link #bridge()} are, and a load must not block a
+     * search that only needs the shared loader.
+     */
+    private final Object registrationLock = new Object();
+
+    /**
      * Registered provider instances, keyed by the provider's own name.
      *
      * Providers are the addressable unit, not plugins: one `.cs3` commonly
@@ -348,13 +379,18 @@ public final class PluginHost {
 
         // Step 9 — load(context) when the plugin extends the Android-shaped
         // Plugin, else the cross-platform load().
-        Object before = snapshotProviders(loader);
-        invokeLoad(instance, loader);
+        //
+        // Serialized: the mark taken by snapshotProviders is an index into a
+        // list every plugin appends to. See registrationLock.
+        List<Map<String, Object>> providers;
+        synchronized (registrationLock) {
+            Object before = snapshotProviders(loader);
+            invokeLoad(instance, loader);
+            providers = diffProviders(loader, before, pluginId);
 
-        List<Map<String, Object>> providers = diffProviders(loader, before, pluginId);
-
-        loaders.put(pluginId, loader);
-        instances.put(pluginId, instance);
+            loaders.put(pluginId, loader);
+            instances.put(pluginId, instance);
+        }
 
         LinkageAnalyzer.Report report =
                 new LinkageAnalyzer(shared()).analyze(t.translatedJar(), entry);
@@ -496,6 +532,10 @@ public final class PluginHost {
 
     /** Calls {@code beforeUnload()} then drops the loader (DROP-14). */
     public boolean unload(String pluginId) {
+        // Under the same lock as load: both mutate the loader and instance maps
+        // and the provider registry, and an unload interleaved with a load
+        // withdraws entries the load is in the middle of adding.
+        synchronized (registrationLock) {
         // Withdraw its providers first: leaving them addressable after the
         // loader closes turns the next search into a NoClassDefFoundError.
         List<String> registered = providerNamesByPlugin.remove(pluginId);
@@ -518,6 +558,7 @@ public final class PluginHost {
             // Closing frees the jar handle; failure leaks a handle, nothing worse.
         }
         return true;
+        }
     }
 
     // --- reflective glue -----------------------------------------------------

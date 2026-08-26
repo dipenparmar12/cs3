@@ -11,6 +11,7 @@ import { DisabledSet } from './util/disabledSet';
 import { SidecarSupervisor } from './cs3/sidecarSupervisor';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from './officialRepositories';
 import { getIssueLog } from './cs3/extensionIssues';
+import { ProviderRegistryCache, type CachedProvider } from './cs3/providerRegistry';
 import { classifyFailure, FAILURE_KIND_LABELS } from './cs3/failureTaxonomy';
 import { mapProviderLink } from './cs3/providerLinks';
 import type { FailureKind } from '../src/types/analytics';
@@ -631,6 +632,33 @@ function safeParse(raw: string): Record<string, unknown> | null {
   }
 }
 
+/**
+ * The sidecar's raw `load` reply, as the shape the registry stores.
+ *
+ * One conversion, used by both the load path and the activation path, because
+ * what gets written to the cache and what gets registered in memory have to be
+ * the same thing — a hydrated launch replays exactly what a loading launch saw,
+ * and any divergence here would show up as providers that appear only on cold
+ * starts.
+ */
+function describeRegistered(raw: unknown): CachedProvider[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CachedProvider[] = [];
+  for (const entry of raw as Array<Record<string, unknown>>) {
+    const name = entry?.name ? String(entry.name) : null;
+    if (!name) continue;
+    out.push({
+      name,
+      mainUrl: entry.mainUrl ? String(entry.mainUrl) : undefined,
+      lang: entry.lang ? String(entry.lang) : undefined,
+      hasMainPage: Boolean(entry.hasMainPage),
+      hasQuickSearch: Boolean(entry.hasQuickSearch),
+      supportedTypes: Array.isArray(entry.supportedTypes) ? (entry.supportedTypes as string[]) : [],
+    });
+  }
+  return out;
+}
+
 export class PluginManager {
   private pluginsDir: string;
   private analyzer = new PluginCompatibilityAnalyzer();
@@ -675,6 +703,30 @@ export class PluginManager {
   private providersLoading: Promise<void> | null = null;
 
   /**
+   * What each archive registered last time, so a launch does not have to ask.
+   *
+   * Loading all 124 installed archives into the JVM was measured at 66.8s on
+   * the development machine, paid on the first search of every launch, and
+   * ~97% of it is JVM class loading of the 56-jar runtime classpath rather than
+   * anything the plugins do — see the header of `providerRegistry.ts` for the
+   * three experiments that established that and ruled out the alternatives.
+   */
+  private registry: ProviderRegistryCache | null = null;
+
+  /**
+   * Plugins whose code is actually live inside the JVM.
+   *
+   * Distinct from `providers`, which is populated from the registry cache and
+   * describes providers that are addressable but not yet running. Conflating
+   * the two is the whole bug this split avoids: the app needs descriptions to
+   * draw a scope picker and needs a live object only to make a call.
+   */
+  private readonly liveInJvm = new Set<string>();
+
+  /** In-flight activations, so two concurrent searches load a plugin once. */
+  private readonly activating = new Map<string, Promise<boolean>>();
+
+  /**
    * How far the one-time provider load has got.
    *
    * Loading runs DEX translation and each plugin's own `load()`, serially,
@@ -707,6 +759,16 @@ export class PluginManager {
       ? path.join(app.getPath('userData'), 'extensions')
       : path.join(process.cwd(), 'extensions');
     fs.mkdirSync(this.pluginsDir, { recursive: true });
+    /**
+     * Keyed to the runtime generation the sidecar will actually use, not to a
+     * constant compiled in here. The shim and the bridge decide what a plugin
+     * can register, so a cached answer recorded under a different runtime is
+     * not an answer about this one.
+     */
+    this.registry = new ProviderRegistryCache({
+      file: path.join(path.dirname(this.pluginsDir), 'cs3-provider-registry.json'),
+      generation: this.sidecar.getProvisioner().generation,
+    });
     this.restore();
   }
 
@@ -1241,7 +1303,13 @@ export class PluginManager {
       this.setExtensionsEnabled([internalName], true);
     }
 
-    // Clean up provider registrations for uninstalled extension
+    // Clean up provider registrations for uninstalled extension.
+    //
+    // The cached description goes with them. A row survives restarts, so
+    // leaving one behind would re-advertise the providers of an extension the
+    // user has removed, on every launch, with nothing installed to serve them.
+    this.registry?.forget(internalName);
+    this.liveInJvm.delete(internalName);
     this.providersLoaded = false;
     for (const [pName, provider] of [...this.providers.entries()]) {
       if (provider.pluginInternalName === internalName) {
@@ -1354,6 +1422,11 @@ export class PluginManager {
   }
 
   public shutdown(): void {
+    // Written before the JVM goes, or a session that loaded new archives throws
+    // its registrations away and pays the full cold load again next launch —
+    // which is exactly the cost this cache exists to remove, reappearing on
+    // precisely the runs that had just done the work.
+    this.registry?.flush();
     this.sidecar.stop();
   }
 
@@ -1716,53 +1789,39 @@ export class PluginManager {
   // --- provider execution --------------------------------------------------
 
   /**
-   * Loads every installed plugin into the sidecar, once per session.
+   * Makes every installed provider *addressable*, which is not the same as
+   * loading it.
    *
-   * Deferred rather than done at startup: loading runs DEX translation and a
-   * plugin's own `load()`, which is far too much to put in the cold-start path
-   * (DSK-57). The first search pays for it, and everything after is warm.
+   * This used to load all 124 archives into the JVM, in series, on the first
+   * search of every launch — measured at **66.8 seconds**, of which ~97% is JVM
+   * class loading of the shared 56-jar runtime rather than anything the plugins
+   * do. `providerRegistry.ts` carries the three experiments that established
+   * that, and rules out the two obvious fixes: caching translation saves 1.4s
+   * of it, and loading concurrently saves 1.4x while mis-attributing 176
+   * providers to the wrong extension.
+   *
+   * So the pass is now in two halves:
+   *
+   *  1. **Hydrate.** Every archive whose registration is already recorded — same
+   *     bytes, same runtime generation — is described from disk. No sidecar, no
+   *     JVM, no class loading. This is enough for the scope picker, the
+   *     extensions tree, the enable cascade, `cs3ext://` addressing and the
+   *     adult gate, which is almost everything the app does with providers.
+   *  2. **Load what is not recorded.** A first run, a new install, or a runtime
+   *     upgrade still pays the real cost — once, for those archives only.
+   *
+   * Making a *call* is what needs a live plugin, and {@link activate} does that
+   * on demand for the handful a search actually asks.
+   *
+   * The sidecar is not even started when everything hydrates. That is the
+   * point: an install with nothing new to load reaches a usable search scope
+   * without a JVM in the picture at all.
    */
   private async ensureProvidersLoaded(): Promise<void> {
     if (this.providersLoaded) return this.providersLoading ?? undefined;
     if (this.providersLoading) return this.providersLoading;
 
     this.providersLoading = (async () => {
-      const started = await this.sidecar.ensureStarted();
-      if (!started) {
-        /**
-         * The runtime is unavailable, and that has to be said out loud.
-         *
-         * This used to return silently. Every installed extension then reported
-         * zero providers with no reason attached, which the extensions screen
-         * rendered as a permanent "JVM sidecar is initializing providers…"
-         * spinner — a message that is not merely unhelpful but wrong: nothing
-         * was initializing and nothing ever would. The actual cause on the
-         * machine where this was found was a `JAVA_HOME` pointing at Java 17,
-         * one sentence that would have ended the investigation immediately.
-         */
-        const status = await this.sidecar.status();
-        const reason =
-          status.reason ?? 'The extension runtime is not available, so providers cannot be loaded.';
-        for (const record of this.installedPlugins.values()) {
-          this.runtimeReports.set(record.internalName, {
-            tier: 'T4_BLOCKED',
-            reason,
-            translated: false,
-            failureKind: 'SIDECAR_UNAVAILABLE',
-          });
-        }
-        // Leave providersLoaded false so retry occurs once runtime is ready
-        this.providersLoaded = false;
-        return;
-      }
-
-      // Clear any transient sidecar unavailable reports from prior cold starts
-      for (const [name, report] of this.runtimeReports.entries()) {
-        if (report.failureKind === 'SIDECAR_UNAVAILABLE') {
-          this.runtimeReports.delete(name);
-        }
-      }
-
       // Recomputed from scratch each pass: an uninstall can resolve a clash,
       // and a stale entry would keep blaming an extension that is now fine.
       this.providerNameClashes.clear();
@@ -1792,9 +1851,85 @@ export class PluginManager {
           failureKind: 'ARCHIVE_MISSING',
         });
       }
-      this.emitLoadProgress({ loaded: 0, total: pending.length, running: true });
-
+      /**
+       * Half of the pass, and on a warm install all of it.
+       *
+       * Every archive whose registration is already recorded is described from
+       * disk here. What is left in `cold` is a first run, a new install, or an
+       * archive whose bytes or runtime generation moved — and only those pay
+       * the JVM.
+       */
+      const cold: Array<PluginData & { meta: SitePlugin }> = [];
       for (const record of pending) {
+        const cached = this.registry?.read(record.internalName, record.filePath);
+        if (!cached) {
+          cold.push(record);
+          continue;
+        }
+        this.registerProviders(record, cached);
+      }
+
+      if (cold.length === 0) {
+        /**
+         * Nothing to load, so nothing starts the JVM.
+         *
+         * The sidecar is spawned by `activate` when a provider is first called.
+         * Starting it here "to be ready" would put a 2.7s process launch back
+         * on the path this whole change exists to clear, for an install that
+         * may never search.
+         */
+        this.providersLoaded = true;
+        this.publishProvenance();
+        this.emitLoadProgress({ loaded: 0, total: 0, running: false, current: undefined });
+        return;
+      }
+
+      const started = await this.sidecar.ensureStarted();
+      if (!started) {
+        /**
+         * The runtime is unavailable, and that has to be said out loud.
+         *
+         * This used to return silently. Every installed extension then reported
+         * zero providers with no reason attached, which the extensions screen
+         * rendered as a permanent "JVM sidecar is initializing providers…"
+         * spinner — a message that is not merely unhelpful but wrong: nothing
+         * was initializing and nothing ever would. The actual cause on the
+         * machine where this was found was a `JAVA_HOME` pointing at Java 17,
+         * one sentence that would have ended the investigation immediately.
+         *
+         * Only the archives that actually needed the JVM are blamed. Reporting
+         * every installed extension as blocked — which is what this did before
+         * hydration existed — would now be wrong as well as unhelpful: the
+         * hydrated ones are addressable and their providers will answer as soon
+         * as the runtime comes back.
+         */
+        const status = await this.sidecar.status();
+        const reason =
+          status.reason ?? 'The extension runtime is not available, so providers cannot be loaded.';
+        for (const record of cold) {
+          this.runtimeReports.set(record.internalName, {
+            tier: 'T4_BLOCKED',
+            reason,
+            translated: false,
+            failureKind: 'SIDECAR_UNAVAILABLE',
+          });
+        }
+        // Leave providersLoaded false so retry occurs once runtime is ready
+        this.providersLoaded = false;
+        this.emitLoadProgress({ running: false, current: undefined });
+        return;
+      }
+
+      // Clear any transient sidecar unavailable reports from prior cold starts
+      for (const [name, report] of this.runtimeReports.entries()) {
+        if (report.failureKind === 'SIDECAR_UNAVAILABLE') {
+          this.runtimeReports.delete(name);
+        }
+      }
+
+      this.emitLoadProgress({ loaded: 0, total: cold.length, running: true });
+
+      for (const record of cold) {
         this.emitLoadProgress({ current: record.meta?.name ?? record.internalName });
 
         const response = await this.sidecar.call('load', {
@@ -1838,46 +1973,11 @@ export class PluginManager {
 
         // Successfully loaded plugin into sidecar; remove any old failure report
         this.runtimeReports.delete(record.internalName);
+        this.liveInJvm.add(record.internalName);
 
-        const result = response.result ?? {};
-        const registered = Array.isArray(result.providers) ? result.providers : [];
-        for (const raw of registered as Array<Record<string, unknown>>) {
-          const name = raw.name ? String(raw.name) : null;
-          if (!name) continue;
-
-          /**
-           * A provider name is the app-wide address for a provider — `cs3ext://`
-           * URLs, the scope and the enable/disable list all key on it — so two
-           * extensions cannot both hold one. The first keeps it, because that is
-           * stable across reloads in a way "whichever loaded last" is not.
-           *
-           * The loser is recorded rather than dropped: without this it shows up
-           * in the tree as an extension that registered nothing, which reads as
-           * a translation failure and sends whoever investigates to the wrong
-           * place entirely.
-           */
-          const owner = this.providers.get(name);
-          if (owner && owner.pluginInternalName !== record.internalName) {
-            const clashes = this.providerNameClashes.get(record.internalName) ?? [];
-            clashes.push(`${name} (held by ${owner.pluginName})`);
-            this.providerNameClashes.set(record.internalName, clashes);
-            continue;
-          }
-
-          this.rememberProviderOrigin(name, record.internalName, record.meta?.name ?? record.internalName);
-          this.providers.set(name, {
-            name,
-            pluginInternalName: record.internalName,
-            pluginName: record.meta?.name ?? record.internalName,
-            mainUrl: raw.mainUrl ? String(raw.mainUrl) : undefined,
-            lang: raw.lang ? String(raw.lang) : undefined,
-            hasMainPage: Boolean(raw.hasMainPage),
-            hasQuickSearch: Boolean(raw.hasQuickSearch),
-            supportedTypes: Array.isArray(raw.supportedTypes)
-              ? (raw.supportedTypes as string[])
-              : [],
-          });
-        }
+        const described = describeRegistered(response.result?.providers);
+        this.registry?.write(record.internalName, record.filePath, described);
+        this.registerProviders(record, described);
       }
       this.providersLoaded = true;
       this.publishProvenance();
@@ -1887,6 +1987,189 @@ export class PluginManager {
     });
 
     return this.providersLoading;
+  }
+
+  /**
+   * Puts one archive's providers into the registry the app addresses.
+   *
+   * Shared by hydration and by a real load, deliberately: the two must agree on
+   * clash resolution and on provenance, and a second copy of this loop is a
+   * second place for "which extension owns this name" to be decided
+   * differently. The input is the same shape either way — that is what the
+   * registry cache stores.
+   */
+  private registerProviders(
+    record: PluginData & { meta: SitePlugin },
+    providers: CachedProvider[]
+  ): void {
+    const pluginName = record.meta?.name ?? record.internalName;
+    for (const provider of providers) {
+      const name = provider.name;
+      if (!name) continue;
+
+      /**
+       * A provider name is the app-wide address for a provider — `cs3ext://`
+       * URLs, the scope and the enable/disable list all key on it — so two
+       * extensions cannot both hold one. The first keeps it, because that is
+       * stable across reloads in a way "whichever loaded last" is not.
+       *
+       * The loser is recorded rather than dropped: without this it shows up in
+       * the tree as an extension that registered nothing, which reads as a
+       * translation failure and sends whoever investigates to the wrong place
+       * entirely.
+       */
+      const owner = this.providers.get(name);
+      if (owner && owner.pluginInternalName !== record.internalName) {
+        const clashes = this.providerNameClashes.get(record.internalName) ?? [];
+        clashes.push(`${name} (held by ${owner.pluginName})`);
+        this.providerNameClashes.set(record.internalName, clashes);
+        continue;
+      }
+
+      this.rememberProviderOrigin(name, record.internalName, pluginName);
+      this.providers.set(name, {
+        name,
+        pluginInternalName: record.internalName,
+        pluginName,
+        mainUrl: provider.mainUrl,
+        lang: provider.lang,
+        hasMainPage: provider.hasMainPage,
+        hasQuickSearch: provider.hasQuickSearch,
+        supportedTypes: provider.supportedTypes,
+      });
+    }
+  }
+
+  /**
+   * Makes a hydrated provider callable, loading its plugin if it is not live.
+   *
+   * The counterpart to hydration: `ensureProvidersLoaded` makes providers
+   * *addressable* from a cached description, and this is what turns one of them
+   * into something the JVM can actually run. A search of eight providers loads
+   * eight plugins, not a hundred and twenty-four.
+   *
+   * Returns whether the provider can now be called. `false` is not an error to
+   * throw on — the caller reports it through the existing provider-missing
+   * path, which knows how to explain *why* a provider is absent.
+   */
+  public async ensureProviderActive(providerName: string): Promise<boolean> {
+    await this.ensureProvidersLoaded();
+    const provider = this.providers.get(providerName);
+    if (!provider) return false;
+    return this.activate(provider.pluginInternalName);
+  }
+
+  /**
+   * Loads one archive into the JVM, at most once, however many callers ask.
+   *
+   * The in-flight map is not an optimisation. A search fans out to eight
+   * providers at once and several routinely come from one archive, so without
+   * it that archive is loaded eight times concurrently — which is precisely the
+   * overlapping-load case that mis-attributes providers, arriving through the
+   * front door. `PluginHost.registrationLock` is the backstop; this is the fix.
+   */
+  private async activate(internalName: string): Promise<boolean> {
+    if (this.liveInJvm.has(internalName)) return true;
+
+    const inFlight = this.activating.get(internalName);
+    if (inFlight) return inFlight;
+
+    const record = this.installedPlugins.get(internalName);
+    if (!record?.filePath) return false;
+
+    const run = (async (): Promise<boolean> => {
+      const started = await this.sidecar.ensureStarted();
+      if (!started) {
+        const status = await this.sidecar.status();
+        this.runtimeReports.set(internalName, {
+          tier: 'T4_BLOCKED',
+          reason:
+            status.reason ?? 'The extension runtime is not available, so providers cannot be loaded.',
+          translated: false,
+          failureKind: 'SIDECAR_UNAVAILABLE',
+        });
+        return false;
+      }
+
+      const response = await this.sidecar.call('load', {
+        pluginId: internalName,
+        path: record.filePath,
+      });
+
+      if (!response.ok) {
+        const reason = response.error ?? 'The extension runtime could not load this plugin.';
+        this.runtimeReports.set(internalName, {
+          tier: 'T4_BLOCKED',
+          reason,
+          translated: false,
+          failureKind: response.errorKind,
+        });
+        getIssueLog()?.recordPluginFailure({
+          plugin: record.meta?.name ?? internalName,
+          reason,
+          kind: response.errorKind,
+          tier: 'T4_BLOCKED',
+        });
+        /**
+         * The cached claim is withdrawn, not merely unused.
+         *
+         * A row says "this archive registered these providers last time". An
+         * archive that will no longer load has stopped being evidence for that,
+         * and leaving the row would advertise dead providers on every launch
+         * from now on, with the failure re-discovered each time and nothing
+         * recording that it is permanent.
+         */
+        this.registry?.forget(internalName);
+        return false;
+      }
+
+      this.runtimeReports.delete(internalName);
+      this.liveInJvm.add(internalName);
+
+      /**
+       * Re-recorded from the live answer, which may differ from the cached one.
+       *
+       * A provider the archive no longer registers has to disappear from the
+       * registry, and one it has started registering has to appear. Hydration
+       * is an optimistic replay; this is the authoritative version, and writing
+       * it back is what stops the two drifting apart across launches.
+       */
+      const described = describeRegistered(response.result?.providers);
+      this.registry?.write(internalName, record.filePath, described);
+      this.registerProviders(record, described);
+      this.publishProvenance();
+      return true;
+    })();
+
+    this.activating.set(internalName, run);
+    try {
+      return await run;
+    } finally {
+      this.activating.delete(internalName);
+    }
+  }
+
+  /**
+   * Loads everything, in the background, so a later search does not have to.
+   *
+   * The cold cost is unavoidable and mostly one-off — 57s of JVM class loading
+   * across a 124-archive install, of which a reload in the same process costs
+   * 2.4s. Paying it while the user is reading the home screen is strictly
+   * better than paying it when they press search, and it is the same work
+   * either way.
+   *
+   * Deliberately serial and deliberately unhurried. Concurrency was measured at
+   * 1.4x for 176 mis-attributed providers, and this runs beside whatever the
+   * user is actually doing — a warm-up that competes with a live search for the
+   * sidecar's worker pool has made things worse, not better.
+   */
+  public async warmProviders(signal?: AbortSignal): Promise<void> {
+    await this.ensureProvidersLoaded();
+    for (const record of [...this.installedPlugins.values()]) {
+      if (signal?.aborted) return;
+      if (this.liveInJvm.has(record.internalName)) continue;
+      await this.activate(record.internalName);
+    }
   }
 
   /**
@@ -1995,11 +2278,24 @@ export class PluginManager {
     return this.disabledProviders.set(names, enabled);
   }
 
-  /** Public entry point for loading providers, used by the extension manager. */
+  /**
+   * Public entry point for loading providers, used by the extension manager.
+   *
+   * `force` now means something stronger than it did. Hydration answers from a
+   * cache, so merely clearing `providersLoaded` would re-read the same
+   * descriptions and change nothing — which is the opposite of what a caller
+   * asking to reload wants. The cache and the live set are dropped too, so the
+   * next pass genuinely re-asks the JVM.
+   */
   public async loadProviders(force = false): Promise<void> {
     if (force || this.providers.size === 0) {
       this.providersLoaded = false;
       this.providersLoading = null;
+    }
+    if (force) {
+      this.registry?.clear();
+      this.liveInJvm.clear();
+      this.providers.clear();
     }
     await this.ensureProvidersLoaded();
   }
@@ -2101,6 +2397,20 @@ export class PluginManager {
   /** One provider's answer, as an outcome rather than a throw. */
   private async searchOne(query: string, name: string): Promise<ProviderSearchOutcome> {
     const started = Date.now();
+    /**
+     * Loaded now, if it is not already — this is where the cost is paid.
+     *
+     * A hydrated provider is addressable but has no code running behind it, and
+     * this is the moment that stops being enough. Only the providers a search
+     * actually asks are loaded, which is the whole saving: eight archives
+     * rather than a hundred and twenty-four.
+     *
+     * A failure is deliberately not short-circuited. The RPC below answers with
+     * `PROVIDER_NOT_LOADED`, and that path already knows how to explain whether
+     * the extension is disabled, uninstalled or failing to load — a bare
+     * `false` here would replace that explanation with silence.
+     */
+    await this.ensureProviderActive(name);
     const response = await this.sidecar.call(
       'providerSearch',
       { query, providers: [name] },
@@ -2201,7 +2511,7 @@ export class PluginManager {
   public async loadMedia(url: string): Promise<LoadResponse | null> {
     const ref = parseExtensionUrl(url);
     if (!ref) return null;
-    await this.ensureProvidersLoaded();
+    await this.ensureProviderActive(ref.provider);
 
     const startedAt = Date.now();
     const response = await this.sidecar.call(
@@ -2366,7 +2676,7 @@ export class PluginManager {
         },
       };
     }
-    await this.ensureProvidersLoaded();
+    await this.ensureProviderActive(ref.provider);
 
     const startedAt = Date.now();
     const response = await this.sidecar.call(
@@ -2558,7 +2868,7 @@ export class PluginManager {
   public async loadSubtitles(url: string): Promise<Array<{ lang: string; url: string }>> {
     const ref = parseExtensionUrl(url);
     if (!ref) return [];
-    await this.ensureProvidersLoaded();
+    await this.ensureProviderActive(ref.provider);
 
     const response = await this.sidecar.call(
       'providerLoadLinks',

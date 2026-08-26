@@ -129,6 +129,18 @@ const PORTABLE_JAVA_MIRRORS: Record<string, string[]> = {
 };
 
 export class RuntimeProvisioner {
+  /**
+   * The generation this build ships.
+   *
+   * Exposed because it is not only the provisioner's business: anything that
+   * caches a *result produced by* the runtime has to key on it, or the cache
+   * outlives the thing that produced it. `ProviderRegistryCache` is the first
+   * such caller — what a plugin registers depends on what the shim and bridge
+   * make available to it, so a row recorded under generation 6 is not an answer
+   * about generation 7.
+   */
+  public readonly generation = RUNTIME_GENERATION;
+
   private baseDir: string;
   private listeners: Set<(progress: RuntimeProgress) => void> = new Set();
   private inFlightProvision: Promise<boolean> | null = null;
