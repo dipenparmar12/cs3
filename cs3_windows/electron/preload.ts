@@ -983,6 +983,35 @@ export interface CloudStreamElectronAPI {
   uninstallPlugin: (internalName: string) => Promise<boolean>;
   getInstalledRepositories: () => Promise<string[]>;
   /**
+   * Adds a repository without installing from it.
+   *
+   * The address is verified before it is kept — an unreachable one would become
+   * a permanent row that fails every time it is opened, and that failure reads
+   * as the extensions being broken rather than the address.
+   */
+  addRepository: (
+    url: string
+  ) => Promise<{ ok: boolean; message: string; name?: string; plugins?: number }>;
+  /**
+   * Installs a repository's extensions in one action.
+   *
+   * `limit` defaults to unlimited, unlike the first-run bootstrap's cap of 12:
+   * that cap protects a user who has not seen the app work yet, and this is a
+   * user who has explicitly asked for this repository. Adult extensions are
+   * skipped unless the setting is on, and the setting is read in the main
+   * process — never passed from here.
+   */
+  installRepository: (
+    url: string,
+    options?: { limit?: number }
+  ) => Promise<{
+    ok: boolean;
+    message: string;
+    installed: number;
+    failed: number;
+    skipped: number;
+  }>;
+  /**
    * Uninstalls the repository *and* the extensions it installed, reporting
    * both. To silence one reversibly, use `setRepositoryEnabled`.
    */
@@ -1462,6 +1491,8 @@ const api: CloudStreamElectronAPI = {
   uninstallPlugin: (internalName) =>
     ipcRenderer.invoke('extension:uninstallPlugin', internalName),
   getInstalledRepositories: () => ipcRenderer.invoke('extension:getInstalledRepositories'),
+  addRepository: (url) => ipcRenderer.invoke('extension:addRepository', url),
+  installRepository: (url, options) => ipcRenderer.invoke('extension:installRepository', url, options),
   removeRepository: (repoUrl) => ipcRenderer.invoke('extension:removeRepository', repoUrl),
   getInstalledPlugins: () => ipcRenderer.invoke('extension:getInstalledPlugins'),
   onExtensionInstallProgress: (callback) => subscribe('extension:installProgress', callback),

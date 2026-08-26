@@ -107,6 +107,37 @@ const TAGGED = /^([A-Za-z][\w.$ -]{0,31}):\s+(?=\S)(.*)$/s;
 const THROWABLE = /^((?:[a-z]\w*\.)+[A-Z]\w*(?:Exception|Error|Throwable))\b/;
 
 /**
+ * The plugin loader's own name, as it appears in a stack frame.
+ *
+ * `PluginClassLoader` names itself `cs3-plugin-<pluginId>`, and the JVM prints
+ * the defining loader before the class in every frame it owns — so a trace
+ * through plugin code carries its attribution in plain sight:
+ *
+ *     at cs3-plugin-Ultima.-1758189056//com.phisher98.UltimaPlugin.load(...)
+ *
+ * Worth reading, because the alternative is what this did first: attribute the
+ * record to `java.lang.reflect.InvocationTargetException`, which names the
+ * reflection layer and says nothing. That is the same mistake `Main.describe`
+ * was fixed for on the JVM side — see the second round of community-extension
+ * findings — arriving here from the other end.
+ */
+const PLUGIN_FRAME = /\bat\s+cs3-plugin-([\w.$-]+)\/\//;
+
+/**
+ * The part of a stack that describes the failure, as opposed to the route to it.
+ *
+ * Only `Caused by:` and `Suppressed:` lines say what went wrong; `at` frames are
+ * an itinerary. Classifying from the whole trace reads that itinerary as
+ * evidence, and it produced exactly the confident wrong answer this taxonomy
+ * exists to avoid: every plugin failure passes through
+ * `com.cloudstream.desktop.sidecar.PluginHost`, the `runtime-unavailable` rule
+ * matches the word `sidecar`, and so *every* trace was reported as the extension
+ * runtime being broken — sending the reader to a runtime status page that is
+ * working and has nothing to tell them.
+ */
+const EXPLANATORY = /^(Caused by:|Suppressed:)/;
+
+/**
  * Registration announcements. High volume, zero diagnostic value, and they
  * arrive at `INFO` so they cannot be dropped by level alone.
  *
@@ -259,6 +290,15 @@ export class SidecarStderrReader {
 export function describe(head: string, stack: string[] = [], julSource?: string | null): SidecarRecord {
   const joined = [head, ...stack].join('\n');
   const missing = MISSING_CLASS.exec(joined)?.[1];
+  /**
+   * What the failure *is*, without the route it took to get here.
+   *
+   * `at` frames are dropped — see EXPLANATORY. Source locations are stripped
+   * inside `classifyFailure` itself, which is the same problem from the other
+   * direction: a line number is a three-digit integer and `server-error` tests
+   * for one.
+   */
+  const subject = [head, ...stack.filter((line) => EXPLANATORY.test(line))].join('\n');
 
   let level: LogLevel | null = null;
   let source: string | undefined = julSource ?? undefined;
@@ -289,8 +329,19 @@ export function describe(head: string, stack: string[] = [], julSource?: string 
       // for, and stripping it makes two different extractors' "No server
       // matched" indistinguishable in any view that does not show the column.
     } else {
-      const throwable = THROWABLE.exec(message)?.[1];
-      if (throwable) source = throwable;
+      /**
+       * A plugin's own loader outranks the exception class.
+       *
+       * `InvocationTargetException` is the reflection layer, not the culprit —
+       * and for a plugin failure the culprit's id is right there in the frames.
+       */
+      const owner = PLUGIN_FRAME.exec(joined)?.[1];
+      if (owner) {
+        source = owner;
+      } else {
+        const throwable = THROWABLE.exec(message)?.[1];
+        if (throwable) source = throwable;
+      }
     }
   }
 
@@ -315,7 +366,7 @@ export function describe(head: string, stack: string[] = [], julSource?: string 
   // rule matches anything containing "Error", so classifying an informational
   // line files chatter as a failure.
   if (level === 'warn' || level === 'error' || level === 'fatal') {
-    record.cause = classifyFailure(joined);
+    record.cause = classifyFailure(subject);
   }
   return record;
 }

@@ -73,7 +73,10 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (32 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (159 tests, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (364 cases, Node type-stripping — no framework) |
+| Extension issues only | `cs3_windows/` | `bun run test:issues` (21 cases, pure) |
+| Provider registry only | `cs3_windows/` | `bun run test:registry` (9 cases, temp dirs) |
+| Sidecar log only | `cs3_windows/` | `bun run test:sidecar-log` (20 cases, pure) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Provider links only | `cs3_windows/` | `bun run test:links` (15 cases, no ffmpeg needed) |
 | WebView matching only | `cs3_windows/` | `bun run test:webview` (21 cases, pure) |
@@ -82,12 +85,8 @@ cs3/
 | Subtitles only | `cs3_windows/` | `bun run test:subtitles` (16 cases) |
 | Media decisions only | `cs3_windows/` | `bun run test:media` (71 cases, no ffmpeg needed) |
 | Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (17 cases, real ffmpeg; skips itself without it) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (124 tests, Node type-stripping — no framework) |
-| Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Source export only | `cs3_windows/` | `bun run test:export` (13 cases, pure) |
 | Download identity only | `cs3_windows/` | `bun run test:download-identity` (18 cases, pure) |
-| Media decisions only | `cs3_windows/` | `bun run test:media` (53 cases, no ffmpeg needed) |
-| Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
 | Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
@@ -256,6 +255,15 @@ and the erase control), `bookmarks:*` (saved detail pages), `discover:*` (home-s
 catalogues and title enrichment), `subtitles:*` (online search, SubRip→WebVTT), `sources:getCacheStats` /
 `sources:clearCache`.
 
+`issues:*` is the extension issue ledger — `issues:list` (rows plus the tally plus the
+per-source breakdown), `issues:annotate` (mute/note), `issues:report`, `issues:clear`. It is
+deliberately a third surface beside `log:*` and `diagnostics:*`; see below for why none of
+the three can answer the others' question.
+
+`extension:addRepository` and `extension:installRepository` are new and are deliberately
+**two** actions. Adding is one fetch and a persisted row; installing is tens of downloads
+and DEX translations. Folding them together commits a user who wanted to browse.
+
 `media:*` is the compatibility engine's surface: `media:inspect` classifies a source without
 starting anything, `media:prepare` inspects-decides-opens and returns the URL to attach,
 `media:switchAudio` / `media:closeStream` drive a live session, `media:setCapabilities` /
@@ -328,6 +336,8 @@ not a layering mistake.
 | `cs3/extensionUpdater.ts` | Over-the-air extension updates on a schedule, so a provider fix does not wait for an app release. |
 | `cs3/bootstrap.ts` | First-run install of the bundled repositories, and the adult-content opt-in. |
 | `cs3/diagnostics.ts` | Provider failures with the context that makes them reproducible. See below. |
+| `cs3/extensionIssues.ts` | The **durable tally** of distinct extension problems, across restarts and log rotation. `diagnostics` is one failure shaped to be pasted; the logger is a per-session transcript; this is the "count before fixing" list. See below. |
+| `cs3/providerRegistry.ts` | What each archive registered, keyed by size+mtime+runtime generation. Hydrates the provider list at launch **without starting the JVM** — the fix for a 57–67s first search. See below. |
 | `cs3/titleOutcomes.ts` | How each title last behaved, so a dead row is not clicked twice. |
 | `cs3/batchDownloader.ts` | Season/series batch download orchestration. |
 | `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, and remembered source choices. |
@@ -335,7 +345,8 @@ not a layering mistake.
 | `cs3/providerAnalytics.ts` | How every provider has actually behaved, counted. Aggregates only — no queries, no titles, no viewing history — because provider quality does not depend on any of them and this file is meant to be shareable. `empty` is tracked separately from `failure`: a provider with nothing for this title is working, and folding the two together would rank providers by catalogue breadth. |
 | `cs3/providerRanking.ts` | Weighted scoring over those counts. Criteria are **rows in a table**, not a formula: an id, a weight, a sample floor and a function to `0..1` or `null`. A `null` is excluded from the denominator rather than scored zero — a provider nobody has downloaded from must not rank below one whose downloads always fail. Rates are smoothed toward a neutral prior so a new extension starts mid-table and can never be permanently buried by one unlucky first call. |
 | `cs3/providerRecommendations.ts` | Turns scores into advice, and (only with `autoEnableProven`) into action. Nothing is ever auto-**disabled**: a site being down for a week is not consent to remove a source the user chose. |
-| `cs3/failureTaxonomy.ts` | `classifyFailure` — one closed set of causes, shared by the ranking and the diagnostics. Counting free text produces a tally with one entry per failure; grouping by cause is what showed 113 load failures came from six missing classes. |
+| `cs3/failureTaxonomy.ts` | `classifyFailure` — one closed set of causes, shared by the ranking, the diagnostics and the issue ledger. Counting free text produces a tally with one entry per failure; grouping by cause is what showed 113 load failures came from six missing classes. Also owns `groupingForm`, moved here from `diagnostics.ts` because that module imports `electron` and cannot be loaded under Node's type stripping. |
+| `cs3/sidecarStderr.ts` | What a line of JVM stderr *means*: level, the tag that printed it, and a cause. Pure and tested — it is the only attribution the corpus offers. |
 | `cs3/discovery.ts` | The home screen's catalogues. Stale-while-revalidate over Stremio's keyless Cinemeta catalogs (`top`/`year`/`imdbRating`, filterable by 19 genres, pageable) plus AniList for anime. Finds **nothing playable** — sources are resolved by providers when an item is opened. |
 | `cs3/titleEnricher.ts` | Resolves `Avengers End Game 720p Hindi Dubbed` to the film it is about. Conservative on purpose: a disagreeing year is disqualifying and the similarity bar is high enough that `Avengers` does not match `Avengers: Endgame`. An unenriched row is a small loss; a mislabelled one reads as data corruption. |
 | `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. |
@@ -1252,6 +1263,181 @@ Three supporting pieces, each of which was a gap on its own:
 `RUNTIME_GENERATION` is bumped to 7: an already-provisioned sidecar never sends the new
 error kind, so without it the host's branch is unreachable and the viewer keeps seeing the
 hundred-name exception.
+
+### The first search cost a minute, and it was never the plugins (2026-08-26)
+
+Reported as: the app is slow to start, and slow again the first time you search. Measured on
+the development machine's real install — **124 archives, 132 providers** — rather than
+reasoned about, and every obvious explanation turned out to be wrong.
+
+`PluginManager.ensureProvidersLoaded` loaded every installed archive into the JVM, in series,
+on the first search of **every launch**:
+
+| Experiment | Result |
+|---|---|
+| Load all 124 archives (`load` RPC, serial) | **66.8s**, plus a 2.7s sidecar handshake |
+| `inspect` all 124 — DEX translate **+** `LinkageAnalyzer` | **1.4s** (mean 11ms) |
+| Load all, unload all, load all again **in the same JVM** | 57.1s, then **2.4s** |
+| Load all with 8 concurrent RPCs | 43.5s — and **176 providers attributed to the wrong extension** |
+
+Read those in order, because each one kills a fix that looks obvious before it:
+
+1. **Translation is not the cost.** It is already cached by archive hash, and the whole
+   translate-plus-analyse pass over the corpus is 1.4 seconds. Caching `LinkageAnalyzer`
+   output — the first thing that suggests itself — would buy about a second of sixty.
+2. **Neither is plugin logic, or the network.** Reloading all 124 *in the same process*
+   costs 2.4s. The 57s is demand-driven **JVM class loading of the 56-jar runtime
+   classpath** — jsoup, ktor, jackson, coroutines — spread across whichever plugin first
+   touches each part. It is paid once per JVM process and it is mostly disk: a run
+   immediately after another, with the OS page cache hot, measured 6.5s for the same work.
+3. **And it cannot safely be parallelised.** Providers do not return themselves; they
+   self-register into the single global `APIHolder.allProviders`, and `diffProviders`
+   observes registration by remembering that list's *length* before `load()`. Two loads
+   overlapping both read from the same mark and each claims the other's providers. Nothing
+   prevented this — the host merely happened to issue loads in series, which made it latent
+   rather than absent.
+
+So the fix is not to make the load faster. It is to **stop doing it before anyone has asked
+for anything.**
+
+**`cs3/providerRegistry.ts` records what each archive registered**, keyed on
+`size:mtime:generation`. Almost everything the app does with providers needs only their
+descriptions — the scope picker, the extensions tree, the enable cascade, `cs3ext://`
+addressing, provenance, the adult gate — and none of that needs a live JVM object.
+
+**Measured end to end against the same 117 distinct archives: 6.6s → 8ms, 132 providers
+preserved identically, zero cache misses, and the sidecar is not started at all.**
+
+Four things about it are load-bearing:
+
+- **The runtime generation is part of the key.** The shim and the bridge decide what a
+  plugin *can* register — four rounds of shim work in this repo each changed exactly that —
+  so a row recorded under generation 7 is not an answer about generation 8, even though the
+  archive's bytes never moved. Same argument `RuntimeProvisioner` makes for dropping
+  translations, and the same failure if skipped.
+- **An archive that registers nothing is recorded too.** Extractor-only bundles register no
+  `MainAPI`, and there are plenty; treating `[]` as "no record" would make every one of them
+  pay the full JVM load on every launch forever.
+- **A failed activation withdraws the row.** Otherwise a permanently broken extension is
+  re-advertised every launch, fails, and is rediscovered — once per launch, with nothing
+  recording that it is permanent.
+- **`loadProviders(force)` now clears the cache.** Hydration answers from disk, so merely
+  clearing `providersLoaded` would re-read the same descriptions and change nothing — the
+  opposite of what a caller asking to reload wants.
+
+**Loading is now lazy and per-archive.** `ensureProviderActive(name)` loads the plugin behind
+one provider, deduped by an in-flight map — a search fans out to eight providers at once and
+several routinely come from one archive, so without it that archive is loaded eight times
+concurrently, which is the mis-attribution case arriving through the front door.
+`PluginHost.registrationLock` is the backstop; the in-flight map is the fix.
+
+**And the unavoidable cold cost moved off the path where someone is waiting.**
+`warmProviders()` runs 4s after the window opens and loads the rest in the background,
+serially. Same work, done while the viewer reads the home screen.
+
+If you add a code path that calls a provider, call `ensureProviderActive` first. A hydrated
+provider is addressable and has no code running behind it; the RPC will answer
+`PROVIDER_NOT_LOADED`, which `explainMissingProvider` will then explain as though the
+extension were disabled.
+
+### Counting the log, from inside the app (2026-08-26)
+
+The capture worked. What it produced was not usable, and the numbers say why. A real user's
+21 session files held **6,069 records, 5,407 of them sidecar stderr — 89% of everything the
+app recorded** — and `missingClass` matched **none** of them. The class problem really is
+closed (§5 says so and the count agrees); what fills the log now is something else, and the
+reader could not tell its parts apart:
+
+| Shape, by frequency | What it is |
+|---|---|
+| `ApiError: ------------------` ×290 | upstream's `logError` divider — pure punctuation |
+| `PluginInstance: Adding Voe (…) ExtractorApi` ×~200 | registration chatter, at `INFO` |
+| `Aug 25, 2026 1:23:45 PM okhttp3…Platform log` ×151 | a JUL *header*, whose message is the next line |
+| `[plugin D/Ayzen] audinifer.com` ×~150 | the `android.util.Log` shim, carrying its own level |
+| `Exception in NiceHttp: … Connection reset` ×74 | a real failure, recorded at `info` |
+
+Three defects, and the first is the one that mattered. **The level was wrong in the
+direction that hides things**: unprefixed lines fell back to `info`, so `Read timed out`,
+`Connection reset` and `UnknownHostException` — 240 occurrences — sat at the same level as
+200 lines of `Adding … ExtractorApi`, and a problems-only view showed neither. **Nothing
+carried who printed it**, though the tag is right there at the front of the line. **And a JUL
+record is two lines**, read as two events: 151 headers with no message, 151 messages with no
+origin.
+
+`sidecarStderr.ts` now emits `source` (92.5% coverage on that corpus) and, for `warn` and
+above only, `cause` from the shared taxonomy. Only problems get a cause — the taxonomy ends
+in a catch-all matching anything containing "Error", so classifying an informational line
+files registration chatter as a failure.
+
+**`cs3/extensionIssues.ts` is the tally those fields make possible: 5,407 records → ~200
+distinct problems**, persisted across restarts and log rotation. It is a third surface beside
+the other two on purpose, because none of them can answer the others' question:
+
+| | Shape | Answers |
+|---|---|---|
+| `Logger` | NDJSON, **one file per launch**, rotated away | what happened, and in what order |
+| `DiagnosticsLog` | one failure's tuple, capped and time-windowed | enough to hand to a maintainer |
+| `ExtensionIssueLog` | one row per `(cause, source, groupingForm(message))`, durable | **how many distinct things are wrong** |
+
+A row needs all three key parts: `cause` alone is eight rows for six thousand records;
+`message` alone is thousands, because a message carries a host and a duration; `source` is
+what makes a row *assignable*. It stores **no URLs, queries or titles** — this file is
+long-lived, and a long-lived file accumulating what someone searched for is a viewing history
+under another name.
+
+Building it found three real classification bugs, each invisible and each in the same
+direction — a plausible category on a real failure:
+
+- **Stack-frame line numbers were read as HTTP statuses.** `RealCall.java:519` contains a
+  three-digit integer and `server-error` tests for one, so `IOException: Canceled` under an
+  OkHttp stack was classified as the *host* returning a 5xx, 23 times. `classifyFailure` now
+  strips source locations first — and only there, because `groupingForm` must keep bare
+  integers so `HTTP 403` and `HTTP 404` stay apart.
+- **The taxonomy only spoke Node's dialect.** It tests `ECONNRESET`; the JVM says
+  `SocketException: Connection reset`. 108 network failures were filed as the extension
+  throwing.
+- **Cancellations were counted as failures.** 79 of them. Fifteen scrapes are in flight when
+  the viewer types a new query, and the scope closing throws in every one. `cancelled` is now
+  its own kind and the ledger drops it — counting it would rank the *slowest* providers down
+  hardest, since those are the ones still running when the cancel lands.
+
+Two more came from running the finished path over the whole corpus, and both are the same
+shape — a stack read as though it were a message:
+
+- **A frame naming the sidecar made every plugin crash the sidecar's fault.** Every plugin
+  failure passes through `com.cloudstream.desktop.sidecar.PluginHost`, and the
+  `runtime-unavailable` rule matches the word `sidecar`. `describe` now classifies from the
+  head plus `Caused by:` lines only — `at` frames are the route, not the reason.
+- **`InvocationTargetException` was the attributed source.** It names the reflection layer
+  and says nothing, which is the same mistake `Main.describe` was fixed for on the JVM side.
+  The plugin's own loader is right there in the frames — `at cs3-plugin-Ultima…//` — so that
+  is read instead.
+
+And one real taxonomy gap the finished ledger surfaced on its first run over the corpus:
+**the rest of the linkage family is ours too.** `NoClassDefFoundError` was classified as the
+runtime's problem; `NoSuchMethodError`, `IncompatibleClassChangeError`, `AbstractMethodError`
+and `VerifyError` were not — yet those are precisely what a *shim* produces, and this repo's
+own history is three worked examples: `SharedPreferences` as a class where Android's is an
+interface (`IncompatibleClassChangeError`, 112 plugins), `getResources` returning `Object`
+(`NoSuchMethodError`), and `AccountManager.aniListApi` declared as the wrapper type
+(`NoSuchMethodError` — a getter returning a supertype is a different method to the JVM). All
+of them were landing in `provider-error`, whose hint tells the reader to report it to the
+scraper's maintainer — for a method we failed to provide.
+
+Two new `FailureKind`s came out of it and **neither is scored**, for the reason
+`provider-missing` is not: `cancelled`, above, and `resource-leak` — OkHttp's "was leaked.
+Did you forget to close a response body?", which was **every unclassified problem record in
+the corpus** (159). The scrape succeeded; a socket leaked. Filing it as `provider-error`
+reports providers as having failed 159 times that did not fail at all.
+
+**One pre-existing bug fell out of the same pass.** `playbackSession.ts` carried
+`/\b(\d{3})\b/` with both `\b` escapes replaced by literal backspace characters and the
+backslash eaten off `\d` — a pattern requiring control characters and the letter "d", which
+can never match. It parses the HTTP status that `SourceCache.recordFailure` uses to decide
+whether a dead link is **dropped on sight** or needs three strikes, so *every* failure was
+reaching it as ambiguous: a definitive 404 was never dropped, and the dead link was served
+first again in between. Worth grepping for `\x08` after any bulk edit; it is invisible in a
+diff.
 
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 

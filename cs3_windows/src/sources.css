@@ -4636,6 +4636,55 @@
   color: var(--text-subtle);
 }
 
+/* --- The issue tally ------------------------------------------------------
+   Reuses the diagnostics rows deliberately: the two panels sit next to each
+   other and answer adjacent questions, and giving the tally its own visual
+   language would suggest they are unrelated. What is new is only the parts
+   that are genuinely new — the count-first tally and the mute control. */
+.diag__tally {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0.45rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+.diag__tally-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.74rem;
+}
+/* Tabular figures and a fixed column so the counts read as a column of
+   numbers rather than ragged text — the whole point is comparing them. */
+.diag__tally-count {
+  min-width: 3.2rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--text-main);
+}
+.diag__tally-label { color: var(--text-main); }
+.diag__tally-distinct { margin-left: auto; color: var(--text-subtle); font-size: 0.68rem; }
+
+.diag__count { font-variant-numeric: tabular-nums; }
+/* Muted rows stay legible rather than being hidden: a muted problem that comes
+   back is the regression signal, and it has to be readable when it does. */
+.diag__row--muted { opacity: 0.5; }
+.diag__mute {
+  background: none;
+  border: none;
+  padding: 0 0.15rem;
+  cursor: pointer;
+  color: var(--text-subtle);
+  display: inline-flex;
+  align-items: center;
+}
+.diag__mute:hover { color: var(--text-main); }
+
 .player__error-actions {
   display: flex;
   align-items: center;

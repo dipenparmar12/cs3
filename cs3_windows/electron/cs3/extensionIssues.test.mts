@@ -299,6 +299,33 @@ test('the JVM says "Connection reset" where Node says ECONNRESET', () => {
 });
 
 
+
+test('a wrong shim method is our problem, not the extension author\'s', () => {
+  /**
+   * `NoClassDefFoundError` was already classified as ours; the rest of the
+   * linkage family was not, and it is the half a shim gets wrong more often —
+   * a class that is present and has the wrong shape. Three documented examples
+   * in this repo (SharedPreferences as a class, getResources returning Object,
+   * aniListApi declared as the wrapper type) all threw one of these, and all
+   * were landing under "the extension itself threw. Worth reporting to its
+   * maintainer" — blaming a scraper author for a method we failed to provide.
+   */
+  const log = ledger();
+  const issue = log.recordPluginFailure({
+    plugin: 'Ultima',
+    reason:
+      "NoSuchMethodError: 'com.lagradost.cloudstream3.utils.Event com.lagradost.cloudstream3.MainActivity$Companion.getBookmarksUpdatedEvent()'",
+    tier: 'T4_BLOCKED',
+  });
+  assert.equal(issue?.cause, 'runtime-unavailable');
+
+  assert.equal(
+    log.recordPluginFailure({ plugin: 'X', reason: 'IncompatibleClassChangeError: Found class …, but interface was expected' })?.cause,
+    'runtime-unavailable'
+  );
+});
+
+
 // --- runner ------------------------------------------------------------------
 
 let failed = 0;

@@ -2844,6 +2844,39 @@ ipcMain.handle('extension:getInstalledRepositories', async () =>
  * reply reports both — the caller needs to be able to say "removed, and 12
  * extensions with it" rather than implying nothing else changed.
  */
+/**
+ * Adds a repository without installing from it, and installs one wholesale.
+ *
+ * The pair matters more than either half. Adding is cheap and reversible, so it
+ * is what "I want to look at this repository" costs; installing forty archives
+ * is neither, so it stays a separate, explicit action. Folding them together
+ * would mean a user who wanted to browse has committed to a catalogue.
+ *
+ * The adult setting is read here rather than passed by the renderer: it is the
+ * kind of gate that must not be decidable by its caller.
+ */
+ipcMain.handle('extension:addRepository', async (_, repoUrl: string) => {
+  try {
+    return await pluginManager.addRepository(repoUrl);
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle(
+  'extension:installRepository',
+  async (_, repoUrl: string, options?: { limit?: number }) => {
+    try {
+      return await pluginManager.installRepository(repoUrl, {
+        limit: options?.limit,
+        adultAllowed: bootstrap.isAdultAllowed(),
+      });
+    } catch (error) {
+      return { ...fail(error), installed: 0, failed: 0, skipped: 0 };
+    }
+  }
+);
+
 ipcMain.handle('extension:removeRepository', async (_, repoUrl: string) => {
   const removedExtensions = pluginManager.removeRepository(repoUrl);
   return { repositories: pluginManager.getInstalledRepositories(), removedExtensions };

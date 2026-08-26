@@ -6,10 +6,29 @@
  * 23 of 26 entries were wrong and returned 404. So an unverified row is labelled
  * unverified rather than silently offered as if it worked.
  *
- * There is no "Add" button, and that is not an omission. The main process has no
- * standalone concept of adding a repository — a URL joins the installed set when
- * an extension is installed *from* it — so an Add button would create a row that
- * vanishes on the next read.
+ * ## Three actions, because they cost differently
+ *
+ * This file used to carry a note explaining that there was deliberately no
+ * "Add" button, since the main process had no standalone concept of adding a
+ * repository — a URL joined the installed set only when an extension was
+ * installed *from* it, so an Add button would have created a row that vanished
+ * on the next read. That was true, and it described a gap rather than a
+ * decision: of 29 catalogued repositories only the 4 bundled ones ever appeared
+ * in a user's list, and reaching any other meant keeping its URL somewhere
+ * outside the app.
+ *
+ * `addRepository` closes it, and the three actions stay separate because their
+ * costs are not comparable:
+ *
+ * | Action | Cost | Reversible |
+ * |---|---|---|
+ * | **Browse** | one fetch | nothing to reverse |
+ * | **Add** | one fetch, then the row persists | yes, Remove |
+ * | **Install all** | tens of downloads and DEX translations | uninstalls them |
+ *
+ * Folding Add into Browse would commit someone who wanted a look; folding
+ * Install into Add would commit them to a catalogue. Install-all is styled as
+ * the heavier action and says how many extensions it is about to fetch.
  */
 import React, { useMemo, useState } from 'react';
 import { Loader2 } from 'lucide-react';
@@ -25,6 +44,10 @@ interface RepositoryCatalogProps {
   busy: string | null;
   onBrowse(repository: { name: string; url: string }): void;
   onRemove(url: string): void;
+  /** Keeps the repository without downloading any of its extensions. */
+  onAdd(url: string): void;
+  /** Downloads and installs its extensions. The expensive one. */
+  onInstallAll(url: string): void;
 }
 
 /** A repository is installed if any of the URLs it is known by is. */
@@ -40,6 +63,8 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
   busy,
   onBrowse,
   onRemove,
+  onAdd,
+  onInstallAll,
 }) => {
   const [customUrl, setCustomUrl] = useState('');
 
@@ -92,6 +117,16 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
         <button type="submit" className="ext-btn" disabled={!customUrl.trim()}>
           Browse
         </button>
+        <button
+          type="button"
+          className="ext-btn"
+          disabled={!customUrl.trim() || busy !== null}
+          title="Keep this repository in your list without installing anything"
+          onClick={() => onAdd(customUrl.trim())}
+        >
+          {busy === `add:${customUrl.trim()}` ? <Loader2 size={13} className="spin" /> : null}
+          Add
+        </button>
       </form>
       <p className="ext-hint">
         A project page or repository shortcode works too. There is no convention for where a plugin list lives, so
@@ -143,6 +178,32 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                     <Loader2 size={13} className="spin" />
                   ) : null}
                   Browse extensions
+                </button>
+                {here ? null : (
+                  <button
+                    type="button"
+                    className="ext-btn"
+                    disabled={busy !== null}
+                    title="Keep this repository in your list without installing anything"
+                    onClick={() => onAdd(repository.rawRepoUrl)}
+                  >
+                    {busy === `add:${repository.rawRepoUrl}` ? (
+                      <Loader2 size={13} className="spin" />
+                    ) : null}
+                    Add
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="ext-btn"
+                  disabled={busy !== null}
+                  title="Download and install every extension this repository publishes"
+                  onClick={() => onInstallAll(repository.rawRepoUrl)}
+                >
+                  {busy === `installRepo:${repository.rawRepoUrl}` ? (
+                    <Loader2 size={13} className="spin" />
+                  ) : null}
+                  Install all
                 </button>
                 {here ? (
                   <button

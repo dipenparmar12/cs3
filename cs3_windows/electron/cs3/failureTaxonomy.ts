@@ -65,6 +65,29 @@ const RULES: Rule[] = [
   { kind: 'provider-missing', test: /PROVIDER_NOT_LOADED|no loaded provider is named|no longer installed|no installed extension provides/i },
 
   { kind: 'runtime-unavailable', test: /sidecar|extension runtime|SIDECAR_[A-Z]+|NoClassDefFoundError|UnsupportedClassVersionError|ClassNotFoundException/i },
+  /**
+   * The other half of the linkage family, and it is just as much ours.
+   *
+   * The rule above catches a *missing class*. These catch a class that is
+   * present and wrong — which is what a shim gets wrong far more often, and
+   * this repository has the history to prove it:
+   *
+   *  - `SharedPreferences` was a class where Android's is an interface, so
+   *    112 plugins' `invokeinterface` threw `IncompatibleClassChangeError` — at
+   *    first *use*, not at load.
+   *  - `Context.getPackageManager` and `getResources` returned `Object`, a
+   *    different descriptor from Android's, so the call site threw
+   *    `NoSuchMethodError` before the stub's own message could ever be seen.
+   *  - `AccountManager.aniListApi` was declared as the wrapper type and failed
+   *    with `NoSuchMethodError: AniListApi AccountManager$Companion.getAniListApi()`
+   *    — a getter returning a supertype is a different method to the JVM.
+   *
+   * Every one of those is a defect in the compatibility layer, and every one
+   * was landing in `provider-error` — "the extension itself threw. Worth
+   * reporting to its maintainer" — which sends the reader to blame a scraper
+   * author for a method we failed to provide.
+   */
+  { kind: 'runtime-unavailable', test: /\b(?:NoSuchMethodError|NoSuchFieldError|IncompatibleClassChangeError|AbstractMethodError|VerifyError|IllegalAccessError)\b/ },
   { kind: 'timeout', test: /timeout|timed out|deadline|ETIMEDOUT/i },
 
   { kind: 'expired', test: /expired|link has expired|token.*(expired|invalid)|signature.*(expired|mismatch)/i },

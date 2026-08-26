@@ -255,6 +255,8 @@ export const ExtensionsScreen: React.FC = () => {
           busy={busy}
           onBrowse={(repository) => void browse(repository)}
           onRemove={(url) => void actions.removeRepository(url)}
+          onAdd={(url) => void actions.addRepository(url)}
+          onInstallAll={(url) => void actions.installRepository(url)}
         />
       ) : null}
 

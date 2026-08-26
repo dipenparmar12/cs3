@@ -1045,6 +1045,147 @@ export class PluginManager {
   }
 
   /**
+   * Adds a repository on its own, without installing anything from it.
+   *
+   * There was no way to do this, and the extensions screen said so in a comment
+   * rather than as a gap: "the main process has no standalone concept of adding
+   * a repository — a URL joins the installed set when an extension is installed
+   * *from* it — so an Add button would create a row that vanishes on the next
+   * read." That is an accurate description of the old behaviour and it is the
+   * wrong behaviour. A user who wants a repository's extensions available has
+   * to keep its URL somewhere outside the app and paste it back every time they
+   * want to browse, and the four bundled repositories are the only ones that
+   * ever appear in their list.
+   *
+   * The URL is **verified before it is kept**. Storing an unreachable one would
+   * produce a permanent row that fails every time it is opened, which is worse
+   * than refusing it — the failure would be attributed to the extensions rather
+   * than to the address. So the plugin list is fetched first and the repository
+   * joins the set only if a document came back.
+   *
+   * Nothing is installed. That is the point of separating this from
+   * {@link installRepository}: adding is cheap and reversible, installing forty
+   * archives is neither, and folding them together means a user who wanted to
+   * look at a repository has committed to its whole catalogue.
+   */
+  public async addRepository(
+    repoUrl: string
+  ): Promise<{ ok: boolean; message: string; name?: string; plugins?: number }> {
+    const url = repoUrl.trim();
+    if (!url) return { ok: false, message: 'No repository address was given.' };
+
+    let result: RepositoryFetchResult;
+    try {
+      result = await this.fetchRepository(url);
+    } catch (error) {
+      return {
+        ok: false,
+        message: `That repository could not be read: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+
+    if (result.plugins.length === 0) {
+      return {
+        ok: false,
+        message:
+          result.warnings[0] ??
+          'That address did not return a plugin list. Check the URL, or open the project page to find the right one.',
+      };
+    }
+
+    this.installedRepoUrls.add(result.repositoryUrl);
+    this.persist();
+    return {
+      ok: true,
+      message: `Added ${result.name} — ${result.plugins.length} extensions available.`,
+      name: result.name,
+      plugins: result.plugins.length,
+    };
+  }
+
+  /**
+   * Installs a repository's extensions in one action.
+   *
+   * The catalogue could be browsed and extensions installed one at a time, and
+   * for a repository publishing eighty of them that is eighty clicks with a
+   * download and a DEX translation between each. `BootstrapService` already had
+   * this loop for the four bundled repositories; this is the same operation
+   * made available for the other twenty-five, which is what "let users enable
+   * extra repos if they want to" actually requires.
+   *
+   * `limit` defaults to unlimited, unlike bootstrap's cap of 12 per repository.
+   * The cap exists there because first-run install time sits in front of a user
+   * who has not seen the app work yet; here the user has explicitly asked for
+   * this repository and can watch it progress.
+   *
+   * **The adult gate is applied here too**, not only at search time. It would
+   * be honoured either way — `enabledProviderNames` is the enforcement point
+   * and nothing bypasses it — but downloading adult archives onto the disk of
+   * someone who has the setting off is not something to do and then filter.
+   */
+  public async installRepository(
+    repoUrl: string,
+    options: { limit?: number; adultAllowed?: boolean } = {}
+  ): Promise<{ ok: boolean; message: string; installed: number; failed: number; skipped: number }> {
+    let result: RepositoryFetchResult;
+    try {
+      result = await this.fetchRepository(repoUrl);
+    } catch (error) {
+      return {
+        ok: false,
+        message: `That repository could not be read: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        installed: 0,
+        failed: 0,
+        skipped: 0,
+      };
+    }
+
+    const adultAllowed = options.adultAllowed ?? false;
+    const wanted = result.plugins.filter(
+      (plugin) =>
+        adultAllowed || !(plugin.tvTypes ?? []).some((t) => String(t).toUpperCase() === 'NSFW')
+    );
+    const skipped = result.plugins.length - wanted.length;
+    const targets = options.limit ? wanted.slice(0, options.limit) : wanted;
+
+    let installed = 0;
+    let failed = 0;
+    for (const plugin of targets) {
+      // Already installed is not a failure and not work: re-downloading an
+      // archive the user already has would make "install the rest of this
+      // repository" cost as much as installing all of it.
+      if (this.installedPlugins.has(plugin.internalName)) continue;
+      try {
+        const outcome = await this.installPlugin(plugin, result.repositoryUrl);
+        if (outcome.ok) installed++;
+        else failed++;
+      } catch {
+        // One archive that will not install must not end the batch — the
+        // remaining thirty are unaffected and the user asked for those too.
+        failed++;
+      }
+    }
+
+    this.installedRepoUrls.add(result.repositoryUrl);
+    this.persist();
+
+    return {
+      ok: true,
+      message:
+        `${result.name}: installed ${installed}` +
+        (failed > 0 ? `, ${failed} failed` : '') +
+        (skipped > 0 ? `, ${skipped} adult extensions skipped` : ''),
+      installed,
+      failed,
+      skipped,
+    };
+  }
+
+  /**
    * Removes a repository *and* the extensions it installed.
    *
    * The cascade is the whole point. This used to delete the URL and stop, which

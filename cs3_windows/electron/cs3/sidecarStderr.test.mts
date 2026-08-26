@@ -19,7 +19,7 @@
  * to a field is what turned 113 load failures into six missing types.
  */
 import assert from 'node:assert/strict';
-import { SidecarStderrReader, type SidecarRecord } from './sidecarStderr.ts';
+import { SidecarStderrReader, describe, type SidecarRecord } from './sidecarStderr.ts';
 
 const tests: Array<[string, () => void]> = [];
 const test = (name: string, fn: () => void) => tests.push([name, fn]);
@@ -223,6 +223,50 @@ test('a sentence containing a colon does not donate a tag', () => {
 test('a bare throwable is attributed to its own class', () => {
   const [record] = absorb('java.io.IOException: Canceled');
   assert.equal(record.source, 'java.io.IOException');
+});
+
+
+
+test('a plugin failure is attributed to the plugin, not to the reflection layer', () => {
+  /**
+   * Verbatim from a real load of the corpus. `InvocationTargetException` names
+   * the reflection layer and says nothing — the same mistake `Main.describe`
+   * was fixed for on the JVM side. The plugin's own loader is in the frames.
+   */
+  const record = describe('java.lang.reflect.InvocationTargetException', [
+    'at java.base/java.lang.reflect.Method.invoke(Method.java:580)',
+    'at com.cloudstream.desktop.sidecar.PluginHost.invokeLoad(PluginHost.java:539)',
+    "Caused by: java.lang.NoSuchMethodError: 'com.lagradost.cloudstream3.utils.Event com.lagradost.cloudstream3.MainActivity$Companion.getBookmarksUpdatedEvent()'",
+    'at cs3-plugin-Ultima.-1758189056//com.phisher98.UltimaPlugin.load(Unknown Source)',
+  ]);
+  assert.equal(record.source, 'Ultima.-1758189056');
+});
+
+test('a stack frame naming the sidecar does not make it the sidecar’s fault', () => {
+  /**
+   * Every plugin failure passes through `com.cloudstream.desktop.sidecar.
+   * PluginHost`, and the `runtime-unavailable` rule matches the word "sidecar"
+   * — so classifying from the whole trace reported *every* plugin crash as the
+   * extension runtime being broken, sending the reader to a runtime status page
+   * that is working and has nothing to tell them.
+   *
+   * `at` frames are the route, not the reason. Only `Caused by:` is evidence.
+   */
+  const record = describe('Cinevood: scrape failed', [
+    'at com.cloudstream.desktop.sidecar.PluginHost.invokeLoad(PluginHost.java:539)',
+    'Caused by: java.net.SocketTimeoutException: Read timed out',
+  ]);
+  assert.equal(record.cause, 'timeout');
+});
+
+test('a genuine runtime failure is still recognised from its cause line', () => {
+  // The rule above must not have thrown away the signal it was narrowing.
+  const record = describe('java.lang.reflect.InvocationTargetException', [
+    'at com.cloudstream.desktop.sidecar.PluginHost.invokeLoad(PluginHost.java:539)',
+    'Caused by: java.lang.NoClassDefFoundError: com/lagradost/cloudstream3/CloudStreamApp',
+  ]);
+  assert.equal(record.cause, 'runtime-unavailable');
+  assert.equal(record.missingClass, 'com.lagradost.cloudstream3.CloudStreamApp');
 });
 
 

@@ -26,6 +26,7 @@ import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
 import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
 import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
+import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPanel';
 
 type TabId = 'general' | 'player' | 'components' | 'sources' | 'downloads' | 'network' | 'advanced';
 
@@ -373,6 +374,13 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
 
       {tab === 'advanced' && (
         <>
+          {/*
+            The tally first, then the transcript.
+            One says how many distinct things are wrong; the other says what
+            happened most recently. Reading them the other way round is what
+            makes 5,407 log lines feel like 5,407 problems.
+          */}
+          <ExtensionIssuesPanel />
           <DiagnosticsPanel />
 
           <SettingGroup title="Migration" icon={<RefreshCw size={15} />}>
