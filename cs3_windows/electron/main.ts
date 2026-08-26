@@ -6,6 +6,11 @@ import { fileURLToPath } from 'url';
 import { DatastoreManager } from './datastore';
 import { HomeProviderRegistry, DEFAULT_PROVIDER_ID } from './cs3/homeProviderRegistry';
 import { Logger, LOG_LEVELS, setLogger, type LogLevel, type LogScope } from './logging/logger';
+import {
+  ExtensionIssueLog,
+  setIssueLog,
+  type IssueQuery,
+} from './cs3/extensionIssues';
 import { Aria2Engine } from './aria2Engine';
 import { DownloadService } from './downloadService';
 import { PluginManager } from './pluginManager';
@@ -111,6 +116,27 @@ logger.info('app', 'session_started', {
 });
 
 const diagnostics = new DiagnosticsLog();
+
+/**
+ * The third log, and the one you read when you sit down to fix extensions.
+ *
+ * `logger` is a transcript and `diagnostics` is a report; neither is a tally,
+ * and a tally is what this codebase's one reliable workflow needs — count the
+ * log before fixing anything. Measured on a real user's 21 session files:
+ * 6,069 records, 5,407 of them sidecar stderr, collapsing to ~200 distinct
+ * problems. That last number is the actionable one and no per-session file can
+ * show it, because the sessions are separate files and old ones rotate away.
+ *
+ * Keyed to the logger's session so a row can count *launches* it appeared in,
+ * which distinguishes a retry loop inside one session from a site that has been
+ * down for a month.
+ */
+const issueLog = new ExtensionIssueLog({
+  file: path.join(app.getPath('userData'), 'cs3-extension-issues.json'),
+  sessionId: logger.session,
+  appVersion: app.getVersion(),
+});
+setIssueLog(issueLog);
 
 /**
  * Every diagnostic also becomes a structured record.
@@ -460,6 +486,10 @@ function installProcessGuards(): void {
     });
     diagnostics.flush();
     providerAnalytics.flush();
+    // The ledger's write is debounced by two seconds, and the failures worth
+    // keeping cluster at shutdown — a session that ended badly is exactly the
+    // one whose last few seconds matter.
+    issueLog.flush();
     throw error;
   });
 
@@ -937,6 +967,70 @@ ipcMain.handle(
 ipcMain.handle('diagnostics:clear', async () => {
   diagnostics.clear();
   return { ok: true };
+});
+
+// --- the extension issue ledger --------------------------------------------
+
+/**
+ * `issues:*` is the "what is actually broken" surface.
+ *
+ * Distinct from `log:*` and `diagnostics:*` in what it answers rather than in
+ * how it is stored. The log says what happened and in what order; the
+ * diagnostics say enough about one failure to hand it to a maintainer; this
+ * says **how many distinct problems there are and which of them matter**, which
+ * is the only one of the three that can be acted on as a list.
+ */
+ipcMain.handle('issues:list', async (_, query?: IssueQuery) => {
+  try {
+    return {
+      ok: true,
+      issues: issueLog.list(query ?? {}),
+      summary: issueLog.summary(),
+      sources: issueLog.bySource(),
+    };
+  } catch (error) {
+    return { ...fail(error), issues: [], summary: [], sources: [] };
+  }
+});
+
+/**
+ * Triage, kept rather than deleted.
+ *
+ * A muted row that starts happening again is the regression signal; deleting it
+ * means the next occurrence looks new and gets investigated a second time.
+ */
+ipcMain.handle(
+  'issues:annotate',
+  async (_, id: string, changes: { muted?: boolean; note?: string }) => {
+    try {
+      return { ok: issueLog.annotate(id, changes ?? {}) };
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+ipcMain.handle('issues:report', async () => {
+  try {
+    return {
+      ok: true,
+      report: issueLog.report({
+        app: app.getVersion(),
+        electron: process.versions.electron,
+        platform: `${process.platform}-${process.arch}`,
+      }),
+    };
+  } catch (error) {
+    return { ...fail(error), report: '' };
+  }
+});
+
+ipcMain.handle('issues:clear', async () => {
+  try {
+    return { ok: true, removed: issueLog.clear() };
+  } catch (error) {
+    return { ...fail(error), removed: 0 };
+  }
 });
 
 // --- the structured log ----------------------------------------------------

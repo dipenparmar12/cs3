@@ -58,6 +58,7 @@ import type {
   HistoryStats,
 } from '../src/types/history';
 import type { DiagnosticRecord, DiagnosticStage } from './cs3/diagnostics';
+import type { ExtensionIssue, IssueSummary } from './cs3/extensionIssues';
 import type { ExternalPlayer } from './externalPlayer';
 import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import type {
@@ -817,6 +818,37 @@ export interface CloudStreamElectronAPI {
     }
   >;
 
+  /**
+   * The extension issue ledger — what is actually broken, counted.
+   *
+   * Separate from `queryLog` and `getDiagnostics` in the question it answers,
+   * not in where it is stored. The log is ordered and per-session; the
+   * diagnostics describe one failure well enough to hand to a maintainer; this
+   * is the only one of the three that answers "how many distinct problems are
+   * there, and which of them matter".
+   */
+  listIssues: (query?: {
+    limit?: number;
+    cause?: string;
+    source?: string;
+    includeMuted?: boolean;
+    thisSessionOnly?: boolean;
+  }) => Promise<
+    Envelope & {
+      issues: ExtensionIssue[];
+      summary: IssueSummary[];
+      sources: Array<{ source: string; issues: number; occurrences: number }>;
+    }
+  >;
+  /** Triage. A muted row keeps counting, so a regression is still visible. */
+  annotateIssue: (
+    id: string,
+    changes: { muted?: boolean; note?: string }
+  ) => Promise<Envelope>;
+  /** A pasteable report, tally first. */
+  reportIssues: () => Promise<Envelope & { report: string }>;
+  clearIssues: () => Promise<Envelope & { removed: number }>;
+
   // The structured log. Deliberately a thin surface — the log's job is to be on
   // disk when something goes wrong, not to be browsed.
   queryLog: (filter?: {
@@ -1390,6 +1422,11 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('api:getProviderProvenance', providerName),
   getProviderProvenanceMap: (providerNames) =>
     ipcRenderer.invoke('api:getProviderProvenanceMap', providerNames),
+
+  listIssues: (query) => ipcRenderer.invoke('issues:list', query),
+  annotateIssue: (id, changes) => ipcRenderer.invoke('issues:annotate', id, changes),
+  reportIssues: () => ipcRenderer.invoke('issues:report'),
+  clearIssues: () => ipcRenderer.invoke('issues:clear'),
 
   queryLog: (filter) => ipcRenderer.invoke('log:query', filter),
   listLogSessions: () => ipcRenderer.invoke('log:sessions'),

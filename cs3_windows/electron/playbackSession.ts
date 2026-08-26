@@ -430,7 +430,14 @@ export class PlaybackSessionManager {
        * 404 goes now, an ambiguous failure needs to repeat before it counts,
        * because a passing network fault must not empty the cache.
        */
-      const status = /(d{3})/.exec(reason);
+      // NB: this regex was silently broken. An editor had replaced both `\b`
+      // escapes with literal backspace characters and eaten the backslash of
+      // `\d`, leaving a pattern that required control characters and the
+      // letter "d" — so `status` was *always* undefined and every failure
+      // reached `recordFailure` as ambiguous. A definitive 404 was therefore
+      // never dropped on sight; it took three strikes like a passing network
+      // fault, and the dead link was served first again in between.
+      const status = /\b(\d{3})\b/.exec(reason);
       this.content
         .getCache()
         .recordFailure(

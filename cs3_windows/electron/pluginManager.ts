@@ -10,6 +10,7 @@ import type { DatastoreManager } from './datastore';
 import { DisabledSet } from './util/disabledSet';
 import { SidecarSupervisor } from './cs3/sidecarSupervisor';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from './officialRepositories';
+import { getIssueLog } from './cs3/extensionIssues';
 import { classifyFailure, FAILURE_KIND_LABELS } from './cs3/failureTaxonomy';
 import { mapProviderLink } from './cs3/providerLinks';
 import type { FailureKind } from '../src/types/analytics';
@@ -1809,11 +1810,28 @@ export class PluginManager {
           // A plugin that will not load is a per-plugin outcome, not a search
           // failure: the other providers still work and the reason is kept for
           // the extension manager to show.
+          const reason = response.error ?? 'The extension runtime could not load this plugin.';
           this.runtimeReports.set(record.internalName, {
             tier: 'T4_BLOCKED',
-            reason: response.error ?? 'The extension runtime could not load this plugin.',
+            reason,
             translated: false,
             failureKind: response.errorKind,
+          });
+          /**
+           * And counted, because the report above lives only in memory.
+           *
+           * `runtimeReports` is rebuilt from scratch on every load pass, so a
+           * plugin that has failed to load on twenty consecutive launches looks
+           * exactly like one failing for the first time — and this is the most
+           * actionable category there is, the one where the fix is ours. It
+           * also never reaches the stderr reader as a tagged line: the host
+           * learns it from a failed reply, not from something the JVM printed.
+           */
+          getIssueLog()?.recordPluginFailure({
+            plugin: record.meta?.name ?? record.internalName,
+            reason,
+            kind: response.errorKind,
+            tier: 'T4_BLOCKED',
           });
           continue;
         }

@@ -23,6 +23,36 @@ interface Rule {
 }
 
 const RULES: Rule[] = [
+  /**
+   * A call the app itself abandoned, and therefore not a failure of anything.
+   *
+   * First in the order because the vocabulary it uses — `IOException: Canceled`,
+   * `Parent job is Cancelling`, `JobCancellationException` — reads as an
+   * exception to every rule below, and `provider-error` was claiming it: 79
+   * occurrences in a real 21-session log, filed as extensions throwing. They
+   * are the ordinary consequence of the viewer typing a new query or closing a
+   * page while fifteen scrapes are in flight, and the coroutine scope closing
+   * throws in every one of them at once.
+   *
+   * Recording those as extension errors is the same mistake as folding `empty`
+   * into `failure` in the ranking: it counts a provider as broken for the app's
+   * own decision to stop waiting. `ExtensionIssueLog` drops these rather than
+   * listing them — there is nothing to fix.
+   */
+  { kind: 'cancelled', test: /\b(?:cancell?ed|Cancelling|CancellationException|JobCancellation)\b/i },
+
+  /**
+   * First, because it is unambiguous and because the rules below would misread
+   * it. The message carries a URL, and a host like `a.5xx.xyz` trips
+   * `server-error`'s three-digit test — filing an extension's own resource leak
+   * as the site having returned a 5xx.
+   *
+   * It reached `unknown` before this rule existed: 159 occurrences, which was
+   * *every* unclassified problem record in a real 21-session log. See the kind's
+   * own note for why it is not `provider-error`.
+   */
+  { kind: 'resource-leak', test: /\bwas leaked\b.*\bresponse body\b|forget to close a response body/i },
+
   // Bot protection first: these usually also carry an HTTP status, and the
   // status is the less informative half.
   { kind: 'blocked', test: /cloudflare|cf-ray|challenge|captcha|bot protection|access denied|just a moment/i },
@@ -41,7 +71,17 @@ const RULES: Rule[] = [
   { kind: 'not-found', test: /\b404\b|not found|no longer (has|exists)|gone\b|\b410\b/i },
   { kind: 'server-error', test: /\b5\d{2}\b|internal server error|bad gateway|service unavailable/i },
 
+  /**
+   * Both dialects, because both reach here.
+   *
+   * The original list is Node's — `ECONNRESET`, `ENOTFOUND` — and the sidecar
+   * is a JVM: it says `SocketException: Connection reset` and
+   * `NoRouteToHostException`. 108 network failures in a real log were reaching
+   * `provider-error` purely for being phrased in Java, which reports the
+   * extension as throwing when the connection never arrived.
+   */
   { kind: 'network', test: /ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|UnknownHost|fetch failed|network|SSL|TLS|handshake|certificate/i },
+  { kind: 'network', test: /\b(?:Connection (?:reset|refused|closed)|Socket(?:Exception|closed)|NoRouteToHost|PortUnreachable|Network is unreachable|Broken pipe)\b/i },
 
   { kind: 'unsupported-operation', test: /does not implement|unsupported operation|NotImplemented|UnsupportedAndroidApiException/i },
   { kind: 'unreadable-reply', test: /could not be read|unreadable|JSON|parse|unexpected token|malformed|encoded string not found/i },
@@ -49,10 +89,27 @@ const RULES: Rule[] = [
   { kind: 'provider-error', test: /Exception|Error\b|failed/i },
 ];
 
+/**
+ * A source location in a stack frame — `(RealCall.java:519)`, `(Http.kt:88)`.
+ *
+ * Stripped before classification, because a line number is a three-digit
+ * integer and `server-error` tests for one: `java.io.IOException: Canceled`
+ * with an OkHttp stack under it was classified as the *host* returning a 5xx,
+ * 23 times, on the strength of `RealCall.java:519`. Nothing about that is
+ * visible in the result — it is a plausible-looking category on a real failure,
+ * which is the worst kind of wrong answer a taxonomy can give.
+ *
+ * Line numbers cannot simply be dropped from the grouping form instead: bare
+ * integers are load-bearing there, and `HTTP 403` and `HTTP 404` have to stay
+ * apart. So the frame is removed, not the digits.
+ */
+const STACK_LOCATION = /\((?:[\w$]+\.(?:java|kt|kts))?:?\d+\)/g;
+
 export function classifyFailure(message: string | undefined | null): FailureKind {
   if (!message) return 'unknown';
+  const subject = message.replace(STACK_LOCATION, '()');
   for (const rule of RULES) {
-    if (rule.test.test(message)) return rule.kind;
+    if (rule.test.test(subject)) return rule.kind;
   }
   return 'unknown';
 }
@@ -110,8 +167,43 @@ export const FAILURE_KIND_LABELS: Record<FailureKind, { label: string; hint: str
     label: 'Extension error',
     hint: 'The extension itself threw. Worth reporting to its maintainer with the copied report.',
   },
+  'resource-leak': {
+    label: 'Connection leaked',
+    hint: 'The extension left a connection open instead of closing it. The scrape itself usually worked, so this costs memory and sockets rather than a stream — worth reporting to the maintainer, not a reason to switch the provider off.',
+  },
+  cancelled: {
+    label: 'Cancelled',
+    hint: 'The app stopped waiting — a new search, a closed page, or a source that answered first. Nothing failed and there is nothing to fix.',
+  },
   unknown: {
     label: 'Unclassified',
     hint: 'No pattern matched. The raw message is in the report.',
   },
 };
+
+/**
+ * The form of a message that two occurrences of one failure share.
+ *
+ * Grouping is the whole point of this module — counting free text produces a
+ * tally with one entry per failure — and grouping needs the parts that differ
+ * on every occurrence removed. Durations, byte counts, timestamps and heap
+ * addresses are those parts: they are never what distinguishes one failure
+ * from another.
+ *
+ * **Bare integers are deliberately left alone.** `HTTP 403` and `HTTP 404`
+ * differ by one digit and mean opposite things — one needs a browser, the other
+ * needs a different source — and folding them together produces a shorter
+ * report that says something false. Same for `Failed sr=1` and `Failed sr=2`.
+ *
+ * Lives here rather than in `diagnostics.ts`, where it was written, because
+ * that module imports `electron` and is therefore unloadable under Node's type
+ * stripping — which is where the tests that pin this behaviour run.
+ */
+export function groupingForm(message: string): string {
+  return message
+    .replace(/\b\d+(\.\d+)?\s?ms\b/gi, '<ms>')
+    .replace(/\b\d+(\.\d+)?\s?s\b/gi, '<s>')
+    .replace(/\b\d+(\.\d+)?\s?(B|KB|MB|GB|KiB|MiB|GiB)\b/g, '<size>')
+    .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, '<time>')
+    .replace(/0x[0-9a-f]{6,}/gi, '<addr>');
+}
