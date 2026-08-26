@@ -1264,6 +1264,93 @@ Three supporting pieces, each of which was a gap on its own:
 error kind, so without it the host's branch is unreachable and the viewer keeps seeing the
 hundred-name exception.
 
+### The timeline drew and never moved (2026-08-26)
+
+Reported as: the film downloads perfectly, and streaming the same link shows a timeline
+that is frozen — in the in-app player and in mpv as an external player alike. Three
+separate defects, found by measuring the sources rather than reading the player, and none
+of them is the one the symptom points at.
+
+The sources were captured from the app for two titles (`.temp/hulk_sources.csv`,
+`.temp/supergirl-…md`) and every one was characterised against the real host. That is what
+made the causes separable — they present identically.
+
+**1. `--force-seekable=yes` on an origin that ignores `Range`.** The flag had been in
+`mpvEngine` since the engine's first commit, as a blanket default. Measured across the
+corpus, hosts fall into three shapes and only one describes itself correctly:
+
+| Shape | Reply to a `Range` | Seekable |
+|---|---|---|
+| `sssrr.org`, r2.cloudflarestorage | 206 + `Content-Range` + `Accept-Ranges: bytes` | yes, and says so |
+| gdflix `workers.dev` mirrors | 206 + `Content-Range`, **no** `Accept-Ranges` | yes, and does not say so |
+| `video-downloads.googleusercontent.com` (GDFlix "Instant Download") | **200 + the whole file from byte zero**, whatever was asked | **no**, and does not say so |
+
+On the third, mpv accepted the seek, could not ask for the offset, and satisfied it by
+reading and discarding from byte zero. On a 3.24 GB link that never arrives: the tracks
+parse, the window opens with a timeline on it, and the position never moves. **Every resume
+from Continue Watching hit it, because a resume is a seek before the first frame** — which
+is why it looked like the app could not play that source at all while the downloader,
+which only ever reads forward, was fine.
+
+Measured on a synthesised fixture behind a Range-ignoring origin, seeking to 60s:
+
+| Origin | `--force-seekable` | Result |
+|---|---|---|
+| honours Range | yes | seeks to 60s |
+| honours Range | **no** | seeks to 60s — the flag buys nothing |
+| ignores Range | **yes** | grinds the whole file, no first frame |
+| ignores Range | no | starts at 0 immediately and plays |
+
+So the flag only ever converts a correct "cannot seek" into a hang, and it is gone.
+`MediaProxy` now **states `Accept-Ranges` rather than forwarding it**, in both directions,
+which is what restores seeking on the middle row without anything having to be forced. It
+also **refuses to serve byte-zero data as a mid-file range**: a `200` answering a
+`bytes=N-` used to be passed straight through, handing the player the opening of the film
+labelled as its middle.
+
+**2. `MAX_ROUTES` was below the cost of one film, and LRU evicted the wrong end.**
+Rewriting one HLS media playlist mints a route per segment — ~1200 for a two-hour film, in
+a single burst, against a cap of 1000. The routes evicted to make room were the *oldest*:
+the master playlist and the video variant playlists it had just handed the player.
+Measured on HDHub4U's `hdstream4u.com` master, tokens 4 and 5 — the two video variants —
+were gone before the first request for either, and the table held segments 306–1305. mpv
+read the master, asked for the variant it named, and got `404 Unknown stream` **from us**.
+
+Two changes, and the second matters more than the cap: routes now carry `createdAt`
+separately from `lastAccess`, a route that has never served a request is evicted only after
+every route that has, and **among never-served routes the newest go first**. For an
+unfetched route, age is not staleness — it is position in the document that minted it, so
+the oldest are the variants and the opening segments and the newest are the end of the
+film. Dropping the tail is free; the playlist re-mints it if playback ever gets there.
+
+**3. Any body under 4 MB with no `Range` was corrupted.** Pre-existing, and independent of
+the above. The manifest-sniffing branch did `await upstream.text()` and then `res.end(body)`
+— so a binary body small enough to reach it was decoded as UTF-8 and re-encoded, turning
+every byte that is not valid UTF-8 into three. A 704 KB HLS segment left the proxy 1.27 MB
+long and no longer a media file. It survived because media requests almost always carry a
+`Range`, which skips the branch entirely; only the occasional un-ranged first fetch of a
+small segment was hit, and it read as a bad source. The body is read as bytes now and
+decoded only to look at.
+
+**Segments disguised as images are unwrapped.** HDHub4U's playlists point at TikTok's image
+CDN, which serves only images, so each segment is a **real 70-byte PNG header with the
+MPEG-TS glued on behind it** — `Content-Type: image/png` and a valid PNG signature. This is
+a step beyond the `.png`-*named* segments `-extension_picky` was added for: there the bytes
+were already TS and only the name lied, so opening the extension allow-list was enough.
+Here the bytes lie too and no demuxer option helps — FFmpeg reads a PNG, finds no
+elementary stream, and stops with nothing in the log naming the cause. Measured on a real
+segment: 704,318 bytes in, a 70-byte prefix, then 3,745 consecutive sync bytes at the exact
+188-byte stride and a clean `h264 + aac` after the strip. Only routes minted by a playlist
+rewrite are examined, and only that signature — PNG magic followed by a sync run at the
+packet stride — counts, so a mis-detection would need a file that is simultaneously a valid
+PNG and a valid transport stream.
+
+**What is still not ours.** Of the 16 Supergirl sources, after these fixes the four
+r2.cloudflarestorage links, HUBCDN and all three HLS variants play. The rest fail at the
+host and are worth recognising rather than re-debugging: pixeldrain 404s, the Vidstack IP
+404s, and the googleusercontent links expire (they are signed with an 8-hour window, and
+answer `HTTP 400` after it). A `RefreshingSource` retry on those is correct behaviour.
+
 ### The first search cost a minute, and it was never the plugins (2026-08-26)
 
 Reported as: the app is slow to start, and slow again the first time you search. Measured on
