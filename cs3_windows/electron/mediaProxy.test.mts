@@ -74,6 +74,8 @@ const bodies: Record<string, { body: string; type?: string; length?: boolean }> 
  * Nothing in its reply says the range was refused; it simply is not there.
  */
 const ENDLESS = 'https://cdn.origin.test/endless.mkv';
+const FLAKY = 'https://cdn.origin.test/flaky.mkv';
+const flaky = { calls: 0 };
 /** What the endless body did, so a test can see the transfer actually stop. */
 const endless = { pulls: 0, cancelled: false, aborted: false };
 
@@ -99,6 +101,18 @@ const stubFetch = (async (url: string, init?: { headers?: Record<string, string>
       status: 200,
       headers: new Headers({ 'Content-Type': 'video/x-matroska', 'Content-Length': String(5e9) }),
     });
+  }
+
+  if (url === FLAKY) {
+    // Answers the first range, then throttles — the workers.dev mirror shape.
+    flaky.calls++;
+    if (flaky.calls === 1) {
+      return new Response('OK', { status: 206, headers: new Headers({
+        'Content-Type': 'video/x-matroska', 'Content-Length': '2',
+        'Content-Range': 'bytes 0-1/1000000',
+      })});
+    }
+    return new Response('denied', { status: 403, headers: new Headers({ 'Content-Length': '6' }) });
   }
 
   if (url === RANGE_HONOURING || url === RANGE_IGNORING) {
@@ -294,6 +308,26 @@ test('a client that walks away takes the upstream transfer with it', async () =>
 
   assert.ok(endless.cancelled || endless.aborted, 'upstream body was neither cancelled nor aborted');
   assert.equal(endless.pulls, settled, 'upstream kept being read after the client left');
+});
+
+test('a throttled reply does not retract a proven range verdict', async () => {
+  // A 403 declines the request, not the range. Recording "no" from one poisons
+  // the route: every later response claims Accept-Ranges: none and the player
+  // stops seeking a source that seeks perfectly.
+  flaky.calls = 0;
+  const wrapped = await proxy.wrap(FLAKY, {});
+
+  const first = await fetch(wrapped, { headers: { Range: 'bytes=0-' } });
+  assert.equal(first.headers.get('accept-ranges'), 'bytes');
+  await first.arrayBuffer();
+
+  const denied = await fetch(wrapped, { headers: { Range: 'bytes=500-' } });
+  assert.equal(denied.status, 403);
+  await denied.arrayBuffer();
+
+  const after = await fetch(wrapped, { headers: { Range: 'bytes=0-' } });
+  assert.equal(after.headers.get('accept-ranges'), 'bytes', 'verdict was retracted by a 403');
+  await after.arrayBuffer();
 });
 
 // --- route capacity --------------------------------------------------------

@@ -1002,7 +1002,17 @@ export class MediaProxy {
       const rangeRequested = offsetFromRange(requestHeaders.Range) !== null;
       const honouredRange =
         upstream.status === 206 || Boolean(upstream.headers.get('content-range'));
-      if (rangeRequested) {
+      /**
+       * Only a reply that succeeded says anything about ranges.
+       *
+       * An origin that answers `403` did not decline the *range*, it declined
+       * the request — and several of the `workers.dev` mirrors in the corpus
+       * throttle exactly that way, answering a first range and rejecting the
+       * next. Recording `no` from one of those poisons the route: every later
+       * response claims `Accept-Ranges: none`, and the player stops seeking a
+       * source that seeks perfectly, for the rest of the session.
+       */
+      if (rangeRequested && upstream.status < 400) {
         route.rangeSupport = honouredRange ? 'yes' : 'no';
       }
 
