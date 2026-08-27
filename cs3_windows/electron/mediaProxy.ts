@@ -1,4 +1,5 @@
 import http from 'http';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import type { AddressInfo } from 'net';
@@ -361,7 +362,24 @@ export class MediaProxy {
   private allowedDirectories = new Set<string>();
   /** Request rate tracking for flood protection. */
   private rateLimits = new Map<string, { count: number; windowStart: number }>();
-  private nextToken = 1;
+  /**
+   * Route tokens are unguessable, not sequential.
+   *
+   * They used to be `1`, `2`, `3`… and every response carries
+   * `Access-Control-Allow-Origin: *` so that ffprobe, hls.js, Shaka, mpv and an
+   * external VLC can all read from the same door. Together those two facts let
+   * *any page open in the user's browser* fetch `http://127.0.0.1:<port>/stream/1`
+   * cross-origin and read the body — and walk `/stream/1..N` to enumerate what
+   * the session had been watching. The port is ephemeral, which is a speed bump
+   * and not a control: a page can sweep 65k ports in seconds.
+   *
+   * 16 random bytes removes the enumeration entirely, which is the whole of the
+   * realistic attack. `tokensByKey` already keeps a token stable for a given
+   * (url, headers) pair, so nothing downstream notices the change.
+   */
+  private mintToken(): string {
+    return crypto.randomBytes(16).toString('hex');
+  }
   private fetchImpl: FetchLike;
   private diagnostics: DiagnosticsSink | null = null;
 
@@ -443,7 +461,7 @@ export class MediaProxy {
    */
   public async wrapLease(lease: SourceLease): Promise<string> {
     const loopbackUrl = await this.wrap(lease.url, lease.headers);
-    const token = loopbackUrl.match(/\/stream\/(\d+)/)?.[1];
+    const token = loopbackUrl.match(/\/stream\/([0-9a-f]{32})/)?.[1];
     if (token) {
       this.leases.set(token, lease);
     }
@@ -455,7 +473,7 @@ export class MediaProxy {
    */
   public getTargetRoute(loopbackUrl: string): Route | null {
     if (!isLoopback(loopbackUrl)) return null;
-    const direct = loopbackUrl.match(/\/stream\/(\d+)/)?.[1];
+    const direct = loopbackUrl.match(/\/stream\/([0-9a-f]{32})/)?.[1];
     if (direct) {
       const route = this.routes.get(direct);
       if (route) return { url: route.url, headers: { ...route.headers } };
@@ -498,7 +516,7 @@ export class MediaProxy {
     this.evictExpiredRoutes();
 
     const existing = this.localTokensByPath.get(resolved);
-    const token = existing ?? String(this.nextToken++);
+    const token = existing ?? this.mintToken();
     this.localTokensByPath.set(resolved, token);
     this.localRoutes.set(token, { file: resolved, lastAccess: Date.now() });
     return `http://127.0.0.1:${this.port}/local/${token}`;
@@ -656,7 +674,7 @@ export class MediaProxy {
     const key = `${url} ${JSON.stringify(headers)}`;
     let token = this.tokensByKey.get(key);
     if (!token) {
-      token = String(this.nextToken++);
+      token = this.mintToken();
       this.tokensByKey.set(key, token);
       this.routes.set(token, { url, headers, key, createdAt: Date.now(), fromPlaylist });
     } else {
@@ -687,7 +705,7 @@ export class MediaProxy {
     const key = `base ${normalised} ${JSON.stringify(headers)}`;
     let token = this.tokensByKey.get(key);
     if (!token) {
-      token = String(this.nextToken++);
+      token = this.mintToken();
       this.tokensByKey.set(key, token);
       this.prefixes.set(token, { url: normalised, headers, key, createdAt: Date.now() });
     } else {
@@ -746,6 +764,23 @@ export class MediaProxy {
   }
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    /**
+     * The `Host` header has to name loopback.
+     *
+     * Binding to 127.0.0.1 stops a request arriving from off the machine; it
+     * does nothing about DNS rebinding, where a page resolves its own hostname
+     * to 127.0.0.1 and then reaches this server with that hostname in `Host`.
+     * Checking it costs one comparison and closes the difference.
+     *
+     * A missing `Host` is allowed: HTTP/1.0 clients omit it, and some ffmpeg
+     * builds do too.
+     */
+    const host = req.headers.host;
+    if (host && !/^(127\.0\.0\.1|localhost|\[::1\]|::1)(:\d+)?$/.test(host)) {
+      res.writeHead(403).end('Forbidden');
+      return;
+    }
+
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
@@ -760,7 +795,7 @@ export class MediaProxy {
      * Two shapes: `/stream/<token>` is one file, `/base/<token>/<rest>` is a
      * path inside a directory route. Only DASH mints the second kind.
      */
-    const local = req.url?.match(/^\/local\/(\d+)/)?.[1];
+    const local = req.url?.match(/^\/local\/([0-9a-f]{32})/)?.[1];
     if (local) {
       if (this.isRateLimited(`local_${local}`)) {
         res.writeHead(429, { 'Retry-After': '1' }).end('Too Many Requests');
@@ -776,8 +811,8 @@ export class MediaProxy {
       return;
     }
 
-    const direct = req.url?.match(/^\/stream\/(\d+)/)?.[1];
-    const prefixed = req.url?.match(/^\/base\/(\d+)\/(.*)$/);
+    const direct = req.url?.match(/^\/stream\/([0-9a-f]{32})/)?.[1];
+    const prefixed = req.url?.match(/^\/base\/([0-9a-f]{32})\/(.*)$/);
     const routeToken = direct ?? prefixed?.[1];
     if (routeToken && this.isRateLimited(`route_${routeToken}`)) {
       res.writeHead(429, { 'Retry-After': '1' }).end('Too Many Requests');

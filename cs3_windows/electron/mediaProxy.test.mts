@@ -18,6 +18,7 @@
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { MediaProxy } from './mediaProxy.ts';
@@ -156,7 +157,7 @@ const baseUrlIn = (text: string): string => {
 test('a manifest with no BaseURL is given one pointing at the proxy', async () => {
   const wrapped = await proxy.wrap('https://cdn.origin.test/rel.mpd', { Referer: 'https://provider.test/' });
   const text = await (await fetch(wrapped)).text();
-  assert.match(baseUrlIn(text), /^http:\/\/127\.0\.0\.1:\d+\/base\/\d+\/$/);
+  assert.match(baseUrlIn(text), /^http:\/\/127\.0\.0\.1:\d+\/base\/[0-9a-f]{32}\/$/);
 });
 
 test('segment templates keep their placeholders — the player expands them', async () => {
@@ -198,7 +199,7 @@ test('absolute segment URLs are rewritten, keeping the filename intact', async (
   const wrapped = await proxy.wrap('https://cdn.origin.test/abs.mpd', {});
   const text = await (await fetch(wrapped)).text();
   assert.doesNotMatch(text, /media="https:\/\/cdn\.origin\.test/);
-  assert.match(text, /media="http:\/\/127\.0\.0\.1:\d+\/base\/\d+\/seg-\$Number\$\.m4s"/);
+  assert.match(text, /media="http:\/\/127\.0\.0\.1:\d+\/base\/[0-9a-f]{32}\/seg-\$Number\$\.m4s"/);
 });
 
 test('a manifest with no extension and no content type is recognised by its body', async () => {
@@ -232,8 +233,8 @@ test('HLS playlists are still rewritten line by line', async () => {
   // DASH handling must not have displaced the playlist path it sits beside.
   const wrapped = await proxy.wrap('https://cdn.origin.test/list.m3u8', {});
   const text = await (await fetch(wrapped)).text();
-  assert.match(text, /URI="http:\/\/127\.0\.0\.1:\d+\/stream\/\d+"/);
-  assert.match(text, /^http:\/\/127\.0\.0\.1:\d+\/stream\/\d+$/m);
+  assert.match(text, /URI="http:\/\/127\.0\.0\.1:\d+\/stream\/[0-9a-f]{32}"/);
+  assert.match(text, /^http:\/\/127\.0\.0\.1:\d+\/stream\/[0-9a-f]{32}$/m);
 });
 
 test('a loopback URL is returned untouched rather than wrapped again', async () => {
@@ -413,7 +414,7 @@ test('one token is minted per file, not one per request', async () => {
 
 test('an unknown local token is a 404, not a way to read arbitrary files', async () => {
   const url = await proxy.serveFile(localFixture.file);
-  const response = await fetch(url.replace(/\/local\/\d+$/, '/local/999999'));
+  const response = await fetch(url.replace(/\/local\/[0-9a-f]{32}$/, `/local/${'9'.repeat(32)}`));
   assert.equal(response.status, 404);
 });
 
@@ -445,6 +446,69 @@ test('direct streams without Referer header do not inject synthetic Referer to o
   seen.length = 0;
   await fetch(wrapped);
   assert.equal(seen.at(-1)?.referer, undefined);
+});
+
+/**
+ * Tokens are unguessable.
+ *
+ * They used to be `1`, `2`, `3`…, and every response carries
+ * `Access-Control-Allow-Origin: *` so that ffprobe, hls.js, Shaka and an
+ * external VLC can all read from the same door. Together those let any page in
+ * the user's browser fetch `/stream/1` cross-origin, read the body, and walk the
+ * integers to enumerate the session's viewing. The ephemeral port is a speed
+ * bump, not a control.
+ */
+test('a route token cannot be guessed by counting', async () => {
+  const a = await proxy.wrap('https://cdn.origin.test/a.mp4', { Referer: 'https://origin.test/' });
+  const b = await proxy.wrap('https://cdn.origin.test/b.mp4', { Referer: 'https://origin.test/' });
+  const tokenOf = (url: string) => url.match(/\/stream\/([^/]+)$/)?.[1] ?? '';
+
+  for (const token of [tokenOf(a), tokenOf(b)]) {
+    assert.match(token, /^[0-9a-f]{32}$/, 'a token is 16 random bytes, hex-encoded');
+    assert.doesNotMatch(token, /^\d+$/, 'a purely numeric token is enumerable');
+  }
+  assert.notEqual(tokenOf(a), tokenOf(b));
+
+  // The old shape must not resolve to anything, whatever else changes.
+  const guessed = await fetch(a.replace(/\/stream\/[0-9a-f]{32}$/, '/stream/1'));
+  assert.equal(guessed.status, 404);
+});
+
+/**
+ * A `Host` header naming anything but loopback is refused.
+ *
+ * Binding to 127.0.0.1 stops a request arriving from off the machine and does
+ * nothing about DNS rebinding, where a page resolves its own hostname to
+ * 127.0.0.1 and reaches this server with that hostname in `Host`.
+ */
+test('a request whose Host is not loopback is refused', async () => {
+  const wrapped = await proxy.wrap('https://cdn.origin.test/a.mp4', {});
+  const target = new URL(wrapped);
+
+  // `fetch` refuses to set Host — it is a forbidden header — so the rebinding
+  // case is driven with a raw request, which is also what an attacker has.
+  const statusWithHost = (hostHeader: string) =>
+    new Promise<number>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port: Number(target.port),
+          path: target.pathname,
+          method: 'GET',
+          headers: { Host: hostHeader },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        }
+      );
+      req.on('error', reject);
+      req.end();
+    });
+
+  assert.equal(await statusWithHost('evil.example.com'), 403);
+  // …and the ordinary case still works, or the check is a denial of service.
+  assert.equal(await statusWithHost(`127.0.0.1:${target.port}`), 200);
 });
 
 // --- runner ----------------------------------------------------------------
