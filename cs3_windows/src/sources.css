@@ -1819,6 +1819,46 @@
 
 .modal__foot { display: flex; justify-content: flex-end; gap: 0.5rem; }
 
+/* --- component setup ------------------------------------------------------ */
+
+.binary-setup__blurb {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.binary-setup__blurb strong { color: var(--text-main); font-weight: 600; }
+
+.binary-setup__status {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.binary-setup__status svg { flex-shrink: 0; margin-top: 0.1rem; }
+.binary-setup__status--done { color: var(--status-success); border-color: var(--status-success); }
+/* A failed install is not an error state to hide: the message names the next
+   action, so it has to be readable rather than merely tinted. */
+.binary-setup__status--failed { color: var(--status-warning); border-color: var(--status-warning); }
+
+.binary-setup__bar {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.binary-setup__fill {
+  height: 100%;
+  background: var(--accent-primary);
+  transition: width 0.2s ease;
+}
+
 /* --- library and continue-watching cards ---------------------------------- */
 
 /* Progress sits on the poster itself rather than below it, so scanning a grid
@@ -5582,3 +5622,77 @@
   border-radius: 3px;
   line-height: 1.35;
 }
+
+/* --- empty states --------------------------------------------------------- */
+
+/* A list with nothing in it used to be one sentence of body text, so an empty
+   library, an empty history and a search that found nothing were the same blank
+   page — and to a new user all three read as a broken app rather than as an app
+   they have not filled yet. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  text-align: center;
+  padding: 3.5rem 1.5rem;
+  max-width: 46ch;
+  margin: 0 auto;
+}
+.empty-state--compact { padding: 2rem 1rem; gap: 0.45rem; }
+
+.empty-state__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-subtle);
+  margin-bottom: 0.35rem;
+}
+.empty-state--compact .empty-state__icon { width: 40px; height: 40px; }
+
+.empty-state__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.empty-state--compact .empty-state__title { font-size: 0.92rem; }
+
+.empty-state__body {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.empty-state__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-top: 0.6rem;
+}
+
+/* --- offline ------------------------------------------------------------- */
+
+/* One true sentence instead of thirty honest ones. Offline, every provider
+   fails independently and the app filled up with per-source errors that were
+   each correct and collectively useless. */
+.offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 1.1rem;
+  background: rgba(245, 158, 11, 0.12);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.35);
+  color: var(--status-warning);
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+.offline-banner strong { color: var(--text-main); font-weight: 600; }

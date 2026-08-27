@@ -1,4 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+/* Bundled, not fetched — see the header of that file for why it matters here. */
+@import './assets/inter.css';
 
 :root {
   --bg-dark: #0c0f17;
@@ -37,6 +38,46 @@
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+/**
+ * A visible focus ring, everywhere, as the floor.
+ *
+ * `outline: none` appears at eight sites across these stylesheets and only some
+ * of them supply a `:focus-visible` replacement. In a full-screen dark app the
+ * consequence of missing one is total — a keyboard user simply loses the cursor
+ * and has no way to tell where they are. This rule is deliberately first and
+ * unspecific: anything later overrides it on purpose, and anything that forgets
+ * degrades to visible rather than to invisible.
+ */
+:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+/**
+ * Motion is a preference, and this file owns the one animation used everywhere.
+ *
+ * `sources.css` and `extensions.css` both honour `prefers-reduced-motion` and
+ * this file did not — while `.spin` above drives every loading indicator in the
+ * product, and `--transition` drives every hover. Vestibular disorders are the
+ * reason this setting exists; an app that respects it in two of four stylesheets
+ * does not respect it.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* The spinner still has to read as "working", so it turns — just slowly, and
+     without the strobing a fast rotation produces. */
+  .spin {
+    animation: spin 4s linear infinite !important;
   }
 }
 
@@ -375,4 +416,17 @@ select option:focus,
 select option:checked {
   background-color: #1e2535 !important;
   color: #60a5fa !important;
+}
+
+/* The "best match" badge. Was an emoji plus six inline declarations: emoji
+   render differently on every platform, do not inherit colour, and sat oddly
+   beside a consistent lucide icon set everywhere else in the app. */
+.poster-badge--match {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: var(--accent-primary);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
 }
