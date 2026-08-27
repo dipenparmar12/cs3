@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFlash } from '../utils/useFlash';
 import {
   History as HistoryIcon,
@@ -30,6 +30,7 @@ import {
   ChevronDown,
   ChevronUp,
   List,
+  FileSpreadsheet,
 } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
 import { TvType } from '../types/api';
@@ -46,6 +47,7 @@ import {
   groupHistoryEvents,
   formatEventActionText,
 } from '../utils/historyGrouping';
+import { downloadHistoryCsv, toHistoryCsv } from '../utils/historyExport';
 
 interface HistoryViewProps {
   onSelectMedia: (item: SearchResponse) => void;
@@ -150,6 +152,66 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   // Multi-selection
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Export CSV State & Dropdown
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const { message: exportSuccessMessage, flash: setExportSuccessMessage } = useFlash<string>(3500);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const onOutside = (e: PointerEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', onOutside, true);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('pointerdown', onOutside, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [exportMenuOpen]);
+
+  const handleExportFilteredCsv = () => {
+    setExportMenuOpen(false);
+    if (events.length === 0) return;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    downloadHistoryCsv(events, `cloudstream-history-filtered-${dateStr}.csv`);
+    setExportSuccessMessage(`Exported ${events.length} records`);
+  };
+
+  const handleExportAllCsv = async () => {
+    setExportMenuOpen(false);
+    if (!window.cloudstream) return;
+    setExporting(true);
+    try {
+      const all = await window.cloudstream.exportHistory?.();
+      const items = all && all.length > 0 ? all : events;
+      const dateStr = new Date().toISOString().slice(0, 10);
+      downloadHistoryCsv(items, `cloudstream-history-all-${dateStr}.csv`);
+      setExportSuccessMessage(`Exported all ${items.length} records`);
+    } catch {
+      downloadHistoryCsv(events, `cloudstream-history-all-${new Date().toISOString().slice(0, 10)}.csv`);
+      setExportSuccessMessage(`Exported ${events.length} records`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleCopyCsvToClipboard = async () => {
+    setExportMenuOpen(false);
+    if (events.length === 0) return;
+    const csv = toHistoryCsv(events);
+    await navigator.clipboard.writeText(csv);
+    setExportSuccessMessage(`Copied ${events.length} records as CSV`);
+  };
 
   // Modal / Drawer Inspector
   const [inspectingItem, setInspectingItem] = useState<HistoryEvent | null>(null);
@@ -481,6 +543,83 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
               <RotateCw size={14} className={refreshing ? 'animate-spin' : ''} />
               <span>Refresh</span>
             </button>
+
+            {/* Export CSV Dropdown */}
+            {events.length > 0 && (
+              <div style={{ position: 'relative' }} ref={exportMenuRef}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setExportMenuOpen((v) => !v)}
+                  disabled={exporting}
+                  title="Export media history with technical provider & source details as CSV"
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                >
+                  <FileSpreadsheet size={14} />
+                  <span>{exportSuccessMessage ? exportSuccessMessage : 'Export CSV'}</span>
+                  <ChevronDown size={12} />
+                </button>
+
+                {exportMenuOpen && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      right: 0,
+                      top: 'calc(100% + 4px)',
+                      backgroundColor: '#161b26',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--border-color)',
+                      boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.75)',
+                      padding: '0.35rem',
+                      zIndex: 1000,
+                      minWidth: '240px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.2rem',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleExportFilteredCsv}
+                      style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '0.78rem', padding: '0.45rem 0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
+                    >
+                      <Download size={14} style={{ marginTop: '2px', flexShrink: 0, color: '#60a5fa' }} />
+                      <div>
+                        <div style={{ fontWeight: 600, color: '#fff' }}>Export Current View ({events.length})</div>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>Filtered & searched items</span>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleExportAllCsv}
+                      style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '0.78rem', padding: '0.45rem 0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
+                    >
+                      <FileSpreadsheet size={14} style={{ marginTop: '2px', flexShrink: 0, color: '#34d399' }} />
+                      <div>
+                        <div style={{ fontWeight: 600, color: '#fff' }}>Export All History ({stats.total})</div>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>Complete durable database logs</span>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleCopyCsvToClipboard}
+                      style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '0.78rem', padding: '0.45rem 0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
+                    >
+                      <Copy size={14} style={{ marginTop: '2px', flexShrink: 0, color: '#a78bfa' }} />
+                      <div>
+                        <div style={{ fontWeight: 600, color: '#fff' }}>Copy CSV to Clipboard</div>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>Paste into Excel, Sheets, or notes</span>
+                      </div>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {events.length > 0 && (
               <>

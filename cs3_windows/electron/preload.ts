@@ -1234,6 +1234,7 @@ export interface CloudStreamElectronAPI {
   deleteHistoryItems: (ids: string[]) => Promise<number>;
   clearHistory: () => Promise<Envelope>;
   getHistoryStats: () => Promise<HistoryStats>;
+  exportHistory: () => Promise<HistoryEvent[]>;
 
   // Datastore
   getSetting: (key: string, defaultValue?: unknown) => Promise<string>;
@@ -1614,6 +1615,7 @@ const api: CloudStreamElectronAPI = {
   deleteHistoryItems: (ids) => ipcRenderer.invoke('history:deleteItems', ids),
   clearHistory: () => ipcRenderer.invoke('history:clearAll'),
   getHistoryStats: () => ipcRenderer.invoke('history:getStats'),
+  exportHistory: () => ipcRenderer.invoke('history:exportAll'),
 
   getSetting: (key, defaultValue) => ipcRenderer.invoke('datastore:getSetting', key, defaultValue),
   setSetting: (key, value) => ipcRenderer.invoke('datastore:setSetting', key, value),

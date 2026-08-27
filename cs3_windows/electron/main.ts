@@ -3857,6 +3857,10 @@ ipcMain.handle('history:getStats', async () =>
   historyStore.getStats()
 );
 
+ipcMain.handle('history:exportAll', async () =>
+  historyStore.exportAll()
+);
+
 // --- datastore -----------------------------------------------------------
 
 ipcMain.handle('datastore:getSetting', async (_, key: string, defaultValue: any) =>
