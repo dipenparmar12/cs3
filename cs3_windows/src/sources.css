@@ -1819,6 +1819,46 @@
 
 .modal__foot { display: flex; justify-content: flex-end; gap: 0.5rem; }
 
+/* --- component setup ------------------------------------------------------ */
+
+.binary-setup__blurb {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.binary-setup__blurb strong { color: var(--text-main); font-weight: 600; }
+
+.binary-setup__status {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.binary-setup__status svg { flex-shrink: 0; margin-top: 0.1rem; }
+.binary-setup__status--done { color: var(--status-success); border-color: var(--status-success); }
+/* A failed install is not an error state to hide: the message names the next
+   action, so it has to be readable rather than merely tinted. */
+.binary-setup__status--failed { color: var(--status-warning); border-color: var(--status-warning); }
+
+.binary-setup__bar {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.binary-setup__fill {
+  height: 100%;
+  background: var(--accent-primary);
+  transition: width 0.2s ease;
+}
+
 /* --- library and continue-watching cards ---------------------------------- */
 
 /* Progress sits on the poster itself rather than below it, so scanning a grid
@@ -2839,12 +2879,29 @@
   color: var(--text-muted);
 }
 
+/*
+ * The tabs wrap; they do not scroll sideways.
+ *
+ * `overflow-x: auto` on a fixed set of tabs means that on an ordinary window a
+ * user has to find and drag a horizontal scrollbar before they can click
+ * "Advanced" — in a desktop app, for navigation that is always the same eight
+ * items. Wrapping costs one extra line of height at narrow widths and makes
+ * every destination clickable at every width, which is the whole job.
+ */
 .settings__tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.3rem;
-  overflow-x: auto;
   border-bottom: 1px solid var(--border-color);
-  padding-bottom: 0.4rem;
+  padding-bottom: 0.5rem;
+  /* Sticky because "All settings" is one long page: navigation that scrolls
+     away is navigation you have to scroll back up to reach. */
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bg-dark);
+  padding-top: 0.5rem;
+  margin-top: -0.5rem;
 }
 .settings__tab {
   display: inline-flex;
@@ -2883,6 +2940,10 @@
   border-radius: var(--radius-md);
   padding: 0.9rem 1.1rem 1rem;
 }
+/* Groups are the unit of scanning, so they need air between them — on the
+   "All settings" view they are the only thing separating one area from the
+   next, and butted together they read as one very long list. */
+.setting-group + .setting-group { margin-top: 0.7rem; }
 .setting-group h3 {
   display: flex;
   align-items: center;
@@ -4636,6 +4697,55 @@
   color: var(--text-subtle);
 }
 
+/* --- The issue tally ------------------------------------------------------
+   Reuses the diagnostics rows deliberately: the two panels sit next to each
+   other and answer adjacent questions, and giving the tally its own visual
+   language would suggest they are unrelated. What is new is only the parts
+   that are genuinely new — the count-first tally and the mute control. */
+.diag__tally {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0.45rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+.diag__tally-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.74rem;
+}
+/* Tabular figures and a fixed column so the counts read as a column of
+   numbers rather than ragged text — the whole point is comparing them. */
+.diag__tally-count {
+  min-width: 3.2rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--text-main);
+}
+.diag__tally-label { color: var(--text-main); }
+.diag__tally-distinct { margin-left: auto; color: var(--text-subtle); font-size: 0.68rem; }
+
+.diag__count { font-variant-numeric: tabular-nums; }
+/* Muted rows stay legible rather than being hidden: a muted problem that comes
+   back is the regression signal, and it has to be readable when it does. */
+.diag__row--muted { opacity: 0.5; }
+.diag__mute {
+  background: none;
+  border: none;
+  padding: 0 0.15rem;
+  cursor: pointer;
+  color: var(--text-subtle);
+  display: inline-flex;
+  align-items: center;
+}
+.diag__mute:hover { color: var(--text-main); }
+
 .player__error-actions {
   display: flex;
   align-items: center;
@@ -5533,3 +5643,236 @@
   border-radius: 3px;
   line-height: 1.35;
 }
+
+/* --- empty states --------------------------------------------------------- */
+
+/* A list with nothing in it used to be one sentence of body text, so an empty
+   library, an empty history and a search that found nothing were the same blank
+   page — and to a new user all three read as a broken app rather than as an app
+   they have not filled yet. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  text-align: center;
+  padding: 3.5rem 1.5rem;
+  max-width: 46ch;
+  margin: 0 auto;
+}
+.empty-state--compact { padding: 2rem 1rem; gap: 0.45rem; }
+
+.empty-state__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-subtle);
+  margin-bottom: 0.35rem;
+}
+.empty-state--compact .empty-state__icon { width: 40px; height: 40px; }
+
+.empty-state__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.empty-state--compact .empty-state__title { font-size: 0.92rem; }
+
+.empty-state__body {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.empty-state__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-top: 0.6rem;
+}
+
+/* --- offline ------------------------------------------------------------- */
+
+/* One true sentence instead of thirty honest ones. Offline, every provider
+   fails independently and the app filled up with per-source errors that were
+   each correct and collectively useless. */
+.offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 1.1rem;
+  background: rgba(245, 158, 11, 0.12);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.35);
+  color: var(--status-warning);
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+.offline-banner strong { color: var(--text-main); font-weight: 600; }
+
+/* --- about and licences --------------------------------------------------- */
+
+.about-panel { display: flex; flex-direction: column; gap: 1rem; }
+
+.about-panel__lede { display: flex; gap: 0.7rem; align-items: flex-start; color: var(--text-muted); }
+.about-panel__lede svg { flex-shrink: 0; margin-top: 0.15rem; color: var(--accent-light); }
+.about-panel__lede h3 { margin: 0 0 0.25rem; font-size: 0.9rem; color: var(--text-main); }
+.about-panel__lede p { margin: 0; font-size: 0.82rem; line-height: 1.55; max-width: 62ch; }
+.about-panel__lede strong { color: var(--text-main); }
+
+.about-panel__note {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-subtle);
+  max-width: 62ch;
+}
+
+.about-panel__table {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.about-panel__row {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) minmax(0, 2fr) minmax(7rem, auto);
+  gap: 0.75rem;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.78rem;
+  border-bottom: 1px solid var(--border-color);
+}
+.about-panel__row:last-child { border-bottom: 0; }
+.about-panel__row--head {
+  background: var(--bg-input);
+  color: var(--text-subtle);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.about-panel__detail { color: var(--text-muted); }
+.about-panel__licence { color: var(--text-subtle); font-variant-numeric: tabular-nums; }
+
+.about-panel__env {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.8rem;
+  margin: 0;
+  font-size: 0.76rem;
+}
+.about-panel__env dt { color: var(--text-subtle); }
+.about-panel__env dd { margin: 0; color: var(--text-muted); }
+
+.about-panel__actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+/*
+ * The section heading that only appears on the "All settings" view.
+ *
+ * On a single tab the heading would repeat what the tab already says. On the
+ * everything view it is the only thing separating Connection from Downloads, so
+ * it is deliberately heavier than a group title and sticks while its section
+ * scrolls past.
+ */
+.settings__section {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 1.6rem 0 0.3rem;
+  padding: 0.5rem 0 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-light);
+  background: var(--bg-dark);
+  border-bottom: 1px solid var(--border-color);
+}
+.settings__section:first-of-type { margin-top: 0.4rem; }
+
+/* --- backup and restore --------------------------------------------------- */
+
+.backup-panel { display: flex; flex-direction: column; gap: 0.85rem; }
+
+.backup-panel__lede,
+.backup-panel__note {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-muted);
+  max-width: 64ch;
+}
+.backup-panel__note { font-size: 0.76rem; color: var(--text-subtle); }
+.backup-panel__note em { color: var(--text-muted); font-style: normal; font-weight: 600; }
+
+.backup-panel__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+/* What is in the chosen file. Restoring writes over live data, so this is the
+   thing being confirmed — not the filename. */
+.backup-panel__chosen,
+.backup-panel__result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+}
+.backup-panel__chosen h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 0.9rem;
+}
+.backup-panel__meta { margin: 0; font-size: 0.74rem; color: var(--text-subtle); }
+
+.backup-panel__summary {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.15rem 1rem;
+  font-size: 0.78rem;
+}
+.backup-panel__summary li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.2rem 0;
+  border-bottom: 1px dashed var(--border-color);
+  color: var(--text-muted);
+}
+.backup-panel__summary strong {
+  color: var(--text-main);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.backup-panel__flash {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: var(--radius-md);
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid var(--status-success);
+  color: var(--status-success);
+  font-size: 0.79rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.backup-panel__flash--bad {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: var(--status-warning);
+  color: var(--status-warning);
+}
+.backup-panel__flash svg { flex-shrink: 0; margin-top: 0.12rem; }

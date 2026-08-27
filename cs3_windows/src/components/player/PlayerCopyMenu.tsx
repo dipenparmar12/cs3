@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useFlash } from '../../utils/useFlash';
 import { Check, ClipboardCopy, MoreHorizontal } from 'lucide-react';
 import type { SourceCapabilityModel } from '../../types/media';
 import type { TorrentResult } from '../../types/torrent';
@@ -72,7 +73,7 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
   onCopyDiagnostics,
 }) => {
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState<string | null>(null);
+  const { message: copied, flash: setCopied } = useFlash<string>(2200);
   const wrapper = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -97,12 +98,11 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
     try {
       await navigator.clipboard.writeText(text.trim());
       setCopied(label);
-      setTimeout(() => setCopied(null), 2200);
     } catch {
       // Clipboard access can be refused; Settings → Diagnostics is the way
       // through when it is, so failing quietly here is acceptable.
     }
-  }, []);
+  }, [setCopied]);
 
   const video = capability?.metadata?.video;
   const audio = capability?.metadata?.audio ?? [];

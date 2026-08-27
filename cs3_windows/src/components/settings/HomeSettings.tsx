@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useFlash } from '../../utils/useFlash';
 import { AlertTriangle, Check, Loader2, RefreshCw } from 'lucide-react';
 import { SettingRow } from './SettingRow';
 
@@ -54,7 +55,7 @@ export const HomeSettings: React.FC = () => {
   const [providers, setProviders] = useState<Provider[] | null>(null);
   const [selected, setSelected] = useState('');
   const [checking, setChecking] = useState(false);
-  const [message, setMessage] = useState<{ text: string; bad?: boolean } | null>(null);
+  const { message, flash: setMessage } = useFlash<{ text: string; bad?: boolean }>(5000);
 
   const [tmdbKey, setTmdbKey] = useState('');
   const [tmdbKeySet, setTmdbKeySet] = useState(false);
@@ -85,7 +86,6 @@ export const HomeSettings: React.FC = () => {
 
   const flash = (text: string, bad = false) => {
     setMessage({ text, bad });
-    setTimeout(() => setMessage(null), 5000);
   };
 
   const choose = async (id: string) => {

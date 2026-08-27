@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useFlash } from '../utils/useFlash';
 import {
   History as HistoryIcon,
   Play,
@@ -26,16 +27,27 @@ import {
   Server,
   Layers,
   Sparkles,
+  ChevronDown,
+  ChevronUp,
+  List,
+  FileSpreadsheet,
 } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
 import { TvType } from '../types/api';
 import type {
+  GroupedHistoryItem,
   HistoryEvent,
   HistoryFilter,
   HistoryStats,
   HistoryStatus,
 } from '../types/history';
 import { formatHistorySize, formatRuntime } from '../utils/format';
+import {
+  getActionAccents,
+  groupHistoryEvents,
+  formatEventActionText,
+} from '../utils/historyGrouping';
+import { downloadHistoryCsv, toHistoryCsv } from '../utils/historyExport';
 
 interface HistoryViewProps {
   onSelectMedia: (item: SearchResponse) => void;
@@ -124,6 +136,13 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // View Mode: 'grouped' consolidates revisited/duplicate media, 'flat' displays chronological individual logs
+  const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('grouped');
+
+  // Accordion state for grouped view
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [showAllVisitsMap, setShowAllVisitsMap] = useState<Record<string, boolean>>({});
+
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
   const [activeStatus, setActiveStatus] = useState<HistoryStatus | 'All'>('All');
@@ -134,12 +153,72 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  // Export CSV State & Dropdown
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const { message: exportSuccessMessage, flash: setExportSuccessMessage } = useFlash<string>(3500);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const onOutside = (e: PointerEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', onOutside, true);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('pointerdown', onOutside, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [exportMenuOpen]);
+
+  const handleExportFilteredCsv = () => {
+    setExportMenuOpen(false);
+    if (events.length === 0) return;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    downloadHistoryCsv(events, `cloudstream-history-filtered-${dateStr}.csv`);
+    setExportSuccessMessage(`Exported ${events.length} records`);
+  };
+
+  const handleExportAllCsv = async () => {
+    setExportMenuOpen(false);
+    if (!window.cloudstream) return;
+    setExporting(true);
+    try {
+      const all = await window.cloudstream.exportHistory?.();
+      const items = all && all.length > 0 ? all : events;
+      const dateStr = new Date().toISOString().slice(0, 10);
+      downloadHistoryCsv(items, `cloudstream-history-all-${dateStr}.csv`);
+      setExportSuccessMessage(`Exported all ${items.length} records`);
+    } catch {
+      downloadHistoryCsv(events, `cloudstream-history-all-${new Date().toISOString().slice(0, 10)}.csv`);
+      setExportSuccessMessage(`Exported ${events.length} records`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleCopyCsvToClipboard = async () => {
+    setExportMenuOpen(false);
+    if (events.length === 0) return;
+    const csv = toHistoryCsv(events);
+    await navigator.clipboard.writeText(csv);
+    setExportSuccessMessage(`Copied ${events.length} records as CSV`);
+  };
+
   // Modal / Drawer Inspector
   const [inspectingItem, setInspectingItem] = useState<HistoryEvent | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [refreshingSourceId, setRefreshingSourceId] = useState<string | null>(null);
-  const [refreshSuccessMessage, setRefreshSuccessMessage] = useState<{ id: string; text: string } | null>(null);
-  const [copiedText, setCopiedText] = useState<'report' | 'json' | 'url' | null>(null);
+  const { message: refreshSuccessMessage, flash: setRefreshSuccessMessage, dismiss: dismiss_refreshSuccessMessage } = useFlash<{ id: string; text: string }>(4000);
+  const { message: copiedText, flash: setCopiedText } = useFlash<'report' | 'json' | 'url'>(2000);
 
   const fetchHistory = useCallback(async () => {
     if (!window.cloudstream) {
@@ -153,7 +232,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
         status: activeStatus,
         type: mediaTypeFilter,
         sortBy,
-        limit: 100,
+        limit: 150,
       };
 
       const [listRes, statsRes] = await Promise.all([
@@ -177,6 +256,40 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
     fetchHistory();
   }, [fetchHistory]);
 
+  // Compute consolidated grouped media items
+  const groupedItems = useMemo(() => {
+    return groupHistoryEvents(events, sortBy);
+  }, [events, sortBy]);
+
+  const toggleGroupExpand = (groupKey: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
+      return next;
+    });
+  };
+
+  const toggleShowAllVisits = (groupKey: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setShowAllVisitsMap((prev) => ({
+      ...prev,
+      [groupKey]: !prev[groupKey],
+    }));
+  };
+
+  const toggleExpandAll = () => {
+    if (expandedGroups.size === groupedItems.length) {
+      setExpandedGroups(new Set());
+    } else {
+      setExpandedGroups(new Set(groupedItems.map((g) => g.groupKey)));
+    }
+  };
+
   const handleClearAll = async () => {
     if (!window.cloudstream) return;
     await window.cloudstream.clearHistory?.();
@@ -194,6 +307,17 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
     fetchHistory();
   };
 
+  const handleDeleteGroup = async (item: GroupedHistoryItem, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!window.cloudstream) return;
+    const ids = item.events.map((ev) => ev.id);
+    await window.cloudstream.deleteHistoryItems?.(ids);
+    if (inspectingItem && ids.includes(inspectingItem.id)) {
+      setInspectingItem(null);
+    }
+    fetchHistory();
+  };
+
   const handleDeleteSelected = async () => {
     if (!window.cloudstream || selectedIds.size === 0) return;
     await window.cloudstream.deleteHistoryItems?.([...selectedIds]);
@@ -208,6 +332,22 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectGroup = (item: GroupedHistoryItem, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const groupEventIds = item.events.map((ev) => ev.id);
+    const isFullySelected = groupEventIds.every((id) => selectedIds.has(id));
+
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (isFullySelected) {
+        groupEventIds.forEach((id) => next.delete(id));
+      } else {
+        groupEventIds.forEach((id) => next.add(id));
+      }
       return next;
     });
   };
@@ -248,7 +388,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
     e?.stopPropagation();
     if (!window.cloudstream) return;
     setRefreshingSourceId(item.id);
-    setRefreshSuccessMessage(null);
+    dismiss_refreshSuccessMessage();
     try {
       const res = await window.cloudstream.refreshLibrarySources?.(
         item.mediaUrl,
@@ -264,7 +404,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
 
         if (count > 0) {
           const top = res.sources[0];
-          // Record/update refreshed history event
           await window.cloudstream.recordHistoryEvent?.({
             title: item.title,
             year: item.year,
@@ -291,7 +430,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
       }
     } finally {
       setRefreshingSourceId(null);
-      setTimeout(() => setRefreshSuccessMessage(null), 4000);
     }
   };
 
@@ -334,13 +472,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
 
     navigator.clipboard.writeText(lines);
     setCopiedText('report');
-    setTimeout(() => setCopiedText(null), 2000);
   };
 
   const copyRawJson = (item: HistoryEvent) => {
     navigator.clipboard.writeText(JSON.stringify(item, null, 2));
     setCopiedText('json');
-    setTimeout(() => setCopiedText(null), 2000);
   };
 
   const statusPills: Array<{ status: HistoryStatus | 'All'; label: string; count?: number }> = [
@@ -388,7 +524,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
               </h1>
             </div>
             <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              Revisit and replay past media streams directly, refresh fresh sources, or inspect raw provider diagnostic reports.
+              Consolidated playback & download history. Revisit past streams, inspect provider diagnostics, or refresh fresh sources.
             </p>
           </div>
 
@@ -407,6 +543,83 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
               <RotateCw size={14} className={refreshing ? 'animate-spin' : ''} />
               <span>Refresh</span>
             </button>
+
+            {/* Export CSV Dropdown */}
+            {events.length > 0 && (
+              <div style={{ position: 'relative' }} ref={exportMenuRef}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setExportMenuOpen((v) => !v)}
+                  disabled={exporting}
+                  title="Export media history with technical provider & source details as CSV"
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                >
+                  <FileSpreadsheet size={14} />
+                  <span>{exportSuccessMessage ? exportSuccessMessage : 'Export CSV'}</span>
+                  <ChevronDown size={12} />
+                </button>
+
+                {exportMenuOpen && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      right: 0,
+                      top: 'calc(100% + 4px)',
+                      backgroundColor: '#161b26',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--border-color)',
+                      boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.75)',
+                      padding: '0.35rem',
+                      zIndex: 1000,
+                      minWidth: '240px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.2rem',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleExportFilteredCsv}
+                      style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '0.78rem', padding: '0.45rem 0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
+                    >
+                      <Download size={14} style={{ marginTop: '2px', flexShrink: 0, color: '#60a5fa' }} />
+                      <div>
+                        <div style={{ fontWeight: 600, color: '#fff' }}>Export Current View ({events.length})</div>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>Filtered & searched items</span>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleExportAllCsv}
+                      style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '0.78rem', padding: '0.45rem 0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
+                    >
+                      <FileSpreadsheet size={14} style={{ marginTop: '2px', flexShrink: 0, color: '#34d399' }} />
+                      <div>
+                        <div style={{ fontWeight: 600, color: '#fff' }}>Export All History ({stats.total})</div>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>Complete durable database logs</span>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleCopyCsvToClipboard}
+                      style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '0.78rem', padding: '0.45rem 0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
+                    >
+                      <Copy size={14} style={{ marginTop: '2px', flexShrink: 0, color: '#a78bfa' }} />
+                      <div>
+                        <div style={{ fontWeight: 600, color: '#fff' }}>Copy CSV to Clipboard</div>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>Paste into Excel, Sheets, or notes</span>
+                      </div>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {events.length > 0 && (
               <>
@@ -473,10 +686,13 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
             }}
           >
             <div style={{ fontSize: '0.72rem', color: 'var(--text-subtle)', fontWeight: 600, textTransform: 'uppercase' }}>
-              Total Records
+              Unique Titles
             </div>
             <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#fff', marginTop: '0.2rem' }}>
-              {stats.total}
+              {groupedItems.length}
+            </div>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text-subtle)', marginTop: '0.1rem' }}>
+              ({stats.total} total logs)
             </div>
           </div>
 
@@ -546,7 +762,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
         </div>
       </div>
 
-      {/* Filter and Search Bar */}
+      {/* Filter, Search & View Controls Bar */}
       <div
         style={{
           display: 'flex',
@@ -598,6 +814,62 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
             )}
           </div>
 
+          {/* View Mode Toggle: Grouped vs Flat */}
+          <div
+            style={{
+              display: 'flex',
+              backgroundColor: 'rgba(255, 255, 255, 0.04)',
+              borderRadius: '6px',
+              padding: '2px',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setViewMode('grouped')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                padding: '0.3rem 0.65rem',
+                borderRadius: '4px',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                border: 'none',
+                backgroundColor: viewMode === 'grouped' ? 'var(--accent-primary)' : 'transparent',
+                color: viewMode === 'grouped' ? '#fff' : 'var(--text-muted)',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              title="Consolidate duplicate media visits into single entries with action tags and activity history"
+            >
+              <Layers size={13} />
+              <span>Grouped ({groupedItems.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('flat')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                padding: '0.3rem 0.65rem',
+                borderRadius: '4px',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                border: 'none',
+                backgroundColor: viewMode === 'flat' ? 'var(--accent-primary)' : 'transparent',
+                color: viewMode === 'flat' ? '#fff' : 'var(--text-muted)',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              title="Show all individual activity events chronologically"
+            >
+              <List size={13} />
+              <span>Flat Log ({events.length})</span>
+            </button>
+          </div>
+
           {/* Media Type Dropdown */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
             <Filter size={14} style={{ color: 'var(--text-subtle)' }} />
@@ -630,6 +902,19 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
               <option value="downloaded">Recently Downloaded</option>
             </select>
           </div>
+
+          {/* Expand/Collapse All (Grouped Mode Only) */}
+          {viewMode === 'grouped' && groupedItems.length > 0 && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={toggleExpandAll}
+              style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem', color: 'var(--text-muted)' }}
+              title="Expand or collapse all activity logs"
+            >
+              <span>{expandedGroups.size === groupedItems.length ? 'Collapse All' : 'Expand All'}</span>
+            </button>
+          )}
         </div>
 
         {/* Status Pills */}
@@ -678,7 +963,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
       </div>
 
       {/* History List */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', flex: 1 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1 }}>
         {loading && (
           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '4rem 0', color: 'var(--text-subtle)' }}>
             <RotateCw size={24} className="animate-spin" />
@@ -726,7 +1011,525 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
           </div>
         )}
 
-        {!loading &&
+        {/* 1. Grouped View: Consolidates duplicate revisited media into single cards */}
+        {!loading && viewMode === 'grouped' &&
+          groupedItems.map((group) => {
+            const item = group.latestEvent;
+            const statusConfig = STATUS_CONFIG[item.status] || STATUS_CONFIG.Unknown;
+            const StatusIcon = statusConfig.icon;
+            const isGroupFullySelected = group.events.every((ev) => selectedIds.has(ev.id));
+            const isSeries = item.season !== undefined || item.episode !== undefined;
+            const episodeLabel = isSeries
+              ? `S${String(item.season ?? 1).padStart(2, '0')} E${String(item.episode ?? 1).padStart(2, '0')}`
+              : null;
+            const isRefreshing = refreshingSourceId === item.id;
+            const refreshMsg = refreshSuccessMessage?.id === item.id ? refreshSuccessMessage.text : null;
+            const isExpanded = expandedGroups.has(group.groupKey);
+            const showAll = showAllVisitsMap[group.groupKey] || false;
+            const displayEvents = showAll ? group.events : group.events.slice(0, 5);
+            const accents = getActionAccents(group);
+            const latestActionDesc = formatEventActionText(item);
+
+            return (
+              <div
+                key={group.groupKey}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: isGroupFullySelected ? 'rgba(59, 130, 246, 0.08)' : 'var(--bg-card)',
+                  border: '1px solid',
+                  borderColor: isGroupFullySelected ? 'var(--accent-primary)' : isExpanded ? 'rgba(59, 130, 246, 0.4)' : 'var(--border-color)',
+                  overflow: 'hidden',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {/* Main Consolidated Row */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '0.8rem 1rem',
+                    gap: '1rem',
+                  }}
+                >
+                  {/* Left: Select + Thumbnail + Title + Accents & Tags */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', minWidth: 0, flex: 1 }}>
+                    {selectMode && (
+                      <div
+                        onClick={(e) => toggleSelectGroup(group, e)}
+                        style={{ color: isGroupFullySelected ? '#60a5fa' : 'var(--text-subtle)', cursor: 'pointer' }}
+                        title={isGroupFullySelected ? 'Deselect this title and all visits' : 'Select this title and all visits'}
+                      >
+                        {isGroupFullySelected ? <CheckSquare size={18} /> : <Square size={18} />}
+                      </div>
+                    )}
+
+                    {/* Thumbnail / Poster (Clicks to Metadata) */}
+                    <div
+                      onClick={(e) => openMetadataPage(item, e)}
+                      title="Click to view full media details & seasons"
+                      style={{
+                        width: '44px',
+                        height: '62px',
+                        borderRadius: '6px',
+                        overflow: 'hidden',
+                        backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                        flexShrink: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '1px solid rgba(255, 255, 255, 0.08)',
+                        cursor: 'pointer',
+                        position: 'relative',
+                      }}
+                    >
+                      {group.posterUrl ? (
+                        <img
+                          src={group.posterUrl}
+                          alt={group.title}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          onError={(e) => {
+                            (e.currentTarget as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                      ) : (
+                        <Film size={20} style={{ color: 'var(--text-subtle)' }} />
+                      )}
+                    </div>
+
+                    {/* Meta, Tags & Accents */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: 0, flex: 1 }}>
+                      {/* Top line: Title, Year, Episode, Repeat Count in Brackets (5), Action Tags */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                        <span
+                          onClick={(e) => openMetadataPage(item, e)}
+                          title="Click to view media metadata & episodes"
+                          style={{
+                            fontWeight: 700,
+                            fontSize: '0.94rem',
+                            color: '#fff',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            maxWidth: '320px',
+                            cursor: 'pointer',
+                            textDecoration: 'none',
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.color = '#60a5fa')}
+                          onMouseLeave={(e) => (e.currentTarget.style.color = '#fff')}
+                        >
+                          {group.title}
+                        </span>
+
+                        {group.year && (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-subtle)' }}>
+                            ({group.year})
+                          </span>
+                        )}
+
+                        {episodeLabel && (
+                          <span
+                            style={{
+                              fontSize: '0.7rem',
+                              fontWeight: 700,
+                              padding: '0.1rem 0.4rem',
+                              borderRadius: '4px',
+                              backgroundColor: 'rgba(139, 92, 246, 0.15)',
+                              color: '#a78bfa',
+                              border: '1px solid rgba(139, 92, 246, 0.3)',
+                            }}
+                          >
+                            {episodeLabel}
+                          </span>
+                        )}
+
+                        {/* Visited Repeat Count in Brackets (e.g. [3 visits] or (3)) */}
+                        {group.visitCount > 1 && (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.2rem',
+                              fontSize: '0.7rem',
+                              fontWeight: 800,
+                              padding: '0.12rem 0.45rem',
+                              borderRadius: '10px',
+                              backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                              color: '#a5b4fc',
+                              border: '1px solid rgba(99, 102, 241, 0.35)',
+                              letterSpacing: '0.01em',
+                            }}
+                            title={`Revisited ${group.visitCount} times across streams, downloads & discovery`}
+                          >
+                            <Layers size={11} />
+                            <span>({group.visitCount})</span>
+                          </span>
+                        )}
+
+                        {/* Distinct Action Tags / Accents (Streamed, Downloaded, Failed, Refreshed) */}
+                        {accents.map((acc) => (
+                          <span
+                            key={acc.key}
+                            style={{
+                              fontSize: '0.68rem',
+                              fontWeight: 700,
+                              padding: '0.1rem 0.4rem',
+                              borderRadius: '10px',
+                              backgroundColor: acc.bg,
+                              color: acc.text,
+                              border: `1px solid ${acc.border}`,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.2rem',
+                            }}
+                          >
+                            <span>{acc.label}</span>
+                            {acc.count && <span>({acc.count})</span>}
+                          </span>
+                        ))}
+
+                        {/* Latest Status Pill */}
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.25rem',
+                            fontSize: '0.68rem',
+                            fontWeight: 700,
+                            padding: '0.1rem 0.45rem',
+                            borderRadius: '10px',
+                            backgroundColor: statusConfig.bg,
+                            color: statusConfig.text,
+                            border: `1px solid ${statusConfig.border}`,
+                          }}
+                        >
+                          <StatusIcon size={11} />
+                          <span>{statusConfig.label}</span>
+                        </span>
+                      </div>
+
+                      {/* Secondary row: Action summary text, provider, resolution, duration */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.78rem', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+                        <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                          {latestActionDesc}
+                        </span>
+
+                        {group.episodeTitle && (
+                          <span style={{ color: 'var(--text-subtle)' }}>
+                            — "{group.episodeTitle}"
+                          </span>
+                        )}
+
+                        {item.source?.providerName && (
+                          <span style={{ color: 'var(--text-subtle)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                            <span style={{ color: '#94a3b8' }}>Provider:</span>
+                            <strong style={{ color: 'var(--text-primary)' }}>{item.source.providerName}</strong>
+                          </span>
+                        )}
+
+                        {item.source?.quality && (
+                          <span
+                            style={{
+                              padding: '0.05rem 0.35rem',
+                              borderRadius: '3px',
+                              backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                              fontSize: '0.68rem',
+                              fontWeight: 700,
+                              color: '#fff',
+                            }}
+                          >
+                            {item.source.quality}
+                          </span>
+                        )}
+
+                        {group.totalDurationSeconds && group.totalDurationSeconds > (item.durationSeconds || 0) ? (
+                          <span style={{ fontSize: '0.72rem', color: '#34d399', fontWeight: 600 }}>
+                            Total watched: {formatRuntime(group.totalDurationSeconds)}
+                          </span>
+                        ) : null}
+
+                        {refreshMsg && (
+                          <span style={{ color: '#34d399', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                            <Sparkles size={12} />
+                            <span>{refreshMsg}</span>
+                          </span>
+                        )}
+
+                        {!refreshMsg && item.failureReason && (
+                          <span style={{ color: '#fb7185', fontSize: '0.75rem', fontStyle: 'italic', maxWidth: '280px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            — {item.failureReason}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right: Timestamp & Action Buttons */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexShrink: 0 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.15rem', marginRight: '0.4rem' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-subtle)' }}>
+                        {formatRelativeTime(group.latestTimestamp)}
+                      </span>
+                      {item.durationSeconds ? (
+                        <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                          {formatRuntime(item.durationSeconds)}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {/* Direct Play Button */}
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={(e) => handlePlayMedia(item, e)}
+                      title="Play stream directly from history"
+                      style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem', gap: '0.3rem' }}
+                    >
+                      <Play size={13} fill="currentColor" />
+                      <span>Play</span>
+                    </button>
+
+                    {/* Refresh Sources Button */}
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={(e) => handleRefreshSource(item, e)}
+                      disabled={isRefreshing}
+                      title="Re-check enabled providers and discover fresh sources"
+                      style={{ padding: '0.35rem 0.55rem', fontSize: '0.75rem', gap: '0.3rem' }}
+                    >
+                      <RotateCw size={13} className={isRefreshing ? 'animate-spin' : ''} />
+                      <span>Refresh</span>
+                    </button>
+
+                    {/* Inspector Button */}
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setInspectingItem(item);
+                      }}
+                      title="Inspect raw provider metadata, direct links, and diagnostics"
+                      style={{ padding: '0.35rem 0.55rem', fontSize: '0.75rem', gap: '0.3rem' }}
+                    >
+                      <Code2 size={13} />
+                      <span>Inspect</span>
+                    </button>
+
+                    {/* Activity History Expander Toggle (Shows activity logs up to 5 items) */}
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${isExpanded ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={(e) => toggleGroupExpand(group.groupKey, e)}
+                      title="View all individual visits and action history for this media"
+                      style={{ padding: '0.35rem 0.55rem', fontSize: '0.75rem', gap: '0.3rem' }}
+                    >
+                      <Clock size={13} />
+                      <span>({group.visitCount}) Activity</span>
+                      {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                    </button>
+
+                    {/* Delete Group Button */}
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={(e) => handleDeleteGroup(group, e)}
+                      title={`Delete all ${group.visitCount} records for this media`}
+                      style={{ padding: '0.35rem 0.45rem', color: 'var(--text-subtle)' }}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Expanded Activity Timeline (Limited to 5 items by default to prevent screen flooding) */}
+                {isExpanded && (
+                  <div
+                    style={{
+                      borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                      backgroundColor: 'rgba(0, 0, 0, 0.22)',
+                      padding: '0.75rem 1rem 0.85rem 1.75rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.5rem',
+                    }}
+                  >
+                    {/* Header */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#93c5fd', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>
+                        <Clock size={12} />
+                        <span>
+                          Activity History (Showing {displayEvents.length} of {group.events.length} visit{group.events.length === 1 ? '' : 's'})
+                        </span>
+                      </div>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-subtle)' }}>
+                        Individual timestamps and discrete action attempts
+                      </span>
+                    </div>
+
+                    {/* Sub-event list */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {displayEvents.map((subEvent, idx) => {
+                        const subStatus = STATUS_CONFIG[subEvent.status] || STATUS_CONFIG.Unknown;
+                        const SubIcon = subStatus.icon;
+                        const actionDesc = formatEventActionText(subEvent);
+                        const subSeries = subEvent.season !== undefined || subEvent.episode !== undefined;
+                        const subEpLabel = subSeries
+                          ? `S${String(subEvent.season ?? 1).padStart(2, '0')} E${String(subEvent.episode ?? 1).padStart(2, '0')}`
+                          : null;
+
+                        return (
+                          <div
+                            key={subEvent.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '0.45rem 0.75rem',
+                              backgroundColor: 'rgba(255, 255, 255, 0.025)',
+                              borderRadius: '6px',
+                              border: '1px solid rgba(255, 255, 255, 0.05)',
+                              gap: '0.75rem',
+                              fontSize: '0.76rem',
+                            }}
+                          >
+                            {/* Left: Index badge + Status icon + Action description + Quality/Provider */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0, flex: 1 }}>
+                              <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)', fontFamily: 'monospace', width: '16px' }}>
+                                #{idx + 1}
+                              </span>
+
+                              <div style={{ color: subStatus.text, display: 'flex', alignItems: 'center' }}>
+                                <SubIcon size={14} />
+                              </div>
+
+                              <span style={{ color: '#fff', fontWeight: 600 }}>
+                                {actionDesc}
+                              </span>
+
+                              {subEpLabel && (
+                                <span
+                                  style={{
+                                    fontSize: '0.65rem',
+                                    fontWeight: 700,
+                                    padding: '0.05rem 0.35rem',
+                                    borderRadius: '3px',
+                                    backgroundColor: 'rgba(139, 92, 246, 0.15)',
+                                    color: '#a78bfa',
+                                  }}
+                                >
+                                  {subEpLabel}
+                                </span>
+                              )}
+
+                              {subEvent.source?.providerName && (
+                                <span style={{ color: 'var(--text-subtle)' }}>
+                                  ({subEvent.source.providerName})
+                                </span>
+                              )}
+
+                              {subEvent.source?.quality && (
+                                <span
+                                  style={{
+                                    padding: '0.02rem 0.3rem',
+                                    borderRadius: '3px',
+                                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                                    fontSize: '0.65rem',
+                                    fontWeight: 700,
+                                    color: '#fff',
+                                  }}
+                                >
+                                  {subEvent.source.quality}
+                                </span>
+                              )}
+
+                              {subEvent.durationSeconds ? (
+                                <span style={{ color: '#34d399', fontSize: '0.7rem' }}>
+                                  • {formatRuntime(subEvent.durationSeconds)}
+                                </span>
+                              ) : null}
+
+                              {subEvent.failureReason && (
+                                <span style={{ color: '#fb7185', fontSize: '0.72rem', fontStyle: 'italic', maxWidth: '250px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  — {subEvent.failureReason}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Right: Sub-event timestamp & Actions */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+                              <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }} title={new Date(subEvent.timestamp).toLocaleString()}>
+                                {formatRelativeTime(subEvent.timestamp)}
+                              </span>
+
+                              {/* Direct play for this specific sub-event */}
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={(e) => handlePlayMedia(subEvent, e)}
+                                title="Play this stream"
+                                style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}
+                              >
+                                <Play size={11} fill="currentColor" />
+                                <span>Play</span>
+                              </button>
+
+                              {/* Inspect this specific sub-event */}
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setInspectingItem(subEvent);
+                                }}
+                                title="Inspect technical details for this visit"
+                                style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}
+                              >
+                                <Code2 size={11} />
+                                <span>Inspect</span>
+                              </button>
+
+                              {/* Delete single sub-event */}
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={(e) => handleDeleteItem(subEvent.id, e)}
+                                title="Delete this visit entry"
+                                style={{ padding: '0.2rem 0.35rem', color: 'var(--text-subtle)' }}
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Show All / Show Less Toggle if more than 5 events */}
+                    {group.events.length > 5 && (
+                      <div style={{ display: 'flex', justifyContent: 'center', marginTop: '0.25rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={(e) => toggleShowAllVisits(group.groupKey, e)}
+                          style={{ fontSize: '0.72rem', color: '#60a5fa', gap: '0.25rem' }}
+                        >
+                          <span>{showAll ? 'Show latest 5 visits only' : `Show all ${group.events.length} visits in history`}</span>
+                          {showAll ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+        {/* 2. Flat View: Chronological individual log list */}
+        {!loading && viewMode === 'flat' &&
           events.map((item) => {
             const statusConfig = STATUS_CONFIG[item.status] || STATUS_CONFIG.Unknown;
             const StatusIcon = statusConfig.icon;
@@ -737,6 +1540,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
               : null;
             const isRefreshing = refreshingSourceId === item.id;
             const refreshMsg = refreshSuccessMessage?.id === item.id ? refreshSuccessMessage.text : null;
+            const actionDesc = formatEventActionText(item);
 
             return (
               <div
@@ -754,7 +1558,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                   transition: 'all 0.15s ease',
                 }}
               >
-                {/* Left: Checkbox (if selectMode) + Poster + Title (links to Metadata) + Badges */}
+                {/* Left: Checkbox + Poster + Title + Status */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', minWidth: 0, flex: 1 }}>
                   {selectMode && (
                     <div onClick={(e) => toggleSelect(item.id, e)} style={{ color: isSelected ? '#60a5fa' : 'var(--text-subtle)', cursor: 'pointer' }}>
@@ -762,7 +1566,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                     </div>
                   )}
 
-                  {/* Thumbnail / Poster (Clicks to Metadata) */}
+                  {/* Thumbnail */}
                   <div
                     onClick={(e) => openMetadataPage(item, e)}
                     title="Click to view full media details & seasons"
@@ -798,7 +1602,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                   {/* Meta & Status */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: 0, flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      {/* Clickable Title that navigates to media metadata */}
                       <span
                         onClick={(e) => openMetadataPage(item, e)}
                         title="Click to view media metadata & episodes"
@@ -861,11 +1664,15 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                       </span>
                     </div>
 
-                    {/* Secondary row: Episode Title, Provider, Resolution, Failure Reason, or Refresh result */}
+                    {/* Secondary row */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.78rem', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+                      <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                        {actionDesc}
+                      </span>
+
                       {item.episodeTitle && (
-                        <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
-                          "{item.episodeTitle}"
+                        <span style={{ color: 'var(--text-subtle)' }}>
+                          — "{item.episodeTitle}"
                         </span>
                       )}
 
@@ -907,7 +1714,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                   </div>
                 </div>
 
-                {/* Right: Timestamp & Explicit Action Buttons */}
+                {/* Right: Timestamp & Action Buttons */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexShrink: 0 }}>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.15rem', marginRight: '0.4rem' }}>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-subtle)' }}>
@@ -920,7 +1727,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                     ) : null}
                   </div>
 
-                  {/* 1. Direct Play Button: Stream immediately without metadata page */}
                   <button
                     type="button"
                     className="btn btn-primary btn-sm"
@@ -932,7 +1738,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                     <span>Play</span>
                   </button>
 
-                  {/* 2. Refresh Sources Button: Re-check providers directly from history */}
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
@@ -945,7 +1750,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                     <span>Refresh</span>
                   </button>
 
-                  {/* 3. Provider Raw Info / Diagnostics Inspector Button */}
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
@@ -953,14 +1757,13 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                       e.stopPropagation();
                       setInspectingItem(item);
                     }}
-                    title="Inspect raw provider metadata, direct source links, and diagnostics"
+                    title="Inspect raw provider metadata, direct links, and diagnostics"
                     style={{ padding: '0.35rem 0.55rem', fontSize: '0.75rem', gap: '0.3rem' }}
                   >
                     <Code2 size={13} />
                     <span>Inspect</span>
                   </button>
 
-                  {/* 4. Delete Record Button */}
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
@@ -1256,7 +2059,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                             onClick={() => {
                               navigator.clipboard.writeText(src.directUrl!);
                               setCopiedText('url');
-                              setTimeout(() => setCopiedText(null), 1500);
                             }}
                             title="Copy link"
                             style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }}

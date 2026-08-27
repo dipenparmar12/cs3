@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { EmptyState } from '../components/EmptyState';
 import type { SearchResponse } from '../types/api';
 import { TYPE_TABS, matchesTab, tabsFor } from '../utils/contentTypes';
 import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/resultGroups';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, Search, Target, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, Search, SearchX, Target, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
 import { FacetMenu, type FacetOption } from '../components/FacetMenu';
 import { CopyErrorButton } from '../components/CopyErrorButton';
@@ -31,6 +32,14 @@ interface SearchViewProps {
    */
   ui: SearchUiState;
   onUiChange: (next: SearchUiState) => void;
+  /**
+   * Re-run this query against every source, dropping the scope.
+   *
+   * Offered only when a scoped search found nothing, which is exactly when the
+   * sentence above has just said the chosen providers had none of it. Without
+   * this the empty screen names a cause and offers no way to act on it.
+   */
+  onSearchAllSources?: () => void;
 }
 
 export interface SearchUiState {
@@ -122,6 +131,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
   error,
   ui,
   onUiChange,
+  onSearchAllSources,
 }) => {
   const { sourceFilter, typeTab, openGroups } = ui;
   const setSourceFilter = (value: string) => onUiChange({ ...ui, sourceFilter: value });
@@ -328,7 +338,28 @@ export const SearchView: React.FC<SearchViewProps> = ({
               </button>
             </>
           ) : (
-            <p>{search?.emptyReason ?? (running ? 'Waiting for the first source…' : 'No results.')}</p>
+            /*
+              The reason, plus the one action that can change it.
+              `canWiden` means this title came from a scoped set of providers —
+              the sentence above has just said those had nothing, so offering to
+              ask the rest is the only useful next move, and it existed already
+              with no way to reach it from here.
+            */
+            <EmptyState
+              icon={SearchX}
+              title={running ? 'Still looking…' : 'Nothing found'}
+              description={
+                search?.emptyReason ??
+                (running
+                  ? 'The first sources are still answering. Results appear as each one replies.'
+                  : 'No provider had this title. Try a shorter query, or search every source.')
+              }
+              action={
+                !running && onSearchAllSources
+                  ? { label: 'Search all sources', onClick: onSearchAllSources }
+                  : undefined
+              }
+            />
           )}
         </div>
       ) : (

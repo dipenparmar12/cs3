@@ -22,7 +22,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MpvEngine } from './mpvEngine.ts';
+import { MpvEngine, NATIVE_KEY_BINDINGS } from './mpvEngine.ts';
 import type { MpvSnapshot } from '../../src/types/mpv.ts';
 
 const BIN_DIRS = [
@@ -221,6 +221,50 @@ try {
   check('the new stream survives the stopped process being reaped', () => {
     assert.equal(engine.isRunning(), true);
     assert.notEqual(engine.snapshot().state, 'idle');
+  });
+
+  /**
+   * The window's own controls.
+   *
+   * That mpv *accepted* `--osc=yes`, `--osd-level=1` and
+   * `--input-vo-keyboard=yes` is asserted by every test above rather than here:
+   * mpv treats an unknown or malformed option as fatal, so a launch that
+   * happened at all is a launch whose arguments it understood. What is worth
+   * pinning separately is the binding table, because its dangerous property is
+   * an *absence* and nothing else would ever notice it coming back.
+   */
+  check('no binding quits mpv', () => {
+    /**
+     * mpv's default set quits on `q`, `Q` and `Ctrl+q`, which is why
+     * `--input-default-bindings=no` stays off and this list is enumerated. An
+     * exit while playing is reported as `ended`, and `NativeEngineStage` turns
+     * that into `onEnded()` — so a viewer pressing `q` to stop watching would
+     * be handed the next episode instead.
+     */
+    for (const [key, command] of NATIVE_KEY_BINDINGS) {
+      assert.ok(
+        !/\bquit\b/.test(command),
+        `${key} is bound to a quit command (${command})`
+      );
+    }
+  });
+
+  check('the keys do what the same keys do in the app player', () => {
+    const bound = new Map(NATIVE_KEY_BINDINGS.map(([key, command]) => [key, command]));
+    // `SKIP_SECONDS` is 10 in `VideoPlayer`; j/l are 30 there too. One player,
+    // two windows — a key that seeks 10 in one and 60 in the other is worse
+    // than a key that does nothing.
+    assert.equal(bound.get('RIGHT'), 'seek 10');
+    assert.equal(bound.get('LEFT'), 'seek -10');
+    assert.equal(bound.get('l'), 'seek 30');
+    assert.equal(bound.get('j'), 'seek -30');
+    assert.equal(bound.get('SPACE'), 'cycle pause');
+    assert.equal(bound.get('k'), 'cycle pause');
+    assert.equal(bound.get('f'), 'cycle fullscreen');
+    assert.equal(bound.get('m'), 'cycle mute');
+    // ESC leaves fullscreen. It is the reflex for "get me out of this", and in
+    // mpv's own defaults that reflex quits the player.
+    assert.equal(bound.get('ESC'), 'set fullscreen no');
   });
 
   /** An explicit stop is not the credits; reporting `ended` advances an episode. */

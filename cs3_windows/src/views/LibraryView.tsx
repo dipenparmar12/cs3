@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { EmptyState } from '../components/EmptyState';
 import { PlayedSourcePanel } from '../components/library/PlayedSourcePanel';
 import type { PlayedSource } from '../types/library';
 import type { TorrentResult } from '../types/torrent';
@@ -40,6 +41,14 @@ interface LibraryViewProps {
   onPlaySavedSource?: (source: TorrentResult, record: PlayedSource) => void;
   /** Re-runs the search a saved page was originally found by. */
   onSearch?: (query: string) => void;
+  /**
+   * Somewhere to go from an empty bucket.
+   *
+   * A library with nothing in it is the *first* screen a new user reaches here,
+   * and reporting emptiness without offering the action that ends it leaves them
+   * exactly where they were.
+   */
+  onBrowse?: () => void;
 }
 
 /**
@@ -73,6 +82,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onSelectMedia,
   onSearch,
   onPlaySavedSource,
+  onBrowse,
 }) => {
   const [mode, setMode] = useState<LibraryMode>('watching');
   const [activeStatus, setActiveStatus] = useState<WatchStatus>('Watching');
@@ -251,24 +261,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       {loading ? (
         <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
       ) : entries.length === 0 ? (
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '0.6rem',
-            padding: '4rem 2rem',
-            color: 'var(--text-muted)',
-            textAlign: 'center',
-          }}
-        >
-          <LibraryIcon size={30} />
-          <p style={{ fontWeight: 600, color: '#e5e7eb' }}>Nothing in {activeStatus} yet</p>
-          <span style={{ fontSize: '0.82rem', maxWidth: '46ch', lineHeight: 1.5 }}>
-            Titles land here automatically as you watch them, and you can move any of them
-            between buckets from the card.
-          </span>
-        </div>
+        <EmptyState
+          icon={LibraryIcon}
+          title={`Nothing in ${activeStatus} yet`}
+          description="Titles land here automatically as you watch them, and you can move any of them between buckets from the card."
+          action={onBrowse ? { label: 'Browse titles', onClick: onBrowse } : undefined}
+        />
       ) : (
         <div className="poster-grid">
           {entries.map((entry) => {

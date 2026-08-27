@@ -61,6 +61,17 @@ export const SeasonDownloadDialog: React.FC<SeasonDownloadDialogProps> = ({
     return window.cloudstream.onBatchProgress(setProgress);
   }, [open]);
 
+  // Escape closes — unless a run is in flight, where a stray keypress would
+  // hide the only progress report for something that keeps going regardless.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !running) onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [open, running, onClose]);
+
   if (!open) return null;
 
   const start = async () => {
@@ -93,10 +104,23 @@ export const SeasonDownloadDialog: React.FC<SeasonDownloadDialogProps> = ({
   const percent = progress?.total ? (progress.resolved / progress.total) * 100 : 0;
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Download season">
-      <div className="modal">
+    /*
+      Escape and a backdrop click both close this. They did not, and the only
+      exit was the × — while `DeleteDownloadDialog` and `SourcePicker` had both
+      done it correctly the whole time, so this was the odd one out rather than
+      a considered choice. `role="dialog"` also sat on the *backdrop*, which
+      makes the accessible dialog region the whole screen.
+    */
+    <div className="modal-backdrop" onClick={() => !running && onClose()} role="presentation">
+      <div
+        className="modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="season-download-title"
+      >
         <header className="modal__head">
-          <h3>
+          <h3 id="season-download-title">
             <Download size={17} /> Download {scope === 'all' ? 'entire series' : `season ${activeSeason}`}
           </h3>
           <button className="icon-button" onClick={onClose} aria-label="Close">

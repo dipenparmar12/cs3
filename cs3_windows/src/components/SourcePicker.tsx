@@ -1,7 +1,9 @@
 import React, { useCallback, useMemo, useState } from 'react';
+import { useFlash } from '../utils/useFlash';
 import {
   X, Users, HardDrive, Loader2, AlertTriangle, Filter, ChevronDown,
   ChevronRight, Play, Download, Info, Zap, ShieldAlert, Square, Link2, Check,
+  ClipboardCopy, Globe, RefreshCw,
 } from 'lucide-react';
 import type { TorrentResult } from '../types/torrent';
 import type { SourceDiagnosis } from '../types/diagnostics';
@@ -10,7 +12,12 @@ import { SourceFilterBar } from './SourceFilterBar';
 import { CopyErrorButton } from './CopyErrorButton';
 import { SourceExportButton } from './SourceExportButton';
 import { useSourceProvenance } from './useSourceProvenance';
-import { provenanceChain, sourceAddress, sourceHost } from '../utils/sourceExport';
+import {
+  provenanceChain,
+  sourceAddress,
+  sourceHost,
+  toSourceDetails,
+} from '../utils/sourceExport';
 import {
   DEFAULT_FILTER_STATE,
   filterAndSortSources,
@@ -63,7 +70,18 @@ interface SourcePickerProps {
   onClose: () => void;
   onPlay: (source: TorrentResult) => void;
   onDownload: (source: TorrentResult) => void;
+  /** Asks this title's own providers again, ignoring the cache. */
   onRetry: () => void;
+  /**
+   * Look beyond the providers this title was found on.
+   *
+   * Absent, or present with `canWiden` false, when there is nothing wider to
+   * ask — a title opened from the home screen was never bound to a provider, so
+   * its first search already looked everywhere.
+   */
+  onWiden?: () => void;
+  /** True when widening would reach providers and indexers not yet asked. */
+  canWiden?: boolean;
 }
 
 /** Seeder count is the strongest predictor of whether a stream will actually start. */
@@ -98,11 +116,13 @@ function resolutionLabel(resolution: number): string {
 export const SourcePicker: React.FC<SourcePickerProps> = ({
   isOpen, isLoading, data, error, contextLabel, onClose, onPlay, onDownload, onRetry,
   searching = false, searched = 0, totalSources = 0, cancelled = false, onCancelSearch,
+  onWiden, canWiden = false,
 }) => {
   const [showFiltered, setShowFiltered] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [expandedHash, setExpandedHash] = useState<string | null>(null);
-  const [copiedLink, setCopiedLink] = useState<string | null>(null);
+  const { message: copiedLink, flash: setCopiedLink } = useFlash<string>(1800);
+  const { message: copiedDetails, flash: setCopiedDetails } = useFlash<string>(1800);
   const { provenanceFor } = useSourceProvenance(data?.sources ?? []);
 
   /** The provider's address, not the loopback one the player would be using. */
@@ -112,11 +132,30 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
     try {
       await navigator.clipboard.writeText(address);
       setCopiedLink(source.infoHash);
-      setTimeout(() => setCopiedLink(null), 1800);
     } catch {
       // Nothing is lost when the clipboard refuses — the bulk export remains.
     }
-  }, []);
+  }, [setCopiedLink]);
+  /**
+   * Everything the row knows, not just its address.
+   *
+   * A link on its own cannot be reported: it names no provider, no extension
+   * and no repository, so a source that stops working arrives at a maintainer
+   * with nothing identifying whose code produced it. The same columns the bulk
+   * export uses, for the one row the viewer is actually looking at.
+   */
+  const copyDetails = useCallback(
+    async (source: TorrentResult) => {
+      try {
+        await navigator.clipboard.writeText(toSourceDetails(source, provenanceFor(source)));
+        setCopiedDetails(source.infoHash);
+      } catch {
+        // Same as the link: the clipboard refusing loses nothing recoverable.
+      }
+    },
+    [provenanceFor, setCopiedDetails]
+  );
+
   const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);
 
   const best = useMemo(() => data?.sources[0] ?? null, [data]);
@@ -261,6 +300,11 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
 
             <div className="source-picker__state-actions">
               <button className="btn" onClick={onRetry}>Search again</button>
+              {onWiden && canWiden && (
+                <button className="btn" onClick={onWiden}>
+                  <Globe size={15} /> Search all sources
+                </button>
+              )}
               {data.filtered.length > 0 && (
                 <button className="btn" onClick={() => setShowFiltered(true)}>
                   Show {data.filtered.length} filtered
@@ -297,6 +341,39 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                   heading={`${data.query?.title ?? 'Sources'} (${displayedSources.length})`}
                   compact
                 />
+                {/*
+                  Re-scraping is reachable from the list, not only from the
+                  empty state.
+
+                  A list that is present but stale is the common case — expired
+                  provider links look exactly like working ones until they are
+                  played — and until now the only way to ask again was to close
+                  this and find the page's overflow menu.
+                */}
+                <button
+                  className="btn"
+                  onClick={onRetry}
+                  disabled={searching}
+                  title="Ask this title's own providers again, ignoring the cache"
+                >
+                  <RefreshCw size={15} /> Refresh
+                </button>
+                {/*
+                  A different question, not a harder version of the same one:
+                  the default search asks the providers this title was found on,
+                  and this asks every other installed provider plus the torrent
+                  indexers.
+                */}
+                {onWiden && canWiden && (
+                  <button
+                    className="btn"
+                    onClick={onWiden}
+                    disabled={searching}
+                    title="Every enabled provider and torrent indexer, not just this title's own"
+                  >
+                    <Globe size={15} /> Search all sources
+                  </button>
+                )}
                 {best && (
                   <button className="btn btn-primary" onClick={() => onPlay(best)}>
                     <Zap size={15} /> Play best
@@ -402,6 +479,16 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                           {copiedLink === source.infoHash ? <Check size={15} /> : <Link2 size={15} />}
                         </button>
                       )}
+                      <button
+                        className="icon-button"
+                        onClick={() => void copyDetails(source)}
+                        aria-label={`Copy the details for ${source.title}`}
+                        title="Copy this source's details"
+                      >
+                        {copiedDetails === source.infoHash
+                          ? <Check size={15} />
+                          : <ClipboardCopy size={15} />}
+                      </button>
                       <button
                         className="icon-button"
                         onClick={() => setExpandedHash(isExpanded ? null : source.infoHash)}

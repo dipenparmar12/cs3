@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { Play } from 'lucide-react';
+import { Poster } from './Poster';
+import { Play, Target } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
 import { ContentHoverCard } from './ContentHoverCard';
 import { LibraryBucketSelector } from './LibraryBucketSelector';
@@ -86,23 +87,27 @@ export const PosterCard: React.FC<PosterCardProps> = ({
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      <div className="poster-container" onClick={handleCardClick}>
-        {item?.posterUrl ? (
-          <img src={item.posterUrl} alt={titleText} loading="lazy" />
-        ) : (
-          <div className="poster-image--empty">{titleText.slice(0, 1)}</div>
-        )}
+      {/* A `div` with an `onClick` opened every title in the app and could not
+          be reached from the keyboard at all — while `.poster-card:focus-visible`
+          had been styled in `index.css` the whole time, which says someone meant
+          this to be focusable. It is a link, not a command: it navigates. */}
+      <div
+        className="poster-container"
+        onClick={handleCardClick}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            handleCardClick(event as unknown as React.MouseEvent);
+          }
+        }}
+        role="link"
+        tabIndex={0}
+        aria-label={`Open ${titleText}`}
+      >
+        <Poster src={item?.posterUrl} title={titleText} />
         {item?.isExactMatch ? (
-          <span
-            className="poster-badge"
-            style={{
-              background: 'var(--accent-primary)',
-              color: '#fff',
-              fontWeight: 700,
-              boxShadow: '0 2px 8px rgba(59, 130, 246, 0.4)',
-            }}
-          >
-            🎯 Selected
+          <span className="poster-badge poster-badge--match">
+            <Target size={11} aria-hidden /> Best match
           </span>
         ) : (
           <span className="poster-badge">{item?.type || 'Movie'}</span>

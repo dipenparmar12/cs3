@@ -90,13 +90,14 @@
     "id": "csx",
     "name": "CloudStream X (CSX)",
     "internalName": "CSX",
-    "description": "High-performance premium stream extractors and fast direct link resolvers.",
+    "description": "Hindi and English films and series from a large set of scrapers, plus CineStream's aggregated catalogue.",
     "url": "https://github.com/SaurabhKaperwan/CSX",
     "rawRepoUrl": "https://raw.githubusercontent.com/SaurabhKaperwan/CSX/builds/CS.json",
     "category": "Community",
     "language": "English",
     "verified": true,
-    "documentKind": "pluginList"
+    "documentKind": "pluginList",
+    "bundled": true
   },
   {
     "id": "cuxplug",

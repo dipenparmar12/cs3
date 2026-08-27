@@ -72,8 +72,11 @@ cs3/
 | Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
-| Sidecar tests | `sidecar/` | `mvn test` (31 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (159 tests, Node type-stripping — no framework) |
+| Sidecar tests | `sidecar/` | `mvn test` (32 tests) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (364 cases, Node type-stripping — no framework) |
+| Extension issues only | `cs3_windows/` | `bun run test:issues` (21 cases, pure) |
+| Provider registry only | `cs3_windows/` | `bun run test:registry` (9 cases, temp dirs) |
+| Sidecar log only | `cs3_windows/` | `bun run test:sidecar-log` (20 cases, pure) |
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Provider links only | `cs3_windows/` | `bun run test:links` (15 cases, no ffmpeg needed) |
 | WebView matching only | `cs3_windows/` | `bun run test:webview` (21 cases, pure) |
@@ -82,12 +85,8 @@ cs3/
 | Subtitles only | `cs3_windows/` | `bun run test:subtitles` (16 cases) |
 | Media decisions only | `cs3_windows/` | `bun run test:media` (71 cases, no ffmpeg needed) |
 | Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (17 cases, real ffmpeg; skips itself without it) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (124 tests, Node type-stripping — no framework) |
-| Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Source export only | `cs3_windows/` | `bun run test:export` (13 cases, pure) |
 | Download identity only | `cs3_windows/` | `bun run test:download-identity` (18 cases, pure) |
-| Media decisions only | `cs3_windows/` | `bun run test:media` (53 cases, no ffmpeg needed) |
-| Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (14 cases, real ffmpeg; skips itself without it) |
 | Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
@@ -256,6 +255,15 @@ and the erase control), `bookmarks:*` (saved detail pages), `discover:*` (home-s
 catalogues and title enrichment), `subtitles:*` (online search, SubRip→WebVTT), `sources:getCacheStats` /
 `sources:clearCache`.
 
+`issues:*` is the extension issue ledger — `issues:list` (rows plus the tally plus the
+per-source breakdown), `issues:annotate` (mute/note), `issues:report`, `issues:clear`. It is
+deliberately a third surface beside `log:*` and `diagnostics:*`; see below for why none of
+the three can answer the others' question.
+
+`extension:addRepository` and `extension:installRepository` are new and are deliberately
+**two** actions. Adding is one fetch and a persisted row; installing is tens of downloads
+and DEX translations. Folding them together commits a user who wanted to browse.
+
 `media:*` is the compatibility engine's surface: `media:inspect` classifies a source without
 starting anything, `media:prepare` inspects-decides-opens and returns the URL to attach,
 `media:switchAudio` / `media:closeStream` drive a live session, `media:setCapabilities` /
@@ -328,6 +336,8 @@ not a layering mistake.
 | `cs3/extensionUpdater.ts` | Over-the-air extension updates on a schedule, so a provider fix does not wait for an app release. |
 | `cs3/bootstrap.ts` | First-run install of the bundled repositories, and the adult-content opt-in. |
 | `cs3/diagnostics.ts` | Provider failures with the context that makes them reproducible. See below. |
+| `cs3/extensionIssues.ts` | The **durable tally** of distinct extension problems, across restarts and log rotation. `diagnostics` is one failure shaped to be pasted; the logger is a per-session transcript; this is the "count before fixing" list. See below. |
+| `cs3/providerRegistry.ts` | What each archive registered, keyed by size+mtime+runtime generation. Hydrates the provider list at launch **without starting the JVM** — the fix for a 57–67s first search. See below. |
 | `cs3/titleOutcomes.ts` | How each title last behaved, so a dead row is not clicked twice. |
 | `cs3/batchDownloader.ts` | Season/series batch download orchestration. |
 | `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, and remembered source choices. |
@@ -335,7 +345,8 @@ not a layering mistake.
 | `cs3/providerAnalytics.ts` | How every provider has actually behaved, counted. Aggregates only — no queries, no titles, no viewing history — because provider quality does not depend on any of them and this file is meant to be shareable. `empty` is tracked separately from `failure`: a provider with nothing for this title is working, and folding the two together would rank providers by catalogue breadth. |
 | `cs3/providerRanking.ts` | Weighted scoring over those counts. Criteria are **rows in a table**, not a formula: an id, a weight, a sample floor and a function to `0..1` or `null`. A `null` is excluded from the denominator rather than scored zero — a provider nobody has downloaded from must not rank below one whose downloads always fail. Rates are smoothed toward a neutral prior so a new extension starts mid-table and can never be permanently buried by one unlucky first call. |
 | `cs3/providerRecommendations.ts` | Turns scores into advice, and (only with `autoEnableProven`) into action. Nothing is ever auto-**disabled**: a site being down for a week is not consent to remove a source the user chose. |
-| `cs3/failureTaxonomy.ts` | `classifyFailure` — one closed set of causes, shared by the ranking and the diagnostics. Counting free text produces a tally with one entry per failure; grouping by cause is what showed 113 load failures came from six missing classes. |
+| `cs3/failureTaxonomy.ts` | `classifyFailure` — one closed set of causes, shared by the ranking, the diagnostics and the issue ledger. Counting free text produces a tally with one entry per failure; grouping by cause is what showed 113 load failures came from six missing classes. Also owns `groupingForm`, moved here from `diagnostics.ts` because that module imports `electron` and cannot be loaded under Node's type stripping. |
+| `cs3/sidecarStderr.ts` | What a line of JVM stderr *means*: level, the tag that printed it, and a cause. Pure and tested — it is the only attribution the corpus offers. |
 | `cs3/discovery.ts` | The home screen's catalogues. Stale-while-revalidate over Stremio's keyless Cinemeta catalogs (`top`/`year`/`imdbRating`, filterable by 19 genres, pageable) plus AniList for anime. Finds **nothing playable** — sources are resolved by providers when an item is opened. |
 | `cs3/titleEnricher.ts` | Resolves `Avengers End Game 720p Hindi Dubbed` to the film it is about. Conservative on purpose: a disagreeing year is disqualifying and the similarity bar is high enough that `Avengers` does not match `Avengers: Endgame`. An unenriched row is a small loss; a mislabelled one reads as data corruption. |
 | `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. |
@@ -1196,6 +1207,400 @@ why the next unit of effort went into the WebView bridge rather than into more s
 that closed, the remaining named divergence is TLS strictness (1 above) — **and its frequency
 is still unmeasured**. Count it before spending anything on it.
 
+### A provider that is gone has to say which extension owned it (2026-08-24)
+
+Reported as a raw runtime exception on screen:
+
+```
+IllegalArgumentException: No loaded provider is named "EinschaltenIn".
+Loaded: [Aniworld, Serienstream, Cinevood, … 100 more]
+```
+
+Two separate faults, and the visible one is the smaller.
+
+**The runtime appended its whole loaded set to the message**, and the host passed it
+through to the viewer. On a bootstrapped install that is a hundred provider names offered
+as the explanation for the one that did not work — a list of everything that *did* work,
+which is diagnostics and not an answer. `requireProvider` now throws
+`PluginHost.ProviderNotLoadedException` with a one-line message and prints the loaded set
+to stderr, where a diagnosis can find it.
+
+**And the host was not answering the question it is uniquely able to answer.** The runtime
+knows only that a name is absent. The host knows *why*, and each reason is a different
+action for the reader:
+
+| Cause | What the viewer is told |
+|---|---|
+| Provider, extension or repository switched off | which switch, and that Extensions is where it is |
+| Adult provider with the gate off | that, and where the gate is |
+| Two extensions claiming one name | which one lost it (`providerNameClashes`) |
+| Extension uninstalled | which extension it was, and to search again |
+| Extension installed but blocked at load | the `runtimeReports` reason verbatim |
+| Providers not loaded yet | that, rather than a failure |
+
+`PluginManager.explainMissingProvider` is that table, reached from `loadMedia` and
+`loadLinksDetailed` when the reply carries `errorKind: 'PROVIDER_NOT_LOADED'` — recognised
+by kind rather than by matching the sentence, which is why the sidecar has a named
+exception at all.
+
+Three supporting pieces, each of which was a gap on its own:
+
+- **Provider origins are persisted** (`cs3_provider_origins`), because this is read exactly
+  when the live tables cannot answer. A bookmark, a library entry, a cached source or an
+  open detail page addresses `cs3ext://EinschaltenIn/…` long after the extension behind it
+  was disabled or removed, and without a stored `provider name → extension` map the app can
+  only say the name is unknown.
+- **An installed archive that is missing from disk now gets a runtime report.**
+  `ensureProvidersLoaded` filtered those out of `pending` and said nothing, so the extension
+  ceased to exist with no report anywhere and every saved reference to its providers failed
+  by naming a *provider* rather than the missing file that caused it.
+- **`provider-missing` is its own `FailureKind`, and it is not scored.** Folding it into
+  `runtime-unavailable` would send the reader to the runtime status in Settings, which is
+  working and has nothing to tell them. And recording it as a provider failure would rank an
+  extension down for having been switched off — the silently-punitive behaviour the ranking
+  exists to avoid.
+
+`RUNTIME_GENERATION` is bumped to 7: an already-provisioned sidecar never sends the new
+error kind, so without it the host's branch is unreachable and the viewer keeps seeing the
+hundred-name exception.
+
+### The forced retry never asked the engine that could have played it (2026-08-26)
+
+Reported as: none of a title's sources play or download, while the Android app plays the
+same list. Measured against the captured source list (`.temp/RRR_sources.md`, 54 sources):
+most of them are **healthy** — 206 with `Content-Range` and `video/x-matroska`, or a valid
+`.mpd`/`.m3u8` with no DRM — and five of a representative seven play through this app's own
+`MediaProxy` into mpv in about a second, including the CloudFront-signed DASH that needs a
+`Cookie` and the googleusercontent link that ignores `Range`. So the sources were not the
+variable, and neither was the proxy.
+
+**`PlaybackEngine.prepare` hard-set `FULL_TRANSCODE` on the forced pass and never consulted
+`shouldRouteToNativeEngine`.** `decideStrategy` routes to mpv properly; this path bypasses
+the decision entirely. The consequence is precise and backwards: the forced pass runs
+*exactly* when the element has already failed on a source — which is the definition of what
+the native engine exists for — and it was the one path guaranteed to answer with a software
+re-encode instead.
+
+Traced through a session log on MovieBox's DASH:
+
+```
+ffprobe  /stream/17  container=dash videoCodec=hevc audioCodec=aac   1736ms   ok
+prepare  /stream/17  engine=ffmpeg  strategy=REMUX_CONTAINER
+prepare  /stream/17  engine=ffmpeg  strategy=FULL_TRANSCODE  probeLatencyMs=0
+```
+
+An `hev1` 1080p stream probes as `dash`/`hevc`, is remuxed, fails in the element, and comes
+back here to be re-encoded frame by frame. The same URL handed to mpv opens with `d3d11va`
+in about a second — mpv carries its own FFmpeg and the platform's hardware decoders, so a
+bitstream that defeated Chromium is usually ordinary to it.
+
+The forced pass now routes to `NATIVE_MPV` when the engine is available and the policy is
+not `off`, and falls back to the re-encode when it is not. Two exclusions: `EME_NATIVE` and
+anything `requiresEmeDecryption`, because mpv holds no CDM and routing an encrypted stream
+to it converts a playable source into an unplayable one.
+
+**The returned capability is rewritten with it, and that half is load-bearing.**
+`VideoPlayer` reads `capability.requiredStrategy` to choose between the `<video>` element
+and `mpv:open`. Returning the pre-force model would hand the URL back to the element that
+had just failed on it — which fails, forces again, and spins the retry ladder on a source
+the native engine was ready to play.
+
+**What is genuinely dead in that list, and worth recognising rather than re-debugging:**
+`workers.dev` mirrors answering `500` or `403 Quota exceeded`, `r2.cloudflarestorage`
+answering `403 NotEntitled`, pixeldrain `404`, and `hcdn3.hakunaymatata.com` failing to
+resolve at all (`ENOTFOUND`/`EAI_AGAIN`) — a DNS answer, not an app failure, and one the
+DNS-over-HTTPS setting can change.
+
+**One measurement trap.** Probing a manifest with `Range: bytes=1000000-` returns `416`,
+because an `.mpd` is a few kilobytes. Nine sources looked dead that way and every one was
+fine; a liveness scan has to ask for a range the file can actually satisfy, or none at all.
+
+### The timeline drew and never moved (2026-08-26)
+
+Reported as: the film downloads perfectly, and streaming the same link shows a timeline
+that is frozen — in the in-app player and in mpv as an external player alike. Three
+separate defects, found by measuring the sources rather than reading the player, and none
+of them is the one the symptom points at.
+
+The sources were captured from the app for two titles (`.temp/hulk_sources.csv`,
+`.temp/supergirl-…md`) and every one was characterised against the real host. That is what
+made the causes separable — they present identically.
+
+**1. `--force-seekable=yes` on an origin that ignores `Range`.** The flag had been in
+`mpvEngine` since the engine's first commit, as a blanket default. Measured across the
+corpus, hosts fall into three shapes and only one describes itself correctly:
+
+| Shape | Reply to a `Range` | Seekable |
+|---|---|---|
+| `sssrr.org`, r2.cloudflarestorage | 206 + `Content-Range` + `Accept-Ranges: bytes` | yes, and says so |
+| gdflix `workers.dev` mirrors | 206 + `Content-Range`, **no** `Accept-Ranges` | yes, and does not say so |
+| `video-downloads.googleusercontent.com` (GDFlix "Instant Download") | **200 + the whole file from byte zero**, whatever was asked | **no**, and does not say so |
+
+On the third, mpv accepted the seek, could not ask for the offset, and satisfied it by
+reading and discarding from byte zero. On a 3.24 GB link that never arrives: the tracks
+parse, the window opens with a timeline on it, and the position never moves. **Every resume
+from Continue Watching hit it, because a resume is a seek before the first frame** — which
+is why it looked like the app could not play that source at all while the downloader,
+which only ever reads forward, was fine.
+
+Measured on a synthesised fixture behind a Range-ignoring origin, seeking to 60s:
+
+| Origin | `--force-seekable` | Result |
+|---|---|---|
+| honours Range | yes | seeks to 60s |
+| honours Range | **no** | seeks to 60s — the flag buys nothing |
+| ignores Range | **yes** | grinds the whole file, no first frame |
+| ignores Range | no | starts at 0 immediately and plays |
+
+So the flag only ever converts a correct "cannot seek" into a hang, and it is gone.
+`MediaProxy` now **states `Accept-Ranges` rather than forwarding it**, in both directions,
+which is what restores seeking on the middle row without anything having to be forced. It
+also **refuses to serve byte-zero data as a mid-file range**: a `200` answering a
+`bytes=N-` used to be passed straight through, handing the player the opening of the film
+labelled as its middle.
+
+**2. `MAX_ROUTES` was below the cost of one film, and LRU evicted the wrong end.**
+Rewriting one HLS media playlist mints a route per segment — ~1200 for a two-hour film, in
+a single burst, against a cap of 1000. The routes evicted to make room were the *oldest*:
+the master playlist and the video variant playlists it had just handed the player.
+Measured on HDHub4U's `hdstream4u.com` master, tokens 4 and 5 — the two video variants —
+were gone before the first request for either, and the table held segments 306–1305. mpv
+read the master, asked for the variant it named, and got `404 Unknown stream` **from us**.
+
+Two changes, and the second matters more than the cap: routes now carry `createdAt`
+separately from `lastAccess`, a route that has never served a request is evicted only after
+every route that has, and **among never-served routes the newest go first**. For an
+unfetched route, age is not staleness — it is position in the document that minted it, so
+the oldest are the variants and the opening segments and the newest are the end of the
+film. Dropping the tail is free; the playlist re-mints it if playback ever gets there.
+
+**3. Any body under 4 MB with no `Range` was corrupted.** Pre-existing, and independent of
+the above. The manifest-sniffing branch did `await upstream.text()` and then `res.end(body)`
+— so a binary body small enough to reach it was decoded as UTF-8 and re-encoded, turning
+every byte that is not valid UTF-8 into three. A 704 KB HLS segment left the proxy 1.27 MB
+long and no longer a media file. It survived because media requests almost always carry a
+`Range`, which skips the branch entirely; only the occasional un-ranged first fetch of a
+small segment was hit, and it read as a bad source. The body is read as bytes now and
+decoded only to look at.
+
+
+**4. An abandoned request left the whole file downloading.** Found from a later session
+log, after the three above were fixed: `ffprobe timed out after 20000ms` three times on
+each googleusercontent source, then `The source could not be reached: The operation was
+aborted due to timeout` — while the same file probed in 2.4 s standalone. `pump`'s cleanup
+called `reader.releaseLock()`, which detaches the reader and **leaves the body open**.
+Under Node's fetch the transfer stops anyway; the main process runs on Electron's
+`net.fetch`, where the request lives in Chromium's network service and a detached body does
+not reliably stop it. On an origin that ignores `Range` and answers everything with the
+whole file, each abandoned probe is therefore a 3.24 GB download still running — three
+attempts across three sources is nine of them, against a link the viewer was already
+downloading at 4.2 MB/s. That is how a two-second probe becomes a twenty-second timeout,
+and why playback that had started buffered until the engine exited. The reader is cancelled
+now, and every upstream fetch carries an `AbortSignal` tied to the client socket — the
+signal is what reaches a request still blocked in DNS or TLS, before there is a body to
+cancel at all. Guarded on `writableEnded`, because `close` also fires on a normal finish.
+
+**Two traps worth not repeating.** `MediaProxy.wrap` returns loopback URLs *untouched* by
+design, so a test origin listening on 127.0.0.1 is never proxied and measures nothing —
+the test file's header says so, and it is still easy to do. And a regression test for this
+class of bug has to be checked by breaking the fix again: the assertions pass trivially
+against a stub that ends its own body, so the upstream in `mediaProxy.test.mts` is endless
+and the test is verified to FAIL with `releaseLock()` restored.
+
+**Segments disguised as images are unwrapped.** HDHub4U's playlists point at TikTok's image
+CDN, which serves only images, so each segment is a **real 70-byte PNG header with the
+MPEG-TS glued on behind it** — `Content-Type: image/png` and a valid PNG signature. This is
+a step beyond the `.png`-*named* segments `-extension_picky` was added for: there the bytes
+were already TS and only the name lied, so opening the extension allow-list was enough.
+Here the bytes lie too and no demuxer option helps — FFmpeg reads a PNG, finds no
+elementary stream, and stops with nothing in the log naming the cause. Measured on a real
+segment: 704,318 bytes in, a 70-byte prefix, then 3,745 consecutive sync bytes at the exact
+188-byte stride and a clean `h264 + aac` after the strip. Only routes minted by a playlist
+rewrite are examined, and only that signature — PNG magic followed by a sync run at the
+packet stride — counts, so a mis-detection would need a file that is simultaneously a valid
+PNG and a valid transport stream.
+
+**What is still not ours.** Of the 16 Supergirl sources, after these fixes the four
+r2.cloudflarestorage links, HUBCDN and all three HLS variants play. The rest fail at the
+host and are worth recognising rather than re-debugging: pixeldrain 404s, the Vidstack IP
+404s, and the googleusercontent links expire (they are signed with an 8-hour window, and
+answer `HTTP 400` after it). A `RefreshingSource` retry on those is correct behaviour.
+
+### The first search cost a minute, and it was never the plugins (2026-08-26)
+
+Reported as: the app is slow to start, and slow again the first time you search. Measured on
+the development machine's real install — **124 archives, 132 providers** — rather than
+reasoned about, and every obvious explanation turned out to be wrong.
+
+`PluginManager.ensureProvidersLoaded` loaded every installed archive into the JVM, in series,
+on the first search of **every launch**:
+
+| Experiment | Result |
+|---|---|
+| Load all 124 archives (`load` RPC, serial) | **66.8s**, plus a 2.7s sidecar handshake |
+| `inspect` all 124 — DEX translate **+** `LinkageAnalyzer` | **1.4s** (mean 11ms) |
+| Load all, unload all, load all again **in the same JVM** | 57.1s, then **2.4s** |
+| Load all with 8 concurrent RPCs | 43.5s — and **176 providers attributed to the wrong extension** |
+
+Read those in order, because each one kills a fix that looks obvious before it:
+
+1. **Translation is not the cost.** It is already cached by archive hash, and the whole
+   translate-plus-analyse pass over the corpus is 1.4 seconds. Caching `LinkageAnalyzer`
+   output — the first thing that suggests itself — would buy about a second of sixty.
+2. **Neither is plugin logic, or the network.** Reloading all 124 *in the same process*
+   costs 2.4s. The 57s is demand-driven **JVM class loading of the 56-jar runtime
+   classpath** — jsoup, ktor, jackson, coroutines — spread across whichever plugin first
+   touches each part. It is paid once per JVM process and it is mostly disk: a run
+   immediately after another, with the OS page cache hot, measured 6.5s for the same work.
+3. **And it cannot safely be parallelised.** Providers do not return themselves; they
+   self-register into the single global `APIHolder.allProviders`, and `diffProviders`
+   observes registration by remembering that list's *length* before `load()`. Two loads
+   overlapping both read from the same mark and each claims the other's providers. Nothing
+   prevented this — the host merely happened to issue loads in series, which made it latent
+   rather than absent.
+
+So the fix is not to make the load faster. It is to **stop doing it before anyone has asked
+for anything.**
+
+**`cs3/providerRegistry.ts` records what each archive registered**, keyed on
+`size:mtime:generation`. Almost everything the app does with providers needs only their
+descriptions — the scope picker, the extensions tree, the enable cascade, `cs3ext://`
+addressing, provenance, the adult gate — and none of that needs a live JVM object.
+
+**Measured end to end against the same 117 distinct archives: 6.6s → 8ms, 132 providers
+preserved identically, zero cache misses, and the sidecar is not started at all.**
+
+Four things about it are load-bearing:
+
+- **The runtime generation is part of the key.** The shim and the bridge decide what a
+  plugin *can* register — four rounds of shim work in this repo each changed exactly that —
+  so a row recorded under generation 7 is not an answer about generation 8, even though the
+  archive's bytes never moved. Same argument `RuntimeProvisioner` makes for dropping
+  translations, and the same failure if skipped.
+- **An archive that registers nothing is recorded too.** Extractor-only bundles register no
+  `MainAPI`, and there are plenty; treating `[]` as "no record" would make every one of them
+  pay the full JVM load on every launch forever.
+- **A failed activation withdraws the row.** Otherwise a permanently broken extension is
+  re-advertised every launch, fails, and is rediscovered — once per launch, with nothing
+  recording that it is permanent.
+- **`loadProviders(force)` now clears the cache.** Hydration answers from disk, so merely
+  clearing `providersLoaded` would re-read the same descriptions and change nothing — the
+  opposite of what a caller asking to reload wants.
+
+**Loading is now lazy and per-archive.** `ensureProviderActive(name)` loads the plugin behind
+one provider, deduped by an in-flight map — a search fans out to eight providers at once and
+several routinely come from one archive, so without it that archive is loaded eight times
+concurrently, which is the mis-attribution case arriving through the front door.
+`PluginHost.registrationLock` is the backstop; the in-flight map is the fix.
+
+**And the unavoidable cold cost moved off the path where someone is waiting.**
+`warmProviders()` runs 4s after the window opens and loads the rest in the background,
+serially. Same work, done while the viewer reads the home screen.
+
+If you add a code path that calls a provider, call `ensureProviderActive` first. A hydrated
+provider is addressable and has no code running behind it; the RPC will answer
+`PROVIDER_NOT_LOADED`, which `explainMissingProvider` will then explain as though the
+extension were disabled.
+
+### Counting the log, from inside the app (2026-08-26)
+
+The capture worked. What it produced was not usable, and the numbers say why. A real user's
+21 session files held **6,069 records, 5,407 of them sidecar stderr — 89% of everything the
+app recorded** — and `missingClass` matched **none** of them. The class problem really is
+closed (§5 says so and the count agrees); what fills the log now is something else, and the
+reader could not tell its parts apart:
+
+| Shape, by frequency | What it is |
+|---|---|
+| `ApiError: ------------------` ×290 | upstream's `logError` divider — pure punctuation |
+| `PluginInstance: Adding Voe (…) ExtractorApi` ×~200 | registration chatter, at `INFO` |
+| `Aug 25, 2026 1:23:45 PM okhttp3…Platform log` ×151 | a JUL *header*, whose message is the next line |
+| `[plugin D/Ayzen] audinifer.com` ×~150 | the `android.util.Log` shim, carrying its own level |
+| `Exception in NiceHttp: … Connection reset` ×74 | a real failure, recorded at `info` |
+
+Three defects, and the first is the one that mattered. **The level was wrong in the
+direction that hides things**: unprefixed lines fell back to `info`, so `Read timed out`,
+`Connection reset` and `UnknownHostException` — 240 occurrences — sat at the same level as
+200 lines of `Adding … ExtractorApi`, and a problems-only view showed neither. **Nothing
+carried who printed it**, though the tag is right there at the front of the line. **And a JUL
+record is two lines**, read as two events: 151 headers with no message, 151 messages with no
+origin.
+
+`sidecarStderr.ts` now emits `source` (92.5% coverage on that corpus) and, for `warn` and
+above only, `cause` from the shared taxonomy. Only problems get a cause — the taxonomy ends
+in a catch-all matching anything containing "Error", so classifying an informational line
+files registration chatter as a failure.
+
+**`cs3/extensionIssues.ts` is the tally those fields make possible: 5,407 records → ~200
+distinct problems**, persisted across restarts and log rotation. It is a third surface beside
+the other two on purpose, because none of them can answer the others' question:
+
+| | Shape | Answers |
+|---|---|---|
+| `Logger` | NDJSON, **one file per launch**, rotated away | what happened, and in what order |
+| `DiagnosticsLog` | one failure's tuple, capped and time-windowed | enough to hand to a maintainer |
+| `ExtensionIssueLog` | one row per `(cause, source, groupingForm(message))`, durable | **how many distinct things are wrong** |
+
+A row needs all three key parts: `cause` alone is eight rows for six thousand records;
+`message` alone is thousands, because a message carries a host and a duration; `source` is
+what makes a row *assignable*. It stores **no URLs, queries or titles** — this file is
+long-lived, and a long-lived file accumulating what someone searched for is a viewing history
+under another name.
+
+Building it found three real classification bugs, each invisible and each in the same
+direction — a plausible category on a real failure:
+
+- **Stack-frame line numbers were read as HTTP statuses.** `RealCall.java:519` contains a
+  three-digit integer and `server-error` tests for one, so `IOException: Canceled` under an
+  OkHttp stack was classified as the *host* returning a 5xx, 23 times. `classifyFailure` now
+  strips source locations first — and only there, because `groupingForm` must keep bare
+  integers so `HTTP 403` and `HTTP 404` stay apart.
+- **The taxonomy only spoke Node's dialect.** It tests `ECONNRESET`; the JVM says
+  `SocketException: Connection reset`. 108 network failures were filed as the extension
+  throwing.
+- **Cancellations were counted as failures.** 79 of them. Fifteen scrapes are in flight when
+  the viewer types a new query, and the scope closing throws in every one. `cancelled` is now
+  its own kind and the ledger drops it — counting it would rank the *slowest* providers down
+  hardest, since those are the ones still running when the cancel lands.
+
+Two more came from running the finished path over the whole corpus, and both are the same
+shape — a stack read as though it were a message:
+
+- **A frame naming the sidecar made every plugin crash the sidecar's fault.** Every plugin
+  failure passes through `com.cloudstream.desktop.sidecar.PluginHost`, and the
+  `runtime-unavailable` rule matches the word `sidecar`. `describe` now classifies from the
+  head plus `Caused by:` lines only — `at` frames are the route, not the reason.
+- **`InvocationTargetException` was the attributed source.** It names the reflection layer
+  and says nothing, which is the same mistake `Main.describe` was fixed for on the JVM side.
+  The plugin's own loader is right there in the frames — `at cs3-plugin-Ultima…//` — so that
+  is read instead.
+
+And one real taxonomy gap the finished ledger surfaced on its first run over the corpus:
+**the rest of the linkage family is ours too.** `NoClassDefFoundError` was classified as the
+runtime's problem; `NoSuchMethodError`, `IncompatibleClassChangeError`, `AbstractMethodError`
+and `VerifyError` were not — yet those are precisely what a *shim* produces, and this repo's
+own history is three worked examples: `SharedPreferences` as a class where Android's is an
+interface (`IncompatibleClassChangeError`, 112 plugins), `getResources` returning `Object`
+(`NoSuchMethodError`), and `AccountManager.aniListApi` declared as the wrapper type
+(`NoSuchMethodError` — a getter returning a supertype is a different method to the JVM). All
+of them were landing in `provider-error`, whose hint tells the reader to report it to the
+scraper's maintainer — for a method we failed to provide.
+
+Two new `FailureKind`s came out of it and **neither is scored**, for the reason
+`provider-missing` is not: `cancelled`, above, and `resource-leak` — OkHttp's "was leaked.
+Did you forget to close a response body?", which was **every unclassified problem record in
+the corpus** (159). The scrape succeeded; a socket leaked. Filing it as `provider-error`
+reports providers as having failed 159 times that did not fail at all.
+
+**One pre-existing bug fell out of the same pass.** `playbackSession.ts` carried
+`/\b(\d{3})\b/` with both `\b` escapes replaced by literal backspace characters and the
+backslash eaten off `\d` — a pattern requiring control characters and the letter "d", which
+can never match. It parses the HTTP status that `SourceCache.recordFailure` uses to decide
+whether a dead link is **dropped on sight** or needs three strikes, so *every* failure was
+reaching it as ambiguous: a definitive 404 was never dropped, and the dead link was served
+first again in between. Worth grepping for `\x08` after any bulk edit; it is invisible in a
+diff.
+
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 
 Run it before believing anything about extension health:
@@ -1966,6 +2371,42 @@ Things that will bite:
 - **mpv is a child process with its own window** and is wired into `before-quit`. Without
   that it outlives the app and keeps playing with nothing left on screen to stop it.
 
+### mpv's window draws its own controls (2026-08-24)
+
+`--osc=no`, `--osd-level=0`, `--input-default-bindings=no` and
+`--input-vo-keyboard=no` were all set on the reasoning that our control bar is the
+controller and mpv's would be a second one. That reasoning holds for an *embedded*
+surface and does not hold for what is actually built: mpv renders into a **separate OS
+window**, so the viewer looking at the picture was looking at a window with no controls
+in it, while the bar that drives it sat behind in a different window.
+
+So `--osc=yes` and `--osd-level=1` are on — mpv's built-in on-screen controller gives
+play/pause, a seek bar, volume and fullscreen — and `--input-vo-keyboard=yes` lets keys
+reach the window. Verified that the OSC still loads under `--no-config --load-scripts=no`:
+it is an internal script, and `--load-scripts` only governs the user's own script
+directory. None of this touches decode or network.
+
+**`--input-default-bindings` stays `no`, and the bindings are enumerated instead**
+(`NATIVE_KEY_BINDINGS`, applied with mpv's `keybind` command after the IPC channel is up).
+mpv's default set quits on `q`, `Q` and `Ctrl+q` — and an exit while playing is reported
+as `ended`, which `NativeEngineStage` turns into `onEnded()`, so a viewer pressing `q` to
+stop watching would be handed the next episode. The defaults also bind `s` to a screenshot
+written beside the working directory. Every enumerated binding matches what the same key
+already does in `VideoPlayer` (`SKIP_SECONDS` is 10 in both), because the two windows are
+one player and a key that seeks 10 in one and 60 in the other is worse than a dead key.
+
+Two consequences worth keeping:
+
+- **Nothing new syncs.** `pause`, `volume`, `mute`, `speed` and `fullscreen` are already in
+  `OBSERVED`, so whatever the viewer changes in mpv's window arrives back as a
+  `property-change` and our own control bar follows it. Adding a control that mpv can
+  change without an `OBSERVED` entry behind it would be the first thing here to need a
+  second sync path.
+- **`end-file` with reason `quit` now reports `idle`.** Closing mpv's window — or any
+  binding that quits — used to reach `child.on('exit')` while `state` was still `playing`,
+  which is the credits as far as that handler is concerned. The next episode started in a
+  new window. Same rule as `shutdownNow`, reached from mpv's side instead of ours.
+
 **What is not built: embedding.** mpv renders in its own window, driven over IPC — the
 roadmap's Option A, which it calls the recommended first step. Putting the video surface
 inside the Electron window needs libmpv's render API through a native addon (Option B).
@@ -2020,7 +2461,7 @@ symptom points at.
    effect depends on a `sourceConfig` memo keyed on that. **If you add a source field to
    that effect, add it to the key, not to the dependency array.**
 
-`electron/media/mpvEngine.test.mts` (15 cases, `bun run test:native`) drives a real mpv
+`electron/media/mpvEngine.test.mts` (17 cases, `bun run test:native`) drives a real mpv
 process against a synthesised HEVC 10-bit / AC-3 5.1 Matroska fixture. It is not pure and
 should not be: every failure worth catching lives in the seam between two processes — the
 JSON framing, `request_id` correlation, the property observations that drive the timeline,
@@ -2299,6 +2740,334 @@ empty `java.library.path`; per-plugin scoped storage.
 (Windows job object + restricted token). They are reported by `status` as `sandboxGaps`
 and surfaced in the UI on purpose: a named gap can be closed; an implied-covered gap never
 gets fixed. Java's `SecurityManager` is not an option (JEP 411/486 removal).
+
+### A links handle is not a page address (2026-08-27)
+
+The single most frequent failure in a user's captured session, and it named the wrong party
+every time:
+
+```
+VegaMovies: IllegalArgumentException: Expected URL scheme 'http' or 'https'
+            but no scheme was found for [{"sou...
+  url: cs3ext://VegaMovies/[{"source":"https://vcloud.fit/ubvtmxgdjbx1xxu"}, …]
+```
+
+Upstream's `MainAPI` has **two kinds of handle and they are not interchangeable**. `load(url)`
+takes a page address and fetches it. `loadLinks(data)` takes an opaque blob the provider built
+for itself — and a large part of the corpus puts JSON in it (VegaMovies an array of objects,
+HDHub4U an array of strings). Both are `String`, so nothing in the type system separates them,
+and `cs3ext://<provider>/<handle>` does not record which kind it is carrying.
+
+Handing a links blob to `load()` reaches OkHttp's `HttpUrl.get`. The throw was recorded at
+stage `detail`, **scored against the provider by the ranking**, and shown to the viewer as the
+reason their title would not play. The provider was fine and the call should never have been
+made.
+
+It reached `load()` from three directions, which is why the guard is one shared predicate
+(`cs3/extensionAddress.ts`, `looksLikeLinksHandle`) rather than three local checks:
+
+1. **`resolveExtensionTarget`** looked up an episode list for any address carrying an episode
+   number — including one that already *was* the episode, which is what Continue Watching
+   hands over.
+2. **`extensionSources`** retried through `dataUrl` whenever the first attempt found no links,
+   without asking whether the address it had could be opened — **and did not catch the
+   throw**, so OkHttp's message replaced the real diagnosis and rejected the whole discovery.
+3. **`DetailView`** was handed a playback handle as an item URL. See below.
+
+The test is deliberately narrow: JSON is definitely not a page, anything else might be.
+Internet Archive's `load()` takes `https://archive.org/details/<id>` while its `loadLinks`
+takes the bare id, so "must start with http" would refuse pages that work.
+
+### "A title I saved now opens blank" (2026-08-27)
+
+The same root cause, persisted. `DetailView` recorded `progress.mediaUrl` as
+`episode?.url ?? detail.url` — and `episode.url` is the **playback handle**. That address went
+into the library, Continue Watching and any page saved from one of those rows; clicking the row
+later called `load()` on it and the detail page came up empty. It reads as data rot, and it is
+not: it is the wrong address having been written, and it only ever manifests on the *second*
+route to a title.
+
+**Nothing is lost by storing the page instead.** `libraryStore.recordProgress` keys on
+`canonicalKey(title, year)` plus season and episode — not on `mediaUrl` — so no progress record
+is orphaned by the change, and the season and episode travel in their own fields. The handle
+that actually plays is still `request.mediaUrl`.
+
+Rows written before the fix cannot be repaired: the page address is not recoverable from a
+links blob. What *is* stored beside them is the title, so the failure screen now offers
+**"Find <title> again"**, which is the only thing that turns a permanently dead row back into a
+working page.
+
+### CloudStream X (CSX), and two shim gaps it found (2026-08-27)
+
+CSX is now `bundled: true`. Per §5's rule that the flag is a claim the harness has driven the
+repository end to end, `tools/e2e/provider-e2e.mjs` knows about it and was run before the flag
+was set. Two extensions stopped at `load()` and both were ours:
+
+1. **`CloudStreamApp$Companion.setKey(String, Object)`** — upstream declares
+   `fun <T> setKey(path, value)`, whose erased descriptor takes `Object`. The bridge carried a
+   `setKey(String, String?)`, which is a *different method* to the JVM: present, and impossible
+   to call. CineStream's `load()` opens with `Settings.initSeenProviders()` and died there.
+   **A Kotlin companion is not inherited** — `CloudStreamApp : AcraApplication()` gives
+   `CloudStreamApp.Companion` nothing from `AcraApplication.Companion` — so both names carry
+   the methods rather than one delegating to the other.
+2. **`AccountManager.simklApi`, typed `SimklApi`.** `SyncRepo.kt` said SIMKL was left out
+   because nothing had been observed to use it; CineStream's `CineSimklProvider` is that
+   observation. Typed as the concrete class, not `SyncAPI` or `SyncRepo` — a getter returning a
+   supertype is a different method. **That near-miss has now been made four times** in this
+   repo (`getResources` returning `Object`, `aniListApi` as the wrapper, `setKey`, this).
+
+**Nothing was setting the application context**, so even once the descriptors matched every
+helper would have been a silent no-op. `PluginHost.invokeLoad` now points both companions at
+the plugin's context immediately before `load()`. The same pass found `newShimContext`
+hard-coding the literal `"plugin"` as the scoped-storage id — so **every extension in the
+process shared one preferences file**, which was invisible while the helpers were stubs and is
+a collision the moment they write. It takes the real `pluginId` now.
+
+`RUNTIME_GENERATION` is **8**: both halves changed and a provisioned copy pairing one with the
+other is worse than either alone. `BOOTSTRAP_VERSION` is **2**, which is how an install that has
+already bootstrapped receives CSX — `run()` filters targets on `!already.has(rawRepoUrl)`, so a
+re-run installs only what is new and re-downloads nothing.
+
+**Measured after the fixes**, `--repo CSX --plugins 10` across five queries
+(dune, reacher, breaking bad, one piece, inception):
+
+```
+providers loaded    11
+providers answering  9
+links resolved       8
+streams with bytes   7
+PASS
+```
+
+CineStream alone resolved 57 links for *Dune: Part One* and 66 for *Dune: Prophecy*, and
+delivered 2.00 MB of `video/x-matroska` at HTTP 206 with ranges honoured. The remaining
+failures are host-side and worth recognising rather than re-debugging: BollyFlix times out,
+Online Movies Hindi resets the connection, GDIndex trips its own 5 MB `.text` guard.
+
+**`tools/package/build-bridge.mjs` could not find Maven on Windows.** `spawnSync('mvn')`
+without a shell does not resolve `mvn.cmd`, and every `dependency:get` failed with `ENOENT` —
+reported as *"could not obtain <artifact> from Maven Central. Is mvn on PATH?"*. It was on
+PATH. `findMaven()` now tries the platform's spellings and prefers `tools/toolchain/apache-maven-*`,
+for the same reason `SidecarSupervisor.resolveJava` prefers the checked-in JDK.
+
+### `InvalidHeader` was every unclassified record (2026-08-27)
+
+`InvalidHeader: Invalid file header. Header doesn't start with #EXTM3U` fell through to
+`unknown` — four IPTV providers failing identically on every search, never grouping, so one
+dead upstream read as scattered noise. It is `unreadable-reply`, not `provider-error`: the
+extension's parser is right to refuse, what changed is on the other end of the connection, and
+the reader's action is to check the source rather than to report a bug to the scraper's
+maintainer.
+
+### Backing up an installation (2026-08-27)
+
+`electron/cs3/backupService.ts`. There were two exports before it and neither answered the
+question: `datastore:exportBackup` writes the **Android** format for moving between the phone
+app and this one, and library/history each exported themselves — so moving to a new machine
+lost the repositories, the extensions switched off, the saved pages and the indexer
+configuration.
+
+**Sections are a table, not two switch statements.** A store added to the export and forgotten
+in the restore produces a file that looks complete and silently drops those rows on the way
+back; one entry cannot be half-added. An export-only section (the download queue) is reported
+as `export only` rather than as a restore of zero, so the two are distinguishable.
+
+Deliberately absent, each for its own reason: the `.cs3` archives and downloaded media (large,
+re-fetchable — the backup records *which*, which is the part that cannot be); tokens and device
+ids (filtered by `DatastoreManager.snapshot` on the way **out**, so they are never written into
+a file in someone's Downloads folder); diagnostics and logs (they describe the machine captured,
+not the one restored to); caches (everything in them expires, and a stale cache is worse than
+an empty one).
+
+**Restore merges rather than replaces**, so a preference added since the backup was taken does
+not silently revert; it snapshots the datastore first so the write can be undone; and a section
+that throws is recorded while the rest still restore, because a restore that stops halfway
+leaves a state neither the backup nor the previous one describes. 12 cases in
+`backupService.test.mts`, including that an unrelated JSON file is refused **by its format
+marker** — otherwise it would be fed to every section and answer "restored 0 rows from 9
+sections" instead of "that is not a CloudStream backup".
+
+### Extensions: browse opens where you asked (2026-08-27)
+
+"What does this repository offer?" was a third tab, and reaching it threw away the list the
+question was asked from — the scroll position, the filter chips, and the neighbouring
+repositories being compared against. Comparing two catalogues cost three tab switches. It is
+now a full-width panel under the repository's own card (`grid-column: 1 / -1`, so a
+twenty-extension list does not render inside one 290px column and read as belonging to the
+card's neighbours), and the tab is gone. Two tabs remain: **Installed** and **Browse**.
+
+**Search reaches through a repository.** The query matched a repository's own name,
+description, language and shortcode and nothing else — so looking for a provider you know you
+have found nothing, even with the repository carrying it on screen. It now also matches the
+installed extensions and providers underneath, and the card says *why* it matched: a result
+with no visible reason reads as a broken filter.
+
+### Settings (2026-08-27)
+
+The tab bar was `overflow-x: auto` over a fixed set of eight tabs, so on an ordinary window
+reaching "Advanced" meant finding and dragging a horizontal scrollbar. It wraps now, and is
+sticky — because the new **All settings** view is one long page, and navigation that scrolls
+away is navigation you have to scroll back up to reach.
+
+`all` is a view, not a category: it renders exactly the same groups the tabs do, in tab order,
+with a heading before each. No control is duplicated, so the two views cannot disagree.
+
+### Seven IPC channels were strings that had stopped matching (2026-08-27)
+
+Found by diffing the channel literals in `main.ts` against those in `preload.ts` — not by
+chasing a symptom, because none of these produces an error anyone would report as an error.
+`tsc` cannot see them: the channel is a string on both sides and the two files never refer to
+each other. The user-visible form is always a dead button or a silent no-op.
+
+| Channel | Was | Consequence |
+|---|---|---|
+| `binary:setupBinaries` | invoked, never registered | the first-run component installer **always failed** |
+| `runtime:repair` | invoked, never registered | the recovery path for a broken runtime, latent |
+| `discover:invalidated` | pushed, no listener | switching home catalogue left the old rows up for 6h |
+| `binary:check`, `binary:setup` | registered, unreachable | duplicate spellings of live handlers |
+| `extension:getRuntimeReport` | registered, unreachable | no way to say *why* an extension registered nothing |
+| `media:get/setProbeConfig` | registered, unreachable | the probe budget, unreachable by the users it affects |
+
+**`ipcRenderer.invoke` on an unregistered channel rejects — it does not return an
+`{ ok: false }` envelope.** That is what made the first one invisible: `BinarySetupModal`
+caught the rejection and rendered `No handler registered for 'binary:setupBinaries'` as a
+friendly-sounding notice with "(HTTP fallback stream active)" after it. The user was told a
+fallback was active and had no way to know the button had done nothing. **A catch that
+reassures is worse than no catch.** Both halves were needed to hide it.
+
+**`electron/ipcSurface.test.mts` now pins all four diffs** (`bun run test:ipc`, and it runs
+first in `test:electron`). It is lexical rather than runtime — loading `main.ts` would boot
+the whole service graph, and the strings are what matter. Verified to fail in all three
+directions by mutation, because a parity test that passes trivially is worthless. Exceptions
+go in the commented allow-lists at the top, and "I will wire it later" is not a reason: an
+entry there is indistinguishable from a working feature to everyone who reads the code.
+
+### Lifecycle: closing a window is not quitting (2026-08-27)
+
+`window-all-closed` ran `downloadService.stop()`, `extensionUpdater.stop()` and
+`pluginManager.shutdown()` **unconditionally**, with only `app.quit()` guarded by platform.
+On macOS the app then stayed in the dock holding a dead sidecar and a stopped queue, and
+`activate` opened a fresh window onto all of it — zero providers, every search empty, and
+nothing on screen explaining any of it. Every teardown moved into `before-quit`, which is the
+event that actually means "we are going away"; `window-all-closed` now only quits.
+
+**Shutdown is raced against a 5s deadline.** WebTorrent's `destroy()` and an unresponsive mpv
+both hang in the wild, and `before-quit` calls `preventDefault()` — so when one hung the
+window was gone, the process was not, and the only recourse was Task Manager, after which the
+next launch hit the locked cache directory this handler exists to prevent. Which service was
+still pending is logged as `shutdown_timeout`; that is the fact that makes the next fix
+possible and it costs one line. The old `if (!torrentEngine) return;` guard was dead (it is
+constructed eagerly) and would have skipped mpv, external players, the WebView host and
+`logger.shutdown()` if it had ever fired.
+
+### Navigation, shortcuts and the menu (2026-08-27)
+
+**A dropped file used to replace the app.** `setWindowOpenHandler` covers `window.open`; it
+does not cover a top-level navigation, and Electron's default is to perform one. Dragging a
+video onto a media player's window is the most natural gesture a user has — and with
+`setApplicationMenu(null)` there was no View → Reload to get back, so the app was bricked
+until relaunch. `will-navigate` and `will-frame-navigate` refuse it now, and the gesture does
+the useful thing instead: the renderer's `drop` handler routes the file through
+`media:prepare` like any other source. **`MediaProxy` could always serve local files
+(`/local/<token>`) and the engine is source-agnostic — the capability was built and had no
+entry point,** so the app could finish a download and then not play it from disk. File → Open
+and drag-and-drop are both that entry point.
+
+**F12 was bound twice and the app's own binding could never fire.** `before-input-event`
+toggled DevTools *and* called `preventDefault()`, which suppresses the page keyboard event —
+so `App.tsx`'s F12 handler never ran and `ProviderInspector`, which has no other entry point,
+was unreachable. DevTools is `Ctrl+Shift+I` only now. **Reload is gated on `app.isPackaged`**:
+`Ctrl+R` is browser muscle memory and in a packaged build it destroys the renderer — playback
+stops, the open page is lost, an in-flight search is abandoned.
+
+**`Menu.setApplicationMenu(null)` cost more than chrome.** On macOS, Cut/Copy/Paste/Select-All
+are menu *roles*, not native text-field behaviour, so `Cmd+C` did nothing in the search box —
+and there was no Quit, no About and no zoom reset anywhere. A real menu is back, hidden behind
+Alt on Windows and Linux via `autoHideMenuBar`. It is also what makes any shortcut
+discoverable at all.
+
+### `aria2` was pinned to port 6800 and told nobody when it failed (2026-08-27)
+
+6800 is aria2's documented default, so the people most likely to collide with it are the ones
+already running aria2 — which is this app's technical audience. `stdio: 'ignore'` discarded
+the reason, and `start()` returned `true` the moment `spawn` returned: **a port conflict is
+not a spawn error.** aria2 starts, fails to bind and exits a few milliseconds later, so
+`isRunning()` answered true for a dead process and every `addUri` after it failed with a
+message about the *download*. It now probes upward from 6800 by test-binding, captures stderr,
+and reports success only once the RPC actually answers (`getVersion`). `getLastError()` carries
+the reason. A silent downgrade to the slow HTTP path is the failure mode this repo keeps
+having to fix.
+
+### The media proxy's tokens were `1`, `2`, `3` (2026-08-27)
+
+Every response carries `Access-Control-Allow-Origin: *` so that ffprobe, hls.js, Shaka, mpv and
+an external VLC can all read from one door — which is correct and load-bearing. Combined with
+sequential tokens it meant **any page open in the user's browser could fetch
+`http://127.0.0.1:<port>/stream/1` cross-origin, read the body, and walk the integers to
+enumerate the session's viewing.** The ephemeral port is a speed bump, not a control. Tokens
+are 16 random bytes now (`[0-9a-f]{32}` in all five route regexes), `tokensByKey` keeps them
+stable so nothing downstream changed, and a `Host` header that does not name loopback is
+refused — binding to 127.0.0.1 says nothing about DNS rebinding. Pinned by two new cases in
+`mediaProxy.test.mts`; `fetch` refuses to set `Host`, so that one uses a raw `http.request`.
+
+### The font was fetched from Google on every launch (2026-08-27)
+
+`src/index.css` opened with `@import url('https://fonts.googleapis.com/…Inter…')`, so a
+*packaged desktop app* sent the user's IP and User-Agent to a third party on every start —
+invisibly, in an app whose users frequently run a VPN precisely to avoid that. It also failed
+silently offline and hung before falling back where the host is blocked. Inter is vendored
+into `src/assets/fonts/` (seven variable-font subsets, 213 KB; the non-latin ones stay because
+provider titles are not English even though the interface is) and `src/assets/inter.css` is
+generated from the Google CSS with the URLs rewritten. **Verify with
+`grep -oE 'https://fonts[^)"]*' dist/assets/*.css` after a build — it must find nothing.** This
+also unblocks a CSP, which would otherwise have to allow a third-party style and font origin.
+
+### Licensing (2026-08-27)
+
+The repository had **no `LICENSE` file** while being a port of a GPL-3.0 Android application,
+vendoring 26 community extension repositories and bundling FFmpeg, mpv, aria2, yt-dlp and a
+JRE. `LICENSE` (GPL-3.0, fetched from gnu.org rather than reproduced from memory) and
+`THIRD-PARTY-NOTICES.md` now exist at the root, and `settings/AboutPanel.tsx` makes them
+reachable from a *packaged* build where the repository is not — GPL-3.0 §6 asks that whoever
+holds the binary can find the source. **The bundled FFmpeg builds are the GPL variants, not
+LGPL**, and the notice says so; "FFmpeg" unqualified would be the kind of accurate-sounding
+omission that file exists to avoid.
+
+### Shared renderer primitives added in the same pass
+
+- **`src/utils/useFlash.ts`** — twenty-odd call sites wrote `setToast(m); setTimeout(() => setToast(null), N)`
+  with no cleanup. Two bugs: the timers **cross**, so flashing a second message two seconds
+  later has the *first* timer clear it early (which reads as the app dropping a confirmation,
+  exactly when someone is doing several things quickly); and every one set state after unmount,
+  which these views do constantly. Durations stay per call site — they range 1500–5000 ms and
+  unifying them would change what several screens do, the same argument `utils/format.ts` won.
+  Note `flash` is stable but the linter cannot know that the way it knows a `useState` setter
+  is, so it goes in dependency arrays.
+- **`src/components/Poster.tsx`** — `PosterCard` handled a *missing* `posterUrl` and had no
+  `onError`, so it handled the case that never happens and not the one that happens constantly:
+  scraped poster URLs expire and 403 on hotlink checks, and the result was Chromium's broken
+  image icon in the most-repeated component in the product. `HistoryView` had answered it with
+  `display: none`, which is an empty bordered box instead. Each call site keeps its own
+  `fallback`; flattening them to one glyph would be a worse screen, not a tidier one.
+- **`src/components/EmptyState.tsx`** — every list route was one sentence of body text, so an
+  empty library, an empty history and a search that found nothing were the same blank page. For
+  a new user **every screen except Home is empty**, which makes this the cheapest onboarding in
+  the app. The *action* is why it is a component: the search empty state now offers "Search all
+  sources", which clears the stored scope and re-runs — previously reachable only by finding
+  the scope picker and clearing it by hand.
+
+Also: a global `:focus-visible` floor in `index.css` (eight `outline: none` sites, only some
+with replacements — in a full-screen dark app a missed one means the keyboard user simply
+loses the cursor); `prefers-reduced-motion` in `index.css`, which owns the `.spin` keyframe
+every loading indicator uses and was the one stylesheet of four not honouring it; the poster
+card is keyboard-reachable (`.poster-card:focus-visible` had been styled all along, which says
+someone meant it to be); window bounds persist and are clamped to a display that still exists;
+and an offline banner, because offline every provider fails separately and thirty honest
+errors are less useful than one true sentence.
+
+**Backlog:** `docs/roadmap/product-hardening-backlog.md` carries the remaining items with
+evidence, fixes and acceptance checks. Items marked `needs-app-run` there have not been
+verified in a running Electron app and should not be reported as done.
 
 ---
 

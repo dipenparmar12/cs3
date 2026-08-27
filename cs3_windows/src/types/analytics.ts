@@ -89,6 +89,16 @@ export interface ProviderAnalyticsRecord {
 export type FailureKind =
   | 'timeout'
   | 'runtime-unavailable'
+  /**
+   * The runtime is fine; *this provider* is not registered in it.
+   *
+   * Deliberately not folded into `runtime-unavailable`, whose hint sends the
+   * reader to the runtime status in Settings — which is working, and which
+   * cannot tell them anything. A saved page, bookmark or cached source outlives
+   * the extension that produced it, and what the reader needs is the name of
+   * that extension and whether it is disabled, gone, or failing to load.
+   */
+  | 'provider-missing'
   | 'blocked'
   | 'not-found'
   | 'server-error'
@@ -97,6 +107,33 @@ export type FailureKind =
   | 'unreadable-reply'
   | 'unsupported-operation'
   | 'provider-error'
+  /**
+   * The extension held a socket open — OkHttp's "was leaked. Did you forget to
+   * close a response body?".
+   *
+   * Its own kind because it is the one entry here that is **not a failure of
+   * the call it appears under**. The scrape usually succeeded; what leaked is a
+   * connection the extension never closed. Counting 159 of these — every
+   * unclassified problem record in a real 21-session log was this one message —
+   * as `provider-error` would report providers as having failed 159 times that
+   * did not fail at all, and rank them down for it.
+   *
+   * Not scored, for the same reason `provider-missing` is not: the ranking must
+   * not punish a provider for something that did not cost the viewer a stream.
+   * It is worth reporting to a maintainer, which is why it is recorded rather
+   * than dropped.
+   */
+  | 'resource-leak'
+  /**
+   * The app abandoned the call. Not a failure of anything, and not scored.
+   *
+   * Fifteen scrapes are routinely in flight when a viewer types a new query or
+   * closes a page, and the coroutine scope closing throws in every one of them.
+   * Counting that as the provider failing would rank a provider down for the
+   * app's own decision to stop waiting — and would rank the *slowest* providers
+   * down hardest, since those are the ones still running when the cancel lands.
+   */
+  | 'cancelled'
   | 'unknown';
 
 /** One criterion's contribution to a provider's score. */

@@ -18,6 +18,7 @@
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { MediaProxy } from './mediaProxy.ts';
@@ -65,8 +66,74 @@ const bodies: Record<string, { body: string; type?: string; length?: boolean }> 
   'https://cdn.origin.test/list.m3u8': { body: HLS_PLAYLIST, type: 'application/vnd.apple.mpegurl' },
 };
 
-const stubFetch = (async (url: string, init?: { headers?: Record<string, string> }) => {
+/**
+ * The two shapes a real origin takes when handed a `Range`, as measured.
+ *
+ * `honours` is an ordinary CDN. `ignores` is `video-downloads.googleusercontent.com`
+ * — the GDFlix "Instant Download" link — which answers **200 with the whole file
+ * from byte zero** no matter what was asked for, and never sends `Accept-Ranges`.
+ * Nothing in its reply says the range was refused; it simply is not there.
+ */
+const ENDLESS = 'https://cdn.origin.test/endless.mkv';
+const FLAKY = 'https://cdn.origin.test/flaky.mkv';
+const flaky = { calls: 0 };
+/** What the endless body did, so a test can see the transfer actually stop. */
+const endless = { pulls: 0, cancelled: false, aborted: false };
+
+const RANGE_HONOURING = 'https://cdn.origin.test/seekable.mkv';
+const RANGE_IGNORING = 'https://cdn.origin.test/unseekable.mkv';
+const FILE_SIZE = 1_000_000;
+
+const stubFetch = (async (url: string, init?: { headers?: Record<string, string>; signal?: AbortSignal }) => {
   seen.push({ url, referer: init?.headers?.Referer ?? init?.headers?.referer });
+
+  if (url === ENDLESS) {
+    // A film-sized body that never ends on its own, the way a 3.24 GB link does
+    // not. `pull` is only called while something is still reading.
+    init?.signal?.addEventListener('abort', () => { endless.aborted = true; });
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        endless.pulls++;
+        controller.enqueue(new Uint8Array(64 * 1024));
+      },
+      cancel() { endless.cancelled = true; },
+    });
+    return new Response(body, {
+      status: 200,
+      headers: new Headers({ 'Content-Type': 'video/x-matroska', 'Content-Length': String(5e9) }),
+    });
+  }
+
+  if (url === FLAKY) {
+    // Answers the first range, then throttles — the workers.dev mirror shape.
+    flaky.calls++;
+    if (flaky.calls === 1) {
+      return new Response('OK', { status: 206, headers: new Headers({
+        'Content-Type': 'video/x-matroska', 'Content-Length': '2',
+        'Content-Range': 'bytes 0-1/1000000',
+      })});
+    }
+    return new Response('denied', { status: 403, headers: new Headers({ 'Content-Length': '6' }) });
+  }
+
+  if (url === RANGE_HONOURING || url === RANGE_IGNORING) {
+    const asked = /bytes=(\d+)-/.exec(init?.headers?.Range ?? '')?.[1];
+    const headers = new Headers({ 'Content-Type': 'video/x-matroska' });
+    if (url === RANGE_IGNORING || asked === undefined) {
+      // Whole file from zero, no Accept-Ranges — the header is simply ignored.
+      // Content-Length matches the body so the client is not left waiting; the
+      // sniff path is skipped anyway, because these requests carry a Range.
+      headers.set('Content-Length', String(Buffer.byteLength('BODY-FROM-ZERO')));
+      return new Response('BODY-FROM-ZERO', { status: 200, headers });
+    }
+    // Note: no `Accept-Ranges` here either. The gdflix workers.dev mirrors
+    // answer 206 with a Content-Range and omit it, so a client reading only
+    // that header concludes it cannot seek a source that seeks perfectly.
+    headers.set('Content-Range', `bytes ${asked}-${FILE_SIZE - 1}/${FILE_SIZE}`);
+    headers.set('Content-Length', String(Buffer.byteLength('BODY-FROM-OFFSET')));
+    return new Response('BODY-FROM-OFFSET', { status: 206, headers });
+  }
+
   const entry = bodies[url];
   const body = entry ? entry.body : 'SEGMENT';
   const headers = new Headers({ 'Content-Type': entry?.type ?? 'video/mp4' });
@@ -90,7 +157,7 @@ const baseUrlIn = (text: string): string => {
 test('a manifest with no BaseURL is given one pointing at the proxy', async () => {
   const wrapped = await proxy.wrap('https://cdn.origin.test/rel.mpd', { Referer: 'https://provider.test/' });
   const text = await (await fetch(wrapped)).text();
-  assert.match(baseUrlIn(text), /^http:\/\/127\.0\.0\.1:\d+\/base\/\d+\/$/);
+  assert.match(baseUrlIn(text), /^http:\/\/127\.0\.0\.1:\d+\/base\/[0-9a-f]{32}\/$/);
 });
 
 test('segment templates keep their placeholders — the player expands them', async () => {
@@ -132,7 +199,7 @@ test('absolute segment URLs are rewritten, keeping the filename intact', async (
   const wrapped = await proxy.wrap('https://cdn.origin.test/abs.mpd', {});
   const text = await (await fetch(wrapped)).text();
   assert.doesNotMatch(text, /media="https:\/\/cdn\.origin\.test/);
-  assert.match(text, /media="http:\/\/127\.0\.0\.1:\d+\/base\/\d+\/seg-\$Number\$\.m4s"/);
+  assert.match(text, /media="http:\/\/127\.0\.0\.1:\d+\/base\/[0-9a-f]{32}\/seg-\$Number\$\.m4s"/);
 });
 
 test('a manifest with no extension and no content type is recognised by its body', async () => {
@@ -166,13 +233,119 @@ test('HLS playlists are still rewritten line by line', async () => {
   // DASH handling must not have displaced the playlist path it sits beside.
   const wrapped = await proxy.wrap('https://cdn.origin.test/list.m3u8', {});
   const text = await (await fetch(wrapped)).text();
-  assert.match(text, /URI="http:\/\/127\.0\.0\.1:\d+\/stream\/\d+"/);
-  assert.match(text, /^http:\/\/127\.0\.0\.1:\d+\/stream\/\d+$/m);
+  assert.match(text, /URI="http:\/\/127\.0\.0\.1:\d+\/stream\/[0-9a-f]{32}"/);
+  assert.match(text, /^http:\/\/127\.0\.0\.1:\d+\/stream\/[0-9a-f]{32}$/m);
 });
 
 test('a loopback URL is returned untouched rather than wrapped again', async () => {
   const already = 'http://127.0.0.1:9/stream/1';
   assert.equal(await proxy.wrap(already, { Referer: 'x' }), already);
+});
+
+// --- range semantics -------------------------------------------------------
+//
+// The proxy is the only component that sees how an origin answers a `Range`, so
+// it is the only one that can tell the player. Passing the origin's headers
+// through unexamined understated one shape and misreported the other, and both
+// failures land on the player as something else entirely: a source that cannot
+// be seeked, or a frozen timeline.
+
+test('an origin that honours ranges is reported seekable even when it never says so', async () => {
+  const wrapped = await proxy.wrap(RANGE_HONOURING, {});
+  const res = await fetch(wrapped, { headers: { Range: 'bytes=0-' } });
+  assert.equal(res.status, 206);
+  // The origin sent Content-Range and no Accept-Ranges; we state it outright.
+  assert.equal(res.headers.get('accept-ranges'), 'bytes');
+  await res.arrayBuffer();
+});
+
+test('an origin that ignores ranges is reported unseekable rather than silently', async () => {
+  const wrapped = await proxy.wrap(RANGE_IGNORING, {});
+  const res = await fetch(wrapped, { headers: { Range: 'bytes=0-' } });
+  assert.equal(res.status, 200);
+  // Without this the player has nothing to read, assumes it may seek, and
+  // satisfies the seek by reading the file from the beginning — which on a
+  // multi-gigabyte link never arrives.
+  assert.equal(res.headers.get('accept-ranges'), 'none');
+  await res.arrayBuffer();
+});
+
+test('byte-zero data is never served as though it were a mid-file range', async () => {
+  const wrapped = await proxy.wrap(RANGE_IGNORING, {});
+  const res = await fetch(wrapped, { headers: { Range: 'bytes=500000-' } });
+  // The origin answered 200 with the opening of the file. Forwarding that would
+  // hand the player the start of the film labelled as its middle.
+  assert.equal(res.status, 416);
+  assert.equal(res.headers.get('accept-ranges'), 'none');
+  assert.equal(await res.text(), '');
+});
+
+test('a client that walks away takes the upstream transfer with it', async () => {
+  /**
+   * `releaseLock()` detaches the reader and leaves the body running. On an
+   * origin that ignores `Range` and answers everything with the whole file,
+   * every abandoned probe was a multi-gigabyte download still in flight —
+   * against a link the viewer is often already downloading. That is how a
+   * source which probes in two seconds on an idle machine times out at twenty
+   * in the app.
+   */
+  endless.pulls = 0; endless.cancelled = false; endless.aborted = false;
+  const wrapped = await proxy.wrap(ENDLESS, {});
+
+  const controller = new AbortController();
+  const res = await fetch(wrapped, { headers: { Range: 'bytes=0-' }, signal: controller.signal });
+  const reader = res.body!.getReader();
+  let got = 0;
+  while (got < 200_000) {
+    const next = await reader.read();
+    if (next.done) break;
+    got += next.value!.byteLength;
+  }
+  controller.abort();           // the viewer switched source, or ffprobe gave up
+  await new Promise((r) => setTimeout(r, 200));
+
+  const settled = endless.pulls;
+  await new Promise((r) => setTimeout(r, 400));
+
+  assert.ok(endless.cancelled || endless.aborted, 'upstream body was neither cancelled nor aborted');
+  assert.equal(endless.pulls, settled, 'upstream kept being read after the client left');
+});
+
+test('a throttled reply does not retract a proven range verdict', async () => {
+  // A 403 declines the request, not the range. Recording "no" from one poisons
+  // the route: every later response claims Accept-Ranges: none and the player
+  // stops seeking a source that seeks perfectly.
+  flaky.calls = 0;
+  const wrapped = await proxy.wrap(FLAKY, {});
+
+  const first = await fetch(wrapped, { headers: { Range: 'bytes=0-' } });
+  assert.equal(first.headers.get('accept-ranges'), 'bytes');
+  await first.arrayBuffer();
+
+  const denied = await fetch(wrapped, { headers: { Range: 'bytes=500-' } });
+  assert.equal(denied.status, 403);
+  await denied.arrayBuffer();
+
+  const after = await fetch(wrapped, { headers: { Range: 'bytes=0-' } });
+  assert.equal(after.headers.get('accept-ranges'), 'bytes', 'verdict was retracted by a 403');
+  await after.arrayBuffer();
+});
+
+// --- route capacity --------------------------------------------------------
+
+test('a route handed to the player survives a burst of newer ones', async () => {
+  // Rewriting one HLS media playlist mints a route per segment — ~1200 for a
+  // two-hour film, in a single burst. Under a plain LRU those evicted the
+  // oldest routes, which are the master playlist and the video variants it had
+  // just named: mpv read the master, asked for the variant, and got a 404 from
+  // us. The variant is unfetched, not stale, and must outlive the segments.
+  const variant = await proxy.wrap('https://cdn.origin.test/variant-playlist.m3u8', {});
+  for (let i = 0; i < 3000; i++) {
+    await proxy.wrap(`https://cdn.origin.test/seg-${i}.ts`, {});
+  }
+  const res = await fetch(variant);
+  assert.notEqual(res.status, 404);
+  await res.arrayBuffer();
 });
 
 // --- local files -----------------------------------------------------------
@@ -241,7 +414,7 @@ test('one token is minted per file, not one per request', async () => {
 
 test('an unknown local token is a 404, not a way to read arbitrary files', async () => {
   const url = await proxy.serveFile(localFixture.file);
-  const response = await fetch(url.replace(/\/local\/\d+$/, '/local/999999'));
+  const response = await fetch(url.replace(/\/local\/[0-9a-f]{32}$/, `/local/${'9'.repeat(32)}`));
   assert.equal(response.status, 404);
 });
 
@@ -273,6 +446,69 @@ test('direct streams without Referer header do not inject synthetic Referer to o
   seen.length = 0;
   await fetch(wrapped);
   assert.equal(seen.at(-1)?.referer, undefined);
+});
+
+/**
+ * Tokens are unguessable.
+ *
+ * They used to be `1`, `2`, `3`…, and every response carries
+ * `Access-Control-Allow-Origin: *` so that ffprobe, hls.js, Shaka and an
+ * external VLC can all read from the same door. Together those let any page in
+ * the user's browser fetch `/stream/1` cross-origin, read the body, and walk the
+ * integers to enumerate the session's viewing. The ephemeral port is a speed
+ * bump, not a control.
+ */
+test('a route token cannot be guessed by counting', async () => {
+  const a = await proxy.wrap('https://cdn.origin.test/a.mp4', { Referer: 'https://origin.test/' });
+  const b = await proxy.wrap('https://cdn.origin.test/b.mp4', { Referer: 'https://origin.test/' });
+  const tokenOf = (url: string) => url.match(/\/stream\/([^/]+)$/)?.[1] ?? '';
+
+  for (const token of [tokenOf(a), tokenOf(b)]) {
+    assert.match(token, /^[0-9a-f]{32}$/, 'a token is 16 random bytes, hex-encoded');
+    assert.doesNotMatch(token, /^\d+$/, 'a purely numeric token is enumerable');
+  }
+  assert.notEqual(tokenOf(a), tokenOf(b));
+
+  // The old shape must not resolve to anything, whatever else changes.
+  const guessed = await fetch(a.replace(/\/stream\/[0-9a-f]{32}$/, '/stream/1'));
+  assert.equal(guessed.status, 404);
+});
+
+/**
+ * A `Host` header naming anything but loopback is refused.
+ *
+ * Binding to 127.0.0.1 stops a request arriving from off the machine and does
+ * nothing about DNS rebinding, where a page resolves its own hostname to
+ * 127.0.0.1 and reaches this server with that hostname in `Host`.
+ */
+test('a request whose Host is not loopback is refused', async () => {
+  const wrapped = await proxy.wrap('https://cdn.origin.test/a.mp4', {});
+  const target = new URL(wrapped);
+
+  // `fetch` refuses to set Host — it is a forbidden header — so the rebinding
+  // case is driven with a raw request, which is also what an attacker has.
+  const statusWithHost = (hostHeader: string) =>
+    new Promise<number>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port: Number(target.port),
+          path: target.pathname,
+          method: 'GET',
+          headers: { Host: hostHeader },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        }
+      );
+      req.on('error', reject);
+      req.end();
+    });
+
+  assert.equal(await statusWithHost('evil.example.com'), 403);
+  // …and the ordinary case still works, or the check is a denial of service.
+  assert.equal(await statusWithHost(`127.0.0.1:${target.port}`), 200);
 });
 
 // --- runner ----------------------------------------------------------------

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useFlash } from '../../utils/useFlash';
 import {
   X, Play, RefreshCw, Loader2, Users, HardDrive, Radio, Check, AlertTriangle, Download, Filter,
   Square, Globe, Link2, Package,
@@ -97,7 +98,7 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
 }) => {
   const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);
   const [showFilterBar, setShowFilterBar] = useState(true);
-  const [copiedLink, setCopiedLink] = useState<string | null>(null);
+  const { message: copiedLink, flash: setCopiedLink } = useFlash<string>(1800);
   const { provenanceFor } = useSourceProvenance(sources);
 
   /**
@@ -114,11 +115,10 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
     try {
       await navigator.clipboard.writeText(address);
       setCopiedLink(source.infoHash);
-      setTimeout(() => setCopiedLink(null), 1800);
     } catch {
       // Refused clipboard access loses nothing — the bulk export is still there.
     }
-  }, []);
+  }, [setCopiedLink]);
 
   const displayedSources = useMemo(
     () => filterAndSortSources(sources, filterState),

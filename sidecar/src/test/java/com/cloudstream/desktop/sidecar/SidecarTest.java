@@ -15,6 +15,36 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class SidecarTest {
 
+    // --- provider lookup ----------------------------------------------------
+
+    /**
+     * A provider name that is not registered, and what the caller is told.
+     *
+     * Reported from a real install: opening a saved page whose extension had
+     * gone produced `IllegalArgumentException: No loaded provider is named
+     * "EinschaltenIn". Loaded: [Aniworld, Serienstream, ... 100 more]` on
+     * screen. The list is everything that *did* work, which is diagnostics and
+     * not an answer, and the host — which knows whether the extension is
+     * disabled, uninstalled or blocked — could not recognise the case to say
+     * anything better because it only had a sentence to match on.
+     */
+    @Test
+    void anUnknownProviderIsItsOwnConditionAndDoesNotListTheLoadedSet(@TempDir Path dir)
+            throws Exception {
+        Path runtime = dir.resolve("runtime");
+        PluginHost host = new PluginHost(new DexTranslator(dir.resolve("cache"), runtime), runtime);
+
+        PluginHost.ProviderNotLoadedException thrown = assertThrows(
+                PluginHost.ProviderNotLoadedException.class,
+                () -> host.loadFromProvider("EinschaltenIn", "some-url", 1000));
+
+        assertEquals("EinschaltenIn", thrown.providerName());
+        assertTrue(thrown.getMessage().contains("EinschaltenIn"));
+        // The whole point: the message is about the one that failed.
+        assertFalse(thrown.getMessage().contains("Loaded:"),
+                "the loaded set is diagnostics and belongs on stderr: " + thrown.getMessage());
+    }
+
     // --- translator ---------------------------------------------------------
 
     @Test

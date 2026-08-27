@@ -38,3 +38,4 @@ e2e-*.log
 sidecar/plugin-data/
 
 .github/hooks/context-mode.json
+.temp/

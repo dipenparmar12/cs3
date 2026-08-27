@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useFlash } from '../utils/useFlash';
 import { Tv, Play, Cpu, Download, Loader2 } from 'lucide-react';
 import { SettingGroup, SettingRow } from './settings/SettingRow';
 import { AspectRatioMode } from '../types/player';
@@ -17,7 +18,7 @@ export const PlayerSettings: React.FC = () => {
   const [showSubtitlesControl, setShowSubtitlesControl] = useState(true);
   const [defaultAspect, setDefaultAspect] = useState<string>(AspectRatioMode.Fit);
   const [defaultSpeed, setDefaultSpeed] = useState<string>('1');
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const { message: statusMessage, flash: setStatusMessage } = useFlash<string>(3000);
 
   /**
    * `null` while the answer is unknown, which is different from "not installed".
@@ -34,7 +35,6 @@ export const PlayerSettings: React.FC = () => {
 
   const flash = (message: string) => {
     setStatusMessage(message);
-    setTimeout(() => setStatusMessage(null), 3000);
   };
 
   useEffect(() => {

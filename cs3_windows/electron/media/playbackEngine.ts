@@ -490,7 +490,7 @@ export class PlaybackEngine {
    */
   public async prepare(request: PlaybackStreamRequest): Promise<PlaybackStreamResponse> {
     const startedAt = Date.now();
-    const capability = await this.inspect(request);
+    let capability = await this.inspect(request);
 
     /**
      * The forced pass, and the reason it does not consult the capability model.
@@ -501,10 +501,54 @@ export class PlaybackEngine {
      * previous implementation guessed here from the URL string — `x265`,
      * `10bit`, `hevc` — which is a guess about a filename a scraper produced.
      */
-    const plan = request.force
-      ? blindFallbackPlan(await this.hostCapability())
-      : capability.transformationPlan;
-    const strategy = request.force ? 'FULL_TRANSCODE' : capability.requiredStrategy;
+    /**
+     * The forced pass is the *best* case for the native engine, and it was the
+     * one place that never asked it.
+     *
+     * `decideStrategy` routes to mpv through `shouldRouteToNativeEngine`, but
+     * this path bypasses the decision entirely and hard-set `FULL_TRANSCODE` —
+     * so the exact situation the engine exists for, "the browser could not play
+     * this", was the situation guaranteed to be answered by a software
+     * re-encode instead. Measured on MovieBox's DASH: an `hev1` 1080p stream
+     * probes as `dash`/`hevc`, is remuxed, fails in the element, and comes back
+     * here to be re-encoded frame by frame — while mpv opens the same URL and
+     * plays it with `d3d11va` in about a second.
+     *
+     * mpv carries its own FFmpeg and the platform's hardware decoders, so
+     * whatever bitstream defeated the element is very likely ordinary to it. If
+     * it is not available, or the policy is `off`, the re-encode is still there.
+     */
+    const forcedToNative =
+      request.force &&
+      capability.requiredStrategy !== 'EME_NATIVE' &&
+      !capability.requiresEmeDecryption &&
+      (() => {
+        const native = this.deps.nativeEngine();
+        return native.available && native.policy !== 'off';
+      })();
+
+    const plan =
+      request.force && !forcedToNative
+        ? blindFallbackPlan(await this.hostCapability())
+        : capability.transformationPlan;
+    const strategy = forcedToNative
+      ? 'NATIVE_MPV'
+      : request.force
+        ? 'FULL_TRANSCODE'
+        : capability.requiredStrategy;
+
+    /**
+     * The model the renderer is handed has to agree with the decision.
+     *
+     * `requiredStrategy` is what `VideoPlayer` reads to decide between the
+     * `<video>` element and `mpv:open`. Returning the pre-force model here would
+     * send the URL back to the element that has just failed on it, and the
+     * element would fail again and force again — the retry ladder spinning on a
+     * source the native engine was ready to play.
+     */
+    if (forcedToNative) {
+      capability = { ...capability, requiredStrategy: 'NATIVE_MPV', directPlayable: false };
+    }
 
     /**
      * A dead link is reported now rather than discovered by ffmpeg.

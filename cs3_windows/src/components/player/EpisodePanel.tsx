@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Poster } from '../Poster';
 import { X, Play, Star, Calendar, Clock, Check } from 'lucide-react';
 import type { Episode } from '../../types/api';
 import { episodeKey, type SeriesContext } from './seriesContext';
@@ -77,7 +78,13 @@ export const EpisodePanel: React.FC<EpisodePanelProps> = ({
       <header className="player-panel__head">
         <div className="player-panel__meta">
           {series.posterUrl && (
-            <img src={series.posterUrl} alt="" className="player-panel__poster" loading="lazy" />
+            <Poster
+              src={series.posterUrl}
+              title={series.title}
+              decorative
+              className="player-panel__poster"
+              fallback={null}
+            />
           )}
           <div>
             <h3>{series.title}</h3>
@@ -151,13 +158,16 @@ export const EpisodePanel: React.FC<EpisodePanelProps> = ({
                 onClick={() => onSelectEpisode(episode)}
                 aria-current={isCurrent || undefined}
               >
-                {episode.posterUrl ? (
-                  <img src={episode.posterUrl} alt="" loading="lazy" />
-                ) : (
-                  <div className="player-panel__episode-fallback">
-                    {episode.episode ?? '?'}
-                  </div>
-                )}
+                <Poster
+                  src={episode.posterUrl}
+                  title={episode.name ?? ''}
+                  decorative
+                  fallback={
+                    <div className="player-panel__episode-fallback">
+                      {episode.episode ?? '?'}
+                    </div>
+                  }
+                />
                 <div className="player-panel__episode-text">
                   <strong>
                     {episode.episode != null && `${episode.episode}. `}

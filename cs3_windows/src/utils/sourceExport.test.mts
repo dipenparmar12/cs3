@@ -25,6 +25,7 @@ import {
   sourceAddress,
   sourceHost,
   toSourceCsv,
+  toSourceDetails,
   toSourceText,
 } from './sourceExport.ts';
 import type { TorrentResult } from '../types/torrent.ts';
@@ -227,6 +228,21 @@ test('the text form carries the link and drops empty facts', () => {
   assert.ok(text.includes('Dune Part Two 2024 1080p WEB-DL'));
   assert.ok(text.includes('URL: https://gdshine.example.workers.dev/file?id=9&Expires=1'));
   assert.ok(!/HDR:/.test(text));
+});
+
+test('the details of one source carry the provenance a bare link cannot', () => {
+  const text = toSourceDetails(source(), {
+    provider: 'Gdshine',
+    extensionName: 'PhisherProvider',
+    repositoryName: 'phisher98',
+  });
+  assert.ok(text.startsWith('Dune Part Two 2024 1080p WEB-DL\n'));
+  assert.ok(text.includes('Provider: Gdshine'));
+  assert.ok(text.includes('Repository: phisher98'));
+  assert.ok(text.includes('URL: https://gdshine.example.workers.dev/file?id=9&Expires=1'));
+  // No list ordinal and no caption: this is one row, not a list of one.
+  assert.ok(!text.includes('1. '));
+  assert.ok(!/^Sources/m.test(text));
 });
 
 // --- runner -----------------------------------------------------------------

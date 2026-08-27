@@ -3,7 +3,7 @@ import path from 'path';
 import { JsonFileStore } from '../util/jsonFileStore';
 
 import type { FailureKind } from '../../src/types/analytics';
-import { classifyFailure, FAILURE_KIND_LABELS } from './failureTaxonomy';
+import { classifyFailure, FAILURE_KIND_LABELS, groupingForm } from './failureTaxonomy';
 
 /**
  * A record of what went wrong, with enough context to reproduce it.
@@ -45,14 +45,6 @@ export interface ReportContext {
  * differ by one digit and mean opposite things, and merging them would produce
  * a shorter report that says something false.
  */
-function groupingForm(message: string): string {
-  return message
-    .replace(/\b\d+(\.\d+)?\s?ms\b/gi, '<ms>')
-    .replace(/\b\d+(\.\d+)?\s?s\b/gi, '<s>')
-    .replace(/\b\d+(\.\d+)?\s?(B|KB|MB|GB|KiB|MiB|GiB)\b/g, '<size>')
-    .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, '<time>')
-    .replace(/0x[0-9a-f]{6,}/gi, '<addr>');
-}
 
 export type DiagnosticStage =
   | 'search'

@@ -5,6 +5,7 @@ import { app } from 'electron';
 import { RuntimeProvisioner } from './runtimeProvisioner';
 import { scopedLogger } from '../logging/logger';
 import { SidecarStderrReader } from './sidecarStderr';
+import { getIssueLog } from './extensionIssues';
 
 export interface RpcResult {
   ok: boolean;
@@ -65,9 +66,23 @@ export class SidecarSupervisor {
    * well as on the next line, because the last trace of a session has nothing
    * after it to trigger a flush and is the one worth having.
    */
-  private readonly stderr = new SidecarStderrReader((record) =>
-    sidecarLog.write(record.level, 'sidecar_stderr', { ...record, level: undefined })
-  );
+  private readonly stderr = new SidecarStderrReader((record) => {
+    sidecarLog.write(record.level, 'sidecar_stderr', { ...record, level: undefined });
+    /**
+     * The same record, counted rather than narrated.
+     *
+     * The log above is a transcript: one file per launch, rotated away, and in
+     * a real session 5,407 of its 6,069 lines came from here. Counting across
+     * those 21 files by hand is what showed that they are ~200 distinct
+     * problems — which is the number worth acting on and the one no transcript
+     * can show. The ledger keeps that tally across restarts.
+     *
+     * Both, not one: the transcript preserves ordering, which is what tells you
+     * a failure followed a particular search, and the ledger discards ordering,
+     * which is what lets it group.
+     */
+    getIssueLog()?.recordSidecar(record);
+  });
   private stderrTimer: NodeJS.Timeout | null = null;
   private pending = new Map<string, Pending>();
   private nextId = 1;

@@ -226,4 +226,68 @@ export class DatastoreManager {
     this.data.exportTimestamp = Date.now();
     return JSON.stringify(this.data, null, 2);
   }
+
+  /**
+   * Every stored key and value, for a whole-app backup.
+   *
+   * Distinct from `exportBackup` above, which produces the **Android** wire
+   * format so a backup can move between the phone app and this one. This one
+   * feeds `BackupService`, whose job is different: capture this installation so
+   * it can be restored onto another machine.
+   *
+   * Non-transferable keys are filtered here rather than at restore, and the
+   * distinction matters — a session token or a device id in an exported file is
+   * a credential sitting in a user's Downloads folder. Filtering on the way out
+   * means it was never written down.
+   */
+  public snapshot(): DatastoreBucket & { settings: DatastoreBucket } {
+    const strip = (bucket: DatastoreBucket): DatastoreBucket => {
+      const out: DatastoreBucket = {};
+      for (const [name, entries] of Object.entries(bucket) as Array<
+        [keyof DatastoreBucket, Record<string, unknown> | undefined]
+      >) {
+        if (!entries) continue;
+        const kept: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(entries)) {
+          if (this.isKeyTransferable(key)) kept[key] = value;
+        }
+        (out as Record<string, unknown>)[name] = kept;
+      }
+      return out;
+    };
+    return { ...strip(this.data.datastore), settings: strip(this.data.settings) };
+  }
+
+  /**
+   * Puts a snapshot back, merging rather than replacing.
+   *
+   * Merge is deliberate. A restore onto a *running* installation must not drop
+   * keys the backup predates — a preference added since it was taken would
+   * silently revert to its default, which reads as the restore having broken
+   * something rather than as it not having covered it.
+   */
+  public restore(snapshot: (DatastoreBucket & { settings?: DatastoreBucket }) | null): number {
+    if (!snapshot || typeof snapshot !== 'object') return 0;
+    let restored = 0;
+
+    const merge = (target: DatastoreBucket, source: DatastoreBucket | undefined) => {
+      if (!source) return;
+      for (const [name, entries] of Object.entries(source)) {
+        if (name === 'settings' || !entries || typeof entries !== 'object') continue;
+        const bucket = (target as Record<string, Record<string, unknown>>);
+        bucket[name] ??= {};
+        for (const [key, value] of Object.entries(entries as Record<string, unknown>)) {
+          if (!this.isKeyTransferable(key)) continue;
+          bucket[name][key] = value;
+          restored++;
+        }
+      }
+    };
+
+    const { settings, ...rest } = snapshot;
+    merge(this.data.datastore, rest as DatastoreBucket);
+    merge(this.data.settings, settings);
+    this.save();
+    return restored;
+  }
 }

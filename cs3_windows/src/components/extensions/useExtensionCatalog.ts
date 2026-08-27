@@ -179,16 +179,31 @@ export function useExtensionCatalog() {
       run(`remove:${url}`, () => window.cloudstream!.removeRepository(url)),
     setAdultAllowed: (enabled: boolean) =>
       run('adult', () => window.cloudstream!.setAdultAllowed(enabled)),
+    /**
+     * Keeps a repository without installing anything from it.
+     *
+     * Cheap and reversible, which is why it is separate from
+     * {@link installRepository}: browsing a catalogue should not commit anyone
+     * to downloading it.
+     */
+    addRepository: (url: string) =>
+      run(`add:${url}`, () => window.cloudstream!.addRepository(url)),
+    /** Installs a repository's extensions in one action rather than eighty. */
+    installRepository: (url: string, limit?: number) =>
+      run(`installRepo:${url}`, () => window.cloudstream!.installRepository(url, { limit })),
   };
 
   /**
    * Reads a repository's plugin list. Not a mutation, so it does not refresh.
    *
-   * There is deliberately no "add repository" action, because the main process
-   * has no such concept: `installedRepoUrls` gains a URL when an extension is
-   * installed *from* it. Offering an Add button would therefore create a
-   * repository row that disappears on the next read — a state the screen would
-   * be inventing.
+   * This used to note that there was deliberately no "add repository" action,
+   * because the main process had no such concept — `installedRepoUrls` only
+   * gained a URL when an extension was installed *from* it, so an Add button
+   * would have created a row that vanished on the next read. That was an
+   * accurate description of a gap rather than a design: it meant the only
+   * repositories a user ever saw listed were the four bundled ones, and any
+   * other had to be kept somewhere outside the app and pasted back to browse.
+   * `addRepository` closes it, verifying the address before keeping it.
    */
   const browseRepository = useCallback(async (url: string) => {
     const response = await window.cloudstream?.fetchRepository(url);

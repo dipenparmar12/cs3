@@ -35,12 +35,19 @@ import { ExtensionCatalog } from './ExtensionCatalog';
 import type { SitePlugin } from '../../types/plugin';
 import './extensions.css';
 
-type Tab = 'sources' | 'repositories' | 'extensions';
+/**
+ * Two tabs, not three.
+ *
+ * "What does this repository offer?" was a third destination, and reaching it
+ * meant leaving the list the question was asked from. It is not a separate
+ * question — it is a detail of one repository — so it is now a panel that opens
+ * under that repository's card, and the tab it used to need is gone.
+ */
+type Tab = 'sources' | 'repositories';
 
 const TABS: Array<{ id: Tab; label: string; hint: string }> = [
-  { id: 'sources', label: 'Sources', hint: 'What is installed' },
-  { id: 'repositories', label: 'Repositories', hint: 'What you could add' },
-  { id: 'extensions', label: 'Extensions', hint: 'What a repository offers' },
+  { id: 'sources', label: 'Installed', hint: 'What you have, and what will be asked' },
+  { id: 'repositories', label: 'Browse', hint: 'Repositories, extensions and providers' },
 ];
 
 export const ExtensionsScreen: React.FC = () => {
@@ -101,9 +108,19 @@ export const ExtensionsScreen: React.FC = () => {
     setSelected(names);
   }, [state.tree]);
 
+  /**
+   * Open a repository's extension list without leaving the page.
+   *
+   * This used to `setTab('extensions')`, which answered "what does this
+   * repository offer?" by throwing away the list the question was asked from —
+   * the scroll position, the filter chips and the neighbouring repositories
+   * being compared against. Comparing two catalogues meant three tab switches
+   * per comparison. The list now opens as a full-width panel directly under the
+   * card, so the answer appears next to the question.
+   */
   const browse = useCallback(
     async (repository: { name: string; url: string }) => {
-      setTab('extensions');
+      setTab('repositories');
       setBrowsing(repository);
       setBrowseLoading(true);
       setBrowseError(null);
@@ -193,7 +210,7 @@ export const ExtensionsScreen: React.FC = () => {
         activeCount={filters.activeCount}
         onReset={filters.reset}
         showCategories={tab === 'repositories'}
-        scope={tab}
+        scope={tab === 'repositories' ? 'repositories' : 'sources'}
       />
 
       {tab === 'sources' ? (
@@ -253,26 +270,33 @@ export const ExtensionsScreen: React.FC = () => {
           adultAllowed={state.adultAllowed}
           filters={filters.state}
           busy={busy}
+          tree={state.tree}
+          expandedUrl={browsing?.url ?? null}
           onBrowse={(repository) => void browse(repository)}
+          onCollapse={() => setBrowsing(null)}
+          renderExpanded={() => (
+            <ExtensionCatalog
+              repository={browsing}
+              plugins={plugins}
+              warnings={warnings}
+              installedNames={installedNames}
+              filters={filters.state}
+              loading={browseLoading}
+              error={browseError}
+              busy={busy}
+              progress={progress}
+              embedded
+              onInstall={(plugin) => void install(plugin)}
+              onUninstall={(name) => void actions.uninstallPlugin(name)}
+            />
+          )}
           onRemove={(url) => void actions.removeRepository(url)}
+          onAdd={(url) => void actions.addRepository(url)}
+          onInstallAll={(url) => void actions.installRepository(url)}
         />
       ) : null}
 
-      {tab === 'extensions' ? (
-        <ExtensionCatalog
-          repository={browsing}
-          plugins={plugins}
-          warnings={warnings}
-          installedNames={installedNames}
-          filters={filters.state}
-          loading={browseLoading}
-          error={browseError}
-          busy={busy}
-          progress={progress}
-          onInstall={(plugin) => void install(plugin)}
-          onUninstall={(name) => void actions.uninstallPlugin(name)}
-        />
-      ) : null}
+
 
       <footer className="ext-footer">
         <label className="ext-adult">

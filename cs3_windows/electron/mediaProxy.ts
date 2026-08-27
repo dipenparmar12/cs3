@@ -1,4 +1,5 @@
 import http from 'http';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import type { AddressInfo } from 'net';
@@ -60,7 +61,15 @@ const MAX_RESUME_ATTEMPTS = 4;
 const RESUME_DELAY_MS = 400;
 
 /** LRU cache limits to prevent memory accumulation in long-running sessions. */
-const MAX_ROUTES = 1000;
+/**
+ * Sized for HLS, which was never accounted for: one media playlist mints a
+ * route per segment, so a two-hour film at six-second segments is ~1200 from a
+ * single rewrite and a multi-variant master with separate audio renditions is
+ * several thousand before anything has played. The old cap of 1000 was below
+ * the cost of *one* film, so the table thrashed and evicted the playlists that
+ * were driving playback. A route is a URL, a small header map and two numbers.
+ */
+const MAX_ROUTES = 20000;
 const ROUTE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 /** Rate limiting thresholds per stream token to prevent flood loops. */
@@ -73,7 +82,31 @@ interface Route {
   url: string;
   headers: Record<string, string>;
   key?: string;
+  /**
+   * When this route was minted, or last re-minted by a playlist rewrite.
+   *
+   * Kept apart from {@link lastAccess} because the two answer different
+   * questions and the eviction policy needs both: this one says "a document the
+   * player is reading points at me", and `lastAccess` says "the player has
+   * actually fetched me". A route can be vital and never yet fetched.
+   */
+  createdAt?: number;
+  /** When this route last served a request. Undefined until it serves one. */
   lastAccess?: number;
+  /**
+   * Minted while rewriting a playlist, so this is a segment, key or child
+   * playlist rather than a URL the app chose. Only these are examined for an
+   * image header glued on the front — see {@link unwrapDisguisedSegment}.
+   */
+  fromPlaylist?: boolean;
+  /**
+   * Whether this origin honoured a `Range`, once it has been asked one.
+   *
+   * Remembered per route rather than re-derived per request because a player
+   * asks the question once, at open, and every later decision it makes about
+   * seeking rests on that first answer.
+   */
+  rangeSupport?: 'yes' | 'no';
 }
 
 interface LocalRoute {
@@ -171,6 +204,106 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** `\x89PNG\r\n\x1a\n` — the signature a disguised segment opens with. */
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+/** MPEG-TS packets are 188 bytes and each starts with this. */
+const TS_PACKET_SIZE = 188;
+const TS_SYNC_BYTE = 0x47;
+/** How far into a segment a disguising header may plausibly run. */
+const MAX_DISGUISE_PREFIX = 4096;
+
+/**
+ * Where the real MPEG-TS starts inside a segment wearing an image header, or 0.
+ *
+ * Deliberately hard to satisfy by accident: the run of sync bytes at the exact
+ * packet stride is the real test, and the signature is only what makes it worth
+ * looking. A genuine image cannot pass it, so a mis-detection would take a file
+ * that is simultaneously a valid PNG and a valid transport stream.
+ */
+function disguisedTsOffset(head: Uint8Array): number {
+  if (head.length < PNG_SIGNATURE.length) return 0;
+  if (!PNG_SIGNATURE.every((byte, i) => head[i] === byte)) return 0;
+
+  const limit = Math.min(head.length - TS_PACKET_SIZE * 3, MAX_DISGUISE_PREFIX);
+  for (let offset = PNG_SIGNATURE.length; offset < limit; offset++) {
+    if (
+      head[offset] === TS_SYNC_BYTE &&
+      head[offset + TS_PACKET_SIZE] === TS_SYNC_BYTE &&
+      head[offset + TS_PACKET_SIZE * 2] === TS_SYNC_BYTE
+    ) {
+      return offset;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Peels an image header off a segment, passing everything else through untouched.
+ *
+ * The first chunks are buffered only until there is enough to decide — the
+ * header is tens of bytes and the decision needs three packets — and the body is
+ * then re-emitted with nothing copied that did not have to be.
+ */
+async function unwrapDisguisedSegment(
+  source: ReadableStream<Uint8Array<ArrayBuffer>>
+): Promise<{ body: ReadableStream<Uint8Array<ArrayBuffer>>; stripped: number }> {
+  const reader = source.getReader();
+  const chunks: Uint8Array[] = [];
+  let buffered = 0;
+  const needed = PNG_SIGNATURE.length + MAX_DISGUISE_PREFIX + TS_PACKET_SIZE * 3;
+
+  let done = false;
+  while (buffered < needed) {
+    const next = await reader.read();
+    if (next.done) {
+      done = true;
+      break;
+    }
+    if (!next.value) continue;
+    chunks.push(next.value);
+    buffered += next.value.byteLength;
+    // A body that does not start with the signature can never match, so there
+    // is no reason to hold more of it while finding that out.
+    if (chunks.length === 1 && disguisedTsOffset(next.value) === 0 &&
+        next.value.byteLength >= PNG_SIGNATURE.length &&
+        !PNG_SIGNATURE.every((byte, i) => next.value![i] === byte)) {
+      break;
+    }
+  }
+
+  const head = new Uint8Array(buffered);
+  let at = 0;
+  for (const chunk of chunks) {
+    head.set(chunk, at);
+    at += chunk.byteLength;
+  }
+
+  const stripped = disguisedTsOffset(head);
+  const prelude = stripped > 0 ? head.subarray(stripped) : head;
+
+  const body = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    start(controller) {
+      if (prelude.byteLength > 0) controller.enqueue(prelude);
+      if (done) controller.close();
+    },
+    async pull(controller) {
+      if (done) return;
+      const next = await reader.read();
+      if (next.done) {
+        done = true;
+        controller.close();
+        return;
+      }
+      if (next.value) controller.enqueue(next.value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+
+  return { body, stripped };
+}
+
 function looksLikeHls(url: string, contentType: string | null): boolean {
   if (contentType) {
     const type = contentType.toLowerCase();
@@ -229,7 +362,24 @@ export class MediaProxy {
   private allowedDirectories = new Set<string>();
   /** Request rate tracking for flood protection. */
   private rateLimits = new Map<string, { count: number; windowStart: number }>();
-  private nextToken = 1;
+  /**
+   * Route tokens are unguessable, not sequential.
+   *
+   * They used to be `1`, `2`, `3`… and every response carries
+   * `Access-Control-Allow-Origin: *` so that ffprobe, hls.js, Shaka, mpv and an
+   * external VLC can all read from the same door. Together those two facts let
+   * *any page open in the user's browser* fetch `http://127.0.0.1:<port>/stream/1`
+   * cross-origin and read the body — and walk `/stream/1..N` to enumerate what
+   * the session had been watching. The port is ephemeral, which is a speed bump
+   * and not a control: a page can sweep 65k ports in seconds.
+   *
+   * 16 random bytes removes the enumeration entirely, which is the whole of the
+   * realistic attack. `tokensByKey` already keeps a token stable for a given
+   * (url, headers) pair, so nothing downstream notices the change.
+   */
+  private mintToken(): string {
+    return crypto.randomBytes(16).toString('hex');
+  }
   private fetchImpl: FetchLike;
   private diagnostics: DiagnosticsSink | null = null;
 
@@ -311,7 +461,7 @@ export class MediaProxy {
    */
   public async wrapLease(lease: SourceLease): Promise<string> {
     const loopbackUrl = await this.wrap(lease.url, lease.headers);
-    const token = loopbackUrl.match(/\/stream\/(\d+)/)?.[1];
+    const token = loopbackUrl.match(/\/stream\/([0-9a-f]{32})/)?.[1];
     if (token) {
       this.leases.set(token, lease);
     }
@@ -323,7 +473,7 @@ export class MediaProxy {
    */
   public getTargetRoute(loopbackUrl: string): Route | null {
     if (!isLoopback(loopbackUrl)) return null;
-    const direct = loopbackUrl.match(/\/stream\/(\d+)/)?.[1];
+    const direct = loopbackUrl.match(/\/stream\/([0-9a-f]{32})/)?.[1];
     if (direct) {
       const route = this.routes.get(direct);
       if (route) return { url: route.url, headers: { ...route.headers } };
@@ -366,7 +516,7 @@ export class MediaProxy {
     this.evictExpiredRoutes();
 
     const existing = this.localTokensByPath.get(resolved);
-    const token = existing ?? String(this.nextToken++);
+    const token = existing ?? this.mintToken();
     this.localTokensByPath.set(resolved, token);
     this.localRoutes.set(token, { file: resolved, lastAccess: Date.now() });
     return `http://127.0.0.1:${this.port}/local/${token}`;
@@ -449,16 +599,19 @@ export class MediaProxy {
   private evictExpiredRoutes(): void {
     const now = Date.now();
 
+    /** How long a route has been idle: since it last served, else since it was minted. */
+    const idleSince = (route: Route): number => route.lastAccess ?? route.createdAt ?? 0;
+
     // 1. Evict expired routes
     for (const [token, route] of this.routes.entries()) {
-      if (route.lastAccess && now - route.lastAccess > ROUTE_TTL_MS) {
+      if (now - idleSince(route) > ROUTE_TTL_MS) {
         if (route.key) this.tokensByKey.delete(route.key);
         this.routes.delete(token);
       }
     }
 
     for (const [token, prefix] of this.prefixes.entries()) {
-      if (prefix.lastAccess && now - prefix.lastAccess > ROUTE_TTL_MS) {
+      if (now - idleSince(prefix) > ROUTE_TTL_MS) {
         if (prefix.key) this.tokensByKey.delete(prefix.key);
         this.prefixes.delete(token);
       }
@@ -471,12 +624,44 @@ export class MediaProxy {
       }
     }
 
-    // 2. Trim excess if still over capacity (LRU)
+    /**
+     * 2. Trim excess, oldest first — but a route nobody has fetched yet goes last.
+     *
+     * A plain LRU over `lastAccess` is what broke HLS, and it broke it in the
+     * least visible way available. Rewriting one media playlist mints a route
+     * per segment, so a two-hour film with two audio renditions minted ~1300 in
+     * a single burst against a 1000 cap. The routes evicted to make room were
+     * the *oldest*, which are the master playlist and the video variant
+     * playlists the master had just handed the player — structural routes that
+     * are referenced constantly and fetched rarely. mpv read the master, asked
+     * for the video variant it named, and got `404 Unknown stream` from us.
+     *
+     * Measured on HDHub4U's `hdstream4u.com` playlist: tokens 4 and 5, the two
+     * video variants, were gone before the first request for either, and the
+     * route table held segments 306–1305.
+     *
+     * Never-fetched routes are therefore evicted only once every fetched route
+     * has been, because "handed to the player and not yet requested" describes
+     * something about to be needed, not something finished with. They stay
+     * bounded by the pass above: they carry a `createdAt`, so the TTL reaps them
+     * whether or not anything ever asked.
+     *
+     * **And among those, the newest go first — LRU's assumption is inverted
+     * here.** For a route that has never served anything, age is not staleness;
+     * it is position in the document that minted it. A playlist is rewritten
+     * top to bottom, so the oldest unserved routes are the master's variants and
+     * the opening segments — the ones needed first — while the newest are the
+     * end of the film. Dropping the tail is free: if playback ever reaches it,
+     * the player re-reads the playlist and the routes are minted again.
+     */
     if (this.routes.size > MAX_ROUTES) {
-      const sorted = [...this.routes.entries()].sort(
-        (a, b) => (a[1].lastAccess ?? 0) - (b[1].lastAccess ?? 0)
-      );
-      const toRemove = sorted.slice(0, this.routes.size - MAX_ROUTES);
+      const entries = [...this.routes.entries()];
+      const served = entries.filter(([, r]) => r.lastAccess !== undefined);
+      const unserved = entries.filter(([, r]) => r.lastAccess === undefined);
+      served.sort((a, b) => idleSince(a[1]) - idleSince(b[1]));
+      unserved.sort((a, b) => idleSince(b[1]) - idleSince(a[1]));
+
+      const toRemove = [...served, ...unserved].slice(0, this.routes.size - MAX_ROUTES);
       for (const [token, route] of toRemove) {
         if (route.key) this.tokensByKey.delete(route.key);
         this.routes.delete(token);
@@ -484,17 +669,19 @@ export class MediaProxy {
     }
   }
 
-  private routeFor(url: string, headers: Record<string, string>): string {
+  private routeFor(url: string, headers: Record<string, string>, fromPlaylist = false): string {
     this.evictExpiredRoutes();
     const key = `${url} ${JSON.stringify(headers)}`;
     let token = this.tokensByKey.get(key);
     if (!token) {
-      token = String(this.nextToken++);
+      token = this.mintToken();
       this.tokensByKey.set(key, token);
-      this.routes.set(token, { url, headers, key, lastAccess: Date.now() });
+      this.routes.set(token, { url, headers, key, createdAt: Date.now(), fromPlaylist });
     } else {
+      // Re-minting is a playlist saying it still points here, which is a reason
+      // to keep the route but not evidence anything has fetched it.
       const existing = this.routes.get(token);
-      if (existing) existing.lastAccess = Date.now();
+      if (existing) existing.createdAt = Date.now();
     }
     return `http://127.0.0.1:${this.port}/stream/${token}`;
   }
@@ -518,12 +705,12 @@ export class MediaProxy {
     const key = `base ${normalised} ${JSON.stringify(headers)}`;
     let token = this.tokensByKey.get(key);
     if (!token) {
-      token = String(this.nextToken++);
+      token = this.mintToken();
       this.tokensByKey.set(key, token);
-      this.prefixes.set(token, { url: normalised, headers, key, lastAccess: Date.now() });
+      this.prefixes.set(token, { url: normalised, headers, key, createdAt: Date.now() });
     } else {
       const existing = this.prefixes.get(token);
-      if (existing) existing.lastAccess = Date.now();
+      if (existing) existing.createdAt = Date.now();
     }
     return `http://127.0.0.1:${this.port}/base/${token}/`;
   }
@@ -577,6 +764,23 @@ export class MediaProxy {
   }
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    /**
+     * The `Host` header has to name loopback.
+     *
+     * Binding to 127.0.0.1 stops a request arriving from off the machine; it
+     * does nothing about DNS rebinding, where a page resolves its own hostname
+     * to 127.0.0.1 and then reaches this server with that hostname in `Host`.
+     * Checking it costs one comparison and closes the difference.
+     *
+     * A missing `Host` is allowed: HTTP/1.0 clients omit it, and some ffmpeg
+     * builds do too.
+     */
+    const host = req.headers.host;
+    if (host && !/^(127\.0\.0\.1|localhost|\[::1\]|::1)(:\d+)?$/.test(host)) {
+      res.writeHead(403).end('Forbidden');
+      return;
+    }
+
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
@@ -591,7 +795,7 @@ export class MediaProxy {
      * Two shapes: `/stream/<token>` is one file, `/base/<token>/<rest>` is a
      * path inside a directory route. Only DASH mints the second kind.
      */
-    const local = req.url?.match(/^\/local\/(\d+)/)?.[1];
+    const local = req.url?.match(/^\/local\/([0-9a-f]{32})/)?.[1];
     if (local) {
       if (this.isRateLimited(`local_${local}`)) {
         res.writeHead(429, { 'Retry-After': '1' }).end('Too Many Requests');
@@ -607,8 +811,8 @@ export class MediaProxy {
       return;
     }
 
-    const direct = req.url?.match(/^\/stream\/(\d+)/)?.[1];
-    const prefixed = req.url?.match(/^\/base\/(\d+)\/(.*)$/);
+    const direct = req.url?.match(/^\/stream\/([0-9a-f]{32})/)?.[1];
+    const prefixed = req.url?.match(/^\/base\/([0-9a-f]{32})\/(.*)$/);
     const routeToken = direct ?? prefixed?.[1];
     if (routeToken && this.isRateLimited(`route_${routeToken}`)) {
       res.writeHead(429, { 'Retry-After': '1' }).end('Too Many Requests');
@@ -639,11 +843,31 @@ export class MediaProxy {
       ...(req.headers.range ? { Range: String(req.headers.range) } : {}),
     });
 
+    /**
+     * Tears the upstream request down when the client walks away.
+     *
+     * Cancelling the body stream is the standards-shaped way to stop a transfer
+     * and it is enough under Node's fetch, but the main process runs on
+     * Electron's `net.fetch` — Chromium's stack, where the request lives in the
+     * network service and a detached body does not reliably stop it. An abort
+     * signal does, and it is the only thing that reaches a request still
+     * blocked in DNS or TLS, before there is any body to cancel at all.
+     *
+     * Guarded on `writableEnded` because `close` also fires on the ordinary
+     * completion of a response, and aborting there would cancel a request that
+     * has already delivered everything it was asked for.
+     */
+    const abort = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) abort.abort();
+    });
+
     try {
       let upstream = await this.fetchImpl(route.url, {
         method: req.method === 'HEAD' ? 'HEAD' : 'GET',
         headers: requestHeaders,
         redirect: 'follow',
+        signal: abort.signal,
       });
 
       const lease = direct ? this.leases.get(direct) : undefined;
@@ -658,6 +882,10 @@ export class MediaProxy {
           const fresh = await lease.refreshSource();
           route.url = fresh.url;
           route.headers = this.clean(fresh.headers);
+          // A refreshed link can land on a different host in the same CDN pool,
+          // and the two halves of that pool do not always agree about ranges.
+          // The old verdict describes a URL that is gone.
+          route.rangeSupport = undefined;
           const freshHasUserAgent = Object.keys(route.headers).some(
             (k) => k.toLowerCase() === 'user-agent'
           );
@@ -670,6 +898,7 @@ export class MediaProxy {
             method: req.method === 'HEAD' ? 'HEAD' : 'GET',
             headers: refreshedHeaders,
             redirect: 'follow',
+            signal: abort.signal,
           });
         } catch (refreshErr) {
           this.recordFailure(
@@ -744,7 +973,20 @@ export class MediaProxy {
         /application\/xml|text\/xml/i.test(contentType ?? '');
 
       if (sniffable && !req.headers.range) {
-        const body = await upstream.text();
+        /**
+         * Read as bytes, and decoded only to look at.
+         *
+         * This used to be `await upstream.text()` followed by `res.end(body)`,
+         * which silently destroyed every binary body small enough to reach it:
+         * the bytes were decoded as UTF-8, and anything that is not valid UTF-8
+         * became U+FFFD and came back out as three bytes where one went in. A
+         * 704 KB HLS segment left here 1.27 MB long and no longer a media file.
+         * It survived because media requests almost always carry a `Range`,
+         * which skips this branch — so only the occasional un-ranged first
+         * fetch of a small segment was corrupted, and it read as a bad source.
+         */
+        const raw = Buffer.from(await upstream.arrayBuffer());
+        const body = raw.toString('utf8');
         if (looksLikeDash(route.url, contentType, body)) {
           const rewritten = this.rewriteDashManifest(body, upstream.url || route.url, route.headers);
           res.writeHead(upstream.status, {
@@ -757,12 +999,87 @@ export class MediaProxy {
           res.end(rewritten);
           return;
         }
+        // A disguised segment can arrive here too, when the player's first
+        // fetch of it carries no Range.
+        const stripped = route.fromPlaylist ? disguisedTsOffset(raw) : 0;
         res.writeHead(upstream.status, {
-          'Content-Type': contentType ?? 'application/octet-stream',
+          'Content-Type': stripped > 0 ? 'video/mp2t' : contentType ?? 'application/octet-stream',
           'Cache-Control': 'no-store',
           'Access-Control-Allow-Origin': '*',
         });
-        res.end(body);
+        res.end(stripped > 0 ? raw.subarray(stripped) : raw);
+        return;
+      }
+
+      /**
+       * Whether the origin honours `Range`, decided from what it just did.
+       *
+       * This proxy is the only component that ever sees the origin's answer, so
+       * it is the only one that can tell the player the truth — and passing the
+       * origin's headers through unexamined told it two different lies.
+       *
+       * The hosts in the corpus fall into three shapes and only one of them
+       * describes itself correctly:
+       *
+       *  - `206` + `Content-Range` + `Accept-Ranges: bytes` (sssrr.org) — honest.
+       *  - `206` + `Content-Range` and **no** `Accept-Ranges` (the gdflix
+       *    `workers.dev` mirrors) — seekable, but nothing in the reply says so,
+       *    so a player reading only `Accept-Ranges` concludes it cannot seek.
+       *  - `200` + the whole file from byte zero whatever was asked for
+       *    (`video-downloads.googleusercontent.com`, the GDFlix "Instant
+       *    Download" link) — **not** seekable, and it does not say that either;
+       *    it simply ignores the header and sends 3.2 GB from the start.
+       *
+       * A reply carrying `Content-Range` proves the origin honoured the range.
+       * A ranged request answered `200` proves it did not. Either way the client
+       * is told explicitly, so it never has to guess and never has to be forced.
+       */
+      const rangeRequested = offsetFromRange(requestHeaders.Range) !== null;
+      const honouredRange =
+        upstream.status === 206 || Boolean(upstream.headers.get('content-range'));
+      /**
+       * Only a reply that succeeded says anything about ranges.
+       *
+       * An origin that answers `403` did not decline the *range*, it declined
+       * the request — and several of the `workers.dev` mirrors in the corpus
+       * throttle exactly that way, answering a first range and rejecting the
+       * next. Recording `no` from one of those poisons the route: every later
+       * response claims `Accept-Ranges: none`, and the player stops seeking a
+       * source that seeks perfectly, for the rest of the session.
+       */
+      if (rangeRequested && upstream.status < 400) {
+        route.rangeSupport = honouredRange ? 'yes' : 'no';
+      }
+
+      /**
+       * The origin ignored a seek, so the body it is holding starts at byte zero
+       * while the client is expecting byte `requestedOffset`.
+       *
+       * Forwarding it is the silent-corruption case: the player is handed the
+       * opening of the film labelled as its middle, and every byte after that is
+       * misattributed. `416` says the one true thing — this offset cannot be
+       * served — and leaves the player to carry on from where it already is
+       * rather than resyncing onto rubbish.
+       */
+      const requestedOffset = offsetFromRange(String(req.headers.range ?? '')) ?? 0;
+      if (requestedOffset > 0 && !honouredRange && upstream.status === 200) {
+        this.recordFailure(
+          route.url,
+          new Error(`origin ignored Range: bytes=${requestedOffset}- and answered HTTP 200`),
+          'Refused to serve byte-zero data as a mid-file range'
+        );
+        try {
+          await upstream.body?.cancel();
+        } catch {
+          // The origin hung up first; nothing left to release.
+        }
+        const total = upstream.headers.get('content-length');
+        res.writeHead(416, {
+          'Cache-Control': 'no-store',
+          'Access-Control-Allow-Origin': '*',
+          'Accept-Ranges': 'none',
+          ...(total ? { 'Content-Range': `bytes */${total}` } : {}),
+        }).end();
         return;
       }
 
@@ -776,14 +1093,67 @@ export class MediaProxy {
         const value = upstream.headers.get(name);
         if (value) headers[name] = value;
       }
-      res.writeHead(upstream.status, headers);
+
+      /**
+       * Stated rather than forwarded, and stated in both directions.
+       *
+       * Saying `bytes` for the `workers.dev` shape is what restores seeking on a
+       * source that always supported it; saying `none` for the googleusercontent
+       * shape is what stops a player attempting a seek that can only be answered
+       * by reading the file from the beginning — which on a 3.2 GB link is the
+       * frozen timeline this whole path was reported for.
+       */
+      const support = route.rangeSupport ?? (honouredRange ? 'yes' : undefined);
+      if (support) headers['Accept-Ranges'] = support === 'yes' ? 'bytes' : 'none';
 
       if (req.method === 'HEAD' || !upstream.body) {
+        res.writeHead(upstream.status, headers);
         res.end();
         return;
       }
 
-      await this.stream(upstream, res, route, requestHeaders, lease);
+      /**
+       * Segments disguised as images are unwrapped before the demuxer sees them.
+       *
+       * HDHub4U's `hdstream4u.com` playlists point at TikTok's image CDN, which
+       * serves only images — so each segment is a **real 70-byte PNG header with
+       * the MPEG-TS glued on behind it**, `Content-Type: image/png` and all. This
+       * is a step beyond the `.png`-named segments `-extension_picky` was added
+       * for: there the bytes were already TS and only the name lied, so opening
+       * the extension allow-list was enough. Here the bytes lie too, and no
+       * demuxer option helps — FFmpeg reads a PNG, finds no elementary stream and
+       * stops, with nothing in the log naming the cause.
+       *
+       * Only segments minted by a playlist rewrite are examined, and only bytes
+       * that are unambiguous: the PNG signature, then a run of TS sync bytes at
+       * the 188-byte stride, with the remaining length an exact multiple of 188.
+       * Measured on a real segment — 704,318 bytes in, 3,745 aligned packets and
+       * a clean `h264 + aac` after the strip.
+       */
+      let body = upstream.body;
+      if (route.fromPlaylist) {
+        const unwrapped = await unwrapDisguisedSegment(body);
+        body = unwrapped.body;
+        if (unwrapped.stripped > 0) {
+          const declared = Number(headers['content-length']);
+          if (Number.isFinite(declared)) {
+            headers['content-length'] = String(Math.max(0, declared - unwrapped.stripped));
+          }
+          // The container is decided by the bytes, and the bytes are TS now.
+          headers['content-type'] = 'video/mp2t';
+        }
+      }
+
+      res.writeHead(upstream.status, headers);
+
+      await this.stream(
+        new Response(body, { status: upstream.status, headers: upstream.headers }),
+        res,
+        route,
+        requestHeaders,
+        lease,
+        abort.signal
+      );
     } catch (error) {
       this.recordFailure(route.url, error, 'Upstream request failed before any body was sent');
       if (!res.headersSent) res.writeHead(502);
@@ -810,7 +1180,8 @@ export class MediaProxy {
     res: http.ServerResponse,
     route: Route,
     requestHeaders: Record<string, string>,
-    lease?: SourceLease
+    lease?: SourceLease,
+    signal?: AbortSignal
   ): Promise<void> {
     /**
      * Where this response started in the file.
@@ -888,6 +1259,7 @@ export class MediaProxy {
           method: 'GET',
           headers: { ...requestHeaders, Range: `bytes=${startedAt + sent}-` },
           redirect: 'follow',
+          signal,
         });
 
         // An origin that answers a resume with 200 is about to send the file
@@ -942,10 +1314,24 @@ export class MediaProxy {
         }
       }
     } finally {
-      // Releasing the lock lets the underlying connection be torn down; without
-      // it a cancelled stream holds its socket until GC.
+      /**
+       * Cancelled, not merely released — the difference is a whole film.
+       *
+       * `releaseLock()` detaches the reader and leaves the body open, so the
+       * transfer carries on into a buffer nobody will ever read. On an origin
+       * that honours `Range` that is a wasted connection; on one that ignores it
+       * and answers every request with the whole file, **each abandoned probe is
+       * a 3.24 GB download still running**. Three ffprobe attempts across three
+       * sources is nine of them, against a link the viewer is often already
+       * downloading — which is how a source that probes in two seconds on an
+       * idle machine times out at twenty in the app, and why playback that had
+       * started buffered until the engine gave up.
+       *
+       * Same shape as the `FastChunkDownloader.probeUrl` bug: `resume()` there
+       * discarded the data without stopping the transfer either.
+       */
       try {
-        reader.releaseLock();
+        await reader.cancel();
       } catch {
         // Already released by the error that brought us here.
       }
@@ -990,7 +1376,7 @@ export class MediaProxy {
   private rewritePlaylist(body: string, baseUrl: string, headers: Record<string, string>): string {
     const absolute = (uri: string): string => {
       try {
-        return this.routeFor(new URL(uri, baseUrl).toString(), headers);
+        return this.routeFor(new URL(uri, baseUrl).toString(), headers, true);
       } catch {
         return uri;
       }

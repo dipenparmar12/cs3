@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { useFlash } from '../../utils/useFlash';
 import {
   X, Play, Pause, RotateCw, Trash2, Check, Copy, Download, FolderOpen, ArrowUpRight,
   Layers, CheckCircle2, PauseCircle, AlertCircle,
@@ -38,7 +39,7 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
   onReveal,
   onOpenDownloads,
 }) => {
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const { message: copiedId, flash: setCopiedId } = useFlash<string>(2500);
   const [activeFilter, setActiveFilter] = useState<DownloadFilterTab>('all');
 
   const counts = useMemo(() => {
@@ -147,7 +148,6 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
 
     void navigator.clipboard.writeText(lines);
     setCopiedId(t.id);
-    setTimeout(() => setCopiedId(null), 2500);
   };
 
   return (

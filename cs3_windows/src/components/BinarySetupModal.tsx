@@ -1,170 +1,206 @@
-import React, { useState } from 'react';
-import { Zap, Download, CheckCircle2, RefreshCw, X } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Download, CheckCircle2, RefreshCw, X, AlertTriangle } from 'lucide-react';
 
+/**
+ * The offer to install the download and playback components.
+ *
+ * This is frequently the first dialog a new user sees, and until 2026-08-27 the
+ * button in it could not work: the preload invoked `binary:setupBinaries`, a
+ * channel nothing registered, so `invoke` rejected — and the catch below dressed
+ * the raw Electron message up as a friendly notice reading
+ * `Notice: No handler registered for 'binary:setupBinaries' (HTTP fallback
+ * stream active)`. The user was told a fallback was active and had no way to
+ * know the button had done nothing at all.
+ *
+ * Two rules came out of that and are worth keeping:
+ *
+ * - **`setupAllBinaries` is the one to call.** It installs every component and
+ *   pushes per-component progress, which is what the bar below renders. The
+ *   handler that was *meant* to be reached installed two of them and pushed no
+ *   progress.
+ * - **A rejected call is not a failed install.** They are told apart now,
+ *   because the first is a bug in this app and the second is a network or a
+ *   mirror having a bad day, and offering the user the same sentence for both
+ *   makes the actionable one invisible.
+ */
 interface BinarySetupModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }
 
+type Phase = 'idle' | 'installing' | 'done' | 'failed';
+
 export const BinarySetupModal: React.FC<BinarySetupModalProps> = ({
   isOpen,
   onClose,
   onSuccess,
 }) => {
-  const [isInstalling, setIsInstalling] = useState(false);
+  const [phase, setPhase] = useState<Phase>('idle');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [isDone, setIsDone] = useState(false);
+  const [progressPercent, setProgressPercent] = useState(0);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const startRef = useRef<HTMLButtonElement | null>(null);
+  /** Focus is handed back where it came from, or the trigger appears to vanish. */
+  const returnFocusTo = useRef<Element | null>(null);
 
-  const [progressPercent, setProgressPercent] = useState<number>(0);
+  const installing = phase === 'installing';
+
+  useEffect(() => {
+    if (!isOpen) return;
+    returnFocusTo.current = document.activeElement;
+    startRef.current?.focus();
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !installing) {
+        onClose();
+        return;
+      }
+      // A modal that lets Tab walk into the page behind it is not modal.
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      (returnFocusTo.current as HTMLElement | null)?.focus?.();
+    };
+  }, [isOpen, installing, onClose]);
+
+  const handleStartSetup = useCallback(async () => {
+    if (!window.cloudstream) return;
+    setPhase('installing');
+    setProgressPercent(0);
+    setStatusMessage('Starting…');
+
+    const unsubscribe = window.cloudstream.onBinarySetupProgress?.((progress) => {
+      setStatusMessage(progress.component ? `${progress.component} — ${progress.status}` : progress.status);
+      setProgressPercent(progress.percent);
+    });
+
+    try {
+      const result = await window.cloudstream.setupAllBinaries();
+      if (result.ok) {
+        setPhase('done');
+        setProgressPercent(100);
+        setStatusMessage(result.message || 'Ready.');
+        window.setTimeout(() => {
+          onSuccess();
+          onClose();
+        }, 1200);
+      } else {
+        setPhase('failed');
+        setStatusMessage(
+          `${result.message || 'The components could not be installed.'} Downloads will use the built-in transfer until this succeeds.`
+        );
+      }
+    } catch (error) {
+      // A rejection here is this app failing to ask, not the install failing.
+      setPhase('failed');
+      setStatusMessage(
+        `Could not reach the installer: ${
+          error instanceof Error ? error.message : String(error)
+        }. This is a bug — please report it.`
+      );
+    } finally {
+      unsubscribe?.();
+    }
+  }, [onClose, onSuccess]);
 
   if (!isOpen) return null;
 
-  const handleStartSetup = async () => {
-    setIsInstalling(true);
-    setProgressPercent(5);
-    setStatusMessage('Connecting to high-speed mirrors...');
-
-    const unsub = window.cloudstream?.onBinarySetupProgress?.((p: { component?: string; status: string; percent: number }) => {
-      setStatusMessage(p.status);
-      setProgressPercent(p.percent);
-    });
-
-    if (window.cloudstream) {
-      try {
-        const res = await window.cloudstream.setupBinaries();
-        if (res.success) {
-          setIsDone(true);
-          setProgressPercent(100);
-          setStatusMessage('✓ 1-Click Downloader Engines Configured Successfully!');
-          setTimeout(() => {
-            onSuccess();
-            onClose();
-          }, 1500);
-        } else {
-          setStatusMessage(`Setup Notice: ${res.message} (HTTP stream downloader active)`);
-        }
-      } catch (e: any) {
-        setStatusMessage(`Notice: ${e.message} (HTTP fallback stream active)`);
-      } finally {
-        unsub?.();
-      }
-    }
-    setIsInstalling(false);
-  };
-
   return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.75)',
-      backdropFilter: 'blur(6px)',
-      zIndex: 10000,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '1.5rem'
-    }}>
-      <div style={{
-        background: 'var(--bg-card)',
-        border: '1px solid var(--accent-primary)',
-        borderRadius: 'var(--radius-lg)',
-        maxWidth: '500px',
-        width: '100%',
-        padding: '1.75rem',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '1.25rem',
-        boxShadow: '0 20px 50px rgba(0,0,0,0.8)'
-      }}>
-        {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <div style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: 'var(--radius-md)',
-              background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#fff'
-            }}>
-              <Zap size={22} />
-            </div>
-            <div>
-              <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
-                1-Click Downloader Setup
-              </h3>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Auto-configure aria2c & yt-dlp transfer engines
-              </span>
-            </div>
-          </div>
-
-          <button onClick={onClose} className="btn btn-secondary btn-icon" style={{ height: '32px', width: '32px' }}>
-            <X size={16} />
+    <div
+      className="modal-backdrop"
+      onClick={() => !installing && onClose()}
+      role="presentation"
+    >
+      <div
+        className="modal binary-setup"
+        ref={dialogRef}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="binary-setup-title"
+      >
+        <header className="modal__head">
+          <h3 id="binary-setup-title">
+            <Download size={17} /> Set up downloads and playback
+          </h3>
+          <button
+            className="icon-button"
+            onClick={onClose}
+            disabled={installing}
+            aria-label="Close"
+          >
+            <X size={18} />
           </button>
-        </div>
+        </header>
 
-        {/* Info Content */}
-        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-          Auto-configure the portable <strong>aria2c engine</strong> (16-thread multi-connection transfer engine) and <strong>yt-dlp fallback extraction adapter</strong> in 1 click.
+        <p className="binary-setup__blurb">
+          Three components make downloads faster and let unusual files play without being
+          re-encoded: <strong>aria2</strong> for multi-connection transfers, <strong>yt-dlp</strong> as
+          a fallback extractor, and <strong>FFmpeg</strong> for inspecting and converting media. They
+          are downloaded from their publishers and kept inside this app.
         </p>
 
-        {/* Status Message & Progress Bar */}
         {statusMessage && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <div style={{
-              fontSize: '0.82rem',
-              color: isDone ? 'var(--status-success)' : 'var(--accent-light)',
-              background: 'var(--bg-input)',
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-color)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.6rem'
-            }}>
-              {isInstalling ? <RefreshCw size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle2 size={16} />}
-              <span style={{ wordBreak: 'break-word', flex: 1 }}>{statusMessage}</span>
-            </div>
-            {isInstalling && (
-              <div style={{
-                height: '4px',
-                width: '100%',
-                background: 'rgba(255,255,255,0.08)',
-                borderRadius: '2px',
-                overflow: 'hidden',
-              }}>
-                <div style={{
-                  height: '100%',
-                  width: `${Math.max(5, Math.min(100, progressPercent))}%`,
-                  background: 'linear-gradient(90deg, #3b82f6, #60a5fa)',
-                  transition: 'width 0.3s ease',
-                  borderRadius: '2px',
-                }} />
-              </div>
-            )}
+          <div
+            className={`binary-setup__status binary-setup__status--${phase}`}
+            role="status"
+            aria-live="polite"
+          >
+            {installing && <RefreshCw size={15} className="spin" />}
+            {phase === 'done' && <CheckCircle2 size={15} />}
+            {phase === 'failed' && <AlertTriangle size={15} />}
+            <span>{statusMessage}</span>
           </div>
         )}
 
-        {/* Actions */}
-        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
-          <button onClick={onClose} className="btn btn-secondary" style={{ flex: 1 }}>
-            Use Built-in HTTP Downloader
-          </button>
+        {installing && (
+          <div
+            className="binary-setup__bar"
+            role="progressbar"
+            aria-valuenow={Math.round(progressPercent)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div
+              className="binary-setup__fill"
+              style={{ width: `${Math.max(2, Math.min(100, progressPercent))}%` }}
+            />
+          </div>
+        )}
 
+        <footer className="modal__foot">
+          <button className="btn btn-secondary" onClick={onClose} disabled={installing}>
+            Not now
+          </button>
           <button
-            onClick={handleStartSetup}
-            disabled={isInstalling}
             className="btn btn-primary"
-            style={{ flex: 1.2 }}
+            onClick={handleStartSetup}
+            disabled={installing}
+            ref={startRef}
           >
             <Download size={16} />
-            <span>{isInstalling ? 'Configuring...' : '1-Click Auto Setup'}</span>
+            <span>
+              {installing ? 'Installing…' : phase === 'failed' ? 'Try again' : 'Install components'}
+            </span>
           </button>
-        </div>
+        </footer>
       </div>
     </div>
   );

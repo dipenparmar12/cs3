@@ -1,4 +1,5 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback } from 'react';
+import { useFlash } from '../../utils/useFlash';
 import {
   AlertTriangle,
   Check,
@@ -70,18 +71,17 @@ export const PlaybackErrorPanel: React.FC<{
   onChooseAnother,
   onConvertHere,
 }) => {
-  const [copied, setCopied] = useState<string | null>(null);
+  const { message: copied, flash: setCopied } = useFlash<string>(2000);
 
   const write = useCallback(async (label: string, text: string) => {
     if (!text.trim()) return;
     try {
       await navigator.clipboard.writeText(text);
       setCopied(label);
-      setTimeout(() => setCopied(null), 2000);
     } catch {
       // The main-process report below still works when the clipboard refuses.
     }
-  }, []);
+  }, [setCopied]);
 
   const address = activeSource ? sourceAddress(activeSource) : '';
   const chain = activeSource ? provenanceChain(activeSource, provenance) : '';

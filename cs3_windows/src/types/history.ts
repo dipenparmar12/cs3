@@ -117,3 +117,33 @@ export interface HistoryListResponse {
   total: number;
   hasMore: boolean;
 }
+
+export interface GroupedHistoryItem {
+  id: string;
+  groupKey: string;
+  mediaKey: string;
+  title: string;
+  originalTitle?: string;
+  year?: number;
+  type?: TvType | string;
+  posterUrl?: string;
+  backdropUrl?: string;
+  mediaUrl: string;
+
+  visitCount: number;
+  latestEvent: HistoryEvent;
+  events: HistoryEvent[];
+  distinctActions: HistoryAction[];
+  distinctStatuses: HistoryStatus[];
+  hasPlayed: boolean;
+  hasDownloaded: boolean;
+  hasFailed: boolean;
+  hasAttempted: boolean;
+
+  season?: number;
+  episode?: number;
+  episodeTitle?: string;
+  latestTimestamp: number;
+  totalDurationSeconds?: number;
+}
+

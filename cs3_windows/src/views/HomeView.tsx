@@ -76,6 +76,22 @@ export const HomeView: React.FC<HomeViewProps> = ({
   }, [loadSections]);
 
   /**
+   * The catalogue behind these rows changed, so re-ask for them.
+   *
+   * The main process has emitted `discover:invalidated` after a provider switch
+   * since the feature was written, and nothing listened. Its own comment says
+   * why it exists: the cache is keyed by provider, so the rows on screen are not
+   * *wrong*, they are someone else's — and without this they stayed up until
+   * each one aged out six hours later. Switching the catalogue in Settings
+   * appeared to do nothing.
+   */
+  useEffect(() => {
+    return window.cloudstream?.onDiscoveryInvalidated?.(() => {
+      void loadSections();
+    });
+  }, [loadSections]);
+
+  /**
    * Continue watching is local and lands first.
    *
    * Loaded separately rather than as another discovery section, because it

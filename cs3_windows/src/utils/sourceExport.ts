@@ -169,3 +169,24 @@ export function sourceHost(source: TorrentResult): string | null {
     return null;
   }
 }
+
+/**
+ * One source, as facts — for "copy this source's details".
+ *
+ * Deliberately not `toSourceText([source])`: that heads its block with a list
+ * caption and a `1.` ordinal, both of which are noise about a list of one. The
+ * columns are the same, so a single row pasted into an issue and a row lifted
+ * out of the CSV describe the same source in the same words.
+ */
+export function toSourceDetails(
+  source: TorrentResult,
+  provenance?: SourceProvenance
+): string {
+  const cells = sourceExportRow(source, 0, provenance);
+  const facts = SOURCE_EXPORT_COLUMNS
+    .map((column, index) => [column, cells[index]] as const)
+    .filter(([column, value]) => column !== '#' && column !== 'Title' && value)
+    .map(([column, value]) => `${column}: ${value}`)
+    .join('\n');
+  return `${source.title}\n${facts}`;
+}

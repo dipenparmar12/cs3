@@ -68,8 +68,30 @@ export interface SystemRuntimeStatus {
  * with nothing on the far end of it. There is a handshake for exactly that
  * (`hostCapabilities`, and the sidecar says so once on stderr), but the bump is
  * what makes it not happen.
+ *
+ * Generation 7 is `ProviderNotLoadedException` and the `PROVIDER_NOT_LOADED`
+ * error kind. The host now explains a missing provider itself — which extension
+ * owned the name, and whether it is disabled, uninstalled or failing to load —
+ * and it recognises the case by that kind rather than by the sentence. An
+ * already-provisioned sidecar never sends it, so without the bump the host's
+ * new branch is unreachable and the viewer keeps being shown the runtime's own
+ * `IllegalArgumentException` with a hundred provider names appended.
+ *
+ * Generation 8 is the `CloudStreamApp`/`AcraApplication` key-value companions
+ * and the context that backs them. Both halves changed and both must ship
+ * together: the bridge gained `setKey(String, Object)` — upstream's erased
+ * `fun <T> setKey`, whose absence stopped CSX's CineStream at `load()` with
+ * `NoSuchMethodError` — and the sidecar now points those companions at the
+ * plugin's own scoped context, which nothing did before, so the methods would
+ * otherwise have linked and then silently written nothing. A provisioned copy
+ * pairing one with the other is worse than either alone.
+ *
+ * The same pass gave each plugin its own scoped storage: `newShimContext` had
+ * hard-coded the literal `"plugin"` as the id, so every extension in the process
+ * shared one preferences file. That was invisible while the key-value helpers
+ * were stubs and becomes a collision the moment they write.
  */
-const RUNTIME_GENERATION = 6;
+const RUNTIME_GENERATION = 8;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {
@@ -121,6 +143,18 @@ const PORTABLE_JAVA_MIRRORS: Record<string, string[]> = {
 };
 
 export class RuntimeProvisioner {
+  /**
+   * The generation this build ships.
+   *
+   * Exposed because it is not only the provisioner's business: anything that
+   * caches a *result produced by* the runtime has to key on it, or the cache
+   * outlives the thing that produced it. `ProviderRegistryCache` is the first
+   * such caller — what a plugin registers depends on what the shim and bridge
+   * make available to it, so a row recorded under generation 6 is not an answer
+   * about generation 7.
+   */
+  public readonly generation = RUNTIME_GENERATION;
+
   private baseDir: string;
   private listeners: Set<(progress: RuntimeProgress) => void> = new Set();
   private inFlightProvision: Promise<boolean> | null = null;

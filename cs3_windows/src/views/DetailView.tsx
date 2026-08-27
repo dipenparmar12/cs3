@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Play, ArrowLeft, Loader2, AlertTriangle, ListVideo,
+  Play, ArrowLeft, Loader2, AlertTriangle, ListVideo, Search,
 } from 'lucide-react';
 import type { SearchResponse, Episode } from '../types/api';
 import { TvType } from '../types/api';
 import type { DownloadRequestResult, DownloadTask } from '../types/download';
 import { buildDownloadTask } from '../utils/downloadIdentity';
+import { useFlash } from '../utils/useFlash';
 import type { TorrentResult } from '../types/torrent';
+import type { PlaybackSnapshot } from '../../electron/playbackSession';
 import { SourcePicker, type SourcePickerData } from '../components/SourcePicker';
 import {
   episodeKey,
@@ -16,6 +18,7 @@ import {
 import { SeasonDownloadDialog } from '../components/SeasonDownloadDialog';
 import { LibraryBucketSelector } from '../components/LibraryBucketSelector';
 import { PosterCard } from '../components/PosterCard';
+import { Poster } from '../components/Poster';
 import { CopyErrorButton } from '../components/CopyErrorButton';
 import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
 import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
@@ -259,11 +262,14 @@ export const DetailView: React.FC<DetailViewProps> = ({
     total: number;
     done: boolean;
     cancelled: boolean;
+    /** Whether asking every provider and indexer would reach anything new. */
+    canWiden: boolean;
   } | null>(null);
   const discoveryRef = useRef<string | null>(null);
   const [pendingEpisode, setPendingEpisode] = useState<Episode | null>(null);
   const [startingStream, setStartingStream] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  /** A confirmation that clears itself; `useFlash` explains what it replaced. */
+  const { message: toast, flash } = useFlash<string>(5000);
   const [seasonDownloadOpen, setSeasonDownloadOpen] = useState(false);
   /**
    * Set when a fallback route answered rather than the row's own.
@@ -439,6 +445,78 @@ export const DetailView: React.FC<DetailViewProps> = ({
     void window.cloudstream?.stopPlayback(id, true);
   }, []);
 
+  /**
+   * Feeds the picker from the running session.
+   *
+   * Subscribed for the life of the page, and buffered by session id, because a
+   * cache hit answers faster than React can render. `startSourceDiscovery`
+   * returns after the session has already emitted its opening snapshot, its
+   * cached results and its `searchDone` — all within a millisecond — so a
+   * listener attached in an effect keyed on the resulting state misses the
+   * entire life of the session and leaves the picker searching forever with
+   * nothing in it. That is invisible while every search is slow, and it is the
+   * *normal* case for "View sources", which exists to serve what is already
+   * found.
+   *
+   * Snapshots are still matched by id: a session that has just been replaced —
+   * the viewer switched episodes, or pressed refresh — can emit once more
+   * before it notices, and those results belong to a different question.
+   */
+  const snapshotsById = useRef(new Map<string, PlaybackSnapshot>());
+  const pendingEpisodeRef = useRef<Episode | null>(null);
+  pendingEpisodeRef.current = pendingEpisode;
+
+  const applySnapshot = useCallback((snapshot: PlaybackSnapshot) => {
+    setDiscovery((current) =>
+      current && current.id === snapshot.sessionId
+        ? {
+            ...current,
+            searched: snapshot.searched,
+            total: snapshot.totalIndexers,
+            done: snapshot.searchDone,
+            cancelled: snapshot.searchCancelled,
+            // Only meaningful once the scoped search has finished and come up
+            // short; offering it mid-search invites widening a run that was
+            // about to answer.
+            canWiden: snapshot.canWiden,
+          }
+        : current
+    );
+
+    setPickerData({
+      sources: snapshot.sources,
+      // Neither is reported by the session: `filtered` and `indexerOutcomes`
+      // are batch summaries produced after everything settles, and this list
+      // is deliberately being shown before that point.
+      filtered: [],
+      indexerOutcomes: [],
+      emptyReason: snapshot.searchDone ? snapshot.emptyReason : undefined,
+      diagnosis: snapshot.searchDone ? snapshot.diagnosis : undefined,
+      query: {
+        title: snapshot.title,
+        season: pendingEpisodeRef.current?.season,
+        episode: pendingEpisodeRef.current?.episode,
+      },
+    });
+  }, []);
+
+
+  /**
+   * Asks every provider and indexer, not just the ones this title came from.
+   *
+   * Driven through the *running* session rather than by starting a new one:
+   * `refreshSources(widen)` replaces the retained query's scope, so the widened
+   * answer is also what a later refresh from this picker asks for. Starting a
+   * fresh discovery here would go back to `origin` on the next press and make
+   * the button look like it had done nothing.
+   */
+  const widenSources = useCallback(() => {
+    const id = discoveryRef.current;
+    if (!id) return;
+    setDiscovery((current) => (current ? { ...current, done: false, cancelled: false } : current));
+    void window.cloudstream?.playbackRefreshSources?.(id, true);
+  }, []);
+
   const openSources = useCallback(
     async (episode: Episode | null, options: { refresh?: boolean } = {}) => {
       if (!window.cloudstream || !detail) return;
@@ -469,70 +547,47 @@ export const DetailView: React.FC<DetailViewProps> = ({
         return;
       }
 
-      discoveryRef.current = response.snapshot.sessionId;
+      const sessionId = response.snapshot.sessionId;
+      discoveryRef.current = sessionId;
       setDiscovery({
-        id: response.snapshot.sessionId,
-        searched: 0,
-        total: 0,
-        done: false,
-        cancelled: false,
+        id: sessionId,
+        searched: response.snapshot.searched,
+        total: response.snapshot.totalIndexers,
+        done: response.snapshot.searchDone,
+        cancelled: response.snapshot.searchCancelled,
+        canWiden: response.snapshot.canWiden,
       });
+
+      // Anything this session emitted while the invoke was in flight. For a
+      // cache hit that is the whole answer, already complete.
+      const buffered = snapshotsById.current.get(sessionId);
+      if (buffered) applySnapshot(buffered);
     },
-    [detail, stopDiscovery]
+    [applySnapshot, detail, stopDiscovery]
   );
 
-  /**
-   * Feeds the picker from the running session.
-   *
-   * Snapshots are filtered by id because a session that has just been replaced —
-   * the viewer switched episodes, or pressed refresh — can still emit once more
-   * before it notices, and those results belong to a different question.
-   */
   useEffect(() => {
-    if (!discovery) return;
-
+    const buffered = snapshotsById.current;
     const dispose = window.cloudstream?.onPlaybackUpdate((snapshot) => {
-      if (snapshot.sessionId !== discoveryRef.current) return;
-
-      setDiscovery((current) =>
-        current && current.id === snapshot.sessionId
-          ? {
-              ...current,
-              searched: snapshot.searched,
-              total: snapshot.totalIndexers,
-              done: snapshot.searchDone,
-              cancelled: snapshot.searchCancelled,
-            }
-          : current
-      );
-
-      setPickerData({
-        sources: snapshot.sources,
-        // Neither is reported by the session: `filtered` and `indexerOutcomes`
-        // are batch summaries produced after everything settles, and this list
-        // is deliberately being shown before that point.
-        filtered: [],
-        indexerOutcomes: [],
-        emptyReason: snapshot.searchDone ? snapshot.emptyReason : undefined,
-        diagnosis: snapshot.searchDone ? snapshot.diagnosis : undefined,
-        query: {
-          title: snapshot.title,
-          season: pendingEpisode?.season,
-          episode: pendingEpisode?.episode,
-        },
-      });
+      /*
+       * Kept even when it is not ours yet. The id of the session we started is
+       * only known once the invoke resolves, and by then its snapshots have
+       * been and gone; one entry per session is enough, because each supersedes
+       * the last.
+       */
+      buffered.set(snapshot.sessionId, snapshot);
+      if (buffered.size > 8) buffered.delete(buffered.keys().next().value as string);
+      if (snapshot.sessionId === discoveryRef.current) applySnapshot(snapshot);
     });
-
-    return dispose;
-  }, [discovery?.id, pendingEpisode]);
+    return () => {
+      dispose?.();
+      buffered.clear();
+    };
+  }, [applySnapshot]);
 
   // A picker left open when the view goes away would leave its session running.
   useEffect(() => stopDiscovery, [stopDiscovery]);
 
-  const flash = useCallback((message: string) => {
-    setToast(message);
-    setTimeout(() => setToast(null), 5000);
-  }, []);
 
   /**
    * Saved state and origin, resolved once per item.
@@ -813,7 +868,25 @@ export const DetailView: React.FC<DetailViewProps> = ({
           episode: episode?.episode,
         },
         progress: {
-          mediaUrl: episode?.url ?? detail.url,
+          /**
+           * The **page**, not the episode's playback handle.
+           *
+           * These two are different addresses and only one of them can be
+           * reopened. `episode.url` carries the opaque blob `loadLinks` wants —
+           * for a large part of the corpus that is JSON, e.g. VegaMovies'
+           * `[{"source":"https://vcloud.fit/…"}]`. Storing it here put it into
+           * the library, Continue Watching and any page saved from one of those
+           * rows; clicking the row later called `load()` on it, which fetches
+           * what it is given, and the detail page came up empty. The user-facing
+           * shape was "a title I saved and watched now opens blank", which reads
+           * as data rot rather than as the wrong address having been written.
+           *
+           * Nothing is lost by using the page: watch progress is keyed on
+           * title + year + season + episode (`libraryStore.recordProgress`), and
+           * the season and episode travel in their own fields right below. The
+           * handle that actually plays is still `request.mediaUrl` above.
+           */
+          mediaUrl: detail.url,
           year: detail.year,
           posterUrl: detail.posterUrl,
           season: episode?.season,
@@ -954,6 +1027,25 @@ export const DetailView: React.FC<DetailViewProps> = ({
           </p>
         )}
         <div className="detail-view__actions">
+          {/*
+            The way back for a page that can no longer be opened.
+
+            Saved pages, library entries and Continue Watching rows written
+            before the address fix carry a playback handle rather than a page,
+            and no amount of retrying will make `load()` accept one — the page
+            address is not recoverable from it. What *is* recoverable is the
+            title, which is stored right alongside, so searching for it again
+            produces a fresh, working page. Without this every such row is a
+            permanent dead end with a Back button.
+          */}
+          {onSearch && (
+            <button
+              className="btn btn-primary"
+              onClick={() => onSearch(mediaItem.originalTitle || mediaItem.name)}
+            >
+              <Search size={16} /> Find “{mediaItem.name}” again
+            </button>
+          )}
           <button className="btn" onClick={onBack}>
             <ArrowLeft size={16} /> Back
           </button>
@@ -1000,6 +1092,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
         sourceReadiness={prefetch}
         onPlay={() => playNow(isSeries ? (episodesInSeason[0] ?? null) : null)}
         onToggleSave={() => void toggleSaved()}
+        // Deliberately not a cache bypass: the badge beside it says these were
+        // already found, so re-asking every provider would contradict it. An
+        // empty answer is not a dead end either — the picker explains it and
+        // offers the bypassing search from there.
         onChooseSource={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
         onDownload={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
         // "Find more" and "Refresh" are the same search with the cache bypassed,
@@ -1056,7 +1152,13 @@ export const DetailView: React.FC<DetailViewProps> = ({
                 className={`episode-row${selectedEpisode?.url === episode.url ? ' episode-row--active' : ''}`}
               >
                 {episode.posterUrl && (
-                  <img className="episode-row__thumb" src={episode.posterUrl} alt="" loading="lazy" />
+                  <Poster
+                    src={episode.posterUrl}
+                    title={episode.name ?? ''}
+                    decorative
+                    className="episode-row__thumb"
+                    fallback={null}
+                  />
                 )}
                 <div className="episode-row__body">
                   <p className="episode-row__title">{episode.name}</p>
@@ -1153,6 +1255,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
         onPlay={handlePlaySource}
         onDownload={handleDownloadSource}
         onRetry={() => openSources(pendingEpisode, { refresh: true })}
+        onWiden={widenSources}
+        canWiden={discovery?.canWiden ?? false}
         onCancelSearch={() => {
           if (discoveryRef.current) {
             void window.cloudstream?.playbackCancelSourceSearch(discoveryRef.current);

@@ -26,6 +26,14 @@ interface ExtensionCatalogProps {
   error: string | null;
   busy: string | null;
   progress: InstallProgress | null;
+  /**
+   * Rendered inside a repository card rather than as a page of its own.
+   *
+   * The repository's name and URL are already on the card two lines above, so
+   * repeating them here is the kind of duplication that makes an inline panel
+   * read as a second screen crammed into the first.
+   */
+  embedded?: boolean;
   onInstall(plugin: SitePlugin): void;
   onUninstall(internalName: string): void;
 }
@@ -52,6 +60,7 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
   error,
   busy,
   progress,
+  embedded,
   onInstall,
   onUninstall,
 }) => {
@@ -106,11 +115,13 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
   }
 
   return (
-    <div className="ext-panel">
-      <div className="ext-panel__head">
-        <h4>{repository.name}</h4>
-        <span className="ext-row__subtitle">{repository.url}</span>
-      </div>
+    <div className={`ext-panel${embedded ? ' ext-panel--embedded' : ''}`}>
+      {embedded ? null : (
+        <div className="ext-panel__head">
+          <h4>{repository.name}</h4>
+          <span className="ext-row__subtitle">{repository.url}</span>
+        </div>
+      )}
 
       {warnings.length > 0 ? (
         <ul className="ext-warnings">

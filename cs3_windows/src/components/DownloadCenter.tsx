@@ -1,4 +1,6 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { EmptyState } from './EmptyState';
+import { useFlash } from '../utils/useFlash';
 import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
 import { DeleteDownloadDialog, type DeletePreference } from './DeleteDownloadDialog';
@@ -83,7 +85,7 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
   onOpenTitle,
   isEpisode = false,
 }) => {
-  const [copiedMeta, setCopiedMeta] = useState(false);
+  const { message: copiedMeta, flash: setCopiedMeta } = useFlash<boolean>(2500);
 
   const percent =
     task.totalBytes > 0
@@ -127,7 +129,6 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
 
     void navigator.clipboard.writeText(lines);
     setCopiedMeta(true);
-    setTimeout(() => setCopiedMeta(false), 2500);
   };
 
   return (
@@ -650,7 +651,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
               style={{ borderColor: 'var(--accent-primary)' }}
             >
               <Zap size={16} style={{ color: 'var(--accent-light)' }} />
-              <span>⚡ 1-Click Engine Setup</span>
+              <span>Set up faster downloads</span>
             </button>
           )}
         </div>
@@ -855,24 +856,20 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
 
       {/* Downloads List */}
       {tasks.length === 0 ? (
-        <div
-          style={{
-            padding: '4rem 2rem',
-            textAlign: 'center',
-            background: 'var(--bg-card)',
-            borderRadius: 'var(--radius-lg)',
-            border: '1px dashed var(--border-color)',
-            color: 'var(--text-muted)',
-          }}
-        >
-          <ArrowDown size={40} style={{ margin: '0 auto 1rem', opacity: 0.5 }} />
-          <h3 style={{ fontSize: '1rem', color: '#fff', marginBottom: '0.5rem' }}>
-            No Active Downloads
-          </h3>
-          <p style={{ fontSize: '0.8rem' }}>
-            Browse media titles and click "1-Click Download" to start high-speed stream downloads.
-          </p>
-        </div>
+        <EmptyState
+          icon={ArrowDown}
+          title="No downloads yet"
+          description={
+            hasBinaries
+              ? 'Press Download on any source and it appears here. Downloads keep going while you browse, and resume after a restart.'
+              : 'Press Download on any source and it appears here. Installing the transfer components first makes downloads considerably faster.'
+          }
+          action={
+            !hasBinaries && onOpenBinarySetup
+              ? { label: 'Set up faster downloads', onClick: onOpenBinarySetup }
+              : undefined
+          }
+        />
       ) : filteredTasks.length === 0 ? (
         <div
           style={{
