@@ -1,6 +1,7 @@
 package com.lagradost.cloudstream3.syncproviders
 
 import com.lagradost.cloudstream3.syncproviders.providers.AniListApi
+import com.lagradost.cloudstream3.syncproviders.providers.SimklApi
 
 /**
  * The type that killed TorraStream before it ran a line.
@@ -74,17 +75,31 @@ abstract class AccountManager(open val idPrefixOverride: String? = null) {
         val aniListApi = AniListApi()
 
         /**
+         * Typed `SimklApi` for the same reason `aniListApi` is typed `AniListApi`.
+         *
+         * Added on evidence, per the rule below: CSX's CineStream constructs
+         * `CineSimklProvider` in its `load()`, which reads this property, and the
+         * whole extension stopped with `NoSuchMethodError: SimklApi
+         * AccountManager$Companion.getSimklApi()`. Note the return type in that
+         * descriptor — declaring this as `SyncAPI` or `SyncRepo` would compile
+         * here and link against nothing there.
+         */
+        @JvmStatic
+        val simklApi = SimklApi()
+
+        /**
          * Every sync service the app knows about.
          *
-         * Only AniList is supplied. The others (MAL, Kitsu, Simkl, Trakt) have
+         * AniList and SIMKL are supplied. The others (MAL, Kitsu, Trakt) have
          * not been observed in a single failure across the corpus, and a stub
          * that exists but is never exercised is a liability: it looks
          * supported, and the first extension to use it discovers otherwise at
          * runtime rather than at link time. Members get added when a real
-         * extension is seen to need one.
+         * extension is seen to need one — SIMKL was added the day CineStream
+         * was seen to need it, and not before.
          */
         @JvmStatic
-        val syncApis: Array<SyncRepo> = arrayOf(SyncRepo(aniListApi))
+        val syncApis: Array<SyncRepo> = arrayOf(SyncRepo(aniListApi), SyncRepo(simklApi))
 
         @JvmStatic
         val subtitleProviders: Array<Any> = emptyArray()
