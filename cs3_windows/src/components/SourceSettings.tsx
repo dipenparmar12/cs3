@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useFlash } from '../utils/useFlash';
 import {
   Plus, Trash2, Loader2, CheckCircle2, XCircle, Radio, Save, RotateCcw,
 } from 'lucide-react';
@@ -35,7 +36,7 @@ export const SourceSettings: React.FC = () => {
   const [health, setHealth] = useState<IndexerHealth[]>([]);
   const [prefs, setPrefs] = useState<SourcePreferences | null>(null);
   const [tests, setTests] = useState<Record<string, TestState>>({});
-  const [status, setStatus] = useState<string | null>(null);
+  const { message: status, flash: setStatus } = useFlash<string>(3500);
 
   const [newName, setNewName] = useState('');
   const [newUrl, setNewUrl] = useState('http://127.0.0.1:9117');
@@ -62,7 +63,6 @@ export const SourceSettings: React.FC = () => {
 
   const flash = (message: string) => {
     setStatus(message);
-    setTimeout(() => setStatus(null), 3500);
   };
 
   const toggleIndexer = async (config: IndexerConfig) => {

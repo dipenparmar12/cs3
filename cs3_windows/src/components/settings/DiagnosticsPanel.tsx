@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useFlash } from '../../utils/useFlash';
 import { AlertTriangle, ClipboardCopy, FolderOpen, RefreshCw, Trash2 } from 'lucide-react';
 import type { DiagnosticRecord } from '../../../electron/cs3/diagnostics';
 import { FacetMenu, type FacetOption } from '../FacetMenu';
@@ -20,7 +21,7 @@ export const DiagnosticsPanel: React.FC = () => {
   const [records, setRecords] = useState<DiagnosticRecord[]>([]);
   const [filePath, setFilePath] = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
-  const [copied, setCopied] = useState(false);
+  const { message: copied, flash: setCopied } = useFlash<boolean>(2500);
   const [loading, setLoading] = useState(false);
   /**
    * Problems only, until asked otherwise.
@@ -77,7 +78,6 @@ export const DiagnosticsPanel: React.FC = () => {
     if (!response?.text) return;
     await navigator.clipboard.writeText(response.text);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
   };
 
   return (

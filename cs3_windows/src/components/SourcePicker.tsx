@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
+import { useFlash } from '../utils/useFlash';
 import {
   X, Users, HardDrive, Loader2, AlertTriangle, Filter, ChevronDown,
   ChevronRight, Play, Download, Info, Zap, ShieldAlert, Square, Link2, Check,
@@ -120,8 +121,8 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
   const [showFiltered, setShowFiltered] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [expandedHash, setExpandedHash] = useState<string | null>(null);
-  const [copiedLink, setCopiedLink] = useState<string | null>(null);
-  const [copiedDetails, setCopiedDetails] = useState<string | null>(null);
+  const { message: copiedLink, flash: setCopiedLink } = useFlash<string>(1800);
+  const { message: copiedDetails, flash: setCopiedDetails } = useFlash<string>(1800);
   const { provenanceFor } = useSourceProvenance(data?.sources ?? []);
 
   /** The provider's address, not the loopback one the player would be using. */
@@ -131,11 +132,10 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
     try {
       await navigator.clipboard.writeText(address);
       setCopiedLink(source.infoHash);
-      setTimeout(() => setCopiedLink(null), 1800);
     } catch {
       // Nothing is lost when the clipboard refuses — the bulk export remains.
     }
-  }, []);
+  }, [setCopiedLink]);
   /**
    * Everything the row knows, not just its address.
    *
@@ -149,12 +149,11 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
       try {
         await navigator.clipboard.writeText(toSourceDetails(source, provenanceFor(source)));
         setCopiedDetails(source.infoHash);
-        setTimeout(() => setCopiedDetails(null), 1800);
       } catch {
         // Same as the link: the clipboard refusing loses nothing recoverable.
       }
     },
-    [provenanceFor]
+    [provenanceFor, setCopiedDetails]
   );
 
   const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);

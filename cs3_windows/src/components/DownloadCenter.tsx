@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { useFlash } from '../utils/useFlash';
 import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
 import { DeleteDownloadDialog, type DeletePreference } from './DeleteDownloadDialog';
@@ -83,7 +84,7 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
   onOpenTitle,
   isEpisode = false,
 }) => {
-  const [copiedMeta, setCopiedMeta] = useState(false);
+  const { message: copiedMeta, flash: setCopiedMeta } = useFlash<boolean>(2500);
 
   const percent =
     task.totalBytes > 0
@@ -127,7 +128,6 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
 
     void navigator.clipboard.writeText(lines);
     setCopiedMeta(true);
-    setTimeout(() => setCopiedMeta(false), 2500);
   };
 
   return (
@@ -650,7 +650,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
               style={{ borderColor: 'var(--accent-primary)' }}
             >
               <Zap size={16} style={{ color: 'var(--accent-light)' }} />
-              <span>⚡ 1-Click Engine Setup</span>
+              <span>Set up faster downloads</span>
             </button>
           )}
         </div>

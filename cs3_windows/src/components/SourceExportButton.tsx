@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useFlash } from '../utils/useFlash';
 import { Check, ChevronDown, ClipboardCopy } from 'lucide-react';
 import type { TorrentResult } from '../types/torrent';
 import {
@@ -29,7 +30,7 @@ export const SourceExportButton: React.FC<{
   compact?: boolean;
 }> = ({ sources, provenanceFor, heading, compact }) => {
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState<string | null>(null);
+  const { message: copied, flash: setCopied } = useFlash<string>(2000);
   const wrapper = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -57,12 +58,11 @@ export const SourceExportButton: React.FC<{
     try {
       await navigator.clipboard.writeText(text);
       setCopied(label);
-      setTimeout(() => setCopied(null), 2000);
     } catch {
       // Clipboard access can be refused by the embedder; failing quietly is
       // acceptable here because nothing was lost — the list is still on screen.
     }
-  }, []);
+  }, [setCopied]);
 
   if (sources.length === 0) return null;
 

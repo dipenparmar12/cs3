@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Poster } from '../Poster';
 import {
   Bookmark as BookmarkIcon,
   BookmarkCheck,
@@ -212,11 +213,13 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
         aria-label={isSeries ? `Play the first episode of ${title}` : `Play ${title}`}
         title={isSeries ? 'Play the first episode' : 'Play'}
       >
-        {posterUrl ? (
-          <img className="detail-art__image" src={posterUrl} alt="" loading="lazy" />
-        ) : (
-          <div className="detail-art__placeholder" aria-hidden />
-        )}
+        <Poster
+          src={posterUrl}
+          title={title}
+          decorative
+          className="detail-art__image"
+          fallback={<div className="detail-art__placeholder" aria-hidden />}
+        />
         <span className="detail-art__scrim" aria-hidden />
         <span className="detail-art__play" aria-hidden>
           <Play size={26} fill="currentColor" />

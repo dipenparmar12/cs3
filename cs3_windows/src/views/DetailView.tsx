@@ -6,6 +6,7 @@ import type { SearchResponse, Episode } from '../types/api';
 import { TvType } from '../types/api';
 import type { DownloadRequestResult, DownloadTask } from '../types/download';
 import { buildDownloadTask } from '../utils/downloadIdentity';
+import { useFlash } from '../utils/useFlash';
 import type { TorrentResult } from '../types/torrent';
 import type { PlaybackSnapshot } from '../../electron/playbackSession';
 import { SourcePicker, type SourcePickerData } from '../components/SourcePicker';
@@ -17,6 +18,7 @@ import {
 import { SeasonDownloadDialog } from '../components/SeasonDownloadDialog';
 import { LibraryBucketSelector } from '../components/LibraryBucketSelector';
 import { PosterCard } from '../components/PosterCard';
+import { Poster } from '../components/Poster';
 import { CopyErrorButton } from '../components/CopyErrorButton';
 import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
 import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
@@ -266,7 +268,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const discoveryRef = useRef<string | null>(null);
   const [pendingEpisode, setPendingEpisode] = useState<Episode | null>(null);
   const [startingStream, setStartingStream] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  /** A confirmation that clears itself; `useFlash` explains what it replaced. */
+  const { message: toast, flash } = useFlash<string>(5000);
   const [seasonDownloadOpen, setSeasonDownloadOpen] = useState(false);
   /**
    * Set when a fallback route answered rather than the row's own.
@@ -585,10 +588,6 @@ export const DetailView: React.FC<DetailViewProps> = ({
   // A picker left open when the view goes away would leave its session running.
   useEffect(() => stopDiscovery, [stopDiscovery]);
 
-  const flash = useCallback((message: string) => {
-    setToast(message);
-    setTimeout(() => setToast(null), 5000);
-  }, []);
 
   /**
    * Saved state and origin, resolved once per item.
@@ -1116,7 +1115,13 @@ export const DetailView: React.FC<DetailViewProps> = ({
                 className={`episode-row${selectedEpisode?.url === episode.url ? ' episode-row--active' : ''}`}
               >
                 {episode.posterUrl && (
-                  <img className="episode-row__thumb" src={episode.posterUrl} alt="" loading="lazy" />
+                  <Poster
+                    src={episode.posterUrl}
+                    title={episode.name ?? ''}
+                    decorative
+                    className="episode-row__thumb"
+                    fallback={null}
+                  />
                 )}
                 <div className="episode-row__body">
                   <p className="episode-row__title">{episode.name}</p>

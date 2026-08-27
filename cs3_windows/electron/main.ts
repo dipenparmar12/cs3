@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, net, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, shell } from 'electron';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -523,10 +523,222 @@ function installProcessGuards(): void {
 
 installProcessGuards();
 
+/**
+ * The application menu, which was `null`.
+ *
+ * Removing it looked like a clean-chrome decision and cost three things:
+ *
+ * 1. **On macOS it removed Cut, Copy, Paste, Select All and Undo entirely.**
+ *    Those are menu *roles* there, not native text-field behaviour — so `Cmd+C`
+ *    did nothing in the search box, and there was no Quit item and no About.
+ *    This is the reason the menu is back, and it is not a small one.
+ * 2. **No zoom reset.** Chromium's `Ctrl+Wheel` zoom is live; a user who zoomed
+ *    by accident had no way back without opening DevTools.
+ * 3. **Every shortcut became undiscoverable**, which is why the app's own
+ *    provider inspector was invisible even before F12 was being swallowed.
+ *
+ * Reload is deliberately absent on a packaged build for the reason given at the
+ * `before-input-event` handler: it destroys live playback, and a viewer reaching
+ * for browser muscle memory should not lose the film they are watching.
+ */
+function buildApplicationMenu(): Menu {
+  const isMac = process.platform === 'darwin';
+
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(isMac
+      ? ([
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' },
+              { type: 'separator' },
+              { role: 'hide' },
+              { role: 'hideOthers' },
+              { role: 'unhide' },
+              { type: 'separator' },
+              { role: 'quit' },
+            ],
+          },
+        ] as Electron.MenuItemConstructorOptions[])
+      : []),
+    {
+      label: '&File',
+      submenu: [
+        {
+          label: 'Open File…',
+          accelerator: 'CmdOrCtrl+O',
+          click: () => void openLocalMediaDialog(),
+        },
+        { type: 'separator' },
+        isMac ? { role: 'close' } : { role: 'quit' },
+      ],
+    },
+    {
+      // The whole point on macOS: these roles are what make the standard
+      // clipboard shortcuts work in a text field at all.
+      label: '&Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        ...(isMac
+          ? ([{ role: 'pasteAndMatchStyle' }, { role: 'delete' }, { role: 'selectAll' }] as Electron.MenuItemConstructorOptions[])
+          : ([{ role: 'delete' }, { type: 'separator' }, { role: 'selectAll' }] as Electron.MenuItemConstructorOptions[])),
+      ],
+    },
+    {
+      label: '&View',
+      submenu: [
+        ...(app.isPackaged
+          ? []
+          : ([{ role: 'reload' }, { role: 'forceReload' }, { type: 'separator' }] as Electron.MenuItemConstructorOptions[])),
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+        { type: 'separator' },
+        { role: 'toggleDevTools' },
+      ],
+    },
+    {
+      label: '&Help',
+      submenu: [
+        {
+          label: 'Provider Inspector',
+          accelerator: 'F12',
+          click: () => mainWindow?.webContents.send('app:toggleInspector'),
+        },
+        {
+          label: 'Open Log Folder',
+          click: () => void shell.openPath(logger.directory()),
+        },
+        { type: 'separator' },
+        {
+          label: 'Licences',
+          click: () => mainWindow?.webContents.send('app:showLicences'),
+        },
+      ],
+    },
+  ];
+
+  return Menu.buildFromTemplate(template);
+}
+
+/**
+ * Open a file the user already has.
+ *
+ * The engine has always been able to do this — `MediaProxy` serves local files
+ * and the inspect→decide→play path is source-agnostic — and there was no way to
+ * ask for it. So the app could download a film and then not play it, and a
+ * user's own 10-bit HEVC MKV, the exact file this engine exists for, could not
+ * be opened at all.
+ *
+ * The renderer does the opening, through `media:prepare` like every other
+ * source. Nothing here hands back a raw URL (INV-RACE-1).
+ */
+async function openLocalMediaDialog(): Promise<void> {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Open a video file',
+    properties: ['openFile'],
+    filters: [
+      {
+        name: 'Video',
+        extensions: ['mkv', 'mp4', 'avi', 'mov', 'm4v', 'webm', 'ts', 'm2ts', 'wmv', 'flv', 'mpg', 'mpeg'],
+      },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || result.filePaths.length === 0) return;
+  mainWindow.webContents.send('app:openLocalFile', result.filePaths[0]);
+}
+
+/** Where the window was last time, so it opens where it was left. */
+interface WindowBounds {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+  maximized: boolean;
+}
+
+const WINDOW_BOUNDS_KEY = 'window_bounds';
+const DEFAULT_BOUNDS: WindowBounds = { width: 1360, height: 860, maximized: false };
+
+/**
+ * Restore the window where the user left it — on a display that still exists.
+ *
+ * The clamp is the part that matters and the part usually left out. A window
+ * remembered at x=2400 on a second monitor is, once that monitor is unplugged,
+ * *invisible*: it opens off-screen with no way to reach it and the app looks
+ * like it failed to start. This app already learned that lesson for the mini
+ * player (`useMiniFrame` clamps on window resize); it is the same lesson.
+ */
+function loadWindowBounds(): WindowBounds {
+  try {
+    const stored = datastore.getObject<WindowBounds>(WINDOW_BOUNDS_KEY, DEFAULT_BOUNDS);
+    if (!stored || typeof stored.width !== 'number' || typeof stored.height !== 'number') {
+      return DEFAULT_BOUNDS;
+    }
+    const bounds: WindowBounds = {
+      width: Math.max(960, Math.round(stored.width)),
+      height: Math.max(640, Math.round(stored.height)),
+      maximized: Boolean(stored.maximized),
+    };
+    if (typeof stored.x === 'number' && typeof stored.y === 'number') {
+      const visible = screen.getAllDisplays().some((display) => {
+        const a = display.workArea;
+        // Any meaningful overlap counts: a window half off the edge of a display
+        // is still reachable, and refusing that would be its own annoyance.
+        return (
+          stored.x! < a.x + a.width &&
+          stored.x! + bounds.width > a.x &&
+          stored.y! < a.y + a.height &&
+          stored.y! + bounds.height > a.y
+        );
+      });
+      if (visible) {
+        bounds.x = Math.round(stored.x);
+        bounds.y = Math.round(stored.y);
+      }
+    }
+    return bounds;
+  } catch {
+    return DEFAULT_BOUNDS;
+  }
+}
+
+function saveWindowBounds(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    // `getNormalBounds` rather than `getBounds`: the latter reports the
+    // maximized rectangle, so un-maximizing after a restart would restore to a
+    // full-screen-sized "restored" window and the un-maximize would do nothing.
+    const normal = mainWindow.getNormalBounds();
+    datastore.setObject(WINDOW_BOUNDS_KEY, {
+      x: normal.x,
+      y: normal.y,
+      width: normal.width,
+      height: normal.height,
+      maximized: mainWindow.isMaximized(),
+    } satisfies WindowBounds);
+  } catch {
+    // Losing a window position is never worth throwing over.
+  }
+}
+
 function createWindow() {
+  const bounds = loadWindowBounds();
+
   mainWindow = new BrowserWindow({
-    width: 1360,
-    height: 860,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
     minWidth: 960,
     minHeight: 640,
     title: 'CloudStream 3 Desktop',
@@ -541,21 +753,65 @@ function createWindow() {
     },
   });
 
-  Menu.setApplicationMenu(null);
+  if (bounds.maximized) mainWindow.maximize();
 
-  // Register developer keyboard shortcuts (F5, Ctrl+R, F12, Ctrl+Shift+I) so reloads & DevTools always work
+  // Debounced, because `resize` and `move` fire continuously while dragging and
+  // this writes through the datastore, which is the user's backup file.
+  let boundsTimer: NodeJS.Timeout | null = null;
+  const rememberBounds = () => {
+    if (boundsTimer) clearTimeout(boundsTimer);
+    boundsTimer = setTimeout(saveWindowBounds, 400);
+    boundsTimer.unref?.();
+  };
+  mainWindow.on('resize', rememberBounds);
+  mainWindow.on('move', rememberBounds);
+  mainWindow.on('maximize', rememberBounds);
+  mainWindow.on('unmaximize', rememberBounds);
+  // Closing is the one moment the position definitely matters, and the debounce
+  // above will not have fired for whatever the user did in the last 400ms.
+  mainWindow.on('close', () => {
+    if (boundsTimer) clearTimeout(boundsTimer);
+    saveWindowBounds();
+  });
+
+  Menu.setApplicationMenu(buildApplicationMenu());
+  // Hidden behind Alt on Windows and Linux, so the app keeps its clean chrome
+  // while every command above stays reachable and discoverable.
+  mainWindow.setAutoHideMenuBar(true);
+  mainWindow.setMenuBarVisibility(false);
+
+  /**
+   * Developer shortcuts, and two rules that are easy to get wrong.
+   *
+   * **F12 is not bound here.** It used to toggle Chromium DevTools *and* call
+   * `preventDefault()`, which suppresses the page keyboard event — so the
+   * renderer's own F12 handler never fired and `ProviderInspector`, which has no
+   * other entry point, was unreachable. DevTools is `Ctrl+Shift+I` only; F12
+   * belongs to the app's own inspector.
+   *
+   * **Reload is gated on a packaged build.** `Ctrl+R` is muscle memory from a
+   * browser, and in a packaged app it destroys the renderer: playback stops, the
+   * open page is lost, an in-flight search is abandoned. A viewer reaching for it
+   * while typing in the search box should not lose the film they are watching.
+   * DevTools stays available everywhere — this app's whole diagnostic story
+   * depends on being able to open it on a user's machine.
+   */
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    // F5 or Ctrl+R / Cmd+R -> Reload window
+    if (input.type !== 'keyDown') return;
+
+    // F5 or Ctrl+R / Cmd+R -> Reload window. Development builds only.
     if ((input.key.toLowerCase() === 'r' && (input.control || input.meta)) || input.key === 'F5') {
-      if (input.shift) {
-        mainWindow?.webContents.reloadIgnoringCache();
-      } else {
-        mainWindow?.webContents.reload();
+      if (!app.isPackaged) {
+        if (input.shift) {
+          mainWindow?.webContents.reloadIgnoringCache();
+        } else {
+          mainWindow?.webContents.reload();
+        }
       }
       event.preventDefault();
     }
-    // F12 or Ctrl+Shift+I / Cmd+Option+I -> Toggle Chromium DevTools
-    if (input.key === 'F12' || (input.key.toLowerCase() === 'i' && (input.control || input.meta) && input.shift)) {
+    // Ctrl+Shift+I / Cmd+Option+I -> Toggle Chromium DevTools.
+    if (input.key.toLowerCase() === 'i' && (input.control || input.meta) && input.shift) {
       mainWindow?.webContents.toggleDevTools();
       event.preventDefault();
     }
@@ -567,6 +823,38 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//.test(url)) shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  /**
+   * The window may never navigate away from the app it is showing.
+   *
+   * `setWindowOpenHandler` covers `window.open` and target=_blank; it does not
+   * cover a top-level navigation, and Electron's default for one is to perform
+   * it. **Dropping a file on the window is a top-level navigation** — and for a
+   * media player, dragging a video onto the picture is the most natural gesture
+   * a user has. The React app would be replaced by the file, and with no
+   * application menu there is no View → Reload to get back: the app is bricked
+   * until it is relaunched.
+   *
+   * The renderer's own drop handler still sees the event (see `src/main.tsx`),
+   * so opening a dropped file remains possible — it just goes through
+   * `media:prepare` like every other source rather than through the address bar.
+   */
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const current = mainWindow?.webContents.getURL();
+    if (current && url !== current) {
+      event.preventDefault();
+      // A dragged http(s) link is a link, and links open in the browser.
+      if (/^https?:\/\//.test(url) && !url.startsWith('http://127.0.0.1')) {
+        void shell.openExternal(url);
+      }
+    }
+  });
+
+  // A subframe cannot navigate the app away either.
+  mainWindow.webContents.on('will-frame-navigate', (event) => {
+    if (event.isMainFrame) return;
+    event.preventDefault();
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {
@@ -742,39 +1030,88 @@ app.whenReady().then(async () => {
   });
 });
 
+/**
+ * Closing the last window is not the same thing as quitting.
+ *
+ * This used to tear down the download queue, the extension updater and the JVM
+ * sidecar *unconditionally*, with only `app.quit()` guarded by platform. On
+ * macOS the app then stayed alive in the dock holding a dead sidecar and a
+ * stopped queue, and `activate` opened a fresh window onto all of it — zero
+ * providers, every search empty, downloads silently halted, and nothing on
+ * screen explaining any of it. Every teardown now lives in `before-quit`, which
+ * is the event that actually means "we are going away".
+ */
 app.on('window-all-closed', () => {
-  downloadService.stop();
-  extensionUpdater.stop();
-  // The sidecar is a child process; leaving it running would orphan a JVM.
-  pluginManager.shutdown();
   if (process.platform !== 'darwin') app.quit();
 });
 
-// The torrent client holds sockets and file handles; tearing it down cleanly
-// prevents a zombie process and a locked cache directory on next launch.
+/** How long the whole shutdown may take before the process leaves anyway. */
+const SHUTDOWN_DEADLINE_MS = 5_000;
+
+/**
+ * Tear down everything that owns a socket, a file handle, a timer or a child
+ * process. Ordered cheapest-first so a hang late in the list still lets the
+ * earlier flushes land.
+ */
+async function shutdownServices(): Promise<void> {
+  downloadService.stop();
+  extensionUpdater.stop();
+  diagnostics.flush();
+  providerAnalytics.flush();
+  // The ledger's write is debounced, and the failures worth keeping cluster at
+  // shutdown — a session that ended badly is the one whose last seconds matter.
+  issueLog.flush();
+  mediaTranscoder.shutdown();
+  contentService.shutdown();
+  // Hidden windows keep running their pages — timers, requests and all — with
+  // nothing on screen to reveal them.
+  webViewHost.destroy();
+  // The sidecar is a child process; leaving it running orphans a JVM.
+  pluginManager.shutdown();
+  // A child process with its own window: without this it survives the app and
+  // keeps playing, with nothing left on screen to stop it.
+  await mpvEngine.shutdown();
+  // A controlled VLC is our child process; without this it outlives the app.
+  await externalPlayers.shutdown();
+  // The torrent client holds sockets and file handles; tearing it down cleanly
+  // prevents a zombie process and a locked cache directory on next launch.
+  await torrentEngine.destroy();
+}
+
+let quitting = false;
+
 app.on('before-quit', async (event) => {
-  if (!torrentEngine) return;
+  if (quitting) return;
+  quitting = true;
   event.preventDefault();
+
+  /**
+   * Shutdown is raced against a deadline, and that is not belt-and-braces.
+   *
+   * WebTorrent's `destroy()` and an unresponsive mpv both hang in the wild, and
+   * this handler is the only thing between them and the process exiting. When
+   * one hung, the window was gone and the process was not, and the user's only
+   * recourse was Task Manager — after which the next launch hit the locked cache
+   * directory this very handler exists to prevent.
+   *
+   * Which service was still pending is logged, because that is the fact that
+   * makes the *next* fix possible and it costs one line.
+   */
+  let settled = false;
   try {
-    // Owns child processes and a socket, so it has to be torn down explicitly
-    // or a killed app leaves orphaned ffmpeg processes behind.
-    diagnostics.flush();
-    providerAnalytics.flush();
-    mediaTranscoder.shutdown();
-    // A child process with its own window: without this it survives the app and
-    // keeps playing, with nothing left on screen to stop it.
-    await mpvEngine.shutdown();
-    // A controlled VLC is our child process; without this it outlives the app.
-    await externalPlayers.shutdown();
-    contentService.shutdown();
-    // Hidden windows keep running their pages — timers, requests and all — with
-    // nothing on screen to reveal them.
-    webViewHost.destroy();
-    await torrentEngine.destroy();
+    await Promise.race([
+      shutdownServices().then(() => {
+        settled = true;
+      }),
+      new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_DEADLINE_MS)),
+    ]);
+    if (!settled) {
+      logger.warn('app', 'shutdown_timeout', { deadlineMs: SHUTDOWN_DEADLINE_MS });
+    }
   } catch (error) {
-    // Shutdown is best-effort; never block quit on it. It is still worth
-    // recording, because a service that throws here is one that leaked
-    // something — and the next launch is where that shows up.
+    // Never block quit on a failed teardown. It is still worth recording,
+    // because a service that throws here is one that leaked something — and the
+    // next launch is where that shows up.
     logger.warn('app', 'shutdown_incomplete', {
       error: error instanceof Error ? error.message : String(error),
     });
@@ -1692,6 +2029,42 @@ ipcMain.handle('runtime:clean', async () => {
     return await provisioner.cleanRuntime();
   } catch (error) {
     return { ...fail(error), ok: false };
+  }
+});
+
+/**
+ * The one verb a user actually has: "fix it".
+ *
+ * `clean`, `provision` and `test` are three technical steps, and a runtime that
+ * reports `stale` or names a blocked class needs all three in that order. Asking
+ * someone looking at a broken extension runtime to work out which button applies
+ * is asking them to understand the provisioner, and the answer is always the
+ * same sequence — so this is that sequence, under the name of the outcome.
+ *
+ * Clean is best-effort on purpose: a first install has nothing to remove, and
+ * failing the repair because the thing being repaired was absent is the opposite
+ * of what was asked for.
+ */
+ipcMain.handle('runtime:repair', async () => {
+  try {
+    const provisioner = pluginManager.getSidecar().getProvisioner();
+    await provisioner.cleanRuntime().catch((error) => {
+      logger.warn('runtime', 'repair_clean_failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    const ready = await provisioner.provisionRuntime();
+    if (ready) {
+      // `force`, because hydration answers from disk: without it the reload
+      // re-reads the same provider descriptions and the repair changes nothing
+      // observable, which is the opposite of what the caller asked for.
+      await pluginManager.loadProviders(true).catch((err) => {
+        console.warn('[runtime:repair] Post-repair provider load failed:', err);
+      });
+    }
+    return { ok: ready, ready };
+  } catch (error) {
+    return { ...fail(error), ready: false };
   }
 });
 
@@ -2694,7 +3067,6 @@ ipcMain.handle('download:revealInFolder', async (_, targetPath?: string) => {
 
 // --- binaries ------------------------------------------------------------
 
-ipcMain.handle('binary:check', async () => binaryDownloader.checkBinaries());
 ipcMain.handle('binary:checkBinaries', async () => binaryDownloader.checkBinaries());
 
 ipcMain.handle('binary:testAll', async () => binaryDownloader.testAllBinaries());
@@ -2767,24 +3139,16 @@ ipcMain.handle('binary:setupAll', async () => {
   }
 });
 
-ipcMain.handle('binary:setup', async () => {
-  try {
-    const aria2Ok = await binaryDownloader.setupAria2();
-    const ytdlpOk = await binaryDownloader.setupYtDlp();
-    if (aria2Ok) await aria2.start();
-
-    return {
-      success: aria2Ok || ytdlpOk,
-      message: aria2Ok
-        ? 'aria2c and yt-dlp downloaded and configured.'
-        : ytdlpOk
-          ? 'yt-dlp configured; aria2c setup failed.'
-          : 'Binary setup failed.',
-    };
-  } catch (e: any) {
-    return { success: false, message: e?.message || 'Failed to set up binaries' };
-  }
-});
+/*
+ * There was a second setup handler here (`binary:setup`), reporting
+ * `{ success, message }` where every other binary handler reports
+ * `{ ok, message }`, installing only aria2 and yt-dlp, and pushing no progress
+ * at all. The preload invoked a third spelling that nothing registered, so the
+ * setup modal — the first thing a new user is offered — rejected on every press
+ * and rendered `No handler registered for 'binary:setupBinaries'` as a friendly
+ * notice. `binary:setupAll` above is the one that installs everything and
+ * reports per-component progress; it is now the only one.
+ */
 
 // --- extensions ----------------------------------------------------------
 

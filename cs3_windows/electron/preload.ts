@@ -22,9 +22,11 @@ import type { MetadataDetail } from './metadataProvider';
 import type { SourceResponse, StreamAttempt } from './contentService';
 import type {
   ExtensionProvider,
+  PluginRuntimeReport,
   ProviderLoadProgress,
   RepositoryFetchResult,
 } from './pluginManager';
+import type { ProbeConfig } from './media/mediaInspector';
 import type { SearchScope } from './searchScope';
 import type { SearchSnapshot } from './searchSession';
 import type { DnsPreset, NetworkSettings } from './networkSettings';
@@ -479,6 +481,17 @@ export interface CloudStreamElectronAPI {
    * can answer for the machine in front of the user.
    */
   setMediaCapabilities: (capabilities: RendererCapabilities) => Promise<Envelope>;
+  /**
+   * How long a source gets to describe itself before it is given up on.
+   *
+   * The default budget is generous on a normal connection and too short on a
+   * slow or high-latency one — where the visible result is that *every* source
+   * "fails", because ffprobe ran out of time rather than because anything was
+   * wrong with the stream. Exposed so the user it affects can raise it; it was
+   * registered in the main process with no way to reach it.
+   */
+  getProbeConfig: () => Promise<Envelope & { config: ProbeConfig }>;
+  setProbeConfig: (config: Partial<ProbeConfig>) => Promise<Envelope & { config?: ProbeConfig }>;
 
   /**
    * Media players installed on this machine, and where to get one.
@@ -732,7 +745,6 @@ export interface CloudStreamElectronAPI {
   onBinarySetupProgress: (
     callback: (progress: { component?: string; status: string; percent: number }) => void
   ) => () => void;
-  setupBinaries: () => Promise<{ success: boolean; message: string }>;
 
   // Plug-and-Play Runtime Provisioner
   getSystemRuntimeStatus: () => Promise<Envelope & SystemRuntimeStatus>;
@@ -789,6 +801,17 @@ export interface CloudStreamElectronAPI {
     skip: number
   ) => Promise<Envelope & { items: SearchResponse[] }>;
   refreshDiscovery: () => Promise<Envelope>;
+  /**
+   * The catalogue behind the home screen changed; whatever is on screen is now
+   * someone else's rows.
+   *
+   * The main process has always emitted this after a provider switch, and
+   * nothing listened for it — so picking a different catalogue in Settings saved
+   * the setting, succeeded, and left the previous provider's rows on the home
+   * screen until each one aged out six hours later. The user's reasonable
+   * conclusion was that the setting did not work.
+   */
+  onDiscoveryInvalidated: (callback: () => void) => () => void;
   /**
    * Replaces provider release names with catalogue titles and artwork.
    *
@@ -1019,6 +1042,16 @@ export interface CloudStreamElectronAPI {
     repoUrl: string
   ) => Promise<{ repositories: string[]; removedExtensions: string[] }>;
   getInstalledPlugins: () => Promise<SitePlugin[]>;
+  /**
+   * What the runtime made of one archive: its compatibility tier, and — when it
+   * is `T4_BLOCKED` — the reason verbatim.
+   *
+   * This is the only place the app can answer "the extension is installed and
+   * registered nothing, why?", and it was registered in the main process with no
+   * way for the renderer to call it. Without it an extension that failed to link
+   * is indistinguishable from one that simply has no providers.
+   */
+  getExtensionRuntimeReport: (internalName: string) => Promise<PluginRuntimeReport | null>;
   onExtensionInstallProgress: (
     callback: (progress: {
       internalName: string;
@@ -1212,6 +1245,18 @@ export interface CloudStreamElectronAPI {
   selectDirectory: () => Promise<string | null>;
   reloadApp: () => Promise<void>;
   relaunchApp: () => Promise<void>;
+  /**
+   * Commands from the application menu.
+   *
+   * The menu is the only place these are discoverable — a keyboard shortcut with
+   * nothing naming it is a feature only its author knows about, which is what
+   * the provider inspector was for as long as F12 was being swallowed before the
+   * renderer ever saw it.
+   */
+  onToggleInspector: (callback: () => void) => () => void;
+  onShowLicences: (callback: () => void) => () => void;
+  /** A file the user picked from File → Open, to be prepared and played. */
+  onOpenLocalFile: (callback: (filePath: string) => void) => () => void;
 }
 
 export type { TorrentFileEntry };
@@ -1329,6 +1374,8 @@ const api: CloudStreamElectronAPI = {
   getPlaybackDiagnostics: (sessionId) =>
     ipcRenderer.invoke('media:getPlaybackDiagnostics', sessionId),
   getCodecProbes: () => ipcRenderer.invoke('media:getCodecProbes'),
+  getProbeConfig: () => ipcRenderer.invoke('media:getProbeConfig'),
+  setProbeConfig: (config) => ipcRenderer.invoke('media:setProbeConfig', config),
   setMediaCapabilities: (capabilities) =>
     ipcRenderer.invoke('media:setCapabilities', capabilities),
   listExternalPlayers: (refresh) => ipcRenderer.invoke('player:listExternal', refresh),
@@ -1424,7 +1471,6 @@ const api: CloudStreamElectronAPI = {
   setupAllBinaries: () => ipcRenderer.invoke('binary:setupAll'),
   setupFfmpeg: () => ipcRenderer.invoke('binary:setupFfmpeg'),
   onBinarySetupProgress: (callback) => subscribe('binary:setupProgress', callback),
-  setupBinaries: () => ipcRenderer.invoke('binary:setupBinaries'),
 
   // Plug-and-Play Runtime Provisioner
   getSystemRuntimeStatus: () => ipcRenderer.invoke('runtime:getStatus'),
@@ -1444,6 +1490,7 @@ const api: CloudStreamElectronAPI = {
   getDiscoverySections: (options) => ipcRenderer.invoke('discover:sections', options),
   getMoreDiscovery: (section, skip) => ipcRenderer.invoke('discover:more', section, skip),
   refreshDiscovery: () => ipcRenderer.invoke('discover:refresh'),
+  onDiscoveryInvalidated: (callback) => subscribe('discover:invalidated', callback),
   enrichResults: (results, limit) => ipcRenderer.invoke('discover:enrich', results, limit),
   resolveTitle: (rawTitle, hint) => ipcRenderer.invoke('discover:resolveTitle', rawTitle, hint),
 
@@ -1495,6 +1542,8 @@ const api: CloudStreamElectronAPI = {
   installRepository: (url, options) => ipcRenderer.invoke('extension:installRepository', url, options),
   removeRepository: (repoUrl) => ipcRenderer.invoke('extension:removeRepository', repoUrl),
   getInstalledPlugins: () => ipcRenderer.invoke('extension:getInstalledPlugins'),
+  getExtensionRuntimeReport: (internalName) =>
+    ipcRenderer.invoke('extension:getRuntimeReport', internalName),
   onExtensionInstallProgress: (callback) => subscribe('extension:installProgress', callback),
 
   checkExtensionUpdates: () => ipcRenderer.invoke('extension:checkUpdates'),
@@ -1575,6 +1624,9 @@ const api: CloudStreamElectronAPI = {
   selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
   reloadApp: () => ipcRenderer.invoke('app:reload'),
   relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
+  onToggleInspector: (callback) => subscribe('app:toggleInspector', callback),
+  onShowLicences: (callback) => subscribe('app:showLicences', callback),
+  onOpenLocalFile: (callback) => subscribe('app:openLocalFile', callback),
 };
 
 contextBridge.exposeInMainWorld('cloudstream', api);

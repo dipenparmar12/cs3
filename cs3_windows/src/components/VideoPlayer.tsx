@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useFlash } from '../utils/useFlash';
 import Hls from 'hls.js';
 import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
 import {
@@ -602,7 +603,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const [showNativePlayerBtn, setShowNativePlayerBtn] = useState(true);
   const [externalPlayers, setExternalPlayers] = useState<Array<{ id: string; name: string }>>([]);
-  const [extPlayerStatus, setExtPlayerStatus] = useState<string | null>(null);
+  const { message: extPlayerStatus, flash: setExtPlayerStatus } = useFlash<string>(5000);
 
   useEffect(() => {
     let active = true;
@@ -655,9 +656,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         setExternalControl(null);
         setExtPlayerStatus(res?.error ?? `Could not launch ${playerName}`);
       }
-      setTimeout(() => setExtPlayerStatus(null), 5000);
     },
-    [streamUrl, externalPlayers]
+    [streamUrl, externalPlayers, setExtPlayerStatus]
   );
 
   const handleDownloadCurrentMedia = useCallback(async () => {

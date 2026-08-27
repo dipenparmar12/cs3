@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useFlash } from '../utils/useFlash';
 import {
   History as HistoryIcon,
   Play,
@@ -138,8 +139,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   const [inspectingItem, setInspectingItem] = useState<HistoryEvent | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [refreshingSourceId, setRefreshingSourceId] = useState<string | null>(null);
-  const [refreshSuccessMessage, setRefreshSuccessMessage] = useState<{ id: string; text: string } | null>(null);
-  const [copiedText, setCopiedText] = useState<'report' | 'json' | 'url' | null>(null);
+  const { message: refreshSuccessMessage, flash: setRefreshSuccessMessage, dismiss: dismiss_refreshSuccessMessage } = useFlash<{ id: string; text: string }>(4000);
+  const { message: copiedText, flash: setCopiedText } = useFlash<'report' | 'json' | 'url'>(2000);
 
   const fetchHistory = useCallback(async () => {
     if (!window.cloudstream) {
@@ -248,7 +249,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
     e?.stopPropagation();
     if (!window.cloudstream) return;
     setRefreshingSourceId(item.id);
-    setRefreshSuccessMessage(null);
+    dismiss_refreshSuccessMessage();
     try {
       const res = await window.cloudstream.refreshLibrarySources?.(
         item.mediaUrl,
@@ -291,7 +292,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
       }
     } finally {
       setRefreshingSourceId(null);
-      setTimeout(() => setRefreshSuccessMessage(null), 4000);
     }
   };
 
@@ -334,13 +334,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
 
     navigator.clipboard.writeText(lines);
     setCopiedText('report');
-    setTimeout(() => setCopiedText(null), 2000);
   };
 
   const copyRawJson = (item: HistoryEvent) => {
     navigator.clipboard.writeText(JSON.stringify(item, null, 2));
     setCopiedText('json');
-    setTimeout(() => setCopiedText(null), 2000);
   };
 
   const statusPills: Array<{ status: HistoryStatus | 'All'; label: string; count?: number }> = [
@@ -1256,7 +1254,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                             onClick={() => {
                               navigator.clipboard.writeText(src.directUrl!);
                               setCopiedText('url');
-                              setTimeout(() => setCopiedText(null), 1500);
                             }}
                             title="Copy link"
                             style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }}

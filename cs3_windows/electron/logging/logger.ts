@@ -343,6 +343,11 @@ export class Logger {
     return matched.slice(-limit);
   }
 
+  /** Where the session files are written, for "open the log folder". */
+  public directory(): string {
+    return this.dir;
+  }
+
   /** Every log file on disk, newest first, with its size. */
   public sessions(): Array<{ file: string; bytes: number; modified: number; current: boolean }> {
     if (!this.persist) return [];

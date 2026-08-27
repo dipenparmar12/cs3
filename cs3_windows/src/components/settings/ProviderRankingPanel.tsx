@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useFlash } from '../../utils/useFlash';
 import {
   BarChart3,
   ChevronDown,
@@ -48,7 +49,7 @@ export const ProviderRankingPanel: React.FC = () => {
   const [recommendations, setRecommendations] = useState<ProviderRecommendation[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [showWeights, setShowWeights] = useState(false);
-  const [flash, setFlash] = useState<string | null>(null);
+  const { message: flashMessage, flash: setFlash } = useFlash<string>(4000);
 
   const load = useCallback(async () => {
     const [board, recs] = await Promise.all([
@@ -70,7 +71,6 @@ export const ProviderRankingPanel: React.FC = () => {
 
   const say = (message: string) => {
     setFlash(message);
-    setTimeout(() => setFlash(null), 4000);
   };
 
   const updateSettings = async (patch: Partial<AnalyticsSettings>) => {
@@ -97,7 +97,7 @@ export const ProviderRankingPanel: React.FC = () => {
 
   return (
     <div className="ranking">
-      {flash && <div className="settings__flash">{flash}</div>}
+      {flashMessage && <div className="settings__flash">{flashMessage}</div>}
 
       {/* --- what is collected, and the switch --------------------------- */}
       <section className="setting-group">

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { WifiOff } from 'lucide-react';
 import type { PlayedSource } from './types/library';
 import { Sidebar } from './components/Sidebar';
 import type { ActiveTab } from './components/Sidebar';
@@ -146,6 +147,28 @@ export const App: React.FC = () => {
   const [providersList, setProvidersList] = useState<string[]>([]);
 
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+
+  /**
+   * Whether the machine has a network at all.
+   *
+   * Offline, every provider fails on its own and the app filled with thirty
+   * separate honest errors instead of one true sentence — and the home screen,
+   * which can render entirely from cache, showed a spinner. `navigator.onLine`
+   * is a weak signal (it reports the link, not reachability) and that is exactly
+   * why it is used only to *add* a banner, never to stop the app trying.
+   */
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+
+  useEffect(() => {
+    const online = () => setIsOffline(false);
+    const offline = () => setIsOffline(true);
+    window.addEventListener('online', online);
+    window.addEventListener('offline', offline);
+    return () => {
+      window.removeEventListener('online', online);
+      window.removeEventListener('offline', offline);
+    };
+  }, []);
   const [isBinaryModalOpen, setIsBinaryModalOpen] = useState(false);
   const [hasBinaries, setHasBinaries] = useState(true);
 
@@ -199,6 +222,15 @@ export const App: React.FC = () => {
       setSearch((current) => (current && current.id === snapshot.id ? snapshot : current));
     });
 
+    /**
+     * F12 opens the provider inspector.
+     *
+     * This listener existed and could never fire: the main process bound F12 to
+     * Chromium's DevTools in `before-input-event` and called `preventDefault()`,
+     * which suppresses the page keyboard event — so the inspector, which has no
+     * other entry point, was unreachable. DevTools is `Ctrl+Shift+I` now, and
+     * the same command is in the Help menu so it is discoverable at all.
+     */
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'F12') {
         e.preventDefault();
@@ -207,13 +239,81 @@ export const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
 
+    const disposeInspector = window.cloudstream?.onToggleInspector?.(() =>
+      setIsInspectorOpen((prev) => !prev)
+    );
+
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       disposeProgress?.();
       disposePlayback?.();
       disposeSearch?.();
+      disposeInspector?.();
     };
   }, []);
+
+  /**
+   * Play a file the user already has on disk.
+   *
+   * The engine could always do this — `MediaProxy` serves local files and the
+   * inspect→decide→play path does not care where a stream came from — and there
+   * was no way to ask for it. So the app could finish a download and then not
+   * play it from disk, and a user's own 10-bit HEVC MKV, the exact file this
+   * engine exists for, could not be opened at all.
+   *
+   * The loopback URL rather than the path is the important half: it goes through
+   * `media:prepare` like every other source, so a local file gets the same
+   * codec routing — including out to mpv — that a provider link does.
+   */
+  const handleOpenLocalFile = useCallback(async (filePath: string) => {
+    const served = await window.cloudstream?.getPlayableDownloadUrl(filePath);
+    if (!served?.ok || !served.url) {
+      setActionNotice(served?.error ?? 'That file could not be opened.');
+      return;
+    }
+    const name = filePath.split(/[\\/]/).pop() ?? 'Local file';
+    setPlayerHidden(false);
+    setPlayerMini(false);
+    setPlayback({
+      streamUrl: served.url,
+      mimeType: 'video/mp4',
+      title: name.replace(/\.[^.]+$/, ''),
+      infoHash: `local:${filePath}`,
+      subtitles: [],
+    });
+  }, []);
+
+  useEffect(() => {
+    return window.cloudstream?.onOpenLocalFile?.((filePath) => {
+      void handleOpenLocalFile(filePath);
+    });
+  }, [handleOpenLocalFile]);
+
+  /**
+   * A file dropped on the window plays; it does not navigate.
+   *
+   * Electron's default for a top-level drop is to navigate to the file, which
+   * replaced the whole app with the raw video and — with no menu at the time —
+   * left no way back short of relaunching. The main process refuses the
+   * navigation now; this turns the gesture into the thing the user meant.
+   */
+  useEffect(() => {
+    const allow = (event: DragEvent) => event.preventDefault();
+    const onDrop = (event: DragEvent) => {
+      event.preventDefault();
+      const file = event.dataTransfer?.files?.[0];
+      // `webUtils.getPathForFile` is the supported route in newer Electron;
+      // `file.path` remains populated in this build and is the simpler one.
+      const filePath = (file as (File & { path?: string }) | undefined)?.path;
+      if (filePath) void handleOpenLocalFile(filePath);
+    };
+    window.addEventListener('dragover', allow);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragover', allow);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, [handleOpenLocalFile]);
 
   /**
    * Opens a search. Returns as soon as it has started, not when it has finished.
@@ -263,6 +363,20 @@ export const App: React.FC = () => {
   const handleScopeChange = useCallback(() => {
     const previous = lastQuery.current;
     if (previous?.query) void handleSearch(previous.query, previous.options);
+  }, [handleSearch]);
+
+  /**
+   * Re-run the last query with no scope at all.
+   *
+   * The empty-results screen is the one place this is genuinely the next step:
+   * the sentence on it has just said the selected providers had nothing, and
+   * "search everywhere" was reachable only by finding the scope picker in the
+   * toolbar and clearing it by hand.
+   */
+  const handleSearchAllSources = useCallback(() => {
+    const previous = lastQuery.current;
+    if (!previous?.query) return;
+    void handleSearch(previous.query, { ...previous.options, providers: [], indexers: [] });
   }, [handleSearch]);
 
   /**
@@ -857,6 +971,16 @@ export const App: React.FC = () => {
           externalQuery={searchQuery}
         />
 
+        {isOffline && (
+          <div className="offline-banner" role="status">
+            <WifiOff size={15} aria-hidden />
+            <span>
+              <strong>You are offline.</strong> Saved pages and downloaded files still work;
+              searching and streaming need a connection.
+            </span>
+          </div>
+        )}
+
         {/* First launch only, and never blocking: the app works while the
             bundled repositories install behind it. */}
         <FirstRunBanner />
@@ -1108,6 +1232,7 @@ export const App: React.FC = () => {
                     error={searchError}
                     ui={searchUi}
                     onUiChange={setSearchUi}
+                    onSearchAllSources={handleSearchAllSources}
                   />
                 </ErrorBoundary>
               )}

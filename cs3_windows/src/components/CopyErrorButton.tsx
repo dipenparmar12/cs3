@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useFlash } from '../utils/useFlash';
 import { Check, ChevronDown, ClipboardCopy, FileText } from 'lucide-react';
 
 /**
@@ -37,7 +38,7 @@ export const CopyErrorButton: React.FC<{
   label?: string;
   compact?: boolean;
 }> = ({ context, recordIds, label = 'Copy error details', compact = false }) => {
-  const [copied, setCopied] = useState<'current' | 'full' | null>(null);
+  const { message: copied, flash: setCopied } = useFlash<'current' | 'full'>(2500);
   const [busy, setBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const wrapper = useRef<HTMLDivElement | null>(null);
@@ -71,7 +72,6 @@ export const CopyErrorButton: React.FC<{
         if (!response?.text) return;
         await navigator.clipboard.writeText(response.text);
         setCopied(mode);
-        setTimeout(() => setCopied(null), 2500);
       } catch {
         // Clipboard access can be refused; the diagnostics panel in Settings is
         // the way through when it is, so failing quietly here is acceptable.
@@ -79,7 +79,7 @@ export const CopyErrorButton: React.FC<{
         setBusy(false);
       }
     },
-    [context, recordIds]
+    [context, recordIds, setCopied]
   );
 
   return (

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useFlash } from '../utils/useFlash';
 import {
   Cpu,
   Download,
@@ -55,11 +56,10 @@ export const UnifiedComponentManager: React.FC = () => {
 
   const [busyMap, setBusyMap] = useState<Record<string, boolean>>({});
   const [openDisclosures, setOpenDisclosures] = useState<Record<string, boolean>>({});
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const { message: statusMessage, flash: setStatusMessage } = useFlash<string>(4000);
 
   const flash = (msg: string) => {
     setStatusMessage(msg);
-    setTimeout(() => setStatusMessage(null), 4000);
   };
 
   const refreshStatus = useCallback(async () => {

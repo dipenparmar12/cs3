@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useFlash } from '../../utils/useFlash';
 import { Download, ExternalLink, MonitorPlay, RefreshCw } from 'lucide-react';
 
 /**
@@ -26,7 +27,7 @@ export const ExternalPlayerFallback: React.FC<{ streamUrl: string; compact?: boo
   const [downloads, setDownloads] = useState<
     Array<{ id: string; name: string; url: string; note: string }>
   >([]);
-  const [status, setStatus] = useState<string | null>(null);
+  const { message: status, flash: setStatus } = useFlash<string>(4000);
   const [checking, setChecking] = useState(false);
 
   const load = async (refresh = false) => {
@@ -44,7 +45,6 @@ export const ExternalPlayerFallback: React.FC<{ streamUrl: string; compact?: boo
   const open = async (id: string, name: string) => {
     const response = await window.cloudstream?.openInExternalPlayer?.(id, streamUrl);
     setStatus(response?.ok ? `Opening in ${name}…` : (response?.error ?? `Could not start ${name}.`));
-    setTimeout(() => setStatus(null), 4000);
   };
 
   if (players.length === 0 && downloads.length === 0) return null;

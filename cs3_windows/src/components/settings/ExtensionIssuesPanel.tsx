@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useFlash } from '../../utils/useFlash';
 import { BellOff, ClipboardCopy, RefreshCw, Trash2 } from 'lucide-react';
 import type { ExtensionIssue, IssueSummary } from '../../../electron/cs3/extensionIssues';
 import { FacetMenu, type FacetOption } from '../FacetMenu';
@@ -30,7 +31,7 @@ export const ExtensionIssuesPanel: React.FC = () => {
   const [sourceFilter, setSourceFilter] = useState('all');
   const [showMuted, setShowMuted] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const { message: copied, flash: setCopied } = useFlash<boolean>(2000);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -91,8 +92,7 @@ export const ExtensionIssuesPanel: React.FC = () => {
     if (!response?.report) return;
     await navigator.clipboard.writeText(response.report);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, []);
+  }, [setCopied]);
 
   const mute = useCallback(
     async (issue: ExtensionIssue) => {

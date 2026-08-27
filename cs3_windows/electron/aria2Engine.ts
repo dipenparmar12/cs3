@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import crypto from 'crypto';
 import http from 'http';
+import net from 'net';
 import path from 'path';
 import fs from 'fs';
 import { app } from 'electron';
@@ -26,14 +27,45 @@ export interface Aria2Progress {
   errorMessage?: string;
 }
 
+/**
+ * Where to start looking for a port. aria2's own default, so a user watching
+ * with a port monitor sees the number they expect — but it is a starting point
+ * and not a requirement; see `findFreePort`.
+ */
+const PREFERRED_PORT = 6800;
+/** How many ports above the preferred one to try before giving up. */
+const PORT_SCAN_RANGE = 24;
+/** How long to wait for the spawned daemon's RPC to answer before failing. */
+const RPC_READY_TIMEOUT_MS = 4_000;
+
 export class Aria2Engine {
   private aria2Process: ChildProcess | null = null;
   private rpcSecret: string;
-  private port: number = 6800;
-
+  private port: number = PREFERRED_PORT;
+  /**
+   * Why the last `start()` failed, in words a person can act on.
+   *
+   * The daemon used to be spawned with `stdio: 'ignore'`, so when it refused to
+   * start the reason was discarded and the app reported only that downloads had
+   * fallen back to the HTTP path — at a fraction of the speed, for the life of
+   * the install, with nothing anywhere saying why. A silent downgrade is the
+   * failure mode this codebase keeps having to fix.
+   */
+  private lastError: string | null = null;
+  private starting: Promise<boolean> | null = null;
 
   constructor() {
     this.rpcSecret = crypto.randomUUID();
+  }
+
+  /** The port the daemon actually bound, once it has started. */
+  public getPort(): number {
+    return this.port;
+  }
+
+  /** Why the engine is unavailable, or null when it is running or untried. */
+  public getLastError(): string | null {
+    return this.lastError;
   }
 
   public getBinaryPath(): string | null {
@@ -46,14 +78,80 @@ export class Aria2Engine {
     return null;
   }
 
+  /**
+   * A port nothing else is listening on, starting at aria2's default.
+   *
+   * 6800 is aria2's *documented* default, which means the people most likely to
+   * collide with it are the ones already running aria2 — a seedbox operator, a
+   * Deluge user, anyone with an aria2 tray app. That is precisely this app's
+   * technical audience, and hard-coding the number handed exactly them the
+   * slowest download path available.
+   *
+   * Binding is the test rather than a connect attempt: a connect that fails
+   * tells you nothing about whether *we* will be allowed to listen there.
+   */
+  private async findFreePort(): Promise<number | null> {
+    for (let candidate = PREFERRED_PORT; candidate < PREFERRED_PORT + PORT_SCAN_RANGE; candidate++) {
+      const free = await new Promise<boolean>((resolve) => {
+        const probe = net.createServer();
+        probe.once('error', () => resolve(false));
+        probe.once('listening', () => probe.close(() => resolve(true)));
+        probe.listen(candidate, '127.0.0.1');
+      });
+      if (free) return candidate;
+    }
+    return null;
+  }
+
+  /** Polls the RPC until it answers, so "started" means "usable". */
+  private async waitForRpc(deadlineMs: number): Promise<boolean> {
+    const until = Date.now() + deadlineMs;
+    while (Date.now() < until) {
+      try {
+        await this.sendRpc('getVersion');
+        return true;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Start the daemon, and only report success once its RPC actually answers.
+   *
+   * The old implementation returned `true` the moment `spawn` returned. A port
+   * conflict is not a spawn error — aria2 starts, fails to bind, and exits with
+   * a non-zero code a few milliseconds later — so `isRunning()` answered true
+   * for a dead process and every `addUri` after it failed with a message about
+   * the *download* rather than about the engine.
+   */
   public async start(): Promise<boolean> {
+    if (this.aria2Process) return true;
+    if (this.starting) return this.starting;
+
+    this.starting = this.startOnce().finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
+
+  private async startOnce(): Promise<boolean> {
     try {
       const binaryPath = this.getBinaryPath();
-
       if (!binaryPath) {
-        console.warn(`aria2c binary not found. Downloads will use HTTP stream fallback.`);
+        this.lastError = 'aria2c is not installed. Downloads use the built-in HTTP transfer.';
         return false;
       }
+
+      const port = await this.findFreePort();
+      if (port === null) {
+        this.lastError = `No free port between ${PREFERRED_PORT} and ${
+          PREFERRED_PORT + PORT_SCAN_RANGE - 1
+        } for the aria2 control channel.`;
+        return false;
+      }
+      this.port = port;
 
       const args = [
         '--enable-rpc',
@@ -64,20 +162,54 @@ export class Aria2Engine {
         '--split=16',
         '--min-split-size=1M',
         '--file-allocation=none',
-        '--quiet=true'
       ];
 
-      this.aria2Process = spawn(binaryPath, args, { stdio: 'ignore' });
+      // stderr is captured rather than ignored: it is the only place the daemon
+      // ever says why it would not start.
+      const child = spawn(binaryPath, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+      this.aria2Process = child;
 
-      this.aria2Process.on('error', (err) => {
-        console.warn('aria2c spawn process warning:', err.message);
-        this.aria2Process = null;
+      let stderr = '';
+      child.stderr?.on('data', (chunk: Buffer) => {
+        // Bounded: a daemon looping on an error must not grow this without limit.
+        if (stderr.length < 4_000) stderr += chunk.toString();
       });
 
+      child.on('error', (err) => {
+        this.lastError = err.message;
+        if (this.aria2Process === child) this.aria2Process = null;
+      });
 
+      child.on('exit', (code) => {
+        if (this.aria2Process === child) this.aria2Process = null;
+        if (code !== 0 && code !== null) {
+          const detail = stderr.trim().split('\n').filter(Boolean).pop();
+          this.lastError = detail
+            ? `aria2c exited (${code}): ${detail}`
+            : `aria2c exited with code ${code}.`;
+        }
+      });
+
+      const ready = await this.waitForRpc(RPC_READY_TIMEOUT_MS);
+      if (!ready) {
+        if (!this.lastError) {
+          const detail = stderr.trim().split('\n').filter(Boolean).pop();
+          this.lastError =
+            detail ?? `The aria2 control channel on port ${this.port} did not answer.`;
+        }
+        try {
+          child.kill();
+        } catch {
+          /* already gone */
+        }
+        this.aria2Process = null;
+        return false;
+      }
+
+      this.lastError = null;
       return true;
     } catch (e) {
-      console.warn('Failed to start aria2 engine:', e);
+      this.lastError = e instanceof Error ? e.message : String(e);
       return false;
     }
   }

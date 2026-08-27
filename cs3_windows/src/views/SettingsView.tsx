@@ -25,6 +25,7 @@ import { ProviderRankingPanel } from '../components/settings/ProviderRankingPane
 import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
 import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
+import { useFlash } from '../utils/useFlash';
 import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
 import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPanel';
 
@@ -49,7 +50,7 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
     'ask'
   );
   const [useLiveStreams, setUseLiveStreams] = useState(true);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const { message: statusMessage, flash } = useFlash<string>(3000);
   const [missingComponentCount, setMissingComponentCount] = useState<number>(0);
   const [concurrency, setConcurrency] = useState<{
     value: number;
@@ -84,10 +85,6 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
     void checkComponentStatus();
   }, [checkComponentStatus]);
 
-  const flash = (message: string) => {
-    setStatusMessage(message);
-    setTimeout(() => setStatusMessage(null), 3000);
-  };
 
   const handleToggleLiveStreams = async (enabled: boolean) => {
     setUseLiveStreams(enabled);

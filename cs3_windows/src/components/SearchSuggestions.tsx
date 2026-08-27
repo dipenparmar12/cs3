@@ -1,4 +1,5 @@
 import React from 'react';
+import { Poster } from './Poster';
 import { Clock, Loader2, Search, Trash2, X } from 'lucide-react';
 import type { SearchHistoryEntry, SearchSuggestion } from '../types/api';
 
@@ -147,13 +148,16 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
               onPickSuggestion(suggestion);
             }}
           >
-            {suggestion.posterUrl ? (
-              <img src={suggestion.posterUrl} alt="" loading="lazy" />
-            ) : (
-              <div className="search-suggest__poster-empty">
-                {suggestion.title.slice(0, 1)}
-              </div>
-            )}
+            <Poster
+              src={suggestion.posterUrl}
+              title={suggestion.title}
+              decorative
+              fallback={
+                <div className="search-suggest__poster-empty">
+                  {suggestion.title.slice(0, 1)}
+                </div>
+              }
+            />
 
             <div className="search-suggest__body">
               <div className="search-suggest__line">
