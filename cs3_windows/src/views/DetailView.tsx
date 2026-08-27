@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Play, ArrowLeft, Loader2, AlertTriangle, ListVideo,
+  Play, ArrowLeft, Loader2, AlertTriangle, ListVideo, Search,
 } from 'lucide-react';
 import type { SearchResponse, Episode } from '../types/api';
 import { TvType } from '../types/api';
@@ -868,7 +868,25 @@ export const DetailView: React.FC<DetailViewProps> = ({
           episode: episode?.episode,
         },
         progress: {
-          mediaUrl: episode?.url ?? detail.url,
+          /**
+           * The **page**, not the episode's playback handle.
+           *
+           * These two are different addresses and only one of them can be
+           * reopened. `episode.url` carries the opaque blob `loadLinks` wants —
+           * for a large part of the corpus that is JSON, e.g. VegaMovies'
+           * `[{"source":"https://vcloud.fit/…"}]`. Storing it here put it into
+           * the library, Continue Watching and any page saved from one of those
+           * rows; clicking the row later called `load()` on it, which fetches
+           * what it is given, and the detail page came up empty. The user-facing
+           * shape was "a title I saved and watched now opens blank", which reads
+           * as data rot rather than as the wrong address having been written.
+           *
+           * Nothing is lost by using the page: watch progress is keyed on
+           * title + year + season + episode (`libraryStore.recordProgress`), and
+           * the season and episode travel in their own fields right below. The
+           * handle that actually plays is still `request.mediaUrl` above.
+           */
+          mediaUrl: detail.url,
           year: detail.year,
           posterUrl: detail.posterUrl,
           season: episode?.season,
@@ -1009,6 +1027,25 @@ export const DetailView: React.FC<DetailViewProps> = ({
           </p>
         )}
         <div className="detail-view__actions">
+          {/*
+            The way back for a page that can no longer be opened.
+
+            Saved pages, library entries and Continue Watching rows written
+            before the address fix carry a playback handle rather than a page,
+            and no amount of retrying will make `load()` accept one — the page
+            address is not recoverable from it. What *is* recoverable is the
+            title, which is stored right alongside, so searching for it again
+            produces a fresh, working page. Without this every such row is a
+            permanent dead end with a Back button.
+          */}
+          {onSearch && (
+            <button
+              className="btn btn-primary"
+              onClick={() => onSearch(mediaItem.originalTitle || mediaItem.name)}
+            >
+              <Search size={16} /> Find “{mediaItem.name}” again
+            </button>
+          )}
           <button className="btn" onClick={onBack}>
             <ArrowLeft size={16} /> Back
           </button>

@@ -1,4 +1,13 @@
 import fs from 'fs';
+// Address helpers live in a pure module so they can be tested; this file
+// imports `electron` and cannot be loaded under Node's type stripping.
+import {
+  buildExtensionUrl,
+  looksLikeLinksHandle,
+  parseExtensionUrl,
+} from './cs3/extensionAddress.ts';
+
+export { buildExtensionUrl, looksLikeLinksHandle, parseExtensionUrl };
 import path from 'path';
 import crypto from 'crypto';
 import { app } from 'electron';
@@ -297,23 +306,7 @@ function isAdultProvider(provider: ExtensionProvider): boolean {
  */
 const PROVIDER_CALL_TIMEOUT_MS = 60_000;
 
-/** `cs3ext://<provider>/<opaque handle>` — see `searchAll` for why. */
-function buildExtensionUrl(provider: string, target: string): string {
-  return `cs3ext://${encodeURIComponent(provider)}/${encodeURIComponent(target)}`;
-}
 
-export function parseExtensionUrl(
-  url: string
-): { provider: string; target: string } | null {
-  if (!url.startsWith('cs3ext://')) return null;
-  const rest = url.slice('cs3ext://'.length);
-  const slash = rest.indexOf('/');
-  if (slash < 0) return null;
-  return {
-    provider: decodeURIComponent(rest.slice(0, slash)),
-    target: decodeURIComponent(rest.slice(slash + 1)),
-  };
-}
 
 /**
  * Branch and filename combinations community repositories actually publish to.
@@ -2652,6 +2645,27 @@ export class PluginManager {
   public async loadMedia(url: string): Promise<LoadResponse | null> {
     const ref = parseExtensionUrl(url);
     if (!ref) return null;
+
+    /**
+     * A links handle is not a page address, and asking anyway blames the wrong
+     * party.
+     *
+     * `load()` fetches what it is given. Handed the JSON blob a provider built
+     * for its own `loadLinks`, it reaches OkHttp and throws
+     * `Expected URL scheme 'http' or 'https'…` — which was recorded against the
+     * *provider* at stage `detail`, counted as a provider failure by the ranking,
+     * and shown to the viewer as the reason their title would not play. None of
+     * that is true: the provider is fine and the call should never have been
+     * made. Refusing here keeps the blame where it belongs and lets callers fall
+     * back on their own real diagnosis.
+     */
+    if (looksLikeLinksHandle(ref.target)) {
+      throw new Error(
+        `That address is a playback handle from ${ref.provider}, not a page it can open. ` +
+          'Search for the title again to get a fresh page.'
+      );
+    }
+
     await this.ensureProviderActive(ref.provider);
 
     const startedAt = Date.now();

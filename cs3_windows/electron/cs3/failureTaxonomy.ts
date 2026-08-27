@@ -107,6 +107,24 @@ const RULES: Rule[] = [
   { kind: 'network', test: /\b(?:Connection (?:reset|refused|closed)|Socket(?:Exception|closed)|NoRouteToHost|PortUnreachable|Network is unreachable|Broken pipe)\b/i },
 
   { kind: 'unsupported-operation', test: /does not implement|unsupported operation|NotImplemented|UnsupportedAndroidApiException/i },
+
+  /**
+   * The host answered, and answered with the wrong kind of document.
+   *
+   * `InvalidHeader: Invalid file header. Header doesn't start with #EXTM3U` was
+   * every one of the four unclassified records in a captured session — four IPTV
+   * providers, failing identically on every search, because the playlist address
+   * they were built against now serves an HTML block page or a redirect. Landing
+   * in `unknown` meant they never grouped, so a single dead upstream read as
+   * scattered noise rather than as one row saying "these four are pointed at
+   * something that is no longer a playlist".
+   *
+   * It is `unreadable-reply` rather than `provider-error` on purpose: the
+   * extension's code is fine and its parser is right to refuse. What changed is
+   * on the other end of the connection, and the reader's action is to check or
+   * replace the source, not to report a bug to the scraper's maintainer.
+   */
+  { kind: 'unreadable-reply', test: /Invalid file header|doesn't start with #EXTM3U|does not start with #EXTM3U|InvalidHeader/i },
   { kind: 'unreadable-reply', test: /could not be read|unreadable|JSON|parse|unexpected token|malformed|encoded string not found/i },
 
   { kind: 'provider-error', test: /Exception|Error\b|failed/i },

@@ -17,7 +17,12 @@ import { TorrentEngine, type StreamHandle } from './torrent/torrentEngine';
 import { infoHashFromMagnet } from './torrent/indexers/base';
 import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
-import { parseExtensionUrl, type AnalyticsSink, type PluginManager } from './pluginManager';
+import {
+  looksLikeLinksHandle,
+  parseExtensionUrl,
+  type AnalyticsSink,
+  type PluginManager,
+} from './pluginManager';
 import { SourceCache } from './sourceCache';
 import { MediaProxy } from './mediaProxy';
 import { DetailCache } from './detailCache';
@@ -975,16 +980,35 @@ export class ContentService {
     // with `https://archive.org/details/<id>` for the page and a bare `<id>`
     // as the handle). When the page address yields nothing, resolving the
     // detail and retrying with its `dataUrl` is what makes films playable.
-    if (links.length === 0) {
-      const detail = (await this.plugins.loadMedia(target)) as
-        | (MetadataDetail & { dataUrl?: string })
-        | null;
-      if (detail?.dataUrl && detail.dataUrl !== target) {
-        // The retry's verdict replaces the first one: the first address was
-        // never the playable handle, so its failure describes the wrong thing.
-        attempt = await this.plugins.loadLinksDetailed(detail.dataUrl);
-        links = attempt.links;
-        diagnosis = attempt.diagnosis;
+    /**
+     * The retry is an optimisation, so its failure must stay invisible.
+     *
+     * Two things were wrong here. It called `loadMedia` on *any* target, and a
+     * target is frequently already a playback handle — an episode's `data`, or a
+     * film's `dataUrl` reached from Continue Watching. `load()` fetches what it
+     * is given, so a JSON blob reached OkHttp and threw `Expected URL scheme
+     * 'http' or 'https'…`. And that throw was **not caught**, so it rejected the
+     * whole discovery: the viewer was shown OkHttp's message about a call we
+     * made speculatively, in place of the real reason no links came back.
+     *
+     * `looksLikeLinksHandle` skips the pointless call; the catch makes sure that
+     * even an unforeseen failure leaves the first attempt's diagnosis standing.
+     */
+    if (links.length === 0 && !looksLikeLinksHandle(target)) {
+      try {
+        const detail = (await this.plugins.loadMedia(target)) as
+          | (MetadataDetail & { dataUrl?: string })
+          | null;
+        if (detail?.dataUrl && detail.dataUrl !== target) {
+          // The retry's verdict replaces the first one: the first address was
+          // never the playable handle, so its failure describes the wrong thing.
+          attempt = await this.plugins.loadLinksDetailed(detail.dataUrl);
+          links = attempt.links;
+          diagnosis = attempt.diagnosis;
+        }
+      } catch {
+        // Keep `diagnosis` from the first attempt. That one describes what the
+        // viewer actually asked for.
       }
     }
 
@@ -1130,9 +1154,31 @@ export class ContentService {
   ): Promise<string> {
     if (episode === undefined) return url;
 
-    const detail = (await this.plugins.loadMedia(url)) as
-      | (MetadataDetail & { episodes?: Array<{ url: string; season?: number; episode?: number }> })
-      | null;
+    /**
+     * The address may already *be* the episode.
+     *
+     * A quick-play from a search row hands over the show's page and an episode
+     * number, which is what the lookup below is for. But Continue Watching, the
+     * library and a saved page all hand over the episode's own playback handle —
+     * and calling `load()` on that reaches OkHttp with a JSON blob and throws
+     * `Expected URL scheme 'http' or 'https'…`, rejecting the whole discovery
+     * before a single provider had been asked for links.
+     */
+    const ref = parseExtensionUrl(url);
+    if (ref && looksLikeLinksHandle(ref.target)) return url;
+
+    type EpisodeListing = MetadataDetail & {
+      episodes?: Array<{ url: string; season?: number; episode?: number }>;
+    };
+    let detail: EpisodeListing | null = null;
+    try {
+      detail = (await this.plugins.loadMedia(url)) as EpisodeListing | null;
+    } catch {
+      // Falling back to the address we were given is right: it is either already
+      // the episode, or it is a page whose episode list we could not read — and
+      // in both cases asking for links directly is a better answer than failing.
+      return url;
+    }
     const episodes = detail?.episodes;
     if (!episodes?.length) return url;
 
