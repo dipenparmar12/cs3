@@ -76,8 +76,22 @@ export interface SystemRuntimeStatus {
  * already-provisioned sidecar never sends it, so without the bump the host's
  * new branch is unreachable and the viewer keeps being shown the runtime's own
  * `IllegalArgumentException` with a hundred provider names appended.
+ *
+ * Generation 8 is the `CloudStreamApp`/`AcraApplication` key-value companions
+ * and the context that backs them. Both halves changed and both must ship
+ * together: the bridge gained `setKey(String, Object)` — upstream's erased
+ * `fun <T> setKey`, whose absence stopped CSX's CineStream at `load()` with
+ * `NoSuchMethodError` — and the sidecar now points those companions at the
+ * plugin's own scoped context, which nothing did before, so the methods would
+ * otherwise have linked and then silently written nothing. A provisioned copy
+ * pairing one with the other is worse than either alone.
+ *
+ * The same pass gave each plugin its own scoped storage: `newShimContext` had
+ * hard-coded the literal `"plugin"` as the id, so every extension in the process
+ * shared one preferences file. That was invisible while the key-value helpers
+ * were stubs and becomes a collision the moment they write.
  */
-const RUNTIME_GENERATION = 7;
+const RUNTIME_GENERATION = 8;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {

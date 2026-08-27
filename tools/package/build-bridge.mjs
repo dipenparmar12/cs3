@@ -46,6 +46,42 @@ const die = (message) => {
 const run = (cmd, args, opts = {}) =>
   spawnSync(cmd, args, { stdio: 'inherit', encoding: 'utf8', ...opts });
 
+/**
+ * Maven, by whatever name this platform gives it.
+ *
+ * On Windows the launcher is `mvn.cmd`, and `spawnSync('mvn')` without a shell
+ * does not resolve `.cmd` — so every `dependency:get` below failed with
+ * `ENOENT`, which the caller reported as "could not obtain <artifact> from
+ * Maven Central. Is mvn on PATH?". It was on PATH. The message sent whoever hit
+ * it to look at their network and their repository, which is the wrong half of
+ * the problem entirely.
+ *
+ * The checked-in toolchain is preferred over PATH for the same reason
+ * `SidecarSupervisor.resolveJava` prefers it: a machine can have an older or
+ * absent Maven and still have the right one sitting beside the source.
+ */
+function findMaven() {
+  const names = process.platform === 'win32' ? ['mvn.cmd', 'mvn.bat', 'mvn'] : ['mvn'];
+  const bundled = path.join(root, 'tools', 'toolchain');
+  if (fs.existsSync(bundled)) {
+    for (const entry of fs.readdirSync(bundled)) {
+      if (!entry.startsWith('apache-maven-')) continue;
+      for (const name of names) {
+        const candidate = path.join(bundled, entry, 'bin', name);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    }
+  }
+  // Nothing bundled: fall back to PATH, still trying the platform's spellings.
+  for (const name of names) {
+    if (spawnSync(name, ['-v'], { stdio: 'ignore' }).status === 0) return name;
+  }
+  return null;
+}
+
+let mavenPath;
+const maven = () => (mavenPath ??= findMaven());
+
 function resolveFromLocalRepository(groupPath, artifact, version) {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? '';
   const jar = path.join(home, '.m2', 'repository', ...groupPath.split('/'), artifact, version,
@@ -54,10 +90,19 @@ function resolveFromLocalRepository(groupPath, artifact, version) {
 
   // `dependency:get` is the only Maven step here, and it only ever touches
   // Central — the repository that is reachable.
-  const got = run('mvn', ['-q', 'dependency:get',
-    `-Dartifact=${groupPath.replaceAll('/', '.')}:${artifact}:${version}`]);
+  const mvn = maven();
+  if (!mvn) {
+    die(
+      `${artifact} ${version} is not in the local repository and Maven was not found.
+` +
+      `  Looked in tools/toolchain/apache-maven-*/bin and on PATH.`
+    );
+  }
+  const got = run(mvn, ['-q', 'dependency:get',
+    `-Dartifact=${groupPath.replaceAll('/', '.')}:${artifact}:${version}`,
+    '-DremoteRepositories=https://repo1.maven.org/maven2']);
   if (got.status !== 0 || !fs.existsSync(jar)) {
-    die(`could not obtain ${artifact} ${version} from Maven Central. Is mvn on PATH?`);
+    die(`could not obtain ${artifact} ${version} from Maven Central using ${mvn}.`);
   }
   return jar;
 }
