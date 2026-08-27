@@ -385,7 +385,7 @@ public final class PluginHost {
         List<Map<String, Object>> providers;
         synchronized (registrationLock) {
             Object before = snapshotProviders(loader);
-            invokeLoad(instance, loader);
+            invokeLoad(instance, loader, pluginId);
             providers = diffProviders(loader, before, pluginId);
 
             loaders.put(pluginId, loader);
@@ -563,12 +563,12 @@ public final class PluginHost {
 
     // --- reflective glue -----------------------------------------------------
 
-    private void invokeLoad(Object instance, ClassLoader loader) throws Exception {
+    private void invokeLoad(Object instance, ClassLoader loader, String pluginId) throws Exception {
         // Plugin.load(Context) exists only on the Android-shaped base class.
         try {
             Class<?> ctx = Class.forName("android.content.Context", false, loader);
             Method load = instance.getClass().getMethod("load", ctx);
-            Object shimCtx = newShimContext(loader);
+            Object shimCtx = newShimContext(loader, pluginId);
             try {
                 Class<?> commonAct = Class.forName("com.lagradost.cloudstream3.CommonActivity", false, loader);
                 Class<?> actClass = Class.forName("android.app.Activity", false, loader);
@@ -577,6 +577,22 @@ public final class PluginHost {
                 setActivity.invoke(commonActInstance, shimCtx);
             } catch (Throwable ignored) {
             }
+            /*
+             * The application context the key/value helpers read through.
+             *
+             * `CloudStreamApp.setKey`/`getKey` and their `AcraApplication`
+             * spelling go through this field, and nothing set it — so even once
+             * the descriptors matched, every call would have been a silent
+             * no-op and every extension that stores a preference would re-run
+             * its first-time setup on each call. CineStream's `load()` opens
+             * with exactly that.
+             *
+             * Set per plugin, immediately before `load()`, because the context
+             * carries the plugin's scoped storage: a single shared one would let
+             * two extensions overwrite each other's keys.
+             */
+            setAppContext(loader, "com.lagradost.cloudstream3.CloudStreamApp", shimCtx);
+            setAppContext(loader, "com.lagradost.cloudstream3.AcraApplication", shimCtx);
             load.invoke(instance, shimCtx);
             return;
         } catch (ClassNotFoundException | NoSuchMethodException e) {
@@ -593,11 +609,35 @@ public final class PluginHost {
      * built by a different loader would fail the invoke with an
      * IllegalArgumentException even though the class names match.
      */
-    private Object newShimContext(ClassLoader loader) throws Exception {
+    private Object newShimContext(ClassLoader loader, String pluginId) throws Exception {
         Class<?> ctx = Class.forName("android.content.Context", false, loader);
         Method factory = ctx.getMethod("cs3CreateScoped", String.class, String.class);
         Path scoped = runtimeClasspathDir.resolveSibling("plugin-data");
-        return factory.invoke(null, "plugin", scoped.toAbsolutePath().toString());
+        // The plugin's own id, not the literal "plugin". `cs3CreateScoped`
+        // sanitises this into a directory name, so passing a constant gave every
+        // extension in the process one shared preferences file — which made the
+        // "per-plugin scoped storage" the sandbox claims not true, and mattered
+        // the moment the key/value helpers above started actually writing.
+        return factory.invoke(null, pluginId == null ? "plugin" : pluginId,
+                scoped.toAbsolutePath().toString());
+    }
+
+    /**
+     * Points one of the application shims at this plugin's context.
+     *
+     * A `@JvmStatic var` on a Kotlin companion emits a static setter on the
+     * *outer* class, which is what is looked up here. Failures are ignored on
+     * purpose: an older provisioned bridge may not carry the class at all, and a
+     * plugin that never touches the key/value helpers is unaffected either way.
+     */
+    private void setAppContext(ClassLoader loader, String className, Object shimCtx) {
+        try {
+            Class<?> app = Class.forName(className, false, loader);
+            Class<?> ctx = Class.forName("android.content.Context", false, loader);
+            app.getMethod("setContext", ctx).invoke(null, shimCtx);
+        } catch (Throwable ignored) {
+            // Nothing to do: the helpers stay null-backed, as before.
+        }
     }
 
     /**

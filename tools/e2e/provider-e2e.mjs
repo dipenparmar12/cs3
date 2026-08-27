@@ -54,6 +54,15 @@ const REPOSITORIES = [
     name: 'MegaRepo',
     url: 'https://raw.githubusercontent.com/self-similarity/MegaRepo/builds/repo.json',
   },
+  /**
+   * CloudStream X — a bare plugin array at `builds/CS.json`, not a `repo.json`.
+   *
+   * Added because it is a candidate for `bundled: true`, and `bundled` in
+   * `official_repositories.json` is a claim that this harness has driven the
+   * repository end to end. Setting the flag without running it would make the
+   * flag mean nothing.
+   */
+  { name: 'CSX', url: 'https://raw.githubusercontent.com/SaurabhKaperwan/CSX/builds/CS.json' },
 ];
 
 /**
