@@ -1246,6 +1246,43 @@ export interface CloudStreamElectronAPI {
   selectDirectory: () => Promise<string | null>;
   reloadApp: () => Promise<void>;
   relaunchApp: () => Promise<void>;
+
+  /**
+   * A whole-installation backup, and the way back from one.
+   *
+   * Distinct from `exportDatastoreBackup`, which writes the *Android* format so
+   * a backup can move between the phone app and this one. This carries every
+   * store — library, history, saved pages, searches, settings, repositories,
+   * which extensions are off, indexer configuration — so a new machine can be
+   * made into this one.
+   *
+   * `inspectBackup` reads a file and describes it without changing anything, so
+   * a restore can be confirmed against what is actually in the file rather than
+   * against its filename.
+   */
+  exportUserData: () => Promise<
+    Envelope & { path?: string; bytes?: number; cancelled?: boolean }
+  >;
+  inspectBackup: () => Promise<
+    Envelope & {
+      cancelled?: boolean;
+      path?: string;
+      envelope?: {
+        formatVersion: number;
+        createdAt: number;
+        app: { version: string; platform: string };
+        summary: Record<string, number>;
+      };
+    }
+  >;
+  restoreUserData: (
+    filePath: string,
+    only?: string[]
+  ) => Promise<
+    Envelope & { sections?: Array<{ name: string; restored: number; note?: string }> }
+  >;
+  /** Puts the key/value store back as it was immediately before a restore. */
+  undoRestore: () => Promise<Envelope>;
   /**
    * Commands from the application menu.
    *
@@ -1626,6 +1663,10 @@ const api: CloudStreamElectronAPI = {
   selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
   reloadApp: () => ipcRenderer.invoke('app:reload'),
   relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
+  exportUserData: () => ipcRenderer.invoke('backup:export'),
+  inspectBackup: () => ipcRenderer.invoke('backup:inspect'),
+  restoreUserData: (filePath, only) => ipcRenderer.invoke('backup:restore', filePath, only),
+  undoRestore: () => ipcRenderer.invoke('backup:undoRestore'),
   onToggleInspector: (callback) => subscribe('app:toggleInspector', callback),
   onShowLicences: (callback) => subscribe('app:showLicences', callback),
   onOpenLocalFile: (callback) => subscribe('app:openLocalFile', callback),

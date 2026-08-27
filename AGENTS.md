@@ -2741,6 +2741,177 @@ empty `java.library.path`; per-plugin scoped storage.
 and surfaced in the UI on purpose: a named gap can be closed; an implied-covered gap never
 gets fixed. Java's `SecurityManager` is not an option (JEP 411/486 removal).
 
+### A links handle is not a page address (2026-08-27)
+
+The single most frequent failure in a user's captured session, and it named the wrong party
+every time:
+
+```
+VegaMovies: IllegalArgumentException: Expected URL scheme 'http' or 'https'
+            but no scheme was found for [{"sou...
+  url: cs3ext://VegaMovies/[{"source":"https://vcloud.fit/ubvtmxgdjbx1xxu"}, …]
+```
+
+Upstream's `MainAPI` has **two kinds of handle and they are not interchangeable**. `load(url)`
+takes a page address and fetches it. `loadLinks(data)` takes an opaque blob the provider built
+for itself — and a large part of the corpus puts JSON in it (VegaMovies an array of objects,
+HDHub4U an array of strings). Both are `String`, so nothing in the type system separates them,
+and `cs3ext://<provider>/<handle>` does not record which kind it is carrying.
+
+Handing a links blob to `load()` reaches OkHttp's `HttpUrl.get`. The throw was recorded at
+stage `detail`, **scored against the provider by the ranking**, and shown to the viewer as the
+reason their title would not play. The provider was fine and the call should never have been
+made.
+
+It reached `load()` from three directions, which is why the guard is one shared predicate
+(`cs3/extensionAddress.ts`, `looksLikeLinksHandle`) rather than three local checks:
+
+1. **`resolveExtensionTarget`** looked up an episode list for any address carrying an episode
+   number — including one that already *was* the episode, which is what Continue Watching
+   hands over.
+2. **`extensionSources`** retried through `dataUrl` whenever the first attempt found no links,
+   without asking whether the address it had could be opened — **and did not catch the
+   throw**, so OkHttp's message replaced the real diagnosis and rejected the whole discovery.
+3. **`DetailView`** was handed a playback handle as an item URL. See below.
+
+The test is deliberately narrow: JSON is definitely not a page, anything else might be.
+Internet Archive's `load()` takes `https://archive.org/details/<id>` while its `loadLinks`
+takes the bare id, so "must start with http" would refuse pages that work.
+
+### "A title I saved now opens blank" (2026-08-27)
+
+The same root cause, persisted. `DetailView` recorded `progress.mediaUrl` as
+`episode?.url ?? detail.url` — and `episode.url` is the **playback handle**. That address went
+into the library, Continue Watching and any page saved from one of those rows; clicking the row
+later called `load()` on it and the detail page came up empty. It reads as data rot, and it is
+not: it is the wrong address having been written, and it only ever manifests on the *second*
+route to a title.
+
+**Nothing is lost by storing the page instead.** `libraryStore.recordProgress` keys on
+`canonicalKey(title, year)` plus season and episode — not on `mediaUrl` — so no progress record
+is orphaned by the change, and the season and episode travel in their own fields. The handle
+that actually plays is still `request.mediaUrl`.
+
+Rows written before the fix cannot be repaired: the page address is not recoverable from a
+links blob. What *is* stored beside them is the title, so the failure screen now offers
+**"Find <title> again"**, which is the only thing that turns a permanently dead row back into a
+working page.
+
+### CloudStream X (CSX), and two shim gaps it found (2026-08-27)
+
+CSX is now `bundled: true`. Per §5's rule that the flag is a claim the harness has driven the
+repository end to end, `tools/e2e/provider-e2e.mjs` knows about it and was run before the flag
+was set. Two extensions stopped at `load()` and both were ours:
+
+1. **`CloudStreamApp$Companion.setKey(String, Object)`** — upstream declares
+   `fun <T> setKey(path, value)`, whose erased descriptor takes `Object`. The bridge carried a
+   `setKey(String, String?)`, which is a *different method* to the JVM: present, and impossible
+   to call. CineStream's `load()` opens with `Settings.initSeenProviders()` and died there.
+   **A Kotlin companion is not inherited** — `CloudStreamApp : AcraApplication()` gives
+   `CloudStreamApp.Companion` nothing from `AcraApplication.Companion` — so both names carry
+   the methods rather than one delegating to the other.
+2. **`AccountManager.simklApi`, typed `SimklApi`.** `SyncRepo.kt` said SIMKL was left out
+   because nothing had been observed to use it; CineStream's `CineSimklProvider` is that
+   observation. Typed as the concrete class, not `SyncAPI` or `SyncRepo` — a getter returning a
+   supertype is a different method. **That near-miss has now been made four times** in this
+   repo (`getResources` returning `Object`, `aniListApi` as the wrapper, `setKey`, this).
+
+**Nothing was setting the application context**, so even once the descriptors matched every
+helper would have been a silent no-op. `PluginHost.invokeLoad` now points both companions at
+the plugin's context immediately before `load()`. The same pass found `newShimContext`
+hard-coding the literal `"plugin"` as the scoped-storage id — so **every extension in the
+process shared one preferences file**, which was invisible while the helpers were stubs and is
+a collision the moment they write. It takes the real `pluginId` now.
+
+`RUNTIME_GENERATION` is **8**: both halves changed and a provisioned copy pairing one with the
+other is worse than either alone. `BOOTSTRAP_VERSION` is **2**, which is how an install that has
+already bootstrapped receives CSX — `run()` filters targets on `!already.has(rawRepoUrl)`, so a
+re-run installs only what is new and re-downloads nothing.
+
+**Measured after the fixes**, `--repo CSX --plugins 10` across five queries
+(dune, reacher, breaking bad, one piece, inception):
+
+```
+providers loaded    11
+providers answering  9
+links resolved       8
+streams with bytes   7
+PASS
+```
+
+CineStream alone resolved 57 links for *Dune: Part One* and 66 for *Dune: Prophecy*, and
+delivered 2.00 MB of `video/x-matroska` at HTTP 206 with ranges honoured. The remaining
+failures are host-side and worth recognising rather than re-debugging: BollyFlix times out,
+Online Movies Hindi resets the connection, GDIndex trips its own 5 MB `.text` guard.
+
+**`tools/package/build-bridge.mjs` could not find Maven on Windows.** `spawnSync('mvn')`
+without a shell does not resolve `mvn.cmd`, and every `dependency:get` failed with `ENOENT` —
+reported as *"could not obtain <artifact> from Maven Central. Is mvn on PATH?"*. It was on
+PATH. `findMaven()` now tries the platform's spellings and prefers `tools/toolchain/apache-maven-*`,
+for the same reason `SidecarSupervisor.resolveJava` prefers the checked-in JDK.
+
+### `InvalidHeader` was every unclassified record (2026-08-27)
+
+`InvalidHeader: Invalid file header. Header doesn't start with #EXTM3U` fell through to
+`unknown` — four IPTV providers failing identically on every search, never grouping, so one
+dead upstream read as scattered noise. It is `unreadable-reply`, not `provider-error`: the
+extension's parser is right to refuse, what changed is on the other end of the connection, and
+the reader's action is to check the source rather than to report a bug to the scraper's
+maintainer.
+
+### Backing up an installation (2026-08-27)
+
+`electron/cs3/backupService.ts`. There were two exports before it and neither answered the
+question: `datastore:exportBackup` writes the **Android** format for moving between the phone
+app and this one, and library/history each exported themselves — so moving to a new machine
+lost the repositories, the extensions switched off, the saved pages and the indexer
+configuration.
+
+**Sections are a table, not two switch statements.** A store added to the export and forgotten
+in the restore produces a file that looks complete and silently drops those rows on the way
+back; one entry cannot be half-added. An export-only section (the download queue) is reported
+as `export only` rather than as a restore of zero, so the two are distinguishable.
+
+Deliberately absent, each for its own reason: the `.cs3` archives and downloaded media (large,
+re-fetchable — the backup records *which*, which is the part that cannot be); tokens and device
+ids (filtered by `DatastoreManager.snapshot` on the way **out**, so they are never written into
+a file in someone's Downloads folder); diagnostics and logs (they describe the machine captured,
+not the one restored to); caches (everything in them expires, and a stale cache is worse than
+an empty one).
+
+**Restore merges rather than replaces**, so a preference added since the backup was taken does
+not silently revert; it snapshots the datastore first so the write can be undone; and a section
+that throws is recorded while the rest still restore, because a restore that stops halfway
+leaves a state neither the backup nor the previous one describes. 12 cases in
+`backupService.test.mts`, including that an unrelated JSON file is refused **by its format
+marker** — otherwise it would be fed to every section and answer "restored 0 rows from 9
+sections" instead of "that is not a CloudStream backup".
+
+### Extensions: browse opens where you asked (2026-08-27)
+
+"What does this repository offer?" was a third tab, and reaching it threw away the list the
+question was asked from — the scroll position, the filter chips, and the neighbouring
+repositories being compared against. Comparing two catalogues cost three tab switches. It is
+now a full-width panel under the repository's own card (`grid-column: 1 / -1`, so a
+twenty-extension list does not render inside one 290px column and read as belonging to the
+card's neighbours), and the tab is gone. Two tabs remain: **Installed** and **Browse**.
+
+**Search reaches through a repository.** The query matched a repository's own name,
+description, language and shortcode and nothing else — so looking for a provider you know you
+have found nothing, even with the repository carrying it on screen. It now also matches the
+installed extensions and providers underneath, and the card says *why* it matched: a result
+with no visible reason reads as a broken filter.
+
+### Settings (2026-08-27)
+
+The tab bar was `overflow-x: auto` over a fixed set of eight tabs, so on an ordinary window
+reaching "Advanced" meant finding and dragging a horizontal scrollbar. It wraps now, and is
+sticky — because the new **All settings** view is one long page, and navigation that scrolls
+away is navigation you have to scroll back up to reach.
+
+`all` is a view, not a category: it renders exactly the same groups the tabs do, in tab order,
+with a heading before each. No control is duplicated, so the two views cannot disagree.
+
 ### Seven IPC channels were strings that had stopped matching (2026-08-27)
 
 Found by diffing the channel literals in `main.ts` against those in `preload.ts` — not by

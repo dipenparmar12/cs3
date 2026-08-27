@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, shell } from 'electron';
+import { BackupService } from './cs3/backupService.ts';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -3887,6 +3888,259 @@ ipcMain.handle('datastore:importBackup', async (_, filePath: string) =>
 );
 
 ipcMain.handle('datastore:exportBackup', async () => datastore.exportBackup());
+
+// --- whole-app backup ------------------------------------------------------
+
+/**
+ * Every store that makes an installation *this* installation.
+ *
+ * A table rather than two switch statements, so adding a store is one entry and
+ * cannot be added to the export while being forgotten in the restore — which is
+ * how a backup comes to look complete and silently not be.
+ *
+ * What is deliberately absent, and why, is documented on `BackupService`.
+ */
+const backupService = new BackupService(
+  [
+    {
+      name: 'settings',
+      label: 'Settings and preferences',
+      collect: () => datastore.snapshot(),
+      restore: (value: unknown) => datastore.restore(value as never),
+    },
+    {
+      name: 'library',
+      label: 'Library, watch progress and remembered sources',
+      collect: () => libraryStore.exportAll(),
+      restore: (value: unknown) => {
+        const result = libraryStore.importAll(value as Parameters<LibraryStore['importAll']>[0]);
+        return typeof result === 'number' ? result : 1;
+      },
+    },
+    {
+      name: 'history',
+      label: 'Watch history',
+      collect: () => historyStore.exportAll(),
+      restore: (value: unknown) =>
+        historyStore.importAll(value as Parameters<HistoryStore['importAll']>[0]),
+    },
+    {
+      name: 'bookmarks',
+      label: 'Saved pages',
+      collect: () => bookmarks.list(),
+      restore: (value: unknown) => {
+        if (!Array.isArray(value)) return 0;
+        let count = 0;
+        for (const row of value) {
+          // `save` re-derives id, savedAt and openCount, so a restored row is a
+          // fresh bookmark carrying the original's identity and origin rather
+          // than a copy of a record from another machine's clock.
+          const { id: _id, savedAt: _savedAt, openCount: _openCount, ...rest } = row ?? {};
+          if (!rest?.mediaUrl) continue;
+          bookmarks.save(rest);
+          count++;
+        }
+        return count;
+      },
+    },
+    {
+      name: 'searchHistory',
+      label: 'Past searches',
+      collect: () => searchHistory.list(500),
+      restore: (value: unknown) => {
+        if (!Array.isArray(value)) return 0;
+        let count = 0;
+        // Oldest first, so the restored list keeps its original ordering — the
+        // store puts each new record at the front.
+        for (const row of [...value].reverse()) {
+          if (!row?.query) continue;
+          searchHistory.record(row.query, row.resultCount);
+          count++;
+        }
+        return count;
+      },
+    },
+    {
+      name: 'titleOutcomes',
+      label: 'What happened last time a title was opened',
+      collect: () => titleOutcomes.list(),
+      restore: (value: unknown) => {
+        if (!value || typeof value !== 'object') return 0;
+        let count = 0;
+        for (const [url, outcome] of Object.entries(value as Record<string, { kind?: string; reason?: string }>)) {
+          if (!outcome?.kind) continue;
+          titleOutcomes.record(url, outcome.kind as never, outcome.reason);
+          count++;
+        }
+        return count;
+      },
+    },
+    {
+      name: 'providerAnalytics',
+      label: 'How each provider has behaved',
+      collect: () => ({
+        records: providerAnalytics.all(),
+        settings: providerAnalytics.getSettings(),
+        preferences: providerAnalytics.getPreferences(),
+      }),
+      restore: (value: unknown) => {
+        const payload = value as {
+          settings?: Parameters<typeof providerAnalytics.setSettings>[0];
+          preferences?: Record<string, Parameters<typeof providerAnalytics.setPreference>[1]>;
+        };
+        let count = 0;
+        // The *counts* are deliberately not restored: they are measurements of
+        // one machine's network and would misdescribe another's. The settings
+        // and the manual preferences are decisions, and those do transfer.
+        if (payload?.settings) {
+          providerAnalytics.setSettings(payload.settings);
+          count++;
+        }
+        for (const [provider, preference] of Object.entries(payload?.preferences ?? {})) {
+          providerAnalytics.setPreference(provider, preference);
+          count++;
+        }
+        return count;
+      },
+    },
+    {
+      name: 'downloads',
+      label: 'Download queue',
+      collect: () => downloadService.getTasks(),
+      // Export only: restoring a queue would point tasks at target paths and
+      // half-finished `.part` files that do not exist on the new machine, and a
+      // task that reports progress against nothing is worse than an absent one.
+      // It travels so the list can be read, not replayed.
+    },
+    {
+      name: 'extensions',
+      label: 'Repositories, extensions and what is switched off',
+      collect: () => ({
+        repositories: pluginManager.getInstalledRepositories(),
+        plugins: pluginManager.getInstalledPlugins().map((plugin) => ({
+          internalName: plugin.internalName,
+          name: plugin.name,
+          repositoryUrl: plugin.repositoryUrl,
+          url: plugin.url,
+          version: plugin.version,
+        })),
+        disabledProviders: pluginManager.getDisabledProviders(),
+        disabledRepositories: pluginManager.getDisabledRepositories(),
+        adultAllowed: bootstrap.isAdultAllowed(),
+      }),
+      /**
+       * The cheap half is restored; the expensive half is offered.
+       *
+       * Putting the repositories back into the user's list, and remembering
+       * which providers they had switched off, is a few fetches and a datastore
+       * write. Re-downloading the archives is tens of downloads and DEX
+       * translations per repository — not something to start inside a handler
+       * the user believes is reading a file, and the same cost split the
+       * repository catalogue already makes between Add and Install all.
+       *
+       * So a restore leaves someone with their repositories listed, their
+       * choices remembered, and one press per repository to fetch the archives.
+       * The extension *names* travel in the backup so that press can be
+       * targeted rather than "install everything this repository has now".
+       */
+      restore: (value: unknown) => {
+        const payload = value as {
+          repositories?: string[];
+          disabledProviders?: string[];
+          disabledRepositories?: string[];
+          adultAllowed?: boolean;
+        };
+        let count = 0;
+        if (typeof payload?.adultAllowed === 'boolean') {
+          bootstrap.setAdultAllowed(payload.adultAllowed);
+          count++;
+        }
+        for (const url of payload?.repositories ?? []) {
+          // Fire-and-forget: each is a network fetch, and a restore must not
+          // block on a repository whose host happens to be down today.
+          void pluginManager.addRepository(url).catch(() => {
+            /* Reported by the repositories screen when it next reads. */
+          });
+          count++;
+        }
+        if (payload?.disabledProviders?.length) {
+          pluginManager.setProvidersEnabled(payload.disabledProviders, false);
+          count += payload.disabledProviders.length;
+        }
+        if (payload?.disabledRepositories?.length) {
+          pluginManager.setRepositoriesEnabled(payload.disabledRepositories, false);
+          count += payload.disabledRepositories.length;
+        }
+        return count;
+      },
+    },
+    {
+      name: 'indexers',
+      label: 'Torrent indexer configuration',
+      collect: () => contentService.getRegistry().getConfigs(),
+      restore: (value: unknown) => {
+        if (!Array.isArray(value)) return 0;
+        contentService.getRegistry().saveConfigs(value);
+        return value.length;
+      },
+    },
+  ],
+  app.getVersion(),
+  `${process.platform} ${os.release()}`
+);
+
+ipcMain.handle('backup:export', async () => {
+  try {
+    if (!mainWindow) return { ok: false, error: 'No window to ask from.' };
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export CloudStream data',
+      defaultPath: BackupService.suggestedFilename(),
+      filters: [{ name: 'CloudStream backup', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
+    return backupService.write(result.filePath);
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/** Describes a file without changing anything, so a restore can be confirmed. */
+ipcMain.handle('backup:inspect', async () => {
+  try {
+    if (!mainWindow) return { ok: false, error: 'No window to ask from.' };
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Choose a CloudStream backup',
+      properties: ['openFile'],
+      filters: [{ name: 'CloudStream backup', extensions: ['json'] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return { ok: false, cancelled: true };
+    const inspected = backupService.inspect(result.filePaths[0]);
+    return { ...inspected, path: result.filePaths[0] };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('backup:restore', async (_, filePath: string, only?: string[]) => {
+  try {
+    if (!filePath) return { ok: false, error: 'No backup file was chosen.' };
+    // A snapshot first: a restore writes over live data, and the alternative to
+    // being able to undo it is telling someone their library is gone.
+    datastore.createSnapshot();
+    return backupService.restore(filePath, only);
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/** Puts back the datastore as it was immediately before the last restore. */
+ipcMain.handle('backup:undoRestore', async () => {
+  try {
+    return { ok: datastore.rollbackSnapshot() };
+  } catch (error) {
+    return fail(error);
+  }
+});
 
 ipcMain.handle('dialog:selectDirectory', async () => {
   if (!mainWindow) return null;
