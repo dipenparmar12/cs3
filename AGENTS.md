@@ -2741,6 +2741,163 @@ empty `java.library.path`; per-plugin scoped storage.
 and surfaced in the UI on purpose: a named gap can be closed; an implied-covered gap never
 gets fixed. Java's `SecurityManager` is not an option (JEP 411/486 removal).
 
+### Seven IPC channels were strings that had stopped matching (2026-08-27)
+
+Found by diffing the channel literals in `main.ts` against those in `preload.ts` — not by
+chasing a symptom, because none of these produces an error anyone would report as an error.
+`tsc` cannot see them: the channel is a string on both sides and the two files never refer to
+each other. The user-visible form is always a dead button or a silent no-op.
+
+| Channel | Was | Consequence |
+|---|---|---|
+| `binary:setupBinaries` | invoked, never registered | the first-run component installer **always failed** |
+| `runtime:repair` | invoked, never registered | the recovery path for a broken runtime, latent |
+| `discover:invalidated` | pushed, no listener | switching home catalogue left the old rows up for 6h |
+| `binary:check`, `binary:setup` | registered, unreachable | duplicate spellings of live handlers |
+| `extension:getRuntimeReport` | registered, unreachable | no way to say *why* an extension registered nothing |
+| `media:get/setProbeConfig` | registered, unreachable | the probe budget, unreachable by the users it affects |
+
+**`ipcRenderer.invoke` on an unregistered channel rejects — it does not return an
+`{ ok: false }` envelope.** That is what made the first one invisible: `BinarySetupModal`
+caught the rejection and rendered `No handler registered for 'binary:setupBinaries'` as a
+friendly-sounding notice with "(HTTP fallback stream active)" after it. The user was told a
+fallback was active and had no way to know the button had done nothing. **A catch that
+reassures is worse than no catch.** Both halves were needed to hide it.
+
+**`electron/ipcSurface.test.mts` now pins all four diffs** (`bun run test:ipc`, and it runs
+first in `test:electron`). It is lexical rather than runtime — loading `main.ts` would boot
+the whole service graph, and the strings are what matter. Verified to fail in all three
+directions by mutation, because a parity test that passes trivially is worthless. Exceptions
+go in the commented allow-lists at the top, and "I will wire it later" is not a reason: an
+entry there is indistinguishable from a working feature to everyone who reads the code.
+
+### Lifecycle: closing a window is not quitting (2026-08-27)
+
+`window-all-closed` ran `downloadService.stop()`, `extensionUpdater.stop()` and
+`pluginManager.shutdown()` **unconditionally**, with only `app.quit()` guarded by platform.
+On macOS the app then stayed in the dock holding a dead sidecar and a stopped queue, and
+`activate` opened a fresh window onto all of it — zero providers, every search empty, and
+nothing on screen explaining any of it. Every teardown moved into `before-quit`, which is the
+event that actually means "we are going away"; `window-all-closed` now only quits.
+
+**Shutdown is raced against a 5s deadline.** WebTorrent's `destroy()` and an unresponsive mpv
+both hang in the wild, and `before-quit` calls `preventDefault()` — so when one hung the
+window was gone, the process was not, and the only recourse was Task Manager, after which the
+next launch hit the locked cache directory this handler exists to prevent. Which service was
+still pending is logged as `shutdown_timeout`; that is the fact that makes the next fix
+possible and it costs one line. The old `if (!torrentEngine) return;` guard was dead (it is
+constructed eagerly) and would have skipped mpv, external players, the WebView host and
+`logger.shutdown()` if it had ever fired.
+
+### Navigation, shortcuts and the menu (2026-08-27)
+
+**A dropped file used to replace the app.** `setWindowOpenHandler` covers `window.open`; it
+does not cover a top-level navigation, and Electron's default is to perform one. Dragging a
+video onto a media player's window is the most natural gesture a user has — and with
+`setApplicationMenu(null)` there was no View → Reload to get back, so the app was bricked
+until relaunch. `will-navigate` and `will-frame-navigate` refuse it now, and the gesture does
+the useful thing instead: the renderer's `drop` handler routes the file through
+`media:prepare` like any other source. **`MediaProxy` could always serve local files
+(`/local/<token>`) and the engine is source-agnostic — the capability was built and had no
+entry point,** so the app could finish a download and then not play it from disk. File → Open
+and drag-and-drop are both that entry point.
+
+**F12 was bound twice and the app's own binding could never fire.** `before-input-event`
+toggled DevTools *and* called `preventDefault()`, which suppresses the page keyboard event —
+so `App.tsx`'s F12 handler never ran and `ProviderInspector`, which has no other entry point,
+was unreachable. DevTools is `Ctrl+Shift+I` only now. **Reload is gated on `app.isPackaged`**:
+`Ctrl+R` is browser muscle memory and in a packaged build it destroys the renderer — playback
+stops, the open page is lost, an in-flight search is abandoned.
+
+**`Menu.setApplicationMenu(null)` cost more than chrome.** On macOS, Cut/Copy/Paste/Select-All
+are menu *roles*, not native text-field behaviour, so `Cmd+C` did nothing in the search box —
+and there was no Quit, no About and no zoom reset anywhere. A real menu is back, hidden behind
+Alt on Windows and Linux via `autoHideMenuBar`. It is also what makes any shortcut
+discoverable at all.
+
+### `aria2` was pinned to port 6800 and told nobody when it failed (2026-08-27)
+
+6800 is aria2's documented default, so the people most likely to collide with it are the ones
+already running aria2 — which is this app's technical audience. `stdio: 'ignore'` discarded
+the reason, and `start()` returned `true` the moment `spawn` returned: **a port conflict is
+not a spawn error.** aria2 starts, fails to bind and exits a few milliseconds later, so
+`isRunning()` answered true for a dead process and every `addUri` after it failed with a
+message about the *download*. It now probes upward from 6800 by test-binding, captures stderr,
+and reports success only once the RPC actually answers (`getVersion`). `getLastError()` carries
+the reason. A silent downgrade to the slow HTTP path is the failure mode this repo keeps
+having to fix.
+
+### The media proxy's tokens were `1`, `2`, `3` (2026-08-27)
+
+Every response carries `Access-Control-Allow-Origin: *` so that ffprobe, hls.js, Shaka, mpv and
+an external VLC can all read from one door — which is correct and load-bearing. Combined with
+sequential tokens it meant **any page open in the user's browser could fetch
+`http://127.0.0.1:<port>/stream/1` cross-origin, read the body, and walk the integers to
+enumerate the session's viewing.** The ephemeral port is a speed bump, not a control. Tokens
+are 16 random bytes now (`[0-9a-f]{32}` in all five route regexes), `tokensByKey` keeps them
+stable so nothing downstream changed, and a `Host` header that does not name loopback is
+refused — binding to 127.0.0.1 says nothing about DNS rebinding. Pinned by two new cases in
+`mediaProxy.test.mts`; `fetch` refuses to set `Host`, so that one uses a raw `http.request`.
+
+### The font was fetched from Google on every launch (2026-08-27)
+
+`src/index.css` opened with `@import url('https://fonts.googleapis.com/…Inter…')`, so a
+*packaged desktop app* sent the user's IP and User-Agent to a third party on every start —
+invisibly, in an app whose users frequently run a VPN precisely to avoid that. It also failed
+silently offline and hung before falling back where the host is blocked. Inter is vendored
+into `src/assets/fonts/` (seven variable-font subsets, 213 KB; the non-latin ones stay because
+provider titles are not English even though the interface is) and `src/assets/inter.css` is
+generated from the Google CSS with the URLs rewritten. **Verify with
+`grep -oE 'https://fonts[^)"]*' dist/assets/*.css` after a build — it must find nothing.** This
+also unblocks a CSP, which would otherwise have to allow a third-party style and font origin.
+
+### Licensing (2026-08-27)
+
+The repository had **no `LICENSE` file** while being a port of a GPL-3.0 Android application,
+vendoring 26 community extension repositories and bundling FFmpeg, mpv, aria2, yt-dlp and a
+JRE. `LICENSE` (GPL-3.0, fetched from gnu.org rather than reproduced from memory) and
+`THIRD-PARTY-NOTICES.md` now exist at the root, and `settings/AboutPanel.tsx` makes them
+reachable from a *packaged* build where the repository is not — GPL-3.0 §6 asks that whoever
+holds the binary can find the source. **The bundled FFmpeg builds are the GPL variants, not
+LGPL**, and the notice says so; "FFmpeg" unqualified would be the kind of accurate-sounding
+omission that file exists to avoid.
+
+### Shared renderer primitives added in the same pass
+
+- **`src/utils/useFlash.ts`** — twenty-odd call sites wrote `setToast(m); setTimeout(() => setToast(null), N)`
+  with no cleanup. Two bugs: the timers **cross**, so flashing a second message two seconds
+  later has the *first* timer clear it early (which reads as the app dropping a confirmation,
+  exactly when someone is doing several things quickly); and every one set state after unmount,
+  which these views do constantly. Durations stay per call site — they range 1500–5000 ms and
+  unifying them would change what several screens do, the same argument `utils/format.ts` won.
+  Note `flash` is stable but the linter cannot know that the way it knows a `useState` setter
+  is, so it goes in dependency arrays.
+- **`src/components/Poster.tsx`** — `PosterCard` handled a *missing* `posterUrl` and had no
+  `onError`, so it handled the case that never happens and not the one that happens constantly:
+  scraped poster URLs expire and 403 on hotlink checks, and the result was Chromium's broken
+  image icon in the most-repeated component in the product. `HistoryView` had answered it with
+  `display: none`, which is an empty bordered box instead. Each call site keeps its own
+  `fallback`; flattening them to one glyph would be a worse screen, not a tidier one.
+- **`src/components/EmptyState.tsx`** — every list route was one sentence of body text, so an
+  empty library, an empty history and a search that found nothing were the same blank page. For
+  a new user **every screen except Home is empty**, which makes this the cheapest onboarding in
+  the app. The *action* is why it is a component: the search empty state now offers "Search all
+  sources", which clears the stored scope and re-runs — previously reachable only by finding
+  the scope picker and clearing it by hand.
+
+Also: a global `:focus-visible` floor in `index.css` (eight `outline: none` sites, only some
+with replacements — in a full-screen dark app a missed one means the keyboard user simply
+loses the cursor); `prefers-reduced-motion` in `index.css`, which owns the `.spin` keyframe
+every loading indicator uses and was the one stylesheet of four not honouring it; the poster
+card is keyboard-reachable (`.poster-card:focus-visible` had been styled all along, which says
+someone meant it to be); window bounds persist and are clamped to a display that still exists;
+and an offline banner, because offline every provider fails separately and thirty honest
+errors are less useful than one true sentence.
+
+**Backlog:** `docs/roadmap/product-hardening-backlog.md` carries the remaining items with
+evidence, fixes and acceptance checks. Items marked `needs-app-run` there have not been
+verified in a running Electron app and should not be reported as done.
+
 ---
 
 ## 6. Documentation: what to trust

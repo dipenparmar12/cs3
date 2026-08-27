@@ -147,6 +147,8 @@ export const App: React.FC = () => {
   const [providersList, setProvidersList] = useState<string[]>([]);
 
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  /** Which Settings pane to open on, when something deep-links into it. */
+  const [settingsTab, setSettingsTab] = useState<'general' | 'advanced'>('general');
 
   /**
    * Whether the machine has a network at all.
@@ -243,12 +245,19 @@ export const App: React.FC = () => {
       setIsInspectorOpen((prev) => !prev)
     );
 
+    // Help → Licences. A menu item that does nothing is worse than no menu item.
+    const disposeLicences = window.cloudstream?.onShowLicences?.(() => {
+      setSettingsTab('advanced');
+      setActiveTab('settings');
+    });
+
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       disposeProgress?.();
       disposePlayback?.();
       disposeSearch?.();
       disposeInspector?.();
+      disposeLicences?.();
     };
   }, []);
 
@@ -376,7 +385,16 @@ export const App: React.FC = () => {
   const handleSearchAllSources = useCallback(() => {
     const previous = lastQuery.current;
     if (!previous?.query) return;
-    void handleSearch(previous.query, { ...previous.options, providers: [], indexers: [] });
+    void (async () => {
+      // The scope is stored in the main process, not carried on the query — an
+      // empty selection *is* "every enabled source", so clearing it is the whole
+      // widening. Saved rather than applied for one run, deliberately: a viewer
+      // who asks to search everything has changed their mind about the scope,
+      // and silently restoring it afterwards would make the next search narrow
+      // again for reasons nothing on screen explains.
+      await window.cloudstream?.setSearchScope?.({ providers: [], indexers: [] });
+      void handleSearch(previous.query, previous.options);
+    })();
   }, [handleSearch]);
 
   /**
@@ -1242,6 +1260,7 @@ export const App: React.FC = () => {
                     onSelectMedia={handleSelectMedia}
                     onSearch={handleSearchFromDetail}
                     onPlaySavedSource={handlePlaySavedSource}
+                    onBrowse={() => setActiveTab('home')}
                   />
                 </ErrorBoundary>
               )}
@@ -1331,6 +1350,7 @@ export const App: React.FC = () => {
                   <SettingsView
                     hasBinaries={hasBinaries}
                     onOpenBinarySetup={() => setIsBinaryModalOpen(true)}
+                    initialTab={settingsTab}
                   />
                 </ErrorBoundary>
               )}

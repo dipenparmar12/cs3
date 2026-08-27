@@ -15,6 +15,7 @@ import {
   Play,
   Trash2,
   Home,
+  Scale,
 } from 'lucide-react';
 import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
@@ -28,16 +29,19 @@ import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
 import { useFlash } from '../utils/useFlash';
 import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
 import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPanel';
+import { AboutPanel } from '../components/settings/AboutPanel';
 
 type TabId = 'general' | 'player' | 'components' | 'sources' | 'downloads' | 'network' | 'advanced';
 
 interface SettingsViewProps {
   hasBinaries?: boolean;
   onOpenBinarySetup?: () => void;
+  /** Which pane to open on, for a deep link from the application menu. */
+  initialTab?: TabId;
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = () => {
-  const [tab, setTab] = useState<TabId>('general');
+export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
+  const [tab, setTab] = useState<TabId>(initialTab ?? 'general');
   const [downloadDir, setDownloadDir] = useState('%USERPROFILE%\\Downloads\\CloudStream');
   /**
    * The delete-behaviour preference, resettable here.
@@ -406,6 +410,17 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                 <span>{useLiveStreams ? 'On' : 'Off'}</span>
               </label>
             </SettingRow>
+          </SettingGroup>
+
+          {/*
+            Reachable from a packaged build, where the repository's LICENSE and
+            THIRD-PARTY-NOTICES.md are not. GPL-3.0 §6 asks that whoever has the
+            binary can find the source; a notice nobody can open does not do it.
+          */}
+          <SettingGroup title="About and licences" icon={<Scale size={15} />}>
+            <div id="settings-about">
+              <AboutPanel />
+            </div>
           </SettingGroup>
         </>
       )}

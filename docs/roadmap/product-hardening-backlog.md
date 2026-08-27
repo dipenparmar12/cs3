@@ -7,6 +7,48 @@ Android extension corpus" and "this app is a product a non-technical person inst
 
 ---
 
+## Status — first pass landed 2026-08-27
+
+**Done (31 items).** Waves 1 and 2 complete, plus the release blockers and the shared
+primitives from Wave 4. The findings and reasoning behind each are now in `AGENTS.md` §5, so
+this document stays the backlog rather than becoming the changelog.
+
+| | Items |
+|---|---|
+| **P0 — all six** | `P0-01` `P0-02` `P0-03` `P0-04` `P0-05` `P0-06` |
+| **P1** | `P1-01` `P1-02` `P1-03` `P1-04` `P1-05` `P1-07` `P1-08` `P1-09` `P1-10` |
+| **P2** | `P2-01` |
+| **UX** | `UX-04` `UX-07` `UX-08` `UX-09` `UX-11` |
+| **Aesthetics** | `AES-06` `AES-08` |
+| **Accessibility** | `A11Y-01` `A11Y-02` (partial) `A11Y-03` (partial) `A11Y-04` |
+| **Engineering** | `ENG-03` `ENG-04` `ENG-08` `ENG-10` |
+
+Verified after the pass: `tsc -b` exits 0 · `npm run test:electron` all suites pass (two new
+media-proxy cases, one new suite) · `oxlint` back to the baseline 12 warnings · `vite build`
+clean with **zero remote font references** in the output.
+
+**Still open and highest value:** `P1-06` (the three playback-path dep warnings — read the
+warning in that item before touching them), `P2-02` (CSP, now unblocked by `ENG-03`),
+`P3-01` (virtualization), `AES-01`/`AES-02` (197 hex literals, 415 inline styles — these block
+theming), `ENG-01` (CI), `ENG-02` (packaging and signing), `PAR-01` (account sync),
+`PAR-03` (auto-update).
+
+**Partial, and why:**
+- `A11Y-02` — `BinarySetupModal` has a focus trap and focus restore; `SeasonDownloadDialog`
+  gained Escape, backdrop dismissal and correct ARIA. The shared `<Modal>` extraction that
+  would give all four dialogs the trap is not done.
+- `A11Y-03` — `PosterCard` is keyboard-reachable. `LibraryView.tsx:284` and the two sites in
+  `HistoryView` still have clickable `div`s.
+- `P1-03` — every self-clearing toast is converted except `UnifiedComponentManager`'s
+  `activeProgress`, which is a *progress* display set from six places, not a flash. Forcing it
+  into `useFlash` would auto-clear a live operation's state; it needs a different fix.
+
+Nothing below has been verified in a running Electron app. Items marked **`needs-app-run`**
+were reasoned from code and Electron's documented defaults — `P1-01` (macOS), `P1-07`,
+`P0-04`, `ENG-08` and `AES-04` in particular still need a human on a real desktop.
+
+---
+
 ## 0. How to use this document
 
 Each item has a stable **ID**, a **severity**, the **evidence** that it is real (file:line, or a

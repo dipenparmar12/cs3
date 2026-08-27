@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { EmptyState } from './EmptyState';
 import { useFlash } from '../utils/useFlash';
 import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
@@ -855,24 +856,20 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
 
       {/* Downloads List */}
       {tasks.length === 0 ? (
-        <div
-          style={{
-            padding: '4rem 2rem',
-            textAlign: 'center',
-            background: 'var(--bg-card)',
-            borderRadius: 'var(--radius-lg)',
-            border: '1px dashed var(--border-color)',
-            color: 'var(--text-muted)',
-          }}
-        >
-          <ArrowDown size={40} style={{ margin: '0 auto 1rem', opacity: 0.5 }} />
-          <h3 style={{ fontSize: '1rem', color: '#fff', marginBottom: '0.5rem' }}>
-            No Active Downloads
-          </h3>
-          <p style={{ fontSize: '0.8rem' }}>
-            Browse media titles and click "1-Click Download" to start high-speed stream downloads.
-          </p>
-        </div>
+        <EmptyState
+          icon={ArrowDown}
+          title="No downloads yet"
+          description={
+            hasBinaries
+              ? 'Press Download on any source and it appears here. Downloads keep going while you browse, and resume after a restart.'
+              : 'Press Download on any source and it appears here. Installing the transfer components first makes downloads considerably faster.'
+          }
+          action={
+            !hasBinaries && onOpenBinarySetup
+              ? { label: 'Set up faster downloads', onClick: onOpenBinarySetup }
+              : undefined
+          }
+        />
       ) : filteredTasks.length === 0 ? (
         <div
           style={{
