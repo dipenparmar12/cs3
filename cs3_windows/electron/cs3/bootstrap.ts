@@ -36,7 +36,21 @@ const KEY_ADULT_ENABLED = 'cs3_adult_content_enabled';
  * verified repositories without re-adding ones the user has since removed —
  * only repositories not seen by a previous run are considered.
  */
-const BOOTSTRAP_VERSION = 1;
+/**
+ * Bumped when the bundled set changes, so an existing install gets the addition.
+ *
+ * Safe to bump because `run()` filters targets on
+ * `!already.has(repo.rawRepoUrl)`: a repository the user already has is skipped
+ * entirely, so a re-run installs only what is new and re-downloads nothing.
+ *
+ * Version 2 adds **CloudStream X (CSX)**. It was catalogued and unbundled; the
+ * flag was set after `tools/e2e/provider-e2e.mjs --repo CSX` drove it end to end
+ * — 11 providers loaded, 9 answering, 8 links resolved, 7 streams delivering
+ * bytes — which is what `bundled` is a claim about. Two shim gaps it exposed
+ * (`CloudStreamApp.setKey` and `AccountManager.simklApi`) were fixed first; see
+ * §5 and `RUNTIME_GENERATION`.
+ */
+const BOOTSTRAP_VERSION = 2;
 
 /**
  * How many plugins are installed per repository on first run.

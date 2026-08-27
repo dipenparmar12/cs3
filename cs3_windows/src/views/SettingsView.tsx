@@ -16,6 +16,8 @@ import {
   Trash2,
   Home,
   Scale,
+  List,
+  Archive,
 } from 'lucide-react';
 import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
@@ -30,8 +32,27 @@ import { useFlash } from '../utils/useFlash';
 import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
 import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPanel';
 import { AboutPanel } from '../components/settings/AboutPanel';
+import { BackupPanel } from '../components/settings/BackupPanel';
 
-type TabId = 'general' | 'player' | 'components' | 'sources' | 'downloads' | 'network' | 'advanced';
+/**
+ * `all` is a view, not a category.
+ *
+ * Every other tab answers one question and hides the rest, which is right for
+ * changing a setting you already know the name of and wrong for the two other
+ * things people do here: finding a setting they half-remember, and checking
+ * what the app is currently configured to do. Both need one page. `all` renders
+ * exactly the same groups the tabs do, in tab order, with a heading before each
+ * — no second copy of any control, so the two views cannot disagree.
+ */
+type TabId =
+  | 'all'
+  | 'general'
+  | 'player'
+  | 'components'
+  | 'sources'
+  | 'downloads'
+  | 'network'
+  | 'advanced';
 
 interface SettingsViewProps {
   hasBinaries?: boolean;
@@ -136,7 +157,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
     if (applied) setConcurrency(applied);
   };
 
+  /** True on that tab, and on the everything view. */
+  const shows = (id: TabId) => tab === id || tab === 'all';
+  /** The heading that separates sections when they are all on one page. */
+  const sectionTitle = (id: TabId, label: string) =>
+    tab === 'all' ? <h3 className="settings__section" id={`settings-${id}`}>{label}</h3> : null;
+
   const tabs: Array<{ id: TabId; label: string; icon: React.ReactNode; badge?: React.ReactNode }> = [
+    { id: 'all', label: 'All settings', icon: <List size={14} /> },
     { id: 'general', label: 'General', icon: <Sliders size={14} /> },
     { id: 'player', label: 'Player', icon: <Play size={14} /> },
     {
@@ -197,8 +225,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
 
       {statusMessage && <div className="settings__flash">{statusMessage}</div>}
 
-      {tab === 'general' && (
+      {shows('general') && (
         <>
+          {sectionTitle('general', 'General')}
           <SettingGroup title="Search" icon={<Search size={15} />}>
             <SettingRow
               label="Providers searched at once"
@@ -276,8 +305,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         </>
       )}
 
-      {tab === 'player' && (
+      {shows('player') && (
         <>
+          {sectionTitle('player', 'Player')}
           <PlayerSettings />
           {/* Sits under the player tab rather than with subtitle *sources*,
               because this is about reading them, not finding them. */}
@@ -285,10 +315,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         </>
       )}
 
-      {tab === 'components' && <UnifiedComponentManager />}
-
-      {tab === 'sources' && (
+      {shows('components') && (
         <>
+          {sectionTitle('components', 'Components & Binaries')}
+          <UnifiedComponentManager />
+        </>
+      )}
+
+      {shows('sources') && (
+        <>
+          {sectionTitle('sources', 'Sources')}
           <SourceSettings />
           {/* Which providers are worth asking, measured rather than assumed.
               Lives under Sources because that is what it is about, and next to
@@ -297,8 +333,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         </>
       )}
 
-      {tab === 'downloads' && (
+      {shows('downloads') && (
         <>
+          {sectionTitle('downloads', 'Downloads')}
           <SettingGroup title="Storage" icon={<HardDrive size={15} />}>
             <SettingRow
               label="Download folder"
@@ -371,10 +408,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         </>
       )}
 
-      {tab === 'network' && <NetworkSettings />}
-
-      {tab === 'advanced' && (
+      {shows('network') && (
         <>
+          {sectionTitle('network', 'Connection')}
+          <NetworkSettings />
+        </>
+      )}
+
+      {shows('advanced') && (
+        <>
+          {sectionTitle('advanced', 'Advanced')}
           {/*
             The tally first, then the transcript.
             One says how many distinct things are wrong; the other says what
@@ -410,6 +453,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                 <span>{useLiveStreams ? 'On' : 'Off'}</span>
               </label>
             </SettingRow>
+          </SettingGroup>
+
+          {/*
+            Your data, in one file, and the way back from one. Above the
+            Android-format import below it, which is a different job: that moves
+            settings between the phone app and this one.
+          */}
+          <SettingGroup title="Back up and restore" icon={<Archive size={15} />}>
+            <BackupPanel />
           </SettingGroup>
 
           {/*

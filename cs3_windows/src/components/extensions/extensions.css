@@ -459,3 +459,47 @@
     transition: none;
   }
 }
+
+/* --- inline repository expansion ------------------------------------------ */
+
+/*
+ * "What does this repository offer?" opens here, under the card, instead of on
+ * a third tab. The panel has to break the three-up grid or a twenty-extension
+ * list would render inside one 290px column and read as belonging to the card's
+ * neighbours; `1 / -1` gives it the whole row, immediately after its own card.
+ */
+.ext-card__panel {
+  grid-column: 1 / -1;
+  margin: -0.2rem 0 0.35rem;
+  border: 1px solid var(--accent-primary);
+  border-top-width: 2px;
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  overflow: hidden;
+}
+
+/* The open card and its panel read as one object. */
+.ext-card--open {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary) inset;
+}
+
+.ext-panel--embedded {
+  padding: 0.85rem 1rem 1rem;
+  background: transparent;
+  border: 0;
+  max-height: 30rem;
+  overflow-y: auto;
+}
+
+/* Why a row is in the results when its own text does not say so. */
+.ext-card__matched {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.3rem;
+  margin: 0;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--accent-light);
+}
+.ext-card__matched svg { flex-shrink: 0; margin-top: 0.15rem; }

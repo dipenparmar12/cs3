@@ -2879,12 +2879,29 @@
   color: var(--text-muted);
 }
 
+/*
+ * The tabs wrap; they do not scroll sideways.
+ *
+ * `overflow-x: auto` on a fixed set of tabs means that on an ordinary window a
+ * user has to find and drag a horizontal scrollbar before they can click
+ * "Advanced" — in a desktop app, for navigation that is always the same eight
+ * items. Wrapping costs one extra line of height at narrow widths and makes
+ * every destination clickable at every width, which is the whole job.
+ */
 .settings__tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.3rem;
-  overflow-x: auto;
   border-bottom: 1px solid var(--border-color);
-  padding-bottom: 0.4rem;
+  padding-bottom: 0.5rem;
+  /* Sticky because "All settings" is one long page: navigation that scrolls
+     away is navigation you have to scroll back up to reach. */
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bg-dark);
+  padding-top: 0.5rem;
+  margin-top: -0.5rem;
 }
 .settings__tab {
   display: inline-flex;
@@ -2923,6 +2940,10 @@
   border-radius: var(--radius-md);
   padding: 0.9rem 1.1rem 1rem;
 }
+/* Groups are the unit of scanning, so they need air between them — on the
+   "All settings" view they are the only thing separating one area from the
+   next, and butted together they read as one very long list. */
+.setting-group + .setting-group { margin-top: 0.7rem; }
 .setting-group h3 {
   display: flex;
   align-items: center;
@@ -5750,3 +5771,108 @@
 .about-panel__env dd { margin: 0; color: var(--text-muted); }
 
 .about-panel__actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+/*
+ * The section heading that only appears on the "All settings" view.
+ *
+ * On a single tab the heading would repeat what the tab already says. On the
+ * everything view it is the only thing separating Connection from Downloads, so
+ * it is deliberately heavier than a group title and sticks while its section
+ * scrolls past.
+ */
+.settings__section {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 1.6rem 0 0.3rem;
+  padding: 0.5rem 0 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-light);
+  background: var(--bg-dark);
+  border-bottom: 1px solid var(--border-color);
+}
+.settings__section:first-of-type { margin-top: 0.4rem; }
+
+/* --- backup and restore --------------------------------------------------- */
+
+.backup-panel { display: flex; flex-direction: column; gap: 0.85rem; }
+
+.backup-panel__lede,
+.backup-panel__note {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-muted);
+  max-width: 64ch;
+}
+.backup-panel__note { font-size: 0.76rem; color: var(--text-subtle); }
+.backup-panel__note em { color: var(--text-muted); font-style: normal; font-weight: 600; }
+
+.backup-panel__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+/* What is in the chosen file. Restoring writes over live data, so this is the
+   thing being confirmed — not the filename. */
+.backup-panel__chosen,
+.backup-panel__result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+}
+.backup-panel__chosen h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 0.9rem;
+}
+.backup-panel__meta { margin: 0; font-size: 0.74rem; color: var(--text-subtle); }
+
+.backup-panel__summary {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.15rem 1rem;
+  font-size: 0.78rem;
+}
+.backup-panel__summary li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.2rem 0;
+  border-bottom: 1px dashed var(--border-color);
+  color: var(--text-muted);
+}
+.backup-panel__summary strong {
+  color: var(--text-main);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.backup-panel__flash {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: var(--radius-md);
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid var(--status-success);
+  color: var(--status-success);
+  font-size: 0.79rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.backup-panel__flash--bad {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: var(--status-warning);
+  color: var(--status-warning);
+}
+.backup-panel__flash svg { flex-shrink: 0; margin-top: 0.12rem; }
