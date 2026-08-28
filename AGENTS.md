@@ -607,6 +607,32 @@ barrier to *desktop* though, only to *JavaScript runtimes* — so:
    corpus found 67.6% of providers import no `android.*` at all, and those five classes
    cover ~93% of the rest.
 
+### Upstream now publishes a jar, and nothing here reads it (2026-08-27)
+
+Found by reading `recloudstream/gradle` `master` rather than by chasing a symptom. The Gradle
+plugin gained `isCrossPlatform`: set it, and `make` emits a plain JVM **`.jar`** beside the
+`.cs3`, `ensureJarCompatibility` runs **`jdeps --print-module-deps`** over it and *fails the
+build* if the output contains `android.`, and `writeCacheEntry` puts `jarUrl`, `jarHash` and
+`jarFileSize` into the plugin entry. **The published `plugins.json` already carries those three
+fields and `pluginManager` ignores all of them.**
+
+That artifact needs no translation. For an archive that opts in, `DexTranslator`,
+`KotlinNameRepair`, the hash-keyed translation cache, the concurrent-translation nonce and the
+generation-keyed cache drop all become dead code on the load path — every one of which has been
+a real defect in this repository at least once. Note the corpus survey above: **67.6% of
+providers import no `android.*` at all**, so most of the corpus is already eligible and simply
+has not been asked.
+
+What it does **not** retire, and claiming otherwise would be overclaiming: `jdeps` flags
+`android.*` only. A cross-platform jar still links against `library-jvm` and can still reach the
+`:app` types the bridge supplies (`Plugin`, `DataStore`, `CloudflareKiller`, `syncproviders`).
+`LinkageAnalyzer` still runs and tiers still apply. This removes the *bytecode* problem, not the
+*classpath* one.
+
+There is currently no host anywhere that consumes that jar, which makes setting the flag worth
+nothing to an author today. Doc 41 §6.3 argues we should be that host and that this is the
+cheapest lever we have on the upstream ecosystem's portability.
+
 **Translation risk was measured, not assumed.** Against all 392 real community plugins:
 392 translated, 18,217 classes emitted, 0 verification failures, 6,617 Kotlin coroutine
 state machines, 0 failures — see `docs/PRD/35`, reproducible via `tools/dex-spike/`.
@@ -3089,6 +3115,16 @@ verified in a running Electron app and should not be reported as done.
   formats, repository signing, the engine ladder and format matrix, and the TLS/challenge
   layer that actually decides how many sites work. It replaces doc 27 §6–§9. Read it
   before designing anything plugin-shaped; do not treat it as as-built.
+- `docs/PRD/41-desktop-extension-platform-and-community-standard.md` — **proposed, nothing
+  built**, and the one to read instead of 39: it expands that sketch into a full
+  specification. Five lanes rather than four (doc 39 missed the upstream cross-platform jar
+  — see below), the repository/extension/SDK standards with schemas, ed25519 signing with
+  per-repository pinned keys, the capability sandbox, the unified metadata model (multi-source
+  ratings, crew, chapters, typed artwork, per-track audio language), the author CLI and
+  fixture harness, and the publishing model. §2 is a measured account of the *Android*
+  ecosystem read from upstream source on 2026-08-27 — repo/index/archive formats, the
+  four-field `manifest.json`, the hardcoded `apiVersion = 1`, the Levenshtein extractor
+  match — and is worth reading on its own before touching anything plugin-shaped.
 - `docs/docs_cs3/` — the Android app's architecture, 9 documents, written from source.
 
 Requirement ids appear throughout code comments — `ARCH-2`, `SEC-7`, `DROP-12`, `DSK-57`,
