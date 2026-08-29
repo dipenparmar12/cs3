@@ -114,6 +114,21 @@ const OBSERVED = [
  * Everything mpv changes this way is already in {@link OBSERVED}, so our own
  * control bar follows along without a second sync path.
  */
+/**
+ * The volume ceiling, shared by the launch argument, the setter and mpv itself.
+ *
+ * 100 rather than mpv's default 130 because the number has to mean the same
+ * thing in both windows and in the `<video>` element the renderer keeps mounted
+ * beside this engine — see `--volume-max` in {@link MpvEngine.buildArgs}.
+ */
+export const MAX_VOLUME = 100;
+
+/** Volume as mpv and the app both agree to express it: an integer 0–100. */
+export function clampVolume(volume: number): number {
+  if (!Number.isFinite(volume)) return 0;
+  return Math.round(Math.max(0, Math.min(MAX_VOLUME, volume)));
+}
+
 export const NATIVE_KEY_BINDINGS: ReadonlyArray<readonly [key: string, command: string]> = [
   ['SPACE', 'cycle pause'],
   ['k', 'cycle pause'],
@@ -633,7 +648,28 @@ export class MpvEngine {
     else args.push('--force-window=immediate');
 
     if (request.fullscreen) args.push('--fullscreen=yes');
-    if (typeof request.volume === 'number') args.push(`--volume=${Math.round(request.volume)}`);
+    if (typeof request.volume === 'number') {
+      args.push(`--volume=${clampVolume(request.volume)}`);
+    }
+
+    /**
+     * mpv's volume ceiling is pinned to the app's.
+     *
+     * mpv defaults `volume-max` to 130, and both its own OSC slider and the
+     * `add volume 5` bindings installed below will happily walk past 100. Our
+     * control bar, the `<video>` element it shares state with, and every
+     * preference we persist are all 0–100 — so anything above that came back as
+     * a snapshot the renderer had no representation for, and assigning it to
+     * `HTMLMediaElement.volume` throws `IndexSizeError` and takes the player
+     * down. That was the reported "turn it up past a point and it crashes".
+     *
+     * The renderer clamps defensively too, but a ceiling only one of two
+     * windows enforces is a disagreement waiting to be noticed: the OSC would
+     * show 120% while our bar showed 100%, and the next thing either of them
+     * sent would yank the other. Same argument as `NATIVE_KEY_BINDINGS` below —
+     * one player, two windows, one set of numbers.
+     */
+    args.push(`--volume-max=${MAX_VOLUME}`);
 
     return args;
   }
@@ -1069,7 +1105,7 @@ export class MpvEngine {
   }
 
   public setVolume(volume: number): Promise<MpvCommandResult> {
-    return this.command(['set_property', 'volume', Math.max(0, Math.min(130, volume))]);
+    return this.command(['set_property', 'volume', clampVolume(volume)]);
   }
 
   public setMuted(muted: boolean): Promise<MpvCommandResult> {

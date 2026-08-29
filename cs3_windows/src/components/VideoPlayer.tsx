@@ -199,6 +199,48 @@ const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const SKIP_SECONDS = 10;
 
 /**
+ * Volume, as the one number three engines have to agree on.
+ *
+ * The player holds volume as a fraction of unity because that is what
+ * `HTMLMediaElement.volume` takes. mpv and VLC both speak percentages, and both
+ * of them — through their own windows, their own keyboard bindings and their
+ * own on-screen sliders — can be pushed *above* unity: mpv's `volume-max`
+ * defaults to 130, VLC reports up to 512 on its 0–256 scale.
+ *
+ * That is where the reported crash came from. A boosted level arrived on a
+ * snapshot, was divided by 100 into something greater than 1, and was assigned
+ * to `video.volume` — whose setter throws `IndexSizeError` for anything outside
+ * [0,1]. Thrown from inside an effect, that unmounts the player: "past a
+ * certain volume it crashes".
+ *
+ * Both engines are now capped at 100 at the source, so this is the second line
+ * rather than the first. It stays because the element's contract is not
+ * something to be defensive about only where we remembered.
+ */
+function clampVolume(volume: number): number {
+  if (!Number.isFinite(volume)) return 1;
+  return Math.max(0, Math.min(1, volume));
+}
+
+/** A 0–1 volume as the whole percentage mpv and VLC expect. */
+function toEnginePercent(volume: number): number {
+  return Math.round(clampVolume(volume) * 100);
+}
+
+/**
+ * How long a locally-made audio change owns the value.
+ *
+ * Volume is bidirectional: we push it to the engine, the engine observes its own
+ * property changing and pushes a snapshot back. That echo is harmless when it
+ * agrees, and it is the "flaky slider" when it does not — dragging produces a
+ * stream of values while snapshots for the *previous* ones are still arriving,
+ * so the slider is repeatedly yanked back to where it was a moment ago. Long
+ * enough to cover a round trip and a drag's inter-event gap; short enough that
+ * turning the knob in mpv's own window still reaches us promptly.
+ */
+const AUDIO_ECHO_MS = 700;
+
+/**
  * Points a conversion URL at a timestamp, replacing any it already carries.
  *
  * A live fragmented MP4 has no index, so seeking is a re-request with `?t=`. The
@@ -253,6 +295,40 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [volume, setVolume] = useState(1);
   /** Current volume/mute, readable from effects that must not depend on them. */
   const audioSettings = useRef({ volume: 1, muted: false });
+
+  /**
+   * When this app last pushed an audio setting to an engine.
+   *
+   * The echo window described on {@link AUDIO_ECHO_MS}. Two writers own one
+   * value — the control bar here and the engine's own window — and without a
+   * rule for which wins, the loser's stale snapshot overwrites the winner's
+   * fresh input mid-gesture. Whoever moved last wins, which is the only rule a
+   * viewer can predict.
+   */
+  const audioEchoAt = useRef(0);
+  const markAudioEcho = useCallback(() => {
+    audioEchoAt.current = Date.now();
+  }, []);
+  /** True while a locally-made change is still settling in the engine. */
+  const audioEchoActive = useCallback(() => Date.now() - audioEchoAt.current < AUDIO_ECHO_MS, []);
+
+  /**
+   * What the engine is already known to hold, in its own units.
+   *
+   * The other half of the two-writer problem, and the half the time window
+   * cannot solve. Adopting a level the engine reported immediately re-derives a
+   * push of that same level *back* to it — harmless when both are settled, and
+   * a fight while the viewer is dragging mpv's own slider, because the value we
+   * echo is by then several steps behind theirs and drags the knob backwards
+   * under their cursor.
+   *
+   * Recording what came in, and declining to send it out again, is what makes
+   * the two windows one control rather than two arguing about a number.
+   */
+  const engineAudio = useRef<{ volume: number; muted: boolean; speed: number } | null>(null);
+  const adoptEngineAudio = useCallback((volume: number, muted: boolean, speed: number) => {
+    engineAudio.current = { volume, muted, speed };
+  }, []);
   const [isMuted, setIsMuted] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -547,13 +623,37 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (externalSnapshot.durationSeconds > 0) setDuration(externalSnapshot.durationSeconds);
     const playing = !externalSnapshot.paused && (externalSnapshot.state === 'playing' || externalSnapshot.state === 'loading');
     setIsPlaying(playing);
-    if (typeof externalSnapshot.volume === 'number' && Number.isFinite(externalSnapshot.volume)) {
-      setVolume(externalSnapshot.volume / 100);
+    /**
+     * Audio only when the viewer is not currently setting it here.
+     *
+     * VLC is polled, so a snapshot in flight describes the volume from before
+     * the drag that is still happening. Applying it moves the slider backwards
+     * under the cursor.
+     */
+    if (!audioEchoActive()) {
+      const reported =
+        typeof externalSnapshot.volume === 'number' && Number.isFinite(externalSnapshot.volume)
+          ? Math.round(clampVolume(externalSnapshot.volume / 100) * 100)
+          : null;
+      const reportedMute =
+        typeof externalSnapshot.muted === 'boolean'
+          ? externalSnapshot.muted
+          : audioSettings.current.muted;
+
+      if (reported !== null) setVolume(reported / 100);
+      setIsMuted(reportedMute);
+      // Remembered so the state change this causes does not turn straight back
+      // into a command aimed at the player that just reported it.
+      adoptEngineAudio(reported ?? toEnginePercent(volume), reportedMute, speed);
     }
-    if (typeof externalSnapshot.muted === 'boolean') {
-      setIsMuted(externalSnapshot.muted);
-    }
-  }, [externalSnapshot, externalControl?.capability]);
+  }, [
+    externalSnapshot,
+    externalControl?.capability,
+    audioEchoActive,
+    adoptEngineAudio,
+    volume,
+    speed,
+  ]);
 
   /**
    * Saves the source that actually delivered this stream.
@@ -817,14 +917,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (snapshot.bufferedSeconds >= 0) {
         setBuffered(snapshot.bufferedSeconds);
       }
-      if (typeof snapshot.volume === 'number' && Number.isFinite(snapshot.volume)) {
-        setVolume(snapshot.volume / 100);
-      }
-      if (typeof snapshot.muted === 'boolean') {
-        setIsMuted(snapshot.muted);
-      }
-      if (typeof snapshot.speed === 'number' && snapshot.speed > 0) {
-        setSpeed(snapshot.speed);
+      /**
+       * mpv's own window is a second controller, so its levels are adopted —
+       * but not while a change made *here* is still on its way there.
+       *
+       * Every push to mpv comes back as a `property-change` observation, and
+       * during a drag those arrive interleaved with newer local values. Without
+       * the window the slider stutters backwards for as long as the viewer
+       * holds it, which is the reported flakiness. `clampVolume` is what stops
+       * a boosted level (mpv allows up to `volume-max`) reaching the element's
+       * setter, which throws outside [0,1].
+       */
+      if (!audioEchoActive()) {
+        const percent =
+          typeof snapshot.volume === 'number' && Number.isFinite(snapshot.volume)
+            ? Math.round(clampVolume(snapshot.volume / 100) * 100)
+            : toEnginePercent(audioSettings.current.volume);
+        const muted =
+          typeof snapshot.muted === 'boolean' ? snapshot.muted : audioSettings.current.muted;
+        const rate = typeof snapshot.speed === 'number' && snapshot.speed > 0 ? snapshot.speed : 1;
+
+        setVolume(percent / 100);
+        setIsMuted(muted);
+        if (typeof snapshot.speed === 'number' && snapshot.speed > 0) setSpeed(rate);
+        // Recorded, so adopting mpv's level does not immediately send that same
+        // level back to mpv. See `engineAudio`.
+        adoptEngineAudio(percent, muted, rate);
       }
       if (snapshot.audioTracks && snapshot.audioTracks.length > 0) {
         setAudioTracks(
@@ -857,7 +975,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       dispose?.();
     };
-  }, [isNativeEngine]);
+  }, [isNativeEngine, audioEchoActive, adoptEngineAudio]);
   const probeFailure = capability?.failure ?? null;
   const probeFailureRef = useRef<typeof probeFailure>(null);
   /**
@@ -1102,7 +1220,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         video.src = playbackUrl;
       }
 
-      video.volume = audioSettings.current.volume;
+      video.volume = clampVolume(audioSettings.current.volume);
       video.muted = audioSettings.current.muted;
 
       try {
@@ -1120,7 +1238,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video
         .play()
         .then(() => {
-          video.volume = audioSettings.current.volume;
+          video.volume = clampVolume(audioSettings.current.volume);
           video.muted = audioSettings.current.muted;
           setIsPlaying(true);
 
@@ -1331,7 +1449,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // muted after a source change. Read from the ref for the same reason the
       // attach effect does: depending on them would rebuild these listeners on
       // every movement of the volume slider.
-      video.volume = audioSettings.current.volume;
+      video.volume = clampVolume(audioSettings.current.volume);
       video.muted = audioSettings.current.muted;
       detectAudioTracks();
     };
@@ -1784,8 +1902,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         return;
       }
       const preferences = stored.preferences;
-      audioSettings.current = { volume: preferences.volume, muted: preferences.muted };
-      setVolume(preferences.volume);
+      // Clamped on the way in: this is the one volume that comes from a file
+      // rather than from a control, so it is the one that can be anything.
+      const storedVolume = clampVolume(preferences.volume);
+      audioSettings.current = { volume: storedVolume, muted: preferences.muted };
+      setVolume(storedVolume);
       setIsMuted(preferences.muted);
       setSpeed(preferences.speed);
       if (preferences.subtitleLanguage) preferredSubtitleLanguage.current = preferences.subtitleLanguage;
@@ -1827,6 +1948,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const preferredAudioLanguage = useRef<string | null>(null);
   const preferredSubtitleLanguage = useRef<string | null>(null);
 
+  /**
+   * A record of the *previous* engine says nothing about the next one.
+   *
+   * Handing over to VLC, coming back, or opening a new mpv process each starts a
+   * player that has never been told anything. Keeping the old record would make
+   * the suppression below skip the one push that matters — the first — and the
+   * new engine would play at whatever level it defaulted to while the slider
+   * showed something else.
+   */
+  useEffect(() => {
+    engineAudio.current = null;
+  }, [isNativeEngine, externalControl?.capability]);
+
   useEffect(() => {
     // Also the single place the ref is kept current, so a newly attached element
     // starts at the volume the viewer last chose rather than at 1.0.
@@ -1839,22 +1973,48 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
      * element keeps its own value for when playback comes back to it — a
      * handoff to VLC and back should not restore the volume to 100%.
      */
-    if (externalControl?.capability === 'full') {
-      void window.cloudstream?.externalSetVolume(Math.round(volume * 100));
-      void window.cloudstream?.externalSetMuted(isMuted);
-      void window.cloudstream?.externalSetSpeed(speed);
-    } else if (isNativeEngine) {
-      void window.cloudstream?.mpvSetVolume(Math.round(volume * 100));
-      void window.cloudstream?.mpvSetMuted(isMuted);
-      void window.cloudstream?.mpvSetSpeed(speed);
+    const external = externalControl?.capability === 'full';
+    if (external || isNativeEngine) {
+      const percent = toEnginePercent(volume);
+      const held = engineAudio.current;
+      // Nothing to say if the engine is the one that just told us this. See
+      // `engineAudio` — echoing it back is what fought the viewer's own drag in
+      // mpv's window.
+      const alreadyThere =
+        held !== null && held.volume === percent && held.muted === isMuted && held.speed === speed;
+
+      if (!alreadyThere) {
+        markAudioEcho();
+        adoptEngineAudio(percent, isMuted, speed);
+        if (external) {
+          void window.cloudstream?.externalSetVolume(percent);
+          void window.cloudstream?.externalSetMuted(isMuted);
+          void window.cloudstream?.externalSetSpeed(speed);
+        } else {
+          void window.cloudstream?.mpvSetVolume(percent);
+          void window.cloudstream?.mpvSetMuted(isMuted);
+          void window.cloudstream?.mpvSetSpeed(speed);
+        }
+      }
     }
 
     const video = videoRef.current;
     if (!video) return;
-    video.volume = volume;
+    // Clamped, and this is the assignment that used to crash the player: the
+    // setter throws `IndexSizeError` outside [0,1], and both engines above can
+    // report a boosted level above unity. See `clampVolume`.
+    video.volume = clampVolume(volume);
     video.muted = isMuted;
     video.playbackRate = speed;
-  }, [volume, isMuted, speed, externalControl?.capability, isNativeEngine]);
+  }, [
+    volume,
+    isMuted,
+    speed,
+    externalControl?.capability,
+    isNativeEngine,
+    markAudioEcho,
+    adoptEngineAudio,
+  ]);
 
   /**
    * Controls visibility.
