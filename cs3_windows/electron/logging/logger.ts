@@ -74,6 +74,13 @@ export const LOG_SCOPES = [
   'ffmpeg',
   'ffprobe',
   'download',
+  /**
+   * The swarm, not the file. `download` is a transfer the user asked for and
+   * can see in a list; this is the BitTorrent client underneath — the DHT, the
+   * trackers, metadata acquisition and piece strategy — whose failures are
+   * diagnosed and read separately.
+   */
+  'torrent',
   'subtitle',
   'audio',
   'network',
