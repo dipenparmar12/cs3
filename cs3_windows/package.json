@@ -54,72 +54,6 @@
     "dist:installer": "node ../tools/package/build-installer.mjs --target nsis",
     "dist:portable": "node ../tools/package/build-installer.mjs --target portable"
   },
-  "build": {
-    "appId": "com.lagradost.cloudstream3.desktop",
-    "productName": "CloudStream Desktop",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "dist-electron/**/*",
-      "node_modules/**/*"
-    ],
-    "//extraResources": "The end user installs one thing and streams. That means the JVM, the sidecar and the whole provider classpath ship inside the app — SidecarSupervisor looks for exactly these paths under resources/sidecar when app.isPackaged. Build them first with: node ../tools/package/build-runtime.mjs",
-    "extraResources": [
-      {
-        "from": "../sidecar/dist",
-        "to": "sidecar"
-      },
-      {
-        "from": "media-runtime",
-        "to": "media"
-      }
-    ],
-    "//asarUnpack": "Native .node binaries cannot be loaded from inside an asar archive, and webtorrent's transitive native deps must be unpacked or the app fails at startup exactly as it does when they are bundled.",
-    "asarUnpack": [
-      "**/*.node",
-      "node_modules/node-datachannel/**",
-      "node_modules/utp-native/**"
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    },
-    "//win": "x64 explicitly: an ia32 build cannot load the x64 native .node binaries webtorrent pulls in, and electron-builder will happily attempt one if the default ever changes.",
-    "//nsis": "oneClick:false and perMachine:false together are what make this installable by anyone on any machine: a per-user install needs no administrator and no UAC prompt, which is the difference between a download people can run and one their IT policy refuses.",
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "allowElevation": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "CloudStream Desktop",
-      "deleteAppDataOnUninstall": false,
-      "runAfterFinish": true,
-      "artifactName": "CloudStream-Desktop-${version}-${arch}-setup.${ext}"
-    },
-    "//portable": "A portable build writes its userData beside the exe rather than into %APPDATA%, so a USB copy carries its own extensions, library and runtime.",
-    "portable": {
-      "unpackDirName": "CloudStreamDesktop",
-      "requestExecutionLevel": "user",
-      "artifactName": "CloudStream-Desktop-${version}-${arch}-portable.${ext}"
-    },
-    "compression": "maximum"
-  },
   "//trustedDependencies": "webtorrent pulls in native modules (node-datachannel for WebRTC peers, utp-native for uTP). Their install scripts MUST run or the app fails at runtime with 'Cannot find module node_datachannel.node'. These also need rebuilding per platform/arch against the Electron ABI before packaging.",
   "trustedDependencies": [
     "node-datachannel",
@@ -151,5 +85,9 @@
     "vite": "^8.2.0",
     "vite-plugin-electron": "^1.1.1",
     "vite-plugin-electron-renderer": "^1.0.0"
-  }
+  },
+  "author": {
+    "name": "CloudStream Desktop contributors"
+  },
+  "license": "GPL-3.0"
 }
