@@ -2697,7 +2697,15 @@ export class PluginManager {
   }
 
   public async loadMedia(url: string): Promise<LoadResponse | null> {
-    const ref = parseExtensionUrl(url);
+    let ref = parseExtensionUrl(url);
+    if (!ref && (url.startsWith('http://') || url.startsWith('https://'))) {
+      for (const p of this.providers.values()) {
+        if (p.mainUrl && url.startsWith(p.mainUrl)) {
+          ref = { provider: p.name, target: url };
+          break;
+        }
+      }
+    }
     if (!ref) return null;
 
     /**

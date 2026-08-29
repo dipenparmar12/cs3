@@ -742,10 +742,20 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
       const task = buildDownloadTask(source, {
         title: detail.name,
+        parentTitle: detail.name,
+        episodeTitle: episode
+          ? (episode.name ? episode.name : `Episode ${episode.episode ?? ''}`)
+          : undefined,
         mediaUrl: episode?.url || detail.url,
-        posterUrl: detail.posterUrl,
+        parentMediaUrl: detail.url,
+        providerName:
+          mediaItem.apiName || (detail as any).apiName || source.providerName || source.indexerName,
+        posterUrl: episode?.posterUrl || detail.posterUrl,
         season: episode?.season,
         episode: episode?.episode,
+        mediaType: detail.type,
+        year: detail.year,
+        originalTitle: mediaItem.originalTitle || (detail as any).originalTitle,
         // A source with no address at all is not downloadable; `infoHash` was
         // used here and is not a URL, so it produced a task that could only
         // fail once it reached an engine.
@@ -1270,6 +1280,9 @@ export const DetailView: React.FC<DetailViewProps> = ({
           title={detail.name}
           parentUrl={detail.url}
           posterUrl={detail.posterUrl}
+          providerName={mediaItem.apiName || (detail as any).apiName}
+          mediaType={detail.type}
+          year={detail.year}
           episodes={detail.episodes ?? []}
           activeSeason={activeSeason}
           onClose={() => setSeasonDownloadOpen(false)}

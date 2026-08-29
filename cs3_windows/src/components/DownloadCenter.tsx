@@ -148,6 +148,7 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
       {/* Poster Thumbnail for standalone items */}
       {!isEpisode && (
         <div
+          onClick={() => (task.parentMediaUrl || task.mediaUrl) && onOpenTitle?.(task)}
           style={{
             width: '48px',
             height: '68px',
@@ -155,7 +156,9 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
             overflow: 'hidden',
             flexShrink: 0,
             backgroundColor: 'var(--bg-input)',
+            cursor: (task.parentMediaUrl || task.mediaUrl) && onOpenTitle ? 'pointer' : 'default',
           }}
+          title={(task.parentMediaUrl || task.mediaUrl) && onOpenTitle ? 'Open media details' : undefined}
         >
           {task.posterUrl ? (
             <img
@@ -184,20 +187,22 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h4 style={{ fontSize: isEpisode ? '0.86rem' : '0.92rem', fontWeight: 600, color: '#fff', margin: 0 }}>
-              {onOpenTitle && task.mediaUrl ? (
+              {onOpenTitle && (task.parentMediaUrl || task.mediaUrl) ? (
                 <button
                   className="download-title"
                   onClick={() => onOpenTitle(task)}
-                  title="Open this title"
+                  title="Open media details & episodes"
                 >
                   {isEpisode
-                    ? task.episodeNumber
+                    ? task.episodeTitle
+                      ? task.episodeTitle
+                      : task.episodeNumber
                       ? `Episode ${task.episodeNumber}`
                       : task.title
                     : `${task.title} ${task.episodeNumber ? `• Ep ${task.episodeNumber}` : ''}`}
                 </button>
               ) : isEpisode ? (
-                task.episodeNumber ? `Episode ${task.episodeNumber}` : task.title
+                task.episodeTitle || (task.episodeNumber ? `Episode ${task.episodeNumber}` : task.title)
               ) : (
                 `${task.title} ${task.episodeNumber ? `• Ep ${task.episodeNumber}` : ''}`
               )}
@@ -971,6 +976,13 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
 
                     {/* Poster Thumbnail */}
                     <div
+                      onClick={(e) => {
+                        const first = group.tasks[0];
+                        if (first && (first.parentMediaUrl || first.mediaUrl) && onOpenTitle) {
+                          e.stopPropagation();
+                          onOpenTitle(first);
+                        }
+                      }}
                       style={{
                         width: '48px',
                         height: '68px',
@@ -978,7 +990,9 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                         overflow: 'hidden',
                         flexShrink: 0,
                         backgroundColor: 'var(--bg-input)',
+                        cursor: onOpenTitle ? 'pointer' : 'default',
                       }}
+                      title={onOpenTitle ? 'Open media details & episodes' : undefined}
                     >
                       {group.posterUrl ? (
                         <img
@@ -1006,7 +1020,20 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                           <h4 style={{ fontSize: '0.98rem', fontWeight: 700, color: '#fff', margin: 0 }}>
-                            {group.title} {group.seasonNumber ? `• Season ${group.seasonNumber}` : ''}
+                            {onOpenTitle && group.tasks[0] && (group.tasks[0].parentMediaUrl || group.tasks[0].mediaUrl) ? (
+                              <button
+                                className="download-title"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenTitle(group.tasks[0]);
+                                }}
+                                title="Open media details & episodes"
+                              >
+                                {group.title} {group.seasonNumber ? `• Season ${group.seasonNumber}` : ''}
+                              </button>
+                            ) : (
+                              `${group.title} ${group.seasonNumber ? `• Season ${group.seasonNumber}` : ''}`
+                            )}
                           </h4>
                           <span
                             className="chip"

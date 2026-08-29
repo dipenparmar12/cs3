@@ -802,11 +802,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     );
     try {
       await window.cloudstream?.recordHistoryEvent?.({
-        title: task.title,
-        mediaUrl: task.mediaUrl || task.link.url,
+        title: task.parentTitle || task.title,
+        parentTitle: task.parentTitle,
+        mediaUrl: task.parentMediaUrl || task.mediaUrl || task.link.url,
+        parentMediaUrl: task.parentMediaUrl,
         posterUrl: task.posterUrl,
         season: task.seasonNumber,
         episode: task.episodeNumber,
+        episodeTitle: task.episodeTitle,
+        type:
+          task.mediaType ||
+          (task.seasonNumber !== undefined || task.episodeNumber !== undefined
+            ? 'series'
+            : 'movie'),
+        year: task.year,
+        originalTitle: task.originalTitle,
         action: 'download_started',
         status: 'Attempted',
         source: {
@@ -1245,10 +1255,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           // Record successful playback event in history
           window.cloudstream?.recordHistoryEvent?.({
             title,
-            year: progress?.year,
-            type: progress?.season !== undefined ? 'series' : 'movie',
-            posterUrl: progress?.posterUrl,
+            parentTitle: series?.title || title,
+            originalTitle,
+            year: progress?.year || series?.year,
+            type: progress?.season !== undefined || series ? 'series' : 'movie',
+            posterUrl: progress?.posterUrl || series?.posterUrl,
             mediaUrl: progress?.mediaUrl || streamUrl,
+            parentMediaUrl: progress?.mediaUrl || series?.currentEpisodeUrl,
             episodeTitle,
             season: progress?.season,
             episode: progress?.episode,
@@ -1256,6 +1269,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             status: 'Played',
             durationSeconds: video.duration || undefined,
             source: {
+              providerName:
+                providerProvenance?.provider ||
+                providerProvenance?.extensionName ||
+                providerProvenance?.indexerName,
               sourceName: title,
               quality: undefined,
               directUrl: streamUrl.startsWith('http') ? streamUrl : undefined,
@@ -1268,16 +1285,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           if (err?.name !== 'NotAllowedError') {
             window.cloudstream?.recordHistoryEvent?.({
               title,
-              year: progress?.year,
-              type: progress?.season !== undefined ? 'series' : 'movie',
-              posterUrl: progress?.posterUrl,
+              parentTitle: series?.title || title,
+              originalTitle,
+              year: progress?.year || series?.year,
+              type: progress?.season !== undefined || series ? 'series' : 'movie',
+              posterUrl: progress?.posterUrl || series?.posterUrl,
               mediaUrl: progress?.mediaUrl || streamUrl,
+              parentMediaUrl: progress?.mediaUrl || series?.currentEpisodeUrl,
               episodeTitle,
               season: progress?.season,
               episode: progress?.episode,
               action: 'playback_failed',
               status: 'Failed',
               failureReason: err?.message || 'Video element playback rejected',
+              source: {
+                providerName:
+                  providerProvenance?.provider ||
+                  providerProvenance?.extensionName ||
+                  providerProvenance?.indexerName,
+                sourceName: title,
+                directUrl: streamUrl.startsWith('http') ? streamUrl : undefined,
+              },
             });
           }
         });
