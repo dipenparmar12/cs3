@@ -87,15 +87,17 @@ compression: maximum
 # @electron/rebuild is off because nothing here needs it, and leaving it on
 # fails the build on any machine without Visual Studio.
 #
-# Measured on this dependency tree: node-datachannel declares napi_versions [8]
-# and utp-native ships prebuilds/win32-x64/node.napi.node — both N-API, whose
-# ABI is stable across Node and Electron, so rebuilding produces a
-# byte-different copy of the same contract. The only modules node-gyp actually
-# wanted to compile were bufferutil and utf-8-validate, which publish no
-# win32-x64 prebuild; both are *optional* dependencies of bittorrent-tracker,
-# pure-JS accelerators for ws's masking and UTF-8 validation. ws works without
-# them, so the cost of not having them is some throughput on tracker
-# WebSockets — not a feature.
+# Measured on this dependency tree: every native module here is N-API, whose
+# ABI is stable across Node and Electron, so there is nothing for a rebuild to
+# change. node-datachannel declares napi_versions [8]; utp-native, bufferutil
+# and utf-8-validate all ship prebuilds/win32-x64. @electron/rebuild ran
+# node-gyp against bufferutil anyway and failed for want of Visual Studio —
+# rebuilding from source a module that already has the prebuild it needs.
+#
+# bufferutil and utf-8-validate are also *optional* dependencies of
+# bittorrent-tracker — native accelerators for ws's masking and UTF-8
+# validation — so even losing them costs some throughput on tracker
+# WebSockets rather than a feature.
 #
 # If a genuinely non-N-API native dependency is ever added, this must go back
 # to true and the build machine needs the C++ toolchain.

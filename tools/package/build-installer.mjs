@@ -329,21 +329,32 @@ if (fs.existsSync(assets)) {
 
 // ── Package ──────────────────────────────────────────────────────────────────
 heading(`Packaging for Windows (${TARGETS})`);
+// electron-builder extracts Electron into release/win-unpacked.tmp and renames
+// it into place. A run interrupted between those two steps leaves the .tmp
+// behind, and the next rename then fails with EPERM naming a path that looks
+// like a permissions problem and is really our own debris.
+const releaseDir = path.join(app, 'release');
+if (fs.existsSync(releaseDir)) {
+  for (const entry of fs.readdirSync(releaseDir)) {
+    if (!entry.endsWith('.tmp')) continue;
+    info(`removing stale ${entry}`);
+    fs.rmSync(path.join(releaseDir, entry), { recursive: true, force: true });
+  }
+}
 const targets = TARGETS === 'both' ? ['nsis', 'portable'] : [TARGETS];
 run(requireBin('electron-builder'), ['--win', ...targets, '--publish', 'never'], {
   cwd: app,
 });
 
 // ── Report ───────────────────────────────────────────────────────────────────
-const release = path.join(app, 'release');
-const produced = fs.existsSync(release)
+const produced = fs.existsSync(releaseDir)
   ? fs
-      .readdirSync(release)
+      .readdirSync(releaseDir)
       .filter((f) => /\.(exe|msi)$/.test(f))
-      .map((f) => ({ name: f, mb: (fs.statSync(path.join(release, f)).size / 1024 / 1024).toFixed(1) }))
+      .map((f) => ({ name: f, mb: (fs.statSync(path.join(releaseDir, f)).size / 1024 / 1024).toFixed(1) }))
   : [];
 
-console.log(`\n\x1b[32mDone\x1b[0m in ${Math.round((Date.now() - started) / 1000)}s — ${release}`);
+console.log(`\n\x1b[32mDone\x1b[0m in ${Math.round((Date.now() - started) / 1000)}s — ${releaseDir}`);
 for (const file of produced) console.log(`    ${file.name}  (${file.mb} MB)`);
 if (!produced.length) console.log('    (no installer found — check the electron-builder output above)');
 if (SKIP_JVM) {
