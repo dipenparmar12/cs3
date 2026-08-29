@@ -12,6 +12,17 @@ import { Badge } from './primitives';
  * blocks it — so presenting this as a verdict would invite the wrong conclusion
  * when a high-scoring extension returns nothing.
  */
+/**
+ * Four-letter archive codes are for the code, not for a panel someone reads.
+ * `CSJ` in particular means nothing to anyone who has not read the PRD.
+ */
+const FORMAT_LABELS: Record<PluginCompatibilityReport['format'], string> = {
+  CS3: 'Android archive (.cs3, DEX)',
+  CSJ: 'Cross-platform JVM jar',
+  JS: 'JavaScript',
+  KMP: 'Kotlin Multiplatform',
+};
+
 export const CompatibilityReport: React.FC<{
   report: PluginCompatibilityReport;
   onClose: () => void;
@@ -32,6 +43,14 @@ export const CompatibilityReport: React.FC<{
             <span>Compatibility analysis: {report.pluginName}</span>
             <Badge tone={tone}>{report.compatibilityScore}%</Badge>
             <Badge>{report.confidence} confidence</Badge>
+            {/*
+              The one badge here that is an observation rather than a
+              prediction: a cross-platform jar has no DEX, so nothing about it
+              is translated and the whole class of translation defect cannot
+              apply. Worth saying on the row, because it is also the lever —
+              an author who sees this is being shown what opting in buys.
+            */}
+            {report.format === 'CSJ' && <Badge tone="success">Cross-platform jar</Badge>}
           </div>
           <div className="ext-row__subtitle">
             Predicted from the archive's bytecode — not a record of it running.
@@ -49,7 +68,7 @@ export const CompatibilityReport: React.FC<{
         </div>
         <div className="ext-provenance__field">
           <span className="ext-provenance__key">Format</span>
-          <span className="ext-provenance__value">{report.format}</span>
+          <span className="ext-provenance__value">{FORMAT_LABELS[report.format]}</span>
         </div>
         <div className="ext-provenance__field">
           <span className="ext-provenance__key">Android API references</span>

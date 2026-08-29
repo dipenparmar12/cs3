@@ -59,6 +59,8 @@ interface ArchiveFacts {
   dexPayload: Buffer | null;
   entryNames: string[];
   manifestClassName?: string;
+  /** `.class` members, which is what makes an archive a cross-platform jar. */
+  classCount: number;
 }
 
 export class PluginCompatibilityAnalyzer {
@@ -118,6 +120,50 @@ export class PluginCompatibilityAnalyzer {
       details.push(`Plugin entry class: ${facts.manifestClassName}`);
     } else {
       details.push('No pluginClassName in manifest.json — entry point unknown.');
+    }
+
+    /**
+     * A cross-platform jar, which has no DEX because it never needed one.
+     *
+     * This branch has to come first, and getting it wrong is worse than having
+     * no branch at all: the archive reaches the "no classes.dex" case below,
+     * which reports `Unsupported` with a score of zero — the exact opposite of
+     * the truth for the one lane that skips translation entirely. The install
+     * screen shows this report, so an author who opted in would have been told
+     * their extension was incompatible.
+     *
+     * The score is not a guess. Upstream's build ran `jdeps --print-module-deps`
+     * over this jar and refused to publish it if the output named a single
+     * `android.` type, so the whole category of failure the score below is
+     * measuring — Android API surface we would have to shim — is absent by
+     * construction.
+     */
+    if (!facts.hasDex && facts.classCount > 0) {
+      details.push(
+        `Cross-platform JVM jar: ${facts.classCount} classes, no DEX to translate.`
+      );
+      details.push(
+        'Published by upstream’s build with `isCrossPlatform`, which fails if `jdeps` finds any `android.` dependency.'
+      );
+      // Stated rather than implied, because it is the part most easily
+      // overclaimed: `jdeps` flags `android.*` only. This jar can still reach
+      // the `:app` types the bridge supplies, so the linkage analysis in the
+      // sidecar still runs and can still demote it.
+      details.push('The `:app` classpath still applies; the runtime tier is decided by the sidecar.');
+      return {
+        pluginName,
+        internalName,
+        format: 'CSJ',
+        compatibilityScore: 95,
+        confidence: 'High',
+        recommendedTier: PluginRuntimeTier.TierA_SourceJVM,
+        androidApiReferences: 0,
+        hasNativeLibs: facts.hasNativeLibs,
+        hasReflection: false,
+        networkStack: 'Unknown',
+        htmlParser: 'Unknown',
+        details,
+      };
     }
 
     if (!facts.hasDex) {
@@ -233,6 +279,7 @@ export class PluginCompatibilityAnalyzer {
       sizeBytes: buffer.length,
       dexPayload: null,
       entryNames: [],
+      classCount: 0,
     };
     if (!facts.isZip) return facts;
 
@@ -254,6 +301,7 @@ export class PluginCompatibilityAnalyzer {
 
       facts.entryNames.push(name);
       if (/\.so$/i.test(name) || name.startsWith('lib/')) facts.hasNativeLibs = true;
+      if (/\.class$/i.test(name)) facts.classCount++;
 
       // A zero compressed size means the sizes live in a trailing data
       // descriptor; streaming past it reliably is out of scope, so stop here
