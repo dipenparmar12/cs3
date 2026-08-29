@@ -2457,7 +2457,31 @@ export class PluginManager {
     return this.disabledExtensions.set(internalNames, enabled);
   }
 
+  public isProviderEnabled(name: string): boolean {
+    const provider = this.providers.get(name);
+    if (!provider) return false;
+    const disabled = new Set(this.getDisabledProviders());
+    const disabledExtensions = new Set(this.getDisabledExtensions());
+    const disabledRepositories = new Set(this.getDisabledRepositories());
+    if (disabled.has(provider.name)) return false;
+    if (disabledExtensions.has(provider.pluginInternalName)) return false;
+    if (disabledRepositories.has(this.repositoryIdOf(provider.pluginInternalName))) return false;
+    if (!this.adultAllowed() && isAdultProvider(provider)) return false;
+    return true;
+  }
+
   public setProviderEnabled(name: string, enabled: boolean): string[] {
+    if (enabled) {
+      const provider = this.providers.get(name);
+      if (provider) {
+        // Also unblock parent extension and repository if they were disabled
+        this.disabledExtensions.set([provider.pluginInternalName], true);
+        const repoId = this.repositoryIdOf(provider.pluginInternalName);
+        if (repoId && repoId !== SIDELOADED_REPOSITORY_ID) {
+          this.disabledRepositories.set([repoId], true);
+        }
+      }
+    }
     return this.disabledProviders.set([name], enabled);
   }
 
@@ -2725,6 +2749,12 @@ export class PluginManager {
       throw new Error(
         `That address is a playback handle from ${ref.provider}, not a page it can open. ` +
           'Search for the title again to get a fresh page.'
+      );
+    }
+
+    if (!this.isProviderEnabled(ref.provider)) {
+      throw new Error(
+        `The extension provider "${ref.provider}" is currently disabled. Enable it to view this content.`
       );
     }
 
