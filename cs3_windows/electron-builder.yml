@@ -11,7 +11,7 @@
 # produces everything referenced here before invoking electron-builder.
 
 appId: com.lagradost.cloudstream3.desktop
-productName: CloudStream Desktop
+productName: CloudStream 3 Desktop
 
 directories:
   output: release
@@ -68,7 +68,7 @@ nsis:
   allowElevation: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: CloudStream Desktop
+  shortcutName: CloudStream 3 Desktop
   deleteAppDataOnUninstall: false
   runAfterFinish: true
   artifactName: CloudStream-Desktop-${version}-${arch}-setup.${ext}
@@ -76,7 +76,7 @@ nsis:
 # The portable target unpacks to a fixed directory name so successive runs
 # reuse one extraction rather than filling %TEMP% with ~400 MB copies.
 portable:
-  unpackDirName: CloudStreamDesktop
+  unpackDirName: CloudStream3Desktop
   requestExecutionLevel: user
   artifactName: CloudStream-Desktop-${version}-${arch}-portable.${ext}
 

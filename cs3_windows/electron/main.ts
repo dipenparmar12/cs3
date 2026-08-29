@@ -88,6 +88,21 @@ import type { MpvSnapshot } from '../src/types/mpv';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const IS_DEV = !app.isPackaged;
+export const APP_NAME = IS_DEV ? 'CloudStream 3 Desktop (Dev)' : 'CloudStream 3 Desktop';
+export const APP_ID = IS_DEV
+  ? 'com.lagradost.cloudstream3.desktop.dev'
+  : 'com.lagradost.cloudstream3.desktop';
+export const APP_TITLE = IS_DEV ? 'CloudStream 3 Desktop [Dev]' : 'CloudStream 3 Desktop';
+
+/**
+ * Configure app name and Windows AppUserModelID before accessing paths or creating windows.
+ * This ensures distinct taskbar grouping, toast notifications, and user data directories
+ * between development and production environments, preventing profile and cache conflicts.
+ */
+app.name = APP_NAME;
+app.setAppUserModelId(APP_ID);
+
 let mainWindow: BrowserWindow | null = null;
 
 const datastore = new DatastoreManager();
@@ -769,7 +784,7 @@ function createWindow() {
     height: bounds.height,
     minWidth: 960,
     minHeight: 640,
-    title: 'CloudStream 3 Desktop',
+    title: APP_TITLE,
     backgroundColor: '#0c0f17',
     show: false,
     webPreferences: {
@@ -779,6 +794,24 @@ function createWindow() {
       sandbox: false,
       autoplayPolicy: 'no-user-gesture-required',
     },
+  });
+
+  // Preserve proper contextual branding and avoid raw dev/bundle titles leaking
+  mainWindow.on('page-title-updated', (event, title) => {
+    event.preventDefault();
+    const cleanTitle = title?.trim();
+    if (
+      cleanTitle &&
+      cleanTitle !== 'cs3_windows' &&
+      cleanTitle !== 'CloudStream 3 Desktop' &&
+      cleanTitle !== 'CloudStream 3' &&
+      cleanTitle !== 'CloudStream 3 Desktop [Dev]' &&
+      cleanTitle !== 'CloudStream 3 Desktop (Dev)'
+    ) {
+      mainWindow?.setTitle(`${cleanTitle} — ${APP_TITLE}`);
+    } else {
+      mainWindow?.setTitle(APP_TITLE);
+    }
   });
 
   if (bounds.maximized) mainWindow.maximize();

@@ -171,6 +171,45 @@ export const App: React.FC = () => {
       window.removeEventListener('offline', offline);
     };
   }, []);
+
+  /** Update document title contextually for views, media details, and active playback. */
+  useEffect(() => {
+    if (session?.context?.title) {
+      const ep = session.context.episodeTitle ? ` — ${session.context.episodeTitle}` : '';
+      document.title = `${session.context.title}${ep}`;
+    } else if (playback?.title) {
+      const ep = playback.episodeTitle ? ` — ${playback.episodeTitle}` : '';
+      document.title = `${playback.title}${ep}`;
+    } else if (selectedMedia?.name) {
+      document.title = selectedMedia.name;
+    } else {
+      switch (activeTab) {
+        case 'home':
+          document.title = 'CloudStream 3 Desktop';
+          break;
+        case 'search':
+          document.title = searchQuery.trim() ? `Search: ${searchQuery.trim()}` : 'Search';
+          break;
+        case 'library':
+          document.title = 'Library';
+          break;
+        case 'history':
+          document.title = 'History';
+          break;
+        case 'extensions':
+          document.title = 'Extensions';
+          break;
+        case 'settings':
+          document.title = 'Settings';
+          break;
+        case 'downloads':
+          document.title = 'Downloads';
+          break;
+        default:
+          document.title = 'CloudStream 3 Desktop';
+      }
+    }
+  }, [activeTab, searchQuery, selectedMedia, playback, session]);
   const [isBinaryModalOpen, setIsBinaryModalOpen] = useState(false);
   const [hasBinaries, setHasBinaries] = useState(true);
 
