@@ -126,31 +126,22 @@ export function sanitiseContacts(raw: unknown, cap = MAX_PERSISTED_NODES): DhtCo
 }
 
 /**
- * The bootstrap list handed to the DHT.
+ * Saved contacts are **not** bootstrap entries, and an earlier revision of this
+ * file exported a `bootstrapList()` that merged the two. It has been removed
+ * rather than deprecated, because the merged list is not a slower version of
+ * the right thing — it is actively worse than a cold start.
  *
- * Saved contacts come **first**. `k-rpc` probes the whole list in parallel and
- * keeps whatever answers, so order is not a priority in the strict sense — but
- * a saved contact is a node that was live minutes ago on this connection, and
- * the hardcoded hosts are shared by every client on earth and correspondingly
- * rate-limited. Leading with the saved ones is what turns a warm start into
- * something measurably different from a cold one.
+ * `k-rpc` uses `bootstrap.length` as a threshold on every round of every
+ * iterative lookup, comparing it against a set that can never exceed `k` (20).
+ * A 200-entry list therefore pins that comparison true forever, which makes the
+ * lookup discard the per-query node table it is supposed to converge through
+ * and fire the whole bootstrap list at the socket in one unthrottled burst.
  *
- * The hardcoded hosts are always appended and never replaced: a saved table can
- * be entirely stale (a laptop opened after a fortnight, a changed network), and
- * a client with no reachable bootstrap contact has no DHT at all.
+ * The saved table goes in through `DHT.addNode()` instead — see
+ * `TorrentEngine.seedDhtNodes`, which is where the reasoning is written out in
+ * full. `DHT_BOOTSTRAP_NODES` above is what `bootstrap` receives, and it is
+ * deliberately the length `k-rpc` expects.
  */
-export function bootstrapList(saved: DhtContact[]): DhtContact[] {
-  const seen = new Set<string>();
-  const out: DhtContact[] = [];
-
-  for (const contact of [...saved, ...DHT_BOOTSTRAP_NODES]) {
-    const key = `${contact.host}:${contact.port}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(contact);
-  }
-  return out;
-}
 
 /**
  * The persisted half of a warm DHT node.
@@ -196,13 +187,12 @@ export class DhtNodeCache {
     return this.nodeId;
   }
 
-  public getBootstrap(): DhtContact[] {
-    return bootstrapList(this.saved);
-  }
-
-  /** How many usable contacts came back from disk — the warm/cold measurement. */
-  public get warmContactCount(): number {
-    return this.saved.length;
+  /**
+   * The contacts that came back from disk, to be pushed into the live routing
+   * table with `DHT.addNode()`. Empty is the ordinary cold start, not an error.
+   */
+  public get warmContacts(): readonly DhtContact[] {
+    return this.saved;
   }
 
   public save(nodes: unknown, now = Date.now()): void {

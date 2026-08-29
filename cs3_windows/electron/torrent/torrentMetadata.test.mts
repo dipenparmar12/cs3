@@ -32,9 +32,9 @@ import {
   DhtNodeCache,
   MAX_PERSISTED_NODES,
   NODE_CACHE_TTL_MS,
-  bootstrapList,
   sanitiseContacts,
 } from './dhtNodeCache.ts';
+import { DEFAULT_TRACKERS, mergeTrackers, trackersFromMagnet } from './indexers/base.ts';
 
 const tests: Array<[string, () => void]> = [];
 const test = (name: string, fn: () => void) => tests.push([name, fn]);
@@ -317,28 +317,21 @@ test('the saved table is capped', () => {
   assert.equal(sanitiseContacts(many).length, MAX_PERSISTED_NODES);
 });
 
-test('saved contacts lead, and the well-known hosts are always present', () => {
-  // Saved first because they were live minutes ago on this connection; the
-  // hardcoded hosts appended because a saved table can be entirely stale, and a
-  // client with no reachable bootstrap contact has no DHT at all.
-  const list = bootstrapList([{ host: '9.9.9.9', port: 6881 }]);
-  assert.deepEqual(list[0], { host: '9.9.9.9', port: 6881 });
-  for (const known of DHT_BOOTSTRAP_NODES) {
-    assert.ok(
-      list.some((n) => n.host === known.host && n.port === known.port),
-      `${known.host} must survive`
-    );
-  }
-});
-
-test('a saved contact that is also a bootstrap host appears once', () => {
-  const list = bootstrapList([{ host: 'router.bittorrent.com', port: 6881 }]);
-  const matches = list.filter((n) => n.host === 'router.bittorrent.com');
-  assert.equal(matches.length, 1);
-});
-
-test('a cold start still has bootstrap hosts', () => {
-  assert.deepEqual(bootstrapList([]), [...DHT_BOOTSTRAP_NODES]);
+test('the bootstrap list stays short enough for k-rpc to work', () => {
+  /**
+   * Not a style rule. `k-rpc` compares `bootstrap.length` against a set capped
+   * at `k` (20) on every round of every iterative lookup; a list longer than
+   * that pins the comparison true, which makes the lookup throw away the
+   * per-query node table it converges through and fire the whole bootstrap
+   * array at the socket unthrottled.
+   *
+   * Saved contacts are therefore never merged in here — they go to
+   * `DHT.addNode()`. This asserts the boundary that regression crossed.
+   */
+  assert.ok(
+    DHT_BOOTSTRAP_NODES.length < 20,
+    'bootstrap must stay below k-rpc’s k, or lookups degrade'
+  );
 });
 
 test('the node id and the routing table survive a restart', () => {
@@ -353,8 +346,7 @@ test('the node id and the routing table survive a restart', () => {
   const second = new DhtNodeCache(file);
   second.load();
   assert.equal(second.getNodeId(), nodeId, 'a changing node id is one nobody can route to');
-  assert.equal(second.warmContactCount, 1);
-  assert.deepEqual(second.getBootstrap()[0], { host: '4.4.4.4', port: 6881 });
+  assert.deepEqual([...second.warmContacts], [{ host: '4.4.4.4', port: 6881 }]);
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -371,7 +363,7 @@ test('contacts expire but the identity does not', () => {
   second.load();
   // A DHT contact is a residential IP with a DHCP lease; after a week most of a
   // saved table is a UDP probe that will never be answered.
-  assert.equal(second.warmContactCount, 0);
+  assert.equal(second.warmContacts.length, 0);
   assert.equal(second.getNodeId(), nodeId);
 
   fs.rmSync(dir, { recursive: true, force: true });
@@ -388,7 +380,7 @@ test('an empty routing table never overwrites a good one', () => {
 
   const reloaded = new DhtNodeCache(file);
   reloaded.load();
-  assert.equal(reloaded.warmContactCount, 1);
+  assert.equal(reloaded.warmContacts.length, 1);
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -399,15 +391,81 @@ test('a missing or unreadable cache file is a cold start, not a failure', () => 
 
   const missing = new DhtNodeCache(file);
   missing.load();
-  assert.equal(missing.warmContactCount, 0);
+  assert.equal(missing.warmContacts.length, 0);
   assert.match(missing.getNodeId(), /^[a-f0-9]{40}$/);
 
   fs.writeFileSync(file, 'not json at all');
   const corrupt = new DhtNodeCache(file);
   corrupt.load();
-  assert.equal(corrupt.warmContactCount, 0);
+  assert.equal(corrupt.warmContacts.length, 0);
 
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+
+// --- trackers survive a cache hit -------------------------------------------
+
+/**
+ * The regression these guard is invisible and arrives late.
+ *
+ * `TorrentEngine` hands `add()` a cached `.torrent` buffer whenever it has one,
+ * and a buffer carries no magnet — so every `tr=` the source supplied is gone
+ * on the *second* open, which is the one the cache exists to make faster. The
+ * user-visible form is a release that found peers the first time and fewer the
+ * next, which reads as the swarm dying rather than as a cache.
+ */
+
+test('a magnet’s own trackers are read back out', () => {
+  const magnet =
+    'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567' +
+    '&dn=Some.Release' +
+    '&tr=' + encodeURIComponent('udp://tracker.example.org:1337/announce') +
+    '&tr=' + encodeURIComponent('https://tracker.example.net/announce');
+
+  assert.deepEqual(trackersFromMagnet(magnet), [
+    'udp://tracker.example.org:1337/announce',
+    'https://tracker.example.net/announce',
+  ]);
+});
+
+test('a bare infohash and a magnet with no trackers yield none', () => {
+  assert.deepEqual(trackersFromMagnet('0123456789abcdef0123456789abcdef01234567'), []);
+  assert.deepEqual(trackersFromMagnet('magnet:?xt=urn:btih:abc&dn=x'), []);
+});
+
+test('anything that is not an announce URL is dropped', () => {
+  // A malformed entry is not inert: it becomes a socket the client retries for
+  // the life of the torrent.
+  const magnet =
+    'magnet:?xt=urn:btih:abc' +
+    '&tr=' + encodeURIComponent('javascript:alert(1)') +
+    '&tr=not-a-url' +
+    '&tr=%E0%A4%A' + // undecodable percent escape
+    '&tr=' + encodeURIComponent('udp://good.example:6969/announce');
+
+  assert.deepEqual(trackersFromMagnet(magnet), ['udp://good.example:6969/announce']);
+});
+
+test('a tr key inside another parameter is not mistaken for one', () => {
+  // `dn` legitimately contains arbitrary text, and `xtr=`/`&trailer=` are not
+  // announce lists. The boundary is what stops a display name becoming a
+  // tracker socket.
+  const magnet = 'magnet:?xt=urn:btih:abc&dn=' + encodeURIComponent('tr=udp://nope:1/a');
+  assert.deepEqual(trackersFromMagnet(magnet), []);
+});
+
+test('merging keeps our defaults first and adds the source’s own', () => {
+  const extra = 'udp://tracker.example.org:1337/announce';
+  const merged = mergeTrackers(DEFAULT_TRACKERS, [extra]);
+
+  assert.deepEqual(merged.slice(0, DEFAULT_TRACKERS.length), [...DEFAULT_TRACKERS]);
+  assert.equal(merged[merged.length - 1], extra);
+});
+
+test('a tracker we already announce to is not announced to twice', () => {
+  const merged = mergeTrackers(DEFAULT_TRACKERS, [DEFAULT_TRACKERS[0]]);
+  assert.equal(merged.length, DEFAULT_TRACKERS.length);
+  assert.equal(new Set(merged).size, merged.length);
 });
 
 // --- runner ----------------------------------------------------------------

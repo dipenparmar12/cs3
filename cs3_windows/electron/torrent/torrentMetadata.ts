@@ -93,6 +93,9 @@ const MAX_METADATA_BYTES = 8 * 1024 * 1024;
 /** Entries older than this are swept; a magnet nobody reopens is dead weight. */
 const CACHE_TTL_MS = 60 * 24 * 60 * 60 * 1000;
 
+/** Staging files older than this belong to a process that died mid-write. */
+const TEMP_FILE_TTL_MS = 60 * 60 * 1000;
+
 export function metadataCacheUrls(infoHash: string): string[] {
   const hash = infoHash.toLowerCase();
   if (!/^[a-f0-9]{40}$/.test(hash)) return [];
@@ -132,7 +135,19 @@ export function sliceInfoDict(buf: Uint8Array): { start: number; end: number } |
   return null;
 }
 
-function readString(buf: Uint8Array, pos: number): { text: string; end: number } | null {
+/**
+ * Where a bencoded string starts and ends, without materialising it.
+ *
+ * Split out from `readString` because `skipValue` walks *every* string in the
+ * file and only ever wanted the offsets. Building the text as well meant
+ * concatenating `pieces` — twenty bytes per piece, so megabytes on a large
+ * release — one `String.fromCharCode` at a time, on every cache read and twice
+ * on every write, to throw it away immediately.
+ */
+function stringSpan(
+  buf: Uint8Array,
+  pos: number
+): { body: number; end: number } | null {
   let colon = pos;
   while (colon < buf.length && buf[colon] !== 0x3a /* : */) {
     // A length is digits and nothing else; bailing here is what stops a
@@ -148,7 +163,13 @@ function readString(buf: Uint8Array, pos: number): { text: string; end: number }
   const end = colon + 1 + length;
   if (end > buf.length) return null;
 
-  return { text: latin1(buf, colon + 1, end), end };
+  return { body: colon + 1, end };
+}
+
+function readString(buf: Uint8Array, pos: number): { text: string; end: number } | null {
+  const span = stringSpan(buf, pos);
+  if (!span) return null;
+  return { text: latin1(buf, span.body, span.end), end: span.end };
 }
 
 /** Byte offset just past the value starting at `pos`, or -1 if malformed. */
@@ -173,8 +194,8 @@ function skipValue(buf: Uint8Array, pos: number): number {
     return cursor < buf.length ? cursor + 1 : -1;
   }
 
-  const str = readString(buf, pos);
-  return str ? str.end : -1;
+  const span = stringSpan(buf, pos);
+  return span ? span.end : -1;
 }
 
 function latin1(buf: Uint8Array, start: number, end: number): string {
@@ -287,10 +308,23 @@ export class TorrentMetadataCache {
     }
 
     for (const entry of entries) {
-      if (!entry.endsWith('.torrent')) continue;
+      /**
+       * `.tmp` debris is swept too, and on a much shorter clock.
+       *
+       * `write` stages beside the target and renames, so a crash or a kill
+       * mid-write leaves `<hash>.torrent.<pid>.tmp` behind. Matching only
+       * `.torrent` left those in place permanently — an unbounded leak in the
+       * one directory nobody ever looks at. An hour is far longer than a write
+       * of at most 8 MB can legitimately take, so anything older belongs to a
+       * process that is no longer running.
+       */
+      const isTemp = entry.endsWith('.tmp');
+      if (!isTemp && !entry.endsWith('.torrent')) continue;
+
       const file = path.join(this.dir, entry);
+      const ttl = isTemp ? TEMP_FILE_TTL_MS : CACHE_TTL_MS;
       try {
-        if (now - fs.statSync(file).mtimeMs < CACHE_TTL_MS) continue;
+        if (now - fs.statSync(file).mtimeMs < ttl) continue;
         fs.rmSync(file, { force: true });
         removed++;
       } catch {

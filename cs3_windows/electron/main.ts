@@ -127,6 +127,16 @@ logger.info('app', 'session_started', {
  */
 const PROVIDER_WARMUP_DELAY_MS = 4_000;
 
+/**
+ * When the torrent client is brought up, if nothing has asked for it first.
+ *
+ * After the provider warm-up rather than beside it: both are background work
+ * competing with a window that has just opened, and a DHT bootstrap is a burst
+ * of UDP to a dozen hosts that gains nothing from sharing a moment with 56 jars
+ * of JVM class loading.
+ */
+const TORRENT_WARMUP_DELAY_MS = 8_000;
+
 const diagnostics = new DiagnosticsLog();
 
 /**
@@ -200,9 +210,26 @@ pluginManager.getSidecar().setHostCallHandler(async (method, params) => {
   return { ok: false, error: `The desktop app does not implement ${method}.` };
 });
 const binaryDownloader = new BinaryDownloader();
-const torrentEngine = new TorrentEngine(
-  datastore.getString('torrent_cache_path', '', true) || undefined
-);
+const torrentEngine = new TorrentEngine({
+  downloadPath: datastore.getString('torrent_cache_path', '', true) || undefined,
+  /**
+   * Warm-start state lives under `userData`, never under the piece cache.
+   *
+   * "Clear the torrent cache" is a button the user is meant to press, and it
+   * deletes whatever sits in `torrent_cache_path`. The DHT routing table and
+   * the `.torrent` metadata cache are not per-film data and losing them costs a
+   * cold start on the next launch, so they are deliberately somewhere that
+   * button cannot reach.
+   */
+  statePath: path.join(app.getPath('userData'), 'torrent-state'),
+  /**
+   * A getter, not a value. Read once at construction this would need a restart
+   * to take effect, and a privacy switch that only applies next launch is one
+   * the user has to be told about to trust. Consulted per magnet instead, so
+   * Settings → Connection stops the very next request.
+   */
+  httpMetadataCache: () => datastore.getBool('torrent_http_metadata_cache', true, true),
+});
 const contentService = new ContentService(datastore, pluginManager, torrentEngine);
 const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
 const batchDownloader = new BatchDownloader(contentService, downloadService);
@@ -999,6 +1026,30 @@ app.whenReady().then(async () => {
       });
     });
   }, PROVIDER_WARMUP_DELAY_MS).unref?.();
+
+  /**
+   * The torrent client comes up before anyone presses Play.
+   *
+   * Same argument as the provider warm-up above, applied to the other half of
+   * the app, and the measurement behind it is in `torrentEngine.warmUp`: a cold
+   * client pays a TCP bind, a uTP bind, a DHT bind, a DNS lookup and round trip
+   * to every bootstrap host, and an HTTP server bind before the first byte of
+   * any film is requested — all of it on the critical path of a spinner. Done
+   * here it happens while the home screen is being read.
+   *
+   * Deliberately later than the provider warm-up. The DHT bootstrap is a burst
+   * of UDP to a dozen hosts, and putting it in the same window as 56 jars of
+   * JVM class loading makes both slower for no reason.
+   */
+  setTimeout(() => {
+    void torrentEngine.warmUp().catch((error) => {
+      // `startStream` still calls `ensureStarted` itself, so a failed warm-up
+      // costs latency on the first play and nothing else.
+      logger.warn('torrent', 'engine_warmup_failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, TORRENT_WARMUP_DELAY_MS).unref?.();
 
   /**
    * A stale title refreshed behind the viewer's back reaches them here.

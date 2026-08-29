@@ -75,6 +75,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
     'ask'
   );
   const [useLiveStreams, setUseLiveStreams] = useState(true);
+  const [torrentMirrors, setTorrentMirrors] = useState(true);
   const { message: statusMessage, flash } = useFlash<string>(3000);
   const [missingComponentCount, setMissingComponentCount] = useState<number>(0);
   const [concurrency, setConcurrency] = useState<{
@@ -106,6 +107,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
     window.cloudstream
       ?.getSetting('use_live_streaming_sources', 'true')
       .then((value) => setUseLiveStreams(value !== 'false'));
+    window.cloudstream
+      ?.getSetting('torrent_http_metadata_cache', 'true')
+      .then((value) => setTorrentMirrors(value !== 'false'));
     window.cloudstream?.getSearchConcurrency?.().then(setConcurrency);
     void checkComponentStatus();
   }, [checkComponentStatus]);
@@ -115,6 +119,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
     setUseLiveStreams(enabled);
     await window.cloudstream?.setSetting('use_live_streaming_sources', enabled);
     flash(enabled ? 'Live streaming sources enabled.' : 'Demo fallback mode active.');
+  };
+
+  const handleToggleTorrentMirrors = async (enabled: boolean) => {
+    setTorrentMirrors(enabled);
+    // The engine reads this key per magnet rather than at construction, so
+    // there is nothing to restart and the confirmation can say so.
+    await window.cloudstream?.setSetting('torrent_http_metadata_cache', enabled);
+    flash(
+      enabled
+        ? 'Torrent details may be fetched from public mirrors.'
+        : 'Torrent details will come from the swarm only.'
+    );
   };
 
   useEffect(() => {
@@ -412,6 +428,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         <>
           {sectionTitle('network', 'Connection')}
           <NetworkSettings />
+
+          {/*
+            This is here rather than buried in a config file because it is the
+            one torrent behaviour that talks to a third party by name. The
+            module that implements it argues — correctly — that the marginal
+            exposure is small next to the DHT broadcast and the dozen tracker
+            announces pressing Play already makes. That argument is only worth
+            anything if the person it is being made to can act on it, and until
+            now the key had no writer anywhere in the app.
+          */}
+          <SettingGroup title="Torrents" icon={<Globe size={15} />}>
+            <SettingRow
+              label="Fetch torrent details from public mirrors"
+              note={torrentMirrors ? 'On' : 'DHT and trackers only'}
+              hint="Asks itorrents.org and btcache.me for a magnet's file list over HTTPS while the swarm is still being found, which usually saves five to thirty seconds before playback can start. It sends them the infohash — the same identifier the DHT and every tracker already receive when you press Play. Turn it off to keep torrent activity to the BitTorrent network alone; startup is slower and nothing else changes."
+            >
+              <label className="settings__switch">
+                <input
+                  type="checkbox"
+                  checked={torrentMirrors}
+                  onChange={(event) => handleToggleTorrentMirrors(event.target.checked)}
+                />
+                <span>{torrentMirrors ? 'On' : 'Off'}</span>
+              </label>
+            </SettingRow>
+          </SettingGroup>
         </>
       )}
 
