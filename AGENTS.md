@@ -74,7 +74,7 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (42 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (364 cases, Node type-stripping — no framework) |
+| Main-process tests | `cs3_windows/` | `bun run test:electron` (~450 cases across 45 suites, Node type-stripping — no framework) |
 | Extension issues only | `cs3_windows/` | `bun run test:issues` (21 cases, pure) |
 | Provider registry only | `cs3_windows/` | `bun run test:registry` (9 cases, temp dirs) |
 | Sidecar log only | `cs3_windows/` | `bun run test:sidecar-log` (20 cases, pure) |
@@ -83,6 +83,12 @@ cs3/
 | WebView matching only | `cs3_windows/` | `bun run test:webview` (21 cases, pure) |
 | Torrent metadata + DHT cache only | `cs3_windows/` | `bun run test:torrent-metadata` (28 cases, temp dirs) |
 | Source scope only | `cs3_windows/` | `bun run test:scope` (9 cases) |
+| OTT platform matching only | `cs3_windows/` | `bun run test:ott` (19 cases, pure) |
+| Download resume decision only | `cs3_windows/` | `bun run test:resume` (17 cases, pure) |
+| Download resume probe only | `cs3_windows/` | `bun run test:resume-window` (10 cases, real sockets) |
+| Component reachability only | `cs3_windows/` | `bun run test:reachability` (2 cases, lexical) |
+| Settings level only | `cs3_windows/` | `bun run test:settings-level` (6 cases, pure + lexical) |
+| Dead result rows only | `cs3_windows/` | `bun run test:dead-rows` (8 cases, pure) |
 | Media proxy only | `cs3_windows/` | `bun run test:proxy` (11 cases, stubbed origin) |
 | Subtitles only | `cs3_windows/` | `bun run test:subtitles` (16 cases) |
 | Media decisions only | `cs3_windows/` | `bun run test:media` (71 cases, no ffmpeg needed) |
@@ -348,6 +354,23 @@ so the reply landed at the speed of the slowest provider no matter how fast the 
 were. It is now one RPC per provider (`searchEach`), capped at 8 in flight because the
 sidecar dispatches each onto a bounded pool sized to the core count.
 
+`ott:*` is the streaming-service surface — `ott:listPlatforms`, `ott:getCatalog`,
+`ott:getCatalogPage`, `ott:getSearchScope`, `ott:getSuggestions`,
+`ott:installSuggestion`. Separate from `extension:*` because it answers a different
+question: `extension:*` is an inventory keyed on repositories and archives, this is
+"can I watch Netflix?" keyed on the platform — and it has to answer even when the
+answer is no, so the list always contains every platform with how it is reachable
+rather than omitting the ones nothing serves.
+
+**`ott:installSuggestion` takes a repository id, never a URL.** The channel is
+reachable from the renderer and accepting an address would turn "set up Netflix"
+into a way to make the app install code from anywhere. Adding a repository by hand
+stays a separate, deliberate action on the extensions screen.
+
+`window:setAlwaysOnTop` / `window:getAlwaysOnTop` pin the application window;
+`mpv:setOnTop` and `mpv:setVideoEnabled` do the equivalent for the native engine's
+own window. See "Floating playback" below for why there are three mechanisms.
+
 Also namespaced: `analytics:*` (provider measurement, ranking weights, recommendations,
 and the erase control), `bookmarks:*` (saved detail pages), `discover:*` (home-screen
 catalogues and title enrichment), `subtitles:*` (online search, SubRip→WebVTT), `sources:getCacheStats` /
@@ -437,6 +460,10 @@ not a layering mistake.
 | `cs3/extensionIssues.ts` | The **durable tally** of distinct extension problems, across restarts and log rotation. `diagnostics` is one failure shaped to be pasted; the logger is a per-session transcript; this is the "count before fixing" list. See below. |
 | `cs3/providerRegistry.ts` | What each archive registered, keyed by size+mtime+runtime generation. Hydrates the provider list at launch **without starting the JVM** — the fix for a 57–67s first search. See below. |
 | `cs3/titleOutcomes.ts` | How each title last behaved, so a dead row is not clicked twice. |
+| `cs3/ottPlatforms.ts` | The OTT platform table and the rule for deciding which provider is one. Pure and tested — a matcher one character too loose fills the Prime Video page with a torrent aggregator called PrimeWire and nothing says so. |
+| `cs3/ottService.ts` | The same table against what is installed: availability, the search scope for a platform page, and the repositories to offer when nothing serves it. |
+| `download/resumePlan.ts` | Whether a partial download survives its link being replaced. Pure; both failure modes are silent and opposite. |
+| `download/resumeWindow.ts` | The 64 KB boundary probe that proves it — range support, real file length and a byte comparison in one request. |
 | `cs3/batchDownloader.ts` | Season/series batch download orchestration. |
 | `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, and remembered source choices. |
 | `cs3/bookmarkStore.ts` | Saved *detail pages*, with the provider, extension, repository and query that produced them. Deliberately **not** the library: that keys on a normalised title so one film from five providers is one entry, which is right for watch tracking and useless for "reopen the page I was on". Identity and origin are stored; resolved links are not, because they expire. |
@@ -455,6 +482,9 @@ not a layering mistake.
 | `externalPlayerControl.ts` | Two-way control of VLC over its HTTP interface. Capability is declared per player, never assumed — see below. |
 | `media/inspectionStore.ts` | Persists what a probe found, keyed on the origin URL. The measurement only; the verdict is recomputed. |
 | `downloadService.ts`, `aria2Engine.ts`, `ytdlpEngine.ts`, `binaryDownloader.ts` | Downloads via aria2c RPC with an HTTP fallback; portable `aria2c`/`yt-dlp` binaries are fetched on first use. |
+| `src/utils/deadRows.ts` | Which search results are worth showing. `no-sources` hides; `app-error` never does — see below. |
+| `src/components/player/useFloatingPlayer.ts` | Picture-in-Picture, the window pin, the background policy and the Media Session record. |
+| `src/components/settings/settingsLevel.ts` | Simple versus Everything, and what `advanced` means. |
 
 ### Shared primitives, and the duplication they replaced
 
@@ -911,7 +941,9 @@ on the install screen. It now reports `format: 'CSJ'`, 95%, `TierA_SourceJVM`, a
 upstream's build ran `jdeps` over this jar and refused to publish it if a single `android.` type
 appeared.
 
-`RUNTIME_GENERATION` is **9**. An already-provisioned sidecar has none of this: handed a jar it
+The jar lane is what **generation 9** was for (the current value is **10** — see
+`runtimeProvisioner.ts`, which carries one paragraph per generation). An already-provisioned
+sidecar has none of this: handed a jar it
 would call dex2jar, be told there is no `classes.dex`, and report a translation failure for an
 archive that never needed translating — while the upgraded host had already started preferring
 jars.
@@ -1939,6 +1971,234 @@ reaching it as ambiguous: a definitive 404 was never dropped, and the dead link 
 first again in between. Worth grepping for `\x08` after any bulk edit; it is invisible in a
 diff.
 
+### Community extensions: the fifth round, and the OTT lane (2026-08-31)
+
+Found by pointing the harness at two repositories nobody here had run before —
+`Sushan64/NetMirror-Extension` and `NivinCNC/CNCVerse-Cloud-Stream-Extension`,
+the two that carry the Netflix/Prime Video/Hotstar/Disney+ catalogues the
+Android community actually uses.
+
+**NetMirror is the whole reason the OTT feature can exist**, and what it
+registers was read out of the published archive rather than assumed. The
+downloaded `.cs3` hashes to its declared `fileHash`; inside are two members
+(`manifest.json`, `classes.dex`) and four `MainAPI` subclasses —
+`NetflixMirrorProvider`, `PrimeVideoMirrorProvider`, `HotStarMirrorProvider`,
+`DisneyPlusProvider` — registering the display names **Netflix**, **Prime
+Video**, **Hotstar** and **Disney Plus**, all four with a `getMainPage`. It
+loads at `T1_DROPIN`.
+
+**It is not `bundled`, and that is deliberate.** `bundled: true` is a claim the
+harness has driven the repository end to end. The load half passes; the
+streaming half cannot be verified from a cloud container, because the egress
+proxy answers `CONNECT` for the providers' own hosts (`net52.cc` and the rest)
+with 403. Anyone running this on an ordinary network can settle it with
+`node tools/e2e/provider-e2e.mjs --repo NetMirror` and flip the flag.
+
+**CNC Verse gave the fifth round of shim work.** Counted first, as the third
+round taught: `--plugins 20` produced **18 load failures across 5 classes**, and
+16 of them were in three.
+
+| Missing type | Failures | Category |
+|---|---|---|
+| `android.widget.CheckBox` | 7 | shim gap (settings dialogs) |
+| `android.content.Intent` | 6 | shim gap |
+| `android.app.AlertDialog` | 3 | shim gap |
+| `com.lagradost.cloudstream3.ui.settings.Globals` | 1 | `:app` type |
+| `com.google.android.material.…BottomSheetDialogFragment` | 1 | Material, still outstanding |
+
+Adding the top three surfaced two more underneath — `android.graphics.drawable.Drawable`
+(8) and `Globals` (9) — which is the same one-at-a-time pattern as every previous
+round. **After all five: 18 load failures to 1, and 0 to 29 providers registered.**
+Every plugin in that repository now loads.
+
+Four things about the new shims are load-bearing:
+
+- **`Intent` and `AlertDialog.Builder` do not throw on construction or
+  configuration.** Neither touches the platform on Android either — an `Intent`
+  is an inert value object and a builder describes a dialog — so refusing there
+  would break an expression whose only job is to build one. The refusal sits on
+  `startActivity` and `show`, which is where a platform is genuinely needed.
+- **`Context.startActivity` stopped taking `Object`.** It could not name `Intent`
+  before one existed, which made it a *different method* to the JVM: present,
+  and impossible for any extension to call. **That is the fifth time this
+  repository has made that exact near-miss** (`getResources` returning `Object`,
+  `aniListApi` typed as the wrapper, `setKey`, `simklApi`). The rule it keeps
+  breaking: a parameter or return type widened to a supertype does not merely
+  lose type safety, it renames the method. `Application.ActivityLifecycleCallbacks`
+  was fixed in the same pass for the same reason.
+- **`CheckBox` needed three ancestors** (`TextView`, `Button`, `CompoundButton`).
+  Verification resolves a class's whole ancestry before it can be defined, so a
+  shimmed `CheckBox` with missing parents fails exactly as loudly as no
+  `CheckBox` — while naming the wrong class.
+- **`Globals` is Kotlin, in the bridge, not a Java stub.** Upstream declares it
+  as an `object` with a *member extension function* (`fun Context.updateTv()`),
+  and both are Kotlin encodings — an `INSTANCE` field and a receiver-as-first-
+  parameter method. A Java class with static methods of the same names compiles
+  here and links against nothing there. It answers `PHONE`: desktop is a windowed
+  app driven by a pointer, which is the phone layout's assumptions and
+  emphatically not the 10-foot one.
+
+`Drawable` is deliberately **not** abstract and has no `draw(Canvas)`. Every
+counted occurrence uses it as a *type* — an icon field, a return — never as a
+base class, and declaring the abstract members would drag `Canvas`,
+`ColorFilter` and `PixelFormat` in to satisfy signatures nothing calls. If an
+extension ever subclasses it, its own override will fail to resolve `Canvas` and
+show up in the next count, which is the right way to learn that.
+
+### Provider catalogues: `getMainPage`, finally (2026-08-31)
+
+`MainAPI.getMainPage` had no path through the bridge at all, so "show me this
+provider's catalogue" was unanswerable — the app could search a provider and
+open a title from it, and could not browse it. That is the Android home screen's
+entire content model, and it is what makes an OTT platform page more than a
+search box.
+
+`ProviderBridge.mainPageSections` reads the declared rows (a plain property; no
+network, but it does need the plugin *loaded*, because the property lives on the
+instance) and `ProviderBridge.mainPage` fetches one page of one row. Reached
+through `providerMainPageSections` / `providerMainPage` and
+`PluginManager.loadCatalog` / `loadCatalogPage`.
+
+Two things worth knowing:
+
+- **The request travels as separate primitives, not as a document.** The bridge
+  has a JSON *writer* and no parser, and a provider's row handle is an opaque
+  string that routinely contains delimiters — packing three fields into one
+  argument would need an escaping scheme to get wrong.
+- **A provider may answer one request with several rows.** Upstream's
+  `HomePageResponse` carries a list, and those are flattened onto the row that
+  was asked for. Rendering a provider's sub-rows as though the app had requested
+  them would put rows on screen the user cannot page.
+
+`page` is 1-based, matching upstream: providers written against the Android home
+screen treat 0 as "no such page".
+
+### The OTT platform destinations (2026-08-31)
+
+`cs3/ottPlatforms.ts` maps provider display names onto Netflix, Prime Video,
+Disney+ Hotstar, Disney+, Sony LIV, ZEE5 and JioCinema. The desktop app has no
+privileged knowledge of what an extension registers — a `.cs3` is somebody
+else's Kotlin and the only identity it exposes is its `MainAPI.name` — so this
+can only ever be name matching, and the question is how to match without being
+wrong in either direction.
+
+| Too loose | Too tight |
+|---|---|
+| `PrimeWire` files under Prime Video. Someone opens Prime Video and browses a torrent aggregator. | A provider that renames itself disappears from its page and looks uninstalled. |
+
+Loose is far worse because it is *silent* — the page fills with plausible
+content from the wrong place. So exact names win first, and the patterns are
+anchored tightly enough that the false positives which exist in this corpus
+(`PrimeWire`, `Ahashare`, `Netfilm`) cannot reach them. Two overlaps are pinned
+by name because they would otherwise depend on declaration order: `Disney+
+Hotstar` normalises to `disneyhotstar` and must land on Hotstar, and `JioHotstar`
+likewise. The Disney pattern carries a trailing `m?` for a measured reason — CNC
+Verse ships a second extension suffixing every provider with `M`, so `DisneyM`
+sits beside `Disney`.
+
+**Sony LIV, ZEE5 and JioCinema have no provider named after them anywhere in the
+reachable ecosystem.** The community reaches them through aggregate scrapers —
+MovieBox and CNC Verse both advertise it. Dropping them from the catalogue would
+be tidier and would answer the wrong question: the user knows the platform, not
+the scraper. They are listed, and `providersFor` falls back to the providers
+those extensions registered, so the search box on that page asks something real.
+It is a fallback and never a merge: a platform with a provider of its own should
+not have a general scraper's results filed under its name.
+
+Four availability states — `ready`, `disabled`, `aggregate`, `missing` — because
+they need different things from the user: nothing, a switch, an explanation, or
+an install. **Collapsing them into "no content" is the failure this exists to
+avoid**: a user who turned a provider off last week being told the platform does
+not exist.
+
+**A platform is a set of providers, not one.** NetMirror registers `Netflix` and
+CNC Verse registers a `Netflix` of its own; `PluginManager.providers` is keyed on
+the name, so the first keeps it and the second is reported through
+`unavailableReason` — existing behaviour, and correct. The consequence is that
+installing a second OTT repository does not double the Netflix page; it adds
+whichever providers did not collide.
+
+**Search from a platform page is scoped by `SearchOptions.providers`**, an
+override honoured by `SearchScopeStore.override` with the same strictness as the
+stored scope and deliberately *never written to it*. A scope that outlives the
+page it came from is indistinguishable from a stuck filter, which is the failure
+the strict resolution rules already exist to prevent. An empty override searches
+nothing rather than everything.
+
+Browse asks **one** provider, not a merge. Catalogue rows are the provider's own
+editorial — "Trending Now" — and two providers' notions of trending are
+different lists that would interleave into something neither meant. The first
+provider publishing a catalogue wins the browse view; the rest are still
+searched. Paging is a button rather than an infinite scroll, because each page is
+a live scrape of someone else's server.
+
+### A component built and never mounted (2026-08-31)
+
+`ExtensionUpdates` — check, update one, update all, the auto-update policy, live
+progress from the `extension:update*` events — was imported by nothing. Every
+channel it needs was registered in `main.ts` and exposed in `preload.ts`, so
+`ipcSurface.test.mts` was perfectly satisfied: **the IPC surface agreed with
+itself and simply had no caller.**
+
+That is the third direction this same failure has arrived from — a channel
+invoked and never registered, a channel registered and never invoked, and now a
+component built and never mounted. All three are invisible to `tsc` and to every
+other test, and all three look identical to a user: a feature that exists and
+cannot be reached.
+
+`src/componentReachability.test.mts` closes it lexically, and is verified by
+mutation. Three further orphans are allow-listed **with the component that
+superseded each** (`MediaComponentsCard` and `RuntimeProvisionerCard` by
+`UnifiedComponentManager`, `ProviderSelector` by `SearchScopePicker`), because an
+allow-list without reasons becomes precedent for the next one. A second case
+fails on a stale entry, so an entry that gets wired up has to be removed.
+
+### Ranking on the maintainer's own status (2026-08-31)
+
+On a fresh install every ranking criterion returns `null`, every provider scores
+the neutral midpoint, and the order is whatever the map iterated — which is
+exactly when a new user forms their opinion of the app.
+
+There is evidence available; it is just not ours. Every CloudStream repository
+index carries a per-plugin `status` — 0 down, 1 ok, 2 slow, 3 beta — set by
+whoever maintains the scraper. It has been parsed into `SitePlugin.status` all
+along and read by nothing.
+
+Quoting it is defensible in a way a hand-written table of "good providers" would
+not be: it is the author's own claim about their own extension, it updates when
+they update it, and it needs no judgement from us about third-party code. It is
+weighted **0.4** and `minSamples` **0** — a declaration is not a sample, and
+requiring three would exclude the criterion from every provider forever — and it
+loses to the counters the moment those have anything to say. A provider the
+maintainer calls healthy that has failed nine of ten searches here must rank
+below one marked beta that works.
+
+`ProviderRanking.setContext` supplies it after construction, because
+`PluginManager` and the ranking are both built in `main.ts` and each would
+otherwise need the other first. A ranking with no context is still correct: the
+criterion returns `null` and is excluded from the denominator, exactly as it is
+for a repository that publishes no status.
+
+### Results that resolve to nothing are held back (2026-08-31)
+
+`TitleOutcomeStore` already recorded what happened last time a title was opened,
+and `PosterCard` already badged it — which stops someone clicking the *same*
+dead row twice and does nothing about a page full of them. `src/utils/deadRows.ts`
+holds those rows back, and the interesting part is the exclusion:
+
+**`app-error` is never hidden.** It means *our* runtime or transport failed, and
+filtering on it would turn one bug of ours into a catalogue that silently
+shrinks — reported as "the providers stopped working", by someone with no way to
+see that a hundred titles were removed on our own account. This repository has
+already had one translation bug come to look like a hundred broken providers.
+
+Two more rules keep the cure from being worse. **The whole page is never
+hidden**: a query where everything has failed before is exactly when the list is
+needed, to try one anyway or to recognise the title is the problem. And **the
+count is stated with the rows one click away**, because a results page quietly
+shorter than the search found is indistinguishable from a search that found
+less — the same complaint, from the other direction.
+
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 
 Run it before believing anything about extension health:
@@ -1953,7 +2213,8 @@ node tools/e2e/provider-e2e.mjs --repo phisher --only TorraStream,Ultima   # nam
 
 It drives the whole chain — repository JSON → `.cs3` download + SHA-256 → DEX→JVM →
 `load()` → `search()` → `load()` → `loadLinks()` → **a 2 MB range-GET off the real host** —
-against Kraptor123/cs-kraptor, Bnyro/GermanProviders, phisher98, rockhero1234/cinephile and
+against Kraptor123/cs-kraptor, Bnyro/GermanProviders, Sushan64/NetMirror-Extension,
+NivinCNC/CNCVerse-Cloud-Stream-Extension, phisher98, rockhero1234/cinephile and
 self-similarity/MegaRepo. Exit 0 requires bytes, not just search results; `PARTIAL` means
 providers scraped but no link played.
 
@@ -2276,6 +2537,63 @@ because a system that reorders results on evidence nobody can see is one users l
 distrust the first time it is wrong — and with hundreds of third-party scrapers it will
 sometimes be wrong.
 
+### Floating playback: three mechanisms, not one setting (2026-08-31)
+
+Minimising meant one thing — a small window inside the app — which stops being
+useful the moment CloudStream is not the front window, which is exactly when
+someone minimises a film. There are four modes now (`mini`, `floating`, `pip`,
+`background`) and they are a **choice rather than a scale**, because they use
+different mechanisms with different reach:
+
+| Mechanism | Moves | Works when |
+|---|---|---|
+| In-app mini window | nothing — a CSS geometry change | always, while this app is the front window |
+| Native Picture-in-Picture | the `<video>` element's rendering surface, to an OS window | only while the element is what is playing |
+| App window always-on-top | a window level | always, whatever is inside the window |
+| mpv `ontop` | a window level | only while the native engine holds the stream |
+
+**The middle row is why this is not simply "pin the window".** PiP is what people
+mean by "like Chrome" — a real OS window with the system's own controls,
+resizable, above full-screen applications. It is also unavailable for exactly
+the content this app most often plays: a stream routed to mpv renders in mpv's
+window and a handoff to VLC renders in VLC's, and neither has an element to
+detach. So PiP is offered where it can work (`isPipSupported` checks the
+document, the element's `readyState` **and** that the native engine is not
+holding the stream) and the window pin is what makes the feature exist for a
+torrent stream or a 4K HEVC file.
+
+Things that will bite:
+
+- **The element is never remounted, in any mode.** Same rule as the in-app mini
+  player and the same reason: recreating it ends the stream, loses the position
+  and renegotiates the swarm. Audio-only hides the picture with `visibility`
+  rather than `display`, because an element removed from layout loses its
+  surface and some builds treat that as a reason to stop decoding — which would
+  silence the audio the mode exists to keep.
+- **The pin unapplies itself on unmount.** Leaving the app above every other
+  window after the player closed is invisible, survives navigation, and is
+  undone only by a control inside a player that no longer exists.
+- **`audio-only` is asymmetric and says so.** On the native engine it sets
+  `vid=no` and genuinely stops decoding — real work saved on a 4K file. On the
+  element there is nothing equivalent: an offscreen element keeps decoding what
+  it was given, and re-negotiating the source to a track-less stream would be a
+  far larger change than the setting is worth. The setting's own help text
+  states this rather than implying a saving that is not there.
+- **The Media Session record is set, or a PiP window's own buttons are dead
+  chrome.** A native PiP window draws play/pause and next/previous and wires
+  them to `navigator.mediaSession` action handlers; the OS uses the same record
+  for the keyboard's media keys. They are wired to the same `togglePlay` /
+  `seekTo` the on-screen controls use, so two sets of controls cannot disagree
+  about whether the film is paused.
+- **PiP is asked for, never assumed.** `requestPictureInPicture` rejects for
+  several ordinary reasons — no metadata yet, no gesture, a platform without it
+  — and every one of them looks identical from outside: a button that does
+  nothing. The rejection is reported as a sentence.
+
+The mini player also gained a real scrubber on its own row, a volume slider and
+the provider name. A mini window is where a source is most likely to fail
+unattended, and "it stopped" is only actionable if the row says whose it was.
+
 ### Downloads: the state machine, and why 100% was not "done"
 
 **aria2 says `complete`, not `completed`.** `Aria2Progress.status` declared the latter and
@@ -2355,6 +2673,69 @@ Four things follow, and each is load-bearing:
   (batch-1755…)`). Nothing read it, and two things that do read that field broke: recovery
   never matched a provider, and the identity changed on every run — so re-running a season
   queued a second copy of every episode already in it.
+
+### A partial download has to be *proved* to match before it resumes (2026-08-31)
+
+Provider links are signed and short-lived, so a 4 GB film routinely outlives the
+URL serving it. `DownloadService` re-resolves the release and gets a different
+address for what is usually the same content — and then has to decide whether
+the partial file beside it is still the beginning of what that address will
+send.
+
+The old answer compared the provider's *declared* size against the task's and
+restarted when they differed by more than 20%. Both halves are wrong and they
+compound:
+
+- Declared sizes are frequently absent, and with none **the check did not run at
+  all** — the partial was appended to unconditionally.
+- **20% is enormous.** Two encodes of one film at one resolution differ by far
+  less, so appending the tail of encode B to the head of encode A produced a
+  file that finalised, reported success, and did not play. A corrupt download
+  that completes is worse than one that restarts, because nothing says it
+  happened; the viewer finds out when they sit down to watch.
+
+It is proved now. **One ranged request for the 64 KB window ending at the resume
+point answers all three questions at once**: `206` proves the server honours
+Range, `Content-Range: …/total` gives the real file length, and the body
+compares byte for byte against the tail of the `.part`. That is 64 KB against a
+multi-gigabyte transfer, and it turns "these look similar" into "these are the
+same file up to this offset".
+
+`download/resumePlan.ts` is the decision and is pure. Ordered cheapest-first:
+identity (provider, resolution, container) before anything that costs a request,
+then exact size equality, then Range support, then the byte comparison. Notes:
+
+- **`sameResolution` reads `parsed.resolution`**, matching `findMatchingSource`.
+  A resolution the release name did not state is "no opinion" — most direct
+  provider links carry no release name, and treating that as a difference would
+  refuse every resume.
+- **`containersAgree` only ever rejects on positive disagreement.** Most provider
+  links are `?id=…` with no extension, and a container check that refused those
+  would refuse nearly every resume — which is how a safety check comes to be
+  switched off wholesale.
+- **`no-range` is its own cause.** It is the one restart where nothing is wrong
+  with either file, and the honest thing to say is that this server sends the
+  whole file every time. Checked *after* the size arithmetic, so a real mismatch
+  gets the message it deserves.
+- **An unreadable window restarts.** A failed comparison is not evidence of a
+  match; defaulting it to `true` would put the corruption back with a safety
+  check standing in front of it.
+
+`download/resumeWindow.ts` is the socket half, tested against real servers
+because everything worth catching lives in the seam. **The `res.resume()` trap
+appears here for the third time in this repository** — it discards data and
+leaves the transfer running — so both the response and the request are
+destroyed. That regression test is verified by mutation, and its first draft was
+worthless: it asserted the probe *resolved* quickly, which is true with the bug
+present. It asserts the connection tears down now.
+
+Only `restart` is acted on in `markFailed`. `resume` is the default (every engine
+continues from a `.part`) and `complete` is carried by machinery that already
+exists — the transfer asks for `bytes=N-`, the server answers `416`, and
+`httpDownloader` finalises rather than erroring; aria2 routes its own range
+errors to that same downloader. Adding a rename there would bypass
+`finalizeCompletion`, which is the only thing that checks the file is present and
+the right size before claiming success.
 
 ### Pressing Download is a request, not a command
 
@@ -3275,6 +3656,63 @@ description, language and shortcode and nothing else — so looking for a provid
 have found nothing, even with the repository carrying it on screen. It now also matches the
 installed extensions and providers underneath, and the card says *why* it matched: a result
 with no visible reason reads as a broken filter.
+
+### Settings: a level, not an Advanced tab (2026-08-31)
+
+The screen accumulated the way settings screens do — every decision worth
+exposing became a row — and the result is accurate and unusable. "Providers
+searched at once", "Torrent metadata mirrors", "Native engine policy" are all
+real controls with real effects and none of them means anything to somebody who
+installed this to watch a film.
+
+**The obvious fix does not work, and this screen already tried it.** Moving the
+technical rows to an Advanced tab fails because "advanced" is not a category:
+the technical controls are *about* the same subjects as the simple ones — how
+many providers a search asks is a search setting, the probe budget is a playback
+setting. Grouping by audience rather than by subject puts two halves of one topic
+in two places, and the reader has to know which half they need before they can
+look.
+
+So the grouping stays by subject and a **level** filters within it.
+`SettingRow` and `SettingGroup` take `level`, and a group whose rows have all
+hidden themselves hides too — otherwise Simple is a page of empty headings that
+reads as a failure to load.
+
+**`advanced` means one specific thing: understanding the *label* requires
+knowing how this app is built.** Not "rare" and not "dangerous". A control whose
+effect a viewer can describe without that — where downloads go, subtitle size,
+keep playing when I minimise — is basic however obscure it is.
+
+Applying that test changed the answer twice, both times because
+`settingsLevel.test.mts` said so. It refuses a file where over half the rows are
+advanced, and it caught rows marked individually inside groups that were already
+marked, and a batch of rows hidden for having jargon labels **when the labels
+were the problem**. Six are renamed instead — "Detected native players" is now
+"Players found on this computer" — and the toolbar-visibility rows came back,
+because "show the subtitles button" needs no knowledge of anything.
+
+Two traps in that test are worth keeping:
+
+- Its first tag scanner used "the nearest `<` before the match", which is wrong
+  the moment an attribute follows a JSX expression: in
+  `<SettingGroup icon={<RefreshCw />} level="advanced">` the nearest `<` is the
+  icon. It tracks brace depth now.
+- The ratio has to count rows and groups separately, or a marked *group* is
+  counted as a marked row and the file looks twice as filtered as it is.
+
+**Simple is the default**, and that is the part that matters: someone opening
+this screen is being asked, implicitly, which rows they should have an opinion
+about, and the honest answer for most people is about eight. The switch says
+what it is holding back, because a filtered list that does not admit it is
+filtered is the same failure as a scoped search that does not.
+
+Stored in `localStorage`, not the datastore: it describes how one person reads a
+screen, not how the app behaves, and has no business travelling in a backup to a
+machine somebody else uses. `shouldShow` lives in a plain `.ts` beside the
+provider because Node's type stripping cannot load JSX and the rule is the half
+worth testing — its default (**an unclassified row is basic**) is load-bearing,
+since backwards it would make Simple mode silently lose every setting added from
+then on.
 
 ### Settings (2026-08-27)
 
