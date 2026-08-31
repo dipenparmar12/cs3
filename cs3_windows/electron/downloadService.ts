@@ -13,6 +13,8 @@ import type { Aria2Engine } from './aria2Engine';
 import { MediaDownloadResolver } from './mediaDownloadResolver';
 import { YtDlpEngine } from './ytdlpEngine';
 import { startHttpDownload } from './httpDownloader';
+import { containersAgree, overlapWindow, planResume } from './download/resumePlan.ts';
+import { fetchRemoteWindow, readLocalWindow } from './download/resumeWindow.ts';
 import type { TorrentEngine } from './torrent/torrentEngine';
 import type { ContentService } from './contentService';
 import type { AnalyticsSink } from './pluginManager';
@@ -984,6 +986,118 @@ export class DownloadService {
     return directSources.find(sameResolution) ?? null;
   }
 
+  /**
+   * Whether the bytes already on disk survive the link being replaced.
+   *
+   * The identity half is cheap and local; the proof is one 64 KB ranged
+   * request against the replacement URL, compared byte for byte with the tail
+   * of the `.part` file. That single request also establishes whether the new
+   * server honours `Range` at all and how long it says the file is, so a
+   * resume across a re-signed CDN link costs one round trip rather than three.
+   *
+   * The decision itself lives in `download/resumePlan.ts` and is pure, because
+   * both of its failure modes are silent: resuming when it should not have
+   * produces a file that finalises, reports success and does not play, and
+   * restarting when it should not have throws away hours of transfer while
+   * looking exactly like a download that could never resume.
+   */
+  private async decideResume(
+    task: DownloadTask,
+    matched: TorrentResult
+  ): Promise<{ action: 'resume' | 'complete' | 'restart'; reason: string }> {
+    const partPath = `${task.targetFilePath}.part`;
+    const partialBytes = (() => {
+      try {
+        return fs.statSync(partPath).size;
+      } catch {
+        return 0;
+      }
+    })();
+
+    const identity = {
+      /**
+       * `providerName` is the extension provider, not `indexerName` — that is
+       * the *extractor* the provider happened to pick ("Voe", "Server 3") and
+       * it changes between resolves of one release, so comparing it would
+       * reject nearly every legitimate resume.
+       */
+      sameProvider:
+        !task.providerName ||
+        !matched.providerName ||
+        task.providerName === matched.providerName,
+      /**
+       * `parsed.resolution`, matching `findMatchingSource`'s own comparison.
+       * A resolution the release name did not state is "no opinion" rather
+       * than a mismatch — most direct provider links carry no release name at
+       * all, and treating that as a difference would refuse every resume.
+       */
+      sameResolution:
+        !task.resolution ||
+        !matched.parsed?.resolution ||
+        String(task.resolution) === String(matched.parsed.resolution),
+      sameContainer: containersAgree(task.link?.url ?? '', matched.directUrl ?? ''),
+    };
+
+    /**
+     * `verify` is a real answer from the pure planner — it means "everything
+     * cheap agrees, now go and compare the bytes" — and this caller has already
+     * done that by the time it asks. Reaching it here therefore means the
+     * comparison could not be made: an unreadable part file, or a window the
+     * server would not serve. That is not evidence of a match, so it restarts,
+     * and it says so in its own words rather than borrowing the mismatch
+     * message and telling the user the files differ when nobody knows.
+     */
+    const settle = (decision: ReturnType<typeof planResume>) =>
+      decision.action === 'verify'
+        ? {
+            action: 'restart' as const,
+            reason:
+              'The replacement file could not be checked against what has already been ' +
+              'downloaded, so the transfer starts again rather than risk a corrupt file.',
+          }
+        : { action: decision.action, reason: decision.reason };
+
+    const window = overlapWindow(partialBytes);
+    if (!window) {
+      return settle(
+        planResume({
+          partialBytes,
+          remoteSupportsRange: false,
+          ...identity,
+        })
+      );
+    }
+
+    const local = readLocalWindow(partPath, window.start, window.end);
+    const remote = await fetchRemoteWindow(
+      matched.directUrl ?? '',
+      { ...task.headers, ...matched.directHeaders },
+      window.start,
+      window.end
+    );
+
+    return settle(
+      planResume({
+      partialBytes,
+      // The provider's declared size, which is what the task was created with.
+      // Frequently absent, and `planResume` treats absent as "no opinion"
+      // rather than as agreement.
+      expectedTotalBytes: task.totalBytes > 0 ? task.totalBytes : undefined,
+      remoteTotalBytes: remote.totalBytes,
+      remoteSupportsRange: remote.satisfiedRange,
+      /**
+       * Left `undefined` when either side could not be read, which `settle`
+       * turns into a restart. A failed read is not evidence of a match, and
+       * defaulting it to `true` here would put the corruption back with a
+       * safety check standing in front of it.
+       */
+      overlapVerified:
+        local && remote.bytes ? local.equals(remote.bytes) : undefined,
+      ...identity,
+      })
+    );
+  }
+
   private async markFailed(task: DownloadTask, message: string): Promise<void> {
     this.handles.delete(task.id);
 
@@ -1026,23 +1140,28 @@ export class DownloadService {
             }
           }
 
-          // 2. Data Integrity Check: If size changed dramatically (>20%), truncate partial file to avoid corruption
-          if (
-            task.bytesDownloaded > 0 &&
-            matched.sizeBytes &&
-            matched.sizeBytes > 0 &&
-            task.totalBytes > 0
-          ) {
-            const sizeDiff = Math.abs(matched.sizeBytes - task.totalBytes);
-            if (sizeDiff / task.totalBytes > 0.2) {
-              console.warn(
-                `[download] Refreshed source size (${matched.sizeBytes}) differs from original (${task.totalBytes}); restarting partial file`
-              );
-              try {
-                fs.rmSync(`${task.targetFilePath}.part`, { force: true });
-              } catch {}
-              task.bytesDownloaded = 0;
+          /**
+           * 2. Decide whether the bytes already on disk survive the new link.
+           *
+           * Only `restart` needs acting on here. `resume` is the default —
+           * every engine already continues from a `.part` file — and
+           * `complete` (the partial is exactly the whole file) is carried by
+           * machinery that already exists: the transfer asks for `bytes=N-`,
+           * the server answers `416`, and `httpDownloader` finalises the part
+           * rather than treating it as an error. aria2 routes its own range
+           * errors to that same downloader. Adding a rename here would bypass
+           * `finalizeCompletion`, which is the only thing that checks the file
+           * is actually there and the right size before claiming success.
+           */
+          const resume = await this.decideResume(task, matched);
+          if (resume.action === 'restart') {
+            try {
+              fs.rmSync(`${task.targetFilePath}.part`, { force: true });
+            } catch {
+              // A locked part file falls through: the downloader opens with
+              // `w` when it is not resuming, which truncates it anyway.
             }
+            task.bytesDownloaded = 0;
           }
 
           // 3. Update task link & headers
@@ -1061,9 +1180,17 @@ export class DownloadService {
 
           task.state = DownloadState.Retrying;
           const downloadedMb = task.bytesDownloaded > 0 ? (task.bytesDownloaded / 1e6).toFixed(0) : '0';
-          task.errorMessage = task.bytesDownloaded > 0
-            ? `Resuming download from ${downloadedMb} MB (attempt ${attemptNum}/${maxRetries})...`
-            : `Retrying download with fresh link (attempt ${attemptNum}/${maxRetries})...`;
+          /**
+           * The reason travels with the state, and that is the visible half of
+           * this fix. A restart that says nothing is indistinguishable from the
+           * download having failed and silently begun again — which is what
+           * this path looked like when it discarded a partial on a 20% size
+           * heuristic and reported "Retrying with fresh link".
+           */
+          task.errorMessage =
+            task.bytesDownloaded > 0
+              ? `Resuming from ${downloadedMb} MB — ${resume.reason} (attempt ${attemptNum}/${maxRetries})`
+              : `${resume.reason} (attempt ${attemptNum}/${maxRetries})`;
           this.saveQueueToStorage();
 
           // 5. Exponential Backoff (1s, 2s, 4s, 8s)
