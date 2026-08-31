@@ -2954,6 +2954,53 @@
 }
 
 /*
+ * The level switch.
+ *
+ * A segmented control rather than a checkbox, because "Simple" and "Everything"
+ * are two named states and a checkbox would have to be labelled from one of
+ * them — "show advanced settings", which is the jargon word the whole feature
+ * exists to keep off this screen.
+ */
+.settings__level {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.8rem;
+}
+
+.settings__level-btn {
+  padding: 0.32rem 0.8rem;
+  border-radius: var(--radius-full, 999px);
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.settings__level-btn:hover { color: #fff; border-color: rgba(255, 255, 255, 0.28); }
+
+.settings__level-btn--on {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.45);
+  color: #dbeafe;
+}
+
+/* Says what is being held back. A filtered list that does not admit it is
+   filtered is the same failure as a scoped search that does not: the reader
+   cannot tell a setting they cannot find from one that does not exist. */
+.settings__level-note {
+  flex: 1 1 22ch;
+  min-width: 0;
+  font-size: 0.72rem;
+  color: var(--text-subtle);
+  line-height: 1.4;
+}
+
+/*
  * The tabs wrap; they do not scroll sideways.
  *
  * `overflow-x: auto` on a fixed set of tabs means that on an ordinary window a

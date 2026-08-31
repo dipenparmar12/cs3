@@ -399,7 +399,8 @@ export const PlayerSettings: React.FC = () => {
          * line; the other two let someone who disagrees say so.
          */}
         <SettingRow
-          label="Use the native engine"
+          label="High-performance video engine"
+          level="advanced"
           note={
             nativeAvailable === null
               ? 'Checking…'
@@ -443,7 +444,8 @@ export const PlayerSettings: React.FC = () => {
 
         {nativeAvailable === false && (
           <SettingRow
-            label="Install the native engine"
+            label="Install the high-performance engine"
+          level="advanced"
             note={nativeProgress ?? '~32 MB download'}
             hint={
               <>
@@ -468,7 +470,8 @@ export const PlayerSettings: React.FC = () => {
 
         {nativeAvailable && nativeDecoders.length > 0 && (
           <SettingRow
-            label="Hardware decoders available"
+            label="Graphics-card decoding"
+          level="advanced"
             hint={
               <>
                 What this build can offer, as reported by mpv. Which one is actually used is
@@ -566,7 +569,7 @@ const NativePlayerSettingsGroup: React.FC<{ flash: (msg: string) => void }> = ({
   return (
     <SettingGroup title="Platform Native & External Players" icon={<Tv size={15} />}>
       <SettingRow
-        label="Native player toolbar button"
+        label="Button to open in another app"
         note={showNativeButton ? 'Visible' : 'Hidden'}
         hint={
           <>
@@ -587,7 +590,7 @@ const NativePlayerSettingsGroup: React.FC<{ flash: (msg: string) => void }> = ({
       </SettingRow>
 
       <SettingRow
-        label="Detected native players"
+        label="Players found on this computer"
         note={`${players.length} available`}
         hint="Desktop players detected on your system (Windows, macOS, Linux)."
       >
@@ -626,7 +629,7 @@ const NativePlayerSettingsGroup: React.FC<{ flash: (msg: string) => void }> = ({
 
       {downloads.length > 0 && (
         <SettingRow
-          label="Recommended native players"
+          label="Players you can install"
           note="Free / Open-Source"
           hint="Install any of these players for 100% native decoding of 4K 10-bit HEVC and surround audio codecs."
         >
