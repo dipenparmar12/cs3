@@ -6,6 +6,7 @@ import type { ActiveTab } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
 import { VideoPlayer } from './components/VideoPlayer';
 import { MiniPlayerBar } from './components/player/MiniPlayerBar';
+import { OttPlatformView, type OttPlatformSummary } from './views/OttPlatformView';
 import { DownloadCenter } from './components/DownloadCenter';
 import { ProviderInspector } from './components/ProviderInspector';
 import { ExtensionsScreen } from './components/extensions/ExtensionsScreen';
@@ -145,6 +146,29 @@ export const App: React.FC = () => {
   const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>([]);
   /** Indexer names, for the F12 inspector. The search scope owns its own list. */
   const [providersList, setProvidersList] = useState<string[]>([]);
+  /**
+   * The streaming-service destinations, held here rather than in the sidebar.
+   *
+   * Two consumers need the same answer — the sidebar draws the rows and the
+   * platform page renders from one of them — and a second fetch would let the
+   * two disagree about whether Netflix is installed, which is precisely the
+   * kind of split the extensions screen already had once between `enabled` and
+   * `effectivelyEnabled`.
+   */
+  const [ottPlatforms, setOttPlatforms] = useState<OttPlatformSummary[]>([]);
+
+  /**
+   * Re-reads the streaming-service inventory.
+   *
+   * Called at launch and again after anything that can change it — installing a
+   * repository from a platform page, or toggling a provider on the extensions
+   * screen. Without the second call the sidebar keeps the state it saw at
+   * launch, so installing NetMirror appears to do nothing until a restart.
+   */
+  const refreshOttPlatforms = useCallback(async () => {
+    const response = await window.cloudstream?.listOttPlatforms();
+    if (response?.platforms) setOttPlatforms(response.platforms as OttPlatformSummary[]);
+  }, []);
 
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   /** Which Settings pane to open on, when something deep-links into it. */
@@ -210,6 +234,18 @@ export const App: React.FC = () => {
       }
     }
   }, [activeTab, searchQuery, selectedMedia, playback, session]);
+
+  /**
+   * Re-read the inventory when a streaming-service page is opened.
+   *
+   * Availability changes on the extensions screen — a provider switched off, a
+   * repository removed — and nothing pushes that back here. Without this, a
+   * platform disabled two screens ago still renders its catalogue rows and only
+   * fails when something is clicked.
+   */
+  useEffect(() => {
+    if (activeTab.startsWith('ott:')) void refreshOttPlatforms();
+  }, [activeTab, refreshOttPlatforms]);
   const [isBinaryModalOpen, setIsBinaryModalOpen] = useState(false);
   const [hasBinaries, setHasBinaries] = useState(true);
 
@@ -225,6 +261,7 @@ export const App: React.FC = () => {
       window.cloudstream
         .getIndexerConfigs()
         .then((configs) => setProvidersList(configs.filter((c) => c.enabled).map((c) => c.name)));
+      void refreshOttPlatforms();
     }
 
     /**
@@ -298,7 +335,7 @@ export const App: React.FC = () => {
       disposeInspector?.();
       disposeLicences?.();
     };
-  }, []);
+  }, [refreshOttPlatforms]);
 
   /**
    * Play a file the user already has on disk.
@@ -1024,6 +1061,7 @@ export const App: React.FC = () => {
         }}
         downloadCount={downloadQueue.filter((t) => t.state === 'Downloading' || t.state === 'Queued').length}
         missingComponentCount={missingComponents}
+        ottPlatforms={ottPlatforms}
       />
 
       {/* Main App View Area */}
@@ -1286,6 +1324,35 @@ export const App: React.FC = () => {
                     // through a search rather than straight into a detail page.
                     onSearch={handleSearchFromDetail}
                   />
+                </ErrorBoundary>
+              )}
+              {activeTab.startsWith('ott:') && (
+                <ErrorBoundary>
+                  {(() => {
+                    const platform = ottPlatforms.find(
+                      (entry) => `ott:${entry.id}` === activeTab
+                    );
+                    /*
+                      A platform id that is not in the inventory is the window
+                      between launch and the first `listOttPlatforms` reply, and
+                      also what a stale deep link looks like. Rendering nothing
+                      would be a blank page with a selected sidebar row, so the
+                      row is held until the answer arrives.
+                    */
+                    if (!platform) return null;
+                    return (
+                      <OttPlatformView
+                        platform={platform}
+                        onSelectMedia={handleSelectMedia}
+                        onPlayDirectly={handleQuickPlay}
+                        onScopedSearch={(query, providers) =>
+                          void handleSearch(query, { providers })
+                        }
+                        onOpenExtensions={() => setActiveTab('extensions')}
+                        onInventoryChanged={() => void refreshOttPlatforms()}
+                      />
+                    );
+                  })()}
                 </ErrorBoundary>
               )}
               {activeTab === 'search' && (

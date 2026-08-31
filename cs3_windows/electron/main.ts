@@ -49,6 +49,7 @@ import type {
 } from '../src/types/media';
 import type { MpvOpenRequest } from '../src/types/mpv';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
+import { OttService } from './cs3/ottService';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { BootstrapService } from './cs3/bootstrap';
 import { TitleOutcomeStore, type TitleOutcomeKind } from './cs3/titleOutcomes';
@@ -247,6 +248,7 @@ const torrentEngine = new TorrentEngine({
 });
 const contentService = new ContentService(datastore, pluginManager, torrentEngine);
 const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
+const ottService = new OttService(pluginManager);
 const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
 const historyStore = new HistoryStore(datastore);
@@ -3325,6 +3327,80 @@ ipcMain.handle(
     }
   }
 );
+
+/**
+ * The OTT platform destinations.
+ *
+ * A separate namespace from `extension:*` because it answers a different
+ * question. `extension:*` is "what have I installed?", an inventory keyed on
+ * repositories and archives. This is "can I watch Netflix?", keyed on the
+ * platform — and it has to answer even when the answer is no, so the list
+ * always contains every platform, each carrying how it is reachable rather
+ * than being omitted when it is not.
+ */
+ipcMain.handle('ott:listPlatforms', async () => {
+  try {
+    return { ok: true, platforms: await ottService.listPlatforms() };
+  } catch (error) {
+    return { ...fail(error), platforms: [] };
+  }
+});
+
+ipcMain.handle('ott:getCatalog', async (_, platformId: string) => {
+  try {
+    return { ok: true, catalog: await ottService.getCatalog(platformId) };
+  } catch (error) {
+    return { ...fail(error), catalog: null };
+  }
+});
+
+ipcMain.handle(
+  'ott:getCatalogPage',
+  async (
+    _,
+    provider: string,
+    section: { name: string; data: string; horizontalImages?: boolean },
+    page: number
+  ) => {
+    try {
+      return { ok: true, page: await ottService.getCatalogPage(provider, section, page) };
+    } catch (error) {
+      return { ...fail(error), page: null };
+    }
+  }
+);
+
+/**
+ * Which providers a search from this platform's page may ask.
+ *
+ * Returned to the renderer rather than resolved inside `search:start`, because
+ * the page needs the same list to say what it is about to search — and a page
+ * that claims to search two providers while the main process asks a different
+ * two is the class of disagreement `SearchScopePicker` already had once.
+ */
+ipcMain.handle('ott:getSearchScope', async (_, platformId: string) => {
+  try {
+    return { ok: true, providers: await ottService.providersFor(platformId) };
+  } catch (error) {
+    return { ...fail(error), providers: [] };
+  }
+});
+
+ipcMain.handle('ott:getSuggestions', async (_, platformId: string) => {
+  try {
+    return { ok: true, suggestions: ottService.suggestionsFor(platformId) };
+  } catch (error) {
+    return { ...fail(error), suggestions: [] };
+  }
+});
+
+ipcMain.handle('ott:installSuggestion', async (_, platformId: string, repositoryId: string) => {
+  try {
+    return await ottService.installSuggestion(platformId, repositoryId);
+  } catch (error) {
+    return { ...fail(error), installed: 0, failed: 0 };
+  }
+});
 
 ipcMain.handle('extension:removeRepository', async (_, repoUrl: string) => {
   const removedExtensions = pluginManager.removeRepository(repoUrl);

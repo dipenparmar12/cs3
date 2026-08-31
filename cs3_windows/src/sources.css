@@ -5876,3 +5876,152 @@
   color: var(--status-warning);
 }
 .backup-panel__flash svg { flex-shrink: 0; margin-top: 0.12rem; }
+
+/* ---------------------------------------------------------------------------
+   OTT platform pages
+
+   Deliberately reuses `.home-row` / `.home-rail` for the catalogue rows rather
+   than growing a second rail implementation. The rows here come from a
+   different source — the provider's own `getMainPage` rather than Cinemeta —
+   but they are the same object on screen, and two rail stylesheets is how the
+   home screen and this page come to scroll differently for no reason anyone
+   intended.
+--------------------------------------------------------------------------- */
+
+.ott-view { display: flex; flex-direction: column; gap: 1.6rem; }
+
+.ott-view__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 1.1rem 1.3rem;
+  border-radius: var(--radius-lg, 14px);
+}
+
+.ott-view__header h2 { font-size: 1.5rem; font-weight: 750; color: #fff; letter-spacing: -0.02em; }
+.ott-view__header p { margin-top: 0.25rem; font-size: 0.82rem; color: var(--text-muted); max-width: 46ch; }
+
+.ott-view__search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.4rem 0.4rem 0.75rem;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full, 999px);
+  min-width: 280px;
+}
+
+.ott-view__search svg { color: var(--text-subtle); flex-shrink: 0; }
+
+.ott-view__search input {
+  flex: 1;
+  /* Without this the input refuses to shrink below its intrinsic width and
+     pushes the header wider than the viewport — the same flex trap the native
+     stage's seek bar hit. */
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: #fff;
+  font-size: 0.86rem;
+}
+
+.ott-view__search button { background: none; border: none; color: var(--text-subtle); cursor: pointer; display: flex; }
+.ott-view__search button:hover { color: #fff; }
+
+.ott-view__search-go {
+  padding: 0.4rem 0.9rem !important;
+  border-radius: var(--radius-full, 999px);
+  background: var(--accent-primary) !important;
+  color: #fff !important;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.ott-view__scope {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: -1rem;
+  font-size: 0.74rem;
+  color: var(--text-subtle);
+}
+
+.ott-view__notice {
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--radius-md);
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  font-size: 0.8rem;
+  color: #86efac;
+}
+
+.ott-view__loading,
+.ott-view__row-error {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.ott-view__row-error { color: #fca5a5; font-weight: 500; }
+
+.ott-view__setup { display: flex; flex-direction: column; gap: 1rem; }
+
+.ott-view__suggestions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.9rem;
+}
+
+.ott-view__suggestion {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.95rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+}
+
+.ott-view__suggestion h4 { font-size: 0.9rem; font-weight: 650; color: #fff; }
+.ott-view__suggestion p { font-size: 0.76rem; color: var(--text-muted); line-height: 1.5; flex: 1; }
+
+.ott-view__suggestion button {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.95rem;
+  border-radius: var(--radius-full, 999px);
+  border: none;
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.ott-view__suggestion button:disabled { opacity: 0.55; cursor: default; }
+
+/* Sits in the rail, so it has to match a poster's height rather than a
+   button's, or the row's baseline jumps when the last page loads. */
+.ott-view__more {
+  align-self: stretch;
+  min-height: 120px;
+  padding: 0 1.1rem;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--border-color);
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ott-view__more:hover { color: #fff; border-color: rgba(255, 255, 255, 0.3); }

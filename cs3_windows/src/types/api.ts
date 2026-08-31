@@ -120,6 +120,19 @@ export interface ExactMedia {
 
 export interface SearchOptions {
   exact?: ExactMedia;
+  /**
+   * Ask exactly these providers, for this search only.
+   *
+   * Set by the OTT platform pages, where the scope belongs to the page rather
+   * than to a preference: the user is looking at Netflix, so the search box on
+   * that page searches Netflix. Deliberately not persisted — a scope that
+   * outlives the page it came from is indistinguishable from a stuck filter.
+   *
+   * An empty array is a caller saying "these providers, and there are none of
+   * them", and is honoured as a search of nothing. Omitting the field is what
+   * means "use the stored scope".
+   */
+  providers?: string[];
 }
 
 /** One past search, newest first. */

@@ -1,11 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { LogLevel } from './logging/logger';
 import type {
+  ProviderCatalog,
+  ProviderCatalogPage,
   SearchHistoryEntry,
   SearchOptions,
   SearchResponse,
   SearchSuggestion,
 } from '../src/types/api';
+import type { OttPlatformView } from './cs3/ottPlatforms';
 import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
 import type { SwarmReport } from '../src/types/torrent';
 import type { SitePlugin, PluginCompatibilityReport, ProviderTreeRepository } from '../src/types/plugin';
@@ -1012,6 +1015,73 @@ export interface CloudStreamElectronAPI {
    * a permanent row that fails every time it is opened, and that failure reads
    * as the extensions being broken rather than the address.
    */
+  // --- OTT platform destinations -------------------------------------------
+
+  /**
+   * Every OTT platform the app knows, with what is installed behind it.
+   *
+   * Always the full list, including platforms nothing can serve. A sidebar that
+   * silently omitted Sony LIV would leave a user who came looking for it to
+   * conclude the app cannot do that, when the truth is one repository install
+   * away and `availability` says so.
+   */
+  listOttPlatforms: () => Promise<{
+    ok: boolean;
+    error?: string;
+    platforms: OttPlatformView[];
+  }>;
+  /** What this platform offers to browse, before any row is fetched. */
+  getOttCatalog: (
+    platformId: string
+  ) => Promise<{ ok: boolean; error?: string; catalog: ProviderCatalog | null }>;
+  /**
+   * One page of one catalogue row.
+   *
+   * `section` travels back exactly as it arrived: `data` is the provider's own
+   * opaque handle for the row and is not a URL. Rebuilding it here — or
+   * "cleaning" it — is how a browse request stops matching the row it names.
+   */
+  getOttCatalogPage: (
+    provider: string,
+    section: { name: string; data: string; horizontalImages?: boolean },
+    page: number
+  ) => Promise<{ ok: boolean; error?: string; page: ProviderCatalogPage | null }>;
+  /**
+   * The providers a search from this platform's page should be scoped to.
+   *
+   * Pass the result as `SearchOptions.providers`. It is fetched rather than
+   * derived in the renderer so the page's "searching Netflix, Prime Video"
+   * caption cannot disagree with what the main process actually asks.
+   */
+  getOttSearchScope: (
+    platformId: string
+  ) => Promise<{ ok: boolean; error?: string; providers: string[] }>;
+  /** Repositories to offer when nothing installed serves this platform. */
+  getOttSuggestions: (platformId: string) => Promise<{
+    ok: boolean;
+    error?: string;
+    suggestions: Array<{
+      id: string;
+      name: string;
+      description: string;
+      url: string;
+      rawRepoUrl: string;
+      installed: boolean;
+    }>;
+  }>;
+  /**
+   * Installs one of this platform's suggested repositories.
+   *
+   * By id, never by URL. This channel is reachable from the renderer, and
+   * accepting an address here would turn "set up Netflix" into a way to make
+   * the app install code from anywhere; adding a repository by hand stays a
+   * separate, deliberate action on the extensions screen.
+   */
+  installOttSuggestion: (
+    platformId: string,
+    repositoryId: string
+  ) => Promise<{ ok: boolean; message: string; installed: number; failed: number }>;
+
   addRepository: (
     url: string
   ) => Promise<{ ok: boolean; message: string; name?: string; plugins?: number }>;
@@ -1576,6 +1646,14 @@ const api: CloudStreamElectronAPI = {
   uninstallPlugin: (internalName) =>
     ipcRenderer.invoke('extension:uninstallPlugin', internalName),
   getInstalledRepositories: () => ipcRenderer.invoke('extension:getInstalledRepositories'),
+  listOttPlatforms: () => ipcRenderer.invoke('ott:listPlatforms'),
+  getOttCatalog: (platformId) => ipcRenderer.invoke('ott:getCatalog', platformId),
+  getOttCatalogPage: (provider, section, page) =>
+    ipcRenderer.invoke('ott:getCatalogPage', provider, section, page),
+  getOttSearchScope: (platformId) => ipcRenderer.invoke('ott:getSearchScope', platformId),
+  getOttSuggestions: (platformId) => ipcRenderer.invoke('ott:getSuggestions', platformId),
+  installOttSuggestion: (platformId, repositoryId) =>
+    ipcRenderer.invoke('ott:installSuggestion', platformId, repositoryId),
   addRepository: (url) => ipcRenderer.invoke('extension:addRepository', url),
   installRepository: (url, options) => ipcRenderer.invoke('extension:installRepository', url, options),
   removeRepository: (repoUrl) => ipcRenderer.invoke('extension:removeRepository', repoUrl),
