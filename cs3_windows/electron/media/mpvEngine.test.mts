@@ -22,7 +22,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MpvEngine, NATIVE_KEY_BINDINGS } from './mpvEngine.ts';
+import { MAX_VOLUME, MpvEngine, NATIVE_KEY_BINDINGS, clampVolume } from './mpvEngine.ts';
 import type { MpvSnapshot } from '../../src/types/mpv.ts';
 
 const BIN_DIRS = [
@@ -233,6 +233,42 @@ try {
    * pinning separately is the binding table, because its dangerous property is
    * an *absence* and nothing else would ever notice it coming back.
    */
+  check('volume cannot leave the range the app can represent', () => {
+    /**
+     * The reported crash, guarded at its source.
+     *
+     * mpv defaults `volume-max` to 130 and both its OSC slider and the
+     * `add volume 5` bindings above will walk past 100. Anything above that
+     * came back on a snapshot the renderer divided by 100 into a value greater
+     * than 1, and assigning that to `HTMLMediaElement.volume` throws
+     * `IndexSizeError` — from inside an effect, which unmounts the player.
+     * "Turn it up past a point and it crashes."
+     *
+     * `--volume-max` pins mpv's ceiling to the app's; this pins the setter to
+     * the same number so the two cannot drift apart.
+     */
+    assert.equal(MAX_VOLUME, 100);
+    assert.equal(clampVolume(130), 100);
+    assert.equal(clampVolume(100.4), 100);
+    assert.equal(clampVolume(-5), 0);
+    assert.equal(clampVolume(Number.NaN), 0);
+    assert.equal(clampVolume(73.5), 74, 'mpv takes a number; the app shows an integer');
+  });
+
+  check('no binding can push volume past the ceiling in one step', () => {
+    // A binding that adds more than the range allows would be clamped by mpv
+    // rather than refused, which is fine — this asserts the *intent* stays a
+    // small relative nudge rather than an absolute set that could exceed it.
+    for (const [key, command] of NATIVE_KEY_BINDINGS) {
+      if (!command.startsWith('add volume')) continue;
+      const step = Number(command.split(' ')[2]);
+      assert.ok(
+        Number.isFinite(step) && Math.abs(step) <= MAX_VOLUME,
+        `${key} steps volume by ${step}, which is not a nudge`
+      );
+    }
+  });
+
   check('no binding quits mpv', () => {
     /**
      * mpv's default set quits on `q`, `Q` and `Ctrl+q`, which is why

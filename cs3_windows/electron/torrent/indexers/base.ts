@@ -1,5 +1,5 @@
 import type { IndexerConfig, IndexerQuery, TorrentResult } from '../../../src/types/torrent';
-import { parseReleaseName } from '../releaseParser';
+import { parseReleaseName } from '../releaseParser.ts';
 
 /**
  * Everything an adapter must produce. Normalisation to `TorrentResult`
@@ -95,6 +95,49 @@ export function buildMagnet(infoHash: string, displayName?: string): string {
   if (displayName) params.push(`dn=${encodeURIComponent(displayName)}`);
   for (const tracker of DEFAULT_TRACKERS) params.push(`tr=${encodeURIComponent(tracker)}`);
   return `magnet:?${params.join('&')}`;
+}
+
+/**
+ * The `tr=` announce URLs carried by a magnet — `buildMagnet` read backwards.
+ *
+ * It lives here, beside its inverse, because it exists for a case where the
+ * magnet stops being available: `TorrentEngine` hands `add()` a cached
+ * `.torrent` buffer when it has one, and a buffer carries no magnet, so any
+ * tracker the source named would silently vanish on exactly the second open the
+ * cache was supposed to make faster. A swarm that gets quieter the second time
+ * reads as the release dying.
+ *
+ * A regex rather than `new URL()`: a magnet is not hierarchical, and
+ * `searchParams` does not survive the repeated-key form every indexer emits.
+ * Anything that does not decode to a real announce URL is dropped — a malformed
+ * entry here becomes a socket the client retries for the life of the torrent.
+ */
+export function trackersFromMagnet(magnet: string): string[] {
+  const out: string[] = [];
+  for (const match of magnet.matchAll(/[?&]tr=([^&]+)/gi)) {
+    let url: string;
+    try {
+      url = decodeURIComponent(match[1]);
+    } catch {
+      continue;
+    }
+    if (/^(https?|udp|wss?):\/\/\S+$/i.test(url)) out.push(url);
+  }
+  return out;
+}
+
+/** Announce lists concatenated without duplicates, order preserved. */
+export function mergeTrackers(...lists: readonly (readonly string[])[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const list of lists) {
+    for (const url of list) {
+      if (seen.has(url)) continue;
+      seen.add(url);
+      out.push(url);
+    }
+  }
+  return out;
 }
 
 /**

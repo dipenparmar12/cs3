@@ -91,11 +91,21 @@ export class DownloadService {
     if (!this.historyStore) return;
     try {
       this.historyStore.record({
-        title: task.title,
-        mediaUrl: task.mediaUrl || task.link.url,
+        title: task.parentTitle || task.title,
+        parentTitle: task.parentTitle,
+        mediaUrl: task.parentMediaUrl || task.mediaUrl || task.link.url,
+        parentMediaUrl: task.parentMediaUrl,
         posterUrl: task.posterUrl,
         season: task.seasonNumber,
         episode: task.episodeNumber,
+        episodeTitle: task.episodeTitle,
+        type:
+          task.mediaType ||
+          (task.seasonNumber !== undefined || task.episodeNumber !== undefined
+            ? 'series'
+            : 'movie'),
+        year: task.year,
+        originalTitle: task.originalTitle,
         action,
         status,
         failureReason,
@@ -727,9 +737,119 @@ export class DownloadService {
     task.downloadSpeed = 0;
     task.etaSeconds = 0;
     task.errorMessage = undefined;
+    this.writeDownloadInfoFiles(task, task.totalBytes);
     this.recordHistory(task, 'download_completed', 'Downloaded');
     this.saveQueueToStorage();
     this.pump();
+  }
+
+  /**
+   * Writes companion metadata files (.info.json and .info.txt) alongside the downloaded media.
+   *
+   * Preserves full origin provenance (original provider, media details URL, series context,
+   * source hashes, and download timestamp) directly on disk. If the app is closed, reinstalled,
+   * or if the datastore is reset, the file retains its original identity and can be retried or
+   * re-opened in CloudStream Desktop at any time.
+   */
+  private writeDownloadInfoFiles(task: DownloadTask, actualBytes: number): void {
+    try {
+      if (!task.targetFilePath) return;
+      const targetDir = path.dirname(task.targetFilePath);
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+
+      const ext = path.extname(task.targetFilePath);
+      const basePath = ext ? task.targetFilePath.slice(0, -ext.length) : task.targetFilePath;
+      const jsonPath = `${basePath}.info.json`;
+      const txtPath = `${basePath}.info.txt`;
+
+      const completedAt = new Date().toISOString();
+      const createdAt = task.createdTime ? new Date(task.createdTime).toISOString() : completedAt;
+
+      const metadata = {
+        schemaVersion: 1,
+        title: task.title,
+        parentTitle: task.parentTitle || task.title,
+        episodeTitle: task.episodeTitle,
+        mediaType: task.mediaType || (task.seasonNumber !== undefined ? 'series' : 'movie'),
+        year: task.year,
+        originalTitle: task.originalTitle,
+        season: task.seasonNumber,
+        episode: task.episodeNumber,
+        posterUrl: task.posterUrl,
+        parentMediaUrl: task.parentMediaUrl,
+        mediaUrl: task.mediaUrl,
+        providerName: task.providerName,
+        source: {
+          name: task.link?.name || task.title,
+          url: task.link?.url,
+          referer: task.link?.referer,
+          quality: task.quality,
+          resolution: task.resolution,
+          infoHash: task.sourceInfoHash,
+          isTorrent: task.sourceIsTorrent,
+          languages: task.languages,
+          audioCodecs: task.audioCodecs,
+        },
+        download: {
+          taskId: task.id,
+          variantKey: task.variantKey,
+          targetFilePath: task.targetFilePath,
+          fileSizeBytes: actualBytes || task.totalBytes,
+          fileSizeFormatted: DownloadService.formatBytes(actualBytes || task.totalBytes),
+          createdTime: createdAt,
+          downloadCompletedAt: completedAt,
+        },
+        subtitles: task.subtitles ?? [],
+      };
+
+      // 1. Structured JSON for programmatic import and recovery
+      fs.writeFileSync(jsonPath, JSON.stringify(metadata, null, 2), 'utf8');
+
+      // 2. Human-readable companion text file
+      const isEpisode = task.episodeNumber !== undefined || task.seasonNumber !== undefined;
+      const itemLabel = isEpisode
+        ? `Season ${task.seasonNumber ?? 1}, Episode ${task.episodeNumber ?? 1}${task.episodeTitle ? ` — ${task.episodeTitle}` : ''}`
+        : 'Movie / Feature';
+
+      const readableText = [
+        '================================================================================',
+        'CloudStream 3 Desktop — Download Provenance & Source Metadata',
+        '================================================================================',
+        `Title:            ${task.parentTitle || task.title}${task.year ? ` (${task.year})` : ''}`,
+        `Item:             ${itemLabel}`,
+        `Media Type:       ${metadata.mediaType}`,
+        `Provider / Source:${task.providerName || 'Extension / Built-in'}`,
+        `Source Release:   ${task.link?.name || task.title}`,
+        `Quality:          ${task.quality || (task.resolution ? `${task.resolution}p` : 'Unknown')}`,
+        task.languages?.length ? `Languages:        ${task.languages.join(', ')}` : null,
+        task.audioCodecs?.length ? `Audio Codecs:     ${task.audioCodecs.join(', ')}` : null,
+        `File Size:        ${DownloadService.formatBytes(actualBytes || task.totalBytes)}`,
+        `Downloaded Date:  ${completedAt}`,
+        `Target File:      ${path.basename(task.targetFilePath)}`,
+        `Task ID:          ${task.id}`,
+        task.variantKey ? `Variant Key:      ${task.variantKey}` : null,
+        '',
+        '--------------------------------------------------------------------------------',
+        'ORIGINAL SOURCE & DETAIL PAGE (FOR RE-OPENING / RETRYING)',
+        '--------------------------------------------------------------------------------',
+        `Original Media URL: ${task.parentMediaUrl || task.mediaUrl || 'N/A'}`,
+        task.parentMediaUrl && task.mediaUrl && task.parentMediaUrl !== task.mediaUrl
+          ? `Episode Stream URL: ${task.mediaUrl}`
+          : null,
+        task.link?.url ? `Direct Link / URI:  ${task.link.url}` : null,
+        task.sourceInfoHash ? `Torrent InfoHash:   ${task.sourceInfoHash}` : null,
+        '================================================================================',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      fs.writeFileSync(txtPath, readableText, 'utf8');
+      log.info('download_info_files_written', { jsonPath, txtPath, taskId: task.id });
+    } catch (error) {
+      console.warn('[downloads] Failed to write download info companion files:', describe(error));
+    }
   }
 
   private static formatBytes(bytes: number): string {

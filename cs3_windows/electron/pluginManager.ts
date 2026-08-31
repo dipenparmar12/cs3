@@ -69,11 +69,56 @@ export interface RepositoryFetchResult {
   warnings: string[];
 }
 
+/**
+ * Which of a plugin entry's two published artifacts to install.
+ *
+ * The cross-platform jar wins whenever there is one, and the reason is not
+ * "newer is better" — it is that the entire DEX pipeline stops being involved.
+ * `DexTranslator`, `KotlinNameRepair`, the hash-keyed translation cache, the
+ * concurrent-translation nonce and dropping cached output on a runtime
+ * generation bump all disappear for that archive, and **every one of those has
+ * been a real defect in this repository at least once** (see AGENTS.md §5).
+ * There is nothing to translate, so there is nothing to get wrong.
+ *
+ * A jar entry with no hash is still preferred. The `.cs3` beside it frequently
+ * has no hash either — verification is per-artifact and per-repository, not a
+ * property of the lane — so refusing the jar for that would mean declining the
+ * safer bytecode on a technicality neither artifact satisfies.
+ *
+ * `jarFileSize` is deliberately unused. It is published, and checking it would
+ * add a second way to reject a download that the hash already covers exactly.
+ */
+export function chooseArtifact(plugin: SitePlugin): {
+  url: string;
+  hash?: string;
+  lane: 'cs3' | 'jar';
+} {
+  if (plugin.jarUrl) {
+    return { url: plugin.jarUrl, hash: plugin.jarHash, lane: 'jar' };
+  }
+  return { url: plugin.url, hash: plugin.fileHash, lane: 'cs3' };
+}
+
 /** What the sidecar reports back about a translated archive. */
 export interface PluginRuntimeReport {
   tier: string;
   reason: string;
+  /**
+   * Whether the archive was prepared far enough to analyse.
+   *
+   * Named for the DEX lane it was written for. On the jar lane nothing is
+   * translated and this is still true — `lane` is what distinguishes them.
+   */
   translated: boolean;
+  /**
+   * Which pipeline the sidecar put this archive through: `DEX` (translated at
+   * install) or `JAR` (JVM bytecode, loaded as-is).
+   *
+   * Absent when the reply came from a sidecar provisioned before the lane
+   * existed, which is why it is optional rather than defaulted — reporting an
+   * old runtime's silence as `DEX` would be a claim it never made.
+   */
+  lane?: 'DEX' | 'JAR';
   classCount?: number;
   dexCount?: number;
   entryClass?: string;
@@ -1294,7 +1339,9 @@ export class PluginManager {
         message: `Downloading ${plugin.name}...`,
       });
 
-      const buffer = await fetchBuffer(plugin.url, { timeoutMs: 60_000 }, (downloaded, total, percent) => {
+      const artifact = chooseArtifact(plugin);
+
+      const buffer = await fetchBuffer(artifact.url, { timeoutMs: 60_000 }, (downloaded, total, percent) => {
         const sizeStr =
           total > 0
             ? ` (${(downloaded / 1024).toFixed(0)} KB / ${(total / 1024).toFixed(0)} KB)`
@@ -1320,8 +1367,12 @@ export class PluginManager {
 
       const digest = crypto.createHash('sha256').update(buffer).digest('hex');
 
-      if (plugin.fileHash) {
-        const expected = plugin.fileHash.replace(/^sha256-/i, '').toLowerCase();
+      // The hash checked is the one published for *the artifact downloaded*.
+      // Verifying a jar against `fileHash` — the `.cs3`'s hash — would fail
+      // every cross-platform install, and taking the mismatch as permission to
+      // skip verification would be worse than not checking at all.
+      if (artifact.hash) {
+        const expected = artifact.hash.replace(/^sha256-/i, '').toLowerCase();
         if (expected !== digest) {
           this.notifyInstallProgress({
             internalName: plugin.internalName,
@@ -1357,7 +1408,9 @@ export class PluginManager {
 
       this.installedPlugins.set(plugin.internalName, {
         internalName: plugin.internalName,
-        url: plugin.url,
+        // The artifact actually installed, so the updater re-fetches the same
+        // lane rather than silently swapping to the `.cs3` on the next version.
+        url: artifact.url,
         isOnline: true,
         filePath: target,
         version: plugin.version ?? 1,
@@ -1508,6 +1561,7 @@ export class PluginManager {
       tier: String(r.tier ?? 'T4_BLOCKED'),
       reason: String(r.reason ?? ''),
       translated: Boolean(r.translated),
+      lane: r.lane === 'JAR' || r.lane === 'DEX' ? r.lane : undefined,
       classCount: typeof r.classCount === 'number' ? r.classCount : undefined,
       dexCount: typeof r.dexCount === 'number' ? r.dexCount : undefined,
       entryClass: r.entryClass ? String(r.entryClass) : undefined,
@@ -2403,7 +2457,31 @@ export class PluginManager {
     return this.disabledExtensions.set(internalNames, enabled);
   }
 
+  public isProviderEnabled(name: string): boolean {
+    const provider = this.providers.get(name);
+    if (!provider) return false;
+    const disabled = new Set(this.getDisabledProviders());
+    const disabledExtensions = new Set(this.getDisabledExtensions());
+    const disabledRepositories = new Set(this.getDisabledRepositories());
+    if (disabled.has(provider.name)) return false;
+    if (disabledExtensions.has(provider.pluginInternalName)) return false;
+    if (disabledRepositories.has(this.repositoryIdOf(provider.pluginInternalName))) return false;
+    if (!this.adultAllowed() && isAdultProvider(provider)) return false;
+    return true;
+  }
+
   public setProviderEnabled(name: string, enabled: boolean): string[] {
+    if (enabled) {
+      const provider = this.providers.get(name);
+      if (provider) {
+        // Also unblock parent extension and repository if they were disabled
+        this.disabledExtensions.set([provider.pluginInternalName], true);
+        const repoId = this.repositoryIdOf(provider.pluginInternalName);
+        if (repoId && repoId !== SIDELOADED_REPOSITORY_ID) {
+          this.disabledRepositories.set([repoId], true);
+        }
+      }
+    }
     return this.disabledProviders.set([name], enabled);
   }
 
@@ -2643,7 +2721,15 @@ export class PluginManager {
   }
 
   public async loadMedia(url: string): Promise<LoadResponse | null> {
-    const ref = parseExtensionUrl(url);
+    let ref = parseExtensionUrl(url);
+    if (!ref && (url.startsWith('http://') || url.startsWith('https://'))) {
+      for (const p of this.providers.values()) {
+        if (p.mainUrl && url.startsWith(p.mainUrl)) {
+          ref = { provider: p.name, target: url };
+          break;
+        }
+      }
+    }
     if (!ref) return null;
 
     /**
@@ -2663,6 +2749,12 @@ export class PluginManager {
       throw new Error(
         `That address is a playback handle from ${ref.provider}, not a page it can open. ` +
           'Search for the title again to get a fresh page.'
+      );
+    }
+
+    if (!this.isProviderEnabled(ref.provider)) {
+      throw new Error(
+        `The extension provider "${ref.provider}" is currently disabled. Enable it to view this content.`
       );
     }
 

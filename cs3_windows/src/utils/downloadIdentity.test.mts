@@ -263,6 +263,32 @@ test('a variant with nothing to say gets no folder of its own', () => {
   assert.equal(variantPathSegment({}), '');
 });
 
+test('a built episode task preserves parentMediaUrl and series metadata for navigation', () => {
+  const episodeSource = source({ title: 'Stranger.Things.S01E01.1080p' });
+  const task = buildDownloadTask(episodeSource, {
+    title: 'Stranger Things',
+    parentTitle: 'Stranger Things',
+    episodeTitle: 'Chapter One: The Vanishing of Will Byers',
+    mediaUrl: 'cs3ext://SuperStream/https%3A%2F%2Fsuperstream.org%2Fwatch%3Fep%3D1',
+    parentMediaUrl: 'cs3ext://SuperStream/https%3A%2F%2Fsuperstream.org%2Fseries%2Fstranger-things',
+    providerName: 'SuperStream',
+    season: 1,
+    episode: 1,
+    mediaType: 'series',
+    year: 2016,
+    posterUrl: 'https://example.com/poster.jpg',
+  })!;
+
+  assert.equal(task.parentMediaUrl, 'cs3ext://SuperStream/https%3A%2F%2Fsuperstream.org%2Fseries%2Fstranger-things');
+  assert.equal(task.parentTitle, 'Stranger Things');
+  assert.equal(task.episodeTitle, 'Chapter One: The Vanishing of Will Byers');
+  assert.equal(task.title, 'Stranger Things - Chapter One: The Vanishing of Will Byers');
+  assert.equal(task.providerName, 'SuperStream');
+  assert.equal(task.mediaType, 'series');
+  assert.equal(task.year, 2016);
+  assert.equal(task.posterUrl, 'https://example.com/poster.jpg');
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

@@ -90,8 +90,21 @@ export interface SystemRuntimeStatus {
  * hard-coded the literal `"plugin"` as the id, so every extension in the process
  * shared one preferences file. That was invisible while the key-value helpers
  * were stubs and becomes a collision the moment they write.
+ *
+ * Generation 9 is the cross-platform jar lane (PRD-41 M0). `PluginArchive`
+ * classifies an archive by its contents and, for a jar, skips `DexTranslator`
+ * entirely and recovers the entry class from the `@CloudstreamPlugin`
+ * annotation — because the published jar carries no `manifest.json`, which is
+ * the one thing Android's load sequence assumes is always there. An
+ * already-provisioned sidecar has none of that: handed a jar it would call
+ * dex2jar, be told there is no `classes.dex`, and report a translation failure
+ * for an archive that never needed translating. The host now *prefers* that
+ * artifact wherever a repository publishes one — 47 of 79 in the phisher
+ * repository, 5 of 5 in `recloudstream/extensions` `[measured]` — so without
+ * the bump an upgraded install would start downloading jars into a runtime that
+ * cannot read them.
  */
-const RUNTIME_GENERATION = 8;
+const RUNTIME_GENERATION = 9;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {

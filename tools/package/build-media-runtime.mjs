@@ -176,6 +176,9 @@ function run(command, commandArgs, options = {}) {
 }
 
 function has(command) {
+  // An absolute path resolved for us (see bsdTar) is not something `where`
+  // will find by name - ask the filesystem instead.
+  if (path.isAbsolute(command)) return fs.existsSync(command);
   const probe = process.platform === 'win32' ? 'where' : 'which';
   return run(probe, [command]).status === 0;
 }
@@ -235,19 +238,32 @@ async function resolveMirrors(component) {
  * machine that has none of them gets told which one to install rather than a
  * confusing extraction error.
  */
+/**
+ * Windows ships a libarchive `tar` in System32 that reads 7z; a Git or MSYS
+ * install puts GNU tar - which does not - earlier on PATH. `has('tar')`
+ * therefore answers yes for a binary that cannot open the archive, and the
+ * mpv download fails with "install 7z or bsdtar" on a machine that has had a
+ * capable extractor all along. Name the System32 copy explicitly.
+ */
+function bsdTar() {
+  if (process.platform !== 'win32') return 'tar';
+  const system32 = path.join(process.env.SystemRoot ?? 'C:\Windows', 'System32', 'tar.exe');
+  return fs.existsSync(system32) ? system32 : 'tar';
+}
+
 function extract(archive, dest) {
   fs.mkdirSync(dest, { recursive: true });
   const attempts = archive.endsWith('.tar.xz')
-    ? [['tar', ['-xJf', archive, '-C', dest]]]
+    ? [[bsdTar(), ['-xJf', archive, '-C', dest]]]
     : archive.endsWith('.7z')
       ? [
           ['7z', ['x', '-y', `-o${dest}`, archive]],
           ['7za', ['x', '-y', `-o${dest}`, archive]],
-          ['tar', ['-xf', archive, '-C', dest]],
+          [bsdTar(), ['-xf', archive, '-C', dest]],
         ]
       : [
           ['unzip', ['-qo', archive, '-d', dest]],
-          ['tar', ['-xf', archive, '-C', dest]],
+          [bsdTar(), ['-xf', archive, '-C', dest]],
         ];
 
   for (const [command, commandArgs] of attempts) {

@@ -24,7 +24,7 @@ import { SettingsView } from './views/SettingsView';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { FirstRunBanner } from './components/FirstRunBanner';
 
-import type { Episode, SearchOptions, SearchResponse } from './types/api';
+import { TvType, type Episode, type SearchOptions, type SearchResponse } from './types/api';
 import type { HistoryEvent } from './types/history';
 import type { DownloadRequestResult, DownloadTask } from './types/download';
 import { buildDownloadTask } from './utils/downloadIdentity';
@@ -171,6 +171,45 @@ export const App: React.FC = () => {
       window.removeEventListener('offline', offline);
     };
   }, []);
+
+  /** Update document title contextually for views, media details, and active playback. */
+  useEffect(() => {
+    if (session?.context?.title) {
+      const ep = session.context.episodeTitle ? ` — ${session.context.episodeTitle}` : '';
+      document.title = `${session.context.title}${ep}`;
+    } else if (playback?.title) {
+      const ep = playback.episodeTitle ? ` — ${playback.episodeTitle}` : '';
+      document.title = `${playback.title}${ep}`;
+    } else if (selectedMedia?.name) {
+      document.title = selectedMedia.name;
+    } else {
+      switch (activeTab) {
+        case 'home':
+          document.title = 'CloudStream 3 Desktop';
+          break;
+        case 'search':
+          document.title = searchQuery.trim() ? `Search: ${searchQuery.trim()}` : 'Search';
+          break;
+        case 'library':
+          document.title = 'Library';
+          break;
+        case 'history':
+          document.title = 'History';
+          break;
+        case 'extensions':
+          document.title = 'Extensions';
+          break;
+        case 'settings':
+          document.title = 'Settings';
+          break;
+        case 'downloads':
+          document.title = 'Downloads';
+          break;
+        default:
+          document.title = 'CloudStream 3 Desktop';
+      }
+    }
+  }, [activeTab, searchQuery, selectedMedia, playback, session]);
   const [isBinaryModalOpen, setIsBinaryModalOpen] = useState(false);
   const [hasBinaries, setHasBinaries] = useState(true);
 
@@ -924,11 +963,21 @@ export const App: React.FC = () => {
 
     try {
       await window.cloudstream.recordHistoryEvent?.({
-        title: task.title,
-        mediaUrl: task.mediaUrl || task.link.url,
+        title: task.parentTitle || task.title,
+        parentTitle: task.parentTitle,
+        mediaUrl: task.parentMediaUrl || task.mediaUrl || task.link.url,
+        parentMediaUrl: task.parentMediaUrl,
         posterUrl: task.posterUrl,
         season: task.seasonNumber,
         episode: task.episodeNumber,
+        episodeTitle: task.episodeTitle,
+        type:
+          task.mediaType ||
+          (task.seasonNumber !== undefined || task.episodeNumber !== undefined
+            ? 'series'
+            : 'movie'),
+        year: task.year,
+        originalTitle: task.originalTitle,
         action: 'download_started',
         status: 'Attempted',
         source: {
@@ -1284,12 +1333,21 @@ export const App: React.FC = () => {
                   /* The download carries where it came from; this is the way back
                      to episodes, other sources and playback for that title. */
                   onOpenTitle={(task) => {
-                    if (!task.mediaUrl) return;
+                    const targetUrl = task.parentMediaUrl || task.mediaUrl;
+                    if (!targetUrl) return;
                     handleSelectMedia({
-                      name: task.title,
-                      url: task.mediaUrl,
+                      name:
+                        task.parentTitle ||
+                        task.title.replace(/\s*-\s*(S\d+\s*E\d+|Episode\s*\d+).*$/i, '').trim(),
+                      url: targetUrl,
                       apiName: task.providerName ?? 'Downloads',
                       posterUrl: task.posterUrl,
+                      year: task.year,
+                      type:
+                        (task.mediaType as TvType) ||
+                        (task.seasonNumber !== undefined || task.episodeNumber !== undefined
+                          ? TvType.TvSeries
+                          : TvType.Movie),
                     });
                   }}
                   /* Plays the file we already have, in our own player.

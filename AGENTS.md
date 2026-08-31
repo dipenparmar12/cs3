@@ -68,11 +68,12 @@ cs3/
 | Typecheck + build | `cs3_windows/` | `bun run build` (`tsc && vite build`) |
 | Bundle the JVM | repo root | `node tools/package/build-runtime.mjs --verify` → `sidecar/dist/` |
 | Bundle ffmpeg + mpv | repo root | `node tools/package/build-media-runtime.mjs --verify` → `cs3_windows/media-runtime/` |
-| Package (Windows) | `cs3_windows/` | `bun run electron:build` → `release/` (runs the above first) |
+| **Ship it (Windows)** | `cs3_windows/` | **`bun run dist:win`** → `release/` — the whole chain, Maven included; `dist:win:fast` reuses existing jars |
+| Package (Windows), lower level | `cs3_windows/` | `bun run electron:build` → `release/` (assumes the Maven builds have already been run by hand) |
 | Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
-| Sidecar tests | `sidecar/` | `mvn test` (32 tests) |
+| Sidecar tests | `sidecar/` | `mvn test` (42 tests) |
 | Main-process tests | `cs3_windows/` | `bun run test:electron` (364 cases, Node type-stripping — no framework) |
 | Extension issues only | `cs3_windows/` | `bun run test:issues` (21 cases, pure) |
 | Provider registry only | `cs3_windows/` | `bun run test:registry` (9 cases, temp dirs) |
@@ -80,6 +81,7 @@ cs3/
 | Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
 | Provider links only | `cs3_windows/` | `bun run test:links` (15 cases, no ffmpeg needed) |
 | WebView matching only | `cs3_windows/` | `bun run test:webview` (21 cases, pure) |
+| Torrent metadata + DHT cache only | `cs3_windows/` | `bun run test:torrent-metadata` (28 cases, temp dirs) |
 | Source scope only | `cs3_windows/` | `bun run test:scope` (9 cases) |
 | Media proxy only | `cs3_windows/` | `bun run test:proxy` (11 cases, stubbed origin) |
 | Subtitles only | `cs3_windows/` | `bun run test:subtitles` (16 cases) |
@@ -93,6 +95,102 @@ cs3/
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
 | Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
 | Provider bridge, no JitPack | repo root | `node tools/package/build-bridge.mjs` — same jar, compiled against `sidecar/runtime/` |
+
+### The one command that produces a distributable
+
+`tools/package/build-installer.mjs`, wired up as `bun run dist:win` in `cs3_windows/`. It owns
+the sequence above plus everything after it, because **the order is not guessable and skipping
+a step fails silently in the worst possible way**: `build-runtime.mjs` deliberately verifies
+what Maven produced rather than running Maven itself, so a package built without the sidecar
+step is a complete, installable app with no extension capability at all and nothing anywhere
+saying so.
+
+```
+bun run dist:win           # everything, from Maven to two .exe files
+bun run dist:win:fast      # reuse jars and staging that already exist
+bun run dist:installer     # NSIS setup only
+bun run dist:portable      # portable exe only
+node ../tools/package/build-installer.mjs --help
+```
+
+What it does, in order: preflight (Node 20+, a **Java 21+** it finds by preferring
+`tools/toolchain/jdk-*` over `JAVA_HOME`, the app's `node_modules`) → `sidecar/pom.xml` →
+`runtime-deps` → the bridge → `build-runtime.mjs --verify` → `build-media-runtime.mjs --verify`
+→ `tsc -b` → `vite build` → `electron-builder --win nsis portable`.
+
+Three things in it are less obvious than they look:
+
+- **The bridge falls back to `build-bridge.mjs` when Maven fails**, because `library-jvm` is
+  published only on jitpack and a blocked egress policy fails that module at dependency
+  resolution with a 403 on a POM and nothing about the Kotlin at fault. Falling back is a
+  workaround for the network, never for the build.
+- **`shell: true` is asked for only where a `.cmd` shim needs it.** cmd.exe splits an unquoted
+  path on its spaces, so blanket-shelling every spawn runs
+  `C:\Program Files
+odejs
+ode.exe` as `C:\Program` — which is what the first run of this
+  script did. Local dev-dependency executables are also probed across spellings, because bun
+  writes `tsc.exe` where npm writes `tsc.cmd` and checking one reports a working toolchain as
+  missing.
+- **The built CSS is grepped for `https://fonts.`** before packaging. Inter is vendored so a
+  packaged desktop app does not announce every launch to a third party, and a re-added
+  `@import` would undo that invisibly.
+
+Four things broke the first time this was run end to end, and each is the kind that names
+the wrong party:
+
+- **electron-builder 26 rejects unknown configuration keys**, including the `"//comment"`
+  keys `package.json`'s `build` field carried. That had been failing `electron:build` too.
+  The packaging config now lives in **`cs3_windows/electron-builder.yml`**, where comments
+  are native; there is no `build` field in `package.json` any more.
+- **`npmRebuild: false`.** `@electron/rebuild` ran node-gyp against `bufferutil` and failed
+  for want of Visual Studio — rebuilding from source a module that already ships the
+  `prebuilds/win32-x64` it needs. Every native module here is N-API (`node-datachannel`
+  declares `napi_versions [8]`; `utp-native`, `bufferutil` and `utf-8-validate` all ship
+  win32-x64 prebuilds), and N-API is ABI-stable across Node and Electron, so a rebuild
+  changes nothing. **If a non-N-API native dependency is ever added this must go back to
+  `true`**, and the build machine then needs the C++ toolchain.
+- **A running `bun run dev` fails the package**, and the message blames the wrong thing.
+  Vite watches `cs3_windows` recursively, which on Windows means holding an open directory
+  handle on anything appearing under it. electron-builder extracts Electron to
+  `release/win-unpacked.tmp` and renames it into place, and Windows refuses to rename a
+  directory somebody holds a handle on — so the build dies with
+  `EPERM … rename win-unpacked.tmp -> win-unpacked`, naming a permission it has. Verified
+  in both directions: the rename fails while the dev server runs and succeeds the moment it
+  is stopped. `vite.config.ts` now ignores `release/`, `media-runtime/` and `dist-electron/`,
+  none of which are source. The installer script also clears a stale `*.tmp` first, since an
+  interrupted run leaves one behind and produces the same EPERM from its own debris.
+- **`tar` on PATH is not necessarily the `tar` that reads 7z.** mpv ships as a `.7z`, and
+  `build-media-runtime.mjs` probed for `tar` by name — which on a machine with Git installed
+  finds GNU tar, which cannot open one. Windows' own `System32	ar.exe` is libarchive and
+  can, so it is now named explicitly. The symptom was
+  `Could not unpack mpv.7z. Install one of: 7z, or bsdtar` on a machine that had a capable
+  extractor all along.
+
+**Measured 2026-08-29**, `bun run dist:win:fast`, 158s:
+
+```
+CloudStream-Desktop-1.0.0-x64-setup.exe      271.9 MB
+CloudStream-Desktop-1.0.0-x64-portable.exe   271.7 MB
+```
+
+Verified inside `release/win-unpacked/resources/`: `media/` holds ffmpeg, ffprobe and mpv;
+`sidecar/` holds `cs3-sidecar.jar`, the jlinked JRE and all 58 runtime jars. That is the
+check worth repeating after any change here — a package missing either directory installs
+and launches perfectly and can run no extension.
+
+`--skip-jvm` and `--skip-media` exist for fast UI iteration and both print a warning in the
+final report, because a package missing either is not one to hand to anyone.
+
+**NSIS is configured `oneClick: false` with `perMachine: false`.** A per-user install needs no
+administrator and raises no UAC prompt, which is the difference between a download an ordinary
+person can run and one their machine refuses. The portable target writes its userData beside
+the exe, so a USB copy carries its own extensions, library and runtime. Both are x64-only and
+stated as such: an ia32 build cannot load the x64 native `.node` binaries webtorrent pulls in.
+
+**There is no code-signing certificate**, so SmartScreen will warn on first run of the
+installer. That is a purchase, not a build flag, and it should not be claimed as solved. There
+is also no `.ico` in the repo, so the package carries the default Electron icon.
 
 On a fresh clone run all three **in that order**: the sidecar build produces the android
 shim the bridge compiles against, runtime-deps puts `library-jvm` in place, and the bridge
@@ -349,7 +447,9 @@ not a layering mistake.
 | `cs3/sidecarStderr.ts` | What a line of JVM stderr *means*: level, the tag that printed it, and a cause. Pure and tested — it is the only attribution the corpus offers. |
 | `cs3/discovery.ts` | The home screen's catalogues. Stale-while-revalidate over Stremio's keyless Cinemeta catalogs (`top`/`year`/`imdbRating`, filterable by 19 genres, pageable) plus AniList for anime. Finds **nothing playable** — sources are resolved by providers when an item is opened. |
 | `cs3/titleEnricher.ts` | Resolves `Avengers End Game 720p Hindi Dubbed` to the film it is about. Conservative on purpose: a disagreeing year is disqualifying and the similarity bar is high enough that `Avengers` does not match `Avengers: Endgame`. An unenriched row is a small loss; a mislabelled one reads as data corruption. |
-| `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. |
+| `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. Warmed at launch — see below. |
+| `torrent/torrentMetadata.ts` | `.torrent` bytes cached by infohash, verified against it. A cache hit means `add()` has the piece hashes synchronously and the swarm is needed only for bytes. Also builds the `xs` mirror URLs. |
+| `torrent/dhtNodeCache.ts` | The DHT routing table, node id and port, persisted. Turns a cold bootstrap into a warm one. |
 | `torrent/indexerRegistry.ts`, `indexers/*` | 7 built-in public indexers, Torznab (Jackett/Prowlarr), and aggregators (Torrentio, apibay). |
 | `torrent/ranker.ts`, `releaseParser.ts` | Release-name parsing (quality/codec/group/season/episode) and result ranking. |
 | `externalPlayerControl.ts` | Two-way control of VLC over its HTTP interface. Capability is declared per player, never assumed — see below. |
@@ -584,6 +684,120 @@ split across ten episodes and nothing becomes playable) and **leading-bytes read
 (playability is measured as contiguous leading pieces — the container header lives at the
 start of the file — not as overall percent complete).
 
+### Torrent startup: the client was cold, and it was never the swarm (2026-08-28)
+
+Reported as: the same torrent that a hosted service (seedr) has playing in about a
+second takes tens of seconds here — metadata, peers and first bytes all slow.
+
+The comparison is worth taking seriously rather than dismissing, because the peers are
+the same on both ends. What differs is **how long each client has been running**, and
+almost the whole gap decomposes into things a desktop app was paying on every launch and
+a service pays once, ever:
+
+| Cost | Cold client | Warm service |
+|---|---|---|
+| TCP/uTP bind, DHT UDP bind, loopback HTTP bind | on the first Play | done weeks ago |
+| DHT bootstrap: DNS + round trip to `k-rpc`'s **three** hardcoded hosts | every launch | never |
+| Converging on an infohash from 3 contacts | several `find_node` rounds | ~1, from a dense table |
+| Being *reachable*: node id and DHT port both ephemeral | nobody can route to us | stable, so peers arrive |
+| The info dictionary (BEP-9, 16 KB chunks from a peer that must be found first) | 5–30s | already held |
+
+Five changes, and the first is the largest:
+
+1. **`TorrentEngine.warmUp()`, called 8s after the window opens** (`main.ts`,
+   `TORRENT_WARMUP_DELAY_MS`), exactly like `warmProviders()`. The client used to be
+   constructed lazily inside the first `startStream`, so every bind and the entire DHT
+   bootstrap sat on the critical path of a spinner. Never awaited and never fatal —
+   `startStream` still calls `ensureStarted` itself.
+2. **The DHT routing table, node id and port persist** (`dhtNodeCache.ts`, written to
+   `userData/torrent-state/`). Contacts expire after a week — a DHT contact is a
+   residential IP with a DHCP lease — but **the node id does not**, because a changing
+   identity is one no other node's routing table can hold. `dhtPort` is pinned to 6882:
+   WebTorrent defaults it to 0, which quietly cancelled the persisted id by moving the
+   port it named.
+
+   **Saved contacts go in through `DHT.addNode()`, and must never go in `bootstrap`.**
+   The first revision of this put them at the head of the bootstrap list, which reads as
+   the obvious thing and is a net regression — this section previously described it as
+   the design. `k-rpc` treats `bootstrap` as a handful of well-known entry points and
+   compares its **length** against a candidate set capped at `k` (20), on every round of
+   every iterative lookup:
+
+   ```js
+   var closest = table.closest(target, self.k)          // <= 20
+   if (!closest.length || closest.length < self.bootstrap.length) {
+     closest = self.nodes.closest(target, self.k)
+     if (!closest.length || closest.length < self.bootstrap.length) bootstrap()
+   }
+   ```
+
+   With 200 saved contacts in there that condition is permanently true, and two things
+   follow. The per-lookup `table` is discarded every round — and that is the *only* place
+   nodes learned from a `find_node` reply's compact node list are recorded, since
+   `self.nodes` is fed solely by peers that answered us directly, so the mechanism by
+   which the lookup converges is gone. And `bootstrap()` fires the whole list at the
+   socket in one burst through `socket.query`, bypassing the concurrency gate every other
+   query goes through. `addNode` with no id pings through the *queued* path and files each
+   responder under its real node id, which is what a warm routing table actually is. A
+   test pins `DHT_BOOTSTRAP_NODES.length < 20`.
+3. **`.torrent` metadata is cached on disk by infohash** (`torrentMetadata.ts`). Handed
+   a `.torrent`, `add()` has the file list, the piece length and every piece hash
+   *synchronously* — the swarm is then only needed for the bytes. Content-addressed, so
+   there is no invalidation problem, and **the read verifies its own contents**: the info
+   dictionary is sliced out and SHA-1'd, and a file that does not hash to its own name is
+   deleted rather than trusted.
+4. **A magnet carries `xs` links to public `.torrent` mirrors.** WebTorrent already
+   implements this — it fetches every `xs` in parallel with the swarm and **discards any
+   response whose infohash is not the one being resolved** (`_getMetadataFromServer`) — so
+   this module builds the URLs and adds nothing else. Writing a second race beside that
+   one would add a verification path to keep correct for no new capability. The privacy
+   arithmetic is in the module header: pressing Play already announces that infohash to a
+   dozen public trackers and across the DHT, which is more informative than one HTTPS GET;
+   it is a setting (`torrent_http_metadata_cache`) anyway.
+
+   **That last clause was not true when it was written** — the key had no writer and no UI
+   anywhere in the app, so the mirrors were on and unreachable. It is now a toggle in
+   Settings → Connection, and `TorrentEngine` takes it as a **getter** rather than a value:
+   read once at construction it would only apply after a restart, which for a privacy
+   control is close to not having one. It is consulted per magnet.
+5. **`ut_pex` is stated rather than left to the default.** On a swarm whose tracker is
+   slow or dead, PEX is frequently how the peer list actually grows.
+6. **A magnet's own `tr=` trackers are merged into `announce`, and this is a cache-hit
+   fix.** Handing `add()` a cached `.torrent` buffer discards the magnet entirely, so any
+   tracker the source named vanished on exactly the second open the cache exists to make
+   faster — a swarm that gets quieter the second time reads as the release dying.
+   `trackersFromMagnet` / `mergeTrackers` live in `indexers/base.ts` beside `buildMagnet`,
+   which they are the inverse of, and are tested there.
+
+Three timing changes fall out, and each is a trade rather than a fact:
+
+- **`METADATA_TIMEOUT_MS` 45s → 25s, with a 12s dead-swarm bail.** 45s is far longer than
+  a live swarm ever takes and it was paid *per candidate* — three dead sources in a ranked
+  list cost over two minutes before the fourth was tried. The bail measures **known** peers
+  (`_peers`), not connected ones: a peer we have heard of and cannot reach is a
+  reachability symptom with its own diagnosis in `swarmHealth.ts`, and reporting it as an
+  empty swarm sends the reader to find another source when the source was fine.
+- **`PLAYABLE_THRESHOLD_BYTES` 8 MB → 4 MB.** 8 MB is ~12s of a 5 Mbps encode, so a healthy
+  swarm was made to prove itself twice over. It cannot go much lower: below a couple of
+  megabytes the demuxer opens the container and immediately runs out, which reads as a
+  stall and sends the retry ladder after a source that was working.
+- **The tail window is container-aware** (`tailPriorityBytes`). It used to be one number
+  for everything, and it was the MP4 number. MP4/MOV/AVI genuinely cannot be opened without
+  their trailing `moov`/`idx1`; Matroska has its header and tracks at the front and only
+  loses seek accuracy, and MPEG-TS has no trailing index at all. So 4 MB of the opening
+  burst was being spent on data most streams do not block on — and MKV is the modal
+  container in this corpus.
+
+`torrentMetadata.test.mts` (28 cases, `bun run test:torrent-metadata`) pins the bencode
+reader and both caches. It is verified by mutation: moving the info dictionary's end by one
+byte fails 6 of them. The bencode reader is hand-written rather than a dependency because
+the hash must cover the **exact original byte range** — any parse-then-re-encode round trip
+through a general library normalises key order and loses it.
+
+**What this does not fix, and must not be claimed to.** Inbound reachability behind CGNAT,
+where no port forwarding helps; a genuinely dead swarm; and a host-side 403 or expired
+link. `swarmHealth.ts` still owns that diagnosis and its reasoning is unchanged.
+
 ---
 
 ## 5. The `.cs3` extension story (the part that surprises people)
@@ -632,6 +846,104 @@ What it does **not** retire, and claiming otherwise would be overclaiming: `jdep
 There is currently no host anywhere that consumes that jar, which makes setting the flag worth
 nothing to an author today. Doc 41 §6.3 argues we should be that host and that this is the
 cheapest lever we have on the upstream ecosystem's portability.
+
+### …and now it does: the cross-platform jar lane (2026-08-28)
+
+PRD-41 **M0**, built. The section above was written from upstream's Gradle source; the first
+thing this pass did was count what the *live* indexes actually publish, and the answer is
+larger than the PRD assumed:
+
+| Repository | Extensions | Publishing `jarUrl` |
+|---|---|---|
+| `recloudstream/extensions` (official) | 5 | **5** |
+| `phisher98/cloudstream-extensions-phisher` | 79 | **47** |
+| `Kraptor123/cs-kraptor` | 67 | 0 |
+
+Every jar checked matched its declared `jarHash` and `jarFileSize` exactly. So this is not a
+lane anyone is being asked to adopt — **it is one a large part of the corpus already publishes
+into, with nothing reading it.**
+
+`PluginManager.chooseArtifact` now prefers the jar wherever one exists, verifying it against
+`jarHash` (**not** `fileHash` — that is the `.cs3`'s digest and would fail every
+cross-platform install; taking the mismatch as permission to skip verification would be worse
+than not checking at all). `extensionUpdater` copies the three fields through when it
+re-resolves against the live repository, or an update would quietly move a translation-free
+extension back onto the DEX lane with nothing saying so.
+
+**The archive keeps its `.cs3` path and file name, and that is deliberate.**
+`PluginArchive.detect` classifies by **contents**, never by extension: a `.dex` member means
+the DEX lane, `.class` members mean the jar lane. The file name is chosen by whoever
+downloaded it and is exactly the sort of thing that drifts — a repository renaming artifacts,
+a path written by an older build. Keying on it would also have meant touching
+`installPathFor`, `backupPathFor`, `archivePathFor`, the updater's existence checks and the
+missing-archive report, each a place to forget.
+
+**The one real difference at load time is that a published jar has no `manifest.json`.**
+Measured: a `.cs3` contains exactly two members, `manifest.json` and `classes.dex`; the jar
+beside it contains the module's compiled output and nothing else. Android's load sequence
+reads that file *through the class loader* to learn `pluginClassName` (step 5), and on this
+lane there is no file to read. The entry class is recovered the way upstream's own build finds
+it in the first place — by scanning for the **`@CloudstreamPlugin` annotation** with ASM.
+Verified on `recloudstream/DailymotionPlugin.class`, which carries
+`Lcom/lagradost/cloudstream3/plugins/CloudstreamPlugin;` and extends `BasePlugin`. That is a
+stronger signal than `*Plugin.class`, which is a convention authors are free to ignore.
+
+Two rules in `PluginArchive` are load-bearing:
+
+- **Two annotated classes are reported, never arbitrated.** Picking whichever the zip listed
+  first would make which provider loads a property of archive ordering — reproducible on the
+  machine it was built on and nowhere else.
+- **A class file ASM cannot parse is skipped, not fatal.** It is one member of an archive that
+  may hold fifty, and losing the extension over a class the plugin never touches is the wrong
+  trade.
+
+`PluginHost.prepare` is where the branch lives, and it is the *only* place it lives: `install`
+and `load` both need a jar of bytecode, an entry class, somewhere to read resources from, and a
+failure to report, and a second copy of the load sequence for the jar lane is how the two would
+silently drift apart. On the DEX lane the classpath is still two entries (translated jar +
+original archive, so `manifest.json` resolves as it does on Android); on the jar lane it is one,
+because there is nothing else in it to resolve.
+
+**`PluginCompatibilityAnalyzer` had to learn the lane too, and this was a real defect.** A jar
+reached the existing "no `classes.dex`" branch, which reports `Unsupported` with a score of
+**0** — the exact opposite of the truth for the one lane that skips translation entirely, shown
+on the install screen. It now reports `format: 'CSJ'`, 95%, `TierA_SourceJVM`, and says why:
+upstream's build ran `jdeps` over this jar and refused to publish it if a single `android.` type
+appeared.
+
+`RUNTIME_GENERATION` is **9**. An already-provisioned sidecar has none of this: handed a jar it
+would call dex2jar, be told there is no `classes.dex`, and report a translation failure for an
+archive that never needed translating — while the upgraded host had already started preferring
+jars.
+
+`tools/e2e/provider-e2e.mjs` makes the same choice the app makes, and **`--lane cs3` forces the
+DEX artifact** so the same corpus can be run both ways and compared — which is the
+no-regression half of M0's gate. `PluginArchiveTest` (10 cases) pins detection and the
+annotation scan; the sidecar suite is 42.
+
+**Measured, `--repo phisher --plugins 6 --queries "dune,one piece"`, both lanes:**
+
+```
+                       auto (jar preferred)        --lane cs3
+AllMovieLandProvider   jar  T1_DROPIN              cs3  T1_DROPIN
+AllWish                jar  T1_DROPIN              cs3  T1_DROPIN
+Anikage                jar  T1_DROPIN              cs3  T1_DROPIN
+Anichi                 cs3  T3_DEGRADED            cs3  T3_DEGRADED   (publishes no jar)
+AniDb                  cs3  T3_DEGRADED            cs3  T3_DEGRADED   (publishes no jar)
+AniKoto                cs3  T1_DROPIN              cs3  T1_DROPIN     (publishes no jar)
+
+providers loaded 6 · answering 6 · links resolved 5 · streams with bytes 3 — PASS, identically
+```
+
+Three archives loaded through the jar lane with **zero `DexTranslator` invocations**, every
+one at `T1_DROPIN`, registering the same providers and answering the same queries as the DEX
+artifact beside it. That is M0's gate in both directions.
+
+**What this does not retire, repeated because it is the easy thing to overclaim:** `jdeps`
+flags `android.*` and nothing else. A cross-platform jar still links `library-jvm` and can still
+reach the `:app` types the bridge supplies. `LinkageAnalyzer` still runs, tiers still apply, and
+a jar can still be `T3_DEGRADED`. This removes the **bytecode** problem, not the **classpath**
+one.
 
 **Translation risk was measured, not assumed.** Against all 392 real community plugins:
 392 translated, 18,217 classes emitted, 0 verification failures, 6,617 Kotlin coroutine
@@ -2086,6 +2398,42 @@ never indices: audio track 2 is the Hindi dub on one release and the director's 
 on the next, so restoring an index would confidently select the wrong thing. The load is
 applied through the same ref the attach effect reads, or a source that attaches before the
 preference arrives spends its first seconds at full volume.
+
+### Volume had two writers and no rule (2026-08-29)
+
+Reported as: the volume slider is flaky, and past a certain point in mpv the player
+crashes. Two distinct defects with one shared cause — volume is the only control in this
+app that is written from **both** ends, and nothing said which end wins.
+
+**The crash is a range contract nobody was enforcing.** The player holds volume as a
+fraction of unity because that is what `HTMLMediaElement.volume` takes. Both other engines
+speak percentages and both can exceed unity from their *own* UI: mpv defaults
+`volume-max` to 130, and its OSC slider and the `add volume 5` bindings we install both
+walk past 100; VLC reports up to **512** on its 0–256 scale. That level arrived on a
+snapshot, was divided by 100 into something greater than 1, and was assigned to
+`video.volume` — whose setter throws `IndexSizeError` outside [0,1]. Thrown from inside a
+`useEffect`, that unmounts the player. "Turn it up past a point and it crashes."
+
+Fixed at the source in both engines rather than only at the element: mpv is launched with
+`--volume-max=100` and VLC's reported level is capped, so the two windows agree on what
+100% means — an OSC showing 120% beside a bar showing 100% is the next bug. `clampVolume`
+in `VideoPlayer` and in `mpvEngine` is the second line, kept because the element's
+contract is not something to be defensive about only where we remembered.
+
+**The flakiness is the echo, and it needs two rules, not one.** Every push to an engine
+comes back as an observed property change. Neither rule alone is enough:
+
+- **A time window** (`AUDIO_ECHO_MS`, 700 ms): while a locally-made change is settling,
+  incoming audio values are ignored. Without it, snapshots describing the volume from
+  *before* the drag still in progress arrive and yank the slider backwards under the
+  cursor.
+- **A value record** (`engineAudio`): a level that came *from* an engine is never sent
+  back *to* it. Without it, adopting mpv's level immediately re-derives a push of that
+  same level — by then several steps behind where the viewer has dragged mpv's own knob,
+  so our echo drags it backwards.
+
+`engineAudio` is cleared whenever the engine changes, or the suppression would skip the
+one push that matters — the first to a player that has never been told anything.
 
 ### External players are driven, where driving them is possible
 

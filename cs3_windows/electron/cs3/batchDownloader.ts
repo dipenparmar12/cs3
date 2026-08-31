@@ -26,7 +26,11 @@ export interface EpisodeRef {
 export interface BatchDownloadRequest {
   parentUrl: string;
   title: string;
+  parentTitle?: string;
   posterUrl?: string;
+  providerName?: string;
+  mediaType?: string;
+  year?: number;
   episodes: EpisodeRef[];
   /**
    * Preferred vertical resolution. The best source at or below this is taken,
@@ -237,9 +241,16 @@ function buildTask(
 ): DownloadTask | null {
   return buildDownloadTask(source, {
     title: request.title,
+    parentTitle: request.parentTitle || request.title,
+    episodeTitle:
+      episode.name || (episode.episode !== undefined ? `Episode ${episode.episode}` : undefined),
     mediaUrl: episode.url,
+    parentMediaUrl: request.parentUrl,
+    providerName: request.providerName || source.providerName || source.indexerName,
     posterUrl: request.posterUrl,
     season: episode.season,
     episode: episode.episode,
+    mediaType: request.mediaType,
+    year: request.year,
   });
 }

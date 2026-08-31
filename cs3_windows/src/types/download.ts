@@ -22,8 +22,16 @@ export interface DownloadTask {
   id: string;
   parentId: string; // Media item ID
   title: string;
+  /** The main series/movie title when this task represents a single episode/part. */
+  parentTitle?: string;
+  /** Original media source detail page URL (e.g. series details page) used to navigate back. */
+  parentMediaUrl?: string;
   episodeNumber?: number;
   seasonNumber?: number;
+  episodeTitle?: string;
+  mediaType?: string;
+  year?: number;
+  originalTitle?: string;
   posterUrl?: string;
   targetFilePath: string;
   link: ExtractorLink;

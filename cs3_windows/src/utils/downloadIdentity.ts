@@ -269,9 +269,16 @@ export function variantPathSegment(variant: DownloadVariant): string {
 /** Everything about the viewing context a task needs that the source does not carry. */
 export interface DownloadTaskContext {
   title: string;
+  parentTitle?: string;
   episodeTitle?: string;
   /** The title's own address — the durable half of the identity. */
   mediaUrl?: string;
+  /** The main media/series details page address (for navigating back to original source details). */
+  parentMediaUrl?: string;
+  providerName?: string;
+  mediaType?: string;
+  year?: number;
+  originalTitle?: string;
   posterUrl?: string;
   season?: number;
   episode?: number;
@@ -304,13 +311,17 @@ export function buildDownloadTask(
     ? `${context.title} - ${context.episodeTitle}`
     : context.title;
 
+  const parentMediaUrl = context.parentMediaUrl || context.mediaUrl || '';
+  const parentTitle = context.parentTitle || context.title;
+
   /**
    * The provider, not the extractor. `indexerName` for an extension link is the
    * file host the provider happened to pick ("Voe", "Server 3"), which changes
    * between resolves of one release — so keying identity or recovery on it
    * makes the same download look like a different one.
    */
-  const providerName = source?.providerName || source?.indexerName || 'Player Stream';
+  const providerName =
+    context.providerName || source?.providerName || source?.indexerName || 'Player Stream';
 
   const variant = variantFromSource(
     source ?? ({ infoHash: '', title: taskTitle } as TorrentResult),
@@ -323,10 +334,16 @@ export function buildDownloadTask(
   return {
     id: downloadTaskId(variant),
     variantKey: downloadVariantKey(variant),
-    parentId: context.mediaUrl || '',
+    parentId: parentMediaUrl || context.mediaUrl || '',
     title: taskTitle,
+    parentTitle,
+    parentMediaUrl: parentMediaUrl || undefined,
     episodeNumber: context.episode,
     seasonNumber: context.season,
+    episodeTitle: context.episodeTitle,
+    mediaType: context.mediaType,
+    year: context.year,
+    originalTitle: context.originalTitle,
     posterUrl: context.posterUrl || '',
     targetFilePath: '',
     link: {

@@ -108,5 +108,16 @@ export default defineConfig({
   ],
   server: {
     port: 5173,
+    watch: {
+      // The dev server watches this directory recursively, and on Windows that
+      // means holding an open directory handle on anything that appears under
+      // it. electron-builder extracts Electron into release/win-unpacked.tmp
+      // and renames it into place — a rename Windows refuses while a handle is
+      // open, so a packaging run started with `bun run dev` still running dies
+      // with `EPERM ... rename win-unpacked.tmp -> win-unpacked`. That names a
+      // permission it does have, and says nothing about the watcher that is
+      // actually holding it. Nothing in these directories is source anyway.
+      ignored: ['**/release/**', '**/media-runtime/**', '**/dist-electron/**'],
+    },
   },
 });

@@ -363,11 +363,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   // Navigates to Metadata Details page (synopsis, cast, season picker)
   const openMetadataPage = (item: HistoryEvent, e?: React.MouseEvent) => {
     e?.stopPropagation();
+    const targetUrl = item.parentMediaUrl || item.mediaUrl;
     onSelectMedia({
-      name: item.title,
-      url: item.mediaUrl,
-      apiName: item.source?.providerName || 'History',
-      type: (item.type as TvType) || TvType.Movie,
+      name: item.parentTitle || item.title,
+      url: targetUrl,
+      apiName: item.source?.providerName || item.metadata?.provider || 'History',
+      type: (item.type as TvType) || (item.season !== undefined ? TvType.TvSeries : TvType.Movie),
       posterUrl: item.posterUrl,
       year: item.year,
     });

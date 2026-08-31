@@ -5,8 +5,14 @@
  * The pipeline this exercises has five links and every one of them has failed
  * silently at some point, in a way that looked exactly like the one after it:
  *
- *   repository JSON → .cs3 download → DEX→JVM translation → provider `load()`
+ *   repository JSON → artifact download → (DEX→JVM translation) → `load()`
  *   → `search()` → `load()` → `loadLinks()` → bytes off the wire
+ *
+ * The translation step is parenthesised because it is now conditional. Where a
+ * repository publishes a cross-platform jar — 47 of 79 in the phisher
+ * repository, 5 of 5 in `recloudstream/extensions` `[measured]` — the app
+ * installs that instead and there is nothing to translate. `--lane cs3` forces
+ * the DEX artifact, so the same corpus can be run both ways and compared.
  *
  * The point is bytes. A provider that answers a search has proved translation
  * and HTTP work; it has not proved the link it returns plays, and "plays" is the
@@ -24,6 +30,7 @@
  *   node tools/e2e/provider-e2e.mjs --repo MegaRepo --plugins 3 --queries "one piece,dune"
  *   node tools/e2e/provider-e2e.mjs --list
  *   node tools/e2e/provider-e2e.mjs --json report.json
+ *   node tools/e2e/provider-e2e.mjs --lane cs3     # force the DEX artifact
  *
  * Exit code is 0 only if at least one provider searched *and* at least one
  * stream delivered bytes.
@@ -102,6 +109,11 @@ function parseArgs(argv) {
     keep: false,
     java: null,
     only: null,
+    /**
+     * `auto` mirrors the app: the cross-platform jar wherever one is published,
+     * the `.cs3` otherwise. `--lane cs3` pins the DEX artifact.
+     */
+    lane: 'auto',
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -111,6 +123,13 @@ function parseArgs(argv) {
     else if (arg === '--repo') args.repo = argv[++i];
     else if (arg === '--plugins') args.plugins = Math.max(1, parseInt(argv[++i], 10) || 2);
     else if (arg === '--json') args.json = argv[++i];
+    /**
+     * Which artifact to install. `auto` (default) takes the cross-platform jar
+     * wherever a repository publishes one, exactly as the app now does; `cs3`
+     * forces the DEX archive, which is how the no-regression half of PRD-41 M0
+     * is measured — the same corpus, both ways, compared.
+     */
+    else if (arg === '--lane') args.lane = argv[++i] === 'cs3' ? 'cs3' : 'auto';
     // Names a specific extension, which `--plugins N` cannot reach: it takes
     // the first N as published, and a failing extension is as likely to be
     // sixtieth as second. Reproducing a user's report meant running the whole
@@ -391,8 +410,25 @@ async function listPlugins(document) {
   return plugins;
 }
 
-async function downloadPlugin(plugin, dir) {
-  const response = await fetch(plugin.url, {
+/**
+ * Which artifact to fetch, mirroring `PluginManager.chooseArtifact`.
+ *
+ * The harness has to make the same choice the app makes or it stops measuring
+ * the app. `--lane cs3` forces the DEX artifact, which is what proves M0's
+ * other half: the jar lane must not regress the archives that stay on DEX, and
+ * the only way to show that is to run the same corpus both ways.
+ */
+function chooseArtifact(plugin, lane) {
+  if (lane !== 'cs3' && plugin.jarUrl) {
+    return { url: plugin.jarUrl, hash: plugin.jarHash, lane: 'jar', ext: 'csj' };
+  }
+  return { url: plugin.url, hash: plugin.fileHash, lane: 'cs3', ext: 'cs3' };
+}
+
+async function downloadPlugin(plugin, dir, lane) {
+  const artifact = chooseArtifact(plugin, lane);
+
+  const response = await fetch(artifact.url, {
     signal: AbortSignal.timeout(60_000),
     headers: { 'User-Agent': 'CloudStream3-Desktop-E2E' },
   });
@@ -401,18 +437,20 @@ async function downloadPlugin(plugin, dir) {
 
   // Matches `PluginManager.installPlugin`, prefix strip included: repositories
   // publish the digest as `sha256-<hex>`, and comparing the raw string fails
-  // against a perfectly good download.
-  if (plugin.fileHash) {
+  // against a perfectly good download. The hash checked is the one published
+  // for *this* artifact — a jar verified against `fileHash` would fail every
+  // time, and skipping the check on mismatch would be worse than not checking.
+  if (artifact.hash) {
     const digest = createHash('sha256').update(buffer).digest('hex');
-    const expected = String(plugin.fileHash).replace(/^sha256-/i, '').toLowerCase();
+    const expected = String(artifact.hash).replace(/^sha256-/i, '').toLowerCase();
     if (expected !== digest) {
       throw new Error(`SHA-256 mismatch (published ${expected.slice(0, 12)}…, got ${digest.slice(0, 12)}…)`);
     }
   }
 
-  const file = path.join(dir, `${plugin.internalName}.cs3`);
+  const file = path.join(dir, `${plugin.internalName}.${artifact.ext}`);
   fs.writeFileSync(file, buffer);
-  return { file, bytes: buffer.length };
+  return { file, bytes: buffer.length, lane: artifact.lane };
 }
 
 // --- streaming proof --------------------------------------------------------
@@ -592,8 +630,9 @@ async function main() {
         const record = { internalName: plugin.internalName, name: plugin.name };
         entry.plugins.push(record);
         try {
-          const { file, bytes } = await downloadPlugin(plugin, archives);
+          const { file, bytes, lane } = await downloadPlugin(plugin, archives, args.lane);
           record.bytes = bytes;
+          record.lane = lane;
 
           const result = await sidecar.call('load', {
             pluginId: plugin.internalName,
@@ -608,7 +647,7 @@ async function main() {
           record.tier = result.result?.tier;
           record.providers = providers.map((p) => p.name ?? String(p));
           ok(
-            `${plugin.internalName}: ${record.tier}, ${providers.length} provider(s)` +
+            `${plugin.internalName}: ${record.tier} [${lane}], ${providers.length} provider(s)` +
               (providers.length > 0 ? ` — ${record.providers.join(', ')}` : '')
           );
           for (const provider of providers) {

@@ -274,15 +274,103 @@ public final class PluginHost {
     }
 
     /**
-     * Translates, analyses and — when the runtime classpath allows — loads a
-     * {@code .cs3}.
+     * What the two lanes have in common, once each has done its own preparation.
+     *
+     * <p>{@link #install} and {@link #load} both need the same four things — a
+     * jar of JVM bytecode, an entry class, somewhere to read resources from, and
+     * a failure to report if any of that is missing. Where those come from is
+     * the only thing that differs, so the branch lives in {@link #prepare} and
+     * nowhere else. Adding a second copy of the load sequence for the jar lane
+     * would be how the two silently drift apart.
+     */
+    private record Prepared(
+            PluginArchive.Lane lane,
+            boolean ok,
+            Path codeJar,
+            /** The archive resources are read from, or null when there are none. */
+            Path resourceArchive,
+            /** Known up front on the jar lane; read from manifest.json on the DEX lane. */
+            String entryClass,
+            String name,
+            Integer version,
+            boolean requiresResources,
+            boolean fromCache,
+            int dexCount,
+            int classCount,
+            String failureKind,
+            String failureDetail) {
+    }
+
+    /**
+     * Gets an archive to the point where it is a jar with a known entry class.
+     *
+     * <p>On the DEX lane that is dex2jar plus the manifest the translator read
+     * on the way past. On the jar lane it is neither: the bytecode is already
+     * JVM bytecode, and the entry class is found by the {@code @CloudstreamPlugin}
+     * annotation because the published jar carries no {@code manifest.json}.
+     * See {@link PluginArchive}.
+     */
+    private Prepared prepare(Path archive) {
+        PluginArchive.Lane lane = PluginArchive.detect(archive);
+
+        if (lane == PluginArchive.Lane.DEX) {
+            DexTranslator.Outcome t = translator.translate(archive);
+            return new Prepared(
+                    lane, t.ok(), t.translatedJar(),
+                    // Both entries, and both are needed. dex2jar converts
+                    // classes.dex and nothing else, so the translated jar holds
+                    // the code but none of the archive's other members —
+                    // including manifest.json, which the load sequence has to
+                    // read through this very loader.
+                    archive,
+                    t.manifestClassName(), t.manifestName(), t.manifestVersion(),
+                    t.requiresResources(), t.fromCache(), t.dexCount(), t.classCount(),
+                    t.failureKind(), t.failureDetail());
+        }
+
+        int classCount = PluginArchive.countClasses(archive);
+        PluginArchive.JarManifest manifest;
+        try {
+            manifest = PluginArchive.readJarManifest(archive);
+        } catch (IOException e) {
+            return new Prepared(lane, false, null, null, null, null, null, false, false,
+                    0, classCount, "ARCHIVE_UNREADABLE", e.toString());
+        }
+
+        if (manifest.entryClass() == null) {
+            // Named precisely, because the two causes have different owners. No
+            // annotated class means the jar was not built from a CloudStream
+            // module; several means the author shipped two entry points and the
+            // build should have refused it.
+            String detail = manifest.candidates().isEmpty()
+                    ? "No class in this jar carries @CloudstreamPlugin, so there is no entry point to construct."
+                    : "This jar declares more than one @CloudstreamPlugin entry point: "
+                            + String.join(", ", manifest.candidates());
+            return new Prepared(lane, false, null, null, null, null, null, false, false,
+                    0, classCount, "NO_PLUGIN_ENTRY", detail);
+        }
+
+        // No resource archive: the published jar is the module's compiled output
+        // and carries nothing to read through the loader. Passing the jar twice
+        // would only make the classpath longer.
+        return new Prepared(lane, true, archive, null, manifest.entryClass(),
+                null, null, false, false, 0, classCount, null, null);
+    }
+
+    /**
+     * Prepares, analyses and — when the runtime classpath allows — loads an
+     * extension archive.
      *
      * @param cs3 the archive, retained byte-for-byte (DROP-3)
      */
     public Map<String, Object> install(String pluginId, Path cs3) {
-        DexTranslator.Outcome t = translator.translate(cs3);
+        Prepared t = prepare(cs3);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("pluginId", pluginId);
+        out.put("lane", t.lane().name());
+        // Kept spelled "translated" for the host's existing reader. It has always
+        // meant "prepared far enough to analyse"; on the jar lane nothing was
+        // translated and that is precisely the point, which `lane` now says.
         out.put("translated", t.ok());
         out.put("fromCache", t.fromCache());
         out.put("dexCount", t.dexCount());
@@ -295,15 +383,15 @@ public final class PluginHost {
             return out;
         }
 
-        out.put("entryClass", t.manifestClassName());
-        out.put("name", t.manifestName());
-        out.put("version", t.manifestVersion());
+        out.put("entryClass", t.entryClass());
+        out.put("name", t.name());
+        out.put("version", t.version());
         out.put("requiresResources", t.requiresResources());
-        out.put("translatedJar", t.translatedJar().toString());
+        out.put("translatedJar", t.codeJar().toString());
 
         LinkageAnalyzer.Report report;
         try {
-            report = new LinkageAnalyzer(shared()).analyze(t.translatedJar(), t.manifestClassName());
+            report = new LinkageAnalyzer(shared()).analyze(t.codeJar(), t.entryClass());
         } catch (IOException e) {
             out.put("tier", "T4_BLOCKED");
             out.put("failureKind", "ANALYSIS_FAILED");
@@ -331,7 +419,7 @@ public final class PluginHost {
             throw new IllegalStateException(classpathProblem());
         }
 
-        DexTranslator.Outcome t = translator.translate(cs3);
+        Prepared t = prepare(cs3);
         if (!t.ok()) {
             throw new IllegalStateException(t.failureKind() + ": " + t.failureDetail());
         }
@@ -345,28 +433,48 @@ public final class PluginHost {
 
         // Step 4 — the plugin's own loader.
         //
-        // Two entries, and both are needed. dex2jar converts `classes.dex` and
-        // nothing else, so the translated jar holds the code but none of the
-        // archive's other members — including `manifest.json`, which step 5 has
-        // to read through this very loader. On Android the `.cs3` *is* the
-        // classpath entry and its resources resolve naturally; adding the
-        // original archive alongside the translated classes reproduces that,
-        // and leaves the archive itself untouched (DROP-3).
+        // On the DEX lane there are two entries and both are needed: dex2jar
+        // converts `classes.dex` and nothing else, so the translated jar holds
+        // the code but none of the archive's other members — including
+        // `manifest.json`, which step 5 has to read through this very loader. On
+        // Android the `.cs3` *is* the classpath entry and its resources resolve
+        // naturally; adding the original archive alongside the translated
+        // classes reproduces that, and leaves the archive untouched (DROP-3).
+        //
+        // On the jar lane there is one, because the jar is the module's compiled
+        // output and there is nothing else in it to resolve.
+        List<URL> classpath = new ArrayList<>();
+        classpath.add(t.codeJar().toUri().toURL());
+        if (t.resourceArchive() != null && !t.resourceArchive().equals(t.codeJar())) {
+            classpath.add(t.resourceArchive().toUri().toURL());
+        }
+
         PluginClassLoader loader = new PluginClassLoader(
-                pluginId,
-                new URL[]{ t.translatedJar().toUri().toURL(), cs3.toUri().toURL() },
-                shared());
+                pluginId, classpath.toArray(new URL[0]), shared());
 
         // Step 5 — read manifest.json *through* the loader, not from the zip.
-        String manifestJson;
-        try (InputStream in = loader.getResourceAsStream("manifest.json")) {
-            if (in == null) throw new IllegalStateException("No manifest.json visible to the class loader.");
-            manifestJson = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        //
+        // DEX lane only. A cross-platform jar has no manifest.json at all
+        // [measured], so its entry class came from the @CloudstreamPlugin
+        // annotation during `prepare` and its name and version come from the
+        // repository entry the host already holds. Demanding a manifest here
+        // would refuse every archive on that lane for a file upstream's build
+        // never puts in it.
+        String entry = t.entryClass();
+        String name = t.name();
+        Integer version = t.version();
+
+        if (t.lane() == PluginArchive.Lane.DEX) {
+            String manifestJson;
+            try (InputStream in = loader.getResourceAsStream("manifest.json")) {
+                if (in == null) throw new IllegalStateException("No manifest.json visible to the class loader.");
+                manifestJson = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            }
+            entry = Json.string(manifestJson, "pluginClassName");
+            name = Json.string(manifestJson, "name");
+            version = Json.integer(manifestJson, "version");
+            if (entry == null) throw new IllegalStateException("manifest.json has no pluginClassName.");
         }
-        String entry = Json.string(manifestJson, "pluginClassName");
-        String name = Json.string(manifestJson, "name");
-        Integer version = Json.integer(manifestJson, "version");
-        if (entry == null) throw new IllegalStateException("manifest.json has no pluginClassName.");
 
         // Steps 6 and 7 — load the entry class and construct it reflectively.
         Class<?> pluginClass = loader.loadClass(entry);
@@ -393,7 +501,7 @@ public final class PluginHost {
         }
 
         LinkageAnalyzer.Report report =
-                new LinkageAnalyzer(shared()).analyze(t.translatedJar(), entry);
+                new LinkageAnalyzer(shared()).analyze(t.codeJar(), entry);
 
         return new Loaded(pluginId, entry, name, version, providers, report);
     }

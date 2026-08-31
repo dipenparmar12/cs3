@@ -233,8 +233,19 @@ export class VlcController {
       positionSeconds: Number.isFinite(time) ? time : 0,
       durationSeconds: Number.isFinite(length) ? length : 0,
       paused: state === 'paused',
-      // VLC's scale is 0–256 for 0–100%, and reports beyond it for amplification.
-      volume: Math.round((volume / 256) * 100),
+      /**
+       * VLC's scale is 0–256 for 0–100% and it reports **up to 512** when the
+       * user amplifies past unity — which `setVolume` below cannot even ask
+       * for, but VLC's own interface and keyboard can.
+       *
+       * Reported unclamped, that 200% arrived in the renderer, was divided by
+       * 100 into a 0–1 volume of `2.0`, and was assigned to
+       * `HTMLMediaElement.volume`, which throws `IndexSizeError` outside [0,1]
+       * and took the player down. Every snapshot consumer here assumes a
+       * percentage of unity, so the boost is reported as the ceiling rather
+       * than as a number nothing downstream can hold.
+       */
+      volume: Number.isFinite(volume) ? Math.min(100, Math.round((volume / 256) * 100)) : 100,
       muted: volume === 0,
       error: null,
     };

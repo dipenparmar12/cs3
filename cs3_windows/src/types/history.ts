@@ -66,12 +66,15 @@ export interface HistoryEvent {
   id: string;
   mediaKey: string;
   title: string;
+  parentTitle?: string;
   originalTitle?: string;
   year?: number;
   type?: TvType | string;
   posterUrl?: string;
   backdropUrl?: string;
   mediaUrl: string;
+  /** Main media details URL (e.g. series details page) used to navigate back to origin. */
+  parentMediaUrl?: string;
   season?: number;
   episode?: number;
   episodeTitle?: string;

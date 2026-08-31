@@ -17,6 +17,9 @@ interface SeasonDownloadDialogProps {
   title: string;
   parentUrl: string;
   posterUrl?: string;
+  providerName?: string;
+  mediaType?: string;
+  year?: number;
   episodes: Episode[];
   /** Season currently shown in the detail view; the default scope. */
   activeSeason: number;
@@ -36,6 +39,9 @@ export const SeasonDownloadDialog: React.FC<SeasonDownloadDialogProps> = ({
   title,
   parentUrl,
   posterUrl,
+  providerName,
+  mediaType,
+  year,
   episodes,
   activeSeason,
   onClose,
@@ -83,6 +89,9 @@ export const SeasonDownloadDialog: React.FC<SeasonDownloadDialogProps> = ({
       parentUrl,
       title,
       posterUrl,
+      providerName,
+      mediaType,
+      year,
       episodes: selected.map((e) => ({
         url: e.url,
         name: e.name,

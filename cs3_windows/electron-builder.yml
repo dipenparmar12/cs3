@@ -1,0 +1,104 @@
+# Packaging configuration for CloudStream Desktop.
+#
+# This lives here rather than in package.json's "build" field because the
+# reasoning below is worth keeping next to the settings it explains, and
+# electron-builder 26 rejects any key it does not recognise — including the
+# "//comment" keys the JSON version used, which failed the whole build with
+# "configuration has an unknown property '//extraResources'". YAML has real
+# comments; JSON does not.
+#
+# Build with `bun run dist:win` (tools/package/build-installer.mjs), which
+# produces everything referenced here before invoking electron-builder.
+
+appId: com.lagradost.cloudstream3.desktop
+productName: CloudStream 3 Desktop
+
+directories:
+  output: release
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - node_modules/**/*
+
+# The end user installs one thing and streams. That means the JVM, the sidecar
+# and the whole provider classpath ship inside the app — SidecarSupervisor
+# looks for exactly these paths under resources/sidecar when app.isPackaged,
+# and MpvEngine/MediaInspector look under resources/media. A package missing
+# either is a complete, installable app that can run no extension and decode
+# nothing the browser cannot, with nothing on screen saying so.
+extraResources:
+  - from: ../sidecar/dist
+    to: sidecar
+  - from: media-runtime
+    to: media
+
+# Native .node binaries cannot be loaded from inside an asar archive, and
+# webtorrent's transitive native deps must be unpacked or the app fails at
+# startup exactly as it does when they are bundled.
+asarUnpack:
+  - '**/*.node'
+  - node_modules/node-datachannel/**
+  - node_modules/utp-native/**
+
+win:
+  # x64 explicitly: an ia32 build cannot load the x64 native .node binaries
+  # webtorrent pulls in, and electron-builder will happily attempt one if the
+  # default ever changes.
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+# oneClick:false with perMachine:false is what makes this installable by
+# anyone on any machine: a per-user install needs no administrator and raises
+# no UAC prompt, which is the difference between a download an ordinary person
+# can run and one their machine refuses. allowElevation stays true so someone
+# who *wants* a machine-wide install can still choose it.
+#
+# deleteAppDataOnUninstall is false deliberately: %APPDATA% holds the installed
+# extensions, the library, watch progress and the provisioned runtime, and
+# erasing all of it on an uninstall-to-reinstall is a data loss the user did
+# not ask for.
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: CloudStream 3 Desktop
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  artifactName: CloudStream-Desktop-${version}-${arch}-setup.${ext}
+
+# The portable target unpacks to a fixed directory name so successive runs
+# reuse one extraction rather than filling %TEMP% with ~400 MB copies.
+portable:
+  unpackDirName: CloudStream3Desktop
+  requestExecutionLevel: user
+  artifactName: CloudStream-Desktop-${version}-${arch}-portable.${ext}
+
+# The payload is dominated by a jlinked JRE, ffmpeg and mpv — all highly
+# compressible and all shipped on every download.
+compression: maximum
+
+# @electron/rebuild is off because nothing here needs it, and leaving it on
+# fails the build on any machine without Visual Studio.
+#
+# Measured on this dependency tree: every native module here is N-API, whose
+# ABI is stable across Node and Electron, so there is nothing for a rebuild to
+# change. node-datachannel declares napi_versions [8]; utp-native, bufferutil
+# and utf-8-validate all ship prebuilds/win32-x64. @electron/rebuild ran
+# node-gyp against bufferutil anyway and failed for want of Visual Studio —
+# rebuilding from source a module that already has the prebuild it needs.
+#
+# bufferutil and utf-8-validate are also *optional* dependencies of
+# bittorrent-tracker — native accelerators for ws's masking and UTF-8
+# validation — so even losing them costs some throughput on tracker
+# WebSockets rather than a feature.
+#
+# If a genuinely non-N-API native dependency is ever added, this must go back
+# to true and the build machine needs the C++ toolchain.
+npmRebuild: false

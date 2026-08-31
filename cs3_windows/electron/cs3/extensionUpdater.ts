@@ -308,6 +308,19 @@ export class ExtensionUpdater {
         plugin.fileHash = fresh.fileHash;
         plugin.url = fresh.url;
         plugin.version = Number(fresh.version ?? update.availableVersion);
+        /**
+         * The cross-platform artifact travels with the rest, or an update
+         * quietly moves the extension back to the DEX lane.
+         *
+         * The candidate above is built from a stored update record, which
+         * predates these fields — so without copying them here an install that
+         * was running translation-free would, on its next version, start being
+         * translated again with nothing anywhere saying so. `chooseArtifact`
+         * reads exactly these three.
+         */
+        plugin.jarUrl = fresh.jarUrl;
+        plugin.jarHash = fresh.jarHash;
+        plugin.jarFileSize = fresh.jarFileSize;
       }
     } catch {
       // Proceed without a hash rather than blocking the update; the install path

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Play, ArrowLeft, Loader2, AlertTriangle, ListVideo, Search,
+  Play, ArrowLeft, Loader2, AlertTriangle, ListVideo, Search, Power, PowerOff,
 } from 'lucide-react';
 import type { SearchResponse, Episode } from '../types/api';
 import { TvType } from '../types/api';
@@ -228,6 +228,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [detail, setDetail] = useState<DetailData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [disabledProvider, setDisabledProvider] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
 
   /** Whether this page is in the user's saved list, and where it came from. */
   const [saved, setSaved] = useState(false);
@@ -316,6 +318,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
        */
       setIsLoading(true);
       setLoadError(null);
+      setDisabledProvider(null);
       setDetail(null);
       setFellBackTo(null);
 
@@ -349,6 +352,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         if (response.ok && response.detail) {
           const data = response.detail as DetailData;
           setDetail(data);
+          setDisabledProvider(null);
           window.cloudstream?.recordTitleOutcome?.(mediaItem.url, 'played');
 
           // Record detail opened event in history (Unchecked until user plays/downloads)
@@ -384,6 +388,19 @@ export const DetailView: React.FC<DetailViewProps> = ({
         reasons.length > 0 ? [...new Set(reasons)].join(' · ') : 'No source could open this title.';
       setLoadError(combined);
 
+      // Detect whether a provider is disabled so we can offer an immediate one-click confirmation to enable it
+      const disabledMatch = combined.match(/extension provider "([^"]+)" is currently disabled/i);
+      if (disabledMatch && disabledMatch[1]) {
+        setDisabledProvider(disabledMatch[1]);
+      } else if (/disabled/i.test(combined)) {
+        const extMatch = mediaItem.url.match(/^cs3ext:\/\/([^/]+)/);
+        if (extMatch && extMatch[1]) {
+          setDisabledProvider(decodeURIComponent(extMatch[1]));
+        } else if (mediaItem.apiName && mediaItem.apiName !== 'Cinemeta' && mediaItem.apiName !== 'Indexer') {
+          setDisabledProvider(mediaItem.apiName);
+        }
+      }
+
       /**
        * Remembered, and attributed.
        *
@@ -406,7 +423,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [mediaItem.url, mediaItem.alternates]);
+  }, [mediaItem.url, mediaItem.alternates, reloadToken]);
 
   /**
    * A background refresh landing while this title is open.
@@ -742,10 +759,20 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
       const task = buildDownloadTask(source, {
         title: detail.name,
+        parentTitle: detail.name,
+        episodeTitle: episode
+          ? (episode.name ? episode.name : `Episode ${episode.episode ?? ''}`)
+          : undefined,
         mediaUrl: episode?.url || detail.url,
-        posterUrl: detail.posterUrl,
+        parentMediaUrl: detail.url,
+        providerName:
+          mediaItem.apiName || (detail as any).apiName || source.providerName || source.indexerName,
+        posterUrl: episode?.posterUrl || detail.posterUrl,
         season: episode?.season,
         episode: episode?.episode,
+        mediaType: detail.type,
+        year: detail.year,
+        originalTitle: mediaItem.originalTitle || (detail as any).originalTitle,
         // A source with no address at all is not downloadable; `infoHash` was
         // used here and is not a URL, so it produced a task that could only
         // fail once it reached an engine.
@@ -1016,6 +1043,79 @@ export const DetailView: React.FC<DetailViewProps> = ({
   }
 
   if (loadError || !detail) {
+    if (disabledProvider) {
+      return (
+        <div className="detail-view detail-view--state">
+          <div
+            style={{
+              maxWidth: '520px',
+              padding: '2.2rem 2rem',
+              borderRadius: '16px',
+              backgroundColor: 'rgba(25, 30, 42, 0.95)',
+              border: '1px solid rgba(245, 158, 11, 0.35)',
+              boxShadow: '0 12px 36px rgba(0, 0, 0, 0.45)',
+              textAlign: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '1.2rem',
+            }}
+          >
+            <div
+              style={{
+                width: '56px',
+                height: '56px',
+                borderRadius: '50%',
+                backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#fbbf24',
+              }}
+            >
+              <PowerOff size={30} />
+            </div>
+            <div>
+              <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.25rem', color: '#fff', fontWeight: 600 }}>
+                Extension “{disabledProvider}” is Disabled
+              </h3>
+              <p style={{ margin: 0, fontSize: '0.88rem', color: 'rgba(226, 232, 240, 0.8)', lineHeight: 1.55 }}>
+                This media was retrieved from the <strong>{disabledProvider}</strong> extension, which is currently switched off. Would you like to enable it and load the media details?
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '0.85rem', width: '100%', justifyContent: 'center', marginTop: '0.4rem' }}>
+              <button
+                className="btn btn-primary"
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.65rem 1.25rem' }}
+                onClick={async () => {
+                  if (!window.cloudstream) return;
+                  setIsLoading(true);
+                  setLoadError(null);
+                  setDisabledProvider(null);
+                  await window.cloudstream.setProviderEnabled(disabledProvider, true);
+                  setReloadToken((t) => t + 1);
+                }}
+              >
+                <Power size={17} /> Enable “{disabledProvider}” & Load
+              </button>
+              <button className="btn btn-ghost" onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <ArrowLeft size={16} /> Back
+              </button>
+            </div>
+            {onSearch && (
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: '0.8rem', color: 'var(--text-subtle)', marginTop: '0.2rem' }}
+                onClick={() => onSearch(mediaItem.originalTitle || mediaItem.name)}
+              >
+                <Search size={14} /> Search other providers for “{mediaItem.name}”
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="detail-view detail-view--state">
         <AlertTriangle size={32} />
@@ -1270,6 +1370,9 @@ export const DetailView: React.FC<DetailViewProps> = ({
           title={detail.name}
           parentUrl={detail.url}
           posterUrl={detail.posterUrl}
+          providerName={mediaItem.apiName || (detail as any).apiName}
+          mediaType={detail.type}
+          year={detail.year}
           episodes={detail.episodes ?? []}
           activeSeason={activeSeason}
           onClose={() => setSeasonDownloadOpen(false)}

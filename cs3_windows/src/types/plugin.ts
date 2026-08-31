@@ -25,6 +25,24 @@ export interface SitePlugin {
   iconUrl?: string;
   fileSize?: number;
   fileHash?: string;
+  /**
+   * The cross-platform artifact, when the author opted in.
+   *
+   * Upstream's Gradle plugin has carried `isCrossPlatform` for some time: set
+   * it and `:make` emits a plain JVM **jar** beside the `.cs3`, runs
+   * `jdeps --print-module-deps` over it, and **fails the build** if the output
+   * mentions `android.` — then writes these three fields into the published
+   * index. They have been in `plugins.json` all along and nothing read them.
+   *
+   * Measured against the live indexes on 2026-08-28: **5 of 5** extensions in
+   * `recloudstream/extensions` and **47 of 79** in `phisher98`'s repository
+   * publish a `jarUrl`, and every one checked matched its declared hash and
+   * size. So this is not a lane we are asking anyone to adopt — it is one a
+   * large part of the corpus already publishes into.
+   */
+  jarUrl?: string;
+  jarHash?: string;
+  jarFileSize?: number;
 }
 
 export interface RepositoryData {
@@ -36,7 +54,13 @@ export interface RepositoryData {
 export interface PluginCompatibilityReport {
   pluginName: string;
   internalName: string;
-  format: 'CS3' | 'JS' | 'KMP';
+  /**
+   * `CSJ` is the cross-platform jar lane — JVM bytecode published by upstream's
+   * own build and verified by it to name no `android.*` type. It is a distinct
+   * format rather than a flag on `CS3` because the two go through different
+   * pipelines: one is translated at install and one is not.
+   */
+  format: 'CS3' | 'CSJ' | 'JS' | 'KMP';
   compatibilityScore: number; // 0 to 100
   confidence: 'High' | 'Medium' | 'Low' | 'Unsupported';
   recommendedTier: PluginRuntimeTier;
