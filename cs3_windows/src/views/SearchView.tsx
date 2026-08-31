@@ -6,6 +6,7 @@ import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/res
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, Search, SearchX, Target, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
+import { partitionDeadRows } from '../utils/deadRows';
 import { FacetMenu, type FacetOption } from '../components/FacetMenu';
 import { CopyErrorButton } from '../components/CopyErrorButton';
 import { useTitleEnrichment } from '../components/useTitleEnrichment';
@@ -453,27 +454,55 @@ const Grid: React.FC<{
   onPlayDirectly?: (item: SearchResponse) => void;
 }> = ({ items, onSelectMedia, onPlayDirectly }) => {
   const outcomes = useTitleOutcomes();
+  /**
+   * Per mount, not persisted.
+   *
+   * "Show me the dead ones too" is a decision about this search, not a
+   * preference — and a stored one would leave someone permanently looking at
+   * rows they asked to see once, with nothing on screen saying why the page got
+   * longer.
+   */
+  const [showDead, setShowDead] = useState(false);
+  const { visible, hidden } = partitionDeadRows(items, outcomes, {
+    hideDeadRows: !showDead,
+  });
+
   return (
-  <div
-    style={{
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-      gap: '1.25rem',
-    }}
-  >
-    {items.map((item, index) => {
-      if (!item?.url) return null;
-      return (
-        <PosterCard
-          key={`${item.url}-${index}`}
-          item={item}
-          onSelectMedia={onSelectMedia}
-          onPlayDirectly={onPlayDirectly}
-          outcome={outcomes[item.url]}
-        />
-      );
-    })}
-    </div>
+    <>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+          gap: '1.25rem',
+        }}
+      >
+        {visible.map((item, index) => (
+          <PosterCard
+            key={`${item.url}-${index}`}
+            item={item}
+            onSelectMedia={onSelectMedia}
+            onPlayDirectly={onPlayDirectly}
+            outcome={outcomes[item.url]}
+          />
+        ))}
+      </div>
+
+      {/*
+        Says what is being held back, and offers it.
+
+        A results page quietly shorter than the search found is
+        indistinguishable from a search that found less — which is the same
+        complaint this filter exists to answer, arriving from the other
+        direction. So the count is stated and the rows are one click away.
+      */}
+      {hidden.length > 0 && (
+        <button type="button" className="search-dead-rows" onClick={() => setShowDead(true)}>
+          {hidden.length} result{hidden.length === 1 ? '' : 's'} hidden — {' '}
+          {hidden.length === 1 ? 'it had' : 'they had'} no playable source last time. Show{' '}
+          {hidden.length === 1 ? 'it' : 'them'} anyway
+        </button>
+      )}
+    </>
   );
 };
 

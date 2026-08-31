@@ -6166,3 +6166,21 @@
   color: rgba(255, 255, 255, 0.35);
   pointer-events: none;
 }
+
+/* The "N results hidden" line under a filtered grid. A link rather than a
+   button in appearance: it is an offer, not the page's primary action. */
+.search-dead-rows {
+  align-self: flex-start;
+  margin-top: 1rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--border-color);
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.search-dead-rows:hover { color: #fff; border-color: rgba(255, 255, 255, 0.28); }
