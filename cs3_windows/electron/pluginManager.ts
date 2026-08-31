@@ -12,7 +12,14 @@ import path from 'path';
 import crypto from 'crypto';
 import { app } from 'electron';
 import type { SitePlugin, PluginData, PluginCompatibilityReport } from '../src/types/plugin';
-import type { SearchResponse, LoadResponse, ExtractorLink } from '../src/types/api';
+import type {
+  SearchResponse,
+  LoadResponse,
+  ExtractorLink,
+  ProviderCatalog,
+  ProviderCatalogPage,
+  ProviderCatalogSection,
+} from '../src/types/api';
 import { PluginCompatibilityAnalyzer } from './pluginAnalyzer';
 import { fetchBuffer, fetchJson } from './torrent/http';
 import type { DatastoreManager } from './datastore';
@@ -2714,6 +2721,170 @@ export class PluginManager {
    * The batch form, for callers with nothing to do with a partial answer —
    * source discovery, which cannot start a stream from half a result set.
    */
+  /**
+   * What a provider offers to browse.
+   *
+   * Cheap on the sidecar — `mainPage` is a declared property, not a request —
+   * but it still needs the plugin *loaded*, because the property lives on the
+   * provider instance. That is the whole cost of this call and the reason it is
+   * separate from {@link loadCatalogPage}: opening a provider's browse screen
+   * pays one activation, and every row after that is a fetch.
+   */
+  public async loadCatalog(providerName: string): Promise<ProviderCatalog> {
+    const unavailable = (reason: string): ProviderCatalog => ({
+      provider: providerName,
+      hasMainPage: false,
+      sections: [],
+      unavailableReason: reason,
+    });
+
+    if (!this.isProviderEnabled(providerName)) {
+      return unavailable(this.explainMissingProvider(providerName));
+    }
+
+    await this.ensureProviderActive(providerName);
+    const response = await this.sidecar.call(
+      'providerMainPageSections',
+      { provider: providerName },
+      PROVIDER_CALL_TIMEOUT_MS
+    );
+
+    if (!response.ok) {
+      const reason =
+        response.errorKind === 'PROVIDER_NOT_LOADED'
+          ? this.explainMissingProvider(providerName)
+          : (response.error ?? 'The extension runtime did not answer.');
+      return unavailable(reason);
+    }
+
+    const parsed = safeParse(String(response.result?.json ?? ''));
+    if (!parsed?.ok) {
+      return unavailable(
+        typeof parsed?.error === 'string'
+          ? parsed.error
+          : 'The provider returned no usable answer.'
+      );
+    }
+
+    const sections: ProviderCatalogSection[] = Array.isArray(parsed.sections)
+      ? (parsed.sections as Array<Record<string, unknown>>)
+          .filter((raw) => typeof raw?.name === 'string')
+          .map((raw) => ({
+            name: String(raw.name),
+            data: typeof raw.data === 'string' ? raw.data : '',
+            horizontalImages: raw.horizontalImages === true,
+          }))
+      : [];
+
+    const hasMainPage = parsed.hasMainPage === true;
+    return {
+      provider: providerName,
+      hasMainPage,
+      sections,
+      unavailableReason:
+        hasMainPage && sections.length > 0
+          ? undefined
+          : `${providerName} does not publish a browsable catalogue — search it instead.`,
+    };
+  }
+
+  /**
+   * One page of one catalogue row.
+   *
+   * Counted through the analytics like a search, and for the same reason: a
+   * provider whose catalogue times out is a provider that will time out when
+   * someone tries to play from it. `empty` stays distinct from `failure` here
+   * too — a row that has run out of pages has not malfunctioned.
+   */
+  public async loadCatalogPage(
+    providerName: string,
+    section: ProviderCatalogSection,
+    page: number
+  ): Promise<ProviderCatalogPage> {
+    const requested = Math.max(1, Math.floor(page) || 1);
+    const empty = (): ProviderCatalogPage => ({
+      provider: providerName,
+      section: section.name,
+      page: requested,
+      items: [],
+      hasNext: false,
+    });
+
+    if (!this.isProviderEnabled(providerName)) return empty();
+
+    await this.ensureProviderActive(providerName);
+    const started = Date.now();
+    const response = await this.sidecar.call(
+      'providerMainPage',
+      {
+        provider: providerName,
+        section: section.name,
+        data: section.data,
+        page: requested,
+        horizontalImages: section.horizontalImages === true,
+      },
+      PROVIDER_CALL_TIMEOUT_MS
+    );
+    const latencyMs = Date.now() - started;
+
+    const fail = (message: string): ProviderCatalogPage => {
+      this.diagnostics?.record({
+        level: 'error',
+        stage: 'search',
+        source: providerName,
+        query: section.name,
+        message,
+      });
+      this.analytics?.observe({
+        provider: providerName,
+        stage: 'search',
+        outcome: 'failure',
+        latencyMs,
+        error: message,
+      });
+      return empty();
+    };
+
+    if (!response.ok) return fail(response.error ?? 'The extension runtime did not answer.');
+
+    const parsed = safeParse(String(response.result?.json ?? ''));
+    if (!parsed) return fail('The provider returned no usable answer.');
+    if (!parsed.ok) {
+      return fail(
+        typeof parsed.error === 'string' ? parsed.error : 'The provider reported a failure.'
+      );
+    }
+
+    /**
+     * A provider may answer one request with several rows — upstream's
+     * `HomePageResponse` carries a list — so the items are flattened onto the
+     * row that was asked for. Rendering the provider's sub-rows as though the
+     * app had requested them would put rows on screen the user cannot page.
+     */
+    const items: SearchResponse[] = [];
+    if (Array.isArray(parsed.sections)) {
+      for (const raw of parsed.sections as Array<Record<string, unknown>>) {
+        items.push(...mapProviderResults(providerName, raw?.items));
+      }
+    }
+
+    this.analytics?.observe({
+      provider: providerName,
+      stage: 'search',
+      outcome: items.length > 0 ? 'success' : 'empty',
+      produced: items.length,
+      latencyMs,
+    });
+
+    return {
+      provider: providerName,
+      section: section.name,
+      page: requested,
+      items,
+      hasNext: parsed.hasNext === true && items.length > 0,
+    };
+  }
+
   public async searchAll(query: string, only?: string[]): Promise<SearchResponse[]> {
     const out: SearchResponse[] = [];
     await this.searchEach(query, only, (outcome) => out.push(...outcome.results));

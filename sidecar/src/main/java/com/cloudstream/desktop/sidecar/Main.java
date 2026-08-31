@@ -304,6 +304,17 @@ public final class Main {
             case "providerLoadLinks" -> Map.of("json", host.loadLinksFromProvider(
                     str(params, "provider"), str(params, "data"), timeoutFor(params)));
 
+            case "providerMainPageSections" -> Map.of("json",
+                    host.mainPageSectionsFromProvider(str(params, "provider")));
+
+            case "providerMainPage" -> Map.of("json", host.mainPageFromProvider(
+                    str(params, "provider"),
+                    str(params, "section"),
+                    str(params, "data"),
+                    params.get("page") instanceof Number n ? n.intValue() : 1,
+                    Boolean.TRUE.equals(params.get("horizontalImages")),
+                    timeoutFor(params)));
+
             case "providers" -> Map.of("names", host.providerNames());
 
             case "clearTranslationCache" -> Map.of("removed", host.clearTranslationCache());

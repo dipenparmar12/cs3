@@ -103,8 +103,22 @@ export interface SystemRuntimeStatus {
  * repository, 5 of 5 in `recloudstream/extensions` `[measured]` — so without
  * the bump an upgraded install would start downloading jars into a runtime that
  * cannot read them.
+ *
+ * Generation 10 is the fifth round of shim work plus the provider-catalogue
+ * RPC, and both halves have to move together. The shim gained
+ * `android.widget.CheckBox` (and the `TextView`/`Button`/`CompoundButton`
+ * ancestry it needs), `android.content.Intent`, `android.app.AlertDialog` and
+ * `android.graphics.drawable.Drawable`; the bridge gained
+ * `ui.settings.Globals` and the `mainPage`/`mainPageSections` entry points.
+ * Measured against `NivinCNC/CNCVerse-Cloud-Stream-Extension` with
+ * `--plugins 20`: 18 load failures across 5 classes before, 1 after, and
+ * 0 → 29 providers registered. `Context.startActivity` also stopped taking
+ * `Object` — it now takes the `Intent` it always should have, which is a
+ * *different method* to the JVM and therefore only callable from generation 10
+ * on. A provisioned copy pairing the old shim with the new host would answer
+ * `providerMainPage` with "Unknown method" on every browse.
  */
-const RUNTIME_GENERATION = 9;
+const RUNTIME_GENERATION = 10;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {
