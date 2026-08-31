@@ -2811,6 +2811,55 @@ ipcMain.handle('mpv:stop', async () => mpvEngine.stop());
 /** A pull for the current state, for a player that mounted mid-playback. */
 ipcMain.handle('mpv:snapshot', async () => ({ ok: true, snapshot: mpvEngine.snapshot() }));
 
+/**
+ * Pins the application window above everything else on the desktop.
+ *
+ * The third of three mechanisms, and the only one that always works. Native
+ * Picture-in-Picture detaches the `<video>` element's surface and therefore
+ * cannot help a stream routed to mpv or handed to VLC; mpv's own `ontop` cannot
+ * help a stream playing in the element. This changes a window level and is
+ * indifferent to what is inside the window — so a torrent stream, a 4K HEVC
+ * file the native engine is decoding, and an ordinary MP4 all float equally.
+ *
+ * `'floating'` rather than the default level: on macOS the plain level sits
+ * below full-screen applications, which is exactly where a film someone pinned
+ * on purpose must not go.
+ */
+ipcMain.handle('window:setAlwaysOnTop', async (_, onTop: boolean) => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, error: 'The window is gone.', alwaysOnTop: false };
+  }
+  mainWindow.setAlwaysOnTop(onTop === true, 'floating');
+  return { ok: true, alwaysOnTop: mainWindow.isAlwaysOnTop() };
+});
+
+ipcMain.handle('window:getAlwaysOnTop', async () => ({
+  ok: true,
+  alwaysOnTop: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isAlwaysOnTop()),
+}));
+
+ipcMain.handle('mpv:setVideoEnabled', async (_, enabled: boolean) => {
+  try {
+    if (!mpvEngine.isRunning()) return { ok: true, applied: false };
+    const result = await mpvEngine.setVideoEnabled(enabled !== false);
+    return { ok: result.ok, applied: result.ok, error: result.error };
+  } catch (error) {
+    return { ...fail(error), applied: false };
+  }
+});
+
+ipcMain.handle('mpv:setOnTop', async (_, onTop: boolean) => {
+  try {
+    // Not an error when mpv is not running: the caller is applying a preference
+    // across every engine, and only one of them is holding the stream.
+    if (!mpvEngine.isRunning()) return { ok: true, applied: false };
+    const result = await mpvEngine.setOnTop(onTop === true);
+    return { ok: result.ok, applied: result.ok, error: result.error };
+  } catch (error) {
+    return { ...fail(error), applied: false };
+  }
+});
+
 ipcMain.handle('mpv:getPolicy', async () => ({
   ok: true,
   policy: nativeEnginePolicy(),
@@ -3001,6 +3050,49 @@ interface StoredPlayerPreferences {
   subtitleBackground: 'none' | 'shadow' | 'outline' | 'box';
   subtitleWeight: 'normal' | 'bold';
   subtitlePosition: number;
+  /**
+   * What "minimise the player" does.
+   *
+   * Four different things people mean by it, and they are not orderable on one
+   * scale, so this is a choice rather than a level:
+   *
+   *  - `mini` — a small window inside the app. Cheap, always available, and
+   *    useless the moment the app is not the front window.
+   *  - `floating` — the mini player plus the *application* window pinned above
+   *    everything else. The only one of the four that works while the video is
+   *    a torrent stream or an mpv-routed 4K file, because it moves no surface
+   *    anywhere: it changes a window level.
+   *  - `pip` — Chromium's native Picture-in-Picture. A real OS-level floating
+   *    window with the system's own controls, and the closest thing to what
+   *    people mean when they say "like Chrome". Only reachable when the
+   *    `<video>` element is what is playing; mpv and an external player have
+   *    their own windows and PiP has nothing to detach.
+   *  - `background` — no picture at all, playback continues.
+   */
+  floatingMode: 'mini' | 'floating' | 'pip' | 'background';
+  /**
+   * What happens to playback when the player is out of sight.
+   *
+   * Separate from `floatingMode` because they answer different questions —
+   * where the picture goes, versus whether the film keeps running — and the
+   * combinations are all meaningful: a floating window that pauses when you
+   * click away is a perfectly reasonable thing to want, and so is audio
+   * continuing with nothing on screen.
+   *
+   * `audio-only` is not a codec decision. Nothing is re-negotiated; the video
+   * track keeps decoding and is simply not drawn, which is what the browser
+   * does for an offscreen element anyway. It exists as a distinct setting
+   * because it is what people ask for by name.
+   */
+  backgroundPlayback: 'continue' | 'audio-only' | 'pause';
+  /**
+   * Keep the app above other windows whenever a floating player is showing.
+   *
+   * Stored rather than toggled per session: someone who wants their film on top
+   * of a spreadsheet wants that every evening, and a pin that resets on every
+   * launch is one people stop using.
+   */
+  alwaysOnTop: boolean;
 }
 
 const DEFAULT_PLAYER_PREFERENCES: StoredPlayerPreferences = {
@@ -3015,7 +3107,16 @@ const DEFAULT_PLAYER_PREFERENCES: StoredPlayerPreferences = {
   subtitleBackground: 'outline',
   subtitleWeight: 'normal',
   subtitlePosition: 0,
+  // `mini` is the pre-existing behaviour, so an install that upgrades into this
+  // setting keeps the player it had rather than acquiring a new one nobody
+  // asked for.
+  floatingMode: 'mini',
+  backgroundPlayback: 'continue',
+  alwaysOnTop: false,
 };
+
+const FLOATING_MODES = new Set(['mini', 'floating', 'pip', 'background']);
+const BACKGROUND_MODES = new Set(['continue', 'audio-only', 'pause']);
 
 /** Only these values mean anything to either renderer. */
 const SUBTITLE_BACKGROUNDS = new Set(['none', 'shadow', 'outline', 'box']);
@@ -3046,6 +3147,16 @@ ipcMain.handle('player:getPreferences', async () => {
     preferences.subtitleBackground = DEFAULT_PLAYER_PREFERENCES.subtitleBackground;
   }
   if (preferences.subtitleWeight !== 'bold') preferences.subtitleWeight = 'normal';
+  // Validated on read for the same reason as volume: an unknown mode arriving
+  // from a hand-edited datastore would reach a `switch` in the renderer that
+  // handles four cases and silently do nothing.
+  if (!FLOATING_MODES.has(String(preferences.floatingMode))) {
+    preferences.floatingMode = DEFAULT_PLAYER_PREFERENCES.floatingMode;
+  }
+  if (!BACKGROUND_MODES.has(String(preferences.backgroundPlayback))) {
+    preferences.backgroundPlayback = DEFAULT_PLAYER_PREFERENCES.backgroundPlayback;
+  }
+  preferences.alwaysOnTop = preferences.alwaysOnTop === true;
   return { ok: true, preferences };
 });
 

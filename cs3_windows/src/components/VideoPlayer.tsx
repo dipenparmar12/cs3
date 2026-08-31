@@ -7,7 +7,7 @@ import {
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
   SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
   HardDriveDownload, FolderDown, GripHorizontal, Maximize2, Minimize2, X,
-  Search,
+  Search, PictureInPicture2, Pin, PinOff,
 } from 'lucide-react';
 import type { SwarmReport, TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
@@ -35,6 +35,11 @@ import type { SeriesContext } from './player/seriesContext';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
 import { useMiniFrame } from './player/useMiniFrame';
+import {
+  useFloatingPlayer,
+  type BackgroundPlayback,
+  type FloatingMode,
+} from './player/useFloatingPlayer';
 import { PlayerCopyMenu } from './player/PlayerCopyMenu';
 import { PlaybackErrorPanel } from './player/PlaybackErrorPanel';
 import { formatTimecode, formatTransferRate } from '../utils/format';
@@ -331,6 +336,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, []);
   const [isMuted, setIsMuted] = useState(false);
   const [speed, setSpeed] = useState(1);
+
+  /**
+   * How this player floats, and whether it keeps running out of sight.
+   *
+   * Held here rather than read at the point of use because both are needed on
+   * every render — the control bar draws a different button per mode — and
+   * because they arrive asynchronously: reading them inside the handler would
+   * make the first press after launch behave as the default.
+   */
+  const [floatingMode, setFloatingMode] = useState<FloatingMode>('mini');
+  const [backgroundPlayback, setBackgroundPlayback] = useState<BackgroundPlayback>('continue');
+  const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [aspect, setAspect] = useState<AspectRatioMode>(AspectRatioMode.Fit);
   const [showSpeedControl, setShowSpeedControl] = useState(showPlaybackSpeedControl ?? false);
@@ -1810,6 +1828,40 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [seekTo, isConverted, playbackOffset, externalControl?.capability, isNativeEngine, currentTime]
   );
 
+  /**
+   * Floating playback: native Picture-in-Picture, the window pin, and the
+   * background policy, in one place.
+   *
+   * Declared after the transport helpers because it needs them — a PiP window
+   * and the keyboard's media keys both drive playback through the Media Session
+   * handlers this installs, and wiring those to anything other than the same
+   * `togglePlay`/`seekTo` the on-screen controls use is how two sets of
+   * controls come to disagree about whether the film is paused.
+   */
+  const floating = useFloatingPlayer({
+    video: videoRef,
+    isFloating: mini || hidden,
+    mode: floatingMode,
+    backgroundPlayback,
+    alwaysOnTop,
+    isNativeEngine,
+    metadata: {
+      title,
+      subtitle: episodeTitle,
+      artwork: progress?.posterUrl || series?.posterUrl,
+    },
+    controls: {
+      play: () => {
+        if (!isPlaying) togglePlay();
+      },
+      pause: () => {
+        if (isPlaying) togglePlay();
+      },
+      seekBy,
+      seekTo,
+    },
+  });
+
   const toggleFullscreen = useCallback(async () => {
     const container = containerRef.current;
     if (!container) return;
@@ -1939,6 +1991,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setSpeed(preferences.speed);
       if (preferences.subtitleLanguage) preferredSubtitleLanguage.current = preferences.subtitleLanguage;
       if (preferences.audioLanguage) preferredAudioLanguage.current = preferences.audioLanguage;
+      setFloatingMode(preferences.floatingMode ?? 'mini');
+      setBackgroundPlayback(preferences.backgroundPlayback ?? 'continue');
+      setAlwaysOnTop(preferences.alwaysOnTop === true);
       setSubtitleStyle({
         scale: preferences.subtitleScale ?? DEFAULT_SUBTITLE_STYLE.scale,
         color: preferences.subtitleColor ?? DEFAULT_SUBTITLE_STYLE.color,
@@ -2550,6 +2605,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       className={
         `player${controlsVisible || keepControls ? '' : ' player--idle'}` +
         (mini ? ' player--mini' : '') +
+        /*
+          Audio-only hides the picture rather than unmounting the element.
+          Unmounting is what ends the stream, loses the position and
+          renegotiates the swarm — the same rule the mini player follows. The
+          honest limit is stated in `useFloatingPlayer`: an offscreen element
+          keeps decoding, so for the in-app path this is a description of what
+          is on screen. On the native engine the video track is genuinely
+          dropped.
+        */
+        (mini && floatingMode === 'background' ? ' player--audio-only' : '') +
         (mini && miniFrame.isDragging ? ' player--dragging' : '')
       }
       // `display: none` rather than unmounting: see the `hidden` prop. The
@@ -2581,9 +2646,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <>
           {/* Top Window Bar: Title, Grip indicator, and Windows-style Top-Right Window Controls */}
           <div className="player-mini__top" role="presentation">
-            <div className="player-mini__title-wrap" title={episodeTitle || title}>
+            <div
+              className="player-mini__title-wrap"
+              title={
+                effectiveProvider
+                  ? `${episodeTitle || title} — playing from ${effectiveProvider}`
+                  : episodeTitle || title
+              }
+            >
               <GripHorizontal size={13} className="player-mini__grip-icon" />
               <span className="player-mini__title">{episodeTitle || title}</span>
+              {/*
+                Which provider is playing, on the row. A mini player is where a
+                source is most likely to fail unattended, and "it stopped" is
+                only actionable if the row says whose it was.
+              */}
+              {effectiveProvider && (
+                <span className="player-mini__source">{effectiveProvider}</span>
+              )}
             </div>
             <div className="player-mini__top-actions">
               {onExpand && (
@@ -2615,6 +2695,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </div>
           </div>
 
+          {/*
+            A real timeline, not just a progress hint.
+
+            The reported gap in the mini player was that it could be paused and
+            closed and nothing else — no way to skip the recap, no way to see
+            where you are. A 420px window has room for a scrubber as long as it
+            is the only thing on its row, so it gets its own.
+
+            `player-mini__progress` renders even when the bar is hidden, because
+            a still frame with no indication of position looks like a paused
+            screenshot rather than a film.
+          */}
+          <div
+            className="player-mini__progress"
+            role="presentation"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <input
+              type="range"
+              min={0}
+              max={Math.max(1, duration)}
+              step={1}
+              value={Math.min(currentTime, Math.max(1, duration))}
+              onChange={(e) => seekTo(Number(e.target.value))}
+              aria-label="Seek"
+            />
+            <div
+              className="player-mini__progress-fill"
+              style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
+              aria-hidden
+            />
+          </div>
+
           {/* Bottom Controls Bar: Playback controls, Volume, Time and Expand */}
           <div className="player-mini__bar">
             <button
@@ -2639,10 +2752,44 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             >
               {isMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
             </button>
+            {/*
+              A slider rather than mute-only. Volume is the single most likely
+              thing to want changed by someone who has put the film in the
+              corner to work beside it, and reaching for the full player to do
+              it defeats the point of the corner.
+            */}
+            <input
+              className="player-mini__volume"
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={isMuted ? 0 : volume}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                setVolume(next);
+                if (next > 0 && isMuted) setIsMuted(false);
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              aria-label="Volume"
+            />
             <span className="player-mini__time">
               {formatTimecode(currentTime)} / {formatTimecode(duration)}
             </span>
             <div className="player-mini__spacer" />
+            {floating.isPipSupported && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void floating.togglePip();
+                }}
+                title="Float above other applications"
+                aria-label="Open in a floating window"
+              >
+                <PictureInPicture2 size={15} />
+              </button>
+            )}
             {onExpand && (
               <button
                 type="button"
@@ -2959,13 +3106,79 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {onMinimize && (
           <button
             className="icon-button"
-            onClick={onMinimize}
+            onClick={() => {
+              /**
+               * Minimise means whatever the preference says it means.
+               *
+               * `onMinimize()` runs in every case, because it is what puts the
+               * browsing UI back in front of the user — that is the request,
+               * and the mode only decides where the picture goes. For `pip`
+               * the element also detaches into an OS window; the in-app mini
+               * window then shows the browser's own "playing in
+               * Picture-in-Picture" placeholder, which is the standard
+               * behaviour and the honest one, since the surface really has
+               * moved.
+               */
+              onMinimize();
+              if (floatingMode === 'pip' && floating.isPipSupported) {
+                void floating.enterPip();
+              }
+            }}
             aria-label="Minimise the player"
-            title="Keep playing in a small window while you browse"
+            title={
+              floatingMode === 'pip'
+                ? 'Detach into a floating window'
+                : floatingMode === 'background'
+                  ? 'Keep the sound playing while you browse'
+                  : 'Keep playing in a small window while you browse'
+            }
           >
             <Minimize2 size={19} />
           </button>
         )}
+        {/*
+          Offered only when it can actually work. `requestPictureInPicture`
+          rejects for a stream routed to mpv — that renders in mpv's own window
+          and has no surface to detach — and a button that is present and
+          refuses is worse than one that is absent, because it reads as the
+          floating player being broken rather than as unavailable here.
+        */}
+        {floating.isPipSupported && (
+          <button
+            className={`icon-button${floating.isPip ? ' icon-button--on' : ''}`}
+            onClick={() => void floating.togglePip()}
+            aria-label={floating.isPip ? 'Close the floating window' : 'Open in a floating window'}
+            title={
+              floating.isPip
+                ? 'Bring playback back into the app'
+                : 'Float above other applications, like a browser'
+            }
+          >
+            <PictureInPicture2 size={19} />
+          </button>
+        )}
+        {/*
+          The pin is the mechanism that always works, so it is shown whether or
+          not PiP is available — it is the whole answer for an mpv-routed 4K
+          file or a torrent stream.
+        */}
+        <button
+          className={`icon-button${alwaysOnTop ? ' icon-button--on' : ''}`}
+          onClick={() => {
+            const next = !alwaysOnTop;
+            setAlwaysOnTop(next);
+            void window.cloudstream?.setPlayerPreferences({ alwaysOnTop: next });
+          }}
+          aria-pressed={alwaysOnTop}
+          aria-label={alwaysOnTop ? 'Stop keeping the window on top' : 'Keep the window on top'}
+          title={
+            alwaysOnTop
+              ? 'The window stays above other applications while minimised'
+              : 'Keep this window above other applications while minimised'
+          }
+        >
+          {alwaysOnTop ? <Pin size={18} /> : <PinOff size={18} />}
+        </button>
         <div className="player__titles">
           <div className="player__title-row">
             <h2>{title}</h2>

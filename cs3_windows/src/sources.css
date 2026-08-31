@@ -1112,6 +1112,80 @@
   opacity: 1;
 }
 
+/*
+   The scrubber sits on its own row above the control bar.
+
+   Two elements rather than one: a transparent `<input type=range>` on top for
+   the gesture, and a painted fill underneath for the state. Styling a range
+   input's track to show progress needs a different vendor pseudo-element per
+   engine and none of them animates cleanly, and at this size the thumb is the
+   only part worth drawing.
+*/
+.player-mini__progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 32px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.2);
+  z-index: 6;
+}
+
+.player-mini__progress input {
+  position: absolute;
+  inset: -6px 0;
+  width: 100%;
+  height: 15px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  /* Above the fill, so the whole strip is grabbable rather than only the part
+     already played. */
+  z-index: 2;
+}
+
+.player-mini__progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--accent-primary, #3b82f6);
+  pointer-events: none;
+}
+
+.player--mini:hover .player-mini__progress { height: 5px; }
+
+.player-mini__volume {
+  width: 54px;
+  height: 3px;
+  margin: 0 0.3rem;
+  accent-color: var(--accent-primary, #3b82f6);
+  cursor: pointer;
+}
+
+/* The provider, after the title and only if there is room. Truncating the
+   title to guarantee space for it would be the wrong trade — the title is what
+   the window is for. */
+.player-mini__source {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.62rem;
+  color: rgba(255, 255, 255, 0.55);
+  padding-left: 0.35rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+  margin-left: 0.35rem;
+}
+
+/* A pressed state for the pin and the floating-window buttons, which are
+   toggles rather than actions and are otherwise indistinguishable from one. */
+.icon-button--on {
+  background: rgba(59, 130, 246, 0.22) !important;
+  color: #93c5fd !important;
+}
+
 .player-mini__spacer { flex: 1; }
 
 .player-mini__time {
@@ -6025,3 +6099,23 @@
 }
 
 .ott-view__more:hover { color: #fff; border-color: rgba(255, 255, 255, 0.3); }
+
+/* Audio-only mini player: the picture is hidden, the controls are not.
+   `visibility` rather than `display`, because a `<video>` removed from layout
+   loses its rendering surface and some builds treat that as a reason to stop
+   decoding — which would silence the audio this mode exists to keep. */
+.player--audio-only .player__video { visibility: hidden; }
+
+.player--audio-only::after {
+  content: 'Audio only';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+}

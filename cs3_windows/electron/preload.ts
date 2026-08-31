@@ -666,6 +666,17 @@ export interface CloudStreamElectronAPI {
         subtitleWeight: 'normal' | 'bold';
         /** Percent of frame height to lift cues by, for hard-subbed releases. */
         subtitlePosition: number;
+        /**
+         * What "minimise" does. `pip` is Chromium's native Picture-in-Picture
+         * and is only reachable while the `<video>` element is what is playing
+         * — mpv and an external player have their own windows and there is no
+         * surface for PiP to detach.
+         */
+        floatingMode: 'mini' | 'floating' | 'pip' | 'background';
+        /** Whether the film keeps running when it is out of sight. */
+        backgroundPlayback: 'continue' | 'audio-only' | 'pause';
+        /** Pin the app above other windows while a floating player is showing. */
+        alwaysOnTop: boolean;
       };
     }
   >;
@@ -680,7 +691,38 @@ export interface CloudStreamElectronAPI {
     subtitleBackground?: 'none' | 'shadow' | 'outline' | 'box';
     subtitleWeight?: 'normal' | 'bold';
     subtitlePosition?: number;
+    floatingMode?: 'mini' | 'floating' | 'pip' | 'background';
+    backgroundPlayback?: 'continue' | 'audio-only' | 'pause';
+    alwaysOnTop?: boolean;
   }) => Promise<Envelope>;
+  /**
+   * Pins the application window above everything else.
+   *
+   * The one floating mechanism that is indifferent to what is playing. Native
+   * Picture-in-Picture detaches the element's surface and cannot help a stream
+   * routed to mpv; mpv's own `ontop` cannot help one playing in the element.
+   * This changes a window level, so a torrent stream, a 4K file the native
+   * engine is decoding and an ordinary MP4 all float equally.
+   */
+  setWindowAlwaysOnTop: (onTop: boolean) => Promise<Envelope & { alwaysOnTop: boolean }>;
+  getWindowAlwaysOnTop: () => Promise<Envelope & { alwaysOnTop: boolean }>;
+  /**
+   * Pins mpv's own window, for a stream the native engine is holding.
+   *
+   * Answers `applied: false` rather than failing when mpv is not running: the
+   * caller is applying one preference across every engine and only one of them
+   * has the stream.
+   */
+  setMpvOnTop: (onTop: boolean) => Promise<Envelope & { applied: boolean }>;
+  /**
+   * Drops mpv's video track for audio-only background playback.
+   *
+   * Meaningful only on the native engine. An offscreen `<video>` element keeps
+   * decoding whatever it is told to, so "audio only" there is a description of
+   * what is on screen rather than of what the machine is doing; mpv genuinely
+   * stops.
+   */
+  setMpvVideoEnabled: (enabled: boolean) => Promise<Envelope & { applied: boolean }>;
   getDeleteDownloadPreference: () => Promise<
     Envelope & { preference: 'ask' | 'list-only' | 'list-and-file' }
   >;
@@ -1555,6 +1597,10 @@ const api: CloudStreamElectronAPI = {
   removeDownload: (id, deleteFile) => ipcRenderer.invoke('download:remove', id, deleteFile),
   getPlayerPreferences: () => ipcRenderer.invoke('player:getPreferences'),
   setPlayerPreferences: (patch) => ipcRenderer.invoke('player:setPreferences', patch),
+  setWindowAlwaysOnTop: (onTop) => ipcRenderer.invoke('window:setAlwaysOnTop', onTop),
+  getWindowAlwaysOnTop: () => ipcRenderer.invoke('window:getAlwaysOnTop'),
+  setMpvOnTop: (onTop) => ipcRenderer.invoke('mpv:setOnTop', onTop),
+  setMpvVideoEnabled: (enabled) => ipcRenderer.invoke('mpv:setVideoEnabled', enabled),
   getDeleteDownloadPreference: () => ipcRenderer.invoke('download:getDeletePreference'),
   setDeleteDownloadPreference: (preference) =>
     ipcRenderer.invoke('download:setDeletePreference', preference),

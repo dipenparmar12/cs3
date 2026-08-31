@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useFlash } from '../utils/useFlash';
-import { Tv, Play, Cpu, Download, Loader2 } from 'lucide-react';
+import { Tv, Play, Cpu, Download, Loader2, PictureInPicture2 } from 'lucide-react';
 import { SettingGroup, SettingRow } from './settings/SettingRow';
 import { AspectRatioMode } from '../types/player';
 
@@ -12,6 +12,30 @@ import { AspectRatioMode } from '../types/player';
  */
 type NativePolicy = 'off' | 'auto' | 'aggressive';
 
+type FloatingMode = 'mini' | 'floating' | 'pip' | 'background';
+type BackgroundPlayback = 'continue' | 'audio-only' | 'pause';
+
+/**
+ * Plain-language names for the stored values.
+ *
+ * The stored keys are the engineering words (`pip`, `background`) because they
+ * are what the code branches on; nothing a non-technical user reads should be
+ * one of them. Kept as a table beside the `<option>` labels rather than derived
+ * from them, so the row's summary and the menu cannot drift apart.
+ */
+const FLOATING_LABELS: Record<FloatingMode, string> = {
+  mini: 'Small window in the app',
+  floating: 'Floating above other apps',
+  pip: 'Picture-in-Picture window',
+  background: 'Audio only',
+};
+
+const BACKGROUND_LABELS: Record<BackgroundPlayback, string> = {
+  continue: 'Keeps playing',
+  'audio-only': 'Audio only',
+  pause: 'Pauses',
+};
+
 export const PlayerSettings: React.FC = () => {
   const [showSpeedControl, setShowSpeedControl] = useState(false);
   const [showAspectControl, setShowAspectControl] = useState(false);
@@ -19,6 +43,36 @@ export const PlayerSettings: React.FC = () => {
   const [defaultAspect, setDefaultAspect] = useState<string>(AspectRatioMode.Fit);
   const [defaultSpeed, setDefaultSpeed] = useState<string>('1');
   const { message: statusMessage, flash: setStatusMessage } = useFlash<string>(3000);
+
+  const [floatingMode, setFloatingMode] = useState<FloatingMode>('mini');
+  const [backgroundPlayback, setBackgroundPlayback] = useState<BackgroundPlayback>('continue');
+  const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+
+  useEffect(() => {
+    void window.cloudstream?.getPlayerPreferences().then((stored) => {
+      if (!stored?.ok) return;
+      setFloatingMode(stored.preferences.floatingMode ?? 'mini');
+      setBackgroundPlayback(stored.preferences.backgroundPlayback ?? 'continue');
+      setAlwaysOnTop(stored.preferences.alwaysOnTop === true);
+    });
+  }, []);
+
+  /**
+   * Written through the same `player:setPreferences` the player itself uses,
+   * which merges rather than replacing — so saving a floating mode here does
+   * not erase the volume the player wrote a second ago.
+   */
+  const saveFloating = async (patch: {
+    floatingMode?: FloatingMode;
+    backgroundPlayback?: BackgroundPlayback;
+    alwaysOnTop?: boolean;
+  }) => {
+    if (patch.floatingMode !== undefined) setFloatingMode(patch.floatingMode);
+    if (patch.backgroundPlayback !== undefined) setBackgroundPlayback(patch.backgroundPlayback);
+    if (patch.alwaysOnTop !== undefined) setAlwaysOnTop(patch.alwaysOnTop);
+    await window.cloudstream?.setPlayerPreferences(patch);
+    setStatusMessage('Saved. It applies the next time you minimise the player.');
+  };
 
   /**
    * `null` while the answer is unknown, which is different from "not installed".
@@ -184,6 +238,87 @@ export const PlayerSettings: React.FC = () => {
   return (
     <div className="player-settings">
       {statusMessage && <div className="settings__flash">{statusMessage}</div>}
+
+      <SettingGroup title="Watching while you do other things" icon={<PictureInPicture2 size={15} />}>
+        <SettingRow
+          label="When you minimise the player"
+          note={FLOATING_LABELS[floatingMode]}
+          hint={
+            <>
+              <strong>Small window in the app</strong> keeps the film in a corner of CloudStream —
+              simple, and it disappears behind whatever you switch to.{' '}
+              <strong>Floating above other apps</strong> pins the whole CloudStream window on top,
+              which works for every kind of stream including 4K files played by the native engine.{' '}
+              <strong>Picture-in-Picture</strong> is the browser-style detached window with the
+              system's own controls; it is only available for streams playing inside the app, so a
+              file handed to the native engine or to VLC falls back to the small window.{' '}
+              <strong>Audio only</strong> hides the picture entirely.
+            </>
+          }
+        >
+          <select
+            value={floatingMode}
+            onChange={(e) => void saveFloating({ floatingMode: e.target.value as FloatingMode })}
+            aria-label="Minimised player style"
+          >
+            <option value="mini">Small window in the app</option>
+            <option value="floating">Floating above other apps</option>
+            <option value="pip">Picture-in-Picture window</option>
+            <option value="background">Audio only, no picture</option>
+          </select>
+        </SettingRow>
+
+        <SettingRow
+          label="Keep CloudStream above other windows"
+          note={alwaysOnTop ? 'On while minimised' : 'Off'}
+          hint={
+            <>
+              Applies while the player is minimised, and is switched off again the moment you close
+              it — a window that stayed pinned after the film ended would be very hard to work out
+              how to un-pin. This is the only option that works for every stream, because it changes
+              where the window sits rather than moving the picture anywhere.
+            </>
+          }
+        >
+          <label className="settings__switch">
+            <input
+              type="checkbox"
+              checked={alwaysOnTop}
+              onChange={(e) => void saveFloating({ alwaysOnTop: e.target.checked })}
+              aria-label="Keep the window on top"
+            />
+            <span>{alwaysOnTop ? 'Enabled' : 'Disabled'}</span>
+          </label>
+        </SettingRow>
+
+        <SettingRow
+          label="When the picture is hidden"
+          note={BACKGROUND_LABELS[backgroundPlayback]}
+          hint={
+            <>
+              <strong>Keep playing</strong> is what happens today.{' '}
+              <strong>Audio only</strong> additionally stops the video being decoded when the
+              native engine is playing, which is real work saved on a 4K file; for streams playing
+              inside the app there is nothing extra to stop, so it behaves the same as keep
+              playing. <strong>Pause</strong> stops the film and starts it again when you come
+              back — but only if it was CloudStream that paused it, so a film you paused yourself
+              stays paused.
+            </>
+          }
+        >
+          <select
+            value={backgroundPlayback}
+            onChange={(e) =>
+              void saveFloating({ backgroundPlayback: e.target.value as BackgroundPlayback })
+            }
+            aria-label="Background playback"
+          >
+            <option value="continue">Keep playing</option>
+            <option value="audio-only">Audio only</option>
+            <option value="pause">Pause until I come back</option>
+          </select>
+        </SettingRow>
+      </SettingGroup>
 
       <SettingGroup title="Optional Player Controls" icon={<Tv size={15} />}>
         <SettingRow
