@@ -288,6 +288,25 @@ pluginManager.setDiagnostics(diagnostics);
  */
 const providerAnalytics = new ProviderAnalytics();
 const providerRanking = new ProviderRanking(providerAnalytics);
+
+/**
+ * The maintainer's own health flag, quoted into the ranking.
+ *
+ * Read live from the install records rather than snapshotted, so an extension
+ * whose author marks it down in the repository stops being recommended at the
+ * next update check rather than at the next app release. Indexed per call is
+ * cheap enough — this runs once per provider when a ranking is computed, not
+ * per search.
+ */
+providerRanking.setContext({
+  declaredStatus: (internalName) => {
+    const record = pluginManager
+      .getInstalledPluginRecords()
+      .find((entry) => entry.internalName === internalName);
+    const status = record?.meta?.status;
+    return typeof status === 'number' ? status : undefined;
+  },
+});
 const providerRecommender = new ProviderRecommender(
   providerAnalytics,
   providerRanking,
