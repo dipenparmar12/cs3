@@ -6371,3 +6371,119 @@
   color: var(--text-subtle, #94a3b8);
 }
 .ott-view__meta-head p { margin: 0; font-size: 0.8rem; line-height: 1.5; }
+
+/* --- Catalogue picker, on the home screen --------------------------------
+ *
+ * Moved here from Settings → Home. The person who wants to change what the
+ * front page shows is looking at the front page; asking them to leave it, find
+ * a tab and come back is three navigations to answer a question they are
+ * already staring at. Settings keeps the configuration (keys, custom URLs,
+ * health re-check) that has no place on a browsing screen.
+ */
+.cat-picker { position: relative; }
+
+.cat-picker__button {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  padding: .38rem .7rem;
+  border-radius: 7px;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.22));
+  background: transparent;
+  color: var(--text-subtle, #94a3b8);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.cat-picker__button:hover,
+.cat-picker__button--open {
+  color: var(--text, #e2e8f0);
+  border-color: rgba(148, 163, 184, 0.4);
+  background: rgba(148, 163, 184, 0.08);
+}
+.cat-picker__button:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
+.cat-picker__label { font-weight: 500; }
+
+.cat-picker__menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 30;
+  width: min(340px, calc(100vw - 2rem));
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: var(--surface, #141922);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5);
+  padding: 0.7rem;
+}
+.cat-picker__hint,
+.cat-picker__loading {
+  margin: 0 0 0.55rem;
+  padding: 0 0.25rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--text-subtle, #94a3b8);
+}
+.cat-picker__loading { display: flex; align-items: center; gap: 0.4rem; }
+
+.cat-picker__list { list-style: none; margin: 0; padding: 0; }
+.cat-picker__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.42rem 0.45rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cat-picker__item:hover:not(:disabled) { background: rgba(148, 163, 184, 0.1); }
+.cat-picker__item:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: -2px; }
+.cat-picker__item--on { background: rgba(96, 165, 250, 0.1); }
+/* Greyed, but the reason is always printed beside it — an entry disabled with
+   no explanation reads as a broken menu rather than an unavailable service. */
+.cat-picker__item--blocked { opacity: 0.55; cursor: default; }
+.cat-picker__tick {
+  flex: none;
+  width: 14px;
+  display: inline-flex;
+  justify-content: center;
+  padding-top: 0.15rem;
+  color: var(--accent, #60a5fa);
+}
+.cat-picker__text { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.cat-picker__text strong { font-size: 0.84rem; font-weight: 500; }
+.cat-picker__text em {
+  font-style: normal;
+  font-size: 0.73rem;
+  line-height: 1.4;
+  color: var(--text-subtle, #94a3b8);
+}
+.cat-picker__why { color: #fbbf24 !important; }
+
+.cat-picker__foot {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+.cat-picker__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.cat-picker__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0;
+  padding: 0 0.25rem;
+  font-size: 0.76rem;
+  color: #fca5a5;
+}
