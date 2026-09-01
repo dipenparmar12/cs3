@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { WifiOff } from 'lucide-react';
+import { FileDown, WifiOff } from 'lucide-react';
 import type { PlayedSource } from './types/library';
 import { Sidebar } from './components/Sidebar';
 import type { ActiveTab } from './components/Sidebar';
@@ -86,6 +86,9 @@ export const App: React.FC = () => {
    * tab would mean every one of those first switching to that tab.
    */
   const [openTorrent, setOpenTorrent] = useState<string | null>(null);
+  /** Whether something is being dragged over the window, for the overlay. */
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
 
   /**
    * The instant-play path: the player opens on this state before any stream
@@ -499,6 +502,7 @@ export const App: React.FC = () => {
     const allow = (event: DragEvent) => event.preventDefault();
     const onDrop = (event: DragEvent) => {
       event.preventDefault();
+      setDragging(false);
 
       /*
        * Dragged *text* is checked first, because a magnet dragged out of a
@@ -511,12 +515,33 @@ export const App: React.FC = () => {
         return;
       }
 
-      // `webUtils.getPathForFile` is the supported route in newer Electron;
-      // `file.path` remains populated in this build and is the simpler one.
-      const paths = [...(event.dataTransfer?.files ?? [])]
-        .map((file) => (file as File & { path?: string }).path)
+      const files = [...(event.dataTransfer?.files ?? [])];
+      /*
+       * `File.path` was removed in Electron 32 and this app is on 43.
+       *
+       * That is the whole bug: the old code read `file.path`, got `undefined`
+       * for every file, filtered the list down to nothing and returned without
+       * a word. Drag-and-drop looked like a listener that never fired; it fired
+       * every time and found nothing to act on. `webUtils.getPathForFile` is
+       * the replacement, and it has to be called in the preload because
+       * `webUtils` is a main-world module the renderer cannot reach under
+       * `contextIsolation`.
+       */
+      const paths = files
+        .map((file) => window.cloudstream?.getPathForFile?.(file) ?? null)
         .filter((filePath): filePath is string => Boolean(filePath));
-      if (paths.length === 0) return;
+
+      if (paths.length === 0) {
+        // Never silent. A drop that resolves to nothing has to say so, or it is
+        // indistinguishable from an app that ignores dropped files — which is
+        // exactly how this read for as long as it was broken.
+        setActionNotice(
+          files.length > 0
+            ? 'That could not be read from disk. Try the paperclip beside the search box.'
+            : 'Drop a .torrent file, a video, or a magnet link.'
+        );
+        return;
+      }
 
       const torrents = paths.filter((filePath) => filePath.toLowerCase().endsWith('.torrent'));
       if (torrents.length > 0) {
@@ -525,10 +550,37 @@ export const App: React.FC = () => {
       }
       void handleOpenLocalFile(paths[0]);
     };
+
+    /*
+     * `dragenter`/`dragleave` fire for every element the pointer crosses, so a
+     * naive pair flickers the overlay across the whole window. Counting the
+     * enters and leaves is what makes it stable.
+     */
+    const onDragEnter = (event: DragEvent) => {
+      event.preventDefault();
+      if (!event.dataTransfer?.types?.length) return;
+      dragDepth.current += 1;
+      setDragging(true);
+    };
+    const onDragLeave = () => {
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragging(false);
+    };
+    const onDragEnd = () => {
+      dragDepth.current = 0;
+      setDragging(false);
+    };
+
     window.addEventListener('dragover', allow);
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('dragend', onDragEnd);
     window.addEventListener('drop', onDrop);
     return () => {
       window.removeEventListener('dragover', allow);
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('dragend', onDragEnd);
       window.removeEventListener('drop', onDrop);
     };
   }, [handleOpenLocalFile, handleOpenTorrentFiles, handleOpenMagnet]);
@@ -1215,6 +1267,11 @@ export const App: React.FC = () => {
       {/* Main App View Area */}
       <div className="main-content">
         <Navbar
+          onTorrentPicked={(infoHash) => {
+            setPlayerHidden(true);
+            setOpenTorrent(infoHash);
+          }}
+          onTorrentPickFailed={(message) => setActionNotice(message)}
           onSearch={handleSearch}
           isSearching={Boolean(search && !search.done)}
           onScopeChange={handleScopeChange}
@@ -1223,6 +1280,24 @@ export const App: React.FC = () => {
           // claims to say what is being searched.
           externalQuery={searchQuery}
         />
+
+        {/*
+          Visible feedback for a drop, which the gesture had none of.
+
+          Not decoration: a drop with no acknowledgement is indistinguishable
+          from an app that ignores dropped files, and that is precisely how this
+          read while `File.path` was returning undefined. The overlay says what
+          the window will accept *before* anything is released.
+        */}
+        {dragging && (
+          <div className="drop-overlay" aria-hidden>
+            <div className="drop-overlay__card">
+              <FileDown size={26} />
+              <strong>Drop to open</strong>
+              <span>A .torrent file, a video, or a magnet link</span>
+            </div>
+          </div>
+        )}
 
         {isOffline && (
           <div className="offline-banner" role="status">

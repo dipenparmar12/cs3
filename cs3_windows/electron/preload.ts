@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { LogLevel } from './logging/logger';
 import type {
   ProviderCatalog,
@@ -616,6 +616,39 @@ export interface CloudStreamElectronAPI {
    * `resolved: false` from `getTorrentContents` is an ordinary answer, not a
    * failure — the page renders the name and offers to fetch the rest.
    */
+  /**
+   * The on-disk path of a dropped `File`.
+   *
+   * **`File.path` was removed in Electron 32** and this app is on 43, so the
+   * property the drop handler read was simply `undefined` — every dropped file
+   * produced an empty path list and the handler returned without a word. That
+   * is why drag-and-drop did nothing: not a listener that never fired, but one
+   * that fired and found nothing to act on.
+   *
+   * `webUtils.getPathForFile` is the replacement and has to be called in the
+   * preload: `webUtils` is a main-world module, and the renderer cannot reach
+   * it under `contextIsolation`. Null for a `File` with no filesystem origin.
+   */
+  getPathForFile: (file: File) => string | null;
+  /**
+   * Picks `.torrent` files through the system dialog.
+   *
+   * Drag-and-drop is a gesture not everyone knows, and one that is awkward on a
+   * laptop trackpad. The dialog is the same import with a different door.
+   */
+  pickTorrentFiles: () => Promise<
+    Envelope & {
+      cancelled?: boolean;
+      results?: Array<{
+        path: string;
+        ok: boolean;
+        infoHash?: string;
+        resolved?: boolean;
+        duplicate?: boolean;
+        error?: string;
+      }>;
+    }
+  >;
   importTorrentFiles: (filePaths: string[]) => Promise<
     Envelope & {
       results?: Array<{
@@ -1739,6 +1772,16 @@ const api: CloudStreamElectronAPI = {
   getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
   clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),
 
+  getPathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file) || null;
+    } catch {
+      // A `File` that came from anywhere but the filesystem — a paste, a
+      // generated blob — has no path, and asking throws rather than answering.
+      return null;
+    }
+  },
+  pickTorrentFiles: () => ipcRenderer.invoke('torrent:pickFiles'),
   importTorrentFiles: (filePaths) => ipcRenderer.invoke('torrent:importFiles', filePaths),
   importMagnet: (uri) => ipcRenderer.invoke('torrent:importMagnet', uri),
   getTorrentContents: (infoHash) => ipcRenderer.invoke('torrent:getContents', infoHash),

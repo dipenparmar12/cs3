@@ -6594,3 +6594,64 @@
 }
 .torrent-view__error { color: #fca5a5; }
 .torrent-view__notice { color: #86efac; }
+
+/* --- Dropping a file on the window ----------------------------------------
+ *
+ * The gesture had no acknowledgement at all, which for the whole time
+ * `File.path` was returning undefined made a broken handler and an app that
+ * ignores dropped files completely indistinguishable. The overlay says what
+ * the window accepts before anything is released.
+ */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Never intercepts the drop itself — the window-level listener is what
+     handles it, and a covering element that swallowed the event would break
+     the thing it exists to advertise. */
+  pointer-events: none;
+  background: rgba(4, 7, 14, 0.6);
+  backdrop-filter: blur(2px);
+}
+.drop-overlay__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 2rem 2.6rem;
+  border-radius: 14px;
+  border: 2px dashed rgba(96, 165, 250, 0.55);
+  background: rgba(20, 25, 34, 0.92);
+  color: var(--text, #e2e8f0);
+  text-align: center;
+}
+.drop-overlay__card strong { font-size: 1.05rem; }
+.drop-overlay__card span { font-size: 0.83rem; color: var(--text-subtle, #94a3b8); }
+.drop-overlay__card svg { color: var(--accent, #60a5fa); }
+
+/* The picker beside the search box: the same import, for anyone who does not
+   drag files. Quiet until hovered — it sits next to the primary action and
+   must not compete with it. */
+.search-bar__attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text-subtle, #94a3b8);
+  cursor: pointer;
+}
+.search-bar__attach:hover:not(:disabled) {
+  color: var(--text, #e2e8f0);
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.24);
+}
+.search-bar__attach:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
+.search-bar__attach:disabled { opacity: 0.6; cursor: default; }

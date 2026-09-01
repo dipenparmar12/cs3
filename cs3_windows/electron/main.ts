@@ -3052,6 +3052,32 @@ ipcMain.handle('torrent:importFiles', async (_, filePaths: string[]) => {
   }
 });
 
+/** The same import, reached through a dialog rather than a drop. */
+ipcMain.handle('torrent:pickFiles', async () => {
+  try {
+    if (!mainWindow) return { ok: false, error: 'No window to ask from.' };
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Open torrent files',
+      // Several at once, matching what a drop allows. Picking three and being
+      // given one would be a worse version of the gesture it stands in for.
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Torrent', extensions: ['torrent'] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, cancelled: true };
+    }
+    return {
+      ok: true,
+      results: result.filePaths.map((filePath) => ({
+        path: filePath,
+        ...torrentImports.importFile(filePath),
+      })),
+    };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
 ipcMain.handle('torrent:importMagnet', async (_, uri: string) => {
   try {
     if (!uri) return { ok: false, error: 'No magnet link was given.' };
