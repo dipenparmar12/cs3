@@ -149,3 +149,54 @@ test('the orphan allow-list has no stale entries', () => {
     );
   }
 });
+
+test('no two modules differ only in casing', () => {
+  /**
+   * `SettingsLevel.tsx` sat beside `settingsLevel.ts`. On Windows' case-
+   * insensitive filesystem those are one name, and module resolution tries
+   * `.ts` before `.tsx` — so every `./SettingsLevel` import silently resolved
+   * to the pure rule, which exports `shouldShow` and neither
+   * `useSettingsLevel` nor `SettingsLevelProvider`.
+   *
+   * A missing named export is an ESM *link* error, not a runtime one. It does
+   * not throw inside a component where an ErrorBoundary could catch it; it
+   * fails the whole `App.tsx` import graph, so the window comes up **blank**
+   * with nothing on screen naming a cause. `tsc -b` and `vite build` both
+   * refuse it, which is the layer that should have caught it — this test is
+   * the one that runs in `test:electron`, where the rest of the suite is.
+   *
+   * The check is the filesystem's rule, not TypeScript's: fold the whole path
+   * to lower case and require it to still be unique. That also catches a
+   * collision between two directories, which resolves the same way and is
+   * just as invisible on the machine it was written on.
+   */
+  const roots = [here, path.join(here, '..', 'electron')];
+  const seen = new Map<string, string>();
+
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!/\.(ts|tsx|mts|js|jsx|mjs)$/.test(entry.name)) continue;
+      // The extension is part of the name on disk but not part of a specifier,
+      // so `Foo.ts` and `foo.tsx` collide for an importer even though the two
+      // file names differ. Compare the specifier, which is what resolution sees.
+      const key = full.replace(/\.(ts|tsx|mts|js|jsx|mjs)$/, '').toLowerCase();
+      const previous = seen.get(key);
+      assert.ok(
+        previous === undefined,
+        `${path.relative(here, previous ?? '')} and ${path.relative(here, full)} differ only ` +
+          'in casing. On Windows they are one module, resolution picks whichever extension ' +
+          'comes first, and the loser\'s exports vanish — which fails the import graph and ' +
+          'blanks the window. Rename one.'
+      );
+      seen.set(key, full);
+    }
+  };
+
+  for (const root of roots) walk(root);
+});

@@ -31,7 +31,7 @@ import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
 import {
   SettingsLevelProvider,
   type SettingsLevel,
-} from '../components/settings/SettingsLevel';
+} from '../components/settings/SettingsLevelContext';
 import { useFlash } from '../utils/useFlash';
 import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
 import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPanel';

@@ -1,6 +1,6 @@
 import React from 'react';
 import { InfoHint } from './InfoHint';
-import { shouldShow, useSettingsLevel } from './SettingsLevel';
+import { shouldShow, useSettingsLevel } from './SettingsLevelContext';
 
 /**
  * One setting: what it is on the left, what you do about it on the right.

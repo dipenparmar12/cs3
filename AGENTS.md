@@ -3714,6 +3714,31 @@ worth testing — its default (**an unclassified row is basic**) is load-bearing
 since backwards it would make Simple mode silently lose every setting added from
 then on.
 
+**And splitting it that way is what blanked the whole app (2026-09-01).** The
+React half was `SettingsLevel.tsx`, beside the pure `settingsLevel.ts`. On
+Windows' case-insensitive filesystem those are **one name**, and module
+resolution tries `.ts` before `.tsx` — so `import { useSettingsLevel } from
+'./SettingsLevel'` resolved to the pure rule, which exports `shouldShow` and
+neither the hook nor the provider.
+
+The consequence is out of all proportion to the cause, and that is the part
+worth remembering. A missing named export is an ESM **link** error, not a
+runtime one: it does not throw inside a component where `ErrorBoundary` could
+catch it and it names nothing on screen. It fails the entire `App.tsx` import
+graph, so **the window comes up blank** — every view, not just Settings. The
+last successful `dist/` predated the commit by three days and nothing said so,
+because `vite-plugin-electron` builds main and preload as separate environments
+and those two kept succeeding.
+
+`tsc -b` and `vite build` both refuse it outright, so the tooling was never the
+gap — the gap was shipping without running either. The file is
+`SettingsLevelContext.tsx` now, and `componentReachability.test.mts` grew a
+third case that folds every module path under `src/` and `electron/` to lower
+case and requires it to stay unique. It runs inside `test:electron`, which is
+what people actually run, and it is verified by mutation. **Never name a `.tsx`
+and a `.ts` alike but for their casing** — on the machine it is written on, it
+resolves.
+
 ### Settings (2026-08-27)
 
 The tab bar was `overflow-x: auto` over a fixed set of eight tabs, so on an ordinary window
