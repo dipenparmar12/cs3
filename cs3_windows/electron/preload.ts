@@ -1372,9 +1372,9 @@ export interface CloudStreamElectronAPI {
    * a restore can be confirmed against what is actually in the file rather than
    * against its filename.
    */
-  exportUserData: () => Promise<
-    Envelope & { path?: string; bytes?: number; cancelled?: boolean }
-  >;
+  exportUserData: (
+    only?: string[]
+  ) => Promise<Envelope & { path?: string; bytes?: number; cancelled?: boolean }>;
   inspectBackup: () => Promise<
     Envelope & {
       cancelled?: boolean;
@@ -1389,12 +1389,60 @@ export interface CloudStreamElectronAPI {
   >;
   restoreUserData: (
     filePath: string,
-    only?: string[]
+    options?: { only?: string[]; mode?: 'merge' | 'replace' }
   ) => Promise<
-    Envelope & { sections?: Array<{ name: string; restored: number; note?: string }> }
+    Envelope & {
+      sections?: Array<{
+        name: string;
+        restored: number;
+        note?: string;
+        mode?: 'merge' | 'replace';
+      }>;
+    }
   >;
   /** Puts the key/value store back as it was immediately before a restore. */
   undoRestore: () => Promise<Envelope>;
+
+  /**
+   * Making a provider a saved page names answer again.
+   *
+   * Two calls, because the fix can be a repository fetch and an extension
+   * install. `planProviderRecovery` says what pressing the button would do and
+   * changes nothing; `recoverProvider` does it and reports each step. Folding
+   * them together would commit someone who only wanted to know why their title
+   * would not open.
+   *
+   * Neither takes a repository URL. The address comes from what this machine
+   * has already recorded — see `providerRecovery.ts` for why accepting one from
+   * a `cs3ext://` address would be a way to make the app install code from
+   * anywhere.
+   */
+  planProviderRecovery: (provider: string) => Promise<
+    Envelope & {
+      plan?: {
+        provider: string;
+        steps: Array<{
+          kind:
+            | 'add-repository'
+            | 'install-extension'
+            | 'enable-repository'
+            | 'enable-extension'
+            | 'enable-provider';
+          target: string;
+          label: string;
+          costly?: boolean;
+        }>;
+        blocked?: string;
+        extension?: { internalName: string; name: string; repositoryUrl?: string };
+      };
+    }
+  >;
+  recoverProvider: (provider: string) => Promise<
+    Envelope & {
+      provider?: string;
+      done?: Array<{ kind: string; target: string; ok: boolean; error?: string }>;
+    }
+  >;
   /**
    * Commands from the application menu.
    *
@@ -1787,10 +1835,14 @@ const api: CloudStreamElectronAPI = {
   selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
   reloadApp: () => ipcRenderer.invoke('app:reload'),
   relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
-  exportUserData: () => ipcRenderer.invoke('backup:export'),
+  exportUserData: (only) => ipcRenderer.invoke('backup:export', only),
   inspectBackup: () => ipcRenderer.invoke('backup:inspect'),
-  restoreUserData: (filePath, only) => ipcRenderer.invoke('backup:restore', filePath, only),
+  restoreUserData: (filePath, options) =>
+    ipcRenderer.invoke('backup:restore', filePath, options),
   undoRestore: () => ipcRenderer.invoke('backup:undoRestore'),
+  planProviderRecovery: (provider) =>
+    ipcRenderer.invoke('extension:planProviderRecovery', provider),
+  recoverProvider: (provider) => ipcRenderer.invoke('extension:recoverProvider', provider),
   onToggleInspector: (callback) => subscribe('app:toggleInspector', callback),
   onShowLicences: (callback) => subscribe('app:showLicences', callback),
   onOpenLocalFile: (callback) => subscribe('app:openLocalFile', callback),
