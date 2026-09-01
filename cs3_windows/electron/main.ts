@@ -51,6 +51,9 @@ import type { MpvOpenRequest } from '../src/types/mpv';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { OttService } from './cs3/ottService';
 import { OttCatalogService } from './cs3/ottCatalog';
+import { TorrentImportService, classifyDroppedPath, looksLikeMagnet } from './torrent/torrentImport';
+import { parseReleaseName } from './torrent/releaseParser';
+import { buildDownloadTask } from '../src/utils/downloadIdentity';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { BootstrapService } from './cs3/bootstrap';
 import { TitleOutcomeStore, type TitleOutcomeKind } from './cs3/titleOutcomes';
@@ -249,6 +252,19 @@ const torrentEngine = new TorrentEngine({
 });
 const contentService = new ContentService(datastore, pluginManager, torrentEngine);
 const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
+/**
+ * Opening `.torrent` files and magnets as browsable content.
+ *
+ * Shares the engine's own metadata cache rather than pointing a second one at
+ * the same directory: an imported `.torrent` written there is what makes the
+ * first Play skip the BEP-9 fetch, and a directory named in two places is a
+ * directory that eventually disagrees.
+ */
+const torrentImports = new TorrentImportService(
+  torrentEngine.metadata,
+  app.getPath('userData')
+);
+
 const ottService = new OttService(pluginManager, datastore);
 /** Metadata catalogues for the platforms no installed provider can describe. */
 const ottCatalog = new OttCatalogService();
@@ -710,13 +726,19 @@ function buildApplicationMenu(): Menu {
 async function openLocalMediaDialog(): Promise<void> {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Open a video file',
+    title: 'Open a video or torrent',
     properties: ['openFile'],
     filters: [
       {
-        name: 'Video',
-        extensions: ['mkv', 'mp4', 'avi', 'mov', 'm4v', 'webm', 'ts', 'm2ts', 'wmv', 'flv', 'mpg', 'mpeg'],
+        // Both in one filter, because "open" is one gesture. The renderer sends
+        // each to the handler its extension names, and each verifies.
+        name: 'Video and torrents',
+        extensions: [
+          'mkv', 'mp4', 'avi', 'mov', 'm4v', 'webm', 'ts', 'm2ts', 'wmv', 'flv', 'mpg', 'mpeg',
+          'torrent',
+        ],
       },
+      { name: 'Torrent', extensions: ['torrent'] },
       { name: 'All files', extensions: ['*'] },
     ],
   });
@@ -953,6 +975,68 @@ function createWindow() {
   });
 }
 
+/**
+ * A `.torrent` or magnet given on the command line, or by a file association.
+ *
+ * Windows passes both as ordinary `argv` entries, so this is one scan rather
+ * than two mechanisms. Electron's own switches are skipped: `--inspect` and the
+ * rest are not files, and a naive "last argument" read opens whatever flag the
+ * launcher happened to append.
+ */
+function openableFromArgv(argv: string[]): string | null {
+  for (const argument of argv.slice(1)) {
+    if (argument.startsWith('-')) continue;
+    if (/^magnet:\?/i.test(argument)) return argument;
+    if (/\.torrent$/i.test(argument)) return argument;
+  }
+  return null;
+}
+
+/** Held until the renderer exists, since a launch beats the window. */
+let pendingOpen: string | null = openableFromArgv(process.argv);
+
+function deliverPendingOpen(): void {
+  if (!pendingOpen || !mainWindow || mainWindow.isDestroyed()) return;
+  const target = pendingOpen;
+  pendingOpen = null;
+  mainWindow.webContents.send('app:openLocalFile', target);
+}
+
+/*
+ * One instance, and a second launch hands its argument to the first.
+ *
+ * Without this, double-clicking a second `.torrent` starts a whole second app:
+ * two windows, two sidecars, two torrent clients contending for one cache
+ * directory — which is the locked-cache failure `before-quit` already exists to
+ * prevent, arriving from the other direction.
+ */
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    pendingOpen = openableFromArgv(argv) ?? pendingOpen;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+      deliverPendingOpen();
+    }
+  });
+}
+
+// macOS delivers an associated file this way rather than through argv.
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  pendingOpen = filePath;
+  deliverPendingOpen();
+});
+
+// And a magnet, which arrives as a protocol rather than a file.
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  pendingOpen = url;
+  deliverPendingOpen();
+});
+
 app.whenReady().then(async () => {
   /**
    * Main-process scraping moves onto Chromium's network stack.
@@ -1172,6 +1256,9 @@ async function shutdownServices(): Promise<void> {
   issueLog.flush();
   mediaTranscoder.shutdown();
   contentService.shutdown();
+  // Imported torrents are debounced to disk; without this the last few opens
+  // are lost on a clean quit, which reads as the list forgetting them.
+  torrentImports.shutdown();
   // Hidden windows keep running their pages — timers, requests and all — with
   // nothing on screen to reveal them.
   webViewHost.destroy();
@@ -2931,6 +3018,215 @@ ipcMain.handle('sources:clearCache', async () => {
   contentService.getCache().clear();
   return { ok: true };
 });
+
+/**
+ * `torrent:import*` opens a torrent as *content*, not as a download.
+ *
+ * Import and read are separate calls, and separate for the reason Add and
+ * Install are separate on the repositories screen: importing a file is a read
+ * and a cache write, and a magnet whose metadata is not here yet has to join a
+ * swarm. Folding them together would make opening a page block on a swarm that
+ * may be dead.
+ */
+ipcMain.handle('torrent:importFiles', async (_, filePaths: string[]) => {
+  try {
+    if (!Array.isArray(filePaths) || filePaths.length === 0) {
+      return { ok: false, error: 'No files were given.' };
+    }
+    const results = filePaths
+      .filter((filePath) => classifyDroppedPath(filePath) === 'torrent')
+      .map((filePath) => ({ path: filePath, ...torrentImports.importFile(filePath) }));
+    if (results.length === 0) return { ok: false, error: 'None of those were .torrent files.' };
+    return { ok: true, results };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('torrent:importMagnet', async (_, uri: string) => {
+  try {
+    if (!uri) return { ok: false, error: 'No magnet link was given.' };
+    return torrentImports.importMagnet(uri);
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/**
+ * What is inside a torrent, from metadata this machine already holds.
+ *
+ * `resolved: false` is an ordinary answer for a magnet, not a failure — the
+ * page renders its name and asks the engine to fetch the rest.
+ */
+ipcMain.handle('torrent:getContents', async (_, infoHash: string) => {
+  try {
+    if (!/^[a-f0-9]{40}$/i.test(infoHash ?? '')) {
+      return { ok: false, error: 'That is not a torrent hash.' };
+    }
+    const hash = infoHash.toLowerCase();
+    torrentImports.touch(hash);
+    const contents = torrentImports.contents(hash);
+    return {
+      ok: true,
+      resolved: contents !== null,
+      record: torrentImports.get(hash),
+      contents,
+    };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/**
+ * Joins the swarm for the sole purpose of fetching metadata.
+ *
+ * The engine owns every swarm timeout, the dead-swarm bail and the `xs` mirror
+ * race, so this asks it rather than resolving alongside it. `mode: 'download'`
+ * is deliberate: nothing is being watched yet, and the sequential piece
+ * ordering a stream asks for is wrong for a metadata fetch.
+ */
+ipcMain.handle('torrent:resolveMagnet', async (_, infoHash: string) => {
+  try {
+    const record = torrentImports.get((infoHash ?? '').toLowerCase());
+    if (!record?.source) return { ok: false, error: 'That torrent has no magnet to resolve.' };
+
+    await torrentEngine.startStream({ torrentId: record.source, mode: 'download' });
+    // The engine writes resolved metadata into the shared cache, so reading is
+    // the whole handshake — see `TorrentImportService.load`.
+    const contents = torrentImports.contents(record.infoHash);
+    return {
+      ok: contents !== null,
+      resolved: contents !== null,
+      contents,
+      record: torrentImports.get(record.infoHash),
+      error: contents === null ? 'No peer offered this torrent’s file list.' : undefined,
+    };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('torrent:listImports', async () => {
+  try {
+    return { ok: true, records: torrentImports.list() };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('torrent:removeImport', async (_, infoHash: string) => {
+  try {
+    return { ok: torrentImports.remove((infoHash ?? '').toLowerCase()) };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/** Whether a pasted string is a magnet, so the UI can offer to open it. */
+ipcMain.handle('torrent:isMagnet', async (_, text: string) => ({
+  ok: true,
+  magnet: looksLikeMagnet(text ?? ''),
+}));
+
+/**
+ * Streams one file out of an imported torrent.
+ *
+ * `mode: 'stream'` and an explicit `fileIndex` together are what make this
+ * different from adding the torrent: the engine orders pieces sequentially from
+ * that file's start and deselects the rest, so a 40 GB season pack delivers one
+ * episode rather than splitting the swarm's bandwidth across ten.
+ *
+ * The magnet is preferred as the id when the record has one, because it carries
+ * the trackers the link named. A bare infohash still works — the `.torrent` is
+ * in the shared metadata cache — but it would join with only the DHT.
+ */
+ipcMain.handle('torrent:playFile', async (_, infoHash: string, fileIndex: number) => {
+  try {
+    const hash = (infoHash ?? '').toLowerCase();
+    const record = torrentImports.get(hash);
+    if (!record) return { ok: false, error: 'That torrent is not imported.' };
+    if (!Number.isInteger(fileIndex) || fileIndex < 0) {
+      return { ok: false, error: 'No file was chosen.' };
+    }
+
+    const handle = await torrentEngine.startStream({
+      torrentId: record.origin === 'magnet' && record.source ? record.source : hash,
+      fileIndex,
+      mode: 'stream',
+    });
+    torrentImports.touch(hash);
+    return { ok: true, handle };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/**
+ * Queues one file out of a torrent as an ordinary download.
+ *
+ * Built here rather than in the renderer because the queue's identity rules
+ * live here: `download:request` keys on the *variant*, so re-pressing Download
+ * on an episode already queued resumes or reports it instead of starting a
+ * second copy of the same bytes. The infohash plus the file index is that
+ * variant — durable in a way a provider URL is not, since it addresses content
+ * rather than an address that expires.
+ */
+ipcMain.handle(
+  'torrent:downloadFile',
+  async (
+    _,
+    request: {
+      infoHash: string;
+      fileIndex: number;
+      fileName: string;
+      title: string;
+      season?: number;
+      episode?: number;
+      totalSize?: number;
+    }
+  ) => {
+    try {
+      const hash = (request?.infoHash ?? '').toLowerCase();
+      const record = torrentImports.get(hash);
+      if (!record) return { ok: false, error: 'That torrent is not imported.' };
+
+      const magnet = record.origin === 'magnet' && record.source ? record.source : `magnet:?xt=urn:btih:${hash}`;
+      const source: TorrentResult = {
+        infoHash: hash,
+        title: request.fileName,
+        magnet,
+        sizeBytes: request.totalSize ?? 0,
+        seeders: 0,
+        leechers: 0,
+        indexerId: 'imported-torrent',
+        // Named for what it is. This travels into the download list and the
+        // history, where "which torrent did this come from" is the question.
+        indexerName: 'Imported torrent',
+        // The file inside the archive. Left unset for a provider magnet — see
+        // AGENTS.md — precisely because there it would select an arbitrary
+        // episode; here it is the whole point and is the viewer's own choice.
+        fileIndex: request.fileIndex,
+        parsed: parseReleaseName(request.fileName),
+      } as TorrentResult;
+
+      const task = buildDownloadTask(source, {
+        title: request.title,
+        mediaUrl: `torrent://${hash}/${request.fileIndex}`,
+        episodeTitle:
+          request.season !== undefined && request.episode !== undefined
+            ? `S${String(request.season).padStart(2, '0')}E${String(request.episode).padStart(2, '0')}`
+            : undefined,
+        season: request.season,
+        episode: request.episode,
+      });
+      if (!task) return { ok: false, error: 'That file could not be queued.' };
+
+      return await downloadService.request(task);
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
 
 ipcMain.handle('torrent:getStats', async (_, infoHash: string) =>
   torrentEngine.getStats(infoHash)

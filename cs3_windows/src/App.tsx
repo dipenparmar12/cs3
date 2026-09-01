@@ -7,6 +7,7 @@ import { Navbar } from './components/Navbar';
 import { VideoPlayer } from './components/VideoPlayer';
 import { MiniPlayerBar } from './components/player/MiniPlayerBar';
 import { OttPlatformView, type OttPlatformSummary } from './views/OttPlatformView';
+import { TorrentView, type TorrentPlayRequest } from './views/TorrentView';
 import { DownloadCenter } from './components/DownloadCenter';
 import { ProviderInspector } from './components/ProviderInspector';
 import { ExtensionsScreen } from './components/extensions/ExtensionsScreen';
@@ -76,6 +77,15 @@ export const App: React.FC = () => {
    * button that does nothing when clicked.
    */
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  /**
+   * The imported torrent being browsed, or null.
+   *
+   * Held beside the tab rather than inside it: opening a torrent is a
+   * navigation that can start from anywhere — a drop on the home screen, a
+   * paste in search, a file association at launch — and routing it through a
+   * tab would mean every one of those first switching to that tab.
+   */
+  const [openTorrent, setOpenTorrent] = useState<string | null>(null);
 
   /**
    * The instant-play path: the player opens on this state before any stream
@@ -368,11 +378,114 @@ export const App: React.FC = () => {
     });
   }, []);
 
+  /**
+   * Opens a `.torrent`: browse first, download never implied.
+   *
+   * Several may be dropped at once. The last one that imported wins the page,
+   * and the rest are still imported and reachable — dropping five and being
+   * shown one is expected; dropping five and keeping one would not be.
+   */
+  const handleOpenTorrentFiles = useCallback(async (filePaths: string[]) => {
+    const result = await window.cloudstream?.importTorrentFiles?.(filePaths);
+    if (!result?.ok) {
+      setActionNotice(result?.error ?? 'That file could not be read as a torrent.');
+      return;
+    }
+    const opened = (result.results ?? []).filter((row) => row.ok && row.infoHash);
+    const failed = (result.results ?? []).filter((row) => !row.ok);
+    if (opened.length === 0) {
+      setActionNotice(failed[0]?.error ?? 'None of those could be read as torrents.');
+      return;
+    }
+    if (failed.length > 0) {
+      setActionNotice(
+        `${failed.length} of ${result.results?.length} could not be read as torrents.`
+      );
+    }
+    setPlayerHidden(true);
+    setOpenTorrent(opened[opened.length - 1].infoHash!);
+  }, []);
+
+  /**
+   * Plays one file from an imported torrent.
+   *
+   * Goes to the engine rather than through discovery: the source is already
+   * known exactly, so there is nothing to search, rank or wait on. The player
+   * receives the loopback URL the engine serves, which is the same shape every
+   * other source arrives in.
+   */
+  const handlePlayTorrentFile = useCallback(async (request: TorrentPlayRequest) => {
+    setActionNotice(null);
+    const result = await window.cloudstream?.playTorrentFile?.(
+      request.infoHash,
+      request.fileIndex
+    );
+    if (!result?.ok || !result.handle?.streamUrl) {
+      setActionNotice(result?.error ?? 'That file could not be streamed.');
+      return;
+    }
+    const handle = result.handle;
+    setPlayerHidden(false);
+    setPlayerMini(false);
+    setPlayback({
+      streamUrl: handle.streamUrl,
+      mimeType: handle.mimeType,
+      title: request.title,
+      episodeTitle:
+        request.season !== undefined && request.episode !== undefined
+          ? `S${String(request.season).padStart(2, '0')}E${String(request.episode).padStart(2, '0')}`
+          : request.fileName,
+      infoHash: handle.infoHash,
+      // Subtitles bundled in the torrent, served from the same loopback origin
+      // the video is. Nothing else could supply them for a file with no IMDb id.
+      subtitles: handle.subtitleUrls ?? [],
+      progress: {
+        /*
+         * Addressed by infohash and file index rather than by the loopback URL.
+         * The port and token are minted per session, so a URL-keyed progress
+         * record would miss on every restart while looking as though it should
+         * hit — the same trap the probe cache was keyed into.
+         */
+        mediaUrl: `torrent://${request.infoHash}/${request.fileIndex}`,
+        season: request.season,
+        episode: request.episode,
+      },
+    });
+  }, []);
+
+  const handleDownloadTorrentFile = useCallback(
+    async (request: TorrentPlayRequest & { totalSize: number }) => {
+      const result = await window.cloudstream?.downloadTorrentFile?.(request);
+      if (!result?.ok) setActionNotice(result?.message ?? 'That file could not be queued.');
+    },
+    []
+  );
+
+  const handleOpenMagnet = useCallback(async (uri: string) => {
+    const result = await window.cloudstream?.importMagnet?.(uri);
+    if (!result?.ok || !result.infoHash) {
+      setActionNotice(result?.error ?? 'That magnet link could not be opened.');
+      return;
+    }
+    setPlayerHidden(true);
+    setOpenTorrent(result.infoHash);
+  }, []);
+
   useEffect(() => {
     return window.cloudstream?.onOpenLocalFile?.((filePath) => {
+      // The main process hands over whatever was opened or associated; which
+      // handler it belongs to is decided by extension, and each verifies.
+      if (filePath.toLowerCase().endsWith('.torrent')) {
+        void handleOpenTorrentFiles([filePath]);
+        return;
+      }
+      if (/^magnet:\?/i.test(filePath)) {
+        void handleOpenMagnet(filePath);
+        return;
+      }
       void handleOpenLocalFile(filePath);
     });
-  }, [handleOpenLocalFile]);
+  }, [handleOpenLocalFile, handleOpenTorrentFiles, handleOpenMagnet]);
 
   /**
    * A file dropped on the window plays; it does not navigate.
@@ -386,11 +499,31 @@ export const App: React.FC = () => {
     const allow = (event: DragEvent) => event.preventDefault();
     const onDrop = (event: DragEvent) => {
       event.preventDefault();
-      const file = event.dataTransfer?.files?.[0];
+
+      /*
+       * Dragged *text* is checked first, because a magnet dragged out of a
+       * browser arrives as text and carries no file at all. Checking files
+       * first would silently drop it.
+       */
+      const dragged = event.dataTransfer?.getData('text/plain')?.trim();
+      if (dragged && /^magnet:\?/i.test(dragged)) {
+        void handleOpenMagnet(dragged);
+        return;
+      }
+
       // `webUtils.getPathForFile` is the supported route in newer Electron;
       // `file.path` remains populated in this build and is the simpler one.
-      const filePath = (file as (File & { path?: string }) | undefined)?.path;
-      if (filePath) void handleOpenLocalFile(filePath);
+      const paths = [...(event.dataTransfer?.files ?? [])]
+        .map((file) => (file as File & { path?: string }).path)
+        .filter((filePath): filePath is string => Boolean(filePath));
+      if (paths.length === 0) return;
+
+      const torrents = paths.filter((filePath) => filePath.toLowerCase().endsWith('.torrent'));
+      if (torrents.length > 0) {
+        void handleOpenTorrentFiles(torrents);
+        return;
+      }
+      void handleOpenLocalFile(paths[0]);
     };
     window.addEventListener('dragover', allow);
     window.addEventListener('drop', onDrop);
@@ -398,7 +531,7 @@ export const App: React.FC = () => {
       window.removeEventListener('dragover', allow);
       window.removeEventListener('drop', onDrop);
     };
-  }, [handleOpenLocalFile]);
+  }, [handleOpenLocalFile, handleOpenTorrentFiles, handleOpenMagnet]);
 
   /**
    * Opens a search. Returns as soon as it has started, not when it has finished.
@@ -1330,7 +1463,18 @@ export const App: React.FC = () => {
             />
           ) : (
             <>
-              {activeTab === 'home' && (
+              {openTorrent ? (
+                <ErrorBoundary>
+                  <TorrentView
+                    infoHash={openTorrent}
+                    onPlay={(request) => void handlePlayTorrentFile(request)}
+                    onDownload={(request) => void handleDownloadTorrentFile(request)}
+                    onBack={() => setOpenTorrent(null)}
+                  />
+                </ErrorBoundary>
+              ) : null}
+
+              {!openTorrent && activeTab === 'home' && (
                 <ErrorBoundary>
                   <HomeView
                     onSelectMedia={handleSelectMedia}
@@ -1370,7 +1514,7 @@ export const App: React.FC = () => {
                   })()}
                 </ErrorBoundary>
               )}
-              {activeTab === 'search' && (
+              {!openTorrent && activeTab === 'search' && (
                 <ErrorBoundary>
                   <SearchView
                     query={searchQuery}
@@ -1386,7 +1530,7 @@ export const App: React.FC = () => {
                   />
                 </ErrorBoundary>
               )}
-              {activeTab === 'library' && (
+              {!openTorrent && activeTab === 'library' && (
                 <ErrorBoundary>
                   <LibraryView
                     onSelectMedia={handleSelectMedia}
@@ -1396,7 +1540,7 @@ export const App: React.FC = () => {
                   />
                 </ErrorBoundary>
               )}
-              {activeTab === 'history' && (
+              {!openTorrent && activeTab === 'history' && (
                 <ErrorBoundary>
                   <HistoryView
                     onSelectMedia={handleSelectMedia}
@@ -1404,7 +1548,7 @@ export const App: React.FC = () => {
                   />
                 </ErrorBoundary>
               )}
-              {activeTab === 'downloads' && (
+              {!openTorrent && activeTab === 'downloads' && (
                 <DownloadCenter
                   tasks={downloadQueue}
                   hasBinaries={hasBinaries}
@@ -1481,12 +1625,12 @@ export const App: React.FC = () => {
                   }}
                 />
               )}
-              {activeTab === 'extensions' && (
+              {!openTorrent && activeTab === 'extensions' && (
                 <ErrorBoundary fallbackTitle="Error loading Extensions Manager">
                   <ExtensionsScreen />
                 </ErrorBoundary>
               )}
-              {activeTab === 'settings' && (
+              {!openTorrent && activeTab === 'settings' && (
                 <ErrorBoundary>
                   <SettingsView
                     hasBinaries={hasBinaries}

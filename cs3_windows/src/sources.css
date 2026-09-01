@@ -6487,3 +6487,110 @@
   font-size: 0.76rem;
   color: #fca5a5;
 }
+
+/* --- Torrent contents ------------------------------------------------------
+ *
+ * A catalogue, not a download manager. The ordering the page enforces is
+ * metadata first, choice second, bytes third — so everything here is arranged
+ * around picking a file, and nothing starts a transfer without a press.
+ */
+.torrent-view { padding: 1.5rem 2rem 6rem; }
+.torrent-view--state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 0.8rem; min-height: 60vh; color: var(--text-subtle, #94a3b8);
+}
+
+.torrent-view__head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 2rem; flex-wrap: wrap; margin-bottom: 1.4rem;
+}
+.torrent-view__kicker {
+  margin: 0 0 0.3rem; font-size: 0.74rem; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--accent, #60a5fa);
+}
+.torrent-view__head h1 { margin: 0 0 0.4rem; font-size: 1.6rem; line-height: 1.2; }
+.torrent-view__facts { margin: 0 0 0.3rem; font-size: 0.85rem; color: var(--text-subtle, #94a3b8); }
+.torrent-view__hash {
+  margin: 0; font-family: ui-monospace, monospace; font-size: 0.7rem;
+  color: rgba(148, 163, 184, 0.55); user-select: all;
+}
+.torrent-view__head-actions { display: flex; gap: 0.5rem; flex: none; }
+
+.torrent-view__toolbar {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.9rem;
+}
+.torrent-view__search {
+  display: flex; align-items: center; gap: 0.5rem; flex: 1 1 260px; min-width: 0;
+  padding: 0.45rem 0.7rem; border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.22); background: rgba(148, 163, 184, 0.06);
+  color: var(--text-subtle, #94a3b8);
+}
+.torrent-view__search input {
+  /* `min-width: 0` on a flex item, or the input's intrinsic width forces the
+     toolbar wider than the page. The same trap the native stage hit. */
+  flex: 1; min-width: 0; background: none; border: none; color: var(--text, #e2e8f0);
+  font: inherit; font-size: 0.87rem; outline: none;
+}
+.torrent-view__search button {
+  background: none; border: none; color: inherit; cursor: pointer; padding: 0.1rem;
+}
+
+.torrent-view__filters { display: flex; gap: 0.25rem; flex: none; }
+.torrent-view__filter {
+  padding: 0.35rem 0.7rem; border-radius: 7px; border: 1px solid transparent;
+  background: none; color: var(--text-subtle, #94a3b8);
+  font: inherit; font-size: 0.8rem; cursor: pointer;
+}
+.torrent-view__filter:hover { background: rgba(148, 163, 184, 0.1); }
+.torrent-view__filter--on {
+  background: rgba(96, 165, 250, 0.14); color: var(--text, #e2e8f0);
+  border-color: rgba(96, 165, 250, 0.3);
+}
+
+.torrent-view__hidden {
+  margin: 0 0 0.8rem; font-size: 0.78rem; color: var(--text-subtle, #94a3b8);
+}
+
+.torrent-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.torrent-file {
+  display: flex; align-items: center; gap: 0.7rem;
+  padding: 0.5rem 0.6rem; border-radius: 7px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+}
+.torrent-file:hover { background: rgba(148, 163, 184, 0.06); }
+.torrent-file__pick { flex: none; display: flex; align-items: center; }
+.torrent-file__icon { flex: none; color: var(--text-subtle, #94a3b8); display: flex; }
+.torrent-file__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.torrent-file__name {
+  font-size: 0.87rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.torrent-file__meta { font-size: 0.74rem; color: var(--text-subtle, #94a3b8); }
+.torrent-file__actions { flex: none; display: flex; gap: 0.35rem; }
+
+.torrent-season { margin-bottom: 0.8rem; }
+.torrent-season__head {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%;
+  padding: 0.5rem 0.6rem; border: none; border-radius: 7px;
+  background: rgba(148, 163, 184, 0.07); color: inherit;
+  font: inherit; font-size: 0.87rem; cursor: pointer; text-align: left;
+}
+.torrent-season__head span { margin-left: auto; font-size: 0.76rem; color: var(--text-subtle, #94a3b8); }
+
+/* Fixed, because a selection made at the top of a 400-file list is acted on
+   from wherever the viewer has scrolled to. */
+.torrent-view__bulk {
+  position: fixed; left: 50%; bottom: 1.4rem; transform: translateX(-50%);
+  z-index: 25; display: flex; align-items: center; gap: 1.2rem;
+  padding: 0.6rem 0.9rem; border-radius: 10px;
+  background: var(--surface, #141922); border: 1px solid rgba(148, 163, 184, 0.24);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45); font-size: 0.83rem;
+}
+.torrent-view__bulk > div { display: flex; gap: 0.4rem; }
+
+.torrent-view__error,
+.torrent-view__notice {
+  display: flex; align-items: center; gap: 0.4rem;
+  margin-top: 1rem; font-size: 0.83rem;
+}
+.torrent-view__error { color: #fca5a5; }
+.torrent-view__notice { color: #86efac; }
