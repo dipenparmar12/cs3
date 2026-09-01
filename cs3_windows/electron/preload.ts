@@ -1456,6 +1456,28 @@ export interface CloudStreamElectronAPI {
     }
   >;
   /**
+   * The same two calls for a list.
+   *
+   * One round trip rather than one per provider: the case that motivated them
+   * is a scope warning naming seventy, and seventy `invoke`s each rebuilding
+   * the same context is a visibly slow modal for a checklist.
+   */
+  planProviderRecoveryBulk: (providers: string[]) => Promise<
+    Envelope & {
+      plans?: Array<{
+        provider: string;
+        steps: Array<{ kind: string; target: string; label: string; costly?: boolean }>;
+        blocked?: string;
+        extension?: { internalName: string; name: string; repositoryUrl?: string };
+      }>;
+    }
+  >;
+  recoverProviders: (providers: string[]) => Promise<
+    Envelope & {
+      results?: Array<{ ok: boolean; provider: string; error?: string }>;
+    }
+  >;
+  /**
    * Commands from the application menu.
    *
    * The menu is the only place these are discoverable — a keyboard shortcut with
@@ -1858,6 +1880,10 @@ const api: CloudStreamElectronAPI = {
   planProviderRecovery: (provider) =>
     ipcRenderer.invoke('extension:planProviderRecovery', provider),
   recoverProvider: (provider) => ipcRenderer.invoke('extension:recoverProvider', provider),
+  planProviderRecoveryBulk: (providers) =>
+    ipcRenderer.invoke('extension:planProviderRecoveryBulk', providers),
+  recoverProviders: (providers) =>
+    ipcRenderer.invoke('extension:recoverProviders', providers),
   onToggleInspector: (callback) => subscribe('app:toggleInspector', callback),
   onShowLicences: (callback) => subscribe('app:showLicences', callback),
   onOpenLocalFile: (callback) => subscribe('app:openLocalFile', callback),

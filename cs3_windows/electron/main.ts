@@ -4576,6 +4576,28 @@ ipcMain.handle('extension:planProviderRecovery', async (_, provider: string) => 
   }
 });
 
+ipcMain.handle('extension:planProviderRecoveryBulk', async (_, providers: string[]) => {
+  try {
+    if (!Array.isArray(providers) || providers.length === 0) {
+      return { ok: true, plans: [] };
+    }
+    return { ok: true, plans: pluginManager.planProviderRecoveryBulk(providers) };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('extension:recoverProviders', async (_, providers: string[]) => {
+  try {
+    if (!Array.isArray(providers) || providers.length === 0) {
+      return { ok: true, results: [] };
+    }
+    return { ok: true, results: await pluginManager.runProviderRecoveryBulk(providers) };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
 ipcMain.handle('extension:recoverProvider', async (_, provider: string) => {
   try {
     if (!provider) return { ok: false, error: 'No provider was named.' };

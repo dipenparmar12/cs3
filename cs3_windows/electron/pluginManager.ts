@@ -2066,6 +2066,19 @@ export class PluginManager {
   }
 
   /**
+   * The same, for a list.
+   *
+   * One call rather than one per provider, because the case that motivated it
+   * is a scope warning naming *seventy* — and seventy IPC round trips, each
+   * rebuilding the same context from the same datastore reads, to render one
+   * checklist. The context is built once here and shared across every plan.
+   */
+  public planProviderRecoveryBulk(providers: string[]): RecoveryPlan[] {
+    const context = this.recoveryContext();
+    return providers.map((provider) => planRecovery(provider, context));
+  }
+
+  /**
    * Does it.
    *
    * The plan is recomputed rather than taken from the caller. A renderer that
@@ -2078,6 +2091,36 @@ export class PluginManager {
    * for a switch on nothing. What already succeeded is kept, since a repository
    * added before the archive failed to download is still worth having.
    */
+  /**
+   * Recovers several, and keeps going when one fails.
+   *
+   * Sequential rather than parallel, deliberately. Two providers from one
+   * extension would otherwise both reach `install-extension` and race on the
+   * same archive path, and several at once is tens of concurrent downloads
+   * against community repositories — the same restraint `SourcePrefetcher`
+   * shows, and for the same reason.
+   *
+   * A failure never abandons the rest: the point of a bulk fix is that the one
+   * repository whose host is down today does not cost the user the other
+   * sixty-nine.
+   */
+  public async runProviderRecoveryBulk(providers: string[]): Promise<RecoveryOutcome[]> {
+    const results: RecoveryOutcome[] = [];
+    for (const provider of providers) {
+      try {
+        results.push(await this.runProviderRecovery(provider));
+      } catch (error) {
+        results.push({
+          ok: false,
+          provider,
+          done: [],
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return results;
+  }
+
   public async runProviderRecovery(provider: string): Promise<RecoveryOutcome> {
     const plan = this.planProviderRecovery(provider);
     const done: RecoveryOutcome['done'] = [];
