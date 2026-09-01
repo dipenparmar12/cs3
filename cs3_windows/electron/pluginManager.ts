@@ -66,6 +66,14 @@ interface RepositoryJson {
   pluginLists: string[];
 }
 
+import {
+  planRecovery,
+  isActionable,
+  type RecoveryContext,
+  type RecoveryOutcome,
+  type RecoveryPlan,
+} from './cs3/providerRecovery.js';
+
 export interface RepositoryFetchResult {
   repositoryUrl: string;
   name: string;
@@ -2002,6 +2010,157 @@ export class PluginManager {
     }
     if (count > 0) this.datastore.setObject(SETTINGS_KEY_KNOWN_PLUGINS, known);
     return count;
+  }
+
+  /**
+   * Everything `planRecovery` is allowed to see, gathered in one place.
+   *
+   * Built rather than passed piecemeal so the planner stays pure and the set
+   * of inputs is one readable list. `known` is the only entry that can be
+   * non-empty on a machine where nothing is installed, which is the case the
+   * whole feature exists for.
+   */
+  private recoveryContext(): RecoveryContext {
+    const installed = new Map<string, { name: string; repositoryUrl: string }>();
+    for (const plugin of this.getInstalledPlugins()) {
+      installed.set(plugin.internalName, {
+        name: plugin.name,
+        repositoryUrl: plugin.repositoryUrl ?? '',
+      });
+    }
+
+    const registered = new Map<
+      string,
+      { pluginInternalName: string; pluginName: string; adult: boolean }
+    >();
+    for (const provider of this.providers.values()) {
+      registered.set(provider.name, {
+        pluginInternalName: provider.pluginInternalName,
+        pluginName: provider.pluginName,
+        adult: isAdultProvider(provider),
+      });
+    }
+
+    const known = new Map<string, { name: string; repositoryUrl: string }>();
+    for (const row of this.getKnownPlugins()) {
+      known.set(row.internalName, { name: row.name, repositoryUrl: row.repositoryUrl });
+    }
+
+    return {
+      registered,
+      installed,
+      repositories: new Set(this.getInstalledRepositories()),
+      known,
+      origins: new Map(this.loadProviderOrigins()),
+      disabledProviders: new Set(this.getDisabledProviders()),
+      disabledExtensions: new Set(this.getDisabledExtensions()),
+      disabledRepositories: new Set(this.getDisabledRepositories()),
+      repositoryIdOf: (internalName) => this.repositoryIdOf(internalName),
+      adultAllowed: this.adultAllowed(),
+    };
+  }
+
+  /** What it would take to make `provider` answer, without doing any of it. */
+  public planProviderRecovery(provider: string): RecoveryPlan {
+    return planRecovery(provider, this.recoveryContext());
+  }
+
+  /**
+   * Does it.
+   *
+   * The plan is recomputed rather than taken from the caller. A renderer that
+   * held a plan across a reload — or across another window installing the same
+   * extension — would otherwise ask for an install that has already happened,
+   * and `installPlugin` would spend the download to find out.
+   *
+   * Steps run in order and stop at the first failure, because they depend on
+   * each other: enabling an extension that failed to install reports success
+   * for a switch on nothing. What already succeeded is kept, since a repository
+   * added before the archive failed to download is still worth having.
+   */
+  public async runProviderRecovery(provider: string): Promise<RecoveryOutcome> {
+    const plan = this.planProviderRecovery(provider);
+    const done: RecoveryOutcome['done'] = [];
+
+    if (plan.blocked) {
+      return { ok: false, provider, done, error: plan.blocked };
+    }
+    if (!isActionable(plan)) {
+      return {
+        ok: true,
+        provider,
+        done,
+        error: undefined,
+      };
+    }
+
+    for (const step of plan.steps) {
+      try {
+        switch (step.kind) {
+          case 'add-repository': {
+            const result = await this.addRepository(step.target);
+            if (!result?.ok) throw new Error(result?.message ?? 'The repository could not be read.');
+            break;
+          }
+          case 'install-extension': {
+            const repositoryUrl = plan.extension?.repositoryUrl;
+            if (!repositoryUrl) throw new Error('No repository is recorded for this extension.');
+            const fetched = await this.fetchRepository(repositoryUrl);
+            const entry = fetched.plugins.find(
+              (candidate) => candidate.internalName === step.target
+            );
+            if (!entry) {
+              /*
+               * The extension is gone from the repository it used to be in.
+               * Said plainly rather than as a download failure: the archive is
+               * not coming back and the user's next move is to find the title
+               * elsewhere, not to retry.
+               */
+              throw new Error(
+                `${step.target} is no longer published by that repository. ` +
+                  'It may have been renamed or withdrawn.'
+              );
+            }
+            const result = await this.installPlugin(entry, repositoryUrl);
+            if (!result.ok) throw new Error(result.message);
+            break;
+          }
+          case 'enable-repository':
+            this.setRepositoryEnabled(step.target, true);
+            break;
+          case 'enable-extension':
+            this.setExtensionEnabled(step.target, true);
+            break;
+          case 'enable-provider':
+            this.setProviderEnabled(step.target, true);
+            break;
+        }
+        done.push({ kind: step.kind, target: step.target, ok: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        done.push({ kind: step.kind, target: step.target, ok: false, error: message });
+        return { ok: false, provider, done, error: message };
+      }
+    }
+
+    /*
+     * Verified, not assumed. Every step reporting success and the provider
+     * still not answering is precisely the bug this replaced — so the claim is
+     * checked against the one predicate the rest of the app uses, rather than
+     * inferred from the steps having run.
+     */
+    const enabled = await this.listEnabledProviders();
+    if (!enabled.includes(provider)) {
+      return {
+        ok: false,
+        provider,
+        done,
+        error: this.explainMissingProvider(provider),
+      };
+    }
+
+    await this.ensureProviderActive(provider);
+    return { ok: true, provider, done };
   }
 
   /**

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, shell } from 'electron';
-import { BackupService } from './cs3/backupService.ts';
+import { BackupService, type RestoreOptions } from './cs3/backupService.ts';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -4487,7 +4487,7 @@ const backupService = new BackupService(
   `${process.platform} ${os.release()}`
 );
 
-ipcMain.handle('backup:export', async () => {
+ipcMain.handle('backup:export', async (_, only?: string[]) => {
   try {
     if (!mainWindow) return { ok: false, error: 'No window to ask from.' };
     const result = await dialog.showSaveDialog(mainWindow, {
@@ -4496,7 +4496,7 @@ ipcMain.handle('backup:export', async () => {
       filters: [{ name: 'CloudStream backup', extensions: ['json'] }],
     });
     if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
-    return backupService.write(result.filePath);
+    return backupService.write(result.filePath, only);
   } catch (error) {
     return fail(error);
   }
@@ -4519,13 +4519,39 @@ ipcMain.handle('backup:inspect', async () => {
   }
 });
 
-ipcMain.handle('backup:restore', async (_, filePath: string, only?: string[]) => {
+ipcMain.handle('backup:restore', async (_, filePath: string, options?: RestoreOptions) => {
   try {
     if (!filePath) return { ok: false, error: 'No backup file was chosen.' };
     // A snapshot first: a restore writes over live data, and the alternative to
     // being able to undo it is telling someone their library is gone.
     datastore.createSnapshot();
-    return backupService.restore(filePath, only);
+    return backupService.restore(filePath, options);
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/**
+ * What it would take to make a provider answer again, and doing it.
+ *
+ * Two channels rather than one, and deliberately: the plan can name a
+ * repository fetch and an extension install, which is real time and real
+ * bandwidth. Folding them together would commit a user who pressed a button
+ * labelled "why is this not working?".
+ */
+ipcMain.handle('extension:planProviderRecovery', async (_, provider: string) => {
+  try {
+    if (!provider) return { ok: false, error: 'No provider was named.' };
+    return { ok: true, plan: pluginManager.planProviderRecovery(provider) };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('extension:recoverProvider', async (_, provider: string) => {
+  try {
+    if (!provider) return { ok: false, error: 'No provider was named.' };
+    return await pluginManager.runProviderRecovery(provider);
   } catch (error) {
     return fail(error);
   }
