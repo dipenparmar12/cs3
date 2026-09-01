@@ -458,6 +458,21 @@ export const App: React.FC = () => {
    * "search everywhere" was reachable only by finding the scope picker in the
    * toolbar and clearing it by hand.
    */
+  /**
+   * Re-runs the last query with the scope untouched.
+   *
+   * Distinct from `handleSearchAllSources`, which *clears* the scope: this is
+   * for when the sources the user chose have just been switched back on and the
+   * warning naming them is stale. Widening there would silently discard the
+   * selection they were trying to repair.
+   */
+  const handleRetrySearch = useCallback(() => {
+    const previous = lastQuery.current;
+    if (!previous?.query) return;
+    void handleSearch(previous.query, previous.options);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleSearchAllSources = useCallback(() => {
     const previous = lastQuery.current;
     if (!previous?.query) return;
@@ -1367,6 +1382,7 @@ export const App: React.FC = () => {
                     ui={searchUi}
                     onUiChange={setSearchUi}
                     onSearchAllSources={handleSearchAllSources}
+                    onRetry={handleRetrySearch}
                   />
                 </ErrorBoundary>
               )}

@@ -4,11 +4,12 @@ import type { SearchResponse } from '../types/api';
 import { TYPE_TABS, matchesTab, tabsFor } from '../utils/contentTypes';
 import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/resultGroups';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, Search, SearchX, Target, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, Search, SearchX, Target, Wrench, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
 import { partitionDeadRows } from '../utils/deadRows';
 import { FacetMenu, type FacetOption } from '../components/FacetMenu';
 import { CopyErrorButton } from '../components/CopyErrorButton';
+import { FixProvidersModal } from '../components/FixProvidersModal';
 import { useTitleEnrichment } from '../components/useTitleEnrichment';
 
 interface SearchViewProps {
@@ -41,6 +42,14 @@ interface SearchViewProps {
    * this the empty screen names a cause and offers no way to act on it.
    */
   onSearchAllSources?: () => void;
+  /**
+   * Re-runs the current query unchanged.
+   *
+   * Used after sources are switched back on: the scope report travels inside a
+   * search snapshot, so until the query runs again the warning still names
+   * providers that now work — which reads as the fix having failed.
+   */
+  onRetry?: () => void;
 }
 
 export interface SearchUiState {
@@ -133,8 +142,13 @@ export const SearchView: React.FC<SearchViewProps> = ({
   ui,
   onUiChange,
   onSearchAllSources,
+  onRetry,
 }) => {
   const { sourceFilter, typeTab, openGroups } = ui;
+  /** The provider names the fix modal is open for, or null when it is closed. */
+  const [fixing, setFixing] = useState<string[] | null>(null);
+  const missingCount =
+    (search?.scope.missingProviders.length ?? 0) + (search?.scope.missingIndexers.length ?? 0);
   const setSourceFilter = (value: string) => onUiChange({ ...ui, sourceFilter: value });
   const setTypeTab = (value: string) => onUiChange({ ...ui, typeTab: value });
 
@@ -308,14 +322,46 @@ export const SearchView: React.FC<SearchViewProps> = ({
         <div className="search-alert search-alert--warn" role="status">
           <AlertTriangle size={14} />
           <span>
-            {[...search.scope.missingProviders, ...search.scope.missingIndexers].join(', ')}{' '}
-            {search.scope.missingProviders.length + search.scope.missingIndexers.length === 1
-              ? 'is'
-              : 'are'}{' '}
-            selected in the search scope but is no longer installed or enabled.
+            {/*
+              * The names are summarised rather than listed. This warning was
+              * reported carrying *seventy* of them, which is a paragraph of
+              * provider names where a sentence and a button belong — and the
+              * full list is one click away in the modal, grouped by what each
+              * one actually needs.
+              */}
+            {missingCount === 1
+              ? `${[...search.scope.missingProviders, ...search.scope.missingIndexers][0]} is`
+              : `${missingCount} selected sources are`}{' '}
+            no longer installed or enabled.
           </span>
+          {search.scope.missingProviders.length > 0 && (
+            <button
+              type="button"
+              className="search-alert__action"
+              onClick={() => setFixing(search.scope.missingProviders)}
+            >
+              <Wrench size={13} /> Fix
+            </button>
+          )}
         </div>
       ) : null}
+
+      {fixing && (
+        <FixProvidersModal
+          providers={fixing}
+          onClose={() => setFixing(null)}
+          onFixed={() => {
+            /*
+             * Re-run rather than merely closing. The scope report is part of a
+             * search snapshot, so until the query runs again the warning still
+             * names providers that now work — which reads as the fix having
+             * failed.
+             */
+            setFixing(null);
+            onRetry?.();
+          }}
+        />
+      )}
 
       {filtered.length === 0 ? (
         <div className="search-empty">

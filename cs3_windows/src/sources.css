@@ -6184,3 +6184,169 @@
 }
 
 .search-dead-rows:hover { color: #fff; border-color: rgba(255, 255, 255, 0.28); }
+
+/* --- Fixing sources in bulk ------------------------------------------------
+ *
+ * The warning that opens this listed seventy provider names and offered no
+ * action. It is a sentence and a button now; the names live here, grouped by
+ * what each one would cost.
+ */
+
+.search-alert__action {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.search-alert__action:hover { background: rgba(255, 255, 255, 0.08); }
+
+.fix-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+  background: rgba(4, 7, 14, 0.72);
+  backdrop-filter: blur(3px);
+}
+
+.fix-modal {
+  display: flex;
+  flex-direction: column;
+  /* Bounded, because the list can genuinely hold seventy rows: the body
+     scrolls and the footer with the count and the button never leaves. */
+  max-height: min(78vh, 720px);
+  width: min(620px, 100%);
+  border-radius: 14px;
+  background: var(--surface, #141922);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.fix-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.15rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+.fix-modal__head h3 { margin: 0; font-size: 1.02rem; }
+.fix-modal__head button {
+  background: none;
+  border: none;
+  color: var(--text-subtle, #94a3b8);
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 6px;
+}
+.fix-modal__head button:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+
+.fix-modal__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 3rem 1rem;
+  color: var(--text-subtle, #94a3b8);
+}
+.fix-modal__loading p { margin: 0; font-size: 0.87rem; }
+
+.fix-modal__body { overflow-y: auto; padding: 0.5rem 1.15rem 1rem; }
+
+.fix-modal__error {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #fca5a5;
+  font-size: 0.85rem;
+}
+
+.fix-modal__group { margin-top: 1.1rem; }
+.fix-modal__group header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.fix-modal__group h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.15rem;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+.fix-modal__group p {
+  margin: 0 0 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text-subtle, #94a3b8);
+  line-height: 1.45;
+}
+.fix-modal__count {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-subtle, #94a3b8);
+  background: rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+  padding: 0.05rem 0.42rem;
+}
+.fix-modal__all {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--accent, #60a5fa);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+}
+
+.fix-modal__group ul { list-style: none; margin: 0; padding: 0; }
+.fix-modal__group li { padding: 0.28rem 0; }
+.fix-modal__group label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: pointer;
+  font-size: 0.86rem;
+}
+.fix-modal__row--stuck label { cursor: default; opacity: 0.62; }
+.fix-modal__name { font-weight: 500; }
+.fix-modal__from {
+  font-size: 0.75rem;
+  color: var(--text-subtle, #94a3b8);
+}
+.fix-modal__why {
+  margin: 0.1rem 0 0 1.75rem;
+  font-size: 0.76rem;
+  color: var(--text-subtle, #94a3b8);
+  line-height: 1.4;
+}
+.fix-modal__group--failed h4 { color: #fca5a5; }
+
+.fix-modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1.15rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(0, 0, 0, 0.18);
+}
+.fix-modal__summary {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-subtle, #94a3b8);
+}
+.fix-modal__actions { display: flex; gap: 0.5rem; }
