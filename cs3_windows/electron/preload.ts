@@ -1425,6 +1425,26 @@ export interface CloudStreamElectronAPI {
   listAllOttPlatforms: () => Promise<
     Envelope & { platforms?: unknown[]; enabled?: string[] }
   >;
+  /**
+   * What is on this streaming service, from a keyless metadata catalogue.
+   *
+   * A claim about the *platform*, not about this app: these rows carry no
+   * source and are resolved by searching installed providers when one is
+   * opened. `supported` is false for a platform the catalogue does not cover,
+   * which is a real answer — the alternative is showing a generic popularity
+   * list under a brand name it has nothing to do with.
+   */
+  getOttMetadataCatalog: (platformId: string) => Promise<
+    Envelope & {
+      supported?: boolean;
+      sections?: Array<{
+        id: string;
+        title: string;
+        origin: 'metadata';
+        items: import('../src/types/api').SearchResponse[];
+      }>;
+    }
+  >;
   setOttPlatformEnabled: (
     platformId: string,
     enabled: boolean
@@ -1783,6 +1803,8 @@ const api: CloudStreamElectronAPI = {
   installOttSuggestion: (platformId, repositoryId) =>
     ipcRenderer.invoke('ott:installSuggestion', platformId, repositoryId),
   listAllOttPlatforms: () => ipcRenderer.invoke('ott:listAllPlatforms'),
+  getOttMetadataCatalog: (platformId) =>
+    ipcRenderer.invoke('ott:getMetadataCatalog', platformId),
   setOttPlatformEnabled: (platformId, enabled) =>
     ipcRenderer.invoke('ott:setPlatformEnabled', platformId, enabled),
   addRepository: (url) => ipcRenderer.invoke('extension:addRepository', url),

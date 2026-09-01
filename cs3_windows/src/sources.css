@@ -6350,3 +6350,24 @@
   color: var(--text-subtle, #94a3b8);
 }
 .fix-modal__actions { display: flex; gap: 0.5rem; }
+
+/* --- What is on the service, when no provider can say ----------------------
+ *
+ * Set apart from the provider's own rows rather than blended into them. A
+ * provider row is something this app can play; one of these is something that
+ * exists on the platform and may or may not be findable. Making them look
+ * identical is how a grid of unplayable posters passes for a working catalogue.
+ */
+.ott-view__meta { margin-top: 1.6rem; }
+.ott-view__meta-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(148, 163, 184, 0.06);
+  color: var(--text-subtle, #94a3b8);
+}
+.ott-view__meta-head p { margin: 0; font-size: 0.8rem; line-height: 1.5; }

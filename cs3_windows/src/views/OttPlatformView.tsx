@@ -105,6 +105,20 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     Array<{ id: string; name: string; description: string; installed: boolean }>
   >([]);
   const [installing, setInstalling] = useState<string | null>(null);
+  /**
+   * What is on this service, when no installed provider can say.
+   *
+   * Kept apart from `sections` rather than merged into it, because the two make
+   * different claims: a provider row is something this app can play, and one of
+   * these is something that exists on the platform and may or may not be
+   * findable. Merging them would make a grid of unplayable posters look
+   * identical to a working catalogue.
+   */
+  const [metaSections, setMetaSections] = useState<
+    Array<{ id: string; title: string; items: SearchResponse[] }>
+  >([]);
+  const [metaSupported, setMetaSupported] = useState(false);
+  const [metaLoading, setMetaLoading] = useState(false);
   const { message: notice, flash } = useFlash<string>(4000);
 
   /**
@@ -171,6 +185,29 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     }
 
     setSuggestions([]);
+
+    /*
+     * The metadata catalogue is fetched for every platform, including ones no
+     * provider serves. That is the case it exists for: "Netflix" with nothing
+     * installed used to be a search box and an apology, and the platform's own
+     * editorial is the thing a viewer came to the page for. Opening a row runs
+     * the ordinary search, so the answer to "can this app play it?" is given
+     * where it can actually be answered.
+     */
+    setMetaSections([]);
+    setMetaLoading(true);
+    void api()
+      ?.getOttMetadataCatalog(platform.id)
+      .then((response) => {
+        if (cancelled) return;
+        setMetaLoading(false);
+        setMetaSupported(Boolean(response?.supported));
+        setMetaSections(response?.sections ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setMetaLoading(false);
+      });
+
     if (platform.availability !== 'ready') return;
 
     setLoading(true);
@@ -347,15 +384,65 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
         </p>
       )}
 
-      {platform.availability === 'ready' && !loading && sections.length === 0 && (
-        <EmptyState
-          icon={Search}
-          title={`${platform.name} has no catalogue to browse`}
-          description={
-            catalog?.unavailableReason ??
-            'This provider only answers searches. Use the box above to find a title.'
-          }
-        />
+      {platform.availability === 'ready' &&
+        !loading &&
+        sections.length === 0 &&
+        metaSections.length === 0 &&
+        !metaLoading && (
+          <EmptyState
+            icon={Search}
+            title={`${platform.name} has no catalogue to browse`}
+            description={
+              catalog?.unavailableReason ??
+              'This provider only answers searches. Use the box above to find a title.'
+            }
+          />
+        )}
+
+      {/*
+        * What is on the service, when no installed provider publishes a
+        * catalogue. Shown *below* the provider's own rows when both exist,
+        * because a provider row is something this app can play and one of these
+        * is only something that exists — and the heading says which is which.
+        * A grid of posters that silently cannot play is the failure this
+        * codebase keeps having to fix, so it is labelled rather than blended.
+        */}
+      {metaSections.length > 0 && (
+        <div className="ott-view__meta">
+          <div className="ott-view__meta-head">
+            <Sparkles size={13} aria-hidden />
+            <p>
+              Popular on {platform.name} right now.{' '}
+              {sections.length === 0 && platform.availability !== 'ready'
+                ? 'Nothing installed can play these yet — opening one searches every source you have.'
+                : 'These come from a listings service, not from an installed extension: opening one searches every source you have for it.'}
+            </p>
+          </div>
+          {metaSections.map((section) => (
+            <section className="home-row" key={section.id}>
+              <header>
+                <h3>{section.title}</h3>
+              </header>
+              <div className="home-rail">
+                {section.items.map((item, index) => (
+                  <PosterCard
+                    key={`${item.url}-${index}`}
+                    item={item}
+                    onSelectMedia={onSelectMedia}
+                    onPlayDirectly={onPlayDirectly}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+
+      {metaLoading && metaSections.length === 0 && metaSupported && (
+        <p className="ott-view__loading">
+          <Loader2 size={14} className="spin" aria-hidden /> Finding what is popular on{' '}
+          {platform.name}…
+        </p>
       )}
 
       {sections.map((section) => (

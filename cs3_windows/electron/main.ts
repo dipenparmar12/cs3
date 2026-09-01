@@ -50,6 +50,7 @@ import type {
 import type { MpvOpenRequest } from '../src/types/mpv';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { OttService } from './cs3/ottService';
+import { OttCatalogService } from './cs3/ottCatalog';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { BootstrapService } from './cs3/bootstrap';
 import { TitleOutcomeStore, type TitleOutcomeKind } from './cs3/titleOutcomes';
@@ -249,6 +250,8 @@ const torrentEngine = new TorrentEngine({
 const contentService = new ContentService(datastore, pluginManager, torrentEngine);
 const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
 const ottService = new OttService(pluginManager, datastore);
+/** Metadata catalogues for the platforms no installed provider can describe. */
+const ottCatalog = new OttCatalogService();
 const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
 const historyStore = new HistoryStore(datastore);
@@ -3483,6 +3486,27 @@ ipcMain.handle('ott:listPlatforms', async () => {
  * ones that are off in order to offer to switch them on, and every other
  * caller wants the user's chosen set.
  */
+/**
+ * What is on this service, when no installed provider can say.
+ *
+ * Separate channel from `ott:getCatalog`, which asks a provider. These rows are
+ * a claim about the *platform* and carry no source — opening one runs the
+ * app's ordinary search — so folding them into the provider catalogue would
+ * make a grid of unplayable posters indistinguishable from a working one.
+ */
+ipcMain.handle('ott:getMetadataCatalog', async (_, platformId: string) => {
+  try {
+    if (!platformId) return { ok: false, error: 'No platform was named.' };
+    return {
+      ok: true,
+      supported: OttCatalogService.supports(platformId),
+      sections: await ottCatalog.getCatalog(platformId),
+    };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
 ipcMain.handle('ott:listAllPlatforms', async () => {
   try {
     return {
