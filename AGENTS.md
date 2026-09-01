@@ -3936,6 +3936,16 @@ verified in a running Electron app and should not be reported as done.
   ecosystem read from upstream source on 2026-08-27 — repo/index/archive formats, the
   four-field `manifest.json`, the hardcoded `apiVersion = 1`, the Levenshtein extractor
   match — and is worth reading on its own before touching anything plugin-shaped.
+- `docs/PRD/43-user-and-developer-experience-research-and-roadmap.md` — **research +
+  proposal, §6–§8 not built.** The half 39 and 41 do not cover: not the wire formats but
+  what using and *authoring for* this feels like against Stremio, Kodi and upstream
+  CloudStream. Its §5 is the useful part and is not a competitor analysis at all — it is an
+  eight-shape taxonomy of how this product fails, derived from a 6,180-record session log
+  and from the defects recorded in this file. Read §6.1 before designing any failure UI:
+  *every message that names a problem carries the action that resolves it.* §4 is the
+  finding worth acting on — we specify five extension lanes and **none of them can be
+  authored without the Android toolchain**, so every extension in the reachable ecosystem
+  is an Android `.cs3` written for the phone app.
 - `docs/docs_cs3/` — the Android app's architecture, 9 documents, written from source.
 
 Requirement ids appear throughout code comments — `ARCH-2`, `SEC-7`, `DROP-12`, `DSK-57`,
