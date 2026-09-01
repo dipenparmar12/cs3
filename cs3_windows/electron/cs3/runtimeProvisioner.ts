@@ -117,8 +117,28 @@ export interface SystemRuntimeStatus {
  * *different method* to the JVM and therefore only callable from generation 10
  * on. A provisioned copy pairing the old shim with the new host would answer
  * `providerMainPage` with "Unknown method" on every browse.
+ *
+ * Generation 11 is the sixth round, and every part of it came out of *counting*
+ * a real session log rather than from a report. 6,180 records over 36 hours,
+ * 437 of them problems, and the whole class problem was one type:
+ * **36 `NoClassDefFoundError`, all of them
+ * `com.google.android.material.bottomsheet.BottomSheetDialogFragment`**, with
+ * no tail behind it. It had been noted as outstanding at one occurrence and
+ * left under the count-first rule; the count moved, so it is shimmed.
+ *
+ * That class is the first thing this shim has carried under `com/google/**`,
+ * which needed both jar exclusions changed at once: the sidecar jar had to
+ * start excluding that root, and the shim jar had to stop excluding `com/**` —
+ * it would otherwise have been packaged into neither, existing in the source
+ * tree and shipping nowhere.
+ *
+ * Also `android.util.DisplayMetrics`, with `Resources.getDisplayMetrics()` to
+ * return one — reported as a `NoSuchMethodError`, the sixth descriptor
+ * near-miss on record here. And the `status` RPC now reports the method names
+ * the jar answers, so a sidecar older than its host is named at the handshake
+ * instead of surfacing later as one unexplained failure per feature.
  */
-const RUNTIME_GENERATION = 10;
+const RUNTIME_GENERATION = 11;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {

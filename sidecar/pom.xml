@@ -74,7 +74,8 @@
       <!--
         The sidecar jar: internals only, never the shim.
 
-        Both shim roots must be excluded, and `androidx/**` is not optional.
+        All three shim roots must be excluded, and neither `androidx/**` nor
+        `com/google/**` is optional.
         The shared runtime loader's parent is this jar's loader, so delegation is
         parent-first into it: a stray `androidx.appcompat.app.AppCompatActivity`
         here would win over the copy in `runtime/`, and its supertype chain ends
@@ -90,6 +91,14 @@
           <excludes>
             <exclude>android/**</exclude>
             <exclude>androidx/**</exclude>
+            <!--
+              Material Components live under `com/google/android/material/**`
+              and belong to the shim exactly as androidx does. Their supertypes
+              are androidx fragments, which are excluded here, so a copy left in
+              this jar would win parent-first and then fail to link — the same
+              failure the comment above describes, arriving from a third root.
+            -->
+            <exclude>com/google/**</exclude>
           </excludes>
           <archive>
             <manifest>
@@ -104,8 +113,15 @@
             <goals><goal>jar</goal></goals>
             <configuration>
               <classifier>android-shim</classifier>
+              <!--
+                Only the sidecar's own code is kept out. This was `com/**`,
+                which silently excluded the Material Components shim from the
+                one jar that is supposed to carry it while the exclusion above
+                kept it out of the other — so the class would have existed in
+                the source tree and shipped in neither.
+              -->
               <excludes combine.self="override">
-                <exclude>com/**</exclude>
+                <exclude>com/cloudstream/**</exclude>
               </excludes>
               <archive>
                 <manifest>
