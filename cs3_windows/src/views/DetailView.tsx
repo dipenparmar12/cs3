@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Play, ArrowLeft, Loader2, AlertTriangle, ListVideo, Search, Power, PowerOff,
+  Play, ArrowLeft, Loader2, AlertTriangle, ListVideo, Search,
 } from 'lucide-react';
 import type { SearchResponse, Episode } from '../types/api';
 import { TvType } from '../types/api';
@@ -20,6 +20,7 @@ import { LibraryBucketSelector } from '../components/LibraryBucketSelector';
 import { PosterCard } from '../components/PosterCard';
 import { Poster } from '../components/Poster';
 import { CopyErrorButton } from '../components/CopyErrorButton';
+import { ProviderRecoveryPanel } from '../components/ProviderRecoveryPanel';
 import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
 import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
 
@@ -388,17 +389,40 @@ export const DetailView: React.FC<DetailViewProps> = ({
         reasons.length > 0 ? [...new Set(reasons)].join(' · ') : 'No source could open this title.';
       setLoadError(combined);
 
-      // Detect whether a provider is disabled so we can offer an immediate one-click confirmation to enable it
-      const disabledMatch = combined.match(/extension provider "([^"]+)" is currently disabled/i);
-      if (disabledMatch && disabledMatch[1]) {
-        setDisabledProvider(disabledMatch[1]);
-      } else if (/disabled/i.test(combined)) {
-        const extMatch = mediaItem.url.match(/^cs3ext:\/\/([^/]+)/);
-        if (extMatch && extMatch[1]) {
-          setDisabledProvider(decodeURIComponent(extMatch[1]));
-        } else if (mediaItem.apiName && mediaItem.apiName !== 'Cinemeta' && mediaItem.apiName !== 'Indexer') {
-          setDisabledProvider(mediaItem.apiName);
-        }
+      /*
+       * Whether this failure is one the recovery panel can act on.
+       *
+       * The previous test matched a single sentence — `extension provider "X"
+       * is currently disabled` — and `explainMissingProvider` does not say
+       * that. It says "switched off", "is no longer installed", "did not
+       * load". So the branch that names the provider explicitly almost never
+       * fired, and the broad `/disabled/` fallback beside it fired on messages
+       * that have nothing to do with a provider at all.
+       *
+       * The vocabulary below is `explainMissingProvider`'s own, which is the
+       * only thing that produces these. Getting this wrong is cheap in one
+       * direction and not the other: too narrow and the panel does not appear
+       * for a case it could fix, too broad and it offers to "fix" a dead host.
+       * The panel itself plans first and says plainly when there is nothing to
+       * do, so a false positive degrades to an explanation rather than to
+       * another button that does nothing.
+       */
+      const recoverable =
+        /switched off|currently disabled|no longer installed|did not load|not loaded|no longer registers|turned off in settings|reinstall it/i.test(
+          combined
+        );
+      if (recoverable) {
+        const named = combined.match(/extension provider "([^"]+)" is currently disabled/i);
+        const fromAddress = mediaItem.url.match(/^cs3ext:\/\/([^/]+)/);
+        const provider =
+          named?.[1] ??
+          (fromAddress?.[1] ? decodeURIComponent(fromAddress[1]) : undefined) ??
+          (mediaItem.apiName &&
+          mediaItem.apiName !== 'Cinemeta' &&
+          mediaItem.apiName !== 'Indexer'
+            ? mediaItem.apiName
+            : undefined);
+        if (provider) setDisabledProvider(provider);
       }
 
       /**
@@ -1046,72 +1070,19 @@ export const DetailView: React.FC<DetailViewProps> = ({
     if (disabledProvider) {
       return (
         <div className="detail-view detail-view--state">
-          <div
-            style={{
-              maxWidth: '520px',
-              padding: '2.2rem 2rem',
-              borderRadius: '16px',
-              backgroundColor: 'rgba(25, 30, 42, 0.95)',
-              border: '1px solid rgba(245, 158, 11, 0.35)',
-              boxShadow: '0 12px 36px rgba(0, 0, 0, 0.45)',
-              textAlign: 'center',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '1.2rem',
+          <ProviderRecoveryPanel
+            provider={disabledProvider}
+            title={mediaItem.originalTitle || mediaItem.name}
+            reason={loadError}
+            onBack={onBack}
+            onSearch={onSearch}
+            onRecovered={() => {
+              setIsLoading(true);
+              setLoadError(null);
+              setDisabledProvider(null);
+              setReloadToken((t) => t + 1);
             }}
-          >
-            <div
-              style={{
-                width: '56px',
-                height: '56px',
-                borderRadius: '50%',
-                backgroundColor: 'rgba(245, 158, 11, 0.15)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#fbbf24',
-              }}
-            >
-              <PowerOff size={30} />
-            </div>
-            <div>
-              <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.25rem', color: '#fff', fontWeight: 600 }}>
-                Extension “{disabledProvider}” is Disabled
-              </h3>
-              <p style={{ margin: 0, fontSize: '0.88rem', color: 'rgba(226, 232, 240, 0.8)', lineHeight: 1.55 }}>
-                This media was retrieved from the <strong>{disabledProvider}</strong> extension, which is currently switched off. Would you like to enable it and load the media details?
-              </p>
-            </div>
-            <div style={{ display: 'flex', gap: '0.85rem', width: '100%', justifyContent: 'center', marginTop: '0.4rem' }}>
-              <button
-                className="btn btn-primary"
-                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.65rem 1.25rem' }}
-                onClick={async () => {
-                  if (!window.cloudstream) return;
-                  setIsLoading(true);
-                  setLoadError(null);
-                  setDisabledProvider(null);
-                  await window.cloudstream.setProviderEnabled(disabledProvider, true);
-                  setReloadToken((t) => t + 1);
-                }}
-              >
-                <Power size={17} /> Enable “{disabledProvider}” & Load
-              </button>
-              <button className="btn btn-ghost" onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <ArrowLeft size={16} /> Back
-              </button>
-            </div>
-            {onSearch && (
-              <button
-                className="btn btn-ghost btn-sm"
-                style={{ fontSize: '0.8rem', color: 'var(--text-subtle)', marginTop: '0.2rem' }}
-                onClick={() => onSearch(mediaItem.originalTitle || mediaItem.name)}
-              >
-                <Search size={14} /> Search other providers for “{mediaItem.name}”
-              </button>
-            )}
-          </div>
+          />
         </div>
       );
     }

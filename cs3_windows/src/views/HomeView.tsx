@@ -6,6 +6,7 @@ import type { WatchProgress } from '../../electron/cs3/libraryStore';
 import type { DiscoverySection } from '../../electron/cs3/discovery';
 import { TvType } from '../types/api';
 import { PosterCard } from '../components/PosterCard';
+import { CataloguePicker } from '../components/home/CataloguePicker';
 
 /**
  * The home screen, built from what is actually popular.
@@ -50,6 +51,26 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const [continueWatching, setContinueWatching] = useState<WatchProgress[]>([]);
   const [typeTab, setTypeTab] = useState<string>('all');
   const [confirmClear, setConfirmClear] = useState(false);
+  /**
+   * Whether anime rows are mixed in.
+   *
+   * `discover:sections` has taken `includeAnime` since it was written and
+   * nothing ever passed it — the option existed with no caller, which is the
+   * same shape as the three unreachable features `componentReachability` and
+   * `ipcSurface` now guard against, arriving through a parameter instead.
+   *
+   * Held in `localStorage` rather than the datastore: it describes how one
+   * person likes their front page, not how the app behaves, so it has no
+   * business travelling in a backup to somebody else's machine. Same argument
+   * as the settings level.
+   */
+  const [includeAnime, setIncludeAnime] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('home_include_anime') !== 'false';
+    } catch {
+      return true;
+    }
+  });
 
   const loadSections = useCallback(async () => {
     if (!window.cloudstream?.getDiscoverySections) {
@@ -57,7 +78,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
       return;
     }
     try {
-      const response = await window.cloudstream.getDiscoverySections();
+      const response = await window.cloudstream.getDiscoverySections({ includeAnime });
       if (response?.ok) {
         setSections(response.sections ?? []);
         setError(null);
@@ -69,7 +90,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [includeAnime]);
 
   useEffect(() => {
     void loadSections();
@@ -216,6 +237,20 @@ export const HomeView: React.FC<HomeViewProps> = ({
             ))}
           </div>
         )}
+
+        <CataloguePicker
+          includeAnime={includeAnime}
+          onIncludeAnimeChange={(next) => {
+            setIncludeAnime(next);
+            try {
+              localStorage.setItem('home_include_anime', String(next));
+            } catch {
+              // A browser refusing storage is not a reason to ignore the click;
+              // the change still applies to this session.
+            }
+          }}
+          onChanged={() => void loadSections()}
+        />
 
         <button
           className="home-refresh"

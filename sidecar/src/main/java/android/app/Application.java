@@ -28,13 +28,13 @@ public class Application extends Context {
      * class here would fail to link against their {@code implements} clause.
      */
     public interface ActivityLifecycleCallbacks {
-        default void onActivityCreated(Object activity, android.os.Bundle savedInstanceState) { }
-        default void onActivityStarted(Object activity) { }
-        default void onActivityResumed(Object activity) { }
-        default void onActivityPaused(Object activity) { }
-        default void onActivityStopped(Object activity) { }
-        default void onActivitySaveInstanceState(Object activity, android.os.Bundle outState) { }
-        default void onActivityDestroyed(Object activity) { }
+        default void onActivityCreated(Activity activity, android.os.Bundle savedInstanceState) { }
+        default void onActivityStarted(Activity activity) { }
+        default void onActivityResumed(Activity activity) { }
+        default void onActivityPaused(Activity activity) { }
+        default void onActivityStopped(Activity activity) { }
+        default void onActivitySaveInstanceState(Activity activity, android.os.Bundle outState) { }
+        default void onActivityDestroyed(Activity activity) { }
     }
 
     /** Registered upstream for low-memory and configuration signals. */

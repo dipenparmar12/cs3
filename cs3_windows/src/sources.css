@@ -1112,6 +1112,80 @@
   opacity: 1;
 }
 
+/*
+   The scrubber sits on its own row above the control bar.
+
+   Two elements rather than one: a transparent `<input type=range>` on top for
+   the gesture, and a painted fill underneath for the state. Styling a range
+   input's track to show progress needs a different vendor pseudo-element per
+   engine and none of them animates cleanly, and at this size the thumb is the
+   only part worth drawing.
+*/
+.player-mini__progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 32px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.2);
+  z-index: 6;
+}
+
+.player-mini__progress input {
+  position: absolute;
+  inset: -6px 0;
+  width: 100%;
+  height: 15px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  /* Above the fill, so the whole strip is grabbable rather than only the part
+     already played. */
+  z-index: 2;
+}
+
+.player-mini__progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--accent-primary, #3b82f6);
+  pointer-events: none;
+}
+
+.player--mini:hover .player-mini__progress { height: 5px; }
+
+.player-mini__volume {
+  width: 54px;
+  height: 3px;
+  margin: 0 0.3rem;
+  accent-color: var(--accent-primary, #3b82f6);
+  cursor: pointer;
+}
+
+/* The provider, after the title and only if there is room. Truncating the
+   title to guarantee space for it would be the wrong trade — the title is what
+   the window is for. */
+.player-mini__source {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.62rem;
+  color: rgba(255, 255, 255, 0.55);
+  padding-left: 0.35rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+  margin-left: 0.35rem;
+}
+
+/* A pressed state for the pin and the floating-window buttons, which are
+   toggles rather than actions and are otherwise indistinguishable from one. */
+.icon-button--on {
+  background: rgba(59, 130, 246, 0.22) !important;
+  color: #93c5fd !important;
+}
+
 .player-mini__spacer { flex: 1; }
 
 .player-mini__time {
@@ -2877,6 +2951,53 @@
   margin: 0.2rem 0 0;
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+/*
+ * The level switch.
+ *
+ * A segmented control rather than a checkbox, because "Simple" and "Everything"
+ * are two named states and a checkbox would have to be labelled from one of
+ * them — "show advanced settings", which is the jargon word the whole feature
+ * exists to keep off this screen.
+ */
+.settings__level {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.8rem;
+}
+
+.settings__level-btn {
+  padding: 0.32rem 0.8rem;
+  border-radius: var(--radius-full, 999px);
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.settings__level-btn:hover { color: #fff; border-color: rgba(255, 255, 255, 0.28); }
+
+.settings__level-btn--on {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.45);
+  color: #dbeafe;
+}
+
+/* Says what is being held back. A filtered list that does not admit it is
+   filtered is the same failure as a scoped search that does not: the reader
+   cannot tell a setting they cannot find from one that does not exist. */
+.settings__level-note {
+  flex: 1 1 22ch;
+  min-width: 0;
+  font-size: 0.72rem;
+  color: var(--text-subtle);
+  line-height: 1.4;
 }
 
 /*
@@ -5876,3 +5997,661 @@
   color: var(--status-warning);
 }
 .backup-panel__flash svg { flex-shrink: 0; margin-top: 0.12rem; }
+
+/* ---------------------------------------------------------------------------
+   OTT platform pages
+
+   Deliberately reuses `.home-row` / `.home-rail` for the catalogue rows rather
+   than growing a second rail implementation. The rows here come from a
+   different source — the provider's own `getMainPage` rather than Cinemeta —
+   but they are the same object on screen, and two rail stylesheets is how the
+   home screen and this page come to scroll differently for no reason anyone
+   intended.
+--------------------------------------------------------------------------- */
+
+.ott-view { display: flex; flex-direction: column; gap: 1.6rem; }
+
+.ott-view__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 1.1rem 1.3rem;
+  border-radius: var(--radius-lg, 14px);
+}
+
+.ott-view__header h2 { font-size: 1.5rem; font-weight: 750; color: #fff; letter-spacing: -0.02em; }
+.ott-view__header p { margin-top: 0.25rem; font-size: 0.82rem; color: var(--text-muted); max-width: 46ch; }
+
+.ott-view__search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.4rem 0.4rem 0.75rem;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full, 999px);
+  min-width: 280px;
+}
+
+.ott-view__search svg { color: var(--text-subtle); flex-shrink: 0; }
+
+.ott-view__search input {
+  flex: 1;
+  /* Without this the input refuses to shrink below its intrinsic width and
+     pushes the header wider than the viewport — the same flex trap the native
+     stage's seek bar hit. */
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: #fff;
+  font-size: 0.86rem;
+}
+
+.ott-view__search button { background: none; border: none; color: var(--text-subtle); cursor: pointer; display: flex; }
+.ott-view__search button:hover { color: #fff; }
+
+.ott-view__search-go {
+  padding: 0.4rem 0.9rem !important;
+  border-radius: var(--radius-full, 999px);
+  background: var(--accent-primary) !important;
+  color: #fff !important;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.ott-view__scope {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: -1rem;
+  font-size: 0.74rem;
+  color: var(--text-subtle);
+}
+
+.ott-view__notice {
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--radius-md);
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  font-size: 0.8rem;
+  color: #86efac;
+}
+
+.ott-view__loading,
+.ott-view__row-error {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.ott-view__row-error { color: #fca5a5; font-weight: 500; }
+
+.ott-view__setup { display: flex; flex-direction: column; gap: 1rem; }
+
+.ott-view__suggestions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.9rem;
+}
+
+.ott-view__suggestion {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.95rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+}
+
+.ott-view__suggestion h4 { font-size: 0.9rem; font-weight: 650; color: #fff; }
+.ott-view__suggestion p { font-size: 0.76rem; color: var(--text-muted); line-height: 1.5; flex: 1; }
+
+.ott-view__suggestion button {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.95rem;
+  border-radius: var(--radius-full, 999px);
+  border: none;
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.ott-view__suggestion button:disabled { opacity: 0.55; cursor: default; }
+
+/* Sits in the rail, so it has to match a poster's height rather than a
+   button's, or the row's baseline jumps when the last page loads. */
+.ott-view__more {
+  align-self: stretch;
+  min-height: 120px;
+  padding: 0 1.1rem;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--border-color);
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ott-view__more:hover { color: #fff; border-color: rgba(255, 255, 255, 0.3); }
+
+/* Audio-only mini player: the picture is hidden, the controls are not.
+   `visibility` rather than `display`, because a `<video>` removed from layout
+   loses its rendering surface and some builds treat that as a reason to stop
+   decoding — which would silence the audio this mode exists to keep. */
+.player--audio-only .player__video { visibility: hidden; }
+
+.player--audio-only::after {
+  content: 'Audio only';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+}
+
+/* The "N results hidden" line under a filtered grid. A link rather than a
+   button in appearance: it is an offer, not the page's primary action. */
+.search-dead-rows {
+  align-self: flex-start;
+  margin-top: 1rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--border-color);
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.search-dead-rows:hover { color: #fff; border-color: rgba(255, 255, 255, 0.28); }
+
+/* --- Fixing sources in bulk ------------------------------------------------
+ *
+ * The warning that opens this listed seventy provider names and offered no
+ * action. It is a sentence and a button now; the names live here, grouped by
+ * what each one would cost.
+ */
+
+.search-alert__action {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.search-alert__action:hover { background: rgba(255, 255, 255, 0.08); }
+
+.fix-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+  background: rgba(4, 7, 14, 0.72);
+  backdrop-filter: blur(3px);
+}
+
+.fix-modal {
+  display: flex;
+  flex-direction: column;
+  /* Bounded, because the list can genuinely hold seventy rows: the body
+     scrolls and the footer with the count and the button never leaves. */
+  max-height: min(78vh, 720px);
+  width: min(620px, 100%);
+  border-radius: 14px;
+  background: var(--surface, #141922);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.fix-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.15rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+.fix-modal__head h3 { margin: 0; font-size: 1.02rem; }
+.fix-modal__head button {
+  background: none;
+  border: none;
+  color: var(--text-subtle, #94a3b8);
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 6px;
+}
+.fix-modal__head button:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+
+.fix-modal__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 3rem 1rem;
+  color: var(--text-subtle, #94a3b8);
+}
+.fix-modal__loading p { margin: 0; font-size: 0.87rem; }
+
+.fix-modal__body { overflow-y: auto; padding: 0.5rem 1.15rem 1rem; }
+
+.fix-modal__error {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #fca5a5;
+  font-size: 0.85rem;
+}
+
+.fix-modal__group { margin-top: 1.1rem; }
+.fix-modal__group header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.fix-modal__group h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.15rem;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+.fix-modal__group p {
+  margin: 0 0 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text-subtle, #94a3b8);
+  line-height: 1.45;
+}
+.fix-modal__count {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-subtle, #94a3b8);
+  background: rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+  padding: 0.05rem 0.42rem;
+}
+.fix-modal__all {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--accent, #60a5fa);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+}
+
+.fix-modal__group ul { list-style: none; margin: 0; padding: 0; }
+.fix-modal__group li { padding: 0.28rem 0; }
+.fix-modal__group label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: pointer;
+  font-size: 0.86rem;
+}
+.fix-modal__row--stuck label { cursor: default; opacity: 0.62; }
+.fix-modal__name { font-weight: 500; }
+.fix-modal__from {
+  font-size: 0.75rem;
+  color: var(--text-subtle, #94a3b8);
+}
+.fix-modal__why {
+  margin: 0.1rem 0 0 1.75rem;
+  font-size: 0.76rem;
+  color: var(--text-subtle, #94a3b8);
+  line-height: 1.4;
+}
+.fix-modal__group--failed h4 { color: #fca5a5; }
+
+.fix-modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1.15rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(0, 0, 0, 0.18);
+}
+.fix-modal__summary {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-subtle, #94a3b8);
+}
+.fix-modal__actions { display: flex; gap: 0.5rem; }
+
+/* --- What is on the service, when no provider can say ----------------------
+ *
+ * Set apart from the provider's own rows rather than blended into them. A
+ * provider row is something this app can play; one of these is something that
+ * exists on the platform and may or may not be findable. Making them look
+ * identical is how a grid of unplayable posters passes for a working catalogue.
+ */
+.ott-view__meta { margin-top: 1.6rem; }
+.ott-view__meta-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(148, 163, 184, 0.06);
+  color: var(--text-subtle, #94a3b8);
+}
+.ott-view__meta-head p { margin: 0; font-size: 0.8rem; line-height: 1.5; }
+
+/* --- Catalogue picker, on the home screen --------------------------------
+ *
+ * Moved here from Settings → Home. The person who wants to change what the
+ * front page shows is looking at the front page; asking them to leave it, find
+ * a tab and come back is three navigations to answer a question they are
+ * already staring at. Settings keeps the configuration (keys, custom URLs,
+ * health re-check) that has no place on a browsing screen.
+ */
+.cat-picker { position: relative; }
+
+.cat-picker__button {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  padding: .38rem .7rem;
+  border-radius: 7px;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.22));
+  background: transparent;
+  color: var(--text-subtle, #94a3b8);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.cat-picker__button:hover,
+.cat-picker__button--open {
+  color: var(--text, #e2e8f0);
+  border-color: rgba(148, 163, 184, 0.4);
+  background: rgba(148, 163, 184, 0.08);
+}
+.cat-picker__button:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
+.cat-picker__label { font-weight: 500; }
+
+.cat-picker__menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 30;
+  width: min(340px, calc(100vw - 2rem));
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: var(--surface, #141922);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5);
+  padding: 0.7rem;
+}
+.cat-picker__hint,
+.cat-picker__loading {
+  margin: 0 0 0.55rem;
+  padding: 0 0.25rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--text-subtle, #94a3b8);
+}
+.cat-picker__loading { display: flex; align-items: center; gap: 0.4rem; }
+
+.cat-picker__list { list-style: none; margin: 0; padding: 0; }
+.cat-picker__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.42rem 0.45rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cat-picker__item:hover:not(:disabled) { background: rgba(148, 163, 184, 0.1); }
+.cat-picker__item:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: -2px; }
+.cat-picker__item--on { background: rgba(96, 165, 250, 0.1); }
+/* Greyed, but the reason is always printed beside it — an entry disabled with
+   no explanation reads as a broken menu rather than an unavailable service. */
+.cat-picker__item--blocked { opacity: 0.55; cursor: default; }
+.cat-picker__tick {
+  flex: none;
+  width: 14px;
+  display: inline-flex;
+  justify-content: center;
+  padding-top: 0.15rem;
+  color: var(--accent, #60a5fa);
+}
+.cat-picker__text { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.cat-picker__text strong { font-size: 0.84rem; font-weight: 500; }
+.cat-picker__text em {
+  font-style: normal;
+  font-size: 0.73rem;
+  line-height: 1.4;
+  color: var(--text-subtle, #94a3b8);
+}
+.cat-picker__why { color: #fbbf24 !important; }
+
+.cat-picker__foot {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+.cat-picker__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.cat-picker__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0;
+  padding: 0 0.25rem;
+  font-size: 0.76rem;
+  color: #fca5a5;
+}
+
+/* --- Torrent contents ------------------------------------------------------
+ *
+ * A catalogue, not a download manager. The ordering the page enforces is
+ * metadata first, choice second, bytes third — so everything here is arranged
+ * around picking a file, and nothing starts a transfer without a press.
+ */
+.torrent-view { padding: 1.5rem 2rem 6rem; }
+.torrent-view--state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 0.8rem; min-height: 60vh; color: var(--text-subtle, #94a3b8);
+}
+
+.torrent-view__head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 2rem; flex-wrap: wrap; margin-bottom: 1.4rem;
+}
+.torrent-view__kicker {
+  margin: 0 0 0.3rem; font-size: 0.74rem; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--accent, #60a5fa);
+}
+.torrent-view__head h1 { margin: 0 0 0.4rem; font-size: 1.6rem; line-height: 1.2; }
+.torrent-view__facts { margin: 0 0 0.3rem; font-size: 0.85rem; color: var(--text-subtle, #94a3b8); }
+.torrent-view__hash {
+  margin: 0; font-family: ui-monospace, monospace; font-size: 0.7rem;
+  color: rgba(148, 163, 184, 0.55); user-select: all;
+}
+.torrent-view__head-actions { display: flex; gap: 0.5rem; flex: none; }
+
+.torrent-view__toolbar {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.9rem;
+}
+.torrent-view__search {
+  display: flex; align-items: center; gap: 0.5rem; flex: 1 1 260px; min-width: 0;
+  padding: 0.45rem 0.7rem; border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.22); background: rgba(148, 163, 184, 0.06);
+  color: var(--text-subtle, #94a3b8);
+}
+.torrent-view__search input {
+  /* `min-width: 0` on a flex item, or the input's intrinsic width forces the
+     toolbar wider than the page. The same trap the native stage hit. */
+  flex: 1; min-width: 0; background: none; border: none; color: var(--text, #e2e8f0);
+  font: inherit; font-size: 0.87rem; outline: none;
+}
+.torrent-view__search button {
+  background: none; border: none; color: inherit; cursor: pointer; padding: 0.1rem;
+}
+
+.torrent-view__filters { display: flex; gap: 0.25rem; flex: none; }
+.torrent-view__filter {
+  padding: 0.35rem 0.7rem; border-radius: 7px; border: 1px solid transparent;
+  background: none; color: var(--text-subtle, #94a3b8);
+  font: inherit; font-size: 0.8rem; cursor: pointer;
+}
+.torrent-view__filter:hover { background: rgba(148, 163, 184, 0.1); }
+.torrent-view__filter--on {
+  background: rgba(96, 165, 250, 0.14); color: var(--text, #e2e8f0);
+  border-color: rgba(96, 165, 250, 0.3);
+}
+
+.torrent-view__hidden {
+  margin: 0 0 0.8rem; font-size: 0.78rem; color: var(--text-subtle, #94a3b8);
+}
+
+.torrent-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.torrent-file {
+  display: flex; align-items: center; gap: 0.7rem;
+  padding: 0.5rem 0.6rem; border-radius: 7px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+}
+.torrent-file:hover { background: rgba(148, 163, 184, 0.06); }
+.torrent-file__pick { flex: none; display: flex; align-items: center; }
+.torrent-file__icon { flex: none; color: var(--text-subtle, #94a3b8); display: flex; }
+.torrent-file__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.torrent-file__name {
+  font-size: 0.87rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.torrent-file__meta { font-size: 0.74rem; color: var(--text-subtle, #94a3b8); }
+.torrent-file__actions { flex: none; display: flex; gap: 0.35rem; }
+
+.torrent-season { margin-bottom: 0.8rem; }
+.torrent-season__head {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%;
+  padding: 0.5rem 0.6rem; border: none; border-radius: 7px;
+  background: rgba(148, 163, 184, 0.07); color: inherit;
+  font: inherit; font-size: 0.87rem; cursor: pointer; text-align: left;
+}
+.torrent-season__head span { margin-left: auto; font-size: 0.76rem; color: var(--text-subtle, #94a3b8); }
+
+/* Fixed, because a selection made at the top of a 400-file list is acted on
+   from wherever the viewer has scrolled to. */
+.torrent-view__bulk {
+  position: fixed; left: 50%; bottom: 1.4rem; transform: translateX(-50%);
+  z-index: 25; display: flex; align-items: center; gap: 1.2rem;
+  padding: 0.6rem 0.9rem; border-radius: 10px;
+  background: var(--surface, #141922); border: 1px solid rgba(148, 163, 184, 0.24);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45); font-size: 0.83rem;
+}
+.torrent-view__bulk > div { display: flex; gap: 0.4rem; }
+
+.torrent-view__error,
+.torrent-view__notice {
+  display: flex; align-items: center; gap: 0.4rem;
+  margin-top: 1rem; font-size: 0.83rem;
+}
+.torrent-view__error { color: #fca5a5; }
+.torrent-view__notice { color: #86efac; }
+
+/* --- Dropping a file on the window ----------------------------------------
+ *
+ * The gesture had no acknowledgement at all, which for the whole time
+ * `File.path` was returning undefined made a broken handler and an app that
+ * ignores dropped files completely indistinguishable. The overlay says what
+ * the window accepts before anything is released.
+ */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Never intercepts the drop itself — the window-level listener is what
+     handles it, and a covering element that swallowed the event would break
+     the thing it exists to advertise. */
+  pointer-events: none;
+  background: rgba(4, 7, 14, 0.6);
+  backdrop-filter: blur(2px);
+}
+.drop-overlay__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 2rem 2.6rem;
+  border-radius: 14px;
+  border: 2px dashed rgba(96, 165, 250, 0.55);
+  background: rgba(20, 25, 34, 0.92);
+  color: var(--text, #e2e8f0);
+  text-align: center;
+}
+.drop-overlay__card strong { font-size: 1.05rem; }
+.drop-overlay__card span { font-size: 0.83rem; color: var(--text-subtle, #94a3b8); }
+.drop-overlay__card svg { color: var(--accent, #60a5fa); }
+
+/* The picker beside the search box: the same import, for anyone who does not
+   drag files. Quiet until hovered — it sits next to the primary action and
+   must not compete with it. */
+.search-bar__attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text-subtle, #94a3b8);
+  cursor: pointer;
+}
+.search-bar__attach:hover:not(:disabled) {
+  color: var(--text, #e2e8f0);
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.24);
+}
+.search-bar__attach:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
+.search-bar__attach:disabled { opacity: 0.6; cursor: default; }

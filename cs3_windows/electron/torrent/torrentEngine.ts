@@ -304,6 +304,21 @@ export class TorrentEngine {
     this.httpMetadataCache = typeof mirrors === 'function' ? mirrors : () => mirrors;
   }
 
+  /**
+   * The `.torrent` cache, shared rather than duplicated.
+   *
+   * `TorrentImportService` writes an imported file into it so the first Play
+   * skips the BEP-9 metadata fetch entirely, and reads it back to render a
+   * magnet's contents once this engine has resolved them. Both would work
+   * against a second `TorrentMetadataCache` on the same directory — it is
+   * content-addressed and holds no state — but then the directory would be
+   * named in two places, and the day one moves is the day imports silently stop
+   * warming playback.
+   */
+  public get metadata(): TorrentMetadataCache {
+    return this.metadataCache;
+  }
+
   public setDownloadPath(dir: string): void {
     this.downloadPath = dir;
   }

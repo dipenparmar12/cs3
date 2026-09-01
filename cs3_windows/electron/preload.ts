@@ -1,13 +1,18 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { LogLevel } from './logging/logger';
 import type {
+  ProviderCatalog,
+  ProviderCatalogPage,
   SearchHistoryEntry,
   SearchOptions,
   SearchResponse,
   SearchSuggestion,
 } from '../src/types/api';
+import type { OttPlatformView } from './cs3/ottPlatforms';
 import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
 import type { SwarmReport } from '../src/types/torrent';
+import type { TorrentContents } from './torrent/torrentContents';
+import type { TorrentImportRecord } from './torrent/torrentImport';
 import type { SitePlugin, PluginCompatibilityReport, ProviderTreeRepository } from '../src/types/plugin';
 import type {
   IndexerConfig,
@@ -602,6 +607,102 @@ export interface CloudStreamElectronAPI {
   getSourceCacheStats: () => Promise<{ entries: number; sources: number }>;
   clearSourceCache: () => Promise<Envelope>;
 
+  /**
+   * Opening a `.torrent` or a magnet as browsable content.
+   *
+   * Import and read are separate calls for the same reason Add and Install are
+   * separate on the repositories screen: importing a file is a read and a cache
+   * write, where resolving a magnet has to join a swarm that may be dead.
+   * `resolved: false` from `getTorrentContents` is an ordinary answer, not a
+   * failure — the page renders the name and offers to fetch the rest.
+   */
+  /**
+   * The on-disk path of a dropped `File`.
+   *
+   * **`File.path` was removed in Electron 32** and this app is on 43, so the
+   * property the drop handler read was simply `undefined` — every dropped file
+   * produced an empty path list and the handler returned without a word. That
+   * is why drag-and-drop did nothing: not a listener that never fired, but one
+   * that fired and found nothing to act on.
+   *
+   * `webUtils.getPathForFile` is the replacement and has to be called in the
+   * preload: `webUtils` is a main-world module, and the renderer cannot reach
+   * it under `contextIsolation`. Null for a `File` with no filesystem origin.
+   */
+  getPathForFile: (file: File) => string | null;
+  /**
+   * Picks `.torrent` files through the system dialog.
+   *
+   * Drag-and-drop is a gesture not everyone knows, and one that is awkward on a
+   * laptop trackpad. The dialog is the same import with a different door.
+   */
+  pickTorrentFiles: () => Promise<
+    Envelope & {
+      cancelled?: boolean;
+      results?: Array<{
+        path: string;
+        ok: boolean;
+        infoHash?: string;
+        resolved?: boolean;
+        duplicate?: boolean;
+        error?: string;
+      }>;
+    }
+  >;
+  importTorrentFiles: (filePaths: string[]) => Promise<
+    Envelope & {
+      results?: Array<{
+        path: string;
+        ok: boolean;
+        infoHash?: string;
+        resolved?: boolean;
+        duplicate?: boolean;
+        error?: string;
+      }>;
+    }
+  >;
+  importMagnet: (uri: string) => Promise<
+    Envelope & { infoHash?: string; resolved?: boolean; duplicate?: boolean }
+  >;
+  getTorrentContents: (infoHash: string) => Promise<
+    Envelope & {
+      resolved?: boolean;
+      record?: TorrentImportRecord | null;
+      contents?: TorrentContents | null;
+    }
+  >;
+  /** Joins the swarm purely to fetch a magnet's file list. */
+  resolveMagnet: (infoHash: string) => Promise<
+    Envelope & {
+      resolved?: boolean;
+      record?: TorrentImportRecord | null;
+      contents?: TorrentContents | null;
+    }
+  >;
+  listTorrentImports: () => Promise<Envelope & { records?: TorrentImportRecord[] }>;
+  removeTorrentImport: (infoHash: string) => Promise<Envelope>;
+  isMagnetLink: (text: string) => Promise<Envelope & { magnet?: boolean }>;
+  /**
+   * Streams one file out of an imported torrent.
+   *
+   * The engine orders pieces sequentially from that file and deselects the
+   * rest, so a season pack delivers the chosen episode rather than splitting
+   * the swarm across ten of them.
+   */
+  playTorrentFile: (
+    infoHash: string,
+    fileIndex: number
+  ) => Promise<Envelope & { handle?: StreamHandle | null }>;
+  /** Queues one file as an ordinary download, keyed on infohash + file index. */
+  downloadTorrentFile: (request: {
+    infoHash: string;
+    fileIndex: number;
+    fileName: string;
+    title: string;
+    season?: number;
+    episode?: number;
+    totalSize?: number;
+  }) => Promise<DownloadRequestResult>;
   getStreamStats: (infoHash: string) => Promise<TorrentStreamStats | null>;
   selectStreamFile: (infoHash: string, fileIndex: number) => Promise<StreamHandle | null>;
   stopStream: (infoHash: string, keepFiles?: boolean) => Promise<void>;
@@ -663,6 +764,17 @@ export interface CloudStreamElectronAPI {
         subtitleWeight: 'normal' | 'bold';
         /** Percent of frame height to lift cues by, for hard-subbed releases. */
         subtitlePosition: number;
+        /**
+         * What "minimise" does. `pip` is Chromium's native Picture-in-Picture
+         * and is only reachable while the `<video>` element is what is playing
+         * — mpv and an external player have their own windows and there is no
+         * surface for PiP to detach.
+         */
+        floatingMode: 'mini' | 'floating' | 'pip' | 'background';
+        /** Whether the film keeps running when it is out of sight. */
+        backgroundPlayback: 'continue' | 'audio-only' | 'pause';
+        /** Pin the app above other windows while a floating player is showing. */
+        alwaysOnTop: boolean;
       };
     }
   >;
@@ -677,7 +789,38 @@ export interface CloudStreamElectronAPI {
     subtitleBackground?: 'none' | 'shadow' | 'outline' | 'box';
     subtitleWeight?: 'normal' | 'bold';
     subtitlePosition?: number;
+    floatingMode?: 'mini' | 'floating' | 'pip' | 'background';
+    backgroundPlayback?: 'continue' | 'audio-only' | 'pause';
+    alwaysOnTop?: boolean;
   }) => Promise<Envelope>;
+  /**
+   * Pins the application window above everything else.
+   *
+   * The one floating mechanism that is indifferent to what is playing. Native
+   * Picture-in-Picture detaches the element's surface and cannot help a stream
+   * routed to mpv; mpv's own `ontop` cannot help one playing in the element.
+   * This changes a window level, so a torrent stream, a 4K file the native
+   * engine is decoding and an ordinary MP4 all float equally.
+   */
+  setWindowAlwaysOnTop: (onTop: boolean) => Promise<Envelope & { alwaysOnTop: boolean }>;
+  getWindowAlwaysOnTop: () => Promise<Envelope & { alwaysOnTop: boolean }>;
+  /**
+   * Pins mpv's own window, for a stream the native engine is holding.
+   *
+   * Answers `applied: false` rather than failing when mpv is not running: the
+   * caller is applying one preference across every engine and only one of them
+   * has the stream.
+   */
+  setMpvOnTop: (onTop: boolean) => Promise<Envelope & { applied: boolean }>;
+  /**
+   * Drops mpv's video track for audio-only background playback.
+   *
+   * Meaningful only on the native engine. An offscreen `<video>` element keeps
+   * decoding whatever it is told to, so "audio only" there is a description of
+   * what is on screen rather than of what the machine is doing; mpv genuinely
+   * stops.
+   */
+  setMpvVideoEnabled: (enabled: boolean) => Promise<Envelope & { applied: boolean }>;
   getDeleteDownloadPreference: () => Promise<
     Envelope & { preference: 'ask' | 'list-only' | 'list-and-file' }
   >;
@@ -1012,6 +1155,73 @@ export interface CloudStreamElectronAPI {
    * a permanent row that fails every time it is opened, and that failure reads
    * as the extensions being broken rather than the address.
    */
+  // --- OTT platform destinations -------------------------------------------
+
+  /**
+   * Every OTT platform the app knows, with what is installed behind it.
+   *
+   * Always the full list, including platforms nothing can serve. A sidebar that
+   * silently omitted Sony LIV would leave a user who came looking for it to
+   * conclude the app cannot do that, when the truth is one repository install
+   * away and `availability` says so.
+   */
+  listOttPlatforms: () => Promise<{
+    ok: boolean;
+    error?: string;
+    platforms: OttPlatformView[];
+  }>;
+  /** What this platform offers to browse, before any row is fetched. */
+  getOttCatalog: (
+    platformId: string
+  ) => Promise<{ ok: boolean; error?: string; catalog: ProviderCatalog | null }>;
+  /**
+   * One page of one catalogue row.
+   *
+   * `section` travels back exactly as it arrived: `data` is the provider's own
+   * opaque handle for the row and is not a URL. Rebuilding it here — or
+   * "cleaning" it — is how a browse request stops matching the row it names.
+   */
+  getOttCatalogPage: (
+    provider: string,
+    section: { name: string; data: string; horizontalImages?: boolean },
+    page: number
+  ) => Promise<{ ok: boolean; error?: string; page: ProviderCatalogPage | null }>;
+  /**
+   * The providers a search from this platform's page should be scoped to.
+   *
+   * Pass the result as `SearchOptions.providers`. It is fetched rather than
+   * derived in the renderer so the page's "searching Netflix, Prime Video"
+   * caption cannot disagree with what the main process actually asks.
+   */
+  getOttSearchScope: (
+    platformId: string
+  ) => Promise<{ ok: boolean; error?: string; providers: string[] }>;
+  /** Repositories to offer when nothing installed serves this platform. */
+  getOttSuggestions: (platformId: string) => Promise<{
+    ok: boolean;
+    error?: string;
+    suggestions: Array<{
+      id: string;
+      name: string;
+      description: string;
+      url: string;
+      rawRepoUrl: string;
+      installed: boolean;
+    }>;
+  }>;
+  /**
+   * Installs one of this platform's suggested repositories.
+   *
+   * By id, never by URL. This channel is reachable from the renderer, and
+   * accepting an address here would turn "set up Netflix" into a way to make
+   * the app install code from anywhere; adding a repository by hand stays a
+   * separate, deliberate action on the extensions screen.
+   */
+  installOttSuggestion: (
+    platformId: string,
+    repositoryId: string
+  ) => Promise<{ ok: boolean; message: string; installed: number; failed: number }>;
+
   addRepository: (
     url: string
   ) => Promise<{ ok: boolean; message: string; name?: string; plugins?: number }>;
@@ -1260,9 +1470,9 @@ export interface CloudStreamElectronAPI {
    * a restore can be confirmed against what is actually in the file rather than
    * against its filename.
    */
-  exportUserData: () => Promise<
-    Envelope & { path?: string; bytes?: number; cancelled?: boolean }
-  >;
+  exportUserData: (
+    only?: string[]
+  ) => Promise<Envelope & { path?: string; bytes?: number; cancelled?: boolean }>;
   inspectBackup: () => Promise<
     Envelope & {
       cancelled?: boolean;
@@ -1277,12 +1487,114 @@ export interface CloudStreamElectronAPI {
   >;
   restoreUserData: (
     filePath: string,
-    only?: string[]
+    options?: { only?: string[]; mode?: 'merge' | 'replace' }
   ) => Promise<
-    Envelope & { sections?: Array<{ name: string; restored: number; note?: string }> }
+    Envelope & {
+      sections?: Array<{
+        name: string;
+        restored: number;
+        note?: string;
+        mode?: 'merge' | 'replace';
+      }>;
+    }
   >;
   /** Puts the key/value store back as it was immediately before a restore. */
   undoRestore: () => Promise<Envelope>;
+
+  /**
+   * Making a provider a saved page names answer again.
+   *
+   * Two calls, because the fix can be a repository fetch and an extension
+   * install. `planProviderRecovery` says what pressing the button would do and
+   * changes nothing; `recoverProvider` does it and reports each step. Folding
+   * them together would commit someone who only wanted to know why their title
+   * would not open.
+   *
+   * Neither takes a repository URL. The address comes from what this machine
+   * has already recorded — see `providerRecovery.ts` for why accepting one from
+   * a `cs3ext://` address would be a way to make the app install code from
+   * anywhere.
+   */
+  /**
+   * Every streaming service including the ones switched off, for the screen
+   * that offers to switch them back on. `listOttPlatforms` returns the chosen
+   * set, which is what a sidebar wants.
+   */
+  listAllOttPlatforms: () => Promise<
+    Envelope & { platforms?: unknown[]; enabled?: string[] }
+  >;
+  /**
+   * What is on this streaming service, from a keyless metadata catalogue.
+   *
+   * A claim about the *platform*, not about this app: these rows carry no
+   * source and are resolved by searching installed providers when one is
+   * opened. `supported` is false for a platform the catalogue does not cover,
+   * which is a real answer — the alternative is showing a generic popularity
+   * list under a brand name it has nothing to do with.
+   */
+  getOttMetadataCatalog: (platformId: string) => Promise<
+    Envelope & {
+      supported?: boolean;
+      sections?: Array<{
+        id: string;
+        title: string;
+        origin: 'metadata';
+        items: import('../src/types/api').SearchResponse[];
+      }>;
+    }
+  >;
+  setOttPlatformEnabled: (
+    platformId: string,
+    enabled: boolean
+  ) => Promise<Envelope & { enabled?: string[] }>;
+  planProviderRecovery: (provider: string) => Promise<
+    Envelope & {
+      plan?: {
+        provider: string;
+        steps: Array<{
+          kind:
+            | 'add-repository'
+            | 'install-extension'
+            | 'enable-repository'
+            | 'enable-extension'
+            | 'enable-provider';
+          target: string;
+          label: string;
+          costly?: boolean;
+        }>;
+        blocked?: string;
+        extension?: { internalName: string; name: string; repositoryUrl?: string };
+      };
+    }
+  >;
+  recoverProvider: (provider: string) => Promise<
+    Envelope & {
+      provider?: string;
+      done?: Array<{ kind: string; target: string; ok: boolean; error?: string }>;
+    }
+  >;
+  /**
+   * The same two calls for a list.
+   *
+   * One round trip rather than one per provider: the case that motivated them
+   * is a scope warning naming seventy, and seventy `invoke`s each rebuilding
+   * the same context is a visibly slow modal for a checklist.
+   */
+  planProviderRecoveryBulk: (providers: string[]) => Promise<
+    Envelope & {
+      plans?: Array<{
+        provider: string;
+        steps: Array<{ kind: string; target: string; label: string; costly?: boolean }>;
+        blocked?: string;
+        extension?: { internalName: string; name: string; repositoryUrl?: string };
+      }>;
+    }
+  >;
+  recoverProviders: (providers: string[]) => Promise<
+    Envelope & {
+      results?: Array<{ ok: boolean; provider: string; error?: string }>;
+    }
+  >;
   /**
    * Commands from the application menu.
    *
@@ -1460,6 +1772,26 @@ const api: CloudStreamElectronAPI = {
   getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
   clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),
 
+  getPathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file) || null;
+    } catch {
+      // A `File` that came from anywhere but the filesystem — a paste, a
+      // generated blob — has no path, and asking throws rather than answering.
+      return null;
+    }
+  },
+  pickTorrentFiles: () => ipcRenderer.invoke('torrent:pickFiles'),
+  importTorrentFiles: (filePaths) => ipcRenderer.invoke('torrent:importFiles', filePaths),
+  importMagnet: (uri) => ipcRenderer.invoke('torrent:importMagnet', uri),
+  getTorrentContents: (infoHash) => ipcRenderer.invoke('torrent:getContents', infoHash),
+  resolveMagnet: (infoHash) => ipcRenderer.invoke('torrent:resolveMagnet', infoHash),
+  listTorrentImports: () => ipcRenderer.invoke('torrent:listImports'),
+  removeTorrentImport: (infoHash) => ipcRenderer.invoke('torrent:removeImport', infoHash),
+  isMagnetLink: (text) => ipcRenderer.invoke('torrent:isMagnet', text),
+  playTorrentFile: (infoHash, fileIndex) =>
+    ipcRenderer.invoke('torrent:playFile', infoHash, fileIndex),
+  downloadTorrentFile: (request) => ipcRenderer.invoke('torrent:downloadFile', request),
   getStreamStats: (infoHash) => ipcRenderer.invoke('torrent:getStats', infoHash),
   selectStreamFile: (infoHash, fileIndex) =>
     ipcRenderer.invoke('torrent:selectFile', infoHash, fileIndex),
@@ -1485,6 +1817,10 @@ const api: CloudStreamElectronAPI = {
   removeDownload: (id, deleteFile) => ipcRenderer.invoke('download:remove', id, deleteFile),
   getPlayerPreferences: () => ipcRenderer.invoke('player:getPreferences'),
   setPlayerPreferences: (patch) => ipcRenderer.invoke('player:setPreferences', patch),
+  setWindowAlwaysOnTop: (onTop) => ipcRenderer.invoke('window:setAlwaysOnTop', onTop),
+  getWindowAlwaysOnTop: () => ipcRenderer.invoke('window:getAlwaysOnTop'),
+  setMpvOnTop: (onTop) => ipcRenderer.invoke('mpv:setOnTop', onTop),
+  setMpvVideoEnabled: (enabled) => ipcRenderer.invoke('mpv:setVideoEnabled', enabled),
   getDeleteDownloadPreference: () => ipcRenderer.invoke('download:getDeletePreference'),
   setDeleteDownloadPreference: (preference) =>
     ipcRenderer.invoke('download:setDeletePreference', preference),
@@ -1576,6 +1912,19 @@ const api: CloudStreamElectronAPI = {
   uninstallPlugin: (internalName) =>
     ipcRenderer.invoke('extension:uninstallPlugin', internalName),
   getInstalledRepositories: () => ipcRenderer.invoke('extension:getInstalledRepositories'),
+  listOttPlatforms: () => ipcRenderer.invoke('ott:listPlatforms'),
+  getOttCatalog: (platformId) => ipcRenderer.invoke('ott:getCatalog', platformId),
+  getOttCatalogPage: (provider, section, page) =>
+    ipcRenderer.invoke('ott:getCatalogPage', provider, section, page),
+  getOttSearchScope: (platformId) => ipcRenderer.invoke('ott:getSearchScope', platformId),
+  getOttSuggestions: (platformId) => ipcRenderer.invoke('ott:getSuggestions', platformId),
+  installOttSuggestion: (platformId, repositoryId) =>
+    ipcRenderer.invoke('ott:installSuggestion', platformId, repositoryId),
+  listAllOttPlatforms: () => ipcRenderer.invoke('ott:listAllPlatforms'),
+  getOttMetadataCatalog: (platformId) =>
+    ipcRenderer.invoke('ott:getMetadataCatalog', platformId),
+  setOttPlatformEnabled: (platformId, enabled) =>
+    ipcRenderer.invoke('ott:setPlatformEnabled', platformId, enabled),
   addRepository: (url) => ipcRenderer.invoke('extension:addRepository', url),
   installRepository: (url, options) => ipcRenderer.invoke('extension:installRepository', url, options),
   removeRepository: (repoUrl) => ipcRenderer.invoke('extension:removeRepository', repoUrl),
@@ -1663,10 +2012,18 @@ const api: CloudStreamElectronAPI = {
   selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
   reloadApp: () => ipcRenderer.invoke('app:reload'),
   relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
-  exportUserData: () => ipcRenderer.invoke('backup:export'),
+  exportUserData: (only) => ipcRenderer.invoke('backup:export', only),
   inspectBackup: () => ipcRenderer.invoke('backup:inspect'),
-  restoreUserData: (filePath, only) => ipcRenderer.invoke('backup:restore', filePath, only),
+  restoreUserData: (filePath, options) =>
+    ipcRenderer.invoke('backup:restore', filePath, options),
   undoRestore: () => ipcRenderer.invoke('backup:undoRestore'),
+  planProviderRecovery: (provider) =>
+    ipcRenderer.invoke('extension:planProviderRecovery', provider),
+  recoverProvider: (provider) => ipcRenderer.invoke('extension:recoverProvider', provider),
+  planProviderRecoveryBulk: (providers) =>
+    ipcRenderer.invoke('extension:planProviderRecoveryBulk', providers),
+  recoverProviders: (providers) =>
+    ipcRenderer.invoke('extension:recoverProviders', providers),
   onToggleInspector: (callback) => subscribe('app:toggleInspector', callback),
   onShowLicences: (callback) => subscribe('app:showLicences', callback),
   onOpenLocalFile: (callback) => subscribe('app:openLocalFile', callback),

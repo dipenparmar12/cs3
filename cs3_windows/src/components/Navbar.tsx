@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Search, Bug, Loader2 } from 'lucide-react';
+import { Search, Bug, Loader2, Paperclip } from 'lucide-react';
 import { SearchScopePicker } from './SearchScopePicker';
 import type {
   ExactMedia,
@@ -11,6 +11,16 @@ import { SearchSuggestions } from './SearchSuggestions';
 
 interface NavbarProps {
   onSearch: (query: string, options?: SearchOptions) => void;
+  /**
+   * A torrent was picked from disk, so the app can open its page.
+   *
+   * The Navbar runs the dialog rather than the parent, because the control
+   * lives here and a press that has to travel up before it can open a file
+   * would show its spinner in the wrong place.
+   */
+  onTorrentPicked?: (infoHash: string) => void;
+  /** A picked file that could not be read, said where the press happened. */
+  onTorrentPickFailed?: (message: string) => void;
   isSearching?: boolean;
   /** Fired when the scope picker closes having changed the scope. */
   onScopeChange?: () => void;
@@ -36,6 +46,8 @@ const SUGGEST_DEBOUNCE_MS = 250;
 
 export const Navbar: React.FC<NavbarProps> = ({
   onSearch,
+  onTorrentPicked,
+  onTorrentPickFailed,
   isSearching = false,
   onScopeChange,
   onOpenInspector,
@@ -202,6 +214,32 @@ export const Navbar: React.FC<NavbarProps> = ({
     }
   };
 
+  const [picking, setPicking] = useState(false);
+
+  const pickTorrent = useCallback(async () => {
+    setPicking(true);
+    try {
+      const result = await window.cloudstream?.pickTorrentFiles?.();
+      // A cancelled dialog is not a failure and must not report one.
+      if (result?.cancelled) return;
+      if (!result?.ok) {
+        onTorrentPickFailed?.(result?.error ?? 'That file could not be opened.');
+        return;
+      }
+      const opened = (result.results ?? []).filter((row) => row.ok && row.infoHash);
+      if (opened.length === 0) {
+        onTorrentPickFailed?.(
+          (result.results ?? [])[0]?.error ?? 'That was not a readable .torrent file.'
+        );
+        return;
+      }
+      // The last one opened wins the page; the rest are imported and reachable.
+      onTorrentPicked?.(opened[opened.length - 1].infoHash!);
+    } finally {
+      setPicking(false);
+    }
+  }, [onTorrentPicked, onTorrentPickFailed]);
+
   return (
     <header className="navbar">
       {/* Search Input Bar */}
@@ -228,6 +266,25 @@ export const Navbar: React.FC<NavbarProps> = ({
           aria-expanded={suggestOpen}
           aria-autocomplete="list"
         />
+        {/*
+          The other way in.
+          
+          Drag-and-drop is a gesture plenty of people never use — it is awkward
+          on a trackpad and invisible if nobody has told you it exists. This is
+          the same import behind a control that looks like one, next to the box
+          where somebody is already looking for something to watch.
+        */}
+        <button
+          type="button"
+          onClick={() => void pickTorrent()}
+          disabled={picking}
+          className="search-bar__attach"
+          title="Open a .torrent file"
+          aria-label="Open a torrent file"
+        >
+          {picking ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}
+        </button>
+
         <button
           onClick={() => runSearch(query)}
           disabled={isSearching}

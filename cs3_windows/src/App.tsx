@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { WifiOff } from 'lucide-react';
+import { FileDown, WifiOff } from 'lucide-react';
 import type { PlayedSource } from './types/library';
 import { Sidebar } from './components/Sidebar';
 import type { ActiveTab } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
 import { VideoPlayer } from './components/VideoPlayer';
 import { MiniPlayerBar } from './components/player/MiniPlayerBar';
+import { OttPlatformView, type OttPlatformSummary } from './views/OttPlatformView';
+import { TorrentView, type TorrentPlayRequest } from './views/TorrentView';
 import { DownloadCenter } from './components/DownloadCenter';
 import { ProviderInspector } from './components/ProviderInspector';
 import { ExtensionsScreen } from './components/extensions/ExtensionsScreen';
@@ -75,6 +77,18 @@ export const App: React.FC = () => {
    * button that does nothing when clicked.
    */
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  /**
+   * The imported torrent being browsed, or null.
+   *
+   * Held beside the tab rather than inside it: opening a torrent is a
+   * navigation that can start from anywhere — a drop on the home screen, a
+   * paste in search, a file association at launch — and routing it through a
+   * tab would mean every one of those first switching to that tab.
+   */
+  const [openTorrent, setOpenTorrent] = useState<string | null>(null);
+  /** Whether something is being dragged over the window, for the overlay. */
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
 
   /**
    * The instant-play path: the player opens on this state before any stream
@@ -145,6 +159,29 @@ export const App: React.FC = () => {
   const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>([]);
   /** Indexer names, for the F12 inspector. The search scope owns its own list. */
   const [providersList, setProvidersList] = useState<string[]>([]);
+  /**
+   * The streaming-service destinations, held here rather than in the sidebar.
+   *
+   * Two consumers need the same answer — the sidebar draws the rows and the
+   * platform page renders from one of them — and a second fetch would let the
+   * two disagree about whether Netflix is installed, which is precisely the
+   * kind of split the extensions screen already had once between `enabled` and
+   * `effectivelyEnabled`.
+   */
+  const [ottPlatforms, setOttPlatforms] = useState<OttPlatformSummary[]>([]);
+
+  /**
+   * Re-reads the streaming-service inventory.
+   *
+   * Called at launch and again after anything that can change it — installing a
+   * repository from a platform page, or toggling a provider on the extensions
+   * screen. Without the second call the sidebar keeps the state it saw at
+   * launch, so installing NetMirror appears to do nothing until a restart.
+   */
+  const refreshOttPlatforms = useCallback(async () => {
+    const response = await window.cloudstream?.listOttPlatforms();
+    if (response?.platforms) setOttPlatforms(response.platforms as OttPlatformSummary[]);
+  }, []);
 
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   /** Which Settings pane to open on, when something deep-links into it. */
@@ -210,6 +247,18 @@ export const App: React.FC = () => {
       }
     }
   }, [activeTab, searchQuery, selectedMedia, playback, session]);
+
+  /**
+   * Re-read the inventory when a streaming-service page is opened.
+   *
+   * Availability changes on the extensions screen — a provider switched off, a
+   * repository removed — and nothing pushes that back here. Without this, a
+   * platform disabled two screens ago still renders its catalogue rows and only
+   * fails when something is clicked.
+   */
+  useEffect(() => {
+    if (activeTab.startsWith('ott:')) void refreshOttPlatforms();
+  }, [activeTab, refreshOttPlatforms]);
   const [isBinaryModalOpen, setIsBinaryModalOpen] = useState(false);
   const [hasBinaries, setHasBinaries] = useState(true);
 
@@ -225,6 +274,7 @@ export const App: React.FC = () => {
       window.cloudstream
         .getIndexerConfigs()
         .then((configs) => setProvidersList(configs.filter((c) => c.enabled).map((c) => c.name)));
+      void refreshOttPlatforms();
     }
 
     /**
@@ -298,7 +348,7 @@ export const App: React.FC = () => {
       disposeInspector?.();
       disposeLicences?.();
     };
-  }, []);
+  }, [refreshOttPlatforms]);
 
   /**
    * Play a file the user already has on disk.
@@ -331,11 +381,114 @@ export const App: React.FC = () => {
     });
   }, []);
 
+  /**
+   * Opens a `.torrent`: browse first, download never implied.
+   *
+   * Several may be dropped at once. The last one that imported wins the page,
+   * and the rest are still imported and reachable — dropping five and being
+   * shown one is expected; dropping five and keeping one would not be.
+   */
+  const handleOpenTorrentFiles = useCallback(async (filePaths: string[]) => {
+    const result = await window.cloudstream?.importTorrentFiles?.(filePaths);
+    if (!result?.ok) {
+      setActionNotice(result?.error ?? 'That file could not be read as a torrent.');
+      return;
+    }
+    const opened = (result.results ?? []).filter((row) => row.ok && row.infoHash);
+    const failed = (result.results ?? []).filter((row) => !row.ok);
+    if (opened.length === 0) {
+      setActionNotice(failed[0]?.error ?? 'None of those could be read as torrents.');
+      return;
+    }
+    if (failed.length > 0) {
+      setActionNotice(
+        `${failed.length} of ${result.results?.length} could not be read as torrents.`
+      );
+    }
+    setPlayerHidden(true);
+    setOpenTorrent(opened[opened.length - 1].infoHash!);
+  }, []);
+
+  /**
+   * Plays one file from an imported torrent.
+   *
+   * Goes to the engine rather than through discovery: the source is already
+   * known exactly, so there is nothing to search, rank or wait on. The player
+   * receives the loopback URL the engine serves, which is the same shape every
+   * other source arrives in.
+   */
+  const handlePlayTorrentFile = useCallback(async (request: TorrentPlayRequest) => {
+    setActionNotice(null);
+    const result = await window.cloudstream?.playTorrentFile?.(
+      request.infoHash,
+      request.fileIndex
+    );
+    if (!result?.ok || !result.handle?.streamUrl) {
+      setActionNotice(result?.error ?? 'That file could not be streamed.');
+      return;
+    }
+    const handle = result.handle;
+    setPlayerHidden(false);
+    setPlayerMini(false);
+    setPlayback({
+      streamUrl: handle.streamUrl,
+      mimeType: handle.mimeType,
+      title: request.title,
+      episodeTitle:
+        request.season !== undefined && request.episode !== undefined
+          ? `S${String(request.season).padStart(2, '0')}E${String(request.episode).padStart(2, '0')}`
+          : request.fileName,
+      infoHash: handle.infoHash,
+      // Subtitles bundled in the torrent, served from the same loopback origin
+      // the video is. Nothing else could supply them for a file with no IMDb id.
+      subtitles: handle.subtitleUrls ?? [],
+      progress: {
+        /*
+         * Addressed by infohash and file index rather than by the loopback URL.
+         * The port and token are minted per session, so a URL-keyed progress
+         * record would miss on every restart while looking as though it should
+         * hit — the same trap the probe cache was keyed into.
+         */
+        mediaUrl: `torrent://${request.infoHash}/${request.fileIndex}`,
+        season: request.season,
+        episode: request.episode,
+      },
+    });
+  }, []);
+
+  const handleDownloadTorrentFile = useCallback(
+    async (request: TorrentPlayRequest & { totalSize: number }) => {
+      const result = await window.cloudstream?.downloadTorrentFile?.(request);
+      if (!result?.ok) setActionNotice(result?.message ?? 'That file could not be queued.');
+    },
+    []
+  );
+
+  const handleOpenMagnet = useCallback(async (uri: string) => {
+    const result = await window.cloudstream?.importMagnet?.(uri);
+    if (!result?.ok || !result.infoHash) {
+      setActionNotice(result?.error ?? 'That magnet link could not be opened.');
+      return;
+    }
+    setPlayerHidden(true);
+    setOpenTorrent(result.infoHash);
+  }, []);
+
   useEffect(() => {
     return window.cloudstream?.onOpenLocalFile?.((filePath) => {
+      // The main process hands over whatever was opened or associated; which
+      // handler it belongs to is decided by extension, and each verifies.
+      if (filePath.toLowerCase().endsWith('.torrent')) {
+        void handleOpenTorrentFiles([filePath]);
+        return;
+      }
+      if (/^magnet:\?/i.test(filePath)) {
+        void handleOpenMagnet(filePath);
+        return;
+      }
       void handleOpenLocalFile(filePath);
     });
-  }, [handleOpenLocalFile]);
+  }, [handleOpenLocalFile, handleOpenTorrentFiles, handleOpenMagnet]);
 
   /**
    * A file dropped on the window plays; it does not navigate.
@@ -349,19 +502,88 @@ export const App: React.FC = () => {
     const allow = (event: DragEvent) => event.preventDefault();
     const onDrop = (event: DragEvent) => {
       event.preventDefault();
-      const file = event.dataTransfer?.files?.[0];
-      // `webUtils.getPathForFile` is the supported route in newer Electron;
-      // `file.path` remains populated in this build and is the simpler one.
-      const filePath = (file as (File & { path?: string }) | undefined)?.path;
-      if (filePath) void handleOpenLocalFile(filePath);
+      setDragging(false);
+
+      /*
+       * Dragged *text* is checked first, because a magnet dragged out of a
+       * browser arrives as text and carries no file at all. Checking files
+       * first would silently drop it.
+       */
+      const dragged = event.dataTransfer?.getData('text/plain')?.trim();
+      if (dragged && /^magnet:\?/i.test(dragged)) {
+        void handleOpenMagnet(dragged);
+        return;
+      }
+
+      const files = [...(event.dataTransfer?.files ?? [])];
+      /*
+       * `File.path` was removed in Electron 32 and this app is on 43.
+       *
+       * That is the whole bug: the old code read `file.path`, got `undefined`
+       * for every file, filtered the list down to nothing and returned without
+       * a word. Drag-and-drop looked like a listener that never fired; it fired
+       * every time and found nothing to act on. `webUtils.getPathForFile` is
+       * the replacement, and it has to be called in the preload because
+       * `webUtils` is a main-world module the renderer cannot reach under
+       * `contextIsolation`.
+       */
+      const paths = files
+        .map((file) => window.cloudstream?.getPathForFile?.(file) ?? null)
+        .filter((filePath): filePath is string => Boolean(filePath));
+
+      if (paths.length === 0) {
+        // Never silent. A drop that resolves to nothing has to say so, or it is
+        // indistinguishable from an app that ignores dropped files — which is
+        // exactly how this read for as long as it was broken.
+        setActionNotice(
+          files.length > 0
+            ? 'That could not be read from disk. Try the paperclip beside the search box.'
+            : 'Drop a .torrent file, a video, or a magnet link.'
+        );
+        return;
+      }
+
+      const torrents = paths.filter((filePath) => filePath.toLowerCase().endsWith('.torrent'));
+      if (torrents.length > 0) {
+        void handleOpenTorrentFiles(torrents);
+        return;
+      }
+      void handleOpenLocalFile(paths[0]);
     };
+
+    /*
+     * `dragenter`/`dragleave` fire for every element the pointer crosses, so a
+     * naive pair flickers the overlay across the whole window. Counting the
+     * enters and leaves is what makes it stable.
+     */
+    const onDragEnter = (event: DragEvent) => {
+      event.preventDefault();
+      if (!event.dataTransfer?.types?.length) return;
+      dragDepth.current += 1;
+      setDragging(true);
+    };
+    const onDragLeave = () => {
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragging(false);
+    };
+    const onDragEnd = () => {
+      dragDepth.current = 0;
+      setDragging(false);
+    };
+
     window.addEventListener('dragover', allow);
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('dragend', onDragEnd);
     window.addEventListener('drop', onDrop);
     return () => {
       window.removeEventListener('dragover', allow);
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('dragend', onDragEnd);
       window.removeEventListener('drop', onDrop);
     };
-  }, [handleOpenLocalFile]);
+  }, [handleOpenLocalFile, handleOpenTorrentFiles, handleOpenMagnet]);
 
   /**
    * Opens a search. Returns as soon as it has started, not when it has finished.
@@ -421,6 +643,21 @@ export const App: React.FC = () => {
    * "search everywhere" was reachable only by finding the scope picker in the
    * toolbar and clearing it by hand.
    */
+  /**
+   * Re-runs the last query with the scope untouched.
+   *
+   * Distinct from `handleSearchAllSources`, which *clears* the scope: this is
+   * for when the sources the user chose have just been switched back on and the
+   * warning naming them is stale. Widening there would silently discard the
+   * selection they were trying to repair.
+   */
+  const handleRetrySearch = useCallback(() => {
+    const previous = lastQuery.current;
+    if (!previous?.query) return;
+    void handleSearch(previous.query, previous.options);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleSearchAllSources = useCallback(() => {
     const previous = lastQuery.current;
     if (!previous?.query) return;
@@ -1024,11 +1261,17 @@ export const App: React.FC = () => {
         }}
         downloadCount={downloadQueue.filter((t) => t.state === 'Downloading' || t.state === 'Queued').length}
         missingComponentCount={missingComponents}
+        ottPlatforms={ottPlatforms}
       />
 
       {/* Main App View Area */}
       <div className="main-content">
         <Navbar
+          onTorrentPicked={(infoHash) => {
+            setPlayerHidden(true);
+            setOpenTorrent(infoHash);
+          }}
+          onTorrentPickFailed={(message) => setActionNotice(message)}
           onSearch={handleSearch}
           isSearching={Boolean(search && !search.done)}
           onScopeChange={handleScopeChange}
@@ -1037,6 +1280,24 @@ export const App: React.FC = () => {
           // claims to say what is being searched.
           externalQuery={searchQuery}
         />
+
+        {/*
+          Visible feedback for a drop, which the gesture had none of.
+
+          Not decoration: a drop with no acknowledgement is indistinguishable
+          from an app that ignores dropped files, and that is precisely how this
+          read while `File.path` was returning undefined. The overlay says what
+          the window will accept *before* anything is released.
+        */}
+        {dragging && (
+          <div className="drop-overlay" aria-hidden>
+            <div className="drop-overlay__card">
+              <FileDown size={26} />
+              <strong>Drop to open</strong>
+              <span>A .torrent file, a video, or a magnet link</span>
+            </div>
+          </div>
+        )}
 
         {isOffline && (
           <div className="offline-banner" role="status">
@@ -1277,7 +1538,18 @@ export const App: React.FC = () => {
             />
           ) : (
             <>
-              {activeTab === 'home' && (
+              {openTorrent ? (
+                <ErrorBoundary>
+                  <TorrentView
+                    infoHash={openTorrent}
+                    onPlay={(request) => void handlePlayTorrentFile(request)}
+                    onDownload={(request) => void handleDownloadTorrentFile(request)}
+                    onBack={() => setOpenTorrent(null)}
+                  />
+                </ErrorBoundary>
+              ) : null}
+
+              {!openTorrent && activeTab === 'home' && (
                 <ErrorBoundary>
                   <HomeView
                     onSelectMedia={handleSelectMedia}
@@ -1288,7 +1560,36 @@ export const App: React.FC = () => {
                   />
                 </ErrorBoundary>
               )}
-              {activeTab === 'search' && (
+              {activeTab.startsWith('ott:') && (
+                <ErrorBoundary>
+                  {(() => {
+                    const platform = ottPlatforms.find(
+                      (entry) => `ott:${entry.id}` === activeTab
+                    );
+                    /*
+                      A platform id that is not in the inventory is the window
+                      between launch and the first `listOttPlatforms` reply, and
+                      also what a stale deep link looks like. Rendering nothing
+                      would be a blank page with a selected sidebar row, so the
+                      row is held until the answer arrives.
+                    */
+                    if (!platform) return null;
+                    return (
+                      <OttPlatformView
+                        platform={platform}
+                        onSelectMedia={handleSelectMedia}
+                        onPlayDirectly={handleQuickPlay}
+                        onScopedSearch={(query, providers) =>
+                          void handleSearch(query, { providers })
+                        }
+                        onOpenExtensions={() => setActiveTab('extensions')}
+                        onInventoryChanged={() => void refreshOttPlatforms()}
+                      />
+                    );
+                  })()}
+                </ErrorBoundary>
+              )}
+              {!openTorrent && activeTab === 'search' && (
                 <ErrorBoundary>
                   <SearchView
                     query={searchQuery}
@@ -1300,10 +1601,11 @@ export const App: React.FC = () => {
                     ui={searchUi}
                     onUiChange={setSearchUi}
                     onSearchAllSources={handleSearchAllSources}
+                    onRetry={handleRetrySearch}
                   />
                 </ErrorBoundary>
               )}
-              {activeTab === 'library' && (
+              {!openTorrent && activeTab === 'library' && (
                 <ErrorBoundary>
                   <LibraryView
                     onSelectMedia={handleSelectMedia}
@@ -1313,7 +1615,7 @@ export const App: React.FC = () => {
                   />
                 </ErrorBoundary>
               )}
-              {activeTab === 'history' && (
+              {!openTorrent && activeTab === 'history' && (
                 <ErrorBoundary>
                   <HistoryView
                     onSelectMedia={handleSelectMedia}
@@ -1321,7 +1623,7 @@ export const App: React.FC = () => {
                   />
                 </ErrorBoundary>
               )}
-              {activeTab === 'downloads' && (
+              {!openTorrent && activeTab === 'downloads' && (
                 <DownloadCenter
                   tasks={downloadQueue}
                   hasBinaries={hasBinaries}
@@ -1398,12 +1700,12 @@ export const App: React.FC = () => {
                   }}
                 />
               )}
-              {activeTab === 'extensions' && (
+              {!openTorrent && activeTab === 'extensions' && (
                 <ErrorBoundary fallbackTitle="Error loading Extensions Manager">
                   <ExtensionsScreen />
                 </ErrorBoundary>
               )}
-              {activeTab === 'settings' && (
+              {!openTorrent && activeTab === 'settings' && (
                 <ErrorBoundary>
                   <SettingsView
                     hasBinaries={hasBinaries}

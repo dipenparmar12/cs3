@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, shell } from 'electron';
-import { BackupService } from './cs3/backupService.ts';
+import { BackupService, type RestoreOptions } from './cs3/backupService.ts';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -49,6 +49,11 @@ import type {
 } from '../src/types/media';
 import type { MpvOpenRequest } from '../src/types/mpv';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
+import { OttService } from './cs3/ottService';
+import { OttCatalogService } from './cs3/ottCatalog';
+import { TorrentImportService, classifyDroppedPath, looksLikeMagnet } from './torrent/torrentImport';
+import { parseReleaseName } from './torrent/releaseParser';
+import { buildDownloadTask } from '../src/utils/downloadIdentity';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { BootstrapService } from './cs3/bootstrap';
 import { TitleOutcomeStore, type TitleOutcomeKind } from './cs3/titleOutcomes';
@@ -247,6 +252,22 @@ const torrentEngine = new TorrentEngine({
 });
 const contentService = new ContentService(datastore, pluginManager, torrentEngine);
 const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
+/**
+ * Opening `.torrent` files and magnets as browsable content.
+ *
+ * Shares the engine's own metadata cache rather than pointing a second one at
+ * the same directory: an imported `.torrent` written there is what makes the
+ * first Play skip the BEP-9 fetch, and a directory named in two places is a
+ * directory that eventually disagrees.
+ */
+const torrentImports = new TorrentImportService(
+  torrentEngine.metadata,
+  app.getPath('userData')
+);
+
+const ottService = new OttService(pluginManager, datastore);
+/** Metadata catalogues for the platforms no installed provider can describe. */
+const ottCatalog = new OttCatalogService();
 const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
 const historyStore = new HistoryStore(datastore);
@@ -286,6 +307,25 @@ pluginManager.setDiagnostics(diagnostics);
  */
 const providerAnalytics = new ProviderAnalytics();
 const providerRanking = new ProviderRanking(providerAnalytics);
+
+/**
+ * The maintainer's own health flag, quoted into the ranking.
+ *
+ * Read live from the install records rather than snapshotted, so an extension
+ * whose author marks it down in the repository stops being recommended at the
+ * next update check rather than at the next app release. Indexed per call is
+ * cheap enough — this runs once per provider when a ranking is computed, not
+ * per search.
+ */
+providerRanking.setContext({
+  declaredStatus: (internalName) => {
+    const record = pluginManager
+      .getInstalledPluginRecords()
+      .find((entry) => entry.internalName === internalName);
+    const status = record?.meta?.status;
+    return typeof status === 'number' ? status : undefined;
+  },
+});
 const providerRecommender = new ProviderRecommender(
   providerAnalytics,
   providerRanking,
@@ -686,13 +726,19 @@ function buildApplicationMenu(): Menu {
 async function openLocalMediaDialog(): Promise<void> {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Open a video file',
+    title: 'Open a video or torrent',
     properties: ['openFile'],
     filters: [
       {
-        name: 'Video',
-        extensions: ['mkv', 'mp4', 'avi', 'mov', 'm4v', 'webm', 'ts', 'm2ts', 'wmv', 'flv', 'mpg', 'mpeg'],
+        // Both in one filter, because "open" is one gesture. The renderer sends
+        // each to the handler its extension names, and each verifies.
+        name: 'Video and torrents',
+        extensions: [
+          'mkv', 'mp4', 'avi', 'mov', 'm4v', 'webm', 'ts', 'm2ts', 'wmv', 'flv', 'mpg', 'mpeg',
+          'torrent',
+        ],
       },
+      { name: 'Torrent', extensions: ['torrent'] },
       { name: 'All files', extensions: ['*'] },
     ],
   });
@@ -880,6 +926,15 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => mainWindow?.show());
 
+  /*
+   * A launch argument is delivered once the *renderer* exists, not when the
+   * window does. `app:openLocalFile` is a `webContents.send`, and a send to a
+   * page that has not run its subscription yet is dropped with no error — so
+   * double-clicking a `.torrent` would open the app to the home screen and
+   * silently forget what was asked for.
+   */
+  mainWindow.webContents.once('did-finish-load', () => deliverPendingOpen());
+
   // External links open in the system browser, never in-app (SEC-7 / DSK-36).
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//.test(url)) shell.openExternal(url);
@@ -928,6 +983,68 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+/**
+ * A `.torrent` or magnet given on the command line, or by a file association.
+ *
+ * Windows passes both as ordinary `argv` entries, so this is one scan rather
+ * than two mechanisms. Electron's own switches are skipped: `--inspect` and the
+ * rest are not files, and a naive "last argument" read opens whatever flag the
+ * launcher happened to append.
+ */
+function openableFromArgv(argv: string[]): string | null {
+  for (const argument of argv.slice(1)) {
+    if (argument.startsWith('-')) continue;
+    if (/^magnet:\?/i.test(argument)) return argument;
+    if (/\.torrent$/i.test(argument)) return argument;
+  }
+  return null;
+}
+
+/** Held until the renderer exists, since a launch beats the window. */
+let pendingOpen: string | null = openableFromArgv(process.argv);
+
+function deliverPendingOpen(): void {
+  if (!pendingOpen || !mainWindow || mainWindow.isDestroyed()) return;
+  const target = pendingOpen;
+  pendingOpen = null;
+  mainWindow.webContents.send('app:openLocalFile', target);
+}
+
+/*
+ * One instance, and a second launch hands its argument to the first.
+ *
+ * Without this, double-clicking a second `.torrent` starts a whole second app:
+ * two windows, two sidecars, two torrent clients contending for one cache
+ * directory — which is the locked-cache failure `before-quit` already exists to
+ * prevent, arriving from the other direction.
+ */
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    pendingOpen = openableFromArgv(argv) ?? pendingOpen;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+      deliverPendingOpen();
+    }
+  });
+}
+
+// macOS delivers an associated file this way rather than through argv.
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  pendingOpen = filePath;
+  deliverPendingOpen();
+});
+
+// And a magnet, which arrives as a protocol rather than a file.
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  pendingOpen = url;
+  deliverPendingOpen();
+});
 
 app.whenReady().then(async () => {
   /**
@@ -1148,6 +1265,9 @@ async function shutdownServices(): Promise<void> {
   issueLog.flush();
   mediaTranscoder.shutdown();
   contentService.shutdown();
+  // Imported torrents are debounced to disk; without this the last few opens
+  // are lost on a clean quit, which reads as the list forgetting them.
+  torrentImports.shutdown();
   // Hidden windows keep running their pages — timers, requests and all — with
   // nothing on screen to reveal them.
   webViewHost.destroy();
@@ -2809,6 +2929,55 @@ ipcMain.handle('mpv:stop', async () => mpvEngine.stop());
 /** A pull for the current state, for a player that mounted mid-playback. */
 ipcMain.handle('mpv:snapshot', async () => ({ ok: true, snapshot: mpvEngine.snapshot() }));
 
+/**
+ * Pins the application window above everything else on the desktop.
+ *
+ * The third of three mechanisms, and the only one that always works. Native
+ * Picture-in-Picture detaches the `<video>` element's surface and therefore
+ * cannot help a stream routed to mpv or handed to VLC; mpv's own `ontop` cannot
+ * help a stream playing in the element. This changes a window level and is
+ * indifferent to what is inside the window — so a torrent stream, a 4K HEVC
+ * file the native engine is decoding, and an ordinary MP4 all float equally.
+ *
+ * `'floating'` rather than the default level: on macOS the plain level sits
+ * below full-screen applications, which is exactly where a film someone pinned
+ * on purpose must not go.
+ */
+ipcMain.handle('window:setAlwaysOnTop', async (_, onTop: boolean) => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, error: 'The window is gone.', alwaysOnTop: false };
+  }
+  mainWindow.setAlwaysOnTop(onTop === true, 'floating');
+  return { ok: true, alwaysOnTop: mainWindow.isAlwaysOnTop() };
+});
+
+ipcMain.handle('window:getAlwaysOnTop', async () => ({
+  ok: true,
+  alwaysOnTop: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isAlwaysOnTop()),
+}));
+
+ipcMain.handle('mpv:setVideoEnabled', async (_, enabled: boolean) => {
+  try {
+    if (!mpvEngine.isRunning()) return { ok: true, applied: false };
+    const result = await mpvEngine.setVideoEnabled(enabled !== false);
+    return { ok: result.ok, applied: result.ok, error: result.error };
+  } catch (error) {
+    return { ...fail(error), applied: false };
+  }
+});
+
+ipcMain.handle('mpv:setOnTop', async (_, onTop: boolean) => {
+  try {
+    // Not an error when mpv is not running: the caller is applying a preference
+    // across every engine, and only one of them is holding the stream.
+    if (!mpvEngine.isRunning()) return { ok: true, applied: false };
+    const result = await mpvEngine.setOnTop(onTop === true);
+    return { ok: result.ok, applied: result.ok, error: result.error };
+  } catch (error) {
+    return { ...fail(error), applied: false };
+  }
+});
+
 ipcMain.handle('mpv:getPolicy', async () => ({
   ok: true,
   policy: nativeEnginePolicy(),
@@ -2858,6 +3027,241 @@ ipcMain.handle('sources:clearCache', async () => {
   contentService.getCache().clear();
   return { ok: true };
 });
+
+/**
+ * `torrent:import*` opens a torrent as *content*, not as a download.
+ *
+ * Import and read are separate calls, and separate for the reason Add and
+ * Install are separate on the repositories screen: importing a file is a read
+ * and a cache write, and a magnet whose metadata is not here yet has to join a
+ * swarm. Folding them together would make opening a page block on a swarm that
+ * may be dead.
+ */
+ipcMain.handle('torrent:importFiles', async (_, filePaths: string[]) => {
+  try {
+    if (!Array.isArray(filePaths) || filePaths.length === 0) {
+      return { ok: false, error: 'No files were given.' };
+    }
+    const results = filePaths
+      .filter((filePath) => classifyDroppedPath(filePath) === 'torrent')
+      .map((filePath) => ({ path: filePath, ...torrentImports.importFile(filePath) }));
+    if (results.length === 0) return { ok: false, error: 'None of those were .torrent files.' };
+    return { ok: true, results };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/** The same import, reached through a dialog rather than a drop. */
+ipcMain.handle('torrent:pickFiles', async () => {
+  try {
+    if (!mainWindow) return { ok: false, error: 'No window to ask from.' };
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Open torrent files',
+      // Several at once, matching what a drop allows. Picking three and being
+      // given one would be a worse version of the gesture it stands in for.
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Torrent', extensions: ['torrent'] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, cancelled: true };
+    }
+    return {
+      ok: true,
+      results: result.filePaths.map((filePath) => ({
+        path: filePath,
+        ...torrentImports.importFile(filePath),
+      })),
+    };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('torrent:importMagnet', async (_, uri: string) => {
+  try {
+    if (!uri) return { ok: false, error: 'No magnet link was given.' };
+    return torrentImports.importMagnet(uri);
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/**
+ * What is inside a torrent, from metadata this machine already holds.
+ *
+ * `resolved: false` is an ordinary answer for a magnet, not a failure — the
+ * page renders its name and asks the engine to fetch the rest.
+ */
+ipcMain.handle('torrent:getContents', async (_, infoHash: string) => {
+  try {
+    if (!/^[a-f0-9]{40}$/i.test(infoHash ?? '')) {
+      return { ok: false, error: 'That is not a torrent hash.' };
+    }
+    const hash = infoHash.toLowerCase();
+    torrentImports.touch(hash);
+    const contents = torrentImports.contents(hash);
+    return {
+      ok: true,
+      resolved: contents !== null,
+      record: torrentImports.get(hash),
+      contents,
+    };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/**
+ * Joins the swarm for the sole purpose of fetching metadata.
+ *
+ * The engine owns every swarm timeout, the dead-swarm bail and the `xs` mirror
+ * race, so this asks it rather than resolving alongside it. `mode: 'download'`
+ * is deliberate: nothing is being watched yet, and the sequential piece
+ * ordering a stream asks for is wrong for a metadata fetch.
+ */
+ipcMain.handle('torrent:resolveMagnet', async (_, infoHash: string) => {
+  try {
+    const record = torrentImports.get((infoHash ?? '').toLowerCase());
+    if (!record?.source) return { ok: false, error: 'That torrent has no magnet to resolve.' };
+
+    await torrentEngine.startStream({ torrentId: record.source, mode: 'download' });
+    // The engine writes resolved metadata into the shared cache, so reading is
+    // the whole handshake — see `TorrentImportService.load`.
+    const contents = torrentImports.contents(record.infoHash);
+    return {
+      ok: contents !== null,
+      resolved: contents !== null,
+      contents,
+      record: torrentImports.get(record.infoHash),
+      error: contents === null ? 'No peer offered this torrent’s file list.' : undefined,
+    };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('torrent:listImports', async () => {
+  try {
+    return { ok: true, records: torrentImports.list() };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('torrent:removeImport', async (_, infoHash: string) => {
+  try {
+    return { ok: torrentImports.remove((infoHash ?? '').toLowerCase()) };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/** Whether a pasted string is a magnet, so the UI can offer to open it. */
+ipcMain.handle('torrent:isMagnet', async (_, text: string) => ({
+  ok: true,
+  magnet: looksLikeMagnet(text ?? ''),
+}));
+
+/**
+ * Streams one file out of an imported torrent.
+ *
+ * `mode: 'stream'` and an explicit `fileIndex` together are what make this
+ * different from adding the torrent: the engine orders pieces sequentially from
+ * that file's start and deselects the rest, so a 40 GB season pack delivers one
+ * episode rather than splitting the swarm's bandwidth across ten.
+ *
+ * The magnet is preferred as the id when the record has one, because it carries
+ * the trackers the link named. A bare infohash still works — the `.torrent` is
+ * in the shared metadata cache — but it would join with only the DHT.
+ */
+ipcMain.handle('torrent:playFile', async (_, infoHash: string, fileIndex: number) => {
+  try {
+    const hash = (infoHash ?? '').toLowerCase();
+    const record = torrentImports.get(hash);
+    if (!record) return { ok: false, error: 'That torrent is not imported.' };
+    if (!Number.isInteger(fileIndex) || fileIndex < 0) {
+      return { ok: false, error: 'No file was chosen.' };
+    }
+
+    const handle = await torrentEngine.startStream({
+      torrentId: record.origin === 'magnet' && record.source ? record.source : hash,
+      fileIndex,
+      mode: 'stream',
+    });
+    torrentImports.touch(hash);
+    return { ok: true, handle };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/**
+ * Queues one file out of a torrent as an ordinary download.
+ *
+ * Built here rather than in the renderer because the queue's identity rules
+ * live here: `download:request` keys on the *variant*, so re-pressing Download
+ * on an episode already queued resumes or reports it instead of starting a
+ * second copy of the same bytes. The infohash plus the file index is that
+ * variant — durable in a way a provider URL is not, since it addresses content
+ * rather than an address that expires.
+ */
+ipcMain.handle(
+  'torrent:downloadFile',
+  async (
+    _,
+    request: {
+      infoHash: string;
+      fileIndex: number;
+      fileName: string;
+      title: string;
+      season?: number;
+      episode?: number;
+      totalSize?: number;
+    }
+  ) => {
+    try {
+      const hash = (request?.infoHash ?? '').toLowerCase();
+      const record = torrentImports.get(hash);
+      if (!record) return { ok: false, error: 'That torrent is not imported.' };
+
+      const magnet = record.origin === 'magnet' && record.source ? record.source : `magnet:?xt=urn:btih:${hash}`;
+      const source: TorrentResult = {
+        infoHash: hash,
+        title: request.fileName,
+        magnet,
+        sizeBytes: request.totalSize ?? 0,
+        seeders: 0,
+        leechers: 0,
+        indexerId: 'imported-torrent',
+        // Named for what it is. This travels into the download list and the
+        // history, where "which torrent did this come from" is the question.
+        indexerName: 'Imported torrent',
+        // The file inside the archive. Left unset for a provider magnet — see
+        // AGENTS.md — precisely because there it would select an arbitrary
+        // episode; here it is the whole point and is the viewer's own choice.
+        fileIndex: request.fileIndex,
+        parsed: parseReleaseName(request.fileName),
+      } as TorrentResult;
+
+      const task = buildDownloadTask(source, {
+        title: request.title,
+        mediaUrl: `torrent://${hash}/${request.fileIndex}`,
+        episodeTitle:
+          request.season !== undefined && request.episode !== undefined
+            ? `S${String(request.season).padStart(2, '0')}E${String(request.episode).padStart(2, '0')}`
+            : undefined,
+        season: request.season,
+        episode: request.episode,
+      });
+      if (!task) return { ok: false, error: 'That file could not be queued.' };
+
+      return await downloadService.request(task);
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
 
 ipcMain.handle('torrent:getStats', async (_, infoHash: string) =>
   torrentEngine.getStats(infoHash)
@@ -2999,6 +3403,49 @@ interface StoredPlayerPreferences {
   subtitleBackground: 'none' | 'shadow' | 'outline' | 'box';
   subtitleWeight: 'normal' | 'bold';
   subtitlePosition: number;
+  /**
+   * What "minimise the player" does.
+   *
+   * Four different things people mean by it, and they are not orderable on one
+   * scale, so this is a choice rather than a level:
+   *
+   *  - `mini` — a small window inside the app. Cheap, always available, and
+   *    useless the moment the app is not the front window.
+   *  - `floating` — the mini player plus the *application* window pinned above
+   *    everything else. The only one of the four that works while the video is
+   *    a torrent stream or an mpv-routed 4K file, because it moves no surface
+   *    anywhere: it changes a window level.
+   *  - `pip` — Chromium's native Picture-in-Picture. A real OS-level floating
+   *    window with the system's own controls, and the closest thing to what
+   *    people mean when they say "like Chrome". Only reachable when the
+   *    `<video>` element is what is playing; mpv and an external player have
+   *    their own windows and PiP has nothing to detach.
+   *  - `background` — no picture at all, playback continues.
+   */
+  floatingMode: 'mini' | 'floating' | 'pip' | 'background';
+  /**
+   * What happens to playback when the player is out of sight.
+   *
+   * Separate from `floatingMode` because they answer different questions —
+   * where the picture goes, versus whether the film keeps running — and the
+   * combinations are all meaningful: a floating window that pauses when you
+   * click away is a perfectly reasonable thing to want, and so is audio
+   * continuing with nothing on screen.
+   *
+   * `audio-only` is not a codec decision. Nothing is re-negotiated; the video
+   * track keeps decoding and is simply not drawn, which is what the browser
+   * does for an offscreen element anyway. It exists as a distinct setting
+   * because it is what people ask for by name.
+   */
+  backgroundPlayback: 'continue' | 'audio-only' | 'pause';
+  /**
+   * Keep the app above other windows whenever a floating player is showing.
+   *
+   * Stored rather than toggled per session: someone who wants their film on top
+   * of a spreadsheet wants that every evening, and a pin that resets on every
+   * launch is one people stop using.
+   */
+  alwaysOnTop: boolean;
 }
 
 const DEFAULT_PLAYER_PREFERENCES: StoredPlayerPreferences = {
@@ -3013,7 +3460,16 @@ const DEFAULT_PLAYER_PREFERENCES: StoredPlayerPreferences = {
   subtitleBackground: 'outline',
   subtitleWeight: 'normal',
   subtitlePosition: 0,
+  // `mini` is the pre-existing behaviour, so an install that upgrades into this
+  // setting keeps the player it had rather than acquiring a new one nobody
+  // asked for.
+  floatingMode: 'mini',
+  backgroundPlayback: 'continue',
+  alwaysOnTop: false,
 };
+
+const FLOATING_MODES = new Set(['mini', 'floating', 'pip', 'background']);
+const BACKGROUND_MODES = new Set(['continue', 'audio-only', 'pause']);
 
 /** Only these values mean anything to either renderer. */
 const SUBTITLE_BACKGROUNDS = new Set(['none', 'shadow', 'outline', 'box']);
@@ -3044,6 +3500,16 @@ ipcMain.handle('player:getPreferences', async () => {
     preferences.subtitleBackground = DEFAULT_PLAYER_PREFERENCES.subtitleBackground;
   }
   if (preferences.subtitleWeight !== 'bold') preferences.subtitleWeight = 'normal';
+  // Validated on read for the same reason as volume: an unknown mode arriving
+  // from a hand-edited datastore would reach a `switch` in the renderer that
+  // handles four cases and silently do nothing.
+  if (!FLOATING_MODES.has(String(preferences.floatingMode))) {
+    preferences.floatingMode = DEFAULT_PLAYER_PREFERENCES.floatingMode;
+  }
+  if (!BACKGROUND_MODES.has(String(preferences.backgroundPlayback))) {
+    preferences.backgroundPlayback = DEFAULT_PLAYER_PREFERENCES.backgroundPlayback;
+  }
+  preferences.alwaysOnTop = preferences.alwaysOnTop === true;
   return { ok: true, preferences };
 });
 
@@ -3325,6 +3791,129 @@ ipcMain.handle(
     }
   }
 );
+
+/**
+ * The OTT platform destinations.
+ *
+ * A separate namespace from `extension:*` because it answers a different
+ * question. `extension:*` is "what have I installed?", an inventory keyed on
+ * repositories and archives. This is "can I watch Netflix?", keyed on the
+ * platform — and it has to answer even when the answer is no, so the list
+ * always contains every platform, each carrying how it is reachable rather
+ * than being omitted when it is not.
+ */
+ipcMain.handle('ott:listPlatforms', async () => {
+  try {
+    return { ok: true, platforms: await ottService.listPlatforms() };
+  } catch (error) {
+    return { ...fail(error), platforms: [] };
+  }
+});
+
+/**
+ * Which streaming services appear in the sidebar.
+ *
+ * `includeHidden` is what the settings screen asks with: it has to list the
+ * ones that are off in order to offer to switch them on, and every other
+ * caller wants the user's chosen set.
+ */
+/**
+ * What is on this service, when no installed provider can say.
+ *
+ * Separate channel from `ott:getCatalog`, which asks a provider. These rows are
+ * a claim about the *platform* and carry no source — opening one runs the
+ * app's ordinary search — so folding them into the provider catalogue would
+ * make a grid of unplayable posters indistinguishable from a working one.
+ */
+ipcMain.handle('ott:getMetadataCatalog', async (_, platformId: string) => {
+  try {
+    if (!platformId) return { ok: false, error: 'No platform was named.' };
+    return {
+      ok: true,
+      supported: OttCatalogService.supports(platformId),
+      sections: await ottCatalog.getCatalog(platformId),
+    };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('ott:listAllPlatforms', async () => {
+  try {
+    return {
+      ok: true,
+      platforms: await ottService.listPlatforms(true),
+      enabled: ottService.getEnabledPlatformIds(),
+    };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('ott:setPlatformEnabled', async (_, platformId: string, enabled: boolean) => {
+  try {
+    if (!platformId) return { ok: false, error: 'No platform was named.' };
+    return { ok: true, enabled: ottService.setPlatformEnabled(platformId, enabled) };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('ott:getCatalog', async (_, platformId: string) => {
+  try {
+    return { ok: true, catalog: await ottService.getCatalog(platformId) };
+  } catch (error) {
+    return { ...fail(error), catalog: null };
+  }
+});
+
+ipcMain.handle(
+  'ott:getCatalogPage',
+  async (
+    _,
+    provider: string,
+    section: { name: string; data: string; horizontalImages?: boolean },
+    page: number
+  ) => {
+    try {
+      return { ok: true, page: await ottService.getCatalogPage(provider, section, page) };
+    } catch (error) {
+      return { ...fail(error), page: null };
+    }
+  }
+);
+
+/**
+ * Which providers a search from this platform's page may ask.
+ *
+ * Returned to the renderer rather than resolved inside `search:start`, because
+ * the page needs the same list to say what it is about to search — and a page
+ * that claims to search two providers while the main process asks a different
+ * two is the class of disagreement `SearchScopePicker` already had once.
+ */
+ipcMain.handle('ott:getSearchScope', async (_, platformId: string) => {
+  try {
+    return { ok: true, providers: await ottService.providersFor(platformId) };
+  } catch (error) {
+    return { ...fail(error), providers: [] };
+  }
+});
+
+ipcMain.handle('ott:getSuggestions', async (_, platformId: string) => {
+  try {
+    return { ok: true, suggestions: ottService.suggestionsFor(platformId) };
+  } catch (error) {
+    return { ...fail(error), suggestions: [] };
+  }
+});
+
+ipcMain.handle('ott:installSuggestion', async (_, platformId: string, repositoryId: string) => {
+  try {
+    return await ottService.installSuggestion(platformId, repositoryId);
+  } catch (error) {
+    return { ...fail(error), installed: 0, failed: 0 };
+  }
+});
 
 ipcMain.handle('extension:removeRepository', async (_, repoUrl: string) => {
   const removedExtensions = pluginManager.removeRepository(repoUrl);
@@ -3995,8 +4584,10 @@ const backupService = new BackupService(
     {
       name: 'library',
       label: 'Library, watch progress and remembered sources',
+      replaceable: true,
       collect: () => libraryStore.exportAll(),
-      restore: (value: unknown) => {
+      restore: (value: unknown, mode) => {
+        if (mode === 'replace') libraryStore.clearAll();
         const result = libraryStore.importAll(value as Parameters<LibraryStore['importAll']>[0]);
         return typeof result === 'number' ? result : 1;
       },
@@ -4004,16 +4595,21 @@ const backupService = new BackupService(
     {
       name: 'history',
       label: 'Watch history',
+      replaceable: true,
       collect: () => historyStore.exportAll(),
-      restore: (value: unknown) =>
-        historyStore.importAll(value as Parameters<HistoryStore['importAll']>[0]),
+      restore: (value: unknown, mode) => {
+        if (mode === 'replace') historyStore.clear();
+        return historyStore.importAll(value as Parameters<HistoryStore['importAll']>[0]);
+      },
     },
     {
       name: 'bookmarks',
       label: 'Saved pages',
+      replaceable: true,
       collect: () => bookmarks.list(),
-      restore: (value: unknown) => {
+      restore: (value: unknown, mode) => {
         if (!Array.isArray(value)) return 0;
+        if (mode === 'replace') bookmarks.clearAll();
         let count = 0;
         for (const row of value) {
           // `save` re-derives id, savedAt and openCount, so a restored row is a
@@ -4030,9 +4626,11 @@ const backupService = new BackupService(
     {
       name: 'searchHistory',
       label: 'Past searches',
+      replaceable: true,
       collect: () => searchHistory.list(500),
-      restore: (value: unknown) => {
+      restore: (value: unknown, mode) => {
         if (!Array.isArray(value)) return 0;
+        if (mode === 'replace') searchHistory.clear();
         let count = 0;
         // Oldest first, so the restored list keeps its original ordering — the
         // store puts each new record at the front.
@@ -4047,9 +4645,11 @@ const backupService = new BackupService(
     {
       name: 'titleOutcomes',
       label: 'What happened last time a title was opened',
+      replaceable: true,
       collect: () => titleOutcomes.list(),
-      restore: (value: unknown) => {
+      restore: (value: unknown, mode) => {
         if (!value || typeof value !== 'object') return 0;
+        if (mode === 'replace') titleOutcomes.clear();
         let count = 0;
         for (const [url, outcome] of Object.entries(value as Record<string, { kind?: string; reason?: string }>)) {
           if (!outcome?.kind) continue;
@@ -4099,6 +4699,7 @@ const backupService = new BackupService(
     {
       name: 'extensions',
       label: 'Repositories, extensions and what is switched off',
+      replaceable: true,
       collect: () => ({
         repositories: pluginManager.getInstalledRepositories(),
         plugins: pluginManager.getInstalledPlugins().map((plugin) => ({
@@ -4108,8 +4709,24 @@ const backupService = new BackupService(
           url: plugin.url,
           version: plugin.version,
         })),
+        /*
+         * All three levels of the cascade, and the middle one was missing.
+         * `getDisabledExtensions` had no line here at all, so an extension
+         * switched off came back on after a restore while the provider and
+         * repository lists were reproduced exactly — a third of the state the
+         * section claims to carry, lost silently in the direction that turns
+         * sources back on.
+         */
         disabledProviders: pluginManager.getDisabledProviders(),
+        disabledExtensions: pluginManager.getDisabledExtensions(),
         disabledRepositories: pluginManager.getDisabledRepositories(),
+        /**
+         * What each provider was registered by, so a restored library entry
+         * addressed `cs3ext://Netflix/…` can name the extension to install.
+         * The live map only knows providers that are loaded *now*, which on a
+         * fresh machine is none of the ones a backup refers to.
+         */
+        providerOrigins: pluginManager.exportProviderOrigins(),
         adultAllowed: bootstrap.isAdultAllowed(),
       }),
       /**
@@ -4127,11 +4744,20 @@ const backupService = new BackupService(
        * The extension *names* travel in the backup so that press can be
        * targeted rather than "install everything this repository has now".
        */
-      restore: (value: unknown) => {
+      restore: (value: unknown, mode) => {
         const payload = value as {
           repositories?: string[];
+          plugins?: Array<{
+            internalName?: string;
+            name?: string;
+            repositoryUrl?: string;
+            url?: string;
+            version?: number;
+          }>;
           disabledProviders?: string[];
+          disabledExtensions?: string[];
           disabledRepositories?: string[];
+          providerOrigins?: Record<string, { internalName: string; pluginName: string }>;
           adultAllowed?: boolean;
         };
         let count = 0;
@@ -4147,25 +4773,96 @@ const backupService = new BackupService(
           });
           count++;
         }
-        if (payload?.disabledProviders?.length) {
-          pluginManager.setProvidersEnabled(payload.disabledProviders, false);
-          count += payload.disabledProviders.length;
+
+        /*
+         * The plugin list was collected from the first version of this section
+         * and read by nothing — the comment above it even said the names
+         * travel so a later press can be targeted, and no code ever took them.
+         * They are the whole basis of recovery: they are how the app knows
+         * that `cs3ext://Netflix/…` needs `NetMirror` from a particular
+         * repository, on a machine where nothing is installed yet.
+         */
+        if (payload?.plugins?.length) {
+          count += pluginManager.rememberKnownPlugins(payload.plugins);
         }
-        if (payload?.disabledRepositories?.length) {
-          pluginManager.setRepositoriesEnabled(payload.disabledRepositories, false);
-          count += payload.disabledRepositories.length;
+        if (payload?.providerOrigins) {
+          count += pluginManager.importProviderOrigins(payload.providerOrigins);
         }
+
+        /*
+         * Replace rewrites the three disabled lists so they match the file
+         * exactly; merge only ever adds to them. Merge cannot turn a provider
+         * back *on*, which is the asymmetry that makes Replace worth having
+         * here: someone restoring a working setup onto an install where they
+         * had switched things off wants the file's answer, not the union of
+         * two sets of exclusions.
+         *
+         * Nothing is uninstalled in either mode. Archives are hundreds of
+         * megabytes of re-download and the undo snapshots only the datastore,
+         * so a delete reached through this radio button could not be undone.
+         */
+        const applyDisabled = (
+          current: string[],
+          wanted: string[],
+          setter: (names: string[], enabled: boolean) => unknown
+        ): number => {
+          if (mode === 'replace') {
+            const turnOn = current.filter((name) => !wanted.includes(name));
+            if (turnOn.length) setter(turnOn, true);
+            if (wanted.length) setter(wanted, false);
+            return turnOn.length + wanted.length;
+          }
+          if (!wanted.length) return 0;
+          setter(wanted, false);
+          return wanted.length;
+        };
+
+        count += applyDisabled(
+          pluginManager.getDisabledProviders(),
+          payload?.disabledProviders ?? [],
+          (names, enabled) => pluginManager.setProvidersEnabled(names, enabled)
+        );
+        count += applyDisabled(
+          pluginManager.getDisabledExtensions(),
+          payload?.disabledExtensions ?? [],
+          (names, enabled) => pluginManager.setExtensionsEnabled(names, enabled)
+        );
+        count += applyDisabled(
+          pluginManager.getDisabledRepositories(),
+          payload?.disabledRepositories ?? [],
+          (names, enabled) => pluginManager.setRepositoriesEnabled(names, enabled)
+        );
         return count;
       },
     },
     {
       name: 'indexers',
       label: 'Torrent indexer configuration',
+      replaceable: true,
       collect: () => contentService.getRegistry().getConfigs(),
-      restore: (value: unknown) => {
+      restore: (value: unknown, mode) => {
         if (!Array.isArray(value)) return 0;
-        contentService.getRegistry().saveConfigs(value);
-        return value.length;
+        const registry = contentService.getRegistry();
+        if (mode === 'replace') {
+          registry.saveConfigs(value);
+          return value.length;
+        }
+        /*
+         * Merging is keyed on the indexer id, and the *local* row wins a
+         * collision. A Torznab entry carries an API key and a host that are
+         * this machine's, so a backup from another one would otherwise
+         * overwrite working credentials with stale ones — and the failure is
+         * a search that returns nothing rather than an error.
+         */
+        const byId = new Map(registry.getConfigs().map((config) => [config.id, config]));
+        let added = 0;
+        for (const config of value) {
+          if (!config?.id || byId.has(config.id)) continue;
+          byId.set(config.id, config);
+          added++;
+        }
+        registry.saveConfigs([...byId.values()]);
+        return added;
       },
     },
   ],
@@ -4173,7 +4870,7 @@ const backupService = new BackupService(
   `${process.platform} ${os.release()}`
 );
 
-ipcMain.handle('backup:export', async () => {
+ipcMain.handle('backup:export', async (_, only?: string[]) => {
   try {
     if (!mainWindow) return { ok: false, error: 'No window to ask from.' };
     const result = await dialog.showSaveDialog(mainWindow, {
@@ -4182,7 +4879,7 @@ ipcMain.handle('backup:export', async () => {
       filters: [{ name: 'CloudStream backup', extensions: ['json'] }],
     });
     if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
-    return backupService.write(result.filePath);
+    return backupService.write(result.filePath, only);
   } catch (error) {
     return fail(error);
   }
@@ -4205,13 +4902,61 @@ ipcMain.handle('backup:inspect', async () => {
   }
 });
 
-ipcMain.handle('backup:restore', async (_, filePath: string, only?: string[]) => {
+ipcMain.handle('backup:restore', async (_, filePath: string, options?: RestoreOptions) => {
   try {
     if (!filePath) return { ok: false, error: 'No backup file was chosen.' };
     // A snapshot first: a restore writes over live data, and the alternative to
     // being able to undo it is telling someone their library is gone.
     datastore.createSnapshot();
-    return backupService.restore(filePath, only);
+    return backupService.restore(filePath, options);
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/**
+ * What it would take to make a provider answer again, and doing it.
+ *
+ * Two channels rather than one, and deliberately: the plan can name a
+ * repository fetch and an extension install, which is real time and real
+ * bandwidth. Folding them together would commit a user who pressed a button
+ * labelled "why is this not working?".
+ */
+ipcMain.handle('extension:planProviderRecovery', async (_, provider: string) => {
+  try {
+    if (!provider) return { ok: false, error: 'No provider was named.' };
+    return { ok: true, plan: pluginManager.planProviderRecovery(provider) };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('extension:planProviderRecoveryBulk', async (_, providers: string[]) => {
+  try {
+    if (!Array.isArray(providers) || providers.length === 0) {
+      return { ok: true, plans: [] };
+    }
+    return { ok: true, plans: pluginManager.planProviderRecoveryBulk(providers) };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('extension:recoverProviders', async (_, providers: string[]) => {
+  try {
+    if (!Array.isArray(providers) || providers.length === 0) {
+      return { ok: true, results: [] };
+    }
+    return { ok: true, results: await pluginManager.runProviderRecoveryBulk(providers) };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('extension:recoverProvider', async (_, provider: string) => {
+  try {
+    if (!provider) return { ok: false, error: 'No provider was named.' };
+    return await pluginManager.runProviderRecovery(provider);
   } catch (error) {
     return fail(error);
   }

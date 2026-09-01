@@ -28,6 +28,10 @@ import { ProviderRankingPanel } from '../components/settings/ProviderRankingPane
 import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
 import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
+import {
+  SettingsLevelProvider,
+  type SettingsLevel,
+} from '../components/settings/SettingsLevelContext';
 import { useFlash } from '../utils/useFlash';
 import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
 import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPanel';
@@ -63,6 +67,39 @@ interface SettingsViewProps {
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const [tab, setTab] = useState<TabId>(initialTab ?? 'general');
+
+  /**
+   * Simple by default, and remembered.
+   *
+   * The default matters more than the mechanism. Someone opening this screen
+   * for the first time is being asked, implicitly, which of forty rows they are
+   * supposed to have an opinion about — and the honest answer for most people
+   * is about eight. Starting at Simple makes that the question; starting at
+   * Everything makes it their problem.
+   *
+   * Stored in `localStorage` rather than the datastore because it is a property
+   * of how this person reads a screen, not of how the app behaves, and it has
+   * no business travelling in a backup to a machine somebody else uses.
+   */
+  const [level, setLevel] = useState<SettingsLevel>(() => {
+    try {
+      return localStorage.getItem('cs3.settings.level') === 'everything'
+        ? 'everything'
+        : 'simple';
+    } catch {
+      // Private windows and blocked site data both throw here.
+      return 'simple';
+    }
+  });
+
+  const changeLevel = (next: SettingsLevel) => {
+    setLevel(next);
+    try {
+      localStorage.setItem('cs3.settings.level', next);
+    } catch {
+      // A preference that cannot be stored still applies for this session.
+    }
+  };
   const [downloadDir, setDownloadDir] = useState('%USERPROFILE%\\Downloads\\CloudStream');
   /**
    * The delete-behaviour preference, resettable here.
@@ -182,10 +219,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const tabs: Array<{ id: TabId; label: string; icon: React.ReactNode; badge?: React.ReactNode }> = [
     { id: 'all', label: 'All settings', icon: <List size={14} /> },
     { id: 'general', label: 'General', icon: <Sliders size={14} /> },
-    { id: 'player', label: 'Player', icon: <Play size={14} /> },
+    { id: 'player', label: 'Playback', icon: <Play size={14} /> },
     {
       id: 'components',
-      label: 'Components & Binaries',
+      // "Components & Binaries" names two implementation words and no outcome.
+      // What this tab is actually for is checking the app has what it needs to
+      // play and download, and installing it if not.
+      label: 'Setup & repair',
       icon: <Cpu size={14} />,
       badge: missingComponentCount > 0 ? (
         <span
@@ -207,17 +247,51 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         </span>
       ) : undefined,
     },
-    { id: 'sources', label: 'Sources', icon: <Layers size={14} /> },
+    { id: 'sources', label: 'Where films come from', icon: <Layers size={14} /> },
     { id: 'downloads', label: 'Downloads', icon: <Download size={14} /> },
     { id: 'network', label: 'Connection', icon: <Globe size={14} /> },
-    { id: 'advanced', label: 'Advanced', icon: <Wrench size={14} /> },
+    { id: 'advanced', label: 'Advanced & diagnostics', icon: <Wrench size={14} /> },
   ];
 
   return (
+    <SettingsLevelProvider level={level}>
     <div className="settings">
       <header className="settings__head">
         <h2>Settings</h2>
-        <p>Components, repositories, storage, and networking. Everything has a sensible default.</p>
+        <p>
+          Everything here has a sensible default — you can watch films without changing any of it.
+        </p>
+        {/*
+          The level switch, at the top and stating what it is holding back.
+          A filtered list that does not say it is filtered is the same bug as a
+          scoped search that does not say it is scoped: the user cannot tell a
+          setting they cannot find from one that does not exist.
+        */}
+        <div className="settings__level" role="group" aria-label="How much to show">
+          <button
+            type="button"
+            className={`settings__level-btn${level === 'simple' ? ' settings__level-btn--on' : ''}`}
+            aria-pressed={level === 'simple'}
+            onClick={() => changeLevel('simple')}
+          >
+            Just the essentials
+          </button>
+          <button
+            type="button"
+            className={`settings__level-btn${
+              level === 'everything' ? ' settings__level-btn--on' : ''
+            }`}
+            aria-pressed={level === 'everything'}
+            onClick={() => changeLevel('everything')}
+          >
+            Everything
+          </button>
+          <span className="settings__level-note">
+            {level === 'simple'
+              ? 'Technical options are hidden. Nothing is switched off — they still apply.'
+              : 'Showing every option, including ones that need some knowledge of how the app works.'}
+          </span>
+        </div>
       </header>
 
       <nav className="settings__tabs" role="tablist">
@@ -247,6 +321,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           <SettingGroup title="Search" icon={<Search size={15} />}>
             <SettingRow
               label="Providers searched at once"
+          level="advanced"
               note={concurrency ? `${concurrency.value} in parallel` : undefined}
               hint={
                 <>
@@ -403,6 +478,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           <SettingGroup title="Download engines" icon={<Zap size={15} />}>
             <SettingRow
               label="aria2c and yt-dlp"
+          level="advanced"
               note="Managed in Components & Binaries"
               hint={
                 <>
@@ -441,6 +517,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           <SettingGroup title="Torrents" icon={<Globe size={15} />}>
             <SettingRow
               label="Fetch torrent details from public mirrors"
+          level="advanced"
               note={torrentMirrors ? 'On' : 'DHT and trackers only'}
               hint="Asks itorrents.org and btcache.me for a magnet's file list over HTTPS while the swarm is still being found, which usually saves five to thirty seconds before playback can start. It sends them the infohash — the same identifier the DHT and every tracker already receive when you press Play. Turn it off to keep torrent activity to the BitTorrent network alone; startup is slower and nothing else changes."
             >
@@ -466,10 +543,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             happened most recently. Reading them the other way round is what
             makes 5,407 log lines feel like 5,407 problems.
           */}
-          <ExtensionIssuesPanel />
-          <DiagnosticsPanel />
+          {/*
+            Both are transcripts of the app's own internals — class names, HTTP
+            statuses, sidecar stack frames — and they are the largest single
+            source of jargon on this screen. They stay one click away under
+            Everything rather than being removed, because they are also the
+            first thing to ask for when something goes wrong.
+          */}
+          {level === 'everything' && (
+            <>
+              <ExtensionIssuesPanel />
+              <DiagnosticsPanel />
+            </>
+          )}
 
-          <SettingGroup title="Migration" icon={<RefreshCw size={15} />}>
+          <SettingGroup title="Migration" icon={<RefreshCw size={15} />} level="advanced">
             <SettingRow
               label="Import an Android backup"
               hint="Reads a CloudStream Android .txt backup and restores watch history, bookmarks and settings from it. Existing entries with the same key are overwritten; device-specific values such as tokens and cache paths are skipped."
@@ -480,7 +568,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             </SettingRow>
           </SettingGroup>
 
-          <SettingGroup title="Developer" icon={<ShieldAlert size={15} />}>
+          <SettingGroup title="Developer" icon={<ShieldAlert size={15} />} level="advanced">
             <SettingRow
               label="Live streaming sources"
               note={useLiveStreams ? 'Live' : 'Demo fallback'}
@@ -519,5 +607,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         </>
       )}
     </div>
+    </SettingsLevelProvider>
   );
 };
