@@ -4201,8 +4201,10 @@ const backupService = new BackupService(
     {
       name: 'library',
       label: 'Library, watch progress and remembered sources',
+      replaceable: true,
       collect: () => libraryStore.exportAll(),
-      restore: (value: unknown) => {
+      restore: (value: unknown, mode) => {
+        if (mode === 'replace') libraryStore.clearAll();
         const result = libraryStore.importAll(value as Parameters<LibraryStore['importAll']>[0]);
         return typeof result === 'number' ? result : 1;
       },
@@ -4210,16 +4212,21 @@ const backupService = new BackupService(
     {
       name: 'history',
       label: 'Watch history',
+      replaceable: true,
       collect: () => historyStore.exportAll(),
-      restore: (value: unknown) =>
-        historyStore.importAll(value as Parameters<HistoryStore['importAll']>[0]),
+      restore: (value: unknown, mode) => {
+        if (mode === 'replace') historyStore.clear();
+        return historyStore.importAll(value as Parameters<HistoryStore['importAll']>[0]);
+      },
     },
     {
       name: 'bookmarks',
       label: 'Saved pages',
+      replaceable: true,
       collect: () => bookmarks.list(),
-      restore: (value: unknown) => {
+      restore: (value: unknown, mode) => {
         if (!Array.isArray(value)) return 0;
+        if (mode === 'replace') bookmarks.clearAll();
         let count = 0;
         for (const row of value) {
           // `save` re-derives id, savedAt and openCount, so a restored row is a
@@ -4236,9 +4243,11 @@ const backupService = new BackupService(
     {
       name: 'searchHistory',
       label: 'Past searches',
+      replaceable: true,
       collect: () => searchHistory.list(500),
-      restore: (value: unknown) => {
+      restore: (value: unknown, mode) => {
         if (!Array.isArray(value)) return 0;
+        if (mode === 'replace') searchHistory.clear();
         let count = 0;
         // Oldest first, so the restored list keeps its original ordering — the
         // store puts each new record at the front.
@@ -4253,9 +4262,11 @@ const backupService = new BackupService(
     {
       name: 'titleOutcomes',
       label: 'What happened last time a title was opened',
+      replaceable: true,
       collect: () => titleOutcomes.list(),
-      restore: (value: unknown) => {
+      restore: (value: unknown, mode) => {
         if (!value || typeof value !== 'object') return 0;
+        if (mode === 'replace') titleOutcomes.clear();
         let count = 0;
         for (const [url, outcome] of Object.entries(value as Record<string, { kind?: string; reason?: string }>)) {
           if (!outcome?.kind) continue;
@@ -4305,6 +4316,7 @@ const backupService = new BackupService(
     {
       name: 'extensions',
       label: 'Repositories, extensions and what is switched off',
+      replaceable: true,
       collect: () => ({
         repositories: pluginManager.getInstalledRepositories(),
         plugins: pluginManager.getInstalledPlugins().map((plugin) => ({
@@ -4314,8 +4326,24 @@ const backupService = new BackupService(
           url: plugin.url,
           version: plugin.version,
         })),
+        /*
+         * All three levels of the cascade, and the middle one was missing.
+         * `getDisabledExtensions` had no line here at all, so an extension
+         * switched off came back on after a restore while the provider and
+         * repository lists were reproduced exactly — a third of the state the
+         * section claims to carry, lost silently in the direction that turns
+         * sources back on.
+         */
         disabledProviders: pluginManager.getDisabledProviders(),
+        disabledExtensions: pluginManager.getDisabledExtensions(),
         disabledRepositories: pluginManager.getDisabledRepositories(),
+        /**
+         * What each provider was registered by, so a restored library entry
+         * addressed `cs3ext://Netflix/…` can name the extension to install.
+         * The live map only knows providers that are loaded *now*, which on a
+         * fresh machine is none of the ones a backup refers to.
+         */
+        providerOrigins: pluginManager.exportProviderOrigins(),
         adultAllowed: bootstrap.isAdultAllowed(),
       }),
       /**
@@ -4333,11 +4361,20 @@ const backupService = new BackupService(
        * The extension *names* travel in the backup so that press can be
        * targeted rather than "install everything this repository has now".
        */
-      restore: (value: unknown) => {
+      restore: (value: unknown, mode) => {
         const payload = value as {
           repositories?: string[];
+          plugins?: Array<{
+            internalName?: string;
+            name?: string;
+            repositoryUrl?: string;
+            url?: string;
+            version?: number;
+          }>;
           disabledProviders?: string[];
+          disabledExtensions?: string[];
           disabledRepositories?: string[];
+          providerOrigins?: Record<string, { internalName: string; pluginName: string }>;
           adultAllowed?: boolean;
         };
         let count = 0;
@@ -4353,25 +4390,96 @@ const backupService = new BackupService(
           });
           count++;
         }
-        if (payload?.disabledProviders?.length) {
-          pluginManager.setProvidersEnabled(payload.disabledProviders, false);
-          count += payload.disabledProviders.length;
+
+        /*
+         * The plugin list was collected from the first version of this section
+         * and read by nothing — the comment above it even said the names
+         * travel so a later press can be targeted, and no code ever took them.
+         * They are the whole basis of recovery: they are how the app knows
+         * that `cs3ext://Netflix/…` needs `NetMirror` from a particular
+         * repository, on a machine where nothing is installed yet.
+         */
+        if (payload?.plugins?.length) {
+          count += pluginManager.rememberKnownPlugins(payload.plugins);
         }
-        if (payload?.disabledRepositories?.length) {
-          pluginManager.setRepositoriesEnabled(payload.disabledRepositories, false);
-          count += payload.disabledRepositories.length;
+        if (payload?.providerOrigins) {
+          count += pluginManager.importProviderOrigins(payload.providerOrigins);
         }
+
+        /*
+         * Replace rewrites the three disabled lists so they match the file
+         * exactly; merge only ever adds to them. Merge cannot turn a provider
+         * back *on*, which is the asymmetry that makes Replace worth having
+         * here: someone restoring a working setup onto an install where they
+         * had switched things off wants the file's answer, not the union of
+         * two sets of exclusions.
+         *
+         * Nothing is uninstalled in either mode. Archives are hundreds of
+         * megabytes of re-download and the undo snapshots only the datastore,
+         * so a delete reached through this radio button could not be undone.
+         */
+        const applyDisabled = (
+          current: string[],
+          wanted: string[],
+          setter: (names: string[], enabled: boolean) => unknown
+        ): number => {
+          if (mode === 'replace') {
+            const turnOn = current.filter((name) => !wanted.includes(name));
+            if (turnOn.length) setter(turnOn, true);
+            if (wanted.length) setter(wanted, false);
+            return turnOn.length + wanted.length;
+          }
+          if (!wanted.length) return 0;
+          setter(wanted, false);
+          return wanted.length;
+        };
+
+        count += applyDisabled(
+          pluginManager.getDisabledProviders(),
+          payload?.disabledProviders ?? [],
+          (names, enabled) => pluginManager.setProvidersEnabled(names, enabled)
+        );
+        count += applyDisabled(
+          pluginManager.getDisabledExtensions(),
+          payload?.disabledExtensions ?? [],
+          (names, enabled) => pluginManager.setExtensionsEnabled(names, enabled)
+        );
+        count += applyDisabled(
+          pluginManager.getDisabledRepositories(),
+          payload?.disabledRepositories ?? [],
+          (names, enabled) => pluginManager.setRepositoriesEnabled(names, enabled)
+        );
         return count;
       },
     },
     {
       name: 'indexers',
       label: 'Torrent indexer configuration',
+      replaceable: true,
       collect: () => contentService.getRegistry().getConfigs(),
-      restore: (value: unknown) => {
+      restore: (value: unknown, mode) => {
         if (!Array.isArray(value)) return 0;
-        contentService.getRegistry().saveConfigs(value);
-        return value.length;
+        const registry = contentService.getRegistry();
+        if (mode === 'replace') {
+          registry.saveConfigs(value);
+          return value.length;
+        }
+        /*
+         * Merging is keyed on the indexer id, and the *local* row wins a
+         * collision. A Torznab entry carries an API key and a host that are
+         * this machine's, so a backup from another one would otherwise
+         * overwrite working credentials with stale ones — and the failure is
+         * a search that returns nothing rather than an error.
+         */
+        const byId = new Map(registry.getConfigs().map((config) => [config.id, config]));
+        let added = 0;
+        for (const config of value) {
+          if (!config?.id || byId.has(config.id)) continue;
+          byId.set(config.id, config);
+          added++;
+        }
+        registry.saveConfigs([...byId.values()]);
+        return added;
       },
     },
   ],

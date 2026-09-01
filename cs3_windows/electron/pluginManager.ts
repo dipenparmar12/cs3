@@ -340,6 +340,32 @@ const SETTINGS_KEY_ADULT_ENABLED = 'cs3_adult_content_enabled';
 const SETTINGS_KEY_PROVIDER_ORIGINS = 'cs3_provider_origins';
 
 /**
+ * Extensions this installation has been *told about*, as opposed to ones it has
+ * installed.
+ *
+ * Written by a backup restore, which is the only thing that knows an extension
+ * existed on a machine where it was never installed. Recovery reads it to turn
+ * "this title came from Netflix" into "install NetMirror from this repository",
+ * which is otherwise unanswerable on a fresh install: the live tables know only
+ * what is on disk, and on that machine the answer is nothing.
+ *
+ * Kept separate from the installed records rather than pre-seeding those. A row
+ * here is a claim about another machine and may name an extension that has since
+ * been withdrawn from its repository; merging the two would make the extensions
+ * screen list archives that do not exist and cannot be made to.
+ */
+const SETTINGS_KEY_KNOWN_PLUGINS = 'cs3_known_plugins';
+
+/** One extension a backup says the user had, and where it came from. */
+export interface KnownPlugin {
+  internalName: string;
+  name: string;
+  repositoryUrl: string;
+  url?: string;
+  version?: number;
+}
+
+/**
  * Whether a provider serves adult content.
  *
  * `NSFW` is upstream's own `TvType`, which providers declare themselves, so
@@ -1898,6 +1924,84 @@ export class PluginManager {
     if (existing?.internalName === internalName && existing.pluginName === pluginName) return;
     origins.set(name, { internalName, pluginName });
     this.datastore.setObject(SETTINGS_KEY_PROVIDER_ORIGINS, Object.fromEntries(origins));
+  }
+
+  /**
+   * The provider-to-extension map, for a backup to carry.
+   *
+   * This is the half of recovery that cannot be re-derived. A provider name is
+   * all a `cs3ext://` address holds, and on a machine where nothing is
+   * installed there is no live table that can say which extension registered
+   * it — so without this a restored library is a list of addresses naming
+   * providers nothing can account for.
+   */
+  public exportProviderOrigins(): Record<string, { internalName: string; pluginName: string }> {
+    return Object.fromEntries(this.loadProviderOrigins());
+  }
+
+  /**
+   * Takes a backup's origin map.
+   *
+   * A locally observed origin always wins. What is recorded here is what
+   * actually registered the provider *on this machine*, which is the truth;
+   * the backup's row is a claim about another one, and an extension that has
+   * since changed its provider names would otherwise overwrite a correct entry
+   * with a stale one.
+   */
+  public importProviderOrigins(
+    incoming: Record<string, { internalName: string; pluginName: string }>
+  ): number {
+    const origins = this.loadProviderOrigins();
+    let added = 0;
+    for (const [name, origin] of Object.entries(incoming ?? {})) {
+      if (!origin?.internalName || origins.has(name)) continue;
+      origins.set(name, { internalName: origin.internalName, pluginName: origin.pluginName });
+      added++;
+    }
+    if (added > 0) {
+      this.datastore.setObject(SETTINGS_KEY_PROVIDER_ORIGINS, Object.fromEntries(origins));
+    }
+    return added;
+  }
+
+  /** Extensions a restore said the user had, keyed by internal name. */
+  public getKnownPlugins(): KnownPlugin[] {
+    const stored = this.datastore.getObject<Record<string, KnownPlugin>>(
+      SETTINGS_KEY_KNOWN_PLUGINS,
+      {}
+    );
+    return Object.values(stored ?? {}).filter((row) => row?.internalName && row?.repositoryUrl);
+  }
+
+  /**
+   * Records what a backup says was installed elsewhere.
+   *
+   * Later rows win, because a second restore from a newer backup is the one
+   * carrying the current version and repository. An entry naming no repository
+   * is dropped rather than stored: recovery's whole job is to fetch the
+   * archive, and a row it cannot fetch from is a row that makes the button
+   * appear and fail.
+   */
+  public rememberKnownPlugins(rows: Array<Partial<KnownPlugin>>): number {
+    const stored = this.datastore.getObject<Record<string, KnownPlugin>>(
+      SETTINGS_KEY_KNOWN_PLUGINS,
+      {}
+    );
+    const known: Record<string, KnownPlugin> = { ...(stored ?? {}) };
+    let count = 0;
+    for (const row of rows ?? []) {
+      if (!row?.internalName || !row?.repositoryUrl) continue;
+      known[row.internalName] = {
+        internalName: row.internalName,
+        name: row.name ?? row.internalName,
+        repositoryUrl: row.repositoryUrl,
+        url: row.url,
+        version: row.version,
+      };
+      count++;
+    }
+    if (count > 0) this.datastore.setObject(SETTINGS_KEY_KNOWN_PLUGINS, known);
+    return count;
   }
 
   /**

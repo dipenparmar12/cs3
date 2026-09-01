@@ -30,13 +30,36 @@ import path from 'path';
  * | Diagnostics, the issue ledger, logs | Debugging exhaust. It describes the machine it was captured on and says nothing about the machine it would be restored to. |
  * | Caches — sources, details, discovery | Everything in them expires. Restoring a stale cache is strictly worse than an empty one. |
  *
- * ## Restore merges; it does not replace
+ * ## Merge or replace, and the user picks
  *
- * A restore onto a running installation must not delete what the backup
- * predates. A preference added since it was taken would otherwise silently
- * revert to its default, which reads as the restore having broken something
- * rather than as it not having covered it. Every section reports how many rows
- * it took, so "restored" is a number rather than a claim.
+ * **Merge** is the default and the safe one. A restore onto a running
+ * installation must not delete what the backup predates: a preference added
+ * since it was taken would otherwise silently revert to its default, which
+ * reads as the restore having broken something rather than as it not having
+ * covered it.
+ *
+ * **Replace** is the one people actually mean by "restore my machine". Merging
+ * a library cannot remove a title watched since the backup, so a merge-only
+ * restore can never reproduce the state in the file — it can only ever be a
+ * superset of it. Someone reinstalling after a problem wants the file, not the
+ * union.
+ *
+ * Two rules keep replace from being the destructive option it sounds like:
+ *
+ *  - **A section opts in** (`replaceable`). One that cannot meaningfully clear
+ *    itself merges and *says so* in its report row, rather than silently
+ *    ignoring the mode the user chose. A restore that quietly did something
+ *    other than what was asked is worse than one that refused.
+ *  - **Replace never deletes what the backup does not describe.** The
+ *    extensions section rewrites the enable/disable lists to match exactly and
+ *    leaves every `.cs3` archive on disk. Those are hundreds of megabytes of
+ *    re-download, the existing undo snapshots the datastore and could not put
+ *    them back, and an unrecoverable delete reached through a radio button is
+ *    the wrong default at any level of confirmation.
+ *
+ * Every section reports how many rows it took and which mode it took them in,
+ * so "restored" is a number and a claim about what happened rather than either
+ * alone.
  */
 
 /** Bumped when a section's shape changes in a way a reader must know about. */
@@ -52,10 +75,19 @@ export interface BackupEnvelope {
   contents: Record<string, unknown>;
 }
 
+/**
+ * How a section puts the backup's rows back.
+ *
+ * `merge` adds to what is here; `replace` makes what is here match the file.
+ * The distinction is per section rather than per file only because a section
+ * may not be able to honour `replace` — see `BackupSection.replaceable`.
+ */
+export type RestoreMode = 'merge' | 'replace';
+
 export interface RestoreReport {
   ok: boolean;
-  /** What each section restored, or why it did not. */
-  sections: Array<{ name: string; restored: number; note?: string }>;
+  /** What each section restored, how, or why it did not. */
+  sections: Array<{ name: string; restored: number; note?: string; mode?: RestoreMode }>;
   error?: string;
 }
 
@@ -71,10 +103,34 @@ export interface BackupSection {
   name: string;
   /** Reads the current state. Throwing is caught and reported per section. */
   collect: () => unknown;
-  /** Puts it back, returning how many rows were taken. */
-  restore?: (value: unknown) => number;
+  /**
+   * Puts it back, returning how many rows were taken.
+   *
+   * `mode` is passed to every section, including ones that did not opt in to
+   * `replace` — they receive `'merge'`, because the service downgrades the mode
+   * before calling rather than leaving each section to remember to. A section
+   * that forgot would replace when the report said it merged.
+   */
+  restore?: (value: unknown, mode: RestoreMode) => number;
+  /**
+   * Whether this section can make the installation match the file.
+   *
+   * Opt-in, and absent means no. A section defaulting to replaceable would
+   * make every store added later silently destructive the moment someone
+   * chooses Replace, which is exactly the wrong direction for a default to
+   * fail in.
+   */
+  replaceable?: boolean;
   /** Human label for the report. */
   label: string;
+}
+
+/** What a restore was asked to do. */
+export interface RestoreOptions {
+  /** Section names to restore. Empty or absent means all of them. */
+  only?: string[];
+  /** Defaults to `merge`, which is the mode that cannot lose data. */
+  mode?: RestoreMode;
 }
 
 export class BackupService {
@@ -101,11 +157,16 @@ export class BackupService {
    * export: a backup missing one store is far more useful than no backup, and
    * the summary says which one is missing.
    */
-  public collect(): BackupEnvelope {
+  public collect(only?: string[]): BackupEnvelope {
     const contents: Record<string, unknown> = {};
     const summary: Record<string, number> = {};
+    // An empty selection means "everything", not "nothing". A caller that
+    // passed a filtered list and filtered it down to zero meant to take a
+    // backup; writing an empty file and calling it one is the worse answer.
+    const wanted = only && only.length > 0 ? new Set(only) : null;
 
     for (const section of this.sections) {
+      if (wanted && !wanted.has(section.name)) continue;
       try {
         const value = section.collect();
         contents[section.name] = value;
@@ -133,9 +194,12 @@ export class BackupService {
     };
   }
 
-  public write(filePath: string): { ok: boolean; path?: string; bytes?: number; error?: string } {
+  public write(
+    filePath: string,
+    only?: string[]
+  ): { ok: boolean; path?: string; bytes?: number; error?: string } {
     try {
-      const envelope = this.collect();
+      const envelope = this.collect(only);
       const json = JSON.stringify(envelope, null, 2);
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       // Written to a temp file and renamed, so an interrupted write cannot
@@ -186,7 +250,7 @@ export class BackupService {
     return null;
   }
 
-  public restore(filePath: string, only?: string[]): RestoreReport {
+  public restore(filePath: string, options?: RestoreOptions): RestoreReport {
     let parsed: BackupEnvelope;
     try {
       parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as BackupEnvelope;
@@ -201,6 +265,8 @@ export class BackupService {
     const problem = this.validate(parsed);
     if (problem) return { ok: false, sections: [], error: problem };
 
+    const only = options?.only;
+    const requested: RestoreMode = options?.mode === 'replace' ? 'replace' : 'merge';
     const wanted = only && only.length > 0 ? new Set(only) : null;
     const report: RestoreReport['sections'] = [];
 
@@ -215,8 +281,22 @@ export class BackupService {
         report.push({ name: section.name, restored: 0, note: 'export only' });
         continue;
       }
+      /*
+       * The downgrade happens here, once, rather than inside each section.
+       * A section that has not opted in to replace is handed `'merge'` and
+       * cannot act on a mode it does not implement — which is the failure
+       * that would make the report's own mode column a lie.
+       */
+      const mode: RestoreMode =
+        requested === 'replace' && section.replaceable ? 'replace' : 'merge';
+      const downgraded = requested === 'replace' && mode === 'merge';
       try {
-        report.push({ name: section.name, restored: section.restore(value) });
+        report.push({
+          name: section.name,
+          restored: section.restore(value, mode),
+          mode,
+          note: downgraded ? 'merged — this section cannot be replaced' : undefined,
+        });
       } catch (error) {
         // One bad section must not abandon the rest — a restore that stops
         // halfway leaves an installation in a state neither backup describes.
