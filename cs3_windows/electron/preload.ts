@@ -11,6 +11,8 @@ import type {
 import type { OttPlatformView } from './cs3/ottPlatforms';
 import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
 import type { SwarmReport } from '../src/types/torrent';
+import type { TorrentContents } from './torrent/torrentContents';
+import type { TorrentImportRecord } from './torrent/torrentImport';
 import type { SitePlugin, PluginCompatibilityReport, ProviderTreeRepository } from '../src/types/plugin';
 import type {
   IndexerConfig,
@@ -605,6 +607,69 @@ export interface CloudStreamElectronAPI {
   getSourceCacheStats: () => Promise<{ entries: number; sources: number }>;
   clearSourceCache: () => Promise<Envelope>;
 
+  /**
+   * Opening a `.torrent` or a magnet as browsable content.
+   *
+   * Import and read are separate calls for the same reason Add and Install are
+   * separate on the repositories screen: importing a file is a read and a cache
+   * write, where resolving a magnet has to join a swarm that may be dead.
+   * `resolved: false` from `getTorrentContents` is an ordinary answer, not a
+   * failure — the page renders the name and offers to fetch the rest.
+   */
+  importTorrentFiles: (filePaths: string[]) => Promise<
+    Envelope & {
+      results?: Array<{
+        path: string;
+        ok: boolean;
+        infoHash?: string;
+        resolved?: boolean;
+        duplicate?: boolean;
+        error?: string;
+      }>;
+    }
+  >;
+  importMagnet: (uri: string) => Promise<
+    Envelope & { infoHash?: string; resolved?: boolean; duplicate?: boolean }
+  >;
+  getTorrentContents: (infoHash: string) => Promise<
+    Envelope & {
+      resolved?: boolean;
+      record?: TorrentImportRecord | null;
+      contents?: TorrentContents | null;
+    }
+  >;
+  /** Joins the swarm purely to fetch a magnet's file list. */
+  resolveMagnet: (infoHash: string) => Promise<
+    Envelope & {
+      resolved?: boolean;
+      record?: TorrentImportRecord | null;
+      contents?: TorrentContents | null;
+    }
+  >;
+  listTorrentImports: () => Promise<Envelope & { records?: TorrentImportRecord[] }>;
+  removeTorrentImport: (infoHash: string) => Promise<Envelope>;
+  isMagnetLink: (text: string) => Promise<Envelope & { magnet?: boolean }>;
+  /**
+   * Streams one file out of an imported torrent.
+   *
+   * The engine orders pieces sequentially from that file and deselects the
+   * rest, so a season pack delivers the chosen episode rather than splitting
+   * the swarm across ten of them.
+   */
+  playTorrentFile: (
+    infoHash: string,
+    fileIndex: number
+  ) => Promise<Envelope & { handle?: StreamHandle | null }>;
+  /** Queues one file as an ordinary download, keyed on infohash + file index. */
+  downloadTorrentFile: (request: {
+    infoHash: string;
+    fileIndex: number;
+    fileName: string;
+    title: string;
+    season?: number;
+    episode?: number;
+    totalSize?: number;
+  }) => Promise<DownloadRequestResult>;
   getStreamStats: (infoHash: string) => Promise<TorrentStreamStats | null>;
   selectStreamFile: (infoHash: string, fileIndex: number) => Promise<StreamHandle | null>;
   stopStream: (infoHash: string, keepFiles?: boolean) => Promise<void>;
@@ -1674,6 +1739,16 @@ const api: CloudStreamElectronAPI = {
   getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
   clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),
 
+  importTorrentFiles: (filePaths) => ipcRenderer.invoke('torrent:importFiles', filePaths),
+  importMagnet: (uri) => ipcRenderer.invoke('torrent:importMagnet', uri),
+  getTorrentContents: (infoHash) => ipcRenderer.invoke('torrent:getContents', infoHash),
+  resolveMagnet: (infoHash) => ipcRenderer.invoke('torrent:resolveMagnet', infoHash),
+  listTorrentImports: () => ipcRenderer.invoke('torrent:listImports'),
+  removeTorrentImport: (infoHash) => ipcRenderer.invoke('torrent:removeImport', infoHash),
+  isMagnetLink: (text) => ipcRenderer.invoke('torrent:isMagnet', text),
+  playTorrentFile: (infoHash, fileIndex) =>
+    ipcRenderer.invoke('torrent:playFile', infoHash, fileIndex),
+  downloadTorrentFile: (request) => ipcRenderer.invoke('torrent:downloadFile', request),
   getStreamStats: (infoHash) => ipcRenderer.invoke('torrent:getStats', infoHash),
   selectStreamFile: (infoHash, fileIndex) =>
     ipcRenderer.invoke('torrent:selectFile', infoHash, fileIndex),
