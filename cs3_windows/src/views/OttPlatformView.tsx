@@ -3,6 +3,7 @@ import { Loader2, PlugZap, Search, SlidersHorizontal, Sparkles, X } from 'lucide
 import type { ProviderCatalog, ProviderCatalogSection, SearchResponse } from '../types/api';
 import { PosterCard } from '../components/PosterCard';
 import { EmptyState } from '../components/EmptyState';
+import { FixProvidersModal } from '../components/FixProvidersModal';
 import { useFlash } from '../utils/useFlash';
 
 /**
@@ -119,6 +120,8 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
   >([]);
   const [metaSupported, setMetaSupported] = useState(false);
   const [metaLoading, setMetaLoading] = useState(false);
+  /** Providers the fix modal is open for, or null when it is closed. */
+  const [fixing, setFixing] = useState<string[] | null>(null);
   const { message: notice, flash } = useFlash<string>(4000);
 
   /**
@@ -308,6 +311,20 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
 
       {notice && <div className="ott-view__notice">{notice}</div>}
 
+      {/*
+        The fix, not a pointer to where the fix lives.
+
+        This offered only "Open Extensions", which is accurate and is PRD 43's
+        F-1 exactly: a true statement with the work left to the reader. It is
+        the harder version of that failure, too, because the sentence below
+        names three possible switches and cannot say which — so the viewer
+        arrived in Extensions knowing only that one of three things, somewhere
+        in a tree, is off.
+
+        `FixProvidersModal` plans each provider's whole cascade and turns the
+        right switches. Extensions stays offered underneath for anyone who
+        wants the tree itself.
+      */}
       {platform.availability === 'disabled' && (
         <EmptyState
           icon={PlugZap}
@@ -321,7 +338,22 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
               again.
             </>
           }
-          action={{ label: 'Open Extensions', onClick: onOpenExtensions }}
+          action={{ label: 'Turn it back on', onClick: () => setFixing(platform.disabledProviders) }}
+          secondary={{ label: 'Open Extensions', onClick: onOpenExtensions }}
+        />
+      )}
+
+      {fixing && (
+        <FixProvidersModal
+          providers={fixing}
+          onClose={() => setFixing(null)}
+          onFixed={() => {
+            setFixing(null);
+            // The platform's availability is computed in the main process from
+            // what is enabled, so the page has to be told to re-read it — the
+            // rows on screen were built from the old answer.
+            onInventoryChanged?.();
+          }}
         />
       )}
 
