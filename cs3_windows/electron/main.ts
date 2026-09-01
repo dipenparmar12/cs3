@@ -248,7 +248,7 @@ const torrentEngine = new TorrentEngine({
 });
 const contentService = new ContentService(datastore, pluginManager, torrentEngine);
 const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
-const ottService = new OttService(pluginManager);
+const ottService = new OttService(pluginManager, datastore);
 const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
 const historyStore = new HistoryStore(datastore);
@@ -3473,6 +3473,34 @@ ipcMain.handle('ott:listPlatforms', async () => {
     return { ok: true, platforms: await ottService.listPlatforms() };
   } catch (error) {
     return { ...fail(error), platforms: [] };
+  }
+});
+
+/**
+ * Which streaming services appear in the sidebar.
+ *
+ * `includeHidden` is what the settings screen asks with: it has to list the
+ * ones that are off in order to offer to switch them on, and every other
+ * caller wants the user's chosen set.
+ */
+ipcMain.handle('ott:listAllPlatforms', async () => {
+  try {
+    return {
+      ok: true,
+      platforms: await ottService.listPlatforms(true),
+      enabled: ottService.getEnabledPlatformIds(),
+    };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('ott:setPlatformEnabled', async (_, platformId: string, enabled: boolean) => {
+  try {
+    if (!platformId) return { ok: false, error: 'No platform was named.' };
+    return { ok: true, enabled: ottService.setPlatformEnabled(platformId, enabled) };
+  } catch (error) {
+    return fail(error);
   }
 });
 

@@ -1417,6 +1417,18 @@ export interface CloudStreamElectronAPI {
    * a `cs3ext://` address would be a way to make the app install code from
    * anywhere.
    */
+  /**
+   * Every streaming service including the ones switched off, for the screen
+   * that offers to switch them back on. `listOttPlatforms` returns the chosen
+   * set, which is what a sidebar wants.
+   */
+  listAllOttPlatforms: () => Promise<
+    Envelope & { platforms?: unknown[]; enabled?: string[] }
+  >;
+  setOttPlatformEnabled: (
+    platformId: string,
+    enabled: boolean
+  ) => Promise<Envelope & { enabled?: string[] }>;
   planProviderRecovery: (provider: string) => Promise<
     Envelope & {
       plan?: {
@@ -1748,6 +1760,9 @@ const api: CloudStreamElectronAPI = {
   getOttSuggestions: (platformId) => ipcRenderer.invoke('ott:getSuggestions', platformId),
   installOttSuggestion: (platformId, repositoryId) =>
     ipcRenderer.invoke('ott:installSuggestion', platformId, repositoryId),
+  listAllOttPlatforms: () => ipcRenderer.invoke('ott:listAllPlatforms'),
+  setOttPlatformEnabled: (platformId, enabled) =>
+    ipcRenderer.invoke('ott:setPlatformEnabled', platformId, enabled),
   addRepository: (url) => ipcRenderer.invoke('extension:addRepository', url),
   installRepository: (url, options) => ipcRenderer.invoke('extension:installRepository', url, options),
   removeRepository: (repoUrl) => ipcRenderer.invoke('extension:removeRepository', repoUrl),

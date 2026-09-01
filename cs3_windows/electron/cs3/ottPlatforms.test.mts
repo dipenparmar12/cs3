@@ -205,6 +205,40 @@ test('every declared provider name matches its own platform', () => {
 
 // --- runner ----------------------------------------------------------------
 
+// --- which platforms ship switched on ------------------------------------------
+
+test('only the platforms with a provider of their own are on by default', () => {
+  /**
+   * The four that are on are the four NetMirror and CNC Verse register a
+   * provider *named after*: Netflix, Prime Video, Hotstar and Disney Plus.
+   * Those pages open onto a real catalogue.
+   *
+   * Sony LIV, ZEE5 and JioCinema have no such provider anywhere in the
+   * reachable ecosystem — they are served only by aggregate scrapers, so their
+   * pages are a search box. Shipping seven entries where three cannot browse
+   * reads as four working and three broken, which is a worse first impression
+   * than four that work.
+   */
+  const on = OTT_PLATFORMS.filter((p) => p.defaultEnabled).map((p) => p.id).sort();
+  assert.deepEqual(on, ['disney', 'hotstar', 'netflix', 'primevideo']);
+});
+
+test('a platform that is off by default is still in the table', () => {
+  /**
+   * Off is not gone, and the difference is the whole reason they are listed.
+   * The user knows the platform, not the scraper; answering "can I watch ZEE5?"
+   * by omitting ZEE5 reads as the app not knowing what it is.
+   */
+  const off = OTT_PLATFORMS.filter((p) => !p.defaultEnabled);
+  assert.equal(off.length, 3);
+  for (const platform of off) {
+    assert.ok(
+      platform.aggregateExtensions.length > 0 || platform.suggestedRepositories.length > 0,
+      `${platform.id} is off by default and offers no way to reach it either`
+    );
+  }
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {
@@ -216,5 +250,8 @@ for (const [name, fn] of tests) {
     console.log(`       ${error instanceof Error ? error.message : String(error)}`);
   }
 }
-console.log(failed === 0 ? `\n${tests.length} passed` : `\n${failed} of ${tests.length} FAILED`);
+
+console.log(failed === 0 ? `
+${tests.length} passed` : `
+${failed} of ${tests.length} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

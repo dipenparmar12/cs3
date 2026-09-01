@@ -1,9 +1,11 @@
 import type { PluginManager } from '../pluginManager';
 import type { ProviderCatalog, ProviderCatalogPage } from '../../src/types/api';
 import { OFFICIAL_REPOSITORIES } from '../officialRepositories';
+import type { DatastoreManager } from '../datastore';
 import {
   buildOttPlatformViews,
   ottPlatformById,
+  OTT_PLATFORMS,
   type OttPlatformView,
 } from './ottPlatforms';
 
@@ -32,11 +34,50 @@ import {
  * that installing a second OTT repository does not double the Netflix page; it
  * adds whichever providers did not collide.
  */
+/**
+ * Which platforms the user has chosen to see.
+ *
+ * Stored rather than derived so the choice survives a platform being added to
+ * the table: a new one arrives at its own `defaultEnabled` instead of being
+ * silently absent because an older stored list did not mention it.
+ */
+const SETTINGS_KEY_OTT_ENABLED = 'ott_enabled_platforms';
+
 export class OttService {
   private plugins: PluginManager;
+  private datastore: DatastoreManager;
 
-  constructor(plugins: PluginManager) {
+  constructor(plugins: PluginManager, datastore: DatastoreManager) {
     this.plugins = plugins;
+    this.datastore = datastore;
+  }
+
+  /**
+   * The platforms shown in the sidebar.
+   *
+   * Absent from the stored map means "as shipped", not "off" — see the key's
+   * comment. The four with a provider named after them are on; the three that
+   * exist only behind aggregate scrapers are off, because their pages open onto
+   * a search box rather than a catalogue and a sidebar of those reads as four
+   * working entries and three broken ones.
+   */
+  public getEnabledPlatformIds(): string[] {
+    const stored = this.datastore.getObject<Record<string, boolean>>(
+      SETTINGS_KEY_OTT_ENABLED,
+      {}
+    );
+    return OTT_PLATFORMS.filter((platform) =>
+      typeof stored?.[platform.id] === 'boolean' ? stored[platform.id] : platform.defaultEnabled
+    ).map((platform) => platform.id);
+  }
+
+  public setPlatformEnabled(platformId: string, enabled: boolean): string[] {
+    const stored = this.datastore.getObject<Record<string, boolean>>(
+      SETTINGS_KEY_OTT_ENABLED,
+      {}
+    );
+    this.datastore.setObject(SETTINGS_KEY_OTT_ENABLED, { ...(stored ?? {}), [platformId]: enabled });
+    return this.getEnabledPlatformIds();
   }
 
   /**
@@ -47,19 +88,29 @@ export class OttService {
    * needs to be told it is reachable and how, not shown a sidebar that silently
    * omits it and leaves them to conclude the app does not do that.
    */
-  public async listPlatforms(): Promise<OttPlatformView[]> {
+  public async listPlatforms(includeHidden = false): Promise<OttPlatformView[]> {
     const enabledProviders = await this.plugins.listEnabledProviders();
-    return buildOttPlatformViews({
+    const shown = new Set(this.getEnabledPlatformIds());
+    const views = buildOttPlatformViews({
       allProviders: this.plugins.getProvidersList(),
       enabledProviders,
       installedExtensions: this.plugins
         .getInstalledPlugins()
         .map((plugin) => plugin.internalName),
     });
+    /*
+     * `includeHidden` is for the settings screen, which has to list what is
+     * switched off in order to switch it back on. Every other caller gets the
+     * user's chosen set — a sidebar that showed the hidden ones would make the
+     * setting look broken.
+     */
+    return includeHidden ? views : views.filter((view) => shown.has(view.id));
   }
 
   public async getPlatform(platformId: string): Promise<OttPlatformView | null> {
-    const platforms = await this.listPlatforms();
+    // Hidden included: a platform reached by its own URL should open, not 404
+    // because it is merely absent from the sidebar.
+    const platforms = await this.listPlatforms(true);
     return platforms.find((platform) => platform.id === platformId) ?? null;
   }
 

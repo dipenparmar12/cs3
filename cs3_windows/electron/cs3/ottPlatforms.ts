@@ -75,6 +75,22 @@ export interface OttPlatformDefinition {
   aggregateExtensions: string[];
   /** Repositories to offer when nothing for this platform is installed. */
   suggestedRepositories: RepositoryId[];
+  /**
+   * Whether this platform appears in the sidebar without being asked for.
+   *
+   * The four that are on by default are the four with a provider *named after
+   * them* somewhere in the reachable ecosystem — NetMirror registers exactly
+   * Netflix, Prime Video, Hotstar and Disney Plus, and CNC Verse adds its own.
+   * Sony LIV, ZEE5 and JioCinema have no such provider anywhere: they are
+   * reachable only through aggregate scrapers, so their pages open onto a
+   * search box rather than a catalogue.
+   *
+   * Listing them off by default rather than dropping them is deliberate, and
+   * it is the same argument that put them in the table at all: the user knows
+   * the platform, not the scraper. Hiding them entirely answers "can I watch
+   * ZEE5?" with silence, which reads as the app not knowing what ZEE5 is.
+   */
+  defaultEnabled: boolean;
 }
 
 /**
@@ -97,6 +113,7 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
     providerPatterns: [/^netflix/],
     aggregateExtensions: [],
     suggestedRepositories: ['netmirror', 'cncverse'],
+    defaultEnabled: true,
   },
   {
     id: 'primevideo',
@@ -108,6 +125,7 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
     providerPatterns: [/^(amazon)?primevideo/],
     aggregateExtensions: [],
     suggestedRepositories: ['netmirror', 'cncverse'],
+    defaultEnabled: true,
   },
   {
     id: 'hotstar',
@@ -120,6 +138,7 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
     providerPatterns: [/hotstar/],
     aggregateExtensions: [],
     suggestedRepositories: ['netmirror', 'cncverse'],
+    defaultEnabled: true,
   },
   {
     id: 'disney',
@@ -142,6 +161,7 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
     providerPatterns: [/^disney(plus)?m?$/],
     aggregateExtensions: [],
     suggestedRepositories: ['netmirror', 'cncverse'],
+    defaultEnabled: true,
   },
   {
     id: 'sonyliv',
@@ -153,6 +173,7 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
     // Both advertise Sony LIV coverage in their published descriptions.
     aggregateExtensions: ['MovieBoxProvider', 'MovieBoxProviderIN', 'CNC Verse'],
     suggestedRepositories: ['cncverse', 'phisher'],
+    defaultEnabled: false,
   },
   {
     id: 'zee5',
@@ -163,6 +184,7 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
     providerPatterns: [/^zee5/],
     aggregateExtensions: ['MovieBoxProvider', 'MovieBoxProviderIN', 'CNC Verse'],
     suggestedRepositories: ['cncverse', 'phisher'],
+    defaultEnabled: false,
   },
   {
     id: 'jiocinema',
@@ -179,6 +201,7 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
     providerPatterns: [/^jiocinema/],
     aggregateExtensions: ['MovieBoxProvider', 'MovieBoxProviderIN', 'CNC Verse'],
     suggestedRepositories: ['cncverse', 'phisher'],
+    defaultEnabled: false,
   },
 ];
 
