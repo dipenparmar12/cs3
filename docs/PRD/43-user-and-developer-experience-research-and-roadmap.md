@@ -1,7 +1,11 @@
 # 43 — User and developer experience: research, and the roadmap it implies
 
-**Status: research + proposal. Nothing in §6–§8 is built.**
-**Written 2026-09-01.**
+**Status: research + proposal. Most of §6–§8 is not built.**
+**Written 2026-09-01. Progress noted inline as items land.**
+
+> **Landed since writing:** UX-3 (catalogue control on the home screen, closing
+> F-8) and the second surface of UX-1 (the OTT page's switched-off state now
+> offers the fix rather than directions to it). Everything else stands.
 
 ---
 
@@ -259,8 +263,11 @@ The OTT pages with nothing installed: a brand name, a search box, and no way for
 **Partly fixed this session** via the metadata catalogue.
 
 ### F-8. A setting in the wrong room
-Home-screen catalogue selection lives in Settings. The person who wants it is looking
-at the home screen. **Not fixed.**
+Home-screen catalogue selection lived in Settings. The person who wants it is looking
+at the home screen. **Fixed** — `CataloguePicker` moved it into the home toolbar, and
+the same pass found `includeAnime` had been an accepted parameter with no caller since
+`discover:sections` was written. That is F-3 arriving through an argument rather than
+through a channel or an import, which is a fourth direction and worth recording.
 
 ---
 
@@ -295,6 +302,12 @@ the extensions tree's disabled rows, and the playback failure overlay.
 *Acceptance:* no screen in the app names a disabled or missing provider without an
 in-place control that can enable or install it.
 
+**Progress.** Two of five surfaces done — the search-scope warning and the OTT page's
+switched-off state, both through the same `FixProvidersModal`, which is the point: one
+place to get this right rather than a bespoke recovery per screen. Remaining: the
+source panel's empty state, the extensions tree's disabled rows, and the playback
+failure overlay.
+
 ### 6.3 UX-2 — Progressive disclosure of cost (S)
 
 Any action that downloads or translates states, before it starts: what it will fetch,
@@ -309,6 +322,10 @@ Move (do not duplicate) the catalogue selector onto the home screen as a row-lev
 control: which catalogues, which genres, reorder, hide. Settings keeps a link to it.
 
 *Rationale:* F-8. Also the single most-requested thing in this session.
+
+**Done.** `src/components/home/CataloguePicker.tsx`. Moved rather than duplicated —
+Settings keeps the configuration that has no place on a browsing screen (the key, the
+custom URL, the health re-check), and both read the same state so they cannot disagree.
 
 ### 6.5 UX-4 — One "sources health" surface (M)
 
@@ -425,7 +442,7 @@ Ordered by *evidence strength × cost*, not by appeal.
 
 | Phase | Items | Why here |
 |---|---|---|
-| **A — finish what is started** | UX-1, UX-2, UX-3 | All three have measured evidence, all are small, and UX-1's component already exists |
+| **A — finish what is started** | ~~UX-3~~, UX-1 *(2 of 5 surfaces)*, UX-2 | All three have measured evidence, all are small, and UX-1's component already exists |
 | **B — the author loop** | DX-1, DX-3 | Nothing else in DX matters until someone can write an extension at all; DX-3 is nearly free given `LinkageAnalyzer` |
 | **C — make it trustworthy** | DX-2, DX-5, PRD 41 §8 signing | Fixtures and version negotiation are what stop the ecosystem breaking silently as it grows |
 | **D — the expensive ones** | UX-4, UX-5, UX-6, DX-4, DX-6 | Each is worth doing; none blocks the others |
