@@ -61,6 +61,24 @@ win:
 # extensions, the library, watch progress and the provisioned runtime, and
 # erasing all of it on an uninstall-to-reinstall is a data loss the user did
 # not ask for.
+# Double-clicking a .torrent, and clicking a magnet link, open this app.
+#
+# Both route to the same place: Windows passes an associated file and a
+# protocol argument as ordinary argv entries, which `openableFromArgv` reads.
+# The single-instance lock is what stops a second double-click starting a
+# second app with its own sidecar and its own torrent client contending for one
+# cache directory.
+fileAssociations:
+  - ext: torrent
+    name: BitTorrent file
+    description: Open in CloudStream 3 Desktop
+    mimeType: application/x-bittorrent
+    role: Viewer
+protocols:
+  - name: Magnet link
+    schemes:
+      - magnet
+
 nsis:
   oneClick: false
   perMachine: false

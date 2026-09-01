@@ -926,6 +926,15 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => mainWindow?.show());
 
+  /*
+   * A launch argument is delivered once the *renderer* exists, not when the
+   * window does. `app:openLocalFile` is a `webContents.send`, and a send to a
+   * page that has not run its subscription yet is dropped with no error — so
+   * double-clicking a `.torrent` would open the app to the home screen and
+   * silently forget what was asked for.
+   */
+  mainWindow.webContents.once('did-finish-load', () => deliverPendingOpen());
+
   // External links open in the system browser, never in-app (SEC-7 / DSK-36).
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//.test(url)) shell.openExternal(url);
