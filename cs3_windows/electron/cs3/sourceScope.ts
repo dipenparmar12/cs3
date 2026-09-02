@@ -103,3 +103,57 @@ export function planSourceScope(inputs: ScopeInputs): ScopePlan {
     canWiden: scopeUsed === 'origin',
   };
 }
+
+// --- escalation ------------------------------------------------------------
+
+export interface EscalationInputs {
+  /** The scope that actually produced the answer in hand. */
+  scopeUsed: SourceScope;
+  /** How many playable sources it produced. Only zero is worth escalating. */
+  sourceCount: number;
+  /** Whether widening would ask anything that has not already been asked. */
+  canWiden: boolean;
+  /**
+   * Whether this caller wants the escalation at all.
+   *
+   * False for speculative work — the prefetcher runs on a page the viewer has
+   * merely *opened*, and a fan-out there would contact every provider and every
+   * torrent indexer about a title nobody has committed to watching. That is the
+   * fastest way to get an IP blocked by a scraper target, and it is the reason
+   * `SourcePrefetcher` is restrained everywhere else too.
+   */
+  allowed: boolean;
+  /** A fan-out with no title asks two hundred providers about an empty string. */
+  hasTitle: boolean;
+}
+
+/**
+ * Whether an empty scoped answer should widen itself instead of being reported.
+ *
+ * The reported shape: a title opened from a provider's own search row, whose
+ * provider has no links for it. `origin` scope is right — it is what Android
+ * does and it is what keeps a play from contacting two hundred sites — but when
+ * that provider answers with **nothing**, the narrow answer is worth exactly
+ * zero to the viewer. Every one of its virtues (fewer requests, faster, no dead
+ * links from sites that never had the title) is a saving on an answer that
+ * cannot be played.
+ *
+ * So the scope stays narrow while it is *paying* for itself, and widens the
+ * moment it is not. What the viewer used to get instead was a dead end with a
+ * button under it — and pressing that button, measured on *The Little Prince*
+ * against a provider that had nothing, produced 137 sources from five other
+ * extensions and the torrent indexers. A button that is the only useful action
+ * on a screen is a step the app should have taken itself.
+ *
+ * The escalation is one level and terminal: the widened run is `all`, so
+ * `canWiden` is false for it and this returns false. There is nothing wider.
+ */
+export function shouldEscalateScope(inputs: EscalationInputs): boolean {
+  return (
+    inputs.allowed &&
+    inputs.hasTitle &&
+    inputs.canWiden &&
+    inputs.scopeUsed === 'origin' &&
+    inputs.sourceCount === 0
+  );
+}

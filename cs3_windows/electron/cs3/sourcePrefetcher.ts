@@ -165,7 +165,20 @@ export class SourcePrefetcher {
             total: progress.totalRelevant,
           });
         },
-        { signal: controller.signal }
+        {
+          signal: controller.signal,
+          /**
+           * The one caller that must not widen itself.
+           *
+           * Opening a detail page is not a commitment to watch — the same
+           * reason this whole module waits `SETTLE_MS`, declines on a cache
+           * hit and runs one at a time. An empty scoped answer here escalating
+           * into a fan-out across every provider and every torrent indexer
+           * would turn paging through six titles into six of those, for
+           * nobody. Pressing Play widens for real, and that is soon enough.
+           */
+          autoWiden: false,
+        }
       );
 
       // Superseded or abandoned while it ran. The work is not wasted — whatever
