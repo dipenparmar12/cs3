@@ -88,6 +88,10 @@ cs3/
 | Media decisions only | `cs3_windows/` | `bun run test:media` (71 cases, no ffmpeg needed) |
 | Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (17 cases, real ffmpeg; skips itself without it) |
 | Source export only | `cs3_windows/` | `bun run test:export` (13 cases, pure) |
+| Direct (non-torrent) indexer sources only | `cs3_windows/` | `bun run test:direct-sources` (13 cases, pure) |
+| yt-dlp source mapping only | `cs3_windows/` | `bun run test:ytdlp` (16 cases, pure) |
+| Repository catalogue only | `cs3_windows/` | `bun run test:repositories` (9 cases, pure — fetches nothing) |
+| Repository/corpus liveness | repo root | `node tools/research/survey-repositories.mjs` — counts the live indexes; see PRD-43 |
 | Download identity only | `cs3_windows/` | `bun run test:download-identity` (18 cases, pure) |
 | Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
@@ -2632,6 +2636,80 @@ film that was playing, and the first press paused it. Buffering is deliberately
 "Buffering from peers…", which is a torrent's story and a lie about an HTTP
 stream.
 
+### Two lanes that were already paid for (2026-09-03)
+
+Found by counting the roster for PRD-43 rather than from a bug report. Neither was a missing
+feature; both were built, funded and unreachable.
+
+**Every non-torrent Stremio stream was being discarded.** `StremioAddonIndexer.search` filtered
+its replies to the ones carrying an `infoHash`. A Stremio `stream` carries **either** `infoHash`
+**or** `url`, and the `url` half is what every debrid-fronted addon answers with — an
+already-cached link at line speed, the most reliable source shape in that ecosystem — plus
+everything an HTTP-only addon returns. There was no error and no diagnosis: the addon simply
+"found nothing".
+
+The wall was the adapter contract, not the idea. `TorrentResult` has carried `directUrl` since
+extension providers started returning HTTP links; `RawTorrent` had nowhere to put one, so
+`finaliseResult` returned null. It now has a direct half, finished **before** any of the magnet
+derivation — there is no swarm, no piece order and no infohash to validate.
+
+Three rules in it are load-bearing:
+
+- **The identity is `directSourceIdentity`, shared with `ContentService.extensionSources`.** Same
+  function, same `ext-` prefix, so an addon and an extension that resolve a title to the same
+  file host collapse into one row in `dedupeByInfoHash`. Two schemes would show the viewer one
+  stream twice and call it two sources.
+- **`seeders: 1`, and no attempt to do better.** Swarm health is meaningless for an HTTP stream,
+  and `minSeeders` (1 by default) would hard-reject every direct source in `rankResults`. It
+  understates a cached debrid link, which is deliberate: the provider path has ranked its links
+  this way all along, and a special case here would make two identical sources sort differently
+  depending on which lane found them.
+- **`fileIdx` is dropped on a `url` stream.** It indexes a file *inside* a torrent, and a direct
+  link is already that file.
+
+**yt-dlp had no caller.** `extractLinks`/`searchAndExtract` existed and were referenced by
+nothing outside their own definitions — ~1,800 sites, binary already fetched and resolved by
+`binaryDownloader`. Same shape as the local-file capability that shipped with no entry point.
+Two defects were fixed on the way in, and both are rules this repository had already settled:
+
+- **The transport was read from the URL string** (`url.includes('.m3u8')`) with `fmt.protocol`
+  sitting unread in the same object. Nothing is decided from the URL — `cs3/providerLinks.ts`
+  exists for exactly this argument.
+- **Any format with a video *or* an audio stream was offered.** On every DASH site that means
+  the top rows are video-only, and a video-only row plays perfectly, in silence, with no `error`
+  event. That is the AC-3 signature, and a viewer diagnoses it as a broken app. `ytdlpSources.ts`
+  requires both halves, except on a manifest, which names its own tracks.
+
+The `ytsearch1:<query> official trailer OR full feature` fallback is gone. A trailer standing in
+for a film is a synthetic source under another name.
+
+`YtDlpEngine.resolve` answers with a **reason** rather than an empty array, lifted from yt-dlp's
+own stderr: "Unsupported URL", "Video unavailable" and a named geo-block are three different
+actions a viewer could take, and the old code made them one silent non-answer. It is bounded,
+and it passes `--no-playlist` — handed a series page, yt-dlp otherwise resolves every entry,
+turning one press into hundreds of extractions against somebody's site.
+
+**Two entry points, and no IPC surface changed**, because both paths already ran end to end: a
+pasted page URL becomes its own search row exactly as a pasted magnet does (`searchSession`), and
+`ContentService.discover` resolves an `http(s)` base through yt-dlp — where it previously fell
+through to a catalogue lookup and ended at "Could not determine a title to search for". The page
+is **not** resolved from the search box: typing is not consent to fetch a page, and a search that
+spawns a process per keystroke would be its own bug. A page yt-dlp cannot read still falls through
+to the ordinary search when a title is already known, so re-opening a history row whose media URL
+is an expired CDN address is not answered with a sentence about the dead link.
+
+`bun run test:direct-sources` (13) and `bun run test:ytdlp` (16). The first was verified by
+mutation: restoring the `infoHash` filter and removing the direct branch fails 9 of its 13.
+
+**The catalogue grew with them** — `xr3ed` (190 extensions, 47 on the jar lane), `hexated`,
+`arabic_extensions`, `indochannel`, and `codegeasse` behind the adult gate. None is `bundled`:
+that flag is still a claim `provider-e2e.mjs` has driven the repository end to end.
+`bun run test:repositories` (9) pins what that data file may claim — unique ids and addresses,
+https, a raw document rather than a project page, an adult repository never bundled, a bundled
+repository never unverified. It fetches nothing; liveness is
+`node tools/research/survey-repositories.mjs`, run deliberately, and a test that fails when a
+third-party host has a bad afternoon is one people learn to ignore.
+
 ### The source cache learns from playback
 
 It was already persistent with per-source expiry. What it lacked was any memory of a source
@@ -3473,18 +3551,16 @@ verified in a running Electron app and should not be reported as done.
   ecosystem read from upstream source on 2026-08-27 — repo/index/archive formats, the
   four-field `manifest.json`, the hardcoded `apiVersion = 1`, the Levenshtein extractor
   match — and is worth reading on its own before touching anything plugin-shaped.
-- `docs/PRD/43-source-and-provider-expansion.md` — **research, 2026-09-03**: where more sources
-  come from. Its §3–§5 are counts against the live indexes (614 catalogued extensions, 63 on
-  the jar lane, ~155 net new from eight uncatalogued repositories); its §4 is the part to read
-  first, because it names **four sources this app already pays for and cannot reach** — every
-  non-torrent Stremio stream is dropped by an `infoHash` filter in `StremioAddonIndexer`,
-  `YtDlpEngine.extractLinks` has no caller anywhere (≈1,800 sites, binary already bundled),
-  the bundled `megarepo` can contribute nothing because its only mechanism is the
-  `RepositoryManager` no-op in the bridge, and subtitles are hardcoded to one host whose
-  protocol we already implement twice. §6 maps every candidate onto PRD-41's five lanes; the
-  rule that falls out is that **a direct HTTP link is not an indexer result** — `RawTorrent`
-  requires an infohash, so debrid answers, live channels, yt-dlp output and a Jellyfin item are
-  all *provider* sources.
+- `docs/PRD/43-source-and-provider-expansion.md` — **research, 2026-09-03; items 1–4 built**
+  (see its §0): where more sources come from. Its §3–§5 are counts against the live indexes,
+  taken before the additions. Its §4 named **four sources this app already paid for and could
+  not reach**; two are now wired (see "Two lanes that were already paid for" in §5), one is
+  the bundled `megarepo` — which can contribute nothing, because its only mechanism is the
+  `RepositoryManager` no-op in the bridge — and one is the subtitle service, still hardcoded to
+  a single host whose Stremio protocol we already implement twice. §6 maps every remaining
+  candidate onto PRD-41's five lanes, and the rule that falls out is load-bearing: **a direct
+  HTTP link is not an indexer result** — debrid answers, live channels, yt-dlp output and a
+  Jellyfin item are all *provider* sources, whatever found them.
 - `docs/docs_cs3/` — the Android app's architecture, 9 documents, written from source.
 
 Requirement ids appear throughout code comments — `ARCH-2`, `SEC-7`, `DROP-12`, `DSK-57`,

@@ -1,7 +1,8 @@
 # PRD-43 — More sources: the provider roster this desktop can have, and the four we already paid for
 
-**Status:** research + proposal. Nothing in §6–§9 is built. §3–§5 are counts, taken on the
-date below and reproducible by the commands beside them.
+**Status:** research + proposal. **Items 1–4 of §8 are built** (see §0). Nothing else in
+§6–§9 is. §3–§5 are counts, taken on the date below and reproducible by the commands beside
+them.
 **Answers:** "find more sources and potential providers that can be scraped or created in the
 desktop version, in our own standards."
 **Depends on:** PRD-41 (the five lanes and the one `Provider`/`Source` contract), PRD-39
@@ -21,6 +22,40 @@ exactly the kind of document that turns into a wish list if the checkable half i
 | `[researched]` | Read from a primary source — this repository's code, a published API, upstream Kotlin. |
 | `[proposed]` | A design decision made here. Not built. Arguable. |
 | `[unprobed]` | Named from research and **not reachable from the container this was written in**. See §2. |
+
+---
+
+## 0. What has since been built
+
+Priority items 1–4 of §8 landed on 2026-09-03, the same day this was written. The rest of the
+document is unchanged and still describes what it described — including the §3–§5 counts, which
+were taken **before** these changes and are the baseline they should be read against.
+
+| Item | § | State |
+|---|---|---|
+| Stop discarding non-torrent Stremio streams | 4.1 | **Built.** `RawTorrent` carries a direct half, `finaliseResult` finishes it, `StremioAddonIndexer` maps both stream shapes. 13 cases in `electron/torrent/indexers/directSources.test.mts`, verified by mutation — restoring the `infoHash` filter fails 9 of them. |
+| Give yt-dlp an entry point, fix its two defects | 4.2 | **Built.** `YtDlpEngine.resolve` answers with yt-dlp's own reason; `electron/ytdlpSources.ts` maps its output, taking the transport from `protocol` and refusing video-only formats; a pasted page URL becomes a search row and `discover()` resolves it. The trailer fallback is gone. 16 cases. |
+| Catalogue the four repositories; gate the fifth | 5 | **Built.** `xr3ed`, `hexated`, `arabic_extensions`, `indochannel` added; `codegeasse` added as `adult: true`. None is `bundled` — that still needs `provider-e2e.mjs`. |
+| Fix the dead catalogue row | 3.3 | **Half.** `pitipitii` is marked `verified: false` with the measurement in its description; its index still 404s, so there is no URL to correct it to. `fstream` is **untouched** — it was unreachable from the container, which is not evidence that it is dead. |
+
+**The catalogue after those additions**, same command as §3.3:
+
+```
+node tools/research/survey-repositories.mjs
+
+Catalogue: 34 repositories
+TOTAL 918 extensions · 110 publishing jarUrl (12.0%) · 689 distinct names
+```
+
+So the addressable corpus went from 558 distinct extensions to 689 (+131 — the five repositories
+added, not the eight surveyed), and jar-lane coverage from 10.3% to 12.0%.
+
+`electron/officialRepositories.test.mts` was added with them: 9 rows pinning what this data file
+is allowed to claim — unique ids and addresses, https only, a raw document rather than a project
+page, an adult repository never bundled, a bundled repository never unverified, and the bundled
+set staying small. It fetches nothing; liveness is the survey script, run deliberately.
+
+**Items 5–10 are untouched**, and §9 still applies to all of them.
 
 ---
 
