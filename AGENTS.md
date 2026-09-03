@@ -450,7 +450,7 @@ not a layering mistake.
 | `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. Warmed at launch — see below. |
 | `torrent/torrentMetadata.ts` | `.torrent` bytes cached by infohash, verified against it. A cache hit means `add()` has the piece hashes synchronously and the swarm is needed only for bytes. Also builds the `xs` mirror URLs. |
 | `torrent/dhtNodeCache.ts` | The DHT routing table, node id and port, persisted. Turns a cold bootstrap into a warm one. |
-| `torrent/indexerRegistry.ts`, `indexers/*` | 7 built-in public indexers, Torznab (Jackett/Prowlarr), and aggregators (Torrentio, apibay). |
+| `torrent/indexerRegistry.ts`, `indexers/*` | 17 built-in adapters — 4 Stremio stream addons, 10 JSON APIs, 3 HTML scrapers — plus Torznab (Jackett/Prowlarr). Counted from the registry switch on 2026-09-03; this line said 7 for a long time after it stopped being true. |
 | `torrent/ranker.ts`, `releaseParser.ts` | Release-name parsing (quality/codec/group/season/episode) and result ranking. |
 | `externalPlayerControl.ts` | Two-way control of VLC over its HTTP interface. Capability is declared per player, never assumed — see below. |
 | `media/inspectionStore.ts` | Persists what a probe found, keyed on the origin URL. The measurement only; the verdict is recomputed. |
@@ -3473,6 +3473,18 @@ verified in a running Electron app and should not be reported as done.
   ecosystem read from upstream source on 2026-08-27 — repo/index/archive formats, the
   four-field `manifest.json`, the hardcoded `apiVersion = 1`, the Levenshtein extractor
   match — and is worth reading on its own before touching anything plugin-shaped.
+- `docs/PRD/43-source-and-provider-expansion.md` — **research, 2026-09-03**: where more sources
+  come from. Its §3–§5 are counts against the live indexes (614 catalogued extensions, 63 on
+  the jar lane, ~155 net new from eight uncatalogued repositories); its §4 is the part to read
+  first, because it names **four sources this app already pays for and cannot reach** — every
+  non-torrent Stremio stream is dropped by an `infoHash` filter in `StremioAddonIndexer`,
+  `YtDlpEngine.extractLinks` has no caller anywhere (≈1,800 sites, binary already bundled),
+  the bundled `megarepo` can contribute nothing because its only mechanism is the
+  `RepositoryManager` no-op in the bridge, and subtitles are hardcoded to one host whose
+  protocol we already implement twice. §6 maps every candidate onto PRD-41's five lanes; the
+  rule that falls out is that **a direct HTTP link is not an indexer result** — `RawTorrent`
+  requires an infohash, so debrid answers, live channels, yt-dlp output and a Jellyfin item are
+  all *provider* sources.
 - `docs/docs_cs3/` — the Android app's architecture, 9 documents, written from source.
 
 Requirement ids appear throughout code comments — `ARCH-2`, `SEC-7`, `DROP-12`, `DSK-57`,
