@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { IndexerConfig, IndexerQuery, TorrentResult } from '../../../src/types/torrent';
 import { parseReleaseName } from '../releaseParser.ts';
 
@@ -8,7 +10,12 @@ import { parseReleaseName } from '../releaseParser.ts';
  */
 export interface RawTorrent {
   title: string;
-  /** Either `infoHash` or `magnet` must be present; the other is derived. */
+  /**
+   * Either `infoHash` or `magnet` must be present; the other is derived.
+   *
+   * Unless `directUrl` is set — see below. An adapter answers with one shape or
+   * the other, never both.
+   */
   infoHash?: string;
   magnet?: string;
   torrentUrl?: string;
@@ -20,6 +27,33 @@ export interface RawTorrent {
   /** Index of the playable file inside a multi-file torrent, when known. */
   fileIndex?: number;
   expectedFileName?: string;
+
+  /**
+   * A direct HTTP(S) stream, for adapters that return one instead of a torrent.
+   *
+   * The name of this type says torrent and for a long time that was the whole
+   * truth, which is how the gap got here: `StremioAddonIndexer` filtered its
+   * replies down to the ones carrying an `infoHash` because there was nowhere
+   * to put the others. A Stremio `stream` object carries **either** `infoHash`
+   * **or** `url`, and the `url` half is what every debrid-configured addon
+   * answers with — an already-cached link at line speed, which is the most
+   * reliable source shape in the ecosystem and the one this app discarded
+   * completely.
+   *
+   * `TorrentResult` has carried direct links since extension providers started
+   * returning them, so this is the adapter boundary catching up with the type it
+   * produces, not a new concept. An adapter setting this leaves `infoHash` and
+   * `magnet` unset; `finaliseResult` mints the identity.
+   */
+  directUrl?: string;
+  /** Headers the origin requires — typically a Referer it 403s without. */
+  directHeaders?: Record<string, string>;
+  /** True when `directUrl` is an HLS playlist rather than a progressive file. */
+  isM3u8?: boolean;
+  /** True when `directUrl` is an MPEG-DASH manifest. */
+  isDash?: boolean;
+  /** The MIME type the source declared, when it declared one. */
+  mimeType?: string;
 }
 
 export interface TorrentIndexer {
@@ -178,6 +212,24 @@ export function parseIntSafe(value: unknown, fallback = 0): number {
 }
 
 /**
+ * The dedupe identity for a source that has no infohash of its own.
+ *
+ * A direct link is content-addressed by the only stable thing it has: its URL.
+ * `ContentService.extensionSources` has minted ids this way since providers
+ * started returning HTTP links, and this is deliberately the *same* function
+ * under the same `ext-` prefix rather than a second scheme — an addon and an
+ * extension that resolve a title to the same file host produce the same id and
+ * collapse into one row, which is what `dedupeByInfoHash` is for. Two schemes
+ * would show the viewer the same stream twice and call it two sources.
+ *
+ * It is not a real infohash and must never be handed to the torrent engine;
+ * `directUrl` being set is what keeps it off that path.
+ */
+export function directSourceIdentity(address: string): string {
+  return `ext-${createHash('sha1').update(address).digest('hex').slice(0, 20)}`;
+}
+
+/**
  * Normalises a `RawTorrent` into a `TorrentResult`.
  * Returns null when no infohash can be established, since without one the
  * result can be neither deduped nor streamed.
@@ -186,6 +238,48 @@ export function finaliseResult(
   raw: RawTorrent,
   indexer: Pick<IndexerConfig, 'id' | 'name'>
 ): TorrentResult | null {
+  /**
+   * A direct link is finished here and goes no further into the torrent half.
+   *
+   * Everything below this point derives, validates or builds a magnet, and none
+   * of it applies: there is no swarm, no piece order and no infohash to check
+   * against. `seeders: 1` is the same concession `extensionSources` makes for a
+   * provider link — swarm health is meaningless for an HTTP stream, and the
+   * ranker's `minSeeders` floor (1 by default) would otherwise reject every one
+   * of them before the viewer saw it.
+   *
+   * It also means a debrid link ranks as though it had one seeder, which
+   * understates it: a cached HTTP source is more reliable than a 500-seeder
+   * torrent, not less. That is left alone deliberately — the provider path has
+   * ranked its links this way all along, and a special case here would make two
+   * identical sources sort differently depending on which lane found them.
+   */
+  if (raw.directUrl) {
+    return {
+      infoHash: directSourceIdentity(raw.directUrl),
+      title: raw.title,
+      magnet: '',
+      directUrl: raw.directUrl,
+      directHeaders: raw.directHeaders,
+      isM3u8: raw.isM3u8,
+      isDash: raw.isDash,
+      mimeType: raw.mimeType,
+      sizeBytes: raw.sizeBytes ?? 0,
+      seeders: raw.seeders ?? 1,
+      leechers: 0,
+      indexerId: indexer.id,
+      indexerName: indexer.name,
+      publishedAt: raw.publishedAt,
+      category: raw.category,
+      // Never `fileIndex`: it names a file *inside* a torrent, and a direct
+      // link has no archive to index into.
+      expectedFileName: raw.expectedFileName,
+      parsed: parseReleaseName(raw.expectedFileName || raw.title),
+      score: 0,
+      scoreReasons: [],
+    };
+  }
+
   let infoHash = raw.infoHash?.toLowerCase();
   let magnet = raw.magnet;
 

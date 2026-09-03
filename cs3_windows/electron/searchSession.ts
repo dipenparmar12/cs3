@@ -3,6 +3,7 @@ import type { CinemetaProvider } from './cinemeta';
 import type { MetadataProvider } from './metadataProvider';
 import type { PluginManager } from './pluginManager';
 import type { IndexerRegistry } from './torrent/indexerRegistry';
+import { looksLikeWebPage } from './ytdlpSources.ts';
 import { mergeSearchResults, restrictToExact } from './searchMerge';
 import {
   GLOBAL_SCOPE_REPORT,
@@ -152,6 +153,25 @@ export class SearchSession {
       // rather than sending it to a catalogue search that cannot understand it.
       if (this.query.startsWith('magnet:')) {
         this.record('magnet', 'Magnet link', 'indexer', magnetRow(this.query));
+        return;
+      }
+
+      /**
+       * A pasted page URL is the same case, one lane along.
+       *
+       * Providers are asked about *titles*; handed a URL they either search for
+       * it as free text and return nothing, or match something unrelated. So the
+       * address becomes its own row, and opening it resolves through yt-dlp in
+       * `ContentService.discover` — which is the entry point that lane has
+       * lacked since it was written.
+       *
+       * The page is deliberately **not** resolved here. Typing in the search box
+       * is not consent to fetch a page, and a search that spawns a process per
+       * keystroke would be its own bug; the row is free, and pressing it is the
+       * decision.
+       */
+      if (looksLikeWebPage(this.query)) {
+        this.record('web-page', 'Web page', 'indexer', webPageRow(this.query));
         return;
       }
 
@@ -441,6 +461,24 @@ function pending(id: string, name: string, kind: SearchSourceKind): SearchSource
 function magnetRow(magnet: string): SearchResponse[] {
   const name = decodeURIComponent(magnet.match(/dn=([^&]+)/)?.[1] ?? 'Magnet link');
   return [{ name, url: magnet, apiName: 'Magnet', type: TvType.Torrent }];
+}
+
+/**
+ * One row for a pasted page address.
+ *
+ * The host is the name, because it is the only thing known before the page is
+ * fetched and it is what a viewer recognises. Inventing a friendlier title from
+ * the path would be a guess presented as a fact, and the real title arrives the
+ * moment the row is opened.
+ */
+function webPageRow(pageUrl: string): SearchResponse[] {
+  let host = pageUrl;
+  try {
+    host = new URL(pageUrl).hostname.replace(/^www\./, '');
+  } catch {
+    // `looksLikeWebPage` already parsed it; this is belt and braces.
+  }
+  return [{ name: `Open link from ${host}`, url: pageUrl, apiName: 'Web link', type: TvType.Movie }];
 }
 
 /**

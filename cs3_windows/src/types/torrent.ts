@@ -88,9 +88,9 @@ export interface ParsedRelease {
  * A playable candidate.
  *
  * Two kinds share this shape. Most are torrents, identified by `infoHash` and
- * fetched through the swarm. Some come from an extension provider and are
- * ordinary HTTP streams — those carry `directUrl` and no magnet, and skip the
- * torrent engine entirely. Keeping one type means the ranker, the source
+ * fetched through the swarm. The rest are ordinary HTTP streams — from an
+ * extension provider, or from a Stremio addon answering with `url` — and those
+ * carry `directUrl` and no magnet, and skip the torrent engine entirely. Keeping one type means the ranker, the source
  * picker, the in-player switcher and the download queue treat both alike, which
  * is what lets a provider stream and a torrent sit in the same list.
  */
@@ -99,8 +99,12 @@ export interface TorrentResult {
    *  For a provider-supplied direct stream this is a synthetic stable id. */
   infoHash: string;
   /**
-   * Direct HTTP(S) media URL from an extension provider. When set, this source
-   * plays straight from the URL and `magnet`/`torrentUrl` are empty.
+   * Direct HTTP(S) media URL. When set, this source plays straight from the URL
+   * and `magnet`/`torrentUrl` are empty.
+   *
+   * Written by extension providers and, since the Stremio adapter stopped
+   * filtering them away, by any addon that answers with `url` rather than
+   * `infoHash` — which is every debrid-fronted one.
    */
   directUrl?: string;
   /** Headers the origin requires — typically a Referer that it 403s without. */
