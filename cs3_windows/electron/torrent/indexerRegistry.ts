@@ -162,6 +162,15 @@ export interface SearchProgress {
   /** Name of the indexer that just settled, for a "searched X" readout. */
   lastIndexerName: string;
   done: boolean;
+  /**
+   * True once an empty scoped answer escalated itself to every provider.
+   *
+   * Carried on progress rather than only on the result because the whole point
+   * is to explain a wait that is *still happening* — by the time the response
+   * lands there is nothing left to explain. See
+   * `ContentService.escalateToAllSources`.
+   */
+  widened?: boolean;
 }
 
 export class IndexerRegistry {

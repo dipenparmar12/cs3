@@ -66,6 +66,15 @@ export interface PlaybackSnapshot {
    * everywhere is a button that cannot do anything.
    */
   canWiden: boolean;
+  /**
+   * True when the providers this title came from had nothing and the app went
+   * and asked everything else on its own.
+   *
+   * Reported so the wait can be explained while it is happening. A search that
+   * silently takes three times as long is indistinguishable from one that is
+   * stuck, and this is exactly the moment it does.
+   */
+  widened: boolean;
   title: string;
   episodeTitle?: string;
 }
@@ -106,6 +115,7 @@ interface Session {
   diagnosis?: SourceDiagnosis;
   bufferHealth?: BufferHealthMetrics;
   canWiden: boolean;
+  widened: boolean;
   /**
    * Bumped on every start attempt. A start that loses the race — because the
    * viewer picked a different source while the previous one was still
@@ -150,6 +160,7 @@ export class PlaybackSessionManager {
       diagnosis: session.diagnosis,
       bufferHealth: session.bufferHealth,
       canWiden: session.canWiden,
+      widened: session.widened,
       title: session.title,
       episodeTitle: session.episodeTitle,
     };
@@ -186,6 +197,7 @@ export class PlaybackSessionManager {
       // it is still searching — the offer only means something once a scoped
       // search has finished and come up short.
       canWiden: false,
+      widened: false,
       unplayable: new Set<string>(),
       generation: 0,
       started: false,
@@ -233,6 +245,7 @@ export class PlaybackSessionManager {
       // it is still searching — the offer only means something once a scoped
       // search has finished and come up short.
       canWiden: false,
+      widened: false,
       unplayable: new Set<string>(),
       generation: 0,
       // Nothing will auto-start, and nothing should: the viewer opened this to
@@ -269,6 +282,7 @@ export class PlaybackSessionManager {
     session.searchDone = false;
     session.searchCancelled = false;
     session.searched = 0;
+    session.widened = false;
     session.emptyReason = undefined;
     session.diagnosis = undefined;
     this.emit(session);
@@ -288,6 +302,10 @@ export class PlaybackSessionManager {
           session.searched = progress.settled;
           session.totalIndexers = progress.totalRelevant;
           session.lastIndexerName = progress.lastIndexerName || session.lastIndexerName;
+          // Latching, never clearing: the escalation is a fact about this run,
+          // and the fan-out behind it emits plain progress the moment it starts
+          // reporting indexers of its own.
+          if (progress.widened) session.widened = true;
           this.emit(session);
         },
         { bypassCache: options.bypassCache, signal: controller.signal }
@@ -308,6 +326,7 @@ export class PlaybackSessionManager {
       session.emptyReason = response.emptyReason;
       session.diagnosis = response.diagnosis;
       session.canWiden = response.canWiden;
+      if (response.widenedAutomatically) session.widened = true;
     } catch (error) {
       if (session.disposed || controller.signal.aborted) return;
       session.emptyReason = error instanceof Error ? error.message : String(error);

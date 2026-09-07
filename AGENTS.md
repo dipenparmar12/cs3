@@ -2308,6 +2308,81 @@ The offer appears in two places and only when `canWiden` is true: the source
 panel, and the failure overlay — which is where it matters, because the sentence
 above it has just said the providers this title came from had nothing.
 
+### …and widens itself when that provider has nothing (2026-09-02)
+
+The section above got the scope right and left one case reading as a dead end.
+Reported verbatim from a user's screen:
+
+```
+No playable sources found
+HDO has no sources for this item.
+Try "Find more sources" to ask the other enabled providers.
+provider  HDO
+address   cs3ext://HDO/{"imdbID":"tt1754656",…,"movieName":"The Little Prince"}
+took      1398 ms
+```
+
+**Pressing that button found 137 sources** — five extensions (CineStream,
+Moviesmod, MovieBoxProviderIN, MovieLinkBDProvider) plus The Pirate Bay and
+Torrents-CSV — of which **81 of the 98 distinct HTTP links were still live when
+probed** (206 or 200, mostly `video/x-matroska`). So the screen was a dead end
+whose only useful action was a step the app was perfectly able to take itself.
+
+`shouldEscalateScope` in `cs3/sourceScope.ts` is that step, and the argument for
+it is narrow: `origin` scope is right *while it is paying for itself*. Its whole
+value — fewer third-party sites contacted, a faster answer, no dead links from
+providers that never carried the title — is a **saving on an answer nobody can
+play** the moment it returns zero. So it stays narrow when it finds something and
+widens when it does not.
+
+`ContentService.escalateToAllSources` runs it, and five things about it are
+load-bearing:
+
+- **It goes through `getSources`, not `discover`.** The widened run then lands in
+  the shared in-flight map under its own key, so a viewer pressing "Find more
+  sources" while it runs *joins* it rather than starting a second fan-out across
+  two hundred sites, and its answer lands in the `#all` cache entry so reopening
+  the title is instant.
+- **Two guards against recursion**, not one: `canWiden` is already false at `all`
+  scope, and the nested call passes `autoWiden: false` anyway. A missing guard
+  here does not produce one extra request, it produces unbounded fan-out across
+  the whole provider corpus. `sourceScope.test.mts` pins each guard *in
+  isolation* — the first draft asserted the scope guard only alongside
+  `canWiden: false`, so removing it failed nothing.
+- **A failed escalation leaves the narrow answer standing.** `fallback` is a
+  thunk producing exactly what the scoped pass would have returned. Letting the
+  widened run throw would replace "HDO has no sources for this item" with
+  whatever the fan-out hit — and for a **links-handle** address that is
+  `loadMedia`'s refusal, a sentence about a call the viewer never made. Same
+  rule as the `dataUrl` retry in `extensionSources`: a rescue that makes the
+  original failure worse is not one worth having.
+- **The fan-out's `load(base)` is now allowed to fail when a title is already
+  known.** Escalation is addressed by whatever the viewer was on, which is
+  routinely a provider's links blob, and `loadMedia` refuses those by design.
+  The detail is enrichment at that point; only the title is required. It still
+  throws when there is no `titleOverride`, because then it is not enrichment.
+  The `cs3ext://` path also refuses to escalate a links handle with no title —
+  the fan-out would have nothing to search for.
+- **The prefetcher passes `autoWiden: false`, and it is the only caller that
+  does.** Opening a detail page is not a commitment to watch — the same reason
+  that module waits `SETTLE_MS`, declines on a cache hit and runs one at a time.
+  The flag defaults **on** rather than off so the six real call sites do not each
+  have to opt in; the one that got forgotten would be a dead end nobody could
+  see. It is part of `sourceKey`, or a prefetch that settled for the narrow empty
+  answer would be joined by the play that wanted the wide one.
+
+**The wait is explained while it happens.** `SearchProgress.widened` is stamped
+on *every* event the widened run emits, not just the handover — the fan-out
+builds its own progress objects, so a one-shot flag appears for a frame and is
+overwritten by the next indexer answering. `PlaybackSnapshot.widened` latches it,
+and the overlay, the player's source panel and the detail picker each say "no
+sources where this title was found — asking every provider and indexer". Without
+it the wait silently triples, which is the shape of a hang.
+
+Afterwards `canWiden` is false, so nothing offers a button that would do nothing,
+and `explainEmptyResult` takes an `escalated` flag whose only effect is to stop
+the generic tail advising a step that has already been taken.
+
 ### Search scope: selecting a source is a filter, not a preference
 
 `searchScope.ts` used to widen back to *every* source whenever the stored selection matched

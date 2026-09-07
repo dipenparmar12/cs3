@@ -56,6 +56,12 @@ interface SourcePanelProps {
   onWiden?: () => void;
   /** True when widening would reach providers and indexers not yet asked. */
   canWiden?: boolean;
+  /**
+   * The app widened on its own, because the providers this title came from had
+   * nothing. Stated on the list too, not only while searching: it is why these
+   * rows are from extensions the viewer never saw in the search result.
+   */
+  widened?: boolean;
   /** Stops waiting for the rest; the sources already found stay on the list. */
   onCancelSearch?: () => void;
   /** Offered per source, so a viewer can grab the release they are watching. */
@@ -93,6 +99,7 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
   onRefresh,
   onWiden,
   canWiden,
+  widened,
   onCancelSearch,
   onDownload,
 }) => {
@@ -198,6 +205,13 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
                 {sources.length} found
               </strong>
             </div>
+            {widened && (
+              <div className="player-panel__search-note">
+                <Globe size={12} />
+                No sources where this title was found — asking every provider and
+                indexer.
+              </div>
+            )}
             {totalIndexers > 0 && (
               <div
                 className="player-panel__search-track"
@@ -238,6 +252,13 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
               indexers — and it is a separate button because it is a different
               question, not a harder version of the same one.
             */}
+            {widened && (
+              <div className="player-panel__search-note">
+                <Globe size={12} />
+                Widened automatically: the providers this title came from had no
+                links for it.
+              </div>
+            )}
             {onWiden && canWiden && (
               <button className="player-panel__search-action" onClick={onWiden}>
                 <Globe size={13} />

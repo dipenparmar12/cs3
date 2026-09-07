@@ -267,6 +267,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
     cancelled: boolean;
     /** Whether asking every provider and indexer would reach anything new. */
     canWiden: boolean;
+    /** The app asked everything else on its own; the picker says so. */
+    widened: boolean;
   } | null>(null);
   const discoveryRef = useRef<string | null>(null);
   const [pendingEpisode, setPendingEpisode] = useState<Episode | null>(null);
@@ -520,6 +522,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
             // short; offering it mid-search invites widening a run that was
             // about to answer.
             canWiden: snapshot.canWiden,
+            widened: snapshot.widened,
           }
         : current
     );
@@ -597,6 +600,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         done: response.snapshot.searchDone,
         cancelled: response.snapshot.searchCancelled,
         canWiden: response.snapshot.canWiden,
+        widened: response.snapshot.widened,
       });
 
       // Anything this session emitted while the invoke was in flight. For a
@@ -1328,6 +1332,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         onRetry={() => openSources(pendingEpisode, { refresh: true })}
         onWiden={widenSources}
         canWiden={discovery?.canWiden ?? false}
+        widened={discovery?.widened ?? false}
         onCancelSearch={() => {
           if (discoveryRef.current) {
             void window.cloudstream?.playbackCancelSourceSearch(discoveryRef.current);

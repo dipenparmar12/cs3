@@ -165,6 +165,12 @@ interface VideoPlayerProps {
     onWiden?: () => void;
     /** True while that would ask something the scoped search did not. */
     canWiden?: boolean;
+    /**
+     * True when the app widened by itself, because the providers this title
+     * came from had nothing. Shown, not hidden: it is the reason the search is
+     * taking three times as long, and an unexplained long wait reads as a hang.
+     */
+    widened?: boolean;
     /** Stops waiting for the remaining providers, keeping what has arrived. */
     onCancelSearch?: () => void;
     onDownloadSource?: (source: TorrentResult) => void;
@@ -2962,6 +2968,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onRetry={sourceSession.onRefresh}
           onWiden={sourceSession.onWiden}
           canWiden={sourceSession.canWiden}
+          widened={sourceSession.widened}
           onBack={onBack}
         />
       )}
@@ -3367,6 +3374,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onRefresh={sourceSession.onRefresh}
           onWiden={sourceSession.onWiden}
           canWiden={sourceSession.canWiden}
+          widened={sourceSession.widened}
           onCancelSearch={sourceSession.onCancelSearch}
           onDownload={sourceSession.onDownloadSource}
         />

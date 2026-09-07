@@ -10,7 +10,7 @@
  * slow again", with nothing pointing here.
  */
 import assert from 'node:assert/strict';
-import { planSourceScope } from './sourceScope.ts';
+import { planSourceScope, shouldEscalateScope } from './sourceScope.ts';
 
 const tests: Array<[string, () => void]> = [];
 const test = (name: string, fn: () => void) => tests.push([name, fn]);
@@ -100,6 +100,78 @@ test('a user narrowing to nothing is honoured rather than widened around', () =>
   // the user just excluded.
   const plan = planSourceScope({ requested: 'all', routes: [], hasTitle: true, providersNarrowedToNothing: true });
   assert.equal(plan.searchAllProviders, false);
+});
+
+// --- escalating an empty scoped answer -------------------------------------
+
+const ESCALATE = {
+  scopeUsed: 'origin' as const,
+  sourceCount: 0,
+  canWiden: true,
+  allowed: true,
+  hasTitle: true,
+};
+
+test('a provider with nothing widens itself rather than reporting a dead end', () => {
+  // The reported case: HDO had no links for The Little Prince, and pressing the
+  // button under that message found 137 sources across five other extensions.
+  assert.equal(shouldEscalateScope(ESCALATE), true);
+});
+
+test('a scoped answer that found something is left alone', () => {
+  // The narrow scope is paying for itself here: fewer sites contacted, faster,
+  // and no dead links from providers that never carried the title.
+  assert.equal(shouldEscalateScope({ ...ESCALATE, sourceCount: 1 }), false);
+});
+
+test('a widened answer never widens again', () => {
+  assert.equal(
+    shouldEscalateScope({ ...ESCALATE, scopeUsed: 'all', canWiden: false }),
+    false
+  );
+});
+
+test('and the scope guard holds on its own, with canWiden lying', () => {
+  /*
+   * Deliberately a state that cannot occur: `planSourceScope` never reports
+   * `canWiden` at `all` scope. It is asserted anyway because this is the guard
+   * standing between a bug in that pairing and unbounded recursion across the
+   * whole provider corpus — and a test that only ever exercises it alongside
+   * `canWiden: false` pins nothing. Verified by mutation: removing the
+   * `scopeUsed` clause fails this row and nothing else.
+   */
+  assert.equal(shouldEscalateScope({ ...ESCALATE, scopeUsed: 'all' }), false);
+});
+
+test('a home-screen title that already looked everywhere does not widen', () => {
+  // `planSourceScope` widened it on its own; there is nothing left to ask.
+  assert.equal(shouldEscalateScope({ ...ESCALATE, canWiden: false }), false);
+});
+
+test('speculative callers do not widen', () => {
+  // The prefetcher runs on a page that has merely been opened. A fan-out there
+  // is the fastest way to get an IP blocked by a scraper target.
+  assert.equal(shouldEscalateScope({ ...ESCALATE, allowed: false }), false);
+});
+
+test('a title that could not be determined does not widen', () => {
+  // Same rule the fan-out enforces: there is nothing to search for.
+  assert.equal(shouldEscalateScope({ ...ESCALATE, hasTitle: false }), false);
+});
+
+test('the escalation target is a plan that asks everything', () => {
+  // The pair, checked together: escalation says "widen", and the plan it
+  // produces is the one that actually reaches the providers with no route.
+  assert.equal(shouldEscalateScope(ESCALATE), true);
+  const widened = planSourceScope({
+    requested: 'all',
+    routes: ROUTES,
+    hasTitle: true,
+    providersNarrowedToNothing: false,
+  });
+  assert.equal(widened.searchAllProviders, true);
+  assert.equal(widened.askIndexers, true);
+  assert.equal(widened.canWiden, false);
 });
 
 // --- runner ----------------------------------------------------------------

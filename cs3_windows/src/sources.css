@@ -141,6 +141,18 @@
   cursor: pointer;
 }
 .source-picker__progress-stop:hover { color: #fff; background: rgba(255, 255, 255, 0.13); }
+/* See `.player-panel__search-note` — same explanation, the detail page's copy. */
+.source-picker__progress-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+.source-picker__progress-note svg { flex: none; margin-top: 0.15rem; }
+
 .source-picker__progress-track {
   height: 3px;
   border-radius: 2px;
@@ -1664,6 +1676,24 @@
   font-size: 0.7rem;
   color: var(--text-muted);
 }
+
+/*
+ * Why the list is showing providers the viewer never searched.
+ *
+ * Sits between the progress line and the actions, and is deliberately quiet:
+ * it explains, it does not warn. Nothing has gone wrong — the app took the
+ * step the viewer would otherwise have had to take themselves.
+ */
+.player-panel__search-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.35rem 0.1rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+.player-panel__search-note svg { flex: none; margin-top: 0.15rem; }
 
 .player-panel__tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
 .player-panel__tags span {

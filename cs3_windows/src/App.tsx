@@ -1382,6 +1382,7 @@ export const App: React.FC = () => {
                 onRefresh: handleRefreshSources,
                 onWiden: handleWidenSources,
                 canWiden: session.snapshot.canWiden,
+                widened: session.snapshot.widened,
                 onCancelSearch: handleCancelSourceSearch,
                 onSourceUnplayable: handleSourceUnplayable,
                 onDownloadSource: session.context.onDownloadSource,
