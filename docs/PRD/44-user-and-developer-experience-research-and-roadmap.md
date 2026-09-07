@@ -1,4 +1,4 @@
-# 43 — User and developer experience: research, and the roadmap it implies
+# 44 — User and developer experience: research, and the roadmap it implies
 
 **Status: research + proposal. Most of §6–§8 is not built.**
 **Written 2026-09-01. Progress noted inline as items land.**
