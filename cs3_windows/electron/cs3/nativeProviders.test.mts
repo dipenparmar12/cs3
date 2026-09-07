@@ -51,6 +51,11 @@ import {
   qualityFromLabel,
   unpackHandle,
 } from './nativeProviders/stremioAddon.ts';
+import {
+  JellyfinProvider,
+  probeServer,
+  type JellyfinServerConfig,
+} from './nativeProviders/jellyfin.ts';
 import { NativeProviderRegistry, addonLocalId } from './nativeProviderRegistry.ts';
 
 const tests: Array<[string, () => void | Promise<void>]> = [];
@@ -650,6 +655,139 @@ test('a stored addon can never shadow a built-in provider', () => {
   });
   const registry = new NativeProviderRegistry(datastore as never);
   assert.equal(registry.byId('internet-archive')?.name, 'Internet Archive');
+});
+
+// --- Personal media servers --------------------------------------------------
+
+const SERVER: JellyfinServerConfig = {
+  localId: 'server:nas-local-8096',
+  name: 'Home NAS (nas.local:8096)',
+  url: 'http://nas.local:8096',
+  apiKey: 'SECRET-KEY-0123456789',
+  userId: 'user-1',
+};
+
+test('the API key travels in a header, never in a URL', async () => {
+  /**
+   * A URL is the one part of a request this codebase writes to disk —
+   * `MediaProxy` mints routes from it, `SourceCache` persists it,
+   * `DiagnosticsLog` records it, and the source export copies it to a
+   * clipboard. Jellyfin accepts `?api_key=` and its own docs use it; putting a
+   * long-lived credential there would leak it into all four.
+   */
+  const seen: Array<{ url: string; key?: string }> = [];
+  setHttpFetch(async (url, init) => {
+    const headers = new Headers((init?.headers ?? {}) as Record<string, string>);
+    seen.push({ url: String(url), key: headers.get('X-Emby-Token') ?? undefined });
+    return new Response(
+      JSON.stringify({
+        Id: 'item-1',
+        Name: 'A Film',
+        Type: 'Movie',
+        MediaSources: [{ Id: 'ms-1', Container: 'mkv', MediaStreams: [{ Type: 'Video', Height: 1080 }] }],
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  });
+
+  const provider = new JellyfinProvider(SERVER);
+  const links = await provider.loadLinks('item-1', AbortSignal.timeout(5000));
+
+  assert.ok(seen.length > 0, 'no request was made');
+  for (const request of seen) {
+    assert.ok(!request.url.includes(SERVER.apiKey), `key leaked into a URL: ${request.url}`);
+    assert.equal(request.key, SERVER.apiKey, 'the key must travel as X-Emby-Token');
+  }
+  assert.equal(links.length, 1);
+  assert.ok(!links[0]!.url.includes(SERVER.apiKey), 'key leaked into the playable URL');
+  assert.equal(links[0]!.headers?.['X-Emby-Token'], SERVER.apiKey);
+  assert.equal(links[0]!.quality, 1080);
+});
+
+test('the original file is requested, not a server-side transcode', () => {
+  // This app has its own compatibility engine, ffmpeg and mpv. A transcode on
+  // the user's NAS would be a second one, producing a worse picture than the
+  // file it started from.
+  setHttpFetch(async () =>
+    new Response(
+      JSON.stringify({ Id: 'i', Name: 'F', Type: 'Movie', MediaSources: [{ Id: 'm' }] }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  );
+  return new JellyfinProvider(SERVER)
+    .loadLinks('i', AbortSignal.timeout(5000))
+    .then((links) => {
+      assert.match(links[0]!.url, /[?&]static=true\b/);
+    });
+});
+
+test('a series says to pick an episode rather than failing obscurely', async () => {
+  setHttpFetch(async () =>
+    new Response(JSON.stringify({ Id: 's', Name: 'A Show', Type: 'Series' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  );
+  await assert.rejects(
+    () => new JellyfinProvider(SERVER).loadLinks('s', AbortSignal.timeout(5000)),
+    /Pick an episode/
+  );
+});
+
+test('an item the server lists but has no file for is a reason, not silence', async () => {
+  setHttpFetch(async () =>
+    new Response(JSON.stringify({ Id: 'i', Name: 'Moved Film', Type: 'Movie', MediaSources: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  );
+  await assert.rejects(
+    () => new JellyfinProvider(SERVER).loadLinks('i', AbortSignal.timeout(5000)),
+    /reports no media file/
+  );
+});
+
+test('a key attached to no user account is named as the cause', async () => {
+  // The commonest real failure: the key authenticates, so there is no 401 —
+  // `/Users` just comes back empty, and "no results" would be the wrong message.
+  setHttpFetch(async (url) =>
+    String(url).includes('/Users')
+      ? new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
+      : new Response(JSON.stringify({ ServerName: 'NAS', Version: '10.9.0' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+  );
+  await assert.rejects(
+    () => probeServer('http://nas.local:8096', 'k'),
+    /no user account for that API key/
+  );
+});
+
+test('a server address must be a URL, checked before anything is stored', async () => {
+  await assert.rejects(() => probeServer('nas.local:8096', 'k'), /must start with http/);
+});
+
+test('a stored server never hands its key to the renderer', async () => {
+  const datastore = fakeDatastore({ cs3_media_servers: [SERVER] });
+  const registry = new NativeProviderRegistry(datastore as never);
+
+  assert.ok(registry.enabledProviderNames().includes(SERVER.name), 'server is not in the roster');
+
+  const listed = registry.listServers();
+  assert.equal(listed.length, 1);
+  assert.ok(!('apiKey' in listed[0]!), 'the API key crossed the boundary');
+  // …and nothing else the renderer receives carries it either.
+  const serialised = JSON.stringify({ listed, summaries: registry.summaries() });
+  assert.ok(!serialised.includes(SERVER.apiKey), 'the key appears in renderer-bound data');
+});
+
+test('a media server is gated by the same cascade as everything else', () => {
+  const datastore = fakeDatastore({ cs3_media_servers: [SERVER] });
+  const registry = new NativeProviderRegistry(datastore as never);
+  assert.ok(registry.enabledProviderNames().includes(SERVER.name));
+  registry.setEnabled(SERVER.localId, false);
+  assert.ok(!registry.enabledProviderNames().includes(SERVER.name));
 });
 
 // --- Runner ------------------------------------------------------------------

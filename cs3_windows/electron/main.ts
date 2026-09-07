@@ -3866,6 +3866,34 @@ ipcMain.handle('natives:removeAddon', async (_event, localId: string) => {
   }
 });
 
+/**
+ * Adds the user's own Jellyfin or Emby server.
+ *
+ * The key is accepted here, kept in the main process, and **never sent back**:
+ * `listServers` strips it. A long-lived credential for somebody's own server has
+ * no business crossing the context bridge, where one careless log or error
+ * report writes it down permanently.
+ */
+ipcMain.handle('natives:addServer', async (_event, url: string, apiKey: string) => {
+  try {
+    const registry = contentService.getNativeProviders();
+    const server = await registry.addServer(String(url ?? ''), String(apiKey ?? ''));
+    return { ok: true, server, providers: registry.summaries() };
+  } catch (error) {
+    return { ...fail(error), providers: contentService.getNativeProviders().summaries() };
+  }
+});
+
+ipcMain.handle('natives:removeServer', async (_event, localId: string) => {
+  try {
+    const registry = contentService.getNativeProviders();
+    registry.removeServer(String(localId ?? ''));
+    return { ok: true, providers: registry.summaries() };
+  } catch (error) {
+    return { ...fail(error), providers: [] };
+  }
+});
+
 ipcMain.handle('ott:listPlatforms', async () => {
   try {
     return { ok: true, platforms: await ottService.listPlatforms() };

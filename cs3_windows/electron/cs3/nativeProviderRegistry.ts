@@ -40,6 +40,12 @@ import {
   normaliseBase,
   type StremioManifest,
 } from './nativeProviders/stremioAddon.ts';
+import {
+  JellyfinProvider,
+  normaliseServerUrl,
+  probeServer,
+  type JellyfinServerConfig,
+} from './nativeProviders/jellyfin.ts';
 import type {
   NativeCatalogSection,
   NativeProvider,
@@ -51,6 +57,7 @@ const log = getLogger().child('provider', { component: 'native' });
 const DISABLED_KEY = 'cs3_disabled_native_providers';
 const ADULT_KEY = 'cs3_adult_content_enabled';
 const ADDONS_KEY = 'cs3_stremio_addons';
+const SERVERS_KEY = 'cs3_media_servers';
 
 /**
  * One Stremio addon the user has added, with the manifest as it read at the
@@ -121,6 +128,18 @@ export class NativeProviderRegistry {
       this.providers.set(provider.id, provider);
     }
 
+    for (const server of this.storedServers()) {
+      try {
+        const provider = new JellyfinProvider(server);
+        if (!this.providers.has(provider.id)) this.providers.set(provider.id, provider);
+      } catch (error) {
+        log.warn('stored_server_unusable', {
+          server: server.localId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     for (const addon of this.storedAddons()) {
       try {
         const provider = new StremioAddonProvider({
@@ -148,6 +167,75 @@ export class NativeProviderRegistry {
 
   public listAddons(): StoredAddon[] {
     return this.storedAddons();
+  }
+
+  private storedServers(): JellyfinServerConfig[] {
+    const raw = this.datastore.getObject<JellyfinServerConfig[]>(SERVERS_KEY, []) ?? [];
+    return Array.isArray(raw)
+      ? raw.filter((s) => s?.localId && s?.url && s?.apiKey && s?.userId)
+      : [];
+  }
+
+  /**
+   * The configured media servers, **without their API keys**.
+   *
+   * This is what the renderer is given, and the key is removed on the way out
+   * rather than being filtered by each caller. A long-lived credential for
+   * somebody's own server has no business crossing the context bridge: nothing
+   * in the UI needs it, and once it is in the renderer it is one careless log,
+   * error report or source export away from being written down.
+   */
+  public listServers(): Array<Omit<JellyfinServerConfig, 'apiKey'>> {
+    return this.storedServers().map(({ apiKey: _apiKey, ...rest }) => rest);
+  }
+
+  /**
+   * Validates a media server and stores it.
+   *
+   * Probed at add time — a wrong URL or a key not attached to a user account
+   * fails in front of the person who typed it, rather than becoming a provider
+   * that answers nothing on every search.
+   */
+  public async addServer(
+    url: string,
+    apiKey: string,
+    signal?: AbortSignal
+  ): Promise<Omit<JellyfinServerConfig, 'apiKey'>> {
+    const probe = await probeServer(url, apiKey, signal);
+    const base = normaliseServerUrl(url);
+    const localId = serverLocalId(base);
+
+    const existing = this.storedServers();
+    if (existing.some((s) => s.localId === localId)) {
+      throw new Error(`${probe.name} at ${base} has already been added.`);
+    }
+    if (this.providers.has(localId)) {
+      throw new Error('That server collides with a built-in provider\'s id.');
+    }
+
+    const record: JellyfinServerConfig = {
+      localId,
+      // Disambiguated by host, because "Jellyfin" is what almost every server
+      // is called and two identically named providers would collide on the
+      // scope key.
+      name: `${probe.name} (${hostOf(base)})`,
+      url: base,
+      apiKey,
+      userId: probe.userId,
+    };
+    this.datastore.setObject(SERVERS_KEY, [...existing, record]);
+    this.rebuild();
+    const { apiKey: _apiKey, ...safe } = record;
+    return safe;
+  }
+
+  public removeServer(localId: string): void {
+    this.datastore.setObject(
+      SERVERS_KEY,
+      this.storedServers().filter((s) => s.localId !== localId)
+    );
+    this.disabled.set([localId], true);
+    this.rebuild();
   }
 
   /**
@@ -381,4 +469,17 @@ export function addonLocalId(manifestId: string, baseUrl: string): string {
   }
   const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   return `addon:${slug(manifestId)}@${slug(host)}`;
+}
+
+/** A stable id for one media server. The host is the identity; the key is not. */
+export function serverLocalId(baseUrl: string): string {
+  return `server:${hostOf(baseUrl).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url.replace(/^https?:[/][/]/i, '').replace(/[/].*$/, '');
+  }
 }

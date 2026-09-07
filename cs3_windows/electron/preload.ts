@@ -1191,6 +1191,20 @@ export interface CloudStreamElectronAPI {
     localId: string
   ) => Promise<{ ok: boolean; error?: string; providers: NativeProviderSummary[] }>;
   /**
+   * Adds the user's own Jellyfin or Emby server.
+   *
+   * The key goes one way. It is stored in the main process and stripped from
+   * everything sent back, because a long-lived credential for somebody's own
+   * server has no business living in the renderer.
+   */
+  addMediaServer: (
+    url: string,
+    apiKey: string
+  ) => Promise<{ ok: boolean; error?: string; providers: NativeProviderSummary[] }>;
+  removeMediaServer: (
+    localId: string
+  ) => Promise<{ ok: boolean; error?: string; providers: NativeProviderSummary[] }>;
+  /**
    * Every OTT platform the app knows, with what is installed behind it.
    *
    * Always the full list, including platforms nothing can serve. A sidebar that
@@ -1950,6 +1964,9 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('natives:setEnabled', id, enabled),
   addStremioAddon: (url: string) => ipcRenderer.invoke('natives:addAddon', url),
   removeStremioAddon: (localId: string) => ipcRenderer.invoke('natives:removeAddon', localId),
+  addMediaServer: (url: string, apiKey: string) =>
+    ipcRenderer.invoke('natives:addServer', url, apiKey),
+  removeMediaServer: (localId: string) => ipcRenderer.invoke('natives:removeServer', localId),
   listOttPlatforms: () => ipcRenderer.invoke('ott:listPlatforms'),
   getOttCatalog: (platformId) => ipcRenderer.invoke('ott:getCatalog', platformId),
   getOttCatalogPage: (provider, section, page) =>

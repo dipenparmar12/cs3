@@ -33,6 +33,9 @@ export const BuiltInSources: React.FC = () => {
   const [addonUrl, setAddonUrl] = useState('');
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState<string | null>(null);
+  const [serverUrl, setServerUrl] = useState('');
+  const [serverKey, setServerKey] = useState('');
+  const [addingServer, setAddingServer] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -93,12 +96,44 @@ export const BuiltInSources: React.FC = () => {
     }
   }, [addonUrl]);
 
+  const addServer = useCallback(async () => {
+    const url = serverUrl.trim();
+    const key = serverKey.trim();
+    if (!url || !key) return;
+    setAddingServer(true);
+    setError(null);
+    setAdded(null);
+    try {
+      const response = await window.cloudstream!.addMediaServer(url, key);
+      setProviders(response.providers);
+      if (response.ok) {
+        setServerUrl('');
+        // Cleared on success *and* on failure below: a key left in an input is
+        // one screenshot away from being shared.
+        setServerKey('');
+        setAdded('Your server is connected and will be searched with everything else.');
+      } else {
+        setError(response.error ?? 'That server could not be reached.');
+        setServerKey('');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setServerKey('');
+    } finally {
+      setAddingServer(false);
+    }
+  }, [serverUrl, serverKey]);
+
   const removeAddon = useCallback(async (id: string) => {
     setBusy(id);
     try {
-      const response = await window.cloudstream!.removeStremioAddon(id);
+      // One button, two lanes: an addon and a server are removed by different
+      // channels, and the id prefix is the only thing that distinguishes them.
+      const response = id.startsWith('server:')
+        ? await window.cloudstream!.removeMediaServer(id)
+        : await window.cloudstream!.removeStremioAddon(id);
       if (response.ok) setProviders(response.providers);
-      else setError(response.error ?? 'That addon could not be removed.');
+      else setError(response.error ?? 'That source could not be removed.');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -155,7 +190,7 @@ export const BuiltInSources: React.FC = () => {
               />
               {/* Only an addon can be removed. A built-in has nowhere to go —
                   offering Remove on one would be a button that cannot work. */}
-              {provider.id.startsWith('addon:') ? (
+              {provider.id.startsWith('addon:') || provider.id.startsWith('server:') ? (
                 <button
                   type="button"
                   className="ext-builtin__remove"
@@ -202,6 +237,49 @@ export const BuiltInSources: React.FC = () => {
           subtitle addons all work.
         </p>
         {added ? <p className="ext-builtin__ok">{added}</p> : null}
+      </div>
+
+      {/*
+        Your own server. This is the one source in the app that cannot rot —
+        the files are yours, the server is yours, and there is no third party to
+        403 you or expire a link.
+      */}
+      <div className="ext-builtin__add">
+        <label htmlFor="media-server-url">Add your media server (Jellyfin or Emby)</label>
+        <div className="ext-builtin__addrow">
+          <input
+            id="media-server-url"
+            type="url"
+            placeholder="http://192.168.1.10:8096"
+            value={serverUrl}
+            spellCheck={false}
+            onChange={(event) => setServerUrl(event.target.value)}
+          />
+          <input
+            id="media-server-key"
+            type="password"
+            placeholder="API key"
+            value={serverKey}
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(event) => setServerKey(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void addServer();
+            }}
+          />
+          <button
+            type="button"
+            disabled={addingServer || !serverUrl.trim() || !serverKey.trim()}
+            onClick={() => void addServer()}
+          >
+            {addingServer ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
+            {addingServer ? 'Checking…' : 'Add'}
+          </button>
+        </div>
+        <p className="ext-builtin__hint">
+          Create a key in your server&apos;s Dashboard → API Keys. It is stored on this machine
+          and never leaves it except to reach the server you named.
+        </p>
       </div>
     </section>
   );

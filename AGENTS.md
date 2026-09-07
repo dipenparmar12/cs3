@@ -86,7 +86,7 @@ cs3/
 | Torrent metadata + DHT cache only | `cs3_windows/` | `bun run test:torrent-metadata` (28 cases, temp dirs) |
 | Source scope only | `cs3_windows/` | `bun run test:source-scope` (17 cases) |
 | OTT platform matching only | `cs3_windows/` | `bun run test:ott` (19 cases, pure) |
-| Built-in provider lane only | `cs3_windows/` | `bun run test:native-providers` (42 cases, pure — stubs `setHttpFetch`) |
+| Built-in provider lane only | `cs3_windows/` | `bun run test:native-providers` (50 cases, pure — stubs `setHttpFetch`) |
 | Download resume decision only | `cs3_windows/` | `bun run test:resume` (17 cases, pure) |
 | Download resume probe only | `cs3_windows/` | `bun run test:resume-window` (10 cases, real sockets) |
 | Component reachability only | `cs3_windows/` | `bun run test:reachability` (2 cases, lexical) |
@@ -361,7 +361,10 @@ so the reply landed at the speed of the slowest provider no matter how fast the 
 were. It is now one RPC per provider (`searchEach`), capped at 8 in flight because the
 sidecar dispatches each onto a bounded pool sized to the core count.
 
-`natives:*` is the built-in provider roster — `natives:list`, `natives:setEnabled`.
+`natives:*` is the built-in provider roster — `natives:list`, `natives:setEnabled`,
+`natives:addAddon` / `natives:removeAddon` (Stremio addons by manifest URL) and
+`natives:addServer` / `natives:removeServer` (the user's own Jellyfin or Emby).
+`addServer` takes a key and nothing ever sends one back.
 Separate from `extension:*` because it answers a different question: `extension:*` is an
 inventory of things that were **downloaded** — repositories, archives, hashes, updates,
 compatibility tiers — and none of those words means anything about a provider compiled into
@@ -481,6 +484,8 @@ not a layering mistake.
 | `cs3/nativeProviders/internetArchive.ts` | ~52,000 public-domain films, documentaries and classic TV. The query form is measured, not designed — see below. |
 | `cs3/nativeProviders/peerTube.ts` | Federated video via SepiaSearch. A video's files live on its **own** instance, not the search host. |
 | `cs3/nativeProviders/iptvOrg.ts` | 17,230 free-to-air live streams from the open iptv-org dataset; ~70% answer. |
+| `cs3/nativeProviders/stremioAddon.ts` | Any Stremio addon, by manifest URL. `idPrefixes` is a hard constraint — an addon 500s on an id it does not speak. |
+| `cs3/nativeProviders/jellyfin.ts` | The user's own Jellyfin/Emby server. The key travels as a header, never in a URL, and never reaches the renderer. |
 | `cs3/ottService.ts` | The same table against what is installed: availability, the search scope for a platform page, and the repositories to offer when nothing serves it. |
 | `download/resumePlan.ts` | Whether a partial download survives its link being replaced. Pure; both failure modes are silent and opposite. |
 | `download/resumeWindow.ts` | The 64 KB boundary probe that proves it — range support, real file length and a byte comparison in one request. |
@@ -3190,7 +3195,7 @@ Two things measured while building Internet Archive that would each have shipped
   Ungated, the top documentary by downloads is a 3 MB test clip titled *Sample 1* with 1.25M
   downloads.
 
-`bun run test:native-providers` (42 cases) pins all of it, and is verified by mutation:
+`bun run test:native-providers` (50 cases) pins all of it, and is verified by mutation:
 bypassing the enable cascade fails three. One of those three was rewritten after the
 mutation check — asserting "the result was empty" passed with the cascade removed, because a
 *failing* provider also returns empty, so it asserts the socket was never touched instead.
@@ -3224,6 +3229,32 @@ a web page, and a row that looks playable and is not is worse than no row.
 Internet Archive search → load → `loadLinks` → **HTTP 206, `video/mp4`, `ftypmp42`**; PeerTube
 4 links at 1080p from the origin instance; iptv-org catalogue, search and resolve; Cinemeta
 search and meta.
+
+**The user's own Jellyfin or Emby server is a provider**, and it is the clearest
+desktop-exclusive case there is. It *cannot* exist as a `.cs3`: an Android extension scrapes
+public websites and has no route to a server on your LAN, no way to hold your credentials and
+no reason to. It is also the only source in this app that cannot rot — every other one can
+403, expire or be taken down; a NAS in the next room does not. And it clears the keyless bar
+from the other side: the key is the user's own, for their own server, and there is no
+third-party service to revoke it.
+
+Three rules there are load-bearing:
+
+- **The API key travels as `X-Emby-Token`, never in the URL.** Jellyfin accepts `?api_key=`
+  and its own docs use it — but a URL is the one part of a request this codebase writes to
+  disk: `MediaProxy` mints routes from it, `SourceCache` persists it, `DiagnosticsLog` records
+  it and the source export copies it to a clipboard. The one exception is the poster `src`,
+  which cannot carry a header, so the key is simply omitted there.
+- **The key never crosses the context bridge.** `listServers()` strips it on the way out
+  rather than leaving each caller to remember; a test asserts it appears nowhere in
+  renderer-bound data.
+- **`static=true`.** The original file, not a server-side transcode — this app has its own
+  compatibility engine, and a second one running on the user's NAS would produce a worse
+  picture than the file it started from.
+
+Worth knowing: an API key that authenticates but is attached to no user account does **not**
+401. `/Users` comes back empty, and the honest message names that rather than reporting no
+results.
 
 **Four catalogue rows had rotted** and are now marked with the measurement:
 `pitipitii` is gone permanently (GitHub answers **451, unavailable for legal reasons**),
