@@ -74,35 +74,36 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (42 tests) |
-| Main-process tests | `cs3_windows/` | `bun run test:electron` (~560 cases across 40 suites, Node type-stripping — no framework) |
-| Extension issues only | `cs3_windows/` | `bun run test:issues` (21 cases, pure) |
-| Provider registry only | `cs3_windows/` | `bun run test:registry` (9 cases, temp dirs) |
-| Provider recovery only | `cs3_windows/` | `bun run test:recovery` (12 cases, pure) |
-| Torrent contents only | `cs3_windows/` | `bun run test:torrent-contents` (24 cases, pure) |
-| Sidecar log only | `cs3_windows/` | `bun run test:sidecar-log` (20 cases, pure) |
-| Source cache only | `cs3_windows/` | `bun run test:cache` (10 cases, no ffmpeg needed) |
-| Provider links only | `cs3_windows/` | `bun run test:links` (15 cases, no ffmpeg needed) |
-| WebView matching only | `cs3_windows/` | `bun run test:webview` (21 cases, pure) |
-| Torrent metadata + DHT cache only | `cs3_windows/` | `bun run test:torrent-metadata` (28 cases, temp dirs) |
-| Source scope only | `cs3_windows/` | `bun run test:source-scope` (17 cases) |
-| OTT platform matching only | `cs3_windows/` | `bun run test:ott` (19 cases, pure) |
-| Built-in provider lane only | `cs3_windows/` | `bun run test:native-providers` (50 cases, pure — stubs `setHttpFetch`) |
-| Download resume decision only | `cs3_windows/` | `bun run test:resume` (17 cases, pure) |
-| Download resume probe only | `cs3_windows/` | `bun run test:resume-window` (10 cases, real sockets) |
-| Component reachability only | `cs3_windows/` | `bun run test:reachability` (2 cases, lexical) |
-| Settings level only | `cs3_windows/` | `bun run test:settings-level` (6 cases, pure + lexical) |
-| Dead result rows only | `cs3_windows/` | `bun run test:dead-rows` (8 cases, pure) |
-| Media proxy only | `cs3_windows/` | `bun run test:proxy` (11 cases, stubbed origin) |
-| Subtitles only | `cs3_windows/` | `bun run test:subtitles` (16 cases) |
-| Media decisions only | `cs3_windows/` | `bun run test:media` (71 cases, no ffmpeg needed) |
-| Media pipeline only | `cs3_windows/` | `bun run test:pipeline` (17 cases, real ffmpeg; skips itself without it) |
-| Source export only | `cs3_windows/` | `bun run test:export` (13 cases, pure) |
-| Direct (non-torrent) indexer sources only | `cs3_windows/` | `bun run test:direct-sources` (13 cases, pure) |
-| yt-dlp source mapping only | `cs3_windows/` | `bun run test:ytdlp` (16 cases, pure) |
-| Repository catalogue only | `cs3_windows/` | `bun run test:repositories` (9 cases, pure — fetches nothing) |
+| Main-process tests (all) | `cs3_windows/` | `bun run test` (~580 cases across 42 suites, Node type-stripping; or `bun run test:electron`) |
+| Fast unit tests (skips slow) | `cs3_windows/` | `bun run test --fast` (40 unit suites in ~5s) |
+| Extension issues only | `cs3_windows/` | `bun run test issues` (21 cases, pure) |
+| Provider registry only | `cs3_windows/` | `bun run test registry` (9 cases, temp dirs) |
+| Provider recovery only | `cs3_windows/` | `bun run test recovery` (12 cases, pure) |
+| Torrent contents only | `cs3_windows/` | `bun run test torrent-contents` (24 cases, pure) |
+| Sidecar log only | `cs3_windows/` | `bun run test sidecar-log` (20 cases, pure) |
+| Source cache only | `cs3_windows/` | `bun run test cache` (10 cases, no ffmpeg needed) |
+| Provider links only | `cs3_windows/` | `bun run test links` (15 cases, no ffmpeg needed) |
+| WebView matching only | `cs3_windows/` | `bun run test webview` (21 cases, pure) |
+| Torrent metadata + DHT cache only | `cs3_windows/` | `bun run test torrent-metadata` (28 cases, temp dirs) |
+| Source scope only | `cs3_windows/` | `bun run test source-scope` (17 cases) |
+| OTT platform matching only | `cs3_windows/` | `bun run test ott` (19 cases, pure) |
+| Built-in provider lane only | `cs3_windows/` | `bun run test native-providers` (50 cases, pure — stubs `setHttpFetch`) |
+| Download resume decision only | `cs3_windows/` | `bun run test resume` (17 cases, pure) |
+| Download resume probe only | `cs3_windows/` | `bun run test resume-window` (10 cases, real sockets) |
+| Component reachability only | `cs3_windows/` | `bun run test reachability` (2 cases, lexical) |
+| Settings level only | `cs3_windows/` | `bun run test settings-level` (6 cases, pure + lexical) |
+| Dead result rows only | `cs3_windows/` | `bun run test dead-rows` (8 cases, pure) |
+| Media proxy only | `cs3_windows/` | `bun run test proxy` (11 cases, stubbed origin) |
+| Subtitles only | `cs3_windows/` | `bun run test subtitles` (16 cases) |
+| Media decisions only | `cs3_windows/` | `bun run test media` (71 cases, no ffmpeg needed) |
+| Media pipeline only | `cs3_windows/` | `bun run test pipeline` (17 cases, real ffmpeg; skips itself without it) |
+| Source export only | `cs3_windows/` | `bun run test export` (13 cases, pure) |
+| Direct (non-torrent) indexer sources only | `cs3_windows/` | `bun run test direct-sources` (13 cases, pure) |
+| yt-dlp source mapping only | `cs3_windows/` | `bun run test ytdlp` (16 cases, pure) |
+| Repository catalogue only | `cs3_windows/` | `bun run test repositories` (9 cases, pure — fetches nothing) |
 | Repository/corpus liveness | repo root | `node tools/research/survey-repositories.mjs` — counts the live indexes; see PRD-43 |
-| Download identity only | `cs3_windows/` | `bun run test:download-identity` (18 cases, pure) |
-| Native engine only | `cs3_windows/` | `bun run test:native` (12 cases, spawns a real mpv; skips itself without it) |
+| Download identity only | `cs3_windows/` | `bun run test download-identity` (18 cases, pure) |
+| Native engine only | `cs3_windows/` | `bun run test native` (12 cases, spawns a real mpv; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |

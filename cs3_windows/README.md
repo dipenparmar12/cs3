@@ -24,11 +24,14 @@ Run all commands from within `cs3_windows/`:
 | `bun install` | Install all dependencies |
 | `bun run dev` | Start Vite dev server + Electron with HMR and live reload |
 | `bun run typecheck` | Typecheck entire project via `tsc -b` |
-| `bun run test:electron` | Run main-process, media decision, source cache and native-engine tests (99) |
-| `bun run test:media` | Run codec decision engine tests (no FFmpeg required) |
-| `bun run test:pipeline` | Run full media transcode pipeline tests (requires FFmpeg) |
-| `bun run test:cache` | Run source-cache expiry and invalidation tests |
-| `bun run test:native` | Drive a real mpv process (skips itself when mpv is absent) |
+| `bun run test` | Run all test suites (or `bun run test <alias/filter...>` for single/selected suites) |
+| `bun run test:electron` | Alias for `bun run test` (runs test suite runner) |
+| `bun run test --fast` | Run all unit test suites in ~5s (skips slow ffmpeg/mpv integration suites) |
+| `bun run test --list` | List all 42 available test suites and their aliases |
+| `bun run test media` | Run codec decision engine & webview tests |
+| `bun run test pipeline` | Run full media transcode pipeline tests (requires FFmpeg) |
+| `bun run test cache` | Run source-cache expiry and invalidation tests |
+| `bun run test native` | Drive a real mpv process (skips itself when mpv is absent) |
 | `bun run electron:build` | Build production installer and portable `.exe` into `release/` |
 
 ---
