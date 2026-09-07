@@ -4,6 +4,7 @@ import path from 'path';
 
 import type { SearchResponse } from '../../src/types/api';
 import type { HomeProviderRegistry } from './homeProviderRegistry.ts';
+import type { NativeProviderRegistry } from './nativeProviderRegistry.ts';
 import type { HomeCatalogKind } from './homeProviders.ts';
 import { getLogger } from '../logging/logger.ts';
 
@@ -62,6 +63,16 @@ const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 const FILE_NAME = 'cs3-discovery-cache.json';
 
+/**
+ * A built-in catalogue row is bounded independently of the page.
+ *
+ * The home screen renders from cache first and replaces rows as they land, so a
+ * slow provider costs nothing visible — but iptv-org's first call downloads a
+ * multi-megabyte index, and an unbounded fetch there would hold a promise open
+ * for the life of the process if the host stalled.
+ */
+const NATIVE_TIMEOUT_MS = 25_000;
+
 const log = getLogger().child('discovery');
 
 export type DiscoverySectionId =
@@ -72,7 +83,9 @@ export type DiscoverySectionId =
   | 'new-series'
   | 'featured'
   | 'trending-anime'
-  | `genre:${string}`;
+  | `genre:${string}`
+  /** One built-in provider's own catalogue row: `native:<providerId>:<sectionId>`. */
+  | `native:${string}`;
 
 export interface DiscoverySection {
   id: DiscoverySectionId;
@@ -93,13 +106,26 @@ interface CachedSection {
 
 export class DiscoveryService {
   private providers: HomeProviderRegistry;
+  /**
+   * The built-in providers, whose catalogue rows join the home screen.
+   *
+   * Optional so this service stays constructible without one — it is
+   * instantiated in tests and in `tools/`, and a hard dependency would make
+   * every one of those build a provider roster it does not use.
+   */
+  private natives: NativeProviderRegistry | null;
   private cache = new Map<string, CachedSection>();
   private inFlight = new Map<string, Promise<SearchResponse[]>>();
   private file: string;
   private writeTimer: NodeJS.Timeout | null = null;
 
-  constructor(providers: HomeProviderRegistry, directory?: string) {
+  constructor(
+    providers: HomeProviderRegistry,
+    directory?: string,
+    natives?: NativeProviderRegistry
+  ) {
     this.providers = providers;
+    this.natives = natives ?? null;
     const base = directory ?? (app ? app.getPath('userData') : process.cwd());
     this.file = path.join(base, FILE_NAME);
     this.restore();
@@ -295,6 +321,37 @@ export class DiscoveryService {
           subtitle: 'Because of what you have been watching',
           key: key(`popular-movies:${genre}`),
           load: () => provider.fetch({ kind: 'popular-movies', genre }),
+        });
+      }
+    }
+
+    /**
+     * The built-in providers' own catalogues, after the metadata rows.
+     *
+     * After, deliberately. Cinemeta's "Trending now" is what somebody opening a
+     * streaming app expects at the top; Internet Archive's public-domain shelf
+     * and a list of free-to-air channels are worth having and are not that.
+     * Putting them first would make the home screen look like a different
+     * product than it is.
+     *
+     * These rows are *playable* rather than metadata — opening one goes straight
+     * to that provider's own `loadLinks` — which is the opposite of the caveat
+     * `ottCatalog` carries, and the reason the subtitle names the source.
+     */
+    for (const provider of this.natives?.enabledProviders() ?? []) {
+      if (!provider.capabilities().catalog || !provider.catalog) continue;
+      for (const section of provider.sections?.() ?? []) {
+        const fetch = provider.catalog.bind(provider);
+        requested.push({
+          id: `native:${provider.id}:${section.id}`,
+          title: section.title,
+          subtitle: section.subtitle ? `${section.subtitle} · ${provider.name}` : provider.name,
+          // Namespaced by provider *and* section, for the same reason the
+          // metadata rows are keyed by provider: two catalogues answering the
+          // same cache key serve each other's films.
+          key: `native:${provider.id}:${section.id}`,
+          load: () =>
+            fetch({ sectionId: section.id, page: 1 }, AbortSignal.timeout(NATIVE_TIMEOUT_MS)),
         });
       }
     }

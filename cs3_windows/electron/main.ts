@@ -280,7 +280,19 @@ const bookmarks = new BookmarkStore(datastore);
  * down mid-session falls back on the next request, not on the next restart.
  */
 const homeProviders = new HomeProviderRegistry(datastore);
-const discovery = new DiscoveryService(homeProviders);
+/**
+ * The built-in providers publish home rows too, so the roster is handed over.
+ *
+ * `contentService` owns the registry because it is the thing that resolves
+ * their addresses; passing the same instance rather than building a second one
+ * matters — a provider switched off in the extensions screen must disappear
+ * from the home screen in the same moment, and two rosters would drift.
+ */
+const discovery = new DiscoveryService(
+  homeProviders,
+  undefined,
+  contentService.getNativeProviders()
+);
 const titleEnricher = new TitleEnricher();
 /**
  * Warms the source cache while a detail page is being read.

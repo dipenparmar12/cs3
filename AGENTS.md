@@ -3256,6 +3256,16 @@ Worth knowing: an API key that authenticates but is attached to no user account 
 401. `/Users` comes back empty, and the honest message names that rather than reporting no
 results.
 
+**Their catalogues reach the home screen**, after the metadata rows rather than before.
+Cinemeta's "Trending now" is what somebody opening a streaming app expects at the top; a
+public-domain shelf and a list of free-to-air channels are worth having and are not that.
+These rows are also *playable* rather than metadata — opening one goes straight to that
+provider's own `loadLinks` — which is the opposite of `ottCatalog`'s caveat, and why the
+subtitle names the source. `DiscoveryService` takes the **same** registry instance
+`ContentService` owns, so a provider switched off in the extensions screen leaves the home
+screen in the same moment; two rosters would drift. Verified live: Documentaries 28 rows,
+Public-domain features 30, PeerTube documentaries 30, Movie channels 40.
+
 **Four catalogue rows had rotted** and are now marked with the measurement:
 `pitipitii` is gone permanently (GitHub answers **451, unavailable for legal reasons**),
 `fstream`'s host sits behind an Anubis bot wall serving HTML where JSON is expected, and
