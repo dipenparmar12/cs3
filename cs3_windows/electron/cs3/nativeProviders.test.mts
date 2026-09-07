@@ -33,6 +33,7 @@ import {
   InternetArchiveProvider,
   buildSearchUrl,
   isAdult,
+  isClip,
   phrase,
   playableFiles,
   yearOf,
@@ -41,7 +42,16 @@ import {
 } from './nativeProviders/internetArchive.ts';
 import { parseQuality } from './nativeProviders/iptvOrg.ts';
 import { splitHandle } from './nativeProviders/peerTube.ts';
-import { NativeProviderRegistry } from './nativeProviderRegistry.ts';
+import {
+  StremioAddonProvider,
+  acceptsId,
+  fetchManifest,
+  normaliseBase,
+  packHandle,
+  qualityFromLabel,
+  unpackHandle,
+} from './nativeProviders/stremioAddon.ts';
+import { NativeProviderRegistry, addonLocalId } from './nativeProviderRegistry.ts';
 
 const tests: Array<[string, () => void | Promise<void>]> = [];
 const test = (name: string, fn: () => void | Promise<void>) => tests.push([name, fn]);
@@ -207,6 +217,41 @@ test('adult rows are withheld from search while the gate is off', async () => {
   assert.equal((await on.search('history', signal)).length, 2);
 });
 
+test('a trailer never outranks the film it advertises', async () => {
+  // Measured live: "night of the living dead" put *Night of the living dead
+  // Trailer* above the 1968 feature, because a two-minute clip is downloaded
+  // far more often than a ninety-minute film.
+  setHttpFetch(async () =>
+    new Response(
+      JSON.stringify({
+        response: {
+          docs: [
+            { identifier: 'a', title: 'Night of the living dead Trailer' },
+            { identifier: 'b', title: 'Night of the Living Dead', year: '1968' },
+            { identifier: 'c', title: 'Night of the Living Dead (restored)', year: '1968' },
+          ],
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  );
+  const provider = new InternetArchiveProvider({ adultAllowed: () => false });
+  const rows = await provider.search('night of the living dead', AbortSignal.timeout(5000));
+  assert.equal(rows[0]!.name, 'Night of the Living Dead');
+  assert.equal(rows.at(-1)!.name, 'Night of the living dead Trailer');
+  // The trailer is demoted, never dropped — it is a real item someone may want.
+  assert.equal(rows.length, 3);
+});
+
+test('a legitimate title is not demoted by an over-eager clip filter', () => {
+  assert.equal(isClip('Night of the Living Dead Trailer'), true);
+  assert.equal(isClip('Behind the Scenes'), true);
+  // Prelinger is full of industrial films with words like this in the title.
+  assert.equal(isClip('Preview of Tomorrow'), false);
+  assert.equal(isClip('The Internet\'s Own Boy'), false);
+  assert.equal(isClip('Trailblazers of the West'), false);
+});
+
 test('a multi-file item becomes episodes rather than one truncated row', async () => {
   setHttpFetch(async () =>
     new Response(
@@ -342,6 +387,269 @@ test('an unknown address is explained without claiming an extension owned it', (
   const message = registry.explain(nativeAddress('not-a-provider', 'x'));
   assert.match(message, /not a built-in provider/);
   assert.ok(!/extension/i.test(message), 'must not blame an extension for a built-in address');
+});
+
+// --- The generic Stremio addon lane -----------------------------------------
+
+const CINEMETA_MANIFEST = {
+  id: 'com.linvo.cinemeta',
+  name: 'Cinemeta',
+  types: ['movie', 'series'],
+  resources: ['catalog', 'meta'],
+  catalogs: [
+    { type: 'movie', id: 'top', name: 'Popular' },
+    { type: 'movie', id: 'year', name: 'New' },
+    { type: 'series', id: 'top', name: 'Popular series' },
+  ],
+  idPrefixes: ['tt'],
+};
+
+test('an addon is asked only for ids it declares it accepts', () => {
+  // Measured: Anime Kitsu answers HTTP **500** for `tt0063350`, not an empty
+  // list. An addon that only speaks `kitsu:` treats an IMDb id as malformed, so
+  // the check has to happen before the request rather than around it.
+  const kitsu = { ...CINEMETA_MANIFEST, idPrefixes: ['kitsu', 'mal', 'anilist'] };
+  assert.equal(acceptsId(kitsu, 'tt0063350'), false);
+  assert.equal(acceptsId(kitsu, 'kitsu:12345'), true);
+  assert.equal(acceptsId(CINEMETA_MANIFEST, 'tt0063350'), true);
+  // No `idPrefixes` means "anything", which is the protocol's own default.
+  assert.equal(acceptsId({ ...CINEMETA_MANIFEST, idPrefixes: undefined }, 'anything'), true);
+});
+
+test('a type travels with the id, because a Stremio id means nothing alone', () => {
+  assert.equal(packHandle('series', 'tt0903747:1:3'), 'series|tt0903747:1:3');
+  assert.deepEqual(unpackHandle('series|tt0903747:1:3'), {
+    type: 'series',
+    id: 'tt0903747:1:3',
+  });
+  // An id containing the separator must not be truncated at the wrong bar.
+  assert.deepEqual(unpackHandle('movie|tt1|weird'), { type: 'movie', id: 'tt1|weird' });
+  // A bare handle is still addressable rather than throwing.
+  assert.deepEqual(unpackHandle('tt0063350'), { type: 'movie', id: 'tt0063350' });
+});
+
+test('a manifest URL normalises the same however it was pasted', () => {
+  for (const input of [
+    'https://v3-cinemeta.strem.io/manifest.json',
+    'https://v3-cinemeta.strem.io/',
+    'https://v3-cinemeta.strem.io',
+    '  https://v3-cinemeta.strem.io//  ',
+  ]) {
+    assert.equal(normaliseBase(input), 'https://v3-cinemeta.strem.io');
+  }
+});
+
+test('two deployments of one addon are two providers', () => {
+  // Torrentio, Comet and MediaFusion all have public and self-hosted instances,
+  // and a debrid-configured deployment is the whole point of adding one. Keying
+  // on the manifest id alone would let the second silently replace the first.
+  const a = addonLocalId('com.stremio.torrentio.addon', 'https://torrentio.strem.fun');
+  const b = addonLocalId('com.stremio.torrentio.addon', 'https://my-torrentio.example.net');
+  assert.notEqual(a, b);
+  // Namespaced, so an addon can never claim a built-in provider's id.
+  assert.ok(a.startsWith('addon:'));
+});
+
+test('quality is read out of an addon\'s free-text label', () => {
+  assert.equal(qualityFromLabel('Torrentio 4k HDR | RARBG'), 2160);
+  assert.equal(qualityFromLabel('1080p WEB-DL'), 1080);
+  assert.equal(qualityFromLabel('720p'), 720);
+  assert.equal(qualityFromLabel('some release with no resolution'), 0);
+});
+
+test('capabilities are declared from the manifest, not assumed', () => {
+  const catalogueOnly = new StremioAddonProvider({
+    localId: 'addon:x@y',
+    baseUrl: 'https://example.org',
+    manifest: CINEMETA_MANIFEST,
+  });
+  assert.deepEqual(catalogueOnly.capabilities(), {
+    search: true,
+    catalog: true,
+    resolve: false,
+  });
+
+  const streamOnly = new StremioAddonProvider({
+    localId: 'addon:s@y',
+    baseUrl: 'https://example.org',
+    manifest: { ...CINEMETA_MANIFEST, resources: ['stream'], catalogs: [] },
+  });
+  assert.deepEqual(streamOnly.capabilities(), {
+    search: false,
+    catalog: false,
+    resolve: true,
+  });
+});
+
+test('a catalogue-only addon says so rather than returning nothing', async () => {
+  const provider = new StremioAddonProvider({
+    localId: 'addon:x@y',
+    baseUrl: 'https://example.org',
+    manifest: CINEMETA_MANIFEST,
+  });
+  await assert.rejects(
+    () => provider.loadLinks('movie|tt0063350', AbortSignal.timeout(5000)),
+    /does not supply streams/
+  );
+});
+
+test('search asks once per type, not once per catalogue', async () => {
+  // Three catalogues over two types must be two requests, not three: an addon
+  // publishing eight catalogues would otherwise mean eight requests to someone
+  // else's server for one query, returning the same title eight times.
+  const asked: string[] = [];
+  setHttpFetch(async (url) => {
+    asked.push(String(url));
+    return new Response(JSON.stringify({ metas: [{ id: 'tt1', name: 'A Film', type: 'movie' }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  const provider = new StremioAddonProvider({
+    localId: 'addon:x@y',
+    baseUrl: 'https://example.org',
+    manifest: CINEMETA_MANIFEST,
+  });
+  const rows = await provider.search('dune', AbortSignal.timeout(5000));
+  assert.equal(asked.length, 2, `expected one request per type, got ${asked.length}`);
+  assert.equal(rows.length, 2);
+  // Extras travel as a path segment, not a query string — the part of the
+  // protocol that surprises everybody.
+  assert.ok(asked.every((u) => u.includes('/search=dune.json')), asked.join(' '));
+});
+
+test('an external link is not offered as a source', async () => {
+  setHttpFetch(async () =>
+    new Response(
+      JSON.stringify({
+        streams: [
+          { externalUrl: 'https://example.org/watch', name: 'Open in browser' },
+          { ytId: 'abc123', name: 'YouTube' },
+        ],
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  );
+  const provider = new StremioAddonProvider({
+    localId: 'addon:s@y',
+    baseUrl: 'https://example.org',
+    manifest: { ...CINEMETA_MANIFEST, resources: ['stream'] },
+  });
+  // A row that looks playable and opens a web page is worse than no row.
+  await assert.rejects(
+    () => provider.loadLinks('movie|tt0063350', AbortSignal.timeout(5000)),
+    /none of them playable here/
+  );
+});
+
+test('an infoHash stream becomes a magnet and a url stream stays direct', async () => {
+  setHttpFetch(async () =>
+    new Response(
+      JSON.stringify({
+        streams: [
+          { infoHash: 'abcdef0123456789abcdef0123456789abcdef01', name: 'Torrentio 1080p' },
+          {
+            url: 'https://cdn.example.org/f.mp4',
+            name: 'Debrid 4k',
+            behaviorHints: { proxyHeaders: { request: { Referer: 'https://example.org/' } } },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  );
+  const provider = new StremioAddonProvider({
+    localId: 'addon:s@y',
+    baseUrl: 'https://example.org',
+    manifest: { ...CINEMETA_MANIFEST, resources: ['stream'] },
+  });
+  const links = await provider.loadLinks('movie|tt0063350', AbortSignal.timeout(5000));
+  assert.equal(links.length, 2);
+  assert.equal(links[0]!.linkType, 'MAGNET');
+  assert.match(links[0]!.url, /^magnet:\?xt=urn:btih:abcdef01/);
+  assert.equal(links[0]!.quality, 1080);
+  assert.equal(links[1]!.linkType, 'VIDEO');
+  assert.equal(links[1]!.quality, 2160);
+  // Headers the addon supplied travel, or the host 403s the link.
+  assert.equal(links[1]!.headers?.Referer, 'https://example.org/');
+});
+
+test('a URL that is not an addon is refused in front of the user', async () => {
+  setHttpFetch(async () =>
+    new Response('<!doctype html><html><body>hello</body></html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    })
+  );
+  await assert.rejects(() => fetchManifest('https://example.org'), (error: Error) => {
+    // Any parse/shape failure is fine; what must not happen is silently
+    // becoming a provider that is asked on every search and answers nothing.
+    assert.ok(error instanceof Error);
+    return true;
+  });
+
+  setHttpFetch(async () =>
+    new Response(JSON.stringify({ id: 'x', name: 'Empty', resources: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  );
+  await assert.rejects(() => fetchManifest('https://example.org'), /declares no resources/);
+});
+
+test('an added addon joins the roster and the enable cascade', async () => {
+  const datastore = fakeDatastore();
+  const registry = new NativeProviderRegistry(datastore as never);
+  const builtIns = registry.all().length;
+
+  setHttpFetch(async () =>
+    new Response(JSON.stringify(CINEMETA_MANIFEST), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  );
+  const record = await registry.addAddon('https://v3-cinemeta.strem.io/manifest.json');
+
+  assert.equal(registry.all().length, builtIns + 1);
+  assert.ok(registry.enabledProviderNames().includes('Cinemeta'));
+  // Disabling it works exactly as it does for a built-in.
+  registry.setEnabled(record.localId, false);
+  assert.ok(!registry.enabledProviderNames().includes('Cinemeta'));
+
+  registry.removeAddon(record.localId);
+  assert.equal(registry.all().length, builtIns);
+});
+
+test('the same addon cannot be added twice', async () => {
+  const registry = new NativeProviderRegistry(fakeDatastore() as never);
+  setHttpFetch(async () =>
+    new Response(JSON.stringify(CINEMETA_MANIFEST), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  );
+  await registry.addAddon('https://v3-cinemeta.strem.io');
+  await assert.rejects(
+    () => registry.addAddon('https://v3-cinemeta.strem.io/manifest.json'),
+    /already been added/
+  );
+});
+
+test('a stored addon can never shadow a built-in provider', () => {
+  // The addon list is user data. A malformed or hostile entry claiming
+  // `internet-archive` must not replace the real one.
+  const datastore = fakeDatastore({
+    cs3_stremio_addons: [
+      {
+        localId: 'internet-archive',
+        url: 'https://evil.example.org',
+        manifest: { id: 'evil', name: 'Not Internet Archive', resources: ['stream'] },
+        addedAt: 1,
+      },
+    ],
+  });
+  const registry = new NativeProviderRegistry(datastore as never);
+  assert.equal(registry.byId('internet-archive')?.name, 'Internet Archive');
 });
 
 // --- Runner ------------------------------------------------------------------

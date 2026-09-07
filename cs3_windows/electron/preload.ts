@@ -1177,6 +1177,20 @@ export interface CloudStreamElectronAPI {
     enabled: boolean
   ) => Promise<{ ok: boolean; error?: string; providers: NativeProviderSummary[] }>;
   /**
+   * Adds a Stremio addon by manifest URL, validating it before it is stored.
+   *
+   * What is supported is the protocol rather than any host, so an addon
+   * published after this ships needs no adapter — and a debrid account the user
+   * has already configured elsewhere reaches this app by pasting the URL they
+   * already have. No addon is bundled and no default is added.
+   */
+  addStremioAddon: (
+    url: string
+  ) => Promise<{ ok: boolean; error?: string; providers: NativeProviderSummary[] }>;
+  removeStremioAddon: (
+    localId: string
+  ) => Promise<{ ok: boolean; error?: string; providers: NativeProviderSummary[] }>;
+  /**
    * Every OTT platform the app knows, with what is installed behind it.
    *
    * Always the full list, including platforms nothing can serve. A sidebar that
@@ -1934,6 +1948,8 @@ const api: CloudStreamElectronAPI = {
   listNativeProviders: () => ipcRenderer.invoke('natives:list'),
   setNativeProviderEnabled: (id: string, enabled: boolean) =>
     ipcRenderer.invoke('natives:setEnabled', id, enabled),
+  addStremioAddon: (url: string) => ipcRenderer.invoke('natives:addAddon', url),
+  removeStremioAddon: (localId: string) => ipcRenderer.invoke('natives:removeAddon', localId),
   listOttPlatforms: () => ipcRenderer.invoke('ott:listPlatforms'),
   getOttCatalog: (platformId) => ipcRenderer.invoke('ott:getCatalog', platformId),
   getOttCatalogPage: (provider, section, page) =>

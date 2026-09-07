@@ -311,7 +311,22 @@ export class InternetArchiveProvider implements NativeProvider {
       const row = toSearchResponse(doc, this.name);
       if (row) out.push(row);
     }
-    return out;
+    /**
+     * Trailers and excerpts sink below features.
+     *
+     * `downloads desc` is the only ordering this endpoint offers that is not
+     * useless, and it has one systematic bias: a two-minute trailer is
+     * downloaded far more often than the ninety-minute film beside it, so
+     * searching "night of the living dead" put *Night of the living dead
+     * Trailer* first and the 1968 feature second — measured. Someone searching
+     * for a film has not asked for its trailer, and this repository's standing
+     * rule is that a trailer standing in for a feature is a synthetic source
+     * under another name.
+     *
+     * A stable partition rather than a score: within each group the endpoint's
+     * own popularity ordering is preserved, because that part of it is fine.
+     */
+    return [...out.filter((row) => !isClip(row.name)), ...out.filter((row) => isClip(row.name))];
   }
 
   async load(handle: string, signal: AbortSignal): Promise<LoadResponse> {
@@ -434,6 +449,18 @@ function formatLabel(file: MetadataFile): string {
 
 function prettyFileName(name: string): string {
   return name.replace(/\.[^.]+$/, '').replace(/[._]+/g, ' ').trim();
+}
+
+/**
+ * A title that announces itself as not being the whole work.
+ *
+ * Anchored to whole words and kept short deliberately. "Preview" is not here:
+ * the Prelinger collection is full of legitimate industrial films with
+ * "preview" in the title, and demoting real content to fix a ranking nuisance
+ * is the worse trade.
+ */
+export function isClip(title: string): boolean {
+  return /\b(trailer|teaser|promo|clip|excerpt|opening credits|behind the scenes)\b/i.test(title);
 }
 
 export { playableFiles, phrase, isAdult, yearOf, buildSearchUrl, SECTIONS, QUALITY_GATE };

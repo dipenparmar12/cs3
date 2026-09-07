@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Library, Loader2 } from 'lucide-react';
+import { Library, Loader2, Plus, Trash2 } from 'lucide-react';
 import { Badge, Toggle } from './primitives';
 import type { NativeProviderSummary } from '../../types/plugin';
 
@@ -30,6 +30,9 @@ export const BuiltInSources: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [addonUrl, setAddonUrl] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -59,6 +62,43 @@ export const BuiltInSources: React.FC = () => {
       // as the switch springing back rather than as a lie on screen.
       if (response.ok) setProviders(response.providers);
       else setError(response.error ?? 'That change could not be saved.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  const addAddon = useCallback(async () => {
+    const url = addonUrl.trim();
+    if (!url) return;
+    setAdding(true);
+    setError(null);
+    setAdded(null);
+    try {
+      const response = await window.cloudstream!.addStremioAddon(url);
+      setProviders(response.providers);
+      if (response.ok) {
+        setAddonUrl('');
+        setAdded('Added. It will be searched alongside everything else.');
+      } else {
+        // The reason, verbatim — "that address is not an addon" and "already
+        // added" need different actions from the person who typed it.
+        setError(response.error ?? 'That addon could not be added.');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAdding(false);
+    }
+  }, [addonUrl]);
+
+  const removeAddon = useCallback(async (id: string) => {
+    setBusy(id);
+    try {
+      const response = await window.cloudstream!.removeStremioAddon(id);
+      if (response.ok) setProviders(response.providers);
+      else setError(response.error ?? 'That addon could not be removed.');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -105,16 +145,64 @@ export const BuiltInSources: React.FC = () => {
                 <p className="ext-builtin__reason">{provider.unavailableReason}</p>
               ) : null}
             </div>
-            <Toggle
-              on={provider.enabled}
-              label={`${provider.name} — ${provider.enabled ? 'on' : 'off'}`}
-              suppressedReason={provider.unavailableReason}
-              disabled={busy === provider.id}
-              onChange={(next) => void toggle(provider.id, next)}
-            />
+            <div className="ext-builtin__actions">
+              <Toggle
+                on={provider.enabled}
+                label={`${provider.name} — ${provider.enabled ? 'on' : 'off'}`}
+                suppressedReason={provider.unavailableReason}
+                disabled={busy === provider.id}
+                onChange={(next) => void toggle(provider.id, next)}
+              />
+              {/* Only an addon can be removed. A built-in has nowhere to go —
+                  offering Remove on one would be a button that cannot work. */}
+              {provider.id.startsWith('addon:') ? (
+                <button
+                  type="button"
+                  className="ext-builtin__remove"
+                  title={`Remove ${provider.name}`}
+                  aria-label={`Remove ${provider.name}`}
+                  disabled={busy === provider.id}
+                  onClick={() => void removeAddon(provider.id)}
+                >
+                  <Trash2 size={15} />
+                </button>
+              ) : null}
+            </div>
           </li>
         ))}
       </ul>
+
+      {/*
+        Adding an addon is supporting a protocol, not blessing a host: nothing
+        is bundled and no default is added, exactly as with a Torznab URL. It is
+        also how somebody's existing debrid configuration reaches this app —
+        they paste the URL they already have.
+      */}
+      <div className="ext-builtin__add">
+        <label htmlFor="stremio-addon-url">Add a Stremio addon</label>
+        <div className="ext-builtin__addrow">
+          <input
+            id="stremio-addon-url"
+            type="url"
+            placeholder="https://…/manifest.json"
+            value={addonUrl}
+            spellCheck={false}
+            onChange={(event) => setAddonUrl(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void addAddon();
+            }}
+          />
+          <button type="button" disabled={adding || !addonUrl.trim()} onClick={() => void addAddon()}>
+            {adding ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
+            {adding ? 'Checking…' : 'Add'}
+          </button>
+        </div>
+        <p className="ext-builtin__hint">
+          The manifest is read and checked before it is saved. Catalogue, metadata, stream and
+          subtitle addons all work.
+        </p>
+        {added ? <p className="ext-builtin__ok">{added}</p> : null}
+      </div>
     </section>
   );
 };

@@ -86,7 +86,7 @@ cs3/
 | Torrent metadata + DHT cache only | `cs3_windows/` | `bun run test:torrent-metadata` (28 cases, temp dirs) |
 | Source scope only | `cs3_windows/` | `bun run test:source-scope` (17 cases) |
 | OTT platform matching only | `cs3_windows/` | `bun run test:ott` (19 cases, pure) |
-| Built-in provider lane only | `cs3_windows/` | `bun run test:native-providers` (26 cases, pure — stubs `setHttpFetch`) |
+| Built-in provider lane only | `cs3_windows/` | `bun run test:native-providers` (42 cases, pure — stubs `setHttpFetch`) |
 | Download resume decision only | `cs3_windows/` | `bun run test:resume` (17 cases, pure) |
 | Download resume probe only | `cs3_windows/` | `bun run test:resume-window` (10 cases, real sockets) |
 | Component reachability only | `cs3_windows/` | `bun run test:reachability` (2 cases, lexical) |
@@ -3190,10 +3190,40 @@ Two things measured while building Internet Archive that would each have shipped
   Ungated, the top documentary by downloads is a 3 MB test clip titled *Sample 1* with 1.25M
   downloads.
 
-`bun run test:native-providers` (26 cases) pins all of it, and is verified by mutation:
+`bun run test:native-providers` (42 cases) pins all of it, and is verified by mutation:
 bypassing the enable cascade fails three. One of those three was rewritten after the
 mutation check — asserting "the result was empty" passed with the cascade removed, because a
 *failing* provider also returns empty, so it asserts the socket was never touched instead.
+
+**Any Stremio addon is a provider now**, which is the part of this that keeps paying: what is
+supported is the protocol, so an addon published next year needs no adapter. Measured across
+`api.strem.io/addonscollection.json` (95 addons) by resource: **subtitles 42 · catalog 40 ·
+meta 23 · stream 19**. Read that table against what the app consumed before — `catalog` on the
+home screen only, `stream` in the indexer registry, no `meta`, and `subtitles` from one
+hardcoded host. The single most-served resource in the ecosystem was the one we took from
+exactly one place.
+
+Three rules came out of probing real addons, and two invert what the manifest says:
+
+- **`idPrefixes` is a hard constraint.** Anime Kitsu answers **HTTP 500** for `tt0063350`, not
+  an empty list — an addon that speaks only `kitsu:`/`mal:`/`anilist:` treats an IMDb id as
+  malformed. Check the prefix before the request; an addon that cannot address an id is
+  skipped, not counted as failing.
+- **A declared `extra` list under-reports what works.** TMDB's catalogue declares only `genre`
+  and `skip`, and `search=dune` returns 23 correct results anyway. Search is *attempted* and a
+  refusal is read as "this catalogue does not search" — trusting the manifest would have
+  silently disabled search on one of the two best catalogue addons in the ecosystem.
+- **Two deployments of one addon are two providers.** Torrentio, Comet and MediaFusion all
+  have public and self-hosted instances, and a debrid-configured deployment is the *point* of
+  adding one — so the host is part of the local id or the second silently replaces the first.
+
+Also: `externalUrl` and `ytId` streams are dropped rather than offered. An `externalUrl` opens
+a web page, and a row that looks playable and is not is worse than no row.
+
+**Verified against live hosts**, driving the shipped classes rather than a harness copy:
+Internet Archive search → load → `loadLinks` → **HTTP 206, `video/mp4`, `ftypmp42`**; PeerTube
+4 links at 1080p from the origin instance; iptv-org catalogue, search and resolve; Cinemeta
+search and meta.
 
 **Four catalogue rows had rotted** and are now marked with the measurement:
 `pitipitii` is gone permanently (GitHub answers **451, unavailable for legal reasons**),

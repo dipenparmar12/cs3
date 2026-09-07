@@ -3833,6 +3833,39 @@ ipcMain.handle('natives:setEnabled', async (_event, id: string, enabled: boolean
   }
 });
 
+/**
+ * Adds one Stremio addon by its manifest URL.
+ *
+ * The manifest is fetched and validated here rather than lazily, so a wrong
+ * address fails in front of the person who typed it. A URL that is not an addon
+ * would otherwise become a provider that is listed, enabled, asked on every
+ * search and silently answers nothing — indistinguishable from a source that
+ * genuinely has nothing for this title.
+ *
+ * A URL is accepted here, unlike `ott:installSuggestion`, and the difference is
+ * real: this points the app at a **data** endpoint it will parse, where that
+ * one would have made "set up Netflix" a way to install *code* from anywhere.
+ */
+ipcMain.handle('natives:addAddon', async (_event, url: string) => {
+  try {
+    const registry = contentService.getNativeProviders();
+    const addon = await registry.addAddon(String(url ?? ''));
+    return { ok: true, addon, providers: registry.summaries() };
+  } catch (error) {
+    return { ...fail(error), providers: contentService.getNativeProviders().summaries() };
+  }
+});
+
+ipcMain.handle('natives:removeAddon', async (_event, localId: string) => {
+  try {
+    const registry = contentService.getNativeProviders();
+    registry.removeAddon(String(localId ?? ''));
+    return { ok: true, providers: registry.summaries() };
+  } catch (error) {
+    return { ...fail(error), providers: [] };
+  }
+});
+
 ipcMain.handle('ott:listPlatforms', async () => {
   try {
     return { ok: true, platforms: await ottService.listPlatforms() };

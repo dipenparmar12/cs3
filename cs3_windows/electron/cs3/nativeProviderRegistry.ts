@@ -30,10 +30,16 @@
 import type { DatastoreManager } from '../datastore.ts';
 import { DisabledSet } from '../util/disabledSet.ts';
 import { getLogger } from '../logging/logger.ts';
-import type { SearchResponse, TvType } from '../../src/types/api.ts';
+import type { SearchResponse, SubtitleFile, TvType } from '../../src/types/api.ts';
 import { InternetArchiveProvider } from './nativeProviders/internetArchive.ts';
 import { IptvOrgProvider } from './nativeProviders/iptvOrg.ts';
 import { PeerTubeProvider } from './nativeProviders/peerTube.ts';
+import {
+  StremioAddonProvider,
+  fetchManifest,
+  normaliseBase,
+  type StremioManifest,
+} from './nativeProviders/stremioAddon.ts';
 import type {
   NativeCatalogSection,
   NativeProvider,
@@ -44,6 +50,23 @@ const log = getLogger().child('provider', { component: 'native' });
 
 const DISABLED_KEY = 'cs3_disabled_native_providers';
 const ADULT_KEY = 'cs3_adult_content_enabled';
+const ADDONS_KEY = 'cs3_stremio_addons';
+
+/**
+ * One Stremio addon the user has added, with the manifest as it read at the
+ * time.
+ *
+ * The manifest is stored rather than re-fetched at startup for two reasons:
+ * `capabilities()` is synchronous and the roster has to render immediately, and
+ * an addon host being slow or down must not delay the extensions screen or make
+ * a provider the user added disappear from it.
+ */
+export interface StoredAddon {
+  localId: string;
+  url: string;
+  manifest: StremioManifest;
+  addedAt: number;
+}
 
 /** What the UI renders one native provider as. */
 export interface NativeProviderSummary {
@@ -76,8 +99,20 @@ export class NativeProviderRegistry {
   constructor(datastore: DatastoreManager) {
     this.datastore = datastore;
     this.disabled = new DisabledSet(datastore, DISABLED_KEY);
+    this.rebuild();
+  }
 
+  /**
+   * The roster, rebuilt whenever the set of user-added addons changes.
+   *
+   * Built-ins first and always; addons are appended from storage. Same shape as
+   * `HomeProviderRegistry.rebuild` and for the same reason — a roster assembled
+   * once at construction would not notice an addon being added until a restart.
+   */
+  private rebuild(): void {
+    this.providers.clear();
     const adultAllowed = () => this.adultAllowed();
+
     for (const provider of [
       new InternetArchiveProvider({ adultAllowed }),
       new PeerTubeProvider({ adultAllowed }),
@@ -85,6 +120,88 @@ export class NativeProviderRegistry {
     ]) {
       this.providers.set(provider.id, provider);
     }
+
+    for (const addon of this.storedAddons()) {
+      try {
+        const provider = new StremioAddonProvider({
+          localId: addon.localId,
+          baseUrl: addon.url,
+          manifest: addon.manifest,
+        });
+        // A built-in never loses its slot to a stored addon: the addon list is
+        // user data and a malformed or hostile entry must not be able to
+        // shadow Internet Archive by claiming its id.
+        if (!this.providers.has(provider.id)) this.providers.set(provider.id, provider);
+      } catch (error) {
+        log.warn('stored_addon_unusable', {
+          addon: addon.localId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  private storedAddons(): StoredAddon[] {
+    const raw = this.datastore.getObject<StoredAddon[]>(ADDONS_KEY, []) ?? [];
+    return Array.isArray(raw) ? raw.filter((a) => a?.localId && a?.url && a?.manifest) : [];
+  }
+
+  public listAddons(): StoredAddon[] {
+    return this.storedAddons();
+  }
+
+  /**
+   * Validates and stores one addon.
+   *
+   * The manifest is fetched here rather than lazily so a wrong URL fails in
+   * front of the person who typed it. A URL that is not an addon would
+   * otherwise become a provider that is listed, enabled, asked on every search
+   * and silently answers nothing — indistinguishable from a source that has
+   * nothing for this title.
+   */
+  public async addAddon(url: string, signal?: AbortSignal): Promise<StoredAddon> {
+    const manifest = await fetchManifest(url, signal);
+    const base = normaliseBase(url);
+    const localId = addonLocalId(manifest.id, base);
+
+    const existing = this.storedAddons();
+    if (existing.some((a) => a.localId === localId)) {
+      throw new Error(`"${manifest.name}" has already been added.`);
+    }
+    if (this.providers.has(localId)) {
+      throw new Error(`"${manifest.name}" collides with a built-in provider's id.`);
+    }
+
+    const record: StoredAddon = { localId, url: base, manifest, addedAt: Date.now() };
+    this.datastore.setObject(ADDONS_KEY, [...existing, record]);
+    this.rebuild();
+    return record;
+  }
+
+  public removeAddon(localId: string): void {
+    const remaining = this.storedAddons().filter((a) => a.localId !== localId);
+    this.datastore.setObject(ADDONS_KEY, remaining);
+    // The disabled entry goes with it, or re-adding the same addon later comes
+    // back switched off with nothing on screen explaining why.
+    this.disabled.set([localId], true);
+    this.rebuild();
+  }
+
+  /**
+   * Subtitles from every addon that publishes them, merged.
+   *
+   * 42 of the 95 catalogued addons serve `subtitles` — the most-served resource
+   * in the ecosystem, against the one host `subtitleService` hardcodes. A
+   * failing addon contributes nothing rather than failing the merge.
+   */
+  public async subtitles(handle: string, signal: AbortSignal): Promise<SubtitleFile[]> {
+    const addons = this.enabledProviders().filter(
+      (p): p is StremioAddonProvider => p instanceof StremioAddonProvider
+    );
+    const settled = await Promise.allSettled(addons.map((a) => a.subtitles(handle, signal)));
+    const out: SubtitleFile[] = [];
+    for (const result of settled) if (result.status === 'fulfilled') out.push(...result.value);
+    return out;
   }
 
   /** Read per call, never cached — the setting can change while the app runs. */
@@ -240,4 +357,28 @@ export class NativeProviderRegistry {
     }
     return `${provider.name} could not answer for this item.`;
   }
+}
+
+/**
+ * A stable local id for one addon.
+ *
+ * The manifest id alone is not unique: the same addon software is deployed
+ * behind many hosts (Torrentio, Comet and MediaFusion all have public and
+ * self-hosted deployments, and a debrid-configured instance is the *point* of
+ * adding one), and two deployments of one manifest id must be two providers or
+ * the second silently replaces the first.
+ *
+ * The host is therefore part of the id, and the whole thing is prefixed so an
+ * addon can never collide with a built-in provider's id namespace.
+ */
+export function addonLocalId(manifestId: string, baseUrl: string): string {
+  let host = baseUrl;
+  try {
+    host = new URL(baseUrl).host;
+  } catch {
+    // Not a parseable URL — it was validated before this is reached, so fall
+    // back to the raw string rather than throwing out of an id function.
+  }
+  const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return `addon:${slug(manifestId)}@${slug(host)}`;
 }

@@ -527,3 +527,29 @@
 .ext-builtin__title { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
 .ext-builtin__desc { margin: 0.3rem 0 0; font-size: 0.78rem; opacity: 0.75; line-height: 1.45; }
 .ext-builtin__reason { margin: 0.3rem 0 0; font-size: 0.76rem; color: var(--warning, #fbbf24); }
+.ext-builtin__actions { display: flex; align-items: center; gap: 0.35rem; flex-shrink: 0; }
+.ext-builtin__remove {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: transparent; color: inherit; opacity: 0.7;
+}
+.ext-builtin__remove:hover:not(:disabled) { opacity: 1; color: var(--danger, #f87171); }
+.ext-builtin__remove:disabled { opacity: 0.35; cursor: default; }
+.ext-builtin__add { margin-top: 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
+.ext-builtin__add > label { display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.4rem; }
+.ext-builtin__addrow { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.ext-builtin__addrow input {
+  flex: 1 1 18rem; min-width: 0; padding: 0.45rem 0.6rem; font-size: 0.82rem;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface, rgba(0, 0, 0, 0.2)); color: inherit;
+}
+.ext-builtin__addrow button {
+  display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer;
+  padding: 0.45rem 0.8rem; font-size: 0.82rem;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--accent, #3b82f6); color: #fff;
+}
+.ext-builtin__addrow button:disabled { opacity: 0.5; cursor: default; }
+.ext-builtin__hint { margin: 0.45rem 0 0; font-size: 0.74rem; opacity: 0.6; }
+.ext-builtin__ok { margin: 0.35rem 0 0; font-size: 0.78rem; color: var(--success, #4ade80); }
