@@ -86,6 +86,7 @@ cs3/
 | Torrent metadata + DHT cache only | `cs3_windows/` | `bun run test:torrent-metadata` (28 cases, temp dirs) |
 | Source scope only | `cs3_windows/` | `bun run test:source-scope` (17 cases) |
 | OTT platform matching only | `cs3_windows/` | `bun run test:ott` (19 cases, pure) |
+| Built-in provider lane only | `cs3_windows/` | `bun run test:native-providers` (26 cases, pure — stubs `setHttpFetch`) |
 | Download resume decision only | `cs3_windows/` | `bun run test:resume` (17 cases, pure) |
 | Download resume probe only | `cs3_windows/` | `bun run test:resume-window` (10 cases, real sockets) |
 | Component reachability only | `cs3_windows/` | `bun run test:reachability` (2 cases, lexical) |
@@ -360,6 +361,13 @@ so the reply landed at the speed of the slowest provider no matter how fast the 
 were. It is now one RPC per provider (`searchEach`), capped at 8 in flight because the
 sidecar dispatches each onto a bounded pool sized to the core count.
 
+`natives:*` is the built-in provider roster — `natives:list`, `natives:setEnabled`.
+Separate from `extension:*` because it answers a different question: `extension:*` is an
+inventory of things that were **downloaded** — repositories, archives, hashes, updates,
+compatibility tiers — and none of those words means anything about a provider compiled into
+the binary. The only action on one is a switch, and the only thing the user needs told is
+why one is unavailable. See "The native provider lane" below.
+
 `ott:*` is the streaming-service surface — `ott:listPlatforms`, `ott:getCatalog`,
 `ott:getCatalogPage`, `ott:getSearchScope`, `ott:getSuggestions`,
 `ott:installSuggestion`. Separate from `extension:*` because it answers a different
@@ -468,6 +476,11 @@ not a layering mistake.
 | `cs3/providerRecovery.ts` | Making a provider a saved page names answer again. `planRecovery` is pure and returns the ordered steps, because the button has to say what it will do — a repository fetch and a DEX translation — *before* it starts. It fixes the whole enable cascade, not just the provider switch: the old handler called `setProviderEnabled` alone, which on the common post-restore state (repository off, or extension not installed at all) completed successfully and changed nothing observable. It never adds a repository the app was not already told about — a `cs3ext://` address travels in library rows, and accepting a URL out of one would make "reopen my saved page" a way to install code from anywhere. |
 | `cs3/titleOutcomes.ts` | How each title last behaved, so a dead row is not clicked twice. |
 | `cs3/ottPlatforms.ts` | The OTT platform table and the rule for deciding which provider is one. Pure and tested — a matcher one character too loose fills the Prime Video page with a torrent aggregator called PrimeWire and nothing says so. |
+| `cs3/nativeProviderRegistry.ts` | The roster of providers compiled into the app, and the native mirror of `enabledProviderNames` — the adult gate and the disable cascade, in one place. |
+| `cs3/nativeProviders/types.ts` | The `NativeProvider` interface and `cs3native://` addressing. Pure. |
+| `cs3/nativeProviders/internetArchive.ts` | ~52,000 public-domain films, documentaries and classic TV. The query form is measured, not designed — see below. |
+| `cs3/nativeProviders/peerTube.ts` | Federated video via SepiaSearch. A video's files live on its **own** instance, not the search host. |
+| `cs3/nativeProviders/iptvOrg.ts` | 17,230 free-to-air live streams from the open iptv-org dataset; ~70% answer. |
 | `cs3/ottService.ts` | The same table against what is installed: availability, the search scope for a platform page, and the repositories to offer when nothing serves it. |
 | `download/resumePlan.ts` | Whether a partial download survives its link being replaced. Pure; both failure modes are silent and opposite. |
 | `download/resumeWindow.ts` | The 64 KB boundary probe that proves it — range support, real file length and a byte comparison in one request. |
@@ -3095,6 +3108,97 @@ film that was playing, and the first press paused it. Buffering is deliberately
 *not* forwarded into `isBuffering` — that flag drives an overlay reading
 "Buffering from peers…", which is a torrent's story and a lie about an HTTP
 stream.
+
+### The native provider lane, and why the jar lane stopped being the answer (2026-09-07)
+
+Two findings from re-counting the ecosystem, and the second is the one that changes strategy.
+
+**The cross-platform jar lane collapsed.** PRD-43 measured 110 of 918 extensions publishing
+`jarUrl` on 2026-09-03 — 12.0%. Four days later, re-measured across all 36 catalogued
+repositories following every `pluginLists` entry:
+
+```
+958 extensions · 18 publishing jarUrl (1.9%)
+still on the lane: saimuelrepo 10/10 · recloudstream/extensions 5/5
+                   reflex_repo 1/2 · xr3ed 1/191 · gizlikeyif 1/111
+```
+
+`phisher` went from 47 jars to **0 of 81** and `xr3ed` from 46 to 1 of 191 — verified by
+reading the published `plugins.json` directly: the entries no longer carry `jarUrl`,
+`jarHash` or `jarFileSize` at all. The lane still works and `chooseArtifact` still prefers a
+jar where one exists; what changed is that almost nothing publishes one. **Do not plan work
+on the assumption that the corpus is moving onto it.**
+
+**And the uncatalogued `.cs3` tail is not worth taking.** 122 CloudStream repositories on
+GitHub are not in `official_repositories.json`; 21 of 32 probed have live indexes carrying
+1,158 extensions, of which **19 publish a jar (1.6%)** and three of the four largest are
+majority-NSFW (`7Escanor/BlackHole` 182/182, `vigarepo2` 190/437, `gameras1010-afk` 116/291).
+One trap worth naming: `Wiojelt/TurkSinema` reports `Documentary:56` across 56 extensions —
+every extension declaring every type. **A declared `tvType` is a manifest default, not
+coverage**, and any count taken from that field will be inflated by exactly this pattern.
+
+So the effort went where the sources actually are, and that turned out to be one gap:
+
+> **There was no native searchable provider lane.** `HomeProvider` supplies catalogue rows
+> and has no `search`, `load` or `loadLinks`; everything playable is a `.cs3` addressed
+> `cs3ext://` and run in the JVM. Every source that is not an Android archive — Internet
+> Archive, iptv-org, PeerTube, a Jellyfin server — was unreachable, and all for the same
+> reason.
+
+`cs3/nativeProviderRegistry.ts` plus `cs3/nativeProviders/` closes it. **This is deliberately
+not PRD-41's L2**: `.csx` is a user-installable, sandboxed, signed bundle format for
+third-party code, and that is a large piece of work. This is the other half — code that ships
+inside the app and is reviewed like any other module, so it needs no sandbox, no signing and
+no capability model. When `.csx` lands it produces the same values this does.
+
+Seven rules, each answering a failure already on record:
+
+- **Addressed `cs3native://<id>/<handle>`, never `cs3ext://`.**
+  `explainMissingProvider` resolves an unknown `cs3ext://` name against the extension tables
+  and reports which extension owned it — for a module compiled into the binary that is the
+  wrong-attribution failure that method exists to prevent. `NativeProviderRegistry.explain`
+  is the native counterpart.
+- **They funnel through the enable cascade.** `enabledProviderNames()` on the registry
+  mirrors `PluginManager`'s, reads the same `cs3_adult_content_enabled` key, and stores its
+  exceptions through the same `DisabledSet`. A lane registering providers anywhere else
+  re-opens the adult gate *and* the disable switch at once.
+- **They share the `providers` scope dimension rather than getting a third axis.** A native
+  and an extension provider are the same thing to everything downstream — a named source,
+  scoped by name, enabled by name. What differs is only who to ask, which is one partition in
+  `SearchSession.runProviders`.
+- **`loadLinks` returns `ExtractorLink`.** Not a new shape; `providerLinks.ts`, the
+  compatibility engine, `MediaProxy`, mpv routing and the download identity all already read
+  it.
+- **Failure is a reason, never a bare empty list**, classified through the shared
+  `classifyFailure` taxonomy so these group with everything else in the issue ledger.
+- **`nativeSources` does not escalate to a full fan-out when empty.** `shouldEscalateScope`
+  is right for an extension that has never heard of a title; here the address *names* an item
+  in that provider's own catalogue, so empty means that item is unplayable — which two
+  hundred third-party sites cannot fix and would misreport as the title being unavailable.
+- **The detail route is checked before `plugins.loadMedia`**, which answers `null` for an
+  address it does not know — and that null becomes "nothing knows how to open this address"
+  for every native row.
+
+Two things measured while building Internet Archive that would each have shipped as a bug:
+
+- **Search must be `title:("<query>")`.** The endpoint ORs bare terms across every field and
+  `sort=downloads desc` floats whatever is popular: bare `apollo 11` answers *Experiments in
+  the Revival of Organisms*, bare `night of the living dead` answers *Unus Annus*. The phrase
+  form is right on all five test titles; the bare form is wrong on three.
+- **A sort key is mandatory and `format:(MPEG4)` is a quality gate.** An empty `sort[]`
+  returns an *empty result set* rather than an error — indistinguishable from "no such film".
+  Ungated, the top documentary by downloads is a 3 MB test clip titled *Sample 1* with 1.25M
+  downloads.
+
+`bun run test:native-providers` (26 cases) pins all of it, and is verified by mutation:
+bypassing the enable cascade fails three. One of those three was rewritten after the
+mutation check — asserting "the result was empty" passed with the cascade removed, because a
+*failing* provider also returns empty, so it asserts the socket was never touched instead.
+
+**Four catalogue rows had rotted** and are now marked with the measurement:
+`pitipitii` is gone permanently (GitHub answers **451, unavailable for legal reasons**),
+`fstream`'s host sits behind an Anubis bot wall serving HTML where JSON is expected, and
+`cloudstream_18plus` resolves to a plugin list that 404s. All three are `verified: false`.
 
 ### Two lanes that were already paid for (2026-09-03)
 

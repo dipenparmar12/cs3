@@ -162,3 +162,29 @@ export interface ProviderTreeRepository {
   enabledProviderCount?: number;
   tvTypes?: string[];
 }
+
+/**
+ * One provider compiled into the app, as the renderer sees it.
+ *
+ * Mirrors `electron/cs3/nativeProviderRegistry.ts`'s summary. It lives here
+ * rather than being imported across the boundary for the same reason every
+ * other shared shape does: both sides import from `src/types/`, and a type that
+ * only the main process can name is one the renderer has to restate by hand.
+ *
+ * `enabled` and `effectivelyEnabled` are separate on purpose — see the note in
+ * `BuiltInSources.tsx`. A provider blocked by the adult gate must not render
+ * identically to one the user switched off.
+ */
+export interface NativeProviderSummary {
+  id: string;
+  name: string;
+  description: string;
+  types: string[];
+  adult: boolean;
+  requiresConfig: boolean;
+  enabled: boolean;
+  effectivelyEnabled: boolean;
+  unavailableReason?: string;
+  capabilities: { search: boolean; catalog: boolean; resolve: boolean };
+  sections: Array<{ id: string; title: string; subtitle?: string }>;
+}

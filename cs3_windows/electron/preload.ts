@@ -9,6 +9,7 @@ import type {
   SearchSuggestion,
 } from '../src/types/api';
 import type { OttPlatformView } from './cs3/ottPlatforms';
+import type { NativeProviderSummary } from './cs3/nativeProviderRegistry';
 import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
 import type { SwarmReport } from '../src/types/torrent';
 import type { TorrentContents } from './torrent/torrentContents';
@@ -1158,6 +1159,24 @@ export interface CloudStreamElectronAPI {
   // --- OTT platform destinations -------------------------------------------
 
   /**
+   * The providers compiled into the app, and whether each is switched on.
+   *
+   * Always the full roster, including any that cannot currently answer, for the
+   * same reason `listOttPlatforms` returns platforms nothing serves: a row that
+   * silently vanishes tells the user the app cannot do that, where a row
+   * carrying `unavailableReason` tells them which switch to flip.
+   */
+  listNativeProviders: () => Promise<{
+    ok: boolean;
+    error?: string;
+    providers: NativeProviderSummary[];
+  }>;
+  /** Switches one built-in provider on or off; answers with the whole roster. */
+  setNativeProviderEnabled: (
+    id: string,
+    enabled: boolean
+  ) => Promise<{ ok: boolean; error?: string; providers: NativeProviderSummary[] }>;
+  /**
    * Every OTT platform the app knows, with what is installed behind it.
    *
    * Always the full list, including platforms nothing can serve. A sidebar that
@@ -1912,6 +1931,9 @@ const api: CloudStreamElectronAPI = {
   uninstallPlugin: (internalName) =>
     ipcRenderer.invoke('extension:uninstallPlugin', internalName),
   getInstalledRepositories: () => ipcRenderer.invoke('extension:getInstalledRepositories'),
+  listNativeProviders: () => ipcRenderer.invoke('natives:list'),
+  setNativeProviderEnabled: (id: string, enabled: boolean) =>
+    ipcRenderer.invoke('natives:setEnabled', id, enabled),
   listOttPlatforms: () => ipcRenderer.invoke('ott:listPlatforms'),
   getOttCatalog: (platformId) => ipcRenderer.invoke('ott:getCatalog', platformId),
   getOttCatalogPage: (provider, section, page) =>

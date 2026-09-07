@@ -503,3 +503,27 @@
   color: var(--accent-light);
 }
 .ext-card__matched svg { flex-shrink: 0; margin-top: 0.15rem; }
+
+/* --- Built-in sources ---------------------------------------------------- */
+.ext-builtin {
+  margin-bottom: 1.25rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.02));
+}
+.ext-builtin__head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.ext-builtin__head h3 { margin: 0; font-size: 0.92rem; }
+.ext-builtin__note { font-size: 0.76rem; opacity: 0.65; }
+.ext-builtin__error { margin: 0.5rem 0 0; font-size: 0.8rem; color: var(--danger, #f87171); }
+.ext-builtin__list { list-style: none; margin: 0.75rem 0 0; padding: 0; display: grid; gap: 0.6rem; }
+.ext-builtin__row {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+  padding: 0.6rem 0.7rem; border: 1px solid var(--border); border-radius: 8px;
+}
+/* min-width:0 or the description's longest word forces the row wider than the
+   panel and the toggle leaves the card — the flex trap noted in AGENTS.md. */
+.ext-builtin__main { min-width: 0; }
+.ext-builtin__title { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.ext-builtin__desc { margin: 0.3rem 0 0; font-size: 0.78rem; opacity: 0.75; line-height: 1.45; }
+.ext-builtin__reason { margin: 0.3rem 0 0; font-size: 0.76rem; color: var(--warning, #fbbf24); }

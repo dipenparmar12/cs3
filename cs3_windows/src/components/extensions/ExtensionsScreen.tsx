@@ -31,6 +31,7 @@ import { FilterBar } from './FilterBar';
 import { ExtensionUpdates } from '../ExtensionUpdates';
 import { BulkActionBar } from './BulkActionBar';
 import { SourceTree } from './SourceTree';
+import { BuiltInSources } from './BuiltInSources';
 import { RepositoryCatalog } from './RepositoryCatalog';
 import { ExtensionCatalog } from './ExtensionCatalog';
 import type { SitePlugin } from '../../types/plugin';
@@ -236,6 +237,14 @@ export const ExtensionsScreen: React.FC = () => {
 
       {tab === 'sources' ? (
         <>
+          {/*
+            Above the tree, because these are the sources that always work.
+            A new install has no extensions and, before this lane existed, an
+            empty Sources tab — which reads as an app that cannot do anything
+            until you go and find plugins for it.
+          */}
+          <BuiltInSources />
+
           {/*
             Bulk actions apply to providers, which is the level the enable
             cascade actually gates. Offering them for extensions as well would

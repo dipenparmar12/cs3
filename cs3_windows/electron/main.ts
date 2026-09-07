@@ -3802,6 +3802,37 @@ ipcMain.handle(
  * always contains every platform, each carrying how it is reachable rather
  * than being omitted when it is not.
  */
+/**
+ * The providers that ship with the app.
+ *
+ * A separate surface from `extension:*` because it answers a different
+ * question. `extension:*` is an inventory keyed on repositories and archives —
+ * things that were downloaded, can be updated, and can fail to link. These are
+ * compiled in: there is nothing to install, nothing to verify and nothing that
+ * can be at a compatibility tier. The only thing a user does to one is switch it
+ * off, and the only thing they need told is why one is unavailable.
+ */
+ipcMain.handle('natives:list', async () => {
+  try {
+    return { ok: true, providers: contentService.getNativeProviders().summaries() };
+  } catch (error) {
+    return { ...fail(error), providers: [] };
+  }
+});
+
+ipcMain.handle('natives:setEnabled', async (_event, id: string, enabled: boolean) => {
+  try {
+    const registry = contentService.getNativeProviders();
+    registry.setEnabled(id, enabled);
+    // The whole roster comes back, not just the row that changed — the same
+    // rule `util/disabledSet.ts` owns: a failed write then shows up as the
+    // toggle springing back rather than as a lie on screen.
+    return { ok: true, providers: registry.summaries() };
+  } catch (error) {
+    return { ...fail(error), providers: [] };
+  }
+});
+
 ipcMain.handle('ott:listPlatforms', async () => {
   try {
     return { ok: true, platforms: await ottService.listPlatforms() };

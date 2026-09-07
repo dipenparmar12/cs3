@@ -37,6 +37,9 @@ import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
 import { SharedDiscovery } from './sharedDiscovery';
 import { isTorrentLink } from './cs3/providerLinks';
+import { NativeProviderRegistry } from './cs3/nativeProviderRegistry.ts';
+import { parseNativeAddress } from './cs3/nativeProviders/types.ts';
+import { classifyFailure } from './cs3/failureTaxonomy.ts';
 import { planSourceScope, shouldEscalateScope } from './cs3/sourceScope';
 
 /**
@@ -235,6 +238,8 @@ export class ContentService {
   private cache: SourceCache;
   private scope: SearchScopeStore;
   private searches: SearchSessionManager;
+  /** Providers that ship with the app; see `cs3/nativeProviderRegistry.ts`. */
+  private natives: NativeProviderRegistry;
   /**
    * Applies a provider's `Referer`/`User-Agent` to the stream it handed us.
    *
@@ -291,14 +296,20 @@ export class ContentService {
     this.engine = engine;
     this.cache = new SourceCache(datastore);
     this.scope = new SearchScopeStore(datastore);
+    this.natives = new NativeProviderRegistry(datastore);
     this.searches = new SearchSessionManager({
       plugins: this.plugins,
       registry: this.registry,
       cinemeta: this.cinemeta,
       metadata: this.metadata,
       scope: this.scope,
+      natives: this.natives,
       onResults: (results) => this.rememberRoutes(results),
     });
+  }
+
+  public getNativeProviders(): NativeProviderRegistry {
+    return this.natives;
   }
 
   public getScope(): SearchScopeStore {
@@ -495,6 +506,27 @@ export class ContentService {
         detail.imdbId = await this.metadata.resolveImdbId(detail.name, detail.year);
       }
       return detail;
+    }
+
+    /**
+     * A built-in provider's own detail page.
+     *
+     * Checked before the extension path because `plugins.loadMedia` answers
+     * `null` for an address it does not recognise, and that null becomes
+     * "nothing knows how to open this address" — which would be the message for
+     * every native row, naming the app's own routing rather than anything the
+     * viewer can act on.
+     *
+     * `MetadataDetail` extends `LoadResponse`, so a provider's answer needs no
+     * translation; only `imdbId` is absent, and honestly so — see the note in
+     * `nativeProviders/internetArchive.ts` about why these rows should not be
+     * fused with catalogue rows on a guessed identity.
+     */
+    if (this.natives.handles(base)) {
+      const parsed = parseNativeAddress(base)!;
+      const provider = this.natives.byId(parsed.providerId)!;
+      const controller = new AbortController();
+      return (await provider.load(parsed.handle, controller.signal)) as MetadataDetail;
     }
 
     const fromProvider = await this.plugins.loadMedia(base);
@@ -743,6 +775,44 @@ export class ContentService {
         indexerOutcomes: [],
         query: { title, season, episode },
         // A magnet is the source. There is no wider search to offer.
+        scopeUsed: 'origin',
+        canWiden: false,
+      };
+    }
+
+    /**
+     * A built-in provider knows its own links, exactly as an extension does.
+     *
+     * Checked before the `cs3ext://` branch and before any indexer work for the
+     * same reason that branch exists: this address came *from* a provider, so
+     * asking a torrent index for the title it already resolved is slower and
+     * worse than reading the answer it handed over.
+     *
+     * Unlike the extension branch this does **not** escalate to a full fan-out
+     * when it comes back empty. `shouldEscalateScope` exists because a provider
+     * that has never heard of a title is a saving on an answer nobody can play;
+     * here the address *names* an item in that provider's own catalogue, so an
+     * empty answer means the item has no playable file — which a fan-out across
+     * two hundred third-party sites cannot fix, and would misreport as the
+     * title being unavailable rather than that item being unplayable.
+     */
+    if (this.natives.handles(base)) {
+      const { sources, diagnosis } = await this.nativeSources(base);
+      onProgress?.({
+        results: sources,
+        settled: 1,
+        totalRelevant: 1,
+        lastIndexerName: 'Built-in provider',
+        done: true,
+      });
+      if (sources.length > 0) this.cache.write(base, sources, season, episode);
+      return {
+        sources,
+        filtered: [],
+        indexerOutcomes: [],
+        emptyReason: sources.length === 0 ? diagnosis?.summary : undefined,
+        diagnosis: sources.length === 0 ? diagnosis : undefined,
+        query: { title: request.titleOverride ?? '', season, episode },
         scopeUsed: 'origin',
         canWiden: false,
       };
@@ -1517,6 +1587,126 @@ export class ContentService {
       .sort((a, b) => b.score - a.score);
 
     return { sources, diagnosis: sources.length === 0 ? diagnosis : undefined };
+  }
+
+  /**
+   * A built-in provider's own answer for one of its own addresses.
+   *
+   * The native counterpart of {@link extensionSources}, and deliberately much
+   * shorter — every complication in that method is a property of the `.cs3`
+   * lane rather than of providers in general. There is no `dataUrl` retry
+   * because a native handle is never a page address that has to be opened
+   * first; no playlist expansion because none of these providers splits a title
+   * across files; and no torrent routing because none of them returns a magnet.
+   * When one does, it takes the same branch that method already has.
+   *
+   * What is preserved exactly is the *reporting* contract. A failure becomes a
+   * `SourceDiagnosis` carrying the provider's own sentence — never an empty
+   * list with nothing beside it, which is the habit AGENTS.md records as the
+   * most expensive one this codebase has had to unlearn.
+   */
+  private async nativeSources(
+    address: string
+  ): Promise<{ sources: TorrentResult[]; diagnosis?: SourceDiagnosis }> {
+    const parsed = parseNativeAddress(address);
+    const provider = parsed ? this.natives.byId(parsed.providerId) : undefined;
+    if (!parsed || !provider) {
+      return {
+        sources: [],
+        diagnosis: {
+          // `provider-missing` rather than `runtime-unavailable`: the JVM has
+          // nothing to do with a built-in provider, and sending the reader to
+          // the runtime status in Settings would point at something working.
+          kind: 'provider-missing',
+          summary: this.natives.explain(address),
+          hint: 'Built-in sources can be switched on again under Extensions.',
+          address,
+          stage: 'links',
+          facts: [{ label: 'Address', value: address }],
+          at: Date.now(),
+        },
+      };
+    }
+
+    const controller = new AbortController();
+    let links: ExtractorLink[];
+    try {
+      links = await provider.loadLinks(parsed.handle, controller.signal);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        sources: [],
+        diagnosis: {
+          // Classified through the shared taxonomy so a built-in provider's
+          // failures group with everything else's in the issue ledger — a
+          // second vocabulary here would show up as one row per occurrence.
+          kind: classifyFailure(message),
+          summary: `${provider.name}: ${message}`,
+          provider: provider.name,
+          hint: 'This item could not be resolved. Other sources for the same title may still work.',
+          address,
+          stage: 'links',
+          facts: [
+            { label: 'Provider', value: provider.name },
+            { label: 'Address', value: address },
+          ],
+          at: Date.now(),
+        },
+      };
+    }
+
+    const sources = links
+      .filter((link) => Boolean(link.url))
+      .map((link, index) => {
+        const release = parseReleaseName(link.name || link.source || 'Stream');
+        return {
+          infoHash: directSourceIdentity(link.url),
+          magnet: '',
+          torrentUrl: undefined,
+          directUrl: link.url,
+          directHeaders: link.headers,
+          isM3u8: Boolean(link.isM3u8) || link.linkType === 'M3U8',
+          isDash: Boolean(link.isDash) || link.linkType === 'DASH',
+          mimeType: link.mimeType,
+          drm: link.drm,
+          audioTracks: link.audioTracks,
+          title: link.name || link.source || provider.name,
+          sizeBytes: 0,
+          // Meaningless for a direct stream, and 1 keeps it above the
+          // `minSeeders` floor that would otherwise drop every one of these.
+          seeders: 1,
+          leechers: 0,
+          indexerId: `native:${provider.id}`,
+          indexerName: link.source || provider.name,
+          providerName: provider.name,
+          parsed: {
+            ...release,
+            resolution: (link.quality || release.resolution) as ParsedRelease['resolution'],
+          },
+          score: link.quality || 0,
+          scoreReasons: [`Supplied directly by ${provider.name}`, describeLinkShape(link)],
+          fileIndex: index,
+        } satisfies TorrentResult;
+      })
+      .sort((a, b) => b.score - a.score);
+
+    return {
+      sources,
+      diagnosis:
+        sources.length === 0
+          ? {
+              // Ran cleanly and genuinely had nothing — distinct from a
+              // failure, and the ranking must not score it as one.
+              kind: 'no-links',
+              summary: `${provider.name} returned no playable link for this item.`,
+              provider: provider.name,
+              address,
+              stage: 'links',
+              facts: [{ label: 'Provider', value: provider.name }],
+              at: Date.now(),
+            }
+          : undefined,
+    };
   }
 
   /**

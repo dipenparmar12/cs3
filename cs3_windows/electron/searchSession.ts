@@ -3,6 +3,7 @@ import type { CinemetaProvider } from './cinemeta';
 import type { MetadataProvider } from './metadataProvider';
 import type { PluginManager } from './pluginManager';
 import type { IndexerRegistry } from './torrent/indexerRegistry';
+import type { NativeProviderRegistry } from './cs3/nativeProviderRegistry.ts';
 import { looksLikeWebPage } from './ytdlpSources.ts';
 import { mergeSearchResults, restrictToExact } from './searchMerge';
 import {
@@ -74,6 +75,19 @@ interface SessionDependencies {
   cinemeta: CinemetaProvider;
   metadata: MetadataProvider;
   scope: SearchScopeStore;
+  /**
+   * The built-in providers, searched alongside the extension ones.
+   *
+   * Deliberately merged into the same `providers` dimension rather than given a
+   * third axis. A native provider and an extension provider are the same thing
+   * to everyone downstream — both are a named source that answers a title
+   * search, both are scoped by name, both are enabled or disabled by name — and
+   * a separate axis would mean `SearchScope`, the picker, the report and every
+   * consumer of `missingProviders` each learning a distinction that buys
+   * nothing. What differs is only *who to ask*, which is one partition in
+   * {@link SearchSession.runProviders}.
+   */
+  natives: NativeProviderRegistry;
   /** Called with every snapshot, including the terminal one. */
   notify: (snapshot: SearchSnapshot) => void;
   /** Lets the content service keep its `cs3ext://` alternate-route memory warm. */
@@ -175,7 +189,18 @@ export class SearchSession {
         return;
       }
 
-      const enabledProviders = await this.deps.plugins.listEnabledProviders();
+      /**
+       * Extension providers and built-in ones, in one namespace.
+       *
+       * Native names are appended rather than interleaved so that a global
+       * search asks the extensions first — they are the ones a user installed
+       * deliberately, and on a title they carry the built-ins are the fallback
+       * rather than the answer.
+       */
+      const enabledProviders = [
+        ...(await this.deps.plugins.listEnabledProviders()),
+        ...this.deps.natives.enabledProviderNames(),
+      ];
       const enabledIndexers = this.deps.registry
         .getConfigs()
         .filter((config) => config.enabled)
@@ -267,18 +292,60 @@ export class SearchSession {
     return { providers, indexers, catalogues, sources };
   }
 
+  /**
+   * Asks the scoped providers, whoever owns each one.
+   *
+   * The partition is the only place the two lanes differ. Both halves report
+   * through the same `record(…, 'provider', …)` call, so a built-in provider
+   * shows up in the progress list, the per-source outcome and the scope report
+   * exactly as an extension does — including when it fails, which is the half
+   * that matters: a source that answers nothing and says nothing is
+   * indistinguishable from one that was never asked.
+   */
   private async runProviders(names: string[]): Promise<void> {
     if (names.length === 0) return;
-    await this.deps.plugins.searchEach(
-      this.query,
-      names,
-      (outcome) =>
-        this.record(outcome.provider, outcome.provider, 'provider', outcome.results, {
-          error: outcome.error,
-          latencyMs: outcome.latencyMs,
-        }),
-      this.controller.signal
-    );
+
+    const nativeNames = new Set(this.deps.natives.enabledProviderNames());
+    const natives = names.filter((name) => nativeNames.has(name));
+    const extensions = names.filter((name) => !nativeNames.has(name));
+
+    await Promise.all([
+      extensions.length > 0
+        ? this.deps.plugins.searchEach(
+            this.query,
+            extensions,
+            (outcome) =>
+              this.record(outcome.provider, outcome.provider, 'provider', outcome.results, {
+                error: outcome.error,
+                latencyMs: outcome.latencyMs,
+              }),
+            this.controller.signal
+          )
+        : Promise.resolve(),
+      ...natives.map((name) => this.runNativeProvider(name)),
+    ]);
+  }
+
+  /** One built-in provider, reported the moment it answers. */
+  private async runNativeProvider(name: string): Promise<void> {
+    const provider = this.deps.natives.byName(name);
+    if (!provider || !provider.capabilities().search) {
+      // A provider in scope that cannot answer free text is reported as such,
+      // never as a clean zero — the same reason `runIndexers` surfaces `skipped`.
+      this.record(name, name, 'provider', [], { error: 'does not support text search' });
+      return;
+    }
+    const started = Date.now();
+    try {
+      const results = await provider.search(this.query, this.controller.signal);
+      this.record(name, name, 'provider', results, { latencyMs: Date.now() - started });
+    } catch (error) {
+      if (this.controller.signal.aborted) return;
+      this.record(name, name, 'provider', [], {
+        error: error instanceof Error ? error.message : String(error),
+        latencyMs: Date.now() - started,
+      });
+    }
   }
 
   /**
