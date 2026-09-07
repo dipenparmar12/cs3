@@ -12,7 +12,14 @@ import path from 'path';
 import crypto from 'crypto';
 import { app } from 'electron';
 import type { SitePlugin, PluginData, PluginCompatibilityReport } from '../src/types/plugin';
-import type { SearchResponse, LoadResponse, ExtractorLink } from '../src/types/api';
+import type {
+  SearchResponse,
+  LoadResponse,
+  ExtractorLink,
+  ProviderCatalog,
+  ProviderCatalogPage,
+  ProviderCatalogSection,
+} from '../src/types/api';
 import { PluginCompatibilityAnalyzer } from './pluginAnalyzer';
 import { fetchBuffer, fetchJson } from './torrent/http';
 import type { DatastoreManager } from './datastore';
@@ -58,6 +65,14 @@ interface RepositoryJson {
   /** URLs of plugin-list JSON files — **not** inline plugin objects. */
   pluginLists: string[];
 }
+
+import {
+  planRecovery,
+  isActionable,
+  type RecoveryContext,
+  type RecoveryOutcome,
+  type RecoveryPlan,
+} from './cs3/providerRecovery.js';
 
 export interface RepositoryFetchResult {
   repositoryUrl: string;
@@ -331,6 +346,32 @@ const SETTINGS_KEY_ADULT_ENABLED = 'cs3_adult_content_enabled';
  * that the name is unknown, which is true and useless.
  */
 const SETTINGS_KEY_PROVIDER_ORIGINS = 'cs3_provider_origins';
+
+/**
+ * Extensions this installation has been *told about*, as opposed to ones it has
+ * installed.
+ *
+ * Written by a backup restore, which is the only thing that knows an extension
+ * existed on a machine where it was never installed. Recovery reads it to turn
+ * "this title came from Netflix" into "install NetMirror from this repository",
+ * which is otherwise unanswerable on a fresh install: the live tables know only
+ * what is on disk, and on that machine the answer is nothing.
+ *
+ * Kept separate from the installed records rather than pre-seeding those. A row
+ * here is a claim about another machine and may name an extension that has since
+ * been withdrawn from its repository; merging the two would make the extensions
+ * screen list archives that do not exist and cannot be made to.
+ */
+const SETTINGS_KEY_KNOWN_PLUGINS = 'cs3_known_plugins';
+
+/** One extension a backup says the user had, and where it came from. */
+export interface KnownPlugin {
+  internalName: string;
+  name: string;
+  repositoryUrl: string;
+  url?: string;
+  version?: number;
+}
 
 /**
  * Whether a provider serves adult content.
@@ -1894,6 +1935,278 @@ export class PluginManager {
   }
 
   /**
+   * The provider-to-extension map, for a backup to carry.
+   *
+   * This is the half of recovery that cannot be re-derived. A provider name is
+   * all a `cs3ext://` address holds, and on a machine where nothing is
+   * installed there is no live table that can say which extension registered
+   * it — so without this a restored library is a list of addresses naming
+   * providers nothing can account for.
+   */
+  public exportProviderOrigins(): Record<string, { internalName: string; pluginName: string }> {
+    return Object.fromEntries(this.loadProviderOrigins());
+  }
+
+  /**
+   * Takes a backup's origin map.
+   *
+   * A locally observed origin always wins. What is recorded here is what
+   * actually registered the provider *on this machine*, which is the truth;
+   * the backup's row is a claim about another one, and an extension that has
+   * since changed its provider names would otherwise overwrite a correct entry
+   * with a stale one.
+   */
+  public importProviderOrigins(
+    incoming: Record<string, { internalName: string; pluginName: string }>
+  ): number {
+    const origins = this.loadProviderOrigins();
+    let added = 0;
+    for (const [name, origin] of Object.entries(incoming ?? {})) {
+      if (!origin?.internalName || origins.has(name)) continue;
+      origins.set(name, { internalName: origin.internalName, pluginName: origin.pluginName });
+      added++;
+    }
+    if (added > 0) {
+      this.datastore.setObject(SETTINGS_KEY_PROVIDER_ORIGINS, Object.fromEntries(origins));
+    }
+    return added;
+  }
+
+  /** Extensions a restore said the user had, keyed by internal name. */
+  public getKnownPlugins(): KnownPlugin[] {
+    const stored = this.datastore.getObject<Record<string, KnownPlugin>>(
+      SETTINGS_KEY_KNOWN_PLUGINS,
+      {}
+    );
+    return Object.values(stored ?? {}).filter((row) => row?.internalName && row?.repositoryUrl);
+  }
+
+  /**
+   * Records what a backup says was installed elsewhere.
+   *
+   * Later rows win, because a second restore from a newer backup is the one
+   * carrying the current version and repository. An entry naming no repository
+   * is dropped rather than stored: recovery's whole job is to fetch the
+   * archive, and a row it cannot fetch from is a row that makes the button
+   * appear and fail.
+   */
+  public rememberKnownPlugins(rows: Array<Partial<KnownPlugin>>): number {
+    const stored = this.datastore.getObject<Record<string, KnownPlugin>>(
+      SETTINGS_KEY_KNOWN_PLUGINS,
+      {}
+    );
+    const known: Record<string, KnownPlugin> = { ...(stored ?? {}) };
+    let count = 0;
+    for (const row of rows ?? []) {
+      if (!row?.internalName || !row?.repositoryUrl) continue;
+      known[row.internalName] = {
+        internalName: row.internalName,
+        name: row.name ?? row.internalName,
+        repositoryUrl: row.repositoryUrl,
+        url: row.url,
+        version: row.version,
+      };
+      count++;
+    }
+    if (count > 0) this.datastore.setObject(SETTINGS_KEY_KNOWN_PLUGINS, known);
+    return count;
+  }
+
+  /**
+   * Everything `planRecovery` is allowed to see, gathered in one place.
+   *
+   * Built rather than passed piecemeal so the planner stays pure and the set
+   * of inputs is one readable list. `known` is the only entry that can be
+   * non-empty on a machine where nothing is installed, which is the case the
+   * whole feature exists for.
+   */
+  private recoveryContext(): RecoveryContext {
+    const installed = new Map<string, { name: string; repositoryUrl: string }>();
+    for (const plugin of this.getInstalledPlugins()) {
+      installed.set(plugin.internalName, {
+        name: plugin.name,
+        repositoryUrl: plugin.repositoryUrl ?? '',
+      });
+    }
+
+    const registered = new Map<
+      string,
+      { pluginInternalName: string; pluginName: string; adult: boolean }
+    >();
+    for (const provider of this.providers.values()) {
+      registered.set(provider.name, {
+        pluginInternalName: provider.pluginInternalName,
+        pluginName: provider.pluginName,
+        adult: isAdultProvider(provider),
+      });
+    }
+
+    const known = new Map<string, { name: string; repositoryUrl: string }>();
+    for (const row of this.getKnownPlugins()) {
+      known.set(row.internalName, { name: row.name, repositoryUrl: row.repositoryUrl });
+    }
+
+    return {
+      registered,
+      installed,
+      repositories: new Set(this.getInstalledRepositories()),
+      known,
+      origins: new Map(this.loadProviderOrigins()),
+      disabledProviders: new Set(this.getDisabledProviders()),
+      disabledExtensions: new Set(this.getDisabledExtensions()),
+      disabledRepositories: new Set(this.getDisabledRepositories()),
+      repositoryIdOf: (internalName) => this.repositoryIdOf(internalName),
+      adultAllowed: this.adultAllowed(),
+    };
+  }
+
+  /** What it would take to make `provider` answer, without doing any of it. */
+  public planProviderRecovery(provider: string): RecoveryPlan {
+    return planRecovery(provider, this.recoveryContext());
+  }
+
+  /**
+   * The same, for a list.
+   *
+   * One call rather than one per provider, because the case that motivated it
+   * is a scope warning naming *seventy* — and seventy IPC round trips, each
+   * rebuilding the same context from the same datastore reads, to render one
+   * checklist. The context is built once here and shared across every plan.
+   */
+  public planProviderRecoveryBulk(providers: string[]): RecoveryPlan[] {
+    const context = this.recoveryContext();
+    return providers.map((provider) => planRecovery(provider, context));
+  }
+
+  /**
+   * Does it.
+   *
+   * The plan is recomputed rather than taken from the caller. A renderer that
+   * held a plan across a reload — or across another window installing the same
+   * extension — would otherwise ask for an install that has already happened,
+   * and `installPlugin` would spend the download to find out.
+   *
+   * Steps run in order and stop at the first failure, because they depend on
+   * each other: enabling an extension that failed to install reports success
+   * for a switch on nothing. What already succeeded is kept, since a repository
+   * added before the archive failed to download is still worth having.
+   */
+  /**
+   * Recovers several, and keeps going when one fails.
+   *
+   * Sequential rather than parallel, deliberately. Two providers from one
+   * extension would otherwise both reach `install-extension` and race on the
+   * same archive path, and several at once is tens of concurrent downloads
+   * against community repositories — the same restraint `SourcePrefetcher`
+   * shows, and for the same reason.
+   *
+   * A failure never abandons the rest: the point of a bulk fix is that the one
+   * repository whose host is down today does not cost the user the other
+   * sixty-nine.
+   */
+  public async runProviderRecoveryBulk(providers: string[]): Promise<RecoveryOutcome[]> {
+    const results: RecoveryOutcome[] = [];
+    for (const provider of providers) {
+      try {
+        results.push(await this.runProviderRecovery(provider));
+      } catch (error) {
+        results.push({
+          ok: false,
+          provider,
+          done: [],
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return results;
+  }
+
+  public async runProviderRecovery(provider: string): Promise<RecoveryOutcome> {
+    const plan = this.planProviderRecovery(provider);
+    const done: RecoveryOutcome['done'] = [];
+
+    if (plan.blocked) {
+      return { ok: false, provider, done, error: plan.blocked };
+    }
+    if (!isActionable(plan)) {
+      return {
+        ok: true,
+        provider,
+        done,
+        error: undefined,
+      };
+    }
+
+    for (const step of plan.steps) {
+      try {
+        switch (step.kind) {
+          case 'add-repository': {
+            const result = await this.addRepository(step.target);
+            if (!result?.ok) throw new Error(result?.message ?? 'The repository could not be read.');
+            break;
+          }
+          case 'install-extension': {
+            const repositoryUrl = plan.extension?.repositoryUrl;
+            if (!repositoryUrl) throw new Error('No repository is recorded for this extension.');
+            const fetched = await this.fetchRepository(repositoryUrl);
+            const entry = fetched.plugins.find(
+              (candidate) => candidate.internalName === step.target
+            );
+            if (!entry) {
+              /*
+               * The extension is gone from the repository it used to be in.
+               * Said plainly rather than as a download failure: the archive is
+               * not coming back and the user's next move is to find the title
+               * elsewhere, not to retry.
+               */
+              throw new Error(
+                `${step.target} is no longer published by that repository. ` +
+                  'It may have been renamed or withdrawn.'
+              );
+            }
+            const result = await this.installPlugin(entry, repositoryUrl);
+            if (!result.ok) throw new Error(result.message);
+            break;
+          }
+          case 'enable-repository':
+            this.setRepositoryEnabled(step.target, true);
+            break;
+          case 'enable-extension':
+            this.setExtensionEnabled(step.target, true);
+            break;
+          case 'enable-provider':
+            this.setProviderEnabled(step.target, true);
+            break;
+        }
+        done.push({ kind: step.kind, target: step.target, ok: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        done.push({ kind: step.kind, target: step.target, ok: false, error: message });
+        return { ok: false, provider, done, error: message };
+      }
+    }
+
+    /*
+     * Verified, not assumed. Every step reporting success and the provider
+     * still not answering is precisely the bug this replaced — so the claim is
+     * checked against the one predicate the rest of the app uses, rather than
+     * inferred from the steps having run.
+     */
+    const enabled = await this.listEnabledProviders();
+    if (!enabled.includes(provider)) {
+      return {
+        ok: false,
+        provider,
+        done,
+        error: this.explainMissingProvider(provider),
+      };
+    }
+
+    await this.ensureProviderActive(provider);
+    return { ok: true, provider, done };
+  }
+
+  /**
    * Why a provider name the app is still using no longer answers.
    *
    * The reported failure was a raw runtime exception reaching the screen —
@@ -2714,6 +3027,170 @@ export class PluginManager {
    * The batch form, for callers with nothing to do with a partial answer —
    * source discovery, which cannot start a stream from half a result set.
    */
+  /**
+   * What a provider offers to browse.
+   *
+   * Cheap on the sidecar — `mainPage` is a declared property, not a request —
+   * but it still needs the plugin *loaded*, because the property lives on the
+   * provider instance. That is the whole cost of this call and the reason it is
+   * separate from {@link loadCatalogPage}: opening a provider's browse screen
+   * pays one activation, and every row after that is a fetch.
+   */
+  public async loadCatalog(providerName: string): Promise<ProviderCatalog> {
+    const unavailable = (reason: string): ProviderCatalog => ({
+      provider: providerName,
+      hasMainPage: false,
+      sections: [],
+      unavailableReason: reason,
+    });
+
+    if (!this.isProviderEnabled(providerName)) {
+      return unavailable(this.explainMissingProvider(providerName));
+    }
+
+    await this.ensureProviderActive(providerName);
+    const response = await this.sidecar.call(
+      'providerMainPageSections',
+      { provider: providerName },
+      PROVIDER_CALL_TIMEOUT_MS
+    );
+
+    if (!response.ok) {
+      const reason =
+        response.errorKind === 'PROVIDER_NOT_LOADED'
+          ? this.explainMissingProvider(providerName)
+          : (response.error ?? 'The extension runtime did not answer.');
+      return unavailable(reason);
+    }
+
+    const parsed = safeParse(String(response.result?.json ?? ''));
+    if (!parsed?.ok) {
+      return unavailable(
+        typeof parsed?.error === 'string'
+          ? parsed.error
+          : 'The provider returned no usable answer.'
+      );
+    }
+
+    const sections: ProviderCatalogSection[] = Array.isArray(parsed.sections)
+      ? (parsed.sections as Array<Record<string, unknown>>)
+          .filter((raw) => typeof raw?.name === 'string')
+          .map((raw) => ({
+            name: String(raw.name),
+            data: typeof raw.data === 'string' ? raw.data : '',
+            horizontalImages: raw.horizontalImages === true,
+          }))
+      : [];
+
+    const hasMainPage = parsed.hasMainPage === true;
+    return {
+      provider: providerName,
+      hasMainPage,
+      sections,
+      unavailableReason:
+        hasMainPage && sections.length > 0
+          ? undefined
+          : `${providerName} does not publish a browsable catalogue — search it instead.`,
+    };
+  }
+
+  /**
+   * One page of one catalogue row.
+   *
+   * Counted through the analytics like a search, and for the same reason: a
+   * provider whose catalogue times out is a provider that will time out when
+   * someone tries to play from it. `empty` stays distinct from `failure` here
+   * too — a row that has run out of pages has not malfunctioned.
+   */
+  public async loadCatalogPage(
+    providerName: string,
+    section: ProviderCatalogSection,
+    page: number
+  ): Promise<ProviderCatalogPage> {
+    const requested = Math.max(1, Math.floor(page) || 1);
+    const empty = (): ProviderCatalogPage => ({
+      provider: providerName,
+      section: section.name,
+      page: requested,
+      items: [],
+      hasNext: false,
+    });
+
+    if (!this.isProviderEnabled(providerName)) return empty();
+
+    await this.ensureProviderActive(providerName);
+    const started = Date.now();
+    const response = await this.sidecar.call(
+      'providerMainPage',
+      {
+        provider: providerName,
+        section: section.name,
+        data: section.data,
+        page: requested,
+        horizontalImages: section.horizontalImages === true,
+      },
+      PROVIDER_CALL_TIMEOUT_MS
+    );
+    const latencyMs = Date.now() - started;
+
+    const fail = (message: string): ProviderCatalogPage => {
+      this.diagnostics?.record({
+        level: 'error',
+        stage: 'search',
+        source: providerName,
+        query: section.name,
+        message,
+      });
+      this.analytics?.observe({
+        provider: providerName,
+        stage: 'search',
+        outcome: 'failure',
+        latencyMs,
+        error: message,
+      });
+      return empty();
+    };
+
+    if (!response.ok) return fail(response.error ?? 'The extension runtime did not answer.');
+
+    const parsed = safeParse(String(response.result?.json ?? ''));
+    if (!parsed) return fail('The provider returned no usable answer.');
+    if (!parsed.ok) {
+      return fail(
+        typeof parsed.error === 'string' ? parsed.error : 'The provider reported a failure.'
+      );
+    }
+
+    /**
+     * A provider may answer one request with several rows — upstream's
+     * `HomePageResponse` carries a list — so the items are flattened onto the
+     * row that was asked for. Rendering the provider's sub-rows as though the
+     * app had requested them would put rows on screen the user cannot page.
+     */
+    const items: SearchResponse[] = [];
+    if (Array.isArray(parsed.sections)) {
+      for (const raw of parsed.sections as Array<Record<string, unknown>>) {
+        items.push(...mapProviderResults(providerName, raw?.items));
+      }
+    }
+
+    this.analytics?.observe({
+      provider: providerName,
+      stage: 'search',
+      outcome: items.length > 0 ? 'success' : 'empty',
+      produced: items.length,
+      latencyMs,
+    });
+
+    return {
+      provider: providerName,
+      section: section.name,
+      page: requested,
+      items,
+      hasNext: parsed.hasNext === true && items.length > 0,
+    };
+  }
+
   public async searchAll(query: string, only?: string[]): Promise<SearchResponse[]> {
     const out: SearchResponse[] = [];
     await this.searchEach(query, only, (outcome) => out.push(...outcome.results));

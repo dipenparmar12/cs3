@@ -82,6 +82,15 @@ interface SourcePickerProps {
   onWiden?: () => void;
   /** True when widening would reach providers and indexers not yet asked. */
   canWiden?: boolean;
+  /**
+   * The app widened by itself, because the providers this title came from had
+   * no links for it.
+   *
+   * Worth a line on screen in both states. While searching it explains a wait
+   * that has just tripled; once the list is up it explains why these rows come
+   * from extensions the viewer never chose.
+   */
+  widened?: boolean;
 }
 
 /** Seeder count is the strongest predictor of whether a stream will actually start. */
@@ -116,7 +125,7 @@ function resolutionLabel(resolution: number): string {
 export const SourcePicker: React.FC<SourcePickerProps> = ({
   isOpen, isLoading, data, error, contextLabel, onClose, onPlay, onDownload, onRetry,
   searching = false, searched = 0, totalSources = 0, cancelled = false, onCancelSearch,
-  onWiden, canWiden = false,
+  onWiden, canWiden = false, widened = false,
 }) => {
   const [showFiltered, setShowFiltered] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -213,6 +222,13 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                 </button>
               )}
             </div>
+            {widened && (
+              <div className="source-picker__progress-note">
+                <Globe size={12} />
+                No sources where this title was found — asking every provider and
+                indexer.
+              </div>
+            )}
             {totalSources > 0 && (
               <div
                 className="source-picker__progress-track"
@@ -300,6 +316,9 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
 
             <div className="source-picker__state-actions">
               <button className="btn" onClick={onRetry}>Search again</button>
+              {/* No "Search all sources" is offered beside this, and must not
+                  be: `canWiden` is false after an automatic widen, because it
+                  already happened. */}
               {onWiden && canWiden && (
                 <button className="btn" onClick={onWiden}>
                   <Globe size={15} /> Search all sources

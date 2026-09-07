@@ -7,9 +7,9 @@ import { looksLikeWebPage } from './ytdlpSources.ts';
 import { mergeSearchResults, restrictToExact } from './searchMerge';
 import {
   GLOBAL_SCOPE_REPORT,
+  SearchScopeStore,
   type ScopeResolution,
   type SearchScopeReport,
-  type SearchScopeStore,
 } from './searchScope';
 
 /**
@@ -181,7 +181,17 @@ export class SearchSession {
         .filter((config) => config.enabled)
         .map((config) => config.id);
 
-      const providerScope = this.deps.scope.resolveProviders(enabledProviders);
+      /**
+       * A per-search override beats the stored scope, and does not replace it.
+       *
+       * The OTT platform pages bind their search box to the providers behind
+       * that platform. That binding belongs to the page — leaving it must not
+       * leave the app scoped — so it arrives on the request rather than through
+       * `SearchScopeStore.set`.
+       */
+      const providerScope = this.options.providers
+        ? SearchScopeStore.override(enabledProviders, this.options.providers)
+        : this.deps.scope.resolveProviders(enabledProviders);
       const indexerScope = this.deps.scope.resolveIndexers(enabledIndexers);
       this.scopeReport = this.deps.scope.report(providerScope, indexerScope);
 

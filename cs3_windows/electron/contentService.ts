@@ -37,7 +37,7 @@ import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
 import { SharedDiscovery } from './sharedDiscovery';
 import { isTorrentLink } from './cs3/providerLinks';
-import { planSourceScope } from './cs3/sourceScope';
+import { planSourceScope, shouldEscalateScope } from './cs3/sourceScope';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -145,6 +145,12 @@ export interface SourceResponse {
   scopeUsed: SourceScope;
   /** True when widening to `all` would ask anything that has not been asked. */
   canWiden: boolean;
+  /**
+   * True when this answer came from an automatic escalation: the providers this
+   * row came from had nothing, so everything else was asked without the viewer
+   * having to press anything.
+   */
+  widenedAutomatically?: boolean;
 }
 
 /** Extracts `?s=1&e=2` appended to episode URLs by the metadata provider. */
@@ -525,7 +531,7 @@ export class ContentService {
   }
 
   /** Identity of a discovery run, so two callers asking the same thing share one. */
-  private sourceKey(request: SourceQuery): string {
+  private sourceKey(request: SourceQuery, autoWiden: boolean): string {
     const fromUrl = parseEpisodeParams(request.mediaUrl);
     return [
       stripQuery(request.mediaUrl),
@@ -536,6 +542,11 @@ export class ContentService {
       // so "search everywhere" would be answered by the narrow result that just
       // came back — the button would appear to do nothing.
       request.scope ?? 'origin',
+      // And so is whether an empty answer may widen itself, for the same
+      // reason one level down. The prefetcher deliberately does not escalate;
+      // without this it would share a slot with the play that does, and the
+      // viewer would be handed the narrow empty answer it settled for.
+      autoWiden ? 'widen' : 'narrow',
     ].join('|');
   }
 
@@ -562,25 +573,56 @@ export class ContentService {
     request: SourceQuery,
     /** Fires as each indexer answers, so a caller can act on partial results. */
     onProgress?: (progress: SearchProgress) => void,
-    /** Set by an explicit refresh, which must not be answered from cache. */
-    options: { bypassCache?: boolean; signal?: AbortSignal } = {}
+    options: {
+      /** Set by an explicit refresh, which must not be answered from cache. */
+      bypassCache?: boolean;
+      signal?: AbortSignal;
+      /**
+       * Whether an empty `origin` answer may widen itself. Defaults to true.
+       *
+       * On by default because every path that reaches here is a viewer waiting
+       * for something to play, bar one: {@link SourcePrefetcher} passes false,
+       * because it runs on a page that has merely been opened. Defaulting it
+       * off instead would mean opting each of the six real call sites in, and
+       * the one that got forgotten would be a dead end nobody could see.
+       */
+      autoWiden?: boolean;
+      /** Set only by {@link escalateToAllSources}; changes the wording, nothing else. */
+      escalated?: boolean;
+    } = {}
   ): Promise<SourceResponse> {
     const bypass = Boolean(options.bypassCache);
+    const autoWiden = options.autoWiden ?? true;
     return this.inFlightSources.run(
-      this.sourceKey(request),
+      this.sourceKey(request, autoWiden),
       bypass ? 'bypass' : 'cached',
       // A plain caller joins any run. A refresh joins only a run that also
       // bypassed the cache — the point of a refresh is that it must not be
       // served by something that may have answered from cache.
       (existingTag) => !bypass || existingTag === 'bypass',
-      (emit, signal) => this.runDiscovery(request, emit, { bypassCache: bypass, signal }),
+      (emit, signal) =>
+        this.runDiscovery(request, emit, {
+          bypassCache: bypass,
+          signal,
+          autoWiden,
+          escalated: options.escalated,
+        }),
       { onProgress, signal: options.signal }
     );
   }
 
-  /** True while a discovery for this exact query is already running. */
+  /**
+   * True while a discovery for this exact query is already running.
+   *
+   * Both keys are checked, because whether an empty answer may widen itself is
+   * part of a run's identity and the caller asking this does not care which of
+   * the two is in flight — only that the same question is already being asked.
+   */
   public isDiscovering(request: SourceQuery): boolean {
-    return this.inFlightSources.has(this.sourceKey(request));
+    return (
+      this.inFlightSources.has(this.sourceKey(request, true)) ||
+      this.inFlightSources.has(this.sourceKey(request, false))
+    );
   }
 
   /**
@@ -594,7 +636,12 @@ export class ContentService {
   private async runDiscovery(
     request: SourceQuery,
     onProgress?: (progress: SearchProgress) => void,
-    options: { bypassCache?: boolean; signal?: AbortSignal } = {}
+    options: {
+      bypassCache?: boolean;
+      signal?: AbortSignal;
+      autoWiden?: boolean;
+      escalated?: boolean;
+    } = {}
   ): Promise<SourceResponse> {
     const finish = log.begin('discovery', {
       mediaId: request.mediaUrl,
@@ -621,7 +668,12 @@ export class ContentService {
   private async discover(
     request: SourceQuery,
     onProgress?: (progress: SearchProgress) => void,
-    options: { bypassCache?: boolean; signal?: AbortSignal } = {}
+    options: {
+      bypassCache?: boolean;
+      signal?: AbortSignal;
+      autoWiden?: boolean;
+      escalated?: boolean;
+    } = {}
   ): Promise<SourceResponse> {
     const fromUrl = parseEpisodeParams(request.mediaUrl);
     const season = request.season ?? fromUrl.season;
@@ -704,37 +756,57 @@ export class ContentService {
       // rather than the episode — the detail view hands over an episode handle,
       // but a quick-play straight from a search row does not.
       const { sources, diagnosis } = await this.extensionSources(base, season, episode);
-      onProgress?.({
-        results: sources,
-        settled: 1,
-        totalRelevant: 1,
-        lastIndexerName: 'Extension provider',
-        done: true,
-      });
-      if (sources.length > 0) this.cache.write(base, sources, season, episode);
-      return {
+
+      /**
+       * The provider that produced this row has nothing, so the narrow answer
+       * is worth zero and the app asks everybody else rather than reporting a
+       * dead end with a button under it. See {@link shouldEscalateScope}.
+       *
+       * `hasTitle` is a real check rather than `true`: the fan-out needs a
+       * title, and it gets one from `titleOverride` or from opening the address
+       * as a page. A **links handle** is neither — it is a blob the provider
+       * built for its own `loadLinks` — so escalating one with no title
+       * supplied would fan out to nothing and replace a specific message with a
+       * vague one.
+       */
+      if (
+        shouldEscalateScope({
+          scopeUsed: 'origin',
+          sourceCount: sources.length,
+          canWiden: true,
+          allowed: Boolean(options.autoWiden),
+          hasTitle:
+            Boolean(request.titleOverride) ||
+            !looksLikeLinksHandle(parseExtensionUrl(base)?.target ?? ''),
+        })
+      ) {
+        return this.escalateToAllSources(
+          request,
+          onProgress,
+          options,
+          () =>
+            this.answerFromExtension(
+              base,
+              sources,
+              diagnosis,
+              season,
+              episode,
+              request.titleOverride,
+              onProgress
+            ),
+          diagnosis
+        );
+      }
+
+      return this.answerFromExtension(
+        base,
         sources,
-        filtered: [],
-        indexerOutcomes: [],
-        // The specific reason when there is one. The generic sentence remains
-        // only as the fallback for a path that produced no verdict at all —
-        // it was previously the answer for six distinct situations.
-        emptyReason:
-          sources.length === 0
-            ? (diagnosis?.summary ??
-              'The extension provider returned no playable links for this item.')
-            : undefined,
-        diagnosis: sources.length === 0 ? diagnosis : undefined,
-        query: { title: request.titleOverride ?? '', season, episode },
-        /**
-         * This row *is* a provider's own result, which is the Android shape
-         * exactly: one provider, its own links, nothing else consulted. It has
-         * always behaved this way — the divergence was only ever on the merged
-         * catalogue row.
-         */
-        scopeUsed: 'origin',
-        canWiden: true,
-      };
+        diagnosis,
+        season,
+        episode,
+        request.titleOverride,
+        onProgress
+      );
     }
 
     /**
@@ -754,8 +826,16 @@ export class ContentService {
      * A failure here is reported, not swallowed. yt-dlp says "Unsupported URL",
      * "Video unavailable" or names a geo-block, and those are the three
      * different actions a viewer could take.
+     *
+     * Scoped to `origin` for the same reason the `cs3ext://` branch above is,
+     * and it is not decoration. A page that resolves to nothing falls through
+     * to the catalogue path, which escalates — and an escalation re-enters here
+     * with the same address. Ungated, that spawns yt-dlp a second time on the
+     * page it just failed on and pays its whole timeout again before the
+     * fan-out this widening exists to run has started. A manual "Find more
+     * sources" arrives the same way and would do the same thing.
      */
-    if (looksLikeWebPage(base)) {
+    if (looksLikeWebPage(base) && requestedScope === 'origin') {
       const resolution = await this.ytdlp.resolve(base, { signal: options.signal });
       const sources = resolution.ok ? mapYtDlpInfo(resolution.info, base) : [];
 
@@ -803,7 +883,25 @@ export class ContentService {
       });
     }
 
-    const detail = await this.load(base);
+    /**
+     * The detail is enrichment when the title is already known, and a widened
+     * run reached by escalation is addressed by whatever the viewer was on —
+     * routinely a provider's **links handle**, which `loadMedia` refuses by
+     * design (it is a blob the provider built for its own `loadLinks`, not a
+     * page anything can open). Letting that throw here would turn "the provider
+     * had nothing, so we looked everywhere" into an error message naming a call
+     * that should never have been made, which is the exact failure
+     * `looksLikeLinksHandle` exists to prevent one layer down.
+     *
+     * Rethrown when there is no title, because then it is not enrichment — the
+     * fan-out has nothing to search for and the reason matters.
+     */
+    let detail: MetadataDetail | null = null;
+    try {
+      detail = await this.load(base);
+    } catch (error) {
+      if (!request.titleOverride) throw error;
+    }
     const title = request.titleOverride ?? detail?.name;
 
     if (!title) {
@@ -1023,11 +1121,221 @@ export class ContentService {
     };
 
     if (response.sources.length === 0) {
-      response.emptyReason = this.explainEmptyResult(outcome, routes.length, scopeUsed);
+      // A merged catalogue row whose originating providers had nothing. Same
+      // argument as the `cs3ext://` path above: the saving is on an answer that
+      // cannot be played.
+      if (
+        shouldEscalateScope({
+          scopeUsed,
+          sourceCount: 0,
+          canWiden: plan.canWiden,
+          allowed: Boolean(options.autoWiden),
+          hasTitle: Boolean(title),
+        })
+      ) {
+        return this.escalateToAllSources(request, onProgress, options, () => ({
+          ...response,
+          emptyReason: this.explainEmptyResult(outcome, routes.length, scopeUsed),
+        }));
+      }
+      response.emptyReason = this.explainEmptyResult(
+        outcome,
+        routes.length,
+        scopeUsed,
+        Boolean(options.escalated)
+      );
     } else {
       this.cache.write(this.cacheUrlFor(base, scopeUsed), response.sources, season, episode);
     }
     return response;
+  }
+
+  /**
+   * A `cs3ext://` row's own answer: one provider, its own links, nothing else.
+   *
+   * Extracted so the escalation can hold it as the thing to fall back to. An
+   * escalation that fails must leave the narrow answer standing rather than
+   * replacing a specific message ("HDO has no sources for this item") with
+   * whatever the fan-out threw — the same rule the `dataUrl` retry in
+   * {@link extensionSources} follows, for the same reason.
+   */
+  private answerFromExtension(
+    base: string,
+    sources: TorrentResult[],
+    diagnosis: SourceDiagnosis | undefined,
+    season: number | undefined,
+    episode: number | undefined,
+    titleOverride: string | undefined,
+    onProgress?: (progress: SearchProgress) => void
+  ): SourceResponse {
+    onProgress?.({
+      results: sources,
+      settled: 1,
+      totalRelevant: 1,
+      lastIndexerName: 'Extension provider',
+      done: true,
+    });
+    if (sources.length > 0) this.cache.write(base, sources, season, episode);
+    return {
+      sources,
+      filtered: [],
+      indexerOutcomes: [],
+      // The specific reason when there is one. The generic sentence remains
+      // only as the fallback for a path that produced no verdict at all —
+      // it was previously the answer for six distinct situations.
+      emptyReason:
+        sources.length === 0
+          ? (diagnosis?.summary ??
+            'The extension provider returned no playable links for this item.')
+          : undefined,
+      diagnosis: sources.length === 0 ? diagnosis : undefined,
+      query: { title: titleOverride ?? '', season, episode },
+      /**
+       * This row *is* a provider's own result, which is the Android shape
+       * exactly: one provider, its own links, nothing else consulted. It has
+       * always behaved this way — the divergence was only ever on the merged
+       * catalogue row.
+       */
+      scopeUsed: 'origin',
+      canWiden: true,
+    };
+  }
+
+  /**
+   * Widens an answer that came back empty, without anyone having to press a
+   * button.
+   *
+   * The reported shape, verbatim from a user's screen:
+   *
+   * ```
+   * No playable sources found
+   * HDO has no sources for this item.
+   * Try "Find more sources" to ask the other enabled providers.
+   * ```
+   *
+   * Pressing that button on that exact title found **137 sources** across five
+   * other extensions and the torrent indexers, 81 of whose links were still
+   * live when probed. So the screen was a dead end offering, as its only useful
+   * action, a step the app was perfectly able to take itself — and taking it is
+   * strictly better than reporting it, because the narrow scope's entire value
+   * (fewer third-party requests, a faster answer, no dead links from sites that
+   * never carried the title) is a saving on an answer nobody can play.
+   *
+   * Three things about how it is done:
+   *
+   * - **It runs through `getSources`, not `discover`.** That puts the widened
+   *   run in the shared in-flight map under its own key, so a viewer who
+   *   presses "Find more sources" while this is still going *joins* it instead
+   *   of starting a second fan-out across two hundred sites. It also lands in
+   *   the `#all` cache entry, so re-opening the title skips straight to the
+   *   answer that worked.
+   * - **`autoWiden: false` on the nested call**, belt to the braces of
+   *   `canWiden` already being false at `all` scope. Two guards, because the
+   *   failure mode of one missing guard here is unbounded recursion across the
+   *   whole provider corpus.
+   * - **The originating provider's diagnosis survives.** The fan-out produces
+   *   no `SourceDiagnosis` of its own, and "HDO has no sources for this item"
+   *   is still the most specific true thing anyone can be told about why this
+   *   started. Only its hint is replaced — it points at a button that is
+   *   correctly no longer offered.
+   */
+  private async escalateToAllSources(
+    request: SourceQuery,
+    onProgress: ((progress: SearchProgress) => void) | undefined,
+    options: { bypassCache?: boolean; signal?: AbortSignal },
+    /**
+     * The narrow answer, produced lazily so it is not built unless it is needed.
+     *
+     * An escalation that fails has to leave this standing. Letting the widened
+     * run's failure propagate would replace a specific, true message — "HDO has
+     * no sources for this item" — with whatever the fan-out threw, which for a
+     * links-handle address is a sentence about a call the viewer did not make.
+     * A rescue attempt that makes the original failure worse is not one worth
+     * having.
+     */
+    fallback: () => SourceResponse,
+    /** What the provider this row came from said, when it said anything. */
+    origin?: SourceDiagnosis
+  ): Promise<SourceResponse> {
+    /**
+     * Keeps the caller in its searching state across the handover.
+     *
+     * Without it the scoped pass's terminal `done: true` has already been
+     * emitted, or is about to be, and the UI settles into "found nothing" for
+     * the second or two the fan-out takes — so the viewer watches a failure
+     * appear and then un-appear. `results: []` is not a loss here: this path is
+     * only reached with zero sources.
+     */
+    /*
+     * The viewer has already gone — the page was closed, or a newer search
+     * superseded this one. Fanning out across every provider now would be the
+     * speculative traffic this whole design is careful about, for a result
+     * nobody will read.
+     */
+    if (options.signal?.aborted) return fallback();
+
+    onProgress?.({
+      results: [],
+      settled: 0,
+      totalRelevant: 0,
+      lastIndexerName: '',
+      done: false,
+      widened: true,
+    });
+
+    /**
+     * The flag has to be stamped on every event the widened run emits, not just
+     * the handover above: the fan-out builds its own progress objects, so
+     * without this the explanation appears for one frame and is then overwritten
+     * by the next indexer answering.
+     */
+    const relay = onProgress
+      ? (progress: SearchProgress) => onProgress({ ...progress, widened: true })
+      : undefined;
+
+    let widened: SourceResponse;
+    try {
+      widened = await this.getSources({ ...request, scope: 'all' }, relay, {
+        ...options,
+        autoWiden: false,
+        escalated: true,
+      });
+    } catch (error) {
+      log.warn('escalation_failed', {
+        mediaId: request.mediaUrl,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return fallback();
+    }
+
+    if (widened.sources.length > 0) {
+      return { ...widened, scopeUsed: 'all', canWiden: false, widenedAutomatically: true };
+    }
+
+    /**
+     * Nothing anywhere. Both halves are said, because they are different facts
+     * and the reader needs both: the provider they came from had nothing, and
+     * so did everything else — which is what makes it final rather than a
+     * reason to try the button again.
+     */
+    const everywhere =
+      widened.emptyReason ??
+      'Every enabled provider and torrent indexer was asked, and none had a playable source.';
+    return {
+      ...widened,
+      scopeUsed: 'all',
+      canWiden: false,
+      widenedAutomatically: true,
+      emptyReason: origin ? `${origin.summary} ${everywhere}` : everywhere,
+      diagnosis:
+        widened.diagnosis ??
+        (origin
+          ? {
+              ...origin,
+              hint: 'Every enabled provider and indexer was asked. The title may not be available right now, or its providers may be blocked from this network.',
+            }
+          : undefined),
+    };
   }
 
   /**
@@ -1312,7 +1620,16 @@ export class ContentService {
     outcome: AggregateSearchResult,
     /** Extension providers that also carry this title and were asked too. */
     extensionRoutes = 0,
-    scopeUsed: SourceScope = 'all'
+    scopeUsed: SourceScope = 'all',
+    /**
+     * True when this run only happened because a scoped one came up empty.
+     *
+     * It changes exactly one thing: the generic tail stops telling the reader
+     * to widen. They did not choose this search, the app did, and there is
+     * nothing wider left — advice to take a step already taken is how a message
+     * teaches people to stop reading them.
+     */
+    escalated = false
   ): string {
     /**
      * A scoped search that found nothing is a different sentence entirely.
@@ -1343,7 +1660,9 @@ export class ContentService {
     if (outcome.rejected.length > 0) {
       return `Found ${outcome.rejected.length} result(s), but all were filtered out by your source preferences. Loosen the filters in Settings → Sources, or view the filtered list.`;
     }
-    return 'No sources found for this title. Try a different episode, or add more indexers.';
+    return escalated
+      ? 'Every enabled provider and torrent indexer was asked, and none had a playable source. Try a different episode, or add an indexer in Settings → Sources.'
+      : 'No sources found for this title. Try a different episode, or add more indexers.';
   }
 
   // --- playback ------------------------------------------------------------

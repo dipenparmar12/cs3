@@ -26,6 +26,32 @@
     "documentKind": "repository"
   },
   {
+    "id": "netmirror",
+    "name": "NetMirror (OTT)",
+    "internalName": "NetMirror-Extension",
+    "description": "Netflix, Prime Video, Disney+ Hotstar and Disney+ catalogues. One archive registering four providers named after the platforms they mirror.",
+    "url": "https://github.com/Sushan64/NetMirror-Extension",
+    "rawRepoUrl": "https://raw.githubusercontent.com/Sushan64/NetMirror-Extension/builds/Netflix.json",
+    "category": "Movies & Shows",
+    "language": "Hindi / English",
+    "iconUrl": "https://raw.githubusercontent.com/Sushan64/NetMirror-Extension/refs/heads/master/Netmirror/logo.jpeg",
+    "verified": true,
+    "documentKind": "repository"
+  },
+  {
+    "id": "cncverse",
+    "name": "CNC Verse (All Language)",
+    "internalName": "CNCVerse-Cloud-Stream-Extension",
+    "description": "36 extensions covering Indian OTT catalogues, regional films, audiobooks and live TV, including the MovieBox providers that carry Sony LIV and ZEE5 titles.",
+    "url": "https://github.com/NivinCNC/CNCVerse-Cloud-Stream-Extension",
+    "rawRepoUrl": "https://raw.githubusercontent.com/NivinCNC/CNCVerse-Cloud-Stream-Extension/builds/CNC.json",
+    "category": "Movies & Shows",
+    "language": "Multilingual",
+    "iconUrl": "https://raw.githubusercontent.com/NivinCNC/CNCVerse-Cloud-Stream-Extension/refs/heads/builds/cnc.png",
+    "verified": true,
+    "documentKind": "repository"
+  },
+  {
     "id": "aniyomi_compat",
     "name": "Aniyomi Compatibility Repo",
     "internalName": "AniyomiCompatExtension",

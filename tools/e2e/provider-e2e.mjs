@@ -55,6 +55,17 @@ const REPOSITORIES = [
     name: 'GermanProviders',
     url: 'https://raw.githubusercontent.com/Bnyro/GermanProviders/master/repo.json',
   },
+  {
+    // The OTT lane: one archive registering Netflix, Prime Video, Hotstar and
+    // Disney Plus. Here because `bundled: true` in the repository catalogue is
+    // a claim this harness has driven the repository end to end.
+    name: 'NetMirror',
+    url: 'https://raw.githubusercontent.com/Sushan64/NetMirror-Extension/builds/Netflix.json',
+  },
+  {
+    name: 'CNCVerse',
+    url: 'https://raw.githubusercontent.com/NivinCNC/CNCVerse-Cloud-Stream-Extension/builds/CNC.json',
+  },
   { name: 'phisher', url: 'https://github.com/phisher98/cloudstream-extensions-phisher' },
   { name: 'cinephile', url: 'https://github.com/rockhero1234/cinephile' },
   {

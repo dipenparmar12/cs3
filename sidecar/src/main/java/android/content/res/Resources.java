@@ -24,6 +24,24 @@ public class Resources {
                         + "Android resource table, which has no desktop equivalent.");
     }
 
+    /**
+     * The one accessor here that answers instead of throwing.
+     *
+     * Reported as {@code NoSuchMethodError: 'android.util.DisplayMetrics
+     * android.content.res.Resources.getDisplayMetrics()'} — it did not exist.
+     * Unlike the resource table, screen metrics are not an Android artefact
+     * with no desktop meaning: the corpus reads them to do arithmetic (dp to
+     * pixels, a poster width, a thumbnail request), and aborting a plugin's
+     * {@code load()} over a number used to choose an image size would cost the
+     * extension every provider it was about to register.
+     *
+     * <p>A fresh instance per call, matching Android, so a caller that mutates
+     * what it is handed cannot change what the next one sees.
+     */
+    public android.util.DisplayMetrics getDisplayMetrics() {
+        return new android.util.DisplayMetrics();
+    }
+
     public String getString(int id) {
         throw unsupported("getString");
     }

@@ -187,7 +187,19 @@ public class Context {
         return new android.content.pm.PackageManager();
     }
 
-    public void startActivity(Object intent) {
+    /**
+     * Android's descriptor is {@code (Landroid/content/Intent;)V}.
+     *
+     * <p>This took {@code Object} until {@link Intent} existed to name, which
+     * made it a *different method* to the JVM — present, and impossible for any
+     * extension to call. That is the fifth time this exact near-miss has been
+     * made in this repository ({@code getResources} returning {@code Object},
+     * {@code AccountManager.aniListApi} typed as the wrapper, {@code setKey},
+     * {@code simklApi}); the rule it keeps breaking is that a parameter or
+     * return type widened to a supertype does not merely lose type safety, it
+     * renames the method.
+     */
+    public void startActivity(Intent intent) {
         throw new UnsupportedAndroidApiException("android.content.Context.startActivity");
     }
 

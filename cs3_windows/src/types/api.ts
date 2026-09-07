@@ -120,6 +120,19 @@ export interface ExactMedia {
 
 export interface SearchOptions {
   exact?: ExactMedia;
+  /**
+   * Ask exactly these providers, for this search only.
+   *
+   * Set by the OTT platform pages, where the scope belongs to the page rather
+   * than to a preference: the user is looking at Netflix, so the search box on
+   * that page searches Netflix. Deliberately not persisted — a scope that
+   * outlives the page it came from is indistinguishable from a stuck filter.
+   *
+   * An empty array is a caller saying "these providers, and there are none of
+   * them", and is honoured as a search of nothing. Omitting the field is what
+   * means "use the stored scope".
+   */
+  providers?: string[];
 }
 
 /** One past search, newest first. */
@@ -260,4 +273,50 @@ export interface SubtitleFile {
 
 export interface Score {
   value: number; // 0 to 10 scale
+}
+
+/**
+ * One row of a provider's own catalogue — its Android "home" screen.
+ *
+ * Distinct from `discovery.ts`'s home sections, which come from Cinemeta and
+ * AniList and are addressed by IMDb id. These rows come from the provider
+ * itself and are addressed by `cs3ext://`, so every item on them is already
+ * bound to the provider that can play it. That binding is the point: a
+ * catalogue row is the one place in the app where "browse" and "this provider
+ * can definitely resolve it" are the same list.
+ */
+export interface ProviderCatalogSection {
+  /** The row's title, as the provider names it ("Trending Now", "Comedy"). */
+  name: string;
+  /**
+   * The provider's opaque handle for the row. Must travel back verbatim to
+   * request a further page — it is not a URL and must not be parsed.
+   */
+  data: string;
+  /** Landscape artwork, which changes the card shape rather than the content. */
+  horizontalImages?: boolean;
+}
+
+/** One fetched page of one catalogue row. */
+export interface ProviderCatalogPage {
+  provider: string;
+  /** The section this page belongs to, echoed so a late reply can be placed. */
+  section: string;
+  page: number;
+  items: SearchResponse[];
+  /** Whether asking for `page + 1` is worth doing. */
+  hasNext: boolean;
+}
+
+/** What a provider offers to browse, before anything is fetched. */
+export interface ProviderCatalog {
+  provider: string;
+  hasMainPage: boolean;
+  sections: ProviderCatalogSection[];
+  /**
+   * Why there is nothing to browse, when there is nothing to browse. A
+   * provider with only a search endpoint is working correctly, and saying so
+   * is different from reporting a failure.
+   */
+  unavailableReason?: string;
 }

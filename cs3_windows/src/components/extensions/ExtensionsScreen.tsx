@@ -28,6 +28,7 @@ import { Boxes, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { useExtensionCatalog } from './useExtensionCatalog';
 import { useExtensionFilters } from './useExtensionFilters';
 import { FilterBar } from './FilterBar';
+import { ExtensionUpdates } from '../ExtensionUpdates';
 import { BulkActionBar } from './BulkActionBar';
 import { SourceTree } from './SourceTree';
 import { RepositoryCatalog } from './RepositoryCatalog';
@@ -178,6 +179,26 @@ export const ExtensionsScreen: React.FC = () => {
       </header>
 
       {state.error ? <p className="ext-error">{state.error}</p> : null}
+
+      {/*
+        Extension updates, and the reason this line exists at all.
+
+        `ExtensionUpdates` was built — check, update one, update all, the
+        auto-update policy, live progress from `extension:update*` events — and
+        was imported by nothing. Every one of those channels was registered in
+        `main.ts` and exposed in `preload.ts`, so the IPC parity test was
+        perfectly happy: the surface agreed with itself and simply had no
+        caller. That is the same silent shape as the seven mismatched channels
+        found by diffing the two files, arriving from a third direction, and the
+        user-visible form is identical — a feature that exists and cannot be
+        reached.
+
+        It goes above the tabs rather than inside one, because an update is not
+        a property of what you are currently looking at: a fix published for a
+        provider matters whether you came here to browse repositories or to
+        switch something off.
+      */}
+      <ExtensionUpdates onUpdated={() => void refresh()} />
 
       <nav className="ext-tabs" role="tablist">
         {TABS.map((entry) => (

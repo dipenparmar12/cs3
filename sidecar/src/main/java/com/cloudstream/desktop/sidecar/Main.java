@@ -68,6 +68,19 @@ public final class Main {
         host.setHostChannel(hostChannel);
     }
 
+    /**
+     * Every RPC name `handle` answers.
+     *
+     * Read by the host at startup and compared against what it intends to call,
+     * so a jar older than the build that ships with it is named at the
+     * handshake instead of surfacing later as one unexplained failure per
+     * feature.
+     */
+    private static final List<String> METHODS = List.of(
+            "ping", "status", "inspect", "load", "unload", "hostCapabilities",
+            "providers", "providerSearch", "providerLoad", "providerLoadLinks",
+            "providerMainPageSections", "providerMainPage", "clearTranslationCache");
+
     public static void main(String[] args) throws Exception {
         Map<String, String> opts = parseArgs(args);
         Path dataDir = Paths.get(opts.getOrDefault("data-dir",
@@ -243,6 +256,22 @@ public final class Main {
                 m.put("loadedPlugins", host.loadedPluginIds());
                 m.put("sandboxGaps", new ArrayList<>(PluginClassLoader.SANDBOX_GAPS));
                 m.put("hostChannel", hostChannel.describe());
+                /*
+                 * What this build can actually be asked to do.
+                 *
+                 * The generation stamp compares a number the *host* writes, so
+                 * it cannot notice a host that is newer than the jar beside it
+                 * — which is exactly what happens when the TypeScript is
+                 * rebuilt and `mvn package` is not. The symptom was every OTT
+                 * catalogue reporting `UnsupportedOperationException: Unknown
+                 * method: providerMainPageSections`, naming the RPC layer and
+                 * offering the reader nothing to do about it.
+                 *
+                 * Declared rather than derived by reflection: the dispatch is a
+                 * switch over string literals and there is nothing to enumerate.
+                 * Add a case above, add its name here.
+                 */
+                m.put("methods", METHODS);
                 yield m;
             }
 
@@ -303,6 +332,17 @@ public final class Main {
 
             case "providerLoadLinks" -> Map.of("json", host.loadLinksFromProvider(
                     str(params, "provider"), str(params, "data"), timeoutFor(params)));
+
+            case "providerMainPageSections" -> Map.of("json",
+                    host.mainPageSectionsFromProvider(str(params, "provider")));
+
+            case "providerMainPage" -> Map.of("json", host.mainPageFromProvider(
+                    str(params, "provider"),
+                    str(params, "section"),
+                    str(params, "data"),
+                    params.get("page") instanceof Number n ? n.intValue() : 1,
+                    Boolean.TRUE.equals(params.get("horizontalImages")),
+                    timeoutFor(params)));
 
             case "providers" -> Map.of("names", host.providerNames());
 

@@ -3,9 +3,12 @@ package com.cloudstream.desktop.bridge
 import com.lagradost.cloudstream3.AnimeLoadResponse
 import com.lagradost.cloudstream3.AudioFile
 import com.lagradost.cloudstream3.Episode
+import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.LiveStreamLoadResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageData
+import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.MovieLoadResponse
 import com.lagradost.cloudstream3.Score
 import com.lagradost.cloudstream3.SearchResponse
@@ -196,6 +199,65 @@ object ProviderBridge {
         }
     }
 
+    /**
+     * The catalogue sections a provider declares, without asking it for any.
+     *
+     * `mainPage` is a plain property — reading it costs nothing and touches no
+     * network — so the host can build a provider's browse screen before it has
+     * decided which row to fetch. Providers that do not publish a catalogue
+     * answer with an empty list and `hasMainPage` false, which is a real answer
+     * and not a failure: a scraper with only a search endpoint is working
+     * exactly as designed.
+     */
+    @JvmStatic
+    fun mainPageSections(provider: Any): String {
+        val api = provider as MainAPI
+        return json {
+            field("ok", true)
+            field("hasMainPage", api.hasMainPage)
+            rawArray("sections", api.mainPage.map { encodeMainPageSection(it) })
+        }
+    }
+
+    /**
+     * One page of one catalogue row.
+     *
+     * The request is passed as separate primitives rather than as a document,
+     * because the sidecar reaches this method reflectively and the bridge has a
+     * JSON *writer* and no parser. A provider's `data` handle is an opaque
+     * string that routinely contains delimiters, so packing the three fields
+     * into one argument would need an encoding to get wrong.
+     *
+     * `page` is 1-based, matching upstream: the Android home screen requests
+     * page 1 first and increments as the user scrolls, and providers written
+     * against that convention treat 0 as "no such page".
+     */
+    @JvmStatic
+    fun mainPage(
+        provider: Any,
+        name: String,
+        data: String,
+        page: Int,
+        horizontalImages: Boolean,
+        timeoutMs: Long,
+    ): String = guarded(timeoutMs) {
+        val api = provider as MainAPI
+        val response = api.getMainPage(page, MainPageRequest(name, data, horizontalImages))
+            ?: return@guarded json {
+                // A null response means this page has nothing, which is how
+                // providers signal the end of a catalogue. Reporting it as an
+                // error would make every exhausted row look broken.
+                field("ok", true)
+                field("hasNext", false)
+                rawArray("sections", emptyList())
+            }
+        json {
+            field("ok", true)
+            field("hasNext", response.hasNext)
+            rawArray("sections", response.items.map { encodeHomePageList(it, api) })
+        }
+    }
+
     // --- encoding ------------------------------------------------------------
 
     /**
@@ -204,6 +266,20 @@ object ProviderBridge {
      */
     private fun scoreOutOfTen(score: Score?): Double? =
         score?.let { runCatching { it.toFloat(10).toDouble() }.getOrNull() }
+
+    private fun encodeMainPageSection(section: MainPageData): String = json {
+        // `data` is the provider's own handle for the row and must travel back
+        // verbatim when a page of it is requested.
+        field("name", section.name)
+        field("data", section.data)
+        field("horizontalImages", section.horizontalImages)
+    }
+
+    private fun encodeHomePageList(list: HomePageList, api: MainAPI): String = json {
+        field("name", list.name)
+        field("horizontalImages", list.isHorizontalImages)
+        rawArray("items", list.list.map { encodeSearchResponse(it, api) })
+    }
 
     private fun encodeSearchResponse(item: SearchResponse, api: MainAPI): String = json {
         field("name", item.name)

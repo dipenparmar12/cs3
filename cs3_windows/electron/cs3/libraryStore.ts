@@ -720,6 +720,29 @@ export class LibraryStore {
 
   // --- portability ---------------------------------------------------------
 
+  /**
+   * Empties the library, so a Replace restore can make it match the file.
+   *
+   * Only `importAll`'s three maps are cleared. Played sources are keyed by
+   * title/season/episode and are re-derived from what actually plays, so
+   * dropping them here would lose the record of which source worked while
+   * restoring nothing in its place — the backup does not carry them.
+   */
+  public clearAll(): { entries: number; progress: number; sources: number } {
+    const counts = {
+      entries: this.entries.size,
+      progress: this.progress.size,
+      sources: this.sources.size,
+    };
+    this.entries.clear();
+    this.progress.clear();
+    this.sources.clear();
+    this.persistEntries();
+    this.persistProgress();
+    this.persistSources();
+    return counts;
+  }
+
   public exportAll(): {
     entries: LibraryEntry[];
     progress: WatchProgress[];

@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { BackupService, BACKUP_FORMAT_VERSION, type BackupSection } from './backupService.ts';
+import {
+  BackupService,
+  BACKUP_FORMAT_VERSION,
+  type BackupSection,
+  type RestoreMode,
+} from './backupService.ts';
 
 /**
  * The backup, tested because every way it fails is quiet.
@@ -23,16 +28,29 @@ import { BackupService, BACKUP_FORMAT_VERSION, type BackupSection } from './back
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cs3-backup-'));
 const fileIn = (name: string) => path.join(tmp, name);
 
-/** A section backed by a mutable array, so a round trip is observable. */
-function arraySection(name: string, rows: unknown[]): BackupSection & { rows: unknown[] } {
+/**
+ * A section backed by a mutable array, so a round trip is observable.
+ *
+ * `replaceable` mirrors the real sections: merging appends, replacing clears
+ * first. Both are needed here because the interesting failure is a section
+ * that *acts on* a mode the service said it would not be given.
+ */
+function arraySection(
+  name: string,
+  rows: unknown[],
+  replaceable = false
+): BackupSection & { rows: unknown[]; sawMode: RestoreMode[] } {
   const holder = {
     name,
     label: name,
     rows,
+    replaceable,
+    sawMode: [] as RestoreMode[],
     collect: () => holder.rows,
-    restore: (value: unknown) => {
+    restore: (value: unknown, mode: RestoreMode) => {
+      holder.sawMode.push(mode);
       if (!Array.isArray(value)) return 0;
-      holder.rows = [...value];
+      holder.rows = mode === 'replace' ? [...value] : [...holder.rows, ...value];
       return value.length;
     },
   };
@@ -44,8 +62,8 @@ function service(sections: BackupSection[]): BackupService {
 }
 
 test('a backup round-trips every section it carries', () => {
-  const library = arraySection('library', [{ key: 'a' }, { key: 'b' }]);
-  const history = arraySection('history', [{ id: '1' }]);
+  const library = arraySection('library', [{ key: 'a' }, { key: 'b' }], true);
+  const history = arraySection('history', [{ id: '1' }], true);
   const file = fileIn('round-trip.json');
 
   const written = service([library, history]).write(file);
@@ -189,14 +207,14 @@ test('a file that is not JSON at all fails with a message rather than a crash', 
 // --- selective restore --------------------------------------------------------
 
 test('restoring one section leaves the others untouched', () => {
-  const library = arraySection('library', [{ key: 'a' }]);
-  const history = arraySection('history', [{ id: '1' }]);
+  const library = arraySection('library', [{ key: 'a' }], true);
+  const history = arraySection('history', [{ id: '1' }], true);
   const file = fileIn('selective.json');
   service([library, history]).write(file);
 
   library.rows = [];
   history.rows = [];
-  const report = service([library, history]).restore(file, ['library']);
+  const report = service([library, history]).restore(file, { only: ['library'] });
 
   assert.equal(report.sections.length, 1);
   assert.equal(library.rows.length, 1);
@@ -244,4 +262,100 @@ process.on('exit', () => {
   } catch {
     /* the OS will clean its own temp directory */
   }
+});
+
+// --- merge and replace ---------------------------------------------------------
+
+test('merge is the default, and it cannot lose a row the backup predates', () => {
+  /**
+   * The reason merge has to stay the default: a restore is most often run onto
+   * a *working* installation, and a preference or a title added since the file
+   * was written must survive it. Reverting one silently reads as the restore
+   * having broken something rather than as it not having covered it.
+   */
+  const library = arraySection('library', [{ key: 'from-backup' }], true);
+  const file = fileIn('merge.json');
+  service([library]).write(file);
+
+  library.rows = [{ key: 'added-since' }];
+  const report = service([library]).restore(file);
+
+  assert.deepEqual(library.rows, [{ key: 'added-since' }, { key: 'from-backup' }]);
+  assert.equal(report.sections[0].mode, 'merge');
+});
+
+test('replace makes the section match the file, which merge can never do', () => {
+  /**
+   * This is the case that motivated the mode at all. Merging cannot *remove*
+   * anything, so a merge-only restore is always a superset of the backup and
+   * can never reproduce the state in it — which is what someone reinstalling
+   * after a problem is asking for.
+   */
+  const library = arraySection('library', [{ key: 'from-backup' }], true);
+  const file = fileIn('replace.json');
+  service([library]).write(file);
+
+  library.rows = [{ key: 'added-since' }, { key: 'also-since' }];
+  const report = service([library]).restore(file, { mode: 'replace' });
+
+  assert.deepEqual(library.rows, [{ key: 'from-backup' }]);
+  assert.equal(report.sections[0].mode, 'replace');
+});
+
+test('a section that cannot be replaced is merged, and the row says so', () => {
+  /**
+   * Silently ignoring the chosen mode is the failure this guards. The user
+   * asked for an exact match and got a union; if the report does not say which
+   * sections could not honour that, the difference is invisible until they
+   * notice rows they thought they had removed.
+   */
+  const analytics = arraySection('providerAnalytics', [{ id: 'x' }]); // not replaceable
+  const file = fileIn('downgrade.json');
+  service([analytics]).write(file);
+
+  analytics.rows = [{ id: 'local' }];
+  const report = service([analytics]).restore(file, { mode: 'replace' });
+
+  assert.equal(report.sections[0].mode, 'merge');
+  assert.match(String(report.sections[0].note), /cannot be replaced/);
+  assert.deepEqual(analytics.sawMode, ['merge'], 'the section is never handed a mode it cannot honour');
+  assert.equal(analytics.rows.length, 2, 'and it merged, as the report said');
+});
+
+test('replace is opt-in, so a section added later is not silently destructive', () => {
+  /**
+   * `replaceable` defaults to absent. A section added by someone who has not
+   * read this file must not start deleting rows the first time a user picks
+   * Replace — the default has to fail towards keeping data.
+   */
+  const added = arraySection('somethingNew', [{ id: 'a' }]);
+  assert.equal(added.replaceable, false);
+});
+
+// --- selective export ----------------------------------------------------------
+
+test('an export can carry only the sections asked for', () => {
+  const library = arraySection('library', [{ key: 'a' }], true);
+  const history = arraySection('history', [{ id: '1' }], true);
+  const file = fileIn('partial-export.json');
+  service([library, history]).write(file, ['library']);
+
+  const written = JSON.parse(fs.readFileSync(file, 'utf-8'));
+  assert.deepEqual(Object.keys(written.contents), ['library']);
+  assert.equal(written.summary.history, undefined);
+});
+
+test('an empty selection exports everything rather than nothing', () => {
+  /**
+   * A caller that filtered a list down to zero still meant to take a backup.
+   * Writing an empty file and calling it one is the worse of the two answers,
+   * and it is the one a `length > 0` check gets wrong by accident.
+   */
+  const library = arraySection('library', [{ key: 'a' }], true);
+  const history = arraySection('history', [{ id: '1' }], true);
+  const file = fileIn('empty-selection.json');
+  service([library, history]).write(file, []);
+
+  const written = JSON.parse(fs.readFileSync(file, 'utf-8'));
+  assert.deepEqual(Object.keys(written.contents).sort(), ['history', 'library']);
 });

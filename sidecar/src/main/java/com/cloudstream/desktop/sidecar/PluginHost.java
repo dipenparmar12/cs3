@@ -633,6 +633,36 @@ public final class PluginHost {
         return callBridge("loadLinks", requireProvider(providerName), data, timeoutMs);
     }
 
+    /**
+     * A provider's declared catalogue rows. No network, so no timeout argument.
+     */
+    public String mainPageSectionsFromProvider(String providerName) throws Exception {
+        Method m = bridge().getMethod("mainPageSections", Object.class);
+        return String.valueOf(m.invoke(null, requireProvider(providerName)));
+    }
+
+    /**
+     * One page of one catalogue row.
+     *
+     * Six parameters rather than {@link #callBridge}'s three, because the
+     * request is three values and packing them into one string would need an
+     * escaping scheme for handles that legitimately contain any character.
+     */
+    public String mainPageFromProvider(
+            String providerName,
+            String sectionName,
+            String sectionData,
+            int page,
+            boolean horizontalImages,
+            long timeoutMs) throws Exception {
+        Method m = bridge().getMethod(
+                "mainPage", Object.class, String.class, String.class,
+                int.class, boolean.class, long.class);
+        return String.valueOf(m.invoke(
+                null, requireProvider(providerName), sectionName, sectionData,
+                page, horizontalImages, timeoutMs));
+    }
+
     public String describeProviderJson(String providerName) throws Exception {
         Method m = bridge().getMethod("describe", Object.class);
         return String.valueOf(m.invoke(null, requireProvider(providerName)));

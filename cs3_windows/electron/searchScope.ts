@@ -125,6 +125,29 @@ export class SearchScopeStore {
     return SearchScopeStore.resolve(enabled, this.get().providers);
   }
 
+  /**
+   * A scope for one search only, overriding whatever is stored.
+   *
+   * This exists for the OTT platform pages, where the binding is a property of
+   * *where the user is* rather than of a choice they made — opening the Netflix
+   * page and typing into its search box means "search Netflix", and leaving the
+   * page means it stops applying. Writing that through `set()` would make it
+   * outlast the page, which is exactly the stuck-scope failure the strict
+   * resolution rules elsewhere in this file were introduced to end: the picker
+   * would read "1 source" on the Home screen with nothing explaining why.
+   *
+   * Same strictness as the stored path — intersected with what is enabled,
+   * never widened past it, and an unresolvable name is reported rather than
+   * ignored. An empty override is *not* a global search: it means the caller
+   * asked for a set of providers and none of them is available, and answering
+   * that by asking everything is how a provider-bound search silently becomes
+   * a two-hundred-source one.
+   */
+  public static override(enabled: string[], selected: string[]): ScopeResolution {
+    if (selected.length === 0) return { narrowed: true, allowed: [], missing: [] };
+    return SearchScopeStore.resolve(enabled, selected);
+  }
+
   public resolveIndexers(enabled: string[]): ScopeResolution {
     return SearchScopeStore.resolve(enabled, this.get().indexers);
   }

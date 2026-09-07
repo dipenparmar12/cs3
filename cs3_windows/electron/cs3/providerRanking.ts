@@ -75,8 +75,26 @@ interface CriterionDefinition {
   available: boolean;
   evaluate(
     record: ProviderAnalyticsRecord,
-    analytics: ProviderAnalytics
+    analytics: ProviderAnalytics,
+    context: RankingContext
   ): { score: number | null; samples: number; detail: string };
+}
+
+/**
+ * Anything a criterion needs that is not a measurement.
+ *
+ * Exactly one thing so far, and it is deliberately the only kind of input
+ * allowed here: a *declaration*, from a source outside this app, that can be
+ * quoted rather than trusted. Nothing computed from the user's own behaviour
+ * belongs on this path — that is what the counters are for.
+ */
+export interface RankingContext {
+  /**
+   * The maintainer's own health flag for the extension a provider came from:
+   * `0` down, `1` ok, `2` slow, `3` beta. `undefined` when the repository index
+   * did not say, which is a real and common answer.
+   */
+  declaredStatus?: (extensionInternalName: string) => number | undefined;
 }
 
 /**
@@ -302,16 +320,88 @@ const CRITERIA: CriterionDefinition[] = [
     available: false,
     evaluate: () => ({ score: null, samples: 0, detail: 'Not measured yet.' }),
   },
+  {
+    /**
+     * The one criterion that is not a measurement, and the reason it exists.
+     *
+     * On a fresh install every provider has zero observations, so every
+     * criterion above returns `null`, every provider scores the neutral
+     * midpoint, and the ordering is whatever the map happened to iterate in.
+     * That is the moment a new user forms their opinion of the app — and it is
+     * the moment the ranking, which is built entirely on evidence, has none.
+     *
+     * There is evidence, though; it is just not ours. Every CloudStream
+     * repository index carries a `status` per plugin — `0` down, `1` ok, `2`
+     * slow, `3` beta — set by the person who maintains the scraper. It has been
+     * parsed into `SitePlugin.status` all along and read by nothing. Quoting it
+     * is honest in a way that a hand-written table of "good providers" would
+     * not be: it is the author's own claim about their own extension, it
+     * updates when they update it, and it needs no judgement from us about
+     * third-party code we did not write.
+     *
+     * Weighted low on purpose. It is a claim, not a result, and it must lose to
+     * the counters the moment those have anything to say — a provider the
+     * maintainer calls healthy that has failed nine of ten searches here should
+     * rank below one they marked beta that works.
+     */
+    id: 'maintainer-status',
+    label: 'Maintainer’s own status',
+    description:
+      'What the extension’s author publishes about it in their repository — working, slow, beta, ' +
+      'or down. A claim rather than a measurement, so it counts for little once this app has ' +
+      'watched the provider itself.',
+    defaultWeight: 0.4,
+    // No floor: a declaration is not a sample, and requiring three of them
+    // would exclude the criterion from every provider, forever.
+    minSamples: 0,
+    available: true,
+    evaluate(record, _analytics, context) {
+      const status = record.extensionInternalName
+        ? context.declaredStatus?.(record.extensionInternalName)
+        : undefined;
+      if (status === undefined) {
+        return { score: null, samples: 0, detail: 'The repository does not publish a status.' };
+      }
+      const table: Record<number, { score: number; detail: string }> = {
+        0: { score: 0, detail: 'The maintainer marks this extension as down.' },
+        1: { score: 1, detail: 'The maintainer marks this extension as working.' },
+        2: { score: 0.5, detail: 'The maintainer marks this extension as slow.' },
+        3: { score: 0.25, detail: 'The maintainer marks this extension as beta.' },
+      };
+      const entry = table[status];
+      return entry
+        ? { score: entry.score, samples: 1, detail: entry.detail }
+        : {
+            score: null,
+            samples: 0,
+            detail: `The repository publishes an unrecognised status (${status}).`,
+          };
+    },
+  },
 ];
 
 export class ProviderRanking {
   private weights = new Map<string, number>();
   private analytics: ProviderAnalytics;
+  private context: RankingContext = {};
 
   constructor(analytics: ProviderAnalytics) {
     this.analytics = analytics;
     for (const criterion of CRITERIA) this.weights.set(criterion.id, criterion.defaultWeight);
     this.restoreWeights();
+  }
+
+  /**
+   * Supplies the non-measured inputs, after construction.
+   *
+   * Set rather than injected because `PluginManager` and `ProviderRanking` are
+   * both constructed in `main.ts` and each would otherwise need the other
+   * first. A ranking with no context is still correct — the criterion returns
+   * `null` and is excluded from the denominator, exactly as it is for a
+   * repository that publishes no status.
+   */
+  public setContext(context: RankingContext): void {
+    this.context = context;
   }
 
   private restoreWeights(): void {
@@ -386,7 +476,7 @@ export class ProviderRanking {
     for (const criterion of CRITERIA) {
       if (!criterion.available) continue;
       const weight = this.weights.get(criterion.id) ?? criterion.defaultWeight;
-      const outcome = criterion.evaluate(record, this.analytics);
+      const outcome = criterion.evaluate(record, this.analytics, this.context);
 
       // Below the sample floor the criterion has an opinion but not the
       // evidence to act on it, so it is shown and not counted.

@@ -283,11 +283,37 @@ export class WebViewHost {
 
     let settled = false;
     let failure: string | undefined;
+    /*
+     * Listeners to detach once this resolve is over, whichever way it ends.
+     *
+     * They are collected rather than each unhooked by its own
+     * `finished.then(...)`, because `finished` is a `const` initialised by this
+     * very `new Promise` — its executor runs *synchronously inside* that call,
+     * while the binding is still in its temporal dead zone. Referring to it
+     * there threw `ReferenceError: Cannot access 'finished' before
+     * initialization`, out of `run()`, before the page had even been asked to
+     * load.
+     *
+     * That fired on exactly one branch — the `awaitCookie` one — which is the
+     * branch `CloudflareKiller` uses for `cf_clearance`. So **every Cloudflare
+     * challenge bypass failed**, and the WebView bridge appeared to work for
+     * every resolve that did not need it. Found by counting a session log, not
+     * by anything failing loudly: 5 `unhandled_rejection` records.
+     */
+    const cleanups: Array<() => void> = [];
     const finished = new Promise<void>((resolve) => {
       const finish = (reason?: string) => {
         if (settled) return;
         settled = true;
         if (reason) failure = reason;
+        for (const cleanup of cleanups.splice(0)) {
+          try {
+            cleanup();
+          } catch {
+            // A listener that cannot be detached must not fail the resolve that
+            // has already succeeded.
+          }
+        }
         resolve();
       };
 
@@ -336,7 +362,7 @@ export class WebViewHost {
           finish();
         };
         ses.cookies.on('changed', onChanged);
-        void finished.then(() => ses.cookies.off('changed', onChanged));
+        cleanups.push(() => ses.cookies.off('changed', onChanged));
       }
     });
 

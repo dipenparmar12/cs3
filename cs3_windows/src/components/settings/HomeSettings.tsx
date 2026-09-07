@@ -219,6 +219,7 @@ export const HomeSettings: React.FC = () => {
 
       <SettingRow
         label="TMDB API key"
+          level="advanced"
         note={tmdbKeySet ? 'Set' : 'Not set'}
         hint={
           <>
@@ -260,6 +261,7 @@ export const HomeSettings: React.FC = () => {
 
       <SettingRow
         label="Custom catalogue addon"
+          level="advanced"
         note={customUrl ? 'Configured' : 'None'}
         hint={
           <>

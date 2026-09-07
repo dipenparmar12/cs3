@@ -1116,6 +1116,35 @@ export class MpvEngine {
     return this.command(['set_property', 'speed', Math.max(0.25, Math.min(4, speed))]);
   }
 
+  /**
+   * Pins mpv's window above every other window on the desktop.
+   *
+   * This is what "floating player" means for a stream routed to the native
+   * engine, and it is a different mechanism from the `<video>` element's
+   * Picture-in-Picture and from the app window's own always-on-top. mpv already
+   * renders into its own OS window — there is no surface to move anywhere, only
+   * a window level to change — which is why this is one property set rather
+   * than an embedding problem.
+   */
+  /**
+   * Drops or restores the video track, for audio-only background playback.
+   *
+   * Real on this engine in a way it cannot be for the `<video>` element: mpv
+   * closes its window and stops decoding, which on the 4K HEVC files that get
+   * routed here is the difference between a background film costing a GPU
+   * pipeline and costing nothing. `'auto'` rather than `'1'` on the way back,
+   * so the track mpv would have chosen for itself is the one that returns —
+   * pinning it to the first video stream would lose the selection on a file
+   * with more than one.
+   */
+  public setVideoEnabled(enabled: boolean): Promise<MpvCommandResult> {
+    return this.command(['set_property', 'vid', enabled ? 'auto' : 'no']);
+  }
+
+  public setOnTop(onTop: boolean): Promise<MpvCommandResult> {
+    return this.command(['set_property', 'ontop', onTop]);
+  }
+
   public setFullscreen(fullscreen: boolean): Promise<MpvCommandResult> {
     return this.command(['set_property', 'fullscreen', fullscreen]);
   }

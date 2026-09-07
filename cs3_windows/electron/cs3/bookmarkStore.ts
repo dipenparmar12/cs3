@@ -159,6 +159,13 @@ export class BookmarkStore {
     return bookmark;
   }
 
+  /** Empties the list, so a Replace restore can make it match the file. */
+  public clearAll(): number {
+    const count = this.list().length;
+    for (const bookmark of this.list()) this.remove(bookmark.mediaUrl);
+    return count;
+  }
+
   public remove(mediaUrl: string): boolean {
     const before = this.bookmarks.length;
     this.bookmarks = this.bookmarks.filter((entry) => entry.mediaUrl !== mediaUrl);

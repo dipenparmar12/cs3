@@ -40,3 +40,11 @@ sidecar/plugin-data/
 .github/hooks/context-mode.json
 .temp/
 cs3_windows/release
+# `cs3-sidecar.jar` unzipped in place. A `jar xf` at the repo root leaves
+# `META-INF/` and `com/` beside the sources they were compiled from, and one
+# merge carried all 28 of them into the tree — build output that goes stale
+# silently and reads, to anyone who finds it, like a second copy of the sidecar.
+# Anchored: `com/` unanchored would reach every `com` directory at any depth,
+# which is the rule shape that once swallowed `src/components/extensions/`.
+/META-INF/
+/com/

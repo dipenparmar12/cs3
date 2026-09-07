@@ -58,8 +58,39 @@ interface Pending {
  */
 const sidecarLog = scopedLogger('runtime', { component: 'sidecar' });
 
+/**
+ * RPC names this build will actually call.
+ *
+ * Compared against what the sidecar says it answers, so a jar older than the
+ * host is named at the handshake rather than surfacing later as one
+ * unexplained failure per feature. Add a method here when you add a caller for
+ * it — an entry with no caller costs a false alarm, and a caller with no entry
+ * costs the bug this exists to end.
+ */
+const REQUIRED_METHODS = [
+  'status',
+  'inspect',
+  'load',
+  'unload',
+  'providers',
+  'providerSearch',
+  'providerLoad',
+  'providerLoadLinks',
+  'providerMainPageSections',
+  'providerMainPage',
+] as const;
+
 export class SidecarSupervisor {
   private proc: ChildProcessWithoutNullStreams | null = null;
+
+  /**
+   * RPC names this build needs and the running jar does not answer.
+   *
+   * Empty both when everything matches and when the sidecar is too old to
+   * report its methods at all — absence is not evidence, and refusing to start
+   * over a field an older jar never sent would break installs that merely lag.
+   */
+  private missingMethods: string[] = [];
 
   /**
    * Folds stderr lines into one record per event. Flushed on a short timer as
@@ -173,7 +204,22 @@ export class SidecarSupervisor {
       this.proc = spawn(
         java,
         [
-          '-Xmx512m',
+          /*
+           * 512m was not enough, and the failure named the wrong thing.
+           * Reported as `TRANSLATION_FAILED: OutOfMemoryError: Java heap
+           * space` against MovieBoxProviderIN — a 79 KB archive, which reads
+           * as absurd until you look at what translation does: dex2jar holds
+           * the whole DEX graph plus every emitted class in memory at once,
+           * and a small archive can carry a very large one. The extension was
+           * reported as incompatible when nothing was wrong with it.
+           *
+           * The ceiling is what the JVM is *allowed* to reach, not what it
+           * reserves, so raising it costs an idle sidecar nothing. It is still
+           * bounded rather than left to the default — this process runs
+           * third-party code, and an unbounded heap turns one runaway plugin
+           * into the machine swapping.
+           */
+          '-Xmx1536m',
           // DROP-24: an empty library path makes System.loadLibrary fail, so a
           // plugin cannot pull in native code.
           '-Djava.library.path=',
@@ -225,6 +271,31 @@ export class SidecarSupervisor {
     // host that is not listening — and much better than each provider spending a
     // 60-second browser timeout to find out.
     await this.call('hostCapabilities', { webview: this.hostCallHandler !== null }, 10_000);
+
+    /*
+     * Is the jar as new as the build that shipped it?
+     *
+     * `RUNTIME_GENERATION` cannot answer this. It is a number the *host*
+     * writes into its own stamp, so it detects a provisioned copy going stale
+     * and is blind to the case where the TypeScript was rebuilt and
+     * `mvn package` was not — the jar then predates the code calling it.
+     *
+     * That happened, and every symptom named the wrong party: three OTT
+     * platforms each reported `UnsupportedOperationException: Unknown method:
+     * providerMainPageSections`, which points at the RPC layer and gives the
+     * reader nothing to act on. Checked once here, it is one sentence naming
+     * the actual fix.
+     *
+     * Missing `methods` is not a failure. A sidecar older than this check does
+     * not report the field, and refusing to start over its absence would break
+     * every install that is merely behind rather than incompatible.
+     */
+    const methods = Array.isArray(status.result?.methods)
+      ? (status.result.methods as string[])
+      : null;
+    this.missingMethods = methods
+      ? REQUIRED_METHODS.filter((method) => !methods.includes(method))
+      : [];
 
     this.lastStatus = {
       canExecute: Boolean(status.result?.canExecute),
@@ -352,7 +423,7 @@ export class SidecarSupervisor {
     pending.resolve({
       ok: Boolean(frame.ok),
       result: frame.result,
-      error: frame.error,
+      error: this.explainUnknownMethod(pending.method, frame.error),
       errorKind: frame.errorKind,
     });
   }
@@ -405,6 +476,23 @@ export class SidecarSupervisor {
    * Issues one RPC call. Never rejects: a dead sidecar, a timeout and a plugin
    * error are all outcomes the caller has to render, not exceptions.
    */
+  /**
+   * Turns the runtime's own "Unknown method" into something actionable.
+   *
+   * The dispatch throws `UnsupportedOperationException: Unknown method: X`,
+   * which names the RPC layer and nothing a reader can act on — it reached
+   * users as "Netflix has no catalogue to browse" beside a Java exception.
+   * The handshake check above catches this for every method known when it
+   * shipped; this catches one added later, where the list has not been updated.
+   */
+  private explainUnknownMethod(method: string, error: string | undefined): string | undefined {
+    if (!error || !/Unknown method/i.test(error)) return error;
+    return (
+      `The extension runtime does not support "${method}". It is older than this build of ` +
+      'the app — rebuild it with `mvn -f sidecar/pom.xml package`, or reinstall the app.'
+    );
+  }
+
   public async call(
     method: string,
     params: Record<string, unknown> = {},
@@ -466,10 +554,22 @@ export class SidecarSupervisor {
     }
 
     const probe = await this.call('ping', {}, 10_000);
+    /*
+     * A jar behind its host is reported here rather than only in a log,
+     * because it is a working runtime that will fail one feature at a time.
+     * `canExecute` stays true — extensions load and scrape perfectly; what is
+     * missing is whatever the newer host learned to ask for.
+     */
+    const stale =
+      this.missingMethods.length > 0
+        ? `The extension runtime is older than this build of the app and cannot answer ${this.missingMethods.join(', ')}. ` +
+          'Rebuild it with `mvn -f sidecar/pom.xml package`, or reinstall the app.'
+        : undefined;
+
     return {
       running: probe.ok,
       canExecute: Boolean(this.lastStatus?.canExecute),
-      reason: this.lastStatus?.reason,
+      reason: stale ?? this.lastStatus?.reason,
       javaVersion: probe.result?.javaVersion ? String(probe.result.javaVersion) : undefined,
       pid: typeof probe.result?.pid === 'number' ? probe.result.pid : undefined,
       sandboxGaps: this.lastStatus?.sandboxGaps ?? [],

@@ -38,6 +38,15 @@ interface SourceResolveOverlayProps {
    */
   onWiden?: () => void;
   canWiden?: boolean;
+  /**
+   * The scoped search came up empty and the app widened by itself.
+   *
+   * Said out loud rather than left to be inferred from the counter jumping. The
+   * wait triples at that moment, and a wait that changes length for no stated
+   * reason is the shape of a hang — which is what this used to look like before
+   * it was a wait at all, when it was a dead end with a button under it.
+   */
+  widened?: boolean;
   onBack: () => void;
 }
 
@@ -57,6 +66,7 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
   onRetry,
   onWiden,
   canWiden,
+  widened,
   onBack,
 }) => {
   if (phase === 'error') {
@@ -112,6 +122,13 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
       <span className="muted">
         {episodeTitle ? `${title} — ${episodeTitle}` : title}
       </span>
+
+      {widened && phase === 'searching' && (
+        <span className="muted">
+          <Globe size={13} /> No sources from where this title was found — asking
+          every provider and indexer.
+        </span>
+      )}
 
       {phase === 'searching' && totalIndexers > 0 && (
         <span className="muted">
