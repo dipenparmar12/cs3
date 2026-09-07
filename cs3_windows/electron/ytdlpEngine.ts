@@ -1,8 +1,16 @@
-import { execFile, spawn, type ChildProcess } from 'child_process';
+import { execFile, spawn, type ChildProcess, type ExecException } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { app } from 'electron';
-import type { ExtractorLink } from '../src/types/api';
+import type { YtDlpInfo } from './ytdlpSources.ts';
+
+/** How long one page resolve may take before it is abandoned. */
+const RESOLVE_TIMEOUT_MS = 45_000;
+
+/** What yt-dlp had to say about a page: its metadata, or why not. */
+export type YtDlpResolution =
+  | { ok: true; info: YtDlpInfo }
+  | { ok: false; error: string };
 
 /** Progress line emitted by `yt-dlp --newline`, e.g. `[download]  42.1% of ~1.20GiB at 3.21MiB/s ETA 00:42`. */
 const PROGRESS_RE =
@@ -155,66 +163,90 @@ export class YtDlpEngine {
     };
   }
 
-  public async searchAndExtract(query: string): Promise<ExtractorLink[]> {
-    const target = query.startsWith('http://') || query.startsWith('https://')
-      ? query
-      : `ytsearch1:${query} official trailer OR full feature`;
-    return this.extractLinks(target);
-  }
+  /**
+   * Everything yt-dlp knows about one page, or why it does not know it.
+   *
+   * Three things about this replaced an implementation that had no caller and
+   * two defects; the reasons are in `ytdlpSources.ts`, and the shape here is
+   * what makes them fixable:
+   *
+   * **It answers with a reason rather than an empty array.** The old version
+   * resolved `[]` on every failure and wrote a line to the console, so a missing
+   * binary, an unsupported site, a geo-block and a page with no video were one
+   * indistinguishable non-answer. `ContentService` cannot explain a source list
+   * it was handed no explanation for, and "no sources found" is the sentence
+   * this repository has spent the most effort refusing to ship.
+   *
+   * **It is bounded.** yt-dlp on a cold extractor makes real network calls, and
+   * a site that hangs would otherwise hold a discovery open indefinitely.
+   *
+   * **`--no-playlist` is not tidiness.** Handed a series page or a channel URL,
+   * yt-dlp will otherwise resolve every entry, which turns one press into
+   * hundreds of extractions against somebody's site.
+   */
+  public async resolve(
+    pageUrl: string,
+    options: { timeoutMs?: number; signal?: AbortSignal } = {}
+  ): Promise<YtDlpResolution> {
+    if (!this.isAvailable()) {
+      return {
+        ok: false,
+        error: 'yt-dlp is not installed. Settings → Components can fetch it.',
+      };
+    }
 
-  public async extractLinks(targetUrl: string): Promise<ExtractorLink[]> {
-    return new Promise((resolve) => {
-      const execBinary = this.isAvailable() ? this.binaryPath : 'yt-dlp';
-
+    return new Promise<YtDlpResolution>((resolve) => {
       execFile(
-        execBinary,
-        ['--dump-json', '--no-warnings', '--no-call-home', '--format', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', targetUrl],
-        { maxBuffer: 15 * 1024 * 1024 },
-        (error, stdout) => {
+        this.binaryPath,
+        [
+          '--dump-single-json',
+          '--no-playlist',
+          '--no-warnings',
+          '--no-call-home',
+          '--no-progress',
+          pageUrl,
+        ],
+        {
+          maxBuffer: 32 * 1024 * 1024,
+          timeout: options.timeoutMs ?? RESOLVE_TIMEOUT_MS,
+          signal: options.signal,
+        },
+        (error, stdout, stderr) => {
           if (error) {
-            console.warn('yt-dlp extraction skipped or binary not initialized:', error.message);
-            return resolve([]);
+            return resolve({ ok: false, error: describeYtDlpFailure(error, stderr) });
           }
-
           try {
-            const data = JSON.parse(stdout);
-            const links: ExtractorLink[] = [];
-
-            if (data.formats && Array.isArray(data.formats)) {
-              for (const fmt of data.formats) {
-                if (fmt.url && (fmt.vcodec !== 'none' || fmt.acodec !== 'none')) {
-                  links.push({
-                    source: `yt-dlp Extractor (${data.extractor || 'Web Stream'})`,
-                    name: `${data.title || 'Live Stream'} - ${fmt.format_note || fmt.height + 'p' || 'HD'}`,
-                    url: fmt.url,
-                    referer: data.webpage_url || targetUrl,
-                    quality: fmt.height || 720,
-                    isM3u8: fmt.url.includes('.m3u8') || fmt.protocol === 'm3u8',
-                    isDash: fmt.url.includes('.mpd') || fmt.protocol === 'http_dash_segments',
-                    headers: fmt.http_headers || data.http_headers || {}
-                  });
-                }
-              }
-            } else if (data.url) {
-              links.push({
-                source: `yt-dlp Extractor (${data.extractor || 'Web Stream'})`,
-                name: `${data.title || 'Live Stream'} (${data.height || 720}p)`,
-                url: data.url,
-                referer: data.webpage_url || targetUrl,
-                quality: data.height || 720,
-                headers: data.http_headers || {}
-              });
-            }
-
-            // Return top 4 distinct quality streams sorted by height
-            links.sort((a, b) => b.quality - a.quality);
-            resolve(links.slice(0, 4));
-          } catch (e) {
-            console.error('Failed to parse yt-dlp output:', e);
-            resolve([]);
+            return resolve({ ok: true, info: JSON.parse(stdout) as YtDlpInfo });
+          } catch {
+            // Valid JSON is the whole contract of `--dump-single-json`; if it is
+            // not valid the binary is not the one we think it is.
+            return resolve({ ok: false, error: 'yt-dlp returned output this build could not read.' });
           }
         }
       );
     });
   }
+}
+
+/**
+ * yt-dlp's own words, where it has any.
+ *
+ * Its diagnosis is on stderr and is genuinely useful — "Unsupported URL",
+ * "Video unavailable", "This video is private", a geo-block naming the country.
+ * `execFile`'s Error carries only the exit code, so reporting that instead is
+ * the same mistake `Main.describe` was fixed for on the JVM side: naming the
+ * mechanism where the cause was one line away.
+ */
+function describeYtDlpFailure(error: ExecException, stderr: string): string {
+  if (error.code === 'ABORT_ERR') return 'Cancelled.';
+  if ((error as { killed?: boolean }).killed) {
+    return `yt-dlp did not answer within ${Math.round(RESOLVE_TIMEOUT_MS / 1000)}s.`;
+  }
+  const reported = String(stderr ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('ERROR:'))
+    .pop();
+  if (reported) return reported.replace(/^ERROR:\s*/, '').replace(/^\[[^\]]+\]\s*[^:]*:\s*/, '');
+  return error.message || 'yt-dlp could not read that page.';
 }

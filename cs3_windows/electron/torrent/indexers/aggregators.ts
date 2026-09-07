@@ -1,5 +1,5 @@
-import { fetchJson, postJson } from '../http';
-import { buildMagnet, parseIntSafe, parseSize, type RawTorrent, type TorrentIndexer } from './base';
+import { fetchJson, postJson } from '../http.ts';
+import { buildMagnet, parseIntSafe, parseSize, type RawTorrent, type TorrentIndexer } from './base.ts';
 import type { IndexerConfig, IndexerQuery } from '../../../src/types/torrent';
 
 /**
@@ -31,7 +31,24 @@ interface StremioStream {
   description?: string;
   infoHash?: string;
   fileIdx?: number;
-  behaviorHints?: { filename?: string; bingeGroup?: string };
+  /**
+   * A ready-to-play HTTP(S) link — the other half of the protocol.
+   *
+   * A `stream` carries `infoHash` **or** `url`, never both, and the `url` form
+   * is what an addon fronting a debrid account answers with: the file is already
+   * cached, so there is no swarm to join. It is also what every HTTP-only addon
+   * returns. This adapter used to filter those away.
+   */
+  url?: string;
+  /** Some addons name the transport rather than leaving it to be guessed. */
+  behaviorHints?: {
+    filename?: string;
+    bingeGroup?: string;
+    /** Set by addons whose `url` needs a player that can follow a manifest. */
+    notWebReady?: boolean;
+    proxyHeaders?: { request?: Record<string, string> };
+    videoSize?: number;
+  };
 }
 
 interface StremioResponse {
@@ -76,6 +93,71 @@ function parseStremioTitle(title: string): {
     sizeBytes,
     source,
   };
+}
+
+/**
+ * One Stremio `stream` object as this app's source shape, or nothing.
+ *
+ * Pure and exported so it can be tested without a live addon, for the reason
+ * `providerLinks.ts` is: a wrong answer here is not an error anywhere. A dropped
+ * stream is a source that silently never existed, and a stream mapped into the
+ * wrong half is a debrid link handed to the torrent engine — both read as "that
+ * addon does not work" rather than as a bug on this side, which is exactly how
+ * the `infoHash` filter this replaced survived for as long as it did.
+ */
+export function stremioStreamToRaw(stream: StremioStream | undefined | null): RawTorrent[] {
+  if (!stream) return [];
+  const meta = parseStremioTitle(stream.title ?? stream.description ?? stream.name ?? '');
+  const fileName = stream.behaviorHints?.filename ?? meta.fileName;
+
+  if (stream.infoHash) {
+    const infoHash = stream.infoHash.toLowerCase();
+    return [{
+      title: meta.releaseName,
+      infoHash,
+      magnet: buildMagnet(infoHash, meta.releaseName),
+      sizeBytes: meta.sizeBytes,
+      seeders: meta.seeders,
+      leechers: 0,
+      fileIndex: stream.fileIdx,
+      expectedFileName: fileName,
+      category: meta.source,
+    }];
+  }
+
+  /**
+   * The direct half. Three details are worth stating.
+   *
+   * **`fileIdx` is dropped.** It indexes a file inside a torrent, and a `url`
+   * stream is already that one file. Carrying it over would hand the engine a
+   * position into an archive that does not exist.
+   *
+   * **`videoSize` is preferred over the parsed size.** An addon that knows the
+   * byte count states it in `behaviorHints`; the emoji line is a rendering of
+   * it and is frequently absent on `url` streams, which have no swarm stats to
+   * print in the first place.
+   *
+   * **The transport is not decided here.** `notWebReady` says a plain `<video>`
+   * may not cope, which is a fact about the *player* rather than the container,
+   * and this app answers that question with ffprobe. Setting `isM3u8`/`isDash`
+   * from a `.m3u8` in the address would be the same guess `providerLinks.ts`
+   * exists to stop making, so both are left unset and the inspector classifies
+   * the body.
+   */
+  if (!stream.url) return [];
+  return [{
+    title: meta.releaseName || fileName || stream.name || 'Stream',
+    directUrl: stream.url,
+    directHeaders: stream.behaviorHints?.proxyHeaders?.request,
+    sizeBytes: stream.behaviorHints?.videoSize ?? meta.sizeBytes,
+    // Not the parsed seeder count: a cached HTTP link has no swarm, and an
+    // addon that prints one is describing the torrent it came from rather than
+    // what it just handed over.
+    seeders: 1,
+    leechers: 0,
+    expectedFileName: fileName,
+    category: meta.source,
+  }];
 }
 
 /**
@@ -133,27 +215,7 @@ export class StremioAddonIndexer implements TorrentIndexer {
           { signal, timeoutMs: 25_000 }
         );
 
-        return (response.streams ?? [])
-          .filter((stream): stream is StremioStream => Boolean(stream?.infoHash))
-          .map<RawTorrent>((stream) => {
-            const meta = parseStremioTitle(
-              stream.title ?? stream.description ?? stream.name ?? ''
-            );
-            const fileName = stream.behaviorHints?.filename ?? meta.fileName;
-            const infoHash = (stream.infoHash as string).toLowerCase();
-
-            return {
-              title: meta.releaseName,
-              infoHash,
-              magnet: buildMagnet(infoHash, meta.releaseName),
-              sizeBytes: meta.sizeBytes,
-              seeders: meta.seeders,
-              leechers: 0,
-              fileIndex: stream.fileIdx,
-              expectedFileName: fileName,
-              category: meta.source,
-            };
-          });
+        return (response.streams ?? []).flatMap((stream) => stremioStreamToRaw(stream));
       } catch (error) {
         lastError = error;
       }

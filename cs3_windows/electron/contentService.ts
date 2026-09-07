@@ -1,4 +1,3 @@
-import { createHash } from 'crypto';
 import { TvType, type ExtractorLink, type SearchOptions, type SearchResponse } from '../src/types/api';
 import type {
   IndexerQuery,
@@ -14,7 +13,9 @@ import {
   type SearchProgress,
 } from './torrent/indexerRegistry';
 import { TorrentEngine, type StreamHandle } from './torrent/torrentEngine';
-import { infoHashFromMagnet } from './torrent/indexers/base';
+import { directSourceIdentity, infoHashFromMagnet } from './torrent/indexers/base';
+import { YtDlpEngine } from './ytdlpEngine';
+import { looksLikeWebPage, mapYtDlpInfo } from './ytdlpSources.ts';
 import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
 import {
@@ -236,6 +237,16 @@ export class ContentService {
    */
   private proxy = new MediaProxy((input, init) => rawFetch(input, init));
   private details = new DetailCache();
+  /**
+   * The last lane asked, and the only one that is a bundled binary.
+   *
+   * yt-dlp ships with the app and knows on the order of 1,800 sites. It had no
+   * caller anywhere in the main process or the renderer until this — the same
+   * shape as the local-file capability that was built and left with no entry
+   * point. It is consulted for a page address the rest of the app has no route
+   * for, and never speculatively: one press, one page, one process.
+   */
+  private ytdlp = new YtDlpEngine();
 
   /**
    * Serves a downloaded file over the same loopback origin a stream uses.
@@ -726,6 +737,72 @@ export class ContentService {
       };
     }
 
+    /**
+     * A web page the rest of the app has no route for, handed to yt-dlp.
+     *
+     * Before this, an `http(s)` address that was not a provider handle fell
+     * through to `load()` — which asks the metadata catalogues about a URL,
+     * finds nothing, and ends at "Could not determine a title to search for."
+     * That was the whole user-visible behaviour of a lane with ~1,800
+     * extractors sitting inside the installed app.
+     *
+     * It runs before the catalogue search rather than after it because the two
+     * answer different questions: the catalogues would search *for a title* the
+     * page never named, and any result they returned would be a different file
+     * from the one the viewer pasted a link to.
+     *
+     * A failure here is reported, not swallowed. yt-dlp says "Unsupported URL",
+     * "Video unavailable" or names a geo-block, and those are the three
+     * different actions a viewer could take.
+     */
+    if (looksLikeWebPage(base)) {
+      const resolution = await this.ytdlp.resolve(base, { signal: options.signal });
+      const sources = resolution.ok ? mapYtDlpInfo(resolution.info, base) : [];
+
+      /**
+       * A page yt-dlp cannot read is not the end of the road when a title is
+       * already known.
+       *
+       * A history row records `task.link.url` as its media URL, so re-opening
+       * one lands here with an expired CDN address *and* the title it was saved
+       * under. Answering with yt-dlp's "Video unavailable" there would replace a
+       * search that can still find the film with a sentence about a dead link.
+       */
+      const searchInstead = sources.length === 0 && Boolean(request.titleOverride);
+
+      if (!searchInstead) {
+        onProgress?.({
+          results: sources,
+          settled: 1,
+          totalRelevant: 1,
+          lastIndexerName: 'yt-dlp',
+          done: true,
+        });
+        if (sources.length > 0) this.cache.write(base, sources, season, episode);
+        return {
+          sources,
+          filtered: [],
+          indexerOutcomes: [],
+          emptyReason:
+            sources.length > 0
+              ? undefined
+              : resolution.ok
+                ? 'yt-dlp read that page and found no playable video on it.'
+                : resolution.error,
+          query: { title: request.titleOverride ?? '', season, episode },
+          // There is no wider search to offer: the viewer asked for this page,
+          // and asking thirty providers about a URL they have never seen
+          // returns nothing, slowly.
+          scopeUsed: 'origin',
+          canWiden: false,
+        };
+      }
+
+      log.info('ytdlp_fallthrough', {
+        error: resolution.ok ? 'no playable formats' : resolution.error,
+      });
+    }
+
     const detail = await this.load(base);
     const title = request.titleOverride ?? detail?.name;
 
@@ -1052,7 +1129,7 @@ export class ContentService {
          */
         const identity =
           (address.startsWith('magnet:') ? infoHashFromMagnet(address) : null) ||
-          `ext-${createHash('sha1').update(address).digest('hex').slice(0, 20)}`;
+          directSourceIdentity(address);
 
         /**
          * A torrent from a provider goes to the torrent engine, not the proxy.
