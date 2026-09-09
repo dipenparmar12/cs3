@@ -34,6 +34,8 @@ import type { TorrentResult } from './types/torrent';
 import type { PlaybackSnapshot } from '../electron/playbackSession';
 import type { SearchSnapshot } from '../electron/searchSession';
 import { describeError } from './utils/errors';
+import { pickResumePoint } from './utils/resumePoint';
+import { loadWatchState } from './components/player/seriesContext';
 
 /** One live playback session: its id, what asked for it, and its latest state. */
 interface ActiveSession {
@@ -904,8 +906,17 @@ export const App: React.FC = () => {
    * appears to do nothing for half a second reads as broken. `preparing` holds
    * the player open in its resolving state until the real session exists.
    *
-   * A series starts at its first episode. Handing a series URL to source
-   * discovery finds season packs at best, and nothing at all more often.
+   * A series resolves to a specific episode rather than to the series URL:
+   * handing a series URL to source discovery finds season packs at best, and
+   * nothing at all more often.
+   *
+   * **Which** episode is the viewer's watch history, not always the first. This
+   * path started every series at its pilot, which is right exactly once and
+   * wrong on every visit after — someone six episodes in pressed Play on the
+   * poster and got episode one. Nothing errors and nothing looks broken, so it
+   * is absorbed as "this app does not remember where I was", which is the one
+   * thing a streaming app is expected to do. The detail page had always read
+   * this history; only the card path never asked. See `pickResumePoint`.
    */
   const handleQuickPlay = useCallback(
     async (item: SearchResponse) => {
@@ -918,10 +929,12 @@ export const App: React.FC = () => {
         const response = await window.cloudstream?.loadMedia(item.url);
         const detail = response?.ok ? response.detail : null;
 
-        const episodes = detail?.episodes ?? [];
-        const first = [...episodes].sort(
-          (a, b) => (a.season ?? 1) - (b.season ?? 1) || (a.episode ?? 0) - (b.episode ?? 0)
-        )[0];
+        // Both reads are local — the datastore, not a provider — so they cost
+        // nothing against the round trip that just resolved the detail.
+        const watchState = await loadWatchState(item.url);
+        const { episode: first, resumeAt } = pickResumePoint(detail?.episodes ?? [], watchState, {
+          isLive: detail?.isLive,
+        });
 
         await startSession({
           request: {
@@ -946,6 +959,7 @@ export const App: React.FC = () => {
             posterUrl: detail?.posterUrl ?? item.posterUrl,
             season: first?.season,
             episode: first?.episode,
+            resumeAt,
           },
           subtitleContext: {
             imdbId: (detail as { imdbId?: string } | null)?.imdbId,

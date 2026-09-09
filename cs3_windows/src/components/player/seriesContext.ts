@@ -40,3 +40,33 @@ export interface SeriesContext {
    */
   watchState?: Record<string, EpisodeWatchState>;
 }
+
+/**
+ * Every episode's viewing history for one title, keyed by `episodeKey`.
+ *
+ * Two IPC calls rather than one because progress is keyed on the library's
+ * canonical `title:year`, never on a URL — that is what lets one film from five
+ * providers be one entry, and it means the URL has to be resolved to a key
+ * first.
+ *
+ * Lives here rather than in the detail view because the *card* path needs it
+ * too: quick-play started every series at episode one purely because this
+ * lookup was in a file it could not reach.
+ */
+export async function loadWatchState(mediaUrl: string): Promise<Record<string, EpisodeWatchState>> {
+  if (!window.cloudstream) return {};
+
+  const entry = await window.cloudstream.getLibraryEntryForUrl(mediaUrl);
+  if (!entry) return {};
+
+  const rows = await window.cloudstream.getProgressForKey(entry.key);
+  const state: Record<string, EpisodeWatchState> = {};
+  for (const row of rows) {
+    state[episodeKey(row.season, row.episode)] = {
+      positionSeconds: row.positionSeconds,
+      durationSeconds: row.durationSeconds,
+      completed: row.completed,
+    };
+  }
+  return state;
+}

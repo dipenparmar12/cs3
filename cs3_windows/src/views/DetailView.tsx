@@ -11,10 +11,11 @@ import type { TorrentResult } from '../types/torrent';
 import type { PlaybackSnapshot } from '../../electron/playbackSession';
 import { SourcePicker, type SourcePickerData } from '../components/SourcePicker';
 import {
-  episodeKey,
+  loadWatchState,
   type EpisodeWatchState,
   type SeriesContext,
 } from '../components/player/seriesContext';
+import { pickResumePoint, resumeSeconds } from '../utils/resumePoint';
 import { SeasonDownloadDialog } from '../components/SeasonDownloadDialog';
 import { LibraryBucketSelector } from '../components/LibraryBucketSelector';
 import { PosterCard } from '../components/PosterCard';
@@ -153,52 +154,6 @@ interface DetailData {
    */
   actors?: string[];
   recommendations?: SearchResponse[];
-}
-
-/**
- * Reads this title's whole watch history in one lookup.
- *
- * Looked up through the library entry rather than by URL, so a title the user
- * previously watched through a different provider still resumes. One call backs
- * both the resume position and the per-episode markers, which otherwise meant
- * two round trips for the same rows.
- */
-async function loadWatchState(mediaUrl: string): Promise<Record<string, EpisodeWatchState>> {
-  if (!window.cloudstream) return {};
-
-  const entry = await window.cloudstream.getLibraryEntryForUrl(mediaUrl);
-  if (!entry) return {};
-
-  const rows = await window.cloudstream.getProgressForKey(entry.key);
-  const state: Record<string, EpisodeWatchState> = {};
-  for (const row of rows) {
-    state[episodeKey(row.season, row.episode)] = {
-      positionSeconds: row.positionSeconds,
-      durationSeconds: row.durationSeconds,
-      completed: row.completed,
-    };
-  }
-  return state;
-}
-
-/**
- * Where to resume an episode from, or undefined if it was finished or never
- * started — or if it is live.
- *
- * A live channel has no fixed timeline, so a stored position does not address
- * anything: yesterday's 20 minutes in is not a point in today's broadcast. The
- * seek either lands somewhere arbitrary or is refused, and both read as the
- * channel being broken.
- */
-function resumePositionFrom(
-  watchState: Record<string, EpisodeWatchState>,
-  episode: Episode | null,
-  isLive?: boolean
-): number | undefined {
-  if (isLive) return undefined;
-  const match = watchState[episodeKey(episode?.season, episode?.episode)];
-  if (!match || match.completed) return undefined;
-  return match.positionSeconds;
 }
 
 /** Groups episodes by season so a 200-episode series is navigable. */
@@ -880,10 +835,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
    * which is better placed to decide what to show over a running video.
    */
   const playEpisodeDirectly = useCallback(
-    async (episode: Episode | null) => {
+    async (requested: Episode | null) => {
       if (!window.cloudstream || !detail) return;
 
-      if (episode) setSelectedEpisode(episode);
+      if (requested) setSelectedEpisode(requested);
 
       // Fire-and-forget: recording the title in the library must not stand
       // between the click and the player appearing.
@@ -898,6 +853,22 @@ export const DetailView: React.FC<DetailViewProps> = ({
       // One local datastore read, needed before the player mounts so the
       // episode list and resume point are right from the first frame.
       const watchState = await loadWatchState(detail.url);
+
+      /**
+       * A null episode on a series means "Play", not "play the series URL".
+       *
+       * The hero button used to hand over the first episode of the *displayed*
+       * season, so pressing Play on a show someone was midway through restarted
+       * it — and switching the season tab changed what Play meant, which is not
+       * something anyone would predict from a button labelled Play. Callers with
+       * a specific episode (the episode list, next-episode) still get exactly
+       * what they asked for; only the unqualified press is resolved from
+       * history. See `pickResumePoint`.
+       */
+      const episode =
+        requested ??
+        pickResumePoint(detail.episodes ?? [], watchState, { isLive: detail.isLive }).episode;
+      if (!requested && episode) setSelectedEpisode(episode);
 
       onStartSession({
         request: {
@@ -946,7 +917,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
           posterUrl: detail.posterUrl,
           season: episode?.season,
           episode: episode?.episode,
-          resumeAt: resumePositionFrom(watchState, episode, detail.isLive),
+          resumeAt: resumeSeconds(watchState, episode, { isLive: detail.isLive }),
         },
       });
     },
@@ -1037,7 +1008,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
           posterUrl: detail.posterUrl,
           season: pendingEpisode?.season,
           episode: pendingEpisode?.episode,
-          resumeAt: resumePositionFrom(watchState, pendingEpisode, detail.isLive),
+          resumeAt: resumeSeconds(watchState, pendingEpisode, { isLive: detail.isLive }),
         },
       });
     },
@@ -1168,7 +1139,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         saved={saved}
         busy={startingStream}
         sourceReadiness={prefetch}
-        onPlay={() => playNow(isSeries ? (episodesInSeason[0] ?? null) : null)}
+        onPlay={() => playNow(null)}
         onToggleSave={() => void toggleSaved()}
         // Deliberately not a cache bypass: the badge beside it says these were
         // already found, so re-asking every provider would contradict it. An
