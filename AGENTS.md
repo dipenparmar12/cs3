@@ -62,9 +62,9 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (47 tests) |
-| Main-process tests (all) | `cs3_windows/` | `bun run test` (~630 cases / 45 suites) or `bun run test:electron` |
-| Fast unit tests | `cs3_windows/` | `bun run test --fast` (43 suites, ~6s) |
-| Named suites | `cs3_windows/` | `bun run test <name>`: `errors`(8) `resume-point`(10) `libraryStore`(7) `issues`(21) `registry`(9) `recovery`(12) `torrent-contents`(24) `sidecar-log`(20) `cache`(10) `links`(15) `webview`(21) `torrent-metadata`(28) `source-scope`(17) `ott`(19) `native-providers`(50) `resume`(17) `resume-window`(10) `reachability`(2) `settings-level`(6) `dead-rows`(8) `proxy`(11) `subtitles`(16) `media`(71) `pipeline`(17, real ffmpeg) `export`(13) `direct-sources`(13) `ytdlp`(16) `repositories`(9) `download-identity`(18) `native`(12, real mpv) `ipc` |
+| Main-process tests (all) | `cs3_windows/` | `bun run test` (50 suites; the runner reports suites, not a case total) or `bun run test:electron` |
+| Fast unit tests | `cs3_windows/` | `bun run test --fast` (48 suites, ~10s) |
+| Named suites | `cs3_windows/` | `bun run test <name>`: `errors`(8) `resume-point`(10) `libraryStore`(7) `issues`(21) `registry`(9) `recovery`(12) `torrent-contents`(24) `sidecar-log`(20) `cache`(10) `links`(15) `webview`(21) `torrent-metadata`(28) `source-scope`(17) `ott`(19) `native-providers`(50) `resume`(17) `resume-window`(10) `reachability`(2) `settings-level`(6) `dead-rows`(8) `proxy`(11) `subtitles`(16) `media`(71) `pipeline`(17, real ffmpeg) `export`(13) `direct-sources`(13) `ytdlp`(16) `repositories`(9) `download-identity`(18) `native`(12, real mpv) `ipc` `pageSnapshot`(12) `savedPage`(8) `sourceScopeModel`(5) `searchOrder`(5) `extensionUpdater`(8) |
 | Repository/corpus liveness | repo root | `node tools/research/survey-repositories.mjs` (PRD-43) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — §5.2 |
@@ -173,7 +173,7 @@ Manager    Service       Manager         Engine         Service         Store
 ### The IPC contract
 `electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration: false`.
 Namespaces: `api:*`, `torrent:*`, `playback:*`, `indexer:*`, `sources:*`, `download:*`,
-`extension:*`, `library:*`, `datastore:*`, `binary:*`, `dialog:*`.
+`extension:*`, `library:*`, `datastore:*`, `binary:*`, `dialog:*`, `pages:*`.
 
 - **`playback:*`** push-shaped: `playback:start` returns a session id immediately; updates arrive as `playback:update` snapshots. Player renders from snapshots before a stream exists.
 - **`search:*`** push-shaped for the same reason: `search:start` returns an opening snapshot; results/progress arrive as `search:update`; `search:cancel` abandons the rest. A search across 15 providers is 15 independent scrapes (measured: Cinevood 20s timeout, ARD 350ms) — request/response would spend the whole time on a spinner. `api:searchAll` remains for callers needing a full answer. Required breaking up `PluginManager.searchAll`'s single batched RPC (reply landed at slowest-provider speed) into one RPC per provider (`searchEach`), capped at 8 in flight (sidecar dispatches onto a core-sized bounded pool).
@@ -182,6 +182,7 @@ Namespaces: `api:*`, `torrent:*`, `playback:*`, `indexer:*`, `sources:*`, `downl
 - `window:setAlwaysOnTop/getAlwaysOnTop` pins the app window; `mpv:setOnTop`/`mpv:setVideoEnabled` do the same for mpv's own window (see "Floating playback").
 - Also: `analytics:*`, `bookmarks:*`, `discover:*`, `subtitles:*`, `sources:getCacheStats/clearCache`.
 - **`issues:*`** — `issues:list/annotate/report/clear`: the extension issue ledger, deliberately a third surface beside `log:*`/`diagnostics:*` (see §5, "Counting the log").
+- **`pages:*`** — `pages:getSnapshot/remember/setPinned`: the stored copy of a detail page. Deliberately read-shaped, unlike `search:*`/`playback:*` — the answer is already on disk and the caller wants it in the tick it decides to render. **Capture is not exposed**; it happens in `ContentService.load`, the one funnel every detail load passes through and the only side that knows a provider's ancestry.
 - **`extension:addRepository`** and **`installRepository`** are deliberately two actions (fetch+persist vs. tens of downloads/translations).
 - **`media:*`** — `media:inspect` classifies without starting; `media:prepare` inspects-decides-opens, the only source of a playable URL; `media:switchAudio/closeStream` drive a live session; `media:setCapabilities/getCodecProbes` carry renderer-measured decoder support; `media:getPlaybackDiagnostics` returns per-attempt telemetry. **No channel hands back an unclassified URL.** `media:prepare` also takes provider-declared `isDash`/`drm`, which outrank the probe — DRM in particular skips the probe entirely (ffprobe succeeds with correct codec names over undecodable encrypted payload).
 - `external:*` drives a handed-off player, pushes `external:update` with a `capability` flag. `player:getPreferences/setPreferences` hold volume/mute/speed/track languages. `download:getDeletePreference/setDeletePreference`. `extension:rollback` restores a replaced archive.
@@ -240,6 +241,8 @@ Namespaces: `api:*`, `torrent:*`, `playback:*`, `indexer:*`, `sources:*`, `downl
 | `cs3/batchDownloader.ts` | Season/series batch orchestration. |
 | `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, remembered source choices. |
 | `cs3/bookmarkStore.ts` | Saved detail pages (provider/extension/repo/query) — not the library (that keys on normalised title). |
+| `cs3/pageSnapshot.ts` | Last-known-good copy of every detail page opened, plus its routes and origin — so a saved page never opens blank. |
+| `cs3/searchOrder.ts` | Which provider the fan-out asks first; refuses any ordering that is not the same set. |
 | `cs3/providerAnalytics.ts` | Behaviour counts, aggregates only (no queries/titles/history). `empty` tracked separately from `failure`. |
 | `cs3/providerRanking.ts` | Weighted scoring, criteria as table rows; `null` excluded from denominator, not scored zero; rates smoothed toward neutral prior. |
 | `cs3/providerRecommendations.ts` | Scores → advice/action (`autoEnableProven`). Never auto-disables. |
@@ -256,6 +259,8 @@ Namespaces: `api:*`, `torrent:*`, `playback:*`, `indexer:*`, `sources:*`, `downl
 | `externalPlayerControl.ts` | Two-way VLC control over HTTP; capability declared per player. |
 | `media/inspectionStore.ts` | Persists probe findings keyed on origin URL; verdict recomputed. |
 | `downloadService.ts`, `aria2Engine.ts`, `ytdlpEngine.ts`, `binaryDownloader.ts` | aria2c RPC + HTTP fallback; portable binaries fetched on first use. |
+| `src/utils/savedPage.ts` | Draws a page from its snapshot, and folds a live answer over it without blanking. |
+| `src/components/search/sourceScopeModel.ts` | The scope dialog's row/facet vocabulary and tri-state rule. Pure, tested. |
 | `src/utils/deadRows.ts` | Which search results to hide (`no-sources`) vs never hide (`app-error`). |
 | `src/components/player/useFloatingPlayer.ts` | PiP, window pin, background policy, Media Session record. |
 | `src/components/settings/settingsLevel.ts` | Simple vs Everything semantics. |
@@ -630,6 +635,127 @@ Occurrences: `Context.getPackageManager`, `Context.getResources`, `AccountManage
 `RUNTIME_GENERATION` **12**. **`ShimSignatureTest` enumerates the rule**: no shim method may mention bare `Object` unless Android's own signature does, allow-list carries upstream's real signature per entry, **a stale allow-list entry fails too**. Verified by mutation; found nothing else (family is closed, not merely reduced).
 
 Also: `UnsupportedAndroidApiException` now separates its `Class.method` aggregation key from its explanation (was folding prose into the key, defeating grouping). `errorKind` now classifies the **whole** `LinkageError` family (`NoSuchMethodError`, `IncompatibleClassChangeError`, `AbstractMethodError`, `VerifyError`, not just `NoClassDefFoundError`) — was `PLUGIN_ERROR` ("extension threw"), should be "our shim is wrong." `ExceptionInInitializerError` excluded (a plugin's own static-init throwing, despite being a `LinkageError` by inheritance).
+
+### A saved page had nothing behind it (2026-09-09)
+
+A library row carries a title, a poster and a year, copied when it was added, so the **list**
+always looked right. The **page** behind it carried nothing — drawn entirely from what the
+provider answered at that moment, and when the provider was switched off, uninstalled,
+throttled or had changed its page shape since, that was nothing. Reported as "the app lost my
+saved content". It was never lost; it was never written down.
+
+`cs3/pageSnapshot.ts` writes it down. Captured in **`ContentService.load`** — the one funnel
+catalogue, native-provider and extension pages all pass through, and the only side that knows a
+provider's ancestry (`provenanceOf`). A page is kept by being *looked at*; saving or adding to
+the library only **pins** it against eviction (`MAX_SNAPSHOTS` 600, unpinned LRU).
+
+Stored: the display copy, the repository ▸ extension ▸ provider chain, the search query, and
+**every address known to reach the work**. Those addresses are half the fix — a merged row's
+`alternates` live only as long as the row is on screen, so a page saved in March had one
+address in June and it was the one that had stopped working. `DetailView` now tries the row's
+alternates *and* the snapshot's routes. **No playable link is stored** (that is `SourceCache` /
+`PlayedSource`, which have deadlines; a page that opens and cannot play is worse than one that
+re-resolves).
+
+**The one rule: a later load may add and may correct, but may never blank.** A provider
+answering with a title and no poster has said nothing about the poster; reading that silence as
+"there is no poster" is what made a complete page degrade every time it was opened. Implemented
+twice on purpose — `mergeSnapshot` (main) and `utils/savedPage.ts` `mergeDetail` (display) —
+and both say so. Episode listings are all-or-nothing, never field-merged: splicing two partial
+scrapes invents a season no provider offers.
+
+The page draws from the copy **before** the provider is asked, so a revisit is instant; the live
+answer folds over it. When every route fails the copy **stands**, with a banner naming the
+reason and the copy's age, instead of the blank error screen offering to search for a title it
+is already displaying. "Saved today" beside a failing provider and "saved 8 months ago" call for
+different responses, which is why the age is stated and not just "saved copy".
+
+Its own file, not the datastore (episode lists run to hundreds of rows; the datastore
+round-trips through Android backups) — but **a backup section of its own**, since restoring a
+library without the pages behind it reproduces the whole bug on a new machine. Only pinned rows
+are exported; the rest is cache.
+
+### The scope picker was a letterbox (2026-09-09)
+
+330px wide, 300px tall, holding a search field, a reset row, three unlabelled rows of chips
+meaning three different things, a progress line, a windowed three-level tree of several hundred
+28px rows, two buttons and a sentence. Two distinctions were invisible in it:
+
+1. **A filter is not a selection.** Chips narrow what the list *shows*; a ticked box narrows
+   what the search *asks*. As adjacent rows of similar pills they read as one mechanism —
+   someone who filtered to "Hindi" believed they had scoped their search to Hindi providers.
+   Now: separate panes, separate headings, and one line in the rail saying which is which.
+2. **Which facet a chip belongs to.** Twelve language chips beside six type chips separated by
+   a hairline does not express "OR within a facet, AND across facets". Each facet is a labelled
+   group.
+
+Plus **which sources are actually scoped**: a count answers "how many", never "which", and the
+current scope is now a strip of chips that each remove their own source.
+
+`search/SourceScopeDialog.tsx` (presentation) + `search/sourceScopeModel.ts` (pure, tested);
+`SearchScopePicker.tsx` keeps all data/state and is the trigger. Real `tree`/`treeitem` with
+roving focus via `aria-activedescendant`, arrows stepping over label rows, Left/Right
+collapse/expand, Space to tick, focus trap, focus restored on close. **Escape is handled in
+capture phase** — `VideoPlayer` binds Escape on `window` as "leave playback", and a dialog that
+lets it through closes a film along with itself (§"Escape closed the film"). Viewport height is
+**measured** (`ResizeObserver`), not a constant: the dialog is sized in `vh` and a constant
+mounts invisible rows on a laptop or leaves a blank band on a large display.
+
+`stateOf`'s vacuous case is the tested one: a row with **no members** must read `off`, never
+`on` — an extension that registered nothing would otherwise draw as ticked, advertising a scope
+that queries nothing.
+
+### Updating an extension left its providers dead until restart (2026-09-09)
+
+`installPlugin` tells the sidecar to `unload` before replacing an archive, and told **nothing on
+this side**: `liveInJvm` still held the name, so the next `activate` returned `true` without
+loading, and `registry` still described bytes no longer on disk. Every layer reported success
+and the extension answered nothing. `forgetLoadedExtension` drops all four claims — live set,
+registry row, provider entries, runtime report — **paired with the `unload`**, not placed after
+the rename, so a rename that fails cannot leave a live claim either.
+
+Same pass: every install ran `providersLoaded = false; loadProviders()`, a whole-catalogue
+re-read, so "update all" across twenty extensions was twenty passes of work unrelated to what
+changed. Only the replaced archive is reactivated now — which is also the only correct thing
+once its registry row is gone.
+
+**"Up to date" was wrong for exactly the extensions that had stopped working.** Maintainers here
+fix a scraper and republish without touching `version`. A same version with a different
+published hash is now an update, labelled `reason: 'republished'` so the UI says "v7 rebuilt"
+rather than "v7 ➔ v7". Compared **only when both sides carry a hash for the same lane** — no
+hashes anywhere would otherwise re-download the catalogue on every check, forever.
+
+Also: pressing Update with a cold cache answered "check for updates first", a dead end made
+entirely of our own bookkeeping — `resolveUpdate` asks the extension's own repository first, and
+`updateAll` runs a check rather than iterating an empty list and reporting a successful update
+of nothing.
+
+**The maintainer's own status is the ecosystem's health mechanism**, and the check re-fetched it
+every run and discarded it. An installed extension its author marks `status: 0` now produces an
+`ExtensionNotice`. Deliberately **information, not an action**: switching off a source someone
+chose, on the strength of a number in a JSON file, is the silently-punitive behaviour the
+ranking exists to avoid.
+
+### The fan-out asked whoever was installed first (2026-09-09)
+
+A search runs 8 providers at a time and works through the rest as lanes free; the order was the
+provider registry's, i.e. install order. That order decides how long the screen stays empty — a
+lane timing out on a dead provider is a lane not spent on one answering in 350ms. `ProviderAnalytics`
+has been measuring success rate and latency all along and `ProviderRanking.rank` turning them
+into an order that **only a settings panel read**. `searchEach` reads it now.
+
+`cs3/searchOrder.ts` is a module rather than one line because of its guard: an ordering that is
+not the **same set** — one dropped, added, duplicated behind a plausible length, or a throw —
+falls back to the original. A ranking is scored from noisy scrapes through stored weights and a
+smoothing prior; that is more machinery than a search should trust with "which providers am I
+searching". Silently searching fewer sources and reporting it as "no results" is the worst
+failure this app has, and reaching it through an optimisation is worse.
+
+**The warm-up competed with the searches it exists to speed up.** Serial is not the same as out
+of the way: it keeps the sidecar's bounded pool busy with a 56-jar classpath while eight scrapes
+queue behind it. It now waits **between archives** (never mid-archive — a half-registered
+provider) while any search runs, bounded at 120s so a continuously-searching session still warms
+up, falling back past that to exactly the prior behaviour.
 
 ### Two Play buttons that could not remember (2026-09-09)
 

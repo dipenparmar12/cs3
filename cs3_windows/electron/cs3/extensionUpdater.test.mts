@@ -445,3 +445,58 @@ test('ExtensionUpdater.updateAll checks for updates when the cache is cold', asy
   assert.equal(outcomes.length, 1);
   assert.ok(outcomes[0].ok);
 });
+
+/**
+ * The maintainer's own status is this ecosystem's entire health mechanism, and
+ * the update check has been re-fetching it on every run and discarding it. A
+ * user debugging a provider its author has already declared broken is the
+ * failure it prevents.
+ */
+test('ExtensionUpdater.checkForUpdates reports extensions their maintainer marked down', async () => {
+  const datastore = new FakeDatastore();
+
+  const fakePlugins = {
+    getInstalledRepositories: () => ['https://a.test/repo.json', 'https://b.test/repo.json'],
+    getInstalledPluginRecords: () => [
+      {
+        internalName: 'BrokenSite',
+        version: 4,
+        meta: { internalName: 'BrokenSite', name: 'BrokenSite', version: 4, status: 1, url: 'x' },
+      },
+      {
+        internalName: 'HealthySite',
+        version: 2,
+        meta: { internalName: 'HealthySite', name: 'HealthySite', version: 2, status: 1, url: 'y' },
+      },
+      {
+        internalName: 'SlowSite',
+        version: 1,
+        meta: { internalName: 'SlowSite', name: 'SlowSite', version: 1, status: 1, url: 'z' },
+      },
+    ],
+    fetchRepository: async (url: string) => ({
+      repositoryUrl: url,
+      name: url,
+      plugins: [
+        // Published by both repositories, down in both: one notice, not two.
+        { internalName: 'BrokenSite', name: 'BrokenSite', version: 4, status: 0, url: 'x' },
+        { internalName: 'HealthySite', name: 'HealthySite', version: 2, status: 1, url: 'y' },
+        // Slow is a ranking input, not a notice: it still works.
+        { internalName: 'SlowSite', name: 'SlowSite', version: 1, status: 2, url: 'z' },
+        // Down, but not installed — not this user's problem.
+        { internalName: 'NotInstalled', name: 'NotInstalled', version: 9, status: 0, url: 'q' },
+      ],
+      warnings: [],
+    }),
+  } as unknown as PluginManager;
+
+  const updater = new ExtensionUpdater(datastore as unknown as DatastoreManager, fakePlugins);
+  const result = await updater.checkForUpdates();
+
+  assert.deepEqual(
+    result.notices.map((notice) => notice.internalName),
+    ['BrokenSite']
+  );
+  assert.match(result.notices[0].message, /marked as not working by its maintainer/);
+  assert.equal(result.updates.length, 0, 'A down status is not itself an update');
+});

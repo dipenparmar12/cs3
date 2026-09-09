@@ -45,13 +45,48 @@ export interface AvailableUpdate {
   reason: 'newer' | 'republished';
 }
 
+/**
+ * The maintainer's own word on an extension they publish.
+ *
+ * Every repository index carries a per-plugin `status` — `0` down, `1` ok, `2`
+ * slow, `3` beta — which is this ecosystem's entire health mechanism: the
+ * person who wrote the scraper marks it down when the site it scrapes changes,
+ * often hours before anyone else notices. The update check re-fetches every
+ * index anyway, so it has been reading this on every run and discarding it.
+ *
+ * Surfacing it is the difference between a user debugging a provider that its
+ * own author has already declared broken, and being told so. It is deliberately
+ * *not* an enable/disable action: a maintainer's status is information, and
+ * switching off a source someone chose on the strength of a number in a JSON
+ * file is the kind of silently-punitive behaviour the ranking exists to avoid.
+ */
+export interface ExtensionNotice {
+  internalName: string;
+  name: string;
+  /** The raw value, so an unrecognised one can be reported rather than guessed. */
+  status: number;
+  repositoryUrl: string;
+  message: string;
+}
+
 export interface UpdateCheckResult {
   checkedAt: number;
   updates: AvailableUpdate[];
+  /**
+   * Installed extensions their own maintainer has marked as not working.
+   *
+   * Separate from `warnings`, which is about repositories this app could not
+   * reach. This is the opposite: the repository answered, and what it said was
+   * "this one is down".
+   */
+  notices: ExtensionNotice[];
   /** Repositories that could not be reached; their plugins are simply unchanged. */
   warnings: string[];
   repositoriesChecked: number;
 }
+
+/** The maintainer status values upstream defines, and what each one means here. */
+const STATUS_DOWN = 0;
 
 export interface UpdateOutcome {
   internalName: string;
@@ -254,6 +289,13 @@ export class ExtensionUpdater {
     );
 
     const warnings: string[] = [];
+    /*
+     * Keyed by name so an extension published by two repositories, one of which
+     * has marked it down, produces one notice rather than a contradiction.
+     * First writer wins, which is the repository listed first — the same
+     * first-wins rule the provider registry uses for name clashes.
+     */
+    const notices = new Map<string, ExtensionNotice>();
     // internalName -> best candidate seen, so a plugin present in two
     // repositories resolves to the highest version rather than to whichever
     // repository happened to be fetched last.
@@ -280,6 +322,19 @@ export class ExtensionUpdater {
       for (const remote of outcome.value.plugins) {
         const local = installed.get(remote.internalName);
         if (!local) continue;
+
+        if (Number(remote.status) === STATUS_DOWN && !notices.has(remote.internalName)) {
+          notices.set(remote.internalName, {
+            internalName: remote.internalName,
+            name: remote.name ?? remote.internalName,
+            status: STATUS_DOWN,
+            repositoryUrl: repoUrl,
+            message:
+              `${remote.name ?? remote.internalName} is marked as not working by its maintainer. ` +
+              'Results from it are expected to be empty until they publish a fix — which this app ' +
+              'will pick up on its next update check.',
+          });
+        }
 
         const remoteVersion = Number(remote.version ?? 0);
         const localVersion = Number(local.version ?? 0);
@@ -325,6 +380,7 @@ export class ExtensionUpdater {
     const result: UpdateCheckResult = {
       checkedAt: Date.now(),
       updates,
+      notices: [...notices.values()].sort((a, b) => a.name.localeCompare(b.name)),
       warnings,
       repositoriesChecked: repoUrls.length,
     };

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import type {
   AvailableUpdate,
+  ExtensionNotice,
   UpdateOutcome,
   UpdateSettings,
 } from '../../electron/cs3/extensionUpdater';
@@ -14,6 +15,15 @@ export interface StatusMessage {
 
 export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdated }) => {
   const [updates, setUpdates] = useState<AvailableUpdate[]>([]);
+  /**
+   * Extensions their own maintainer has marked as not working.
+   *
+   * Held beside the updates rather than folded into them because they call for
+   * a different response: an update is something to press, and this is
+   * something to stop debugging. Nothing is switched off on the strength of it
+   * — a status is the author's information, not the app's decision.
+   */
+  const [notices, setNotices] = useState<ExtensionNotice[]>([]);
   const [failedOutcomes, setFailedOutcomes] = useState<UpdateOutcome[]>([]);
   const [settings, setSettings] = useState<UpdateSettings | null>(null);
   const [checking, setChecking] = useState(false);
@@ -96,6 +106,7 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
       }
       const safeUpdates = Array.isArray(response.result.updates) ? response.result.updates : [];
       setUpdates(safeUpdates);
+      setNotices(Array.isArray(response.result.notices) ? response.result.notices : []);
       if (safeUpdates.length > 0) setIsExpanded(true);
       setMessage(
         safeUpdates.length === 0
@@ -326,6 +337,40 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
             <CheckCircle2 size={13} style={{ color: 'var(--status-success, #10b981)' }} />
           )}
           <span>{message.text}</span>
+        </div>
+      )}
+
+      {/*
+        What the maintainers have said about what is installed.
+
+        Always shown rather than folded behind the expander: someone whose
+        provider has been returning nothing all week is not going to go looking
+        for it, and this is the one line that ends the investigation. Not an
+        action — nothing here is switched off on the author's say-so.
+      */}
+      {notices.length > 0 && (
+        <div style={{ marginTop: '0.6rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+          {notices.map((notice) => (
+            <div
+              key={`notice-${notice.internalName}`}
+              role="status"
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.45rem',
+                padding: '0.45rem 0.65rem',
+                borderRadius: 'var(--radius-sm)',
+                background: 'rgba(245, 158, 11, 0.12)',
+                border: '1px solid rgba(245, 158, 11, 0.3)',
+                fontSize: '0.74rem',
+                lineHeight: 1.4,
+                color: 'var(--text-main)',
+              }}
+            >
+              <AlertCircle size={13} style={{ color: '#f59e0b', flexShrink: 0, marginTop: '0.1rem' }} />
+              <span>{notice.message}</span>
+            </div>
+          ))}
         </div>
       )}
 
