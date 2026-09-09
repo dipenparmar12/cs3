@@ -28,6 +28,7 @@ import { SidecarSupervisor } from './cs3/sidecarSupervisor';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from './officialRepositories';
 import { getIssueLog } from './cs3/extensionIssues';
 import { ProviderRegistryCache, type CachedProvider } from './cs3/providerRegistry';
+import { applySearchOrder } from './cs3/searchOrder.ts';
 import { classifyFailure, FAILURE_KIND_LABELS } from './cs3/failureTaxonomy';
 import { mapProviderLink } from './cs3/providerLinks';
 import type { FailureKind } from '../src/types/analytics';
@@ -392,6 +393,19 @@ function isAdultProvider(provider: ExtensionProvider): boolean {
  * merely timing out.
  */
 const PROVIDER_CALL_TIMEOUT_MS = 60_000;
+
+/** How often the background warm-up re-checks whether a search is still running. */
+const WARMUP_YIELD_POLL_MS = 250;
+
+/**
+ * How long the warm-up will defer to searches before proceeding anyway.
+ *
+ * Long enough to cover an ordinary fan-out across a large install including the
+ * slowest providers, short enough that a session spent searching continuously
+ * still gets warmed up eventually. Past it the warm-up accepts the contention,
+ * which is what it did unconditionally before.
+ */
+const WARMUP_YIELD_LIMIT_MS = 120_000;
 
 
 
@@ -803,6 +817,28 @@ export class PluginManager {
    * draw a scope picker and needs a live object only to make a call.
    */
   private readonly liveInJvm = new Set<string>();
+
+  /**
+   * Who the fan-out asks first, supplied by `main.ts` from the ranking.
+   *
+   * A sink rather than a dependency, on the same terms as `analytics` and
+   * `diagnostics`: this class must stay constructible in a tool or a test with
+   * no ranking around it, and an absent order is simply the registry's own,
+   * which is what it was before. See `cs3/searchOrder.ts`.
+   */
+  private searchOrder: ((names: string[]) => string[]) | null = null;
+
+  /**
+   * How many searches are running, so the warm-up can stay out of their way.
+   *
+   * The background warm-up is deliberately serial because concurrency
+   * mis-attributes providers, but serial is not the same as out of the way: it
+   * still loads a 56-jar classpath continuously, and a search starting eight
+   * seconds after launch contends with it for the sidecar's bounded pool for
+   * every one of those loads. The warm-up exists to make searches faster; it
+   * should not be the reason one is slow.
+   */
+  private liveSearches = 0;
 
   /** In-flight activations, so two concurrent searches load a plugin once. */
   private readonly activating = new Map<string, Promise<boolean>>();
@@ -1823,6 +1859,18 @@ export class PluginManager {
     }
   }
 
+  /**
+   * Wired by `main.ts`; decides which providers a search reaches first.
+   *
+   * Never which providers a search reaches — `applySearchOrder` refuses any
+   * ordering that is not the same set, because a reordering that quietly drops
+   * a provider makes a search ask less than the user selected and call the
+   * difference "no results".
+   */
+  public setSearchOrder(order: (names: string[]) => string[]): void {
+    this.searchOrder = order;
+  }
+
   /** Wired by `main.ts`; provider outcomes are counted from here onwards. */
   public setAnalytics(sink: AnalyticsSink): void {
     this.analytics = sink;
@@ -2789,7 +2837,36 @@ export class PluginManager {
     for (const record of [...this.installedPlugins.values()]) {
       if (signal?.aborted) return;
       if (this.liveInJvm.has(record.internalName)) continue;
+      // Between archives, not during one: a load that has started must finish
+      // or the provider is left half-registered.
+      await this.waitForSearchesToFinish(signal);
+      if (signal?.aborted) return;
       await this.activate(record.internalName);
+    }
+  }
+
+  /**
+   * Holds the warm-up while a search is running.
+   *
+   * The warm-up exists so a later search does not pay the class-loading cost.
+   * Paying it *during* a search is the one case where it makes things worse,
+   * and being serial does not prevent that — it still keeps the sidecar's
+   * bounded pool busy with a 56-jar classpath while eight scrapes queue behind
+   * it. Waiting costs the warm-up nothing: it has no deadline, and the searched
+   * providers are being loaded by the search anyway.
+   *
+   * Bounded, because a search that never settles must not stop the warm-up for
+   * the rest of the session. Past the cap it proceeds and accepts the
+   * contention, which is exactly the behaviour that existed before.
+   */
+  private async waitForSearchesToFinish(signal?: AbortSignal): Promise<void> {
+    const deadline = Date.now() + WARMUP_YIELD_LIMIT_MS;
+    while (this.liveSearches > 0 && Date.now() < deadline) {
+      if (signal?.aborted) return;
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, WARMUP_YIELD_POLL_MS);
+        timer.unref?.();
+      });
     }
   }
 
@@ -2987,9 +3064,19 @@ export class PluginManager {
     await this.ensureProvidersLoaded();
     if (signal?.aborted) return;
 
-    const targets = this.narrowToEnabled(only);
+    /*
+     * Best-first, so the first screen of results arrives sooner.
+     *
+     * The set is identical either way — this is a sequence, not a filter — but
+     * with eight lanes and thirty providers the sequence decides how long the
+     * screen stays empty. A lane spent timing out on a dead provider is a lane
+     * not spent on one that answers in three hundred milliseconds, and the app
+     * has been measuring which is which all along without using it here.
+     */
+    const targets = applySearchOrder(this.narrowToEnabled(only), this.searchOrder);
     if (targets.length === 0) return;
 
+    this.liveSearches += 1;
     let next = 0;
     const worker = async (): Promise<void> => {
       while (next < targets.length) {
@@ -3006,7 +3093,13 @@ export class PluginManager {
     // Read per search, not cached: changing it in settings takes effect on the
     // next search rather than the next launch.
     const lanes = Math.min(this.searchConcurrency(), targets.length);
-    await Promise.all(Array.from({ length: lanes }, worker));
+    try {
+      await Promise.all(Array.from({ length: lanes }, worker));
+    } finally {
+      // In a `finally`, because a cancelled search still has to release the
+      // warm-up — otherwise the first abandoned search stops it for the session.
+      this.liveSearches = Math.max(0, this.liveSearches - 1);
+    }
   }
 
   /** How many provider searches this app runs at once. */

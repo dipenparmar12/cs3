@@ -355,6 +355,17 @@ providerRanking.setContext({
     return typeof status === 'number' ? status : undefined;
   },
 });
+
+/**
+ * The ranking decides who a search asks first.
+ *
+ * Wired here rather than inside `PluginManager` because that class must stay
+ * constructible without analytics — the provider harnesses build one with no
+ * Electron app around it. It is an ordering and nothing more: `applySearchOrder`
+ * refuses any answer that is not the same set of providers, so a scoring bug
+ * can cost a little latency and can never quietly shrink a search.
+ */
+pluginManager.setSearchOrder((names) => providerRanking.rank(names));
 const providerRecommender = new ProviderRecommender(
   providerAnalytics,
   providerRanking,
