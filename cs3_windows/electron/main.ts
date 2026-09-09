@@ -2824,9 +2824,7 @@ async function describeUnreadableSource(url: string): Promise<{
   } catch (error) {
     return {
       dead: true,
-      reason: `The source could not be reached: ${
-        describeError(error)
-      }`,
+      reason: `The source could not be reached: ${describeError(error)}`,
     };
   }
 }
