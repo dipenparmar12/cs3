@@ -247,6 +247,60 @@ class SidecarTest {
      * {@code getResources} and {@code getPackageManager} before it: the call
      * links, and the refusal moves to the accessor where it can be seen.
      */
+    /**
+     * A shim that is present and wrong is still ours.
+     *
+     * A missing class is one way the compatibility layer fails and not the
+     * most common one. The rest are a class that links and then does not
+     * behave: `SharedPreferences` declared as a class where Android's is an
+     * interface (`IncompatibleClassChangeError`, 112 plugins in the corpus),
+     * `Context.getResources` returning `Object` (`NoSuchMethodError`),
+     * `AccountManager.aniListApi` typed as the wrapper. Every one of those was
+     * reported as PLUGIN_ERROR — "the extension threw" — which sends the reader
+     * to blame a scraper's author for a method we failed to provide.
+     */
+    @Test
+    void theWholeLinkageFamilyIsReportedAsOurs() {
+        for (Throwable linkage : new Throwable[] {
+                new NoClassDefFoundError("com/lagradost/Missing"),
+                new NoSuchMethodError("android.content.res.Resources Context.getResources()"),
+                new NoSuchFieldError("INSTANCE"),
+                new IncompatibleClassChangeError("Found class, but interface was expected"),
+                new AbstractMethodError("MainAPI.search"),
+                new VerifyError("bad type on operand stack"),
+                new UnsupportedClassVersionError("class file version 65"),
+                new IllegalAccessError("tried to access method"),
+                new ClassNotFoundException("android.net.Uri"),
+        }) {
+            assertEquals("LINKAGE_FAILED", Main.errorKind(linkage), linkage.toString());
+            // Reflection wraps everything on the plugin path; the walk has to
+            // reach through it or the classification never fires in practice.
+            assertEquals(
+                    "LINKAGE_FAILED",
+                    Main.errorKind(new java.lang.reflect.InvocationTargetException(linkage)),
+                    "wrapped: " + linkage);
+        }
+    }
+
+    /**
+     * The one LinkageError that is not ours.
+     *
+     * `ExceptionInInitializerError` is a LinkageError by inheritance and a
+     * plugin's own static initializer throwing in fact. Claiming it would stop
+     * the cause walk one frame short of what actually matters and report the
+     * plugin's bug as the runtime's.
+     */
+    @Test
+    void aPluginsOwnStaticInitializerIsNotALinkageFailure() {
+        var thrown = new ExceptionInInitializerError(new IllegalStateException("no api key"));
+        assertEquals("PLUGIN_ERROR", Main.errorKind(thrown));
+
+        // Unless what it wrapped really was a linkage failure, which is the
+        // shape a missing shim class takes inside a static block.
+        var nested = new ExceptionInInitializerError(new NoClassDefFoundError("android/net/Uri"));
+        assertEquals("LINKAGE_FAILED", Main.errorKind(nested));
+    }
+
     @Test
     void unsupportedAndroidApiNamesTheApiItRefused() {
         android.content.res.AssetManager assets =
