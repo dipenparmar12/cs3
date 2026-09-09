@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { useFlash } from '../utils/useFlash';
 import { Check, ChevronDown, ClipboardCopy, FileText } from 'lucide-react';
+import { useDismissable } from '../utils/useDismissable';
 
 /**
  * Copies a failure in a form someone else can act on — at one of two sizes.
@@ -43,21 +44,8 @@ export const CopyErrorButton: React.FC<{
   const [menuOpen, setMenuOpen] = useState(false);
   const wrapper = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onOutside = (event: PointerEvent) => {
-      if (wrapper.current && !wrapper.current.contains(event.target as Node)) setMenuOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMenuOpen(false);
-    };
-    document.addEventListener('pointerdown', onOutside, true);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onOutside, true);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [menuOpen]);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  useDismissable(menuOpen, wrapper, closeMenu);
 
   const copy = useCallback(
     async (mode: 'current' | 'full') => {

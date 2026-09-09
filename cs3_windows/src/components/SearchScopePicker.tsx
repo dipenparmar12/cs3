@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import type { ProviderTreeRepository, ProviderTreeProvider } from '../types/plugin';
 import type { ProviderLoadProgress } from '../../electron/pluginManager';
+import { useDismissable } from '../utils/useDismissable';
 
 /**
  * Whether a provider can be offered as a search scope.
@@ -277,21 +278,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onOutside = (event: PointerEvent) => {
-      if (wrapper.current && !wrapper.current.contains(event.target as Node)) close();
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close();
-    };
-    document.addEventListener('pointerdown', onOutside, true);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onOutside, true);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open, close]);
+  useDismissable(open, wrapper, close);
 
   const persist = useCallback((nextProviders: Set<string>, nextIndexers: Set<string>) => {
     setProviders(nextProviders);

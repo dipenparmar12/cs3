@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { Poster } from '../Poster';
 import {
   Bookmark as BookmarkIcon,
@@ -17,6 +17,7 @@ import {
   Loader2,
   Zap,
 } from 'lucide-react';
+import { useDismissable } from '../../utils/useDismissable';
 
 /**
  * The detail page's masthead.
@@ -143,23 +144,8 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   const [menuOpen, setMenuOpen] = useState(false);
   const menuWrapper = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onOutside = (event: PointerEvent) => {
-      if (menuWrapper.current && !menuWrapper.current.contains(event.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMenuOpen(false);
-    };
-    document.addEventListener('pointerdown', onOutside, true);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onOutside, true);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [menuOpen]);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  useDismissable(menuOpen, menuWrapper, closeMenu);
 
   const run = (action: () => void) => () => {
     setMenuOpen(false);
