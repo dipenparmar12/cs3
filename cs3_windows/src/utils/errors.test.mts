@@ -10,6 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import { describeError, isAbort } from './errors.ts';
+import { classifyFailure } from '../../electron/cs3/failureTaxonomy.ts';
 
 const tests: Array<[string, () => void]> = [];
 const test = (name: string, fn: () => void) => tests.push([name, fn]);
@@ -20,6 +21,62 @@ function fetchFailure(code: string): Error {
   (error as { cause?: unknown }).cause = Object.assign(new Error(code), { code });
   return error;
 }
+
+test('every description lands in the taxonomy row it means', () => {
+  /**
+   * The coupling this file has to `failureTaxonomy`, made explicit so it cannot
+   * drift. These strings are fed to `classifyFailure` by the analytics and the
+   * issue ledger, so the *wording* decides the category — and the taxonomy's
+   * own warning applies to it: a plausible category on a real failure is the
+   * worst answer a classifier can give.
+   *
+   * Every entry below was wrong on the first attempt at this table, and none of
+   * them looked wrong. "Host not found (DNS blocked…)" contains "not found", so
+   * a DNS failure was filed as `not-found` — "the page or file is gone, the link
+   * was real when the provider produced it". "The site's certificate has
+   * expired" contains "expired", so a TLS fault was filed as `expired` — "the
+   * address carried a deadline; refresh the sources". Both send the reader
+   * somewhere useless, and neither is visible from reading the sentence.
+   */
+  const cause = (code: string) => {
+    const error = new TypeError('fetch failed');
+    (error as { cause?: unknown }).cause = Object.assign(new Error(code), { code });
+    return error;
+  };
+
+  const expected: Array<[string, string]> = [
+    ['ENOTFOUND', 'network'],
+    ['EAI_AGAIN', 'network'],
+    ['ECONNREFUSED', 'network'],
+    ['ECONNRESET', 'network'],
+    // A connection timeout really is a timeout, and stays one.
+    ['ETIMEDOUT', 'timeout'],
+    ['EHOSTUNREACH', 'network'],
+    ['ENETUNREACH', 'network'],
+    ['EPROTO', 'network'],
+    ['DEPTH_ZERO_SELF_SIGNED_CERT', 'network'],
+    ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'network'],
+    ['CERT_HAS_EXPIRED', 'network'],
+  ];
+
+  for (const [code, kind] of expected) {
+    const described = describeError(cause(code));
+    assert.equal(classifyFailure(described), kind, `${code}: "${described}"`);
+  }
+
+  const timeout = new Error('x');
+  timeout.name = 'TimeoutError';
+  assert.equal(classifyFailure(describeError(timeout)), 'timeout');
+
+  const abort = new Error('x');
+  abort.name = 'AbortError';
+  assert.equal(classifyFailure(describeError(abort)), 'cancelled');
+
+  // The taxonomy's catch-all matches anything containing "Error", so the
+  // obvious fallback string would file a failure nobody could describe under
+  // "the extension itself threw. Worth reporting to its maintainer".
+  assert.equal(classifyFailure(describeError(undefined)), 'unknown');
+});
 
 test('a plain Error is its message', () => {
   assert.equal(describeError(new Error('Provider returned no links')), 'Provider returned no links');
@@ -32,9 +89,15 @@ test('fetch failed is replaced by the reason in cause', () => {
    * `groupingForm` collapses the entire network family into one ledger row and
    * "how many distinct things are wrong" answers "one".
    */
-  assert.equal(describeError(fetchFailure('ENOTFOUND')), 'Host not found (DNS blocked or the domain moved)');
-  assert.equal(describeError(fetchFailure('ECONNREFUSED')), 'Connection refused');
-  assert.equal(describeError(fetchFailure('CERT_HAS_EXPIRED')), 'The site’s certificate has expired');
+  // The property, not the exact prose: `fetch failed` must not survive, and the
+  // code must, because the code is the half that distinguishes one failure from
+  // another and the half a maintainer can act on.
+  for (const code of ['ENOTFOUND', 'ECONNREFUSED', 'EPROTO']) {
+    const described = describeError(fetchFailure(code));
+    assert.doesNotMatch(described, /fetch failed/, code);
+    assert.match(described, new RegExp(code), code);
+  }
+  assert.match(describeError(fetchFailure('CERT_HAS_EXPIRED')), /certificate/i);
 
   // Distinctness is the point, not the wording: these must not collapse.
   const seen = new Set(

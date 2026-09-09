@@ -60,8 +60,6 @@ export interface DownloadVariant {
   audioCodecs?: string[];
 }
 
-
-
 /** The media half of the key: which title, and which episode of it. */
 function mediaKey(variant: DownloadVariant): string {
   const season = variant.season === undefined ? '' : String(variant.season);

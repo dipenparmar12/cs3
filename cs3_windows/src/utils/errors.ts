@@ -39,6 +39,16 @@
  * a provider for the app's own decision to stop waiting.
  */
 
+/**
+ * The last resort, worded to classify as `unknown` rather than `provider-error`.
+ *
+ * The taxonomy's catch-all matches anything containing "Error", so the obvious
+ * string — "Unknown error" — files a failure nobody could describe under "the
+ * extension itself threw. Worth reporting to its maintainer", which is advice
+ * about code that may have had nothing to do with it.
+ */
+const NO_REASON = 'No reason was reported';
+
 /** Node's fetch failures carry the real reason here. */
 interface ErrorCause {
   code?: string;
@@ -53,17 +63,17 @@ interface ErrorCause {
  * far better than dropping the code — it is the part that groups.
  */
 const CAUSE_TEXT: Record<string, string> = {
-  ENOTFOUND: 'Host not found (DNS blocked or the domain moved)',
-  EAI_AGAIN: 'DNS lookup failed (the resolver did not answer)',
-  ECONNREFUSED: 'Connection refused',
-  ECONNRESET: 'Connection reset',
+  ENOTFOUND: 'ENOTFOUND — the domain did not resolve (DNS blocked, or the site moved)',
+  EAI_AGAIN: 'EAI_AGAIN — the DNS resolver did not answer',
+  ECONNREFUSED: 'ECONNREFUSED — the host refused the connection',
+  ECONNRESET: 'ECONNRESET — the host closed the connection',
   ETIMEDOUT: 'Connection timed out',
-  EHOSTUNREACH: 'Host unreachable',
-  ENETUNREACH: 'Network unreachable',
-  EPROTO: 'TLS handshake failed',
-  DEPTH_ZERO_SELF_SIGNED_CERT: 'The site presented a self-signed certificate',
-  UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'The site’s certificate could not be verified',
-  CERT_HAS_EXPIRED: 'The site’s certificate has expired',
+  EHOSTUNREACH: 'EHOSTUNREACH — no network route to the host',
+  ENETUNREACH: 'ENETUNREACH — this machine has no network route out',
+  EPROTO: 'EPROTO — the TLS handshake failed',
+  DEPTH_ZERO_SELF_SIGNED_CERT: 'The site presented a self-signed TLS certificate',
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'The site’s TLS certificate could not be verified',
+  CERT_HAS_EXPIRED: 'The site’s TLS certificate is no longer valid',
 };
 
 /**
@@ -101,7 +111,7 @@ export function describeError(error: unknown): string {
     }
 
     if (error.message) return error.message;
-    return error.name || 'Unknown error';
+    return error.name || NO_REASON;
   }
 
   if (typeof error === 'string' && error) return error;
@@ -121,14 +131,14 @@ export function describeError(error: unknown): string {
     } catch {
       /* circular, or a BigInt — fall through to the constructor name */
     }
-    return error.constructor?.name ?? 'Unknown error';
+    return error.constructor?.name ?? NO_REASON;
   }
 
   // `String('')` and `String([])` are both empty, and an empty description
   // renders as a UI element with nothing in it. Whatever else this returns, it
   // is never that.
   const rendered = error === undefined || error === null ? '' : String(error);
-  return rendered || 'Unknown error';
+  return rendered || NO_REASON;
 }
 
 /**

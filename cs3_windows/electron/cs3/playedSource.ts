@@ -18,8 +18,6 @@ import { hasRealInfoHash, normaliseReleaseName } from '../../src/utils/sourceIde
  * resolution. That triple is what a viewer means by "the same source".
  */
 
-
-
 /**
  * Whether a stored link can still be handed to the player without re-resolving.
  *

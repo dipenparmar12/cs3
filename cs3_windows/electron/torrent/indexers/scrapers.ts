@@ -29,8 +29,6 @@ import type { IndexerQuery } from '../../../src/types/torrent';
  *    circuit breaker trips instead of the UI reporting "nothing matched".
  */
 
-
-
 // ---------------------------------------------------------------------------
 // 1337x — HTML, two hops (list page then detail page for the magnet)
 // ---------------------------------------------------------------------------
