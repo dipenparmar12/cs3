@@ -137,8 +137,28 @@ export interface SystemRuntimeStatus {
  * near-miss on record here. And the `status` RPC now reports the method names
  * the jar answers, so a sidecar older than its host is named at the handshake
  * instead of surfacing later as one unexplained failure per feature.
+ *
+ * Generation 12 closes the *rest* of that near-miss family, and this time by
+ * enumeration rather than one report at a time. Four more shim methods were
+ * declaring `Object` where Android names a type — `Context.getAssets`,
+ * `Context.getContentResolver`, `Window.setBackgroundDrawable` and
+ * `Fragment.getResources` — which makes each of them a different method to the
+ * JVM than the one an extension calls, so the call site failed with
+ * `NoSuchMethodError` and the shim's own message was unreachable. Two of the
+ * four could already have named an existing shim type; `Fragment.getResources`
+ * is literally the method `Context.getResources` was fixed for, missed on a
+ * second class.
+ *
+ * `android.content.res.AssetManager` and `android.content.ContentResolver` are
+ * new, and exist to *be named*: they concede the type and refuse every
+ * operation, exactly as `PackageManager` does. A provisioned copy has neither
+ * class and the old descriptors, so an upgraded host asking for either gets the
+ * failure this generation removes.
+ *
+ * `ShimSignatureTest` now enumerates the rule the seven near-misses broke, so
+ * the eighth fails a test instead of a user's extension.
  */
-const RUNTIME_GENERATION = 11;
+const RUNTIME_GENERATION = 12;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {

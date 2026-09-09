@@ -235,14 +235,32 @@ class SidecarTest {
         assertNull(other.getSharedPreferences("s", 0).getString("token", null));
     }
 
+    /**
+     * AC-D5: a refusal names the API it refused — and is reachable.
+     *
+     * This asserted that {@code getAssets()} itself throws, which was true and
+     * untestable from an extension: the signature was
+     * {@code ()Ljava/lang/Object;}, a different method to the JVM than the
+     * {@code ()Landroid/content/res/AssetManager;} a plugin compiled against
+     * Android calls. The refusal was unreachable behind a
+     * {@code NoSuchMethodError} that named nothing. Same correction as
+     * {@code getResources} and {@code getPackageManager} before it: the call
+     * links, and the refusal moves to the accessor where it can be seen.
+     */
     @Test
     void unsupportedAndroidApiNamesTheApiItRefused() {
-        var e = assertThrows(android.content.UnsupportedAndroidApiException.class,
-                () -> android.content.Context.cs3CreateScoped("p", "/tmp").getAssets());
+        android.content.res.AssetManager assets =
+                android.content.Context.cs3CreateScoped("p", "/tmp").getAssets();
+        assertNotNull(assets);
 
-        // AC-D5: the message must identify the API, not just fail.
-        assertTrue(e.getMessage().contains("android.content.Context.getAssets"));
-        assertEquals("android.content.Context.getAssets", e.api());
+        var e = assertThrows(android.content.UnsupportedAndroidApiException.class,
+                () -> assets.open("config.json"));
+        assertTrue(e.getMessage().contains("AssetManager.open"));
+        assertEquals("AssetManager.open", e.api());
+
+        // `close` is deliberately silent: callers put it in a `finally`, and
+        // throwing there replaces the real failure with one raised cleaning up.
+        assertDoesNotThrow(assets::close);
     }
 
     /**
@@ -330,6 +348,19 @@ class SidecarTest {
         var e = assertThrows(android.content.UnsupportedAndroidApiException.class,
                 () -> resources.getString(1));
         assertTrue(e.getMessage().contains("Resources.getString"));
+
+        /**
+         * `api()` is the aggregation key and must stay a bare `Class.method`.
+         *
+         * A shim that wants to explain itself used to fold the explanation into
+         * this field, so the key became a sentence and every refusal grouped
+         * under a different one — the tally the exception exists to make
+         * possible had one row per occurrence. The explanation belongs in the
+         * message, which is what the two-argument constructor separates.
+         */
+        assertEquals("Resources.getString", e.api());
+        assertTrue(e.getMessage().contains("Android resource table"),
+                "the explanation still has to reach the reader");
 
         // Android's documented answer for "no such resource", and truthful here.
         assertEquals(0, resources.getIdentifier("x", "id", "pkg"));
