@@ -1,29 +1,23 @@
 # AGENTS.md — CloudStream 3 Desktop
 
-Context file for AI coding agents (Claude Code, Cursor, Copilot, etc.) working in this
-repository. `CLAUDE.md` is a symlink to this file, so both names load the same content.
+Context file for AI coding agents working in this repository. `CLAUDE.md` is a symlink to
+this file; both names load the same content.
 
-**Read this before searching the codebase.** It exists so you do not have to re-derive
-the architecture, the naming, or the reasons behind the odd-looking decisions on every
-session. If something here contradicts the code, **the code wins** — fix this file in the
-same commit.
+**Read this before searching the codebase.** If something here contradicts the code, **the
+code wins** — fix this file in the same commit.
 
 ---
 
 ## 1. What this repository is
 
-A **reverse-engineering and platform-migration project**: take the Android app
-[CloudStream 3](https://github.com/recloudstream/cloudstream) (Kotlin, 4.8.0) and deliver
-the same product as a **Windows-first Electron desktop app**, while keeping the existing
-community extension ecosystem (`.cs3` plugin archives) working **without asking any
-extension maintainer to do anything**.
+A **reverse-engineering and platform-migration project**: port the Android app
+[CloudStream 3](https://github.com/recloudstream/cloudstream) (Kotlin, 4.8.0) to a
+**Windows-first Electron desktop app**, keeping the existing community `.cs3` extension
+ecosystem working **without asking any extension maintainer to do anything**. This is the
+single most important constraint in the repo — it is why a JVM sidecar exists, why there is
+a DEX→JVM translation layer, and why several apparently over-engineered designs exist.
 
-That last commitment is the single most important constraint in the repo. It is why a JVM
-sidecar exists, why there is a DEX→JVM translation spike, and why several designs that
-would otherwise look over-engineered are the way they are.
-
-Governing principle, from `docs/PRD/00-index.md`:
-
+Governing principle (`docs/PRD/00-index.md`):
 > The Android implementation defines the expected product behavior. The Electron
 > implementation defines how that behavior is delivered on desktop.
 
@@ -35,27 +29,21 @@ Licensing: upstream CloudStream is **GPL-3.0**. Behave accordingly with derived 
 
 ```
 cs3/
-├── cs3_windows/      ← THE APP. Electron + React 19 + TypeScript + Vite 8. Most work happens here.
+├── cs3_windows/      ← THE APP. Electron + React 19 + TypeScript + Vite 8. Most work here.
 ├── sidecar/          ← JVM (Java 21 / Maven) process that runs Android .cs3 extensions.
-├── tools/dex-spike/  ← Throwaway-ish Maven harness that measured DEX→JVM translation across 392 real plugins.
-├── docs/PRD/         ← 37 numbered specification documents. The reasoning behind everything.
-├── docs/docs_cs3/    ← 9 documents describing the *Android* app's architecture (the source of truth being ported).
-└── repositories/     ← 26 git submodules: the vendored community extension corpus.
-    └── _cloudstream_ref_android/  ← git submodule: upstream Android source (commit a72f9e6c…, v4.8.0).
+├── tools/dex-spike/  ← Maven harness that measured DEX→JVM translation across 392 real plugins.
+├── docs/PRD/         ← 37+ numbered spec documents — the reasoning behind everything.
+├── docs/docs_cs3/    ← 9 documents on the *Android* app's architecture (source of truth).
+└── repositories/     ← 26 git submodules: vendored community extension corpus.
+    └── _cloudstream_ref_android/  ← submodule: upstream Android source (a72f9e6c…, v4.8.0).
 ```
 
 ### Submodules are NOT checked out by default
-
-`git submodule status` shows every entry prefixed with `-`. `_cloudstream_ref_android/` and
-`repositories/*` are **empty directories** in a fresh clone (including cloud/CI sessions).
-
-- Do **not** claim you verified something against Android source unless you actually
-  initialised the submodule.
-- Do **not** run `git submodule update --init --recursive` casually — it clones 27
-  repositories over SSH URLs (`git@github.com:…`), which usually fails without an SSH key
-  and always eats a lot of disk in an ephemeral container.
-- For Android-side questions, read `docs/docs_cs3/` and the file:line citations in
-  `docs/PRD/` first. They were written from the real source and cite exact paths.
+`git submodule status` shows every entry prefixed `-`. `_cloudstream_ref_android/` and
+`repositories/*` are **empty** in a fresh clone (incl. cloud/CI).
+- Do not claim you verified something against Android source unless you initialised the submodule.
+- Do not run `git submodule update --init --recursive` casually — clones 27 repos over SSH, usually fails without a key, eats disk.
+- For Android-side questions read `docs/docs_cs3/` and file:line citations in `docs/PRD/` first.
 
 ---
 
@@ -63,257 +51,100 @@ cs3/
 
 | What | Where | Command |
 |---|---|---|
-| Install deps | `cs3_windows/` | `bun install` (lockfile is `bun.lock`; npm works but will churn it) |
-| Dev app | `cs3_windows/` | `bun run dev` — Vite on :5173, `vite-plugin-electron` launches Electron and rebuilds main/preload on change |
+| Install deps | `cs3_windows/` | `bun install` (lockfile `bun.lock`; npm works but churns it) |
+| Dev app | `cs3_windows/` | `bun run dev` — Vite :5173, `vite-plugin-electron` launches Electron, rebuilds main/preload |
 | Typecheck + build | `cs3_windows/` | `bun run build` (`tsc && vite build`) |
 | Bundle the JVM | repo root | `node tools/package/build-runtime.mjs --verify` → `sidecar/dist/` |
 | Bundle ffmpeg + mpv | repo root | `node tools/package/build-media-runtime.mjs --verify` → `cs3_windows/media-runtime/` |
-| **Ship it (Windows)** | `cs3_windows/` | **`bun run dist:win`** → `release/` — the whole chain, Maven included; `dist:win:fast` reuses existing jars |
-| Package (Windows), lower level | `cs3_windows/` | `bun run electron:build` → `release/` (assumes the Maven builds have already been run by hand) |
-| Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
-| Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
-| Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
+| **Ship it (Windows)** | `cs3_windows/` | **`bun run dist:win`** → `release/`; `dist:win:fast` reuses existing jars |
+| Package, lower level | `cs3_windows/` | `bun run electron:build` → `release/` (assumes Maven already run) |
+| Lint | `cs3_windows/` | `bunx oxlint` (devDependency; deliberately no `lint` script) |
+| Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see warning below) |
+| Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (47 tests) |
-| Main-process tests (all) | `cs3_windows/` | `bun run test` (~630 cases across 45 suites, Node type-stripping; or `bun run test:electron`) |
-| Fast unit tests (skips slow) | `cs3_windows/` | `bun run test --fast` (43 unit suites in ~6s) |
-| Error descriptions only | `cs3_windows/` | `bun run test errors` (8 cases, pure) |
-| Resume point only | `cs3_windows/` | `bun run test resume-point` (10 cases, pure) |
-| Library addresses only | `cs3_windows/` | `bun run test libraryStore` (7 cases, pure) |
-| Extension issues only | `cs3_windows/` | `bun run test issues` (21 cases, pure) |
-| Provider registry only | `cs3_windows/` | `bun run test registry` (9 cases, temp dirs) |
-| Provider recovery only | `cs3_windows/` | `bun run test recovery` (12 cases, pure) |
-| Torrent contents only | `cs3_windows/` | `bun run test torrent-contents` (24 cases, pure) |
-| Sidecar log only | `cs3_windows/` | `bun run test sidecar-log` (20 cases, pure) |
-| Source cache only | `cs3_windows/` | `bun run test cache` (10 cases, no ffmpeg needed) |
-| Provider links only | `cs3_windows/` | `bun run test links` (15 cases, no ffmpeg needed) |
-| WebView matching only | `cs3_windows/` | `bun run test webview` (21 cases, pure) |
-| Torrent metadata + DHT cache only | `cs3_windows/` | `bun run test torrent-metadata` (28 cases, temp dirs) |
-| Source scope only | `cs3_windows/` | `bun run test source-scope` (17 cases) |
-| OTT platform matching only | `cs3_windows/` | `bun run test ott` (19 cases, pure) |
-| Built-in provider lane only | `cs3_windows/` | `bun run test native-providers` (50 cases, pure — stubs `setHttpFetch`) |
-| Download resume decision only | `cs3_windows/` | `bun run test resume` (17 cases, pure) |
-| Download resume probe only | `cs3_windows/` | `bun run test resume-window` (10 cases, real sockets) |
-| Component reachability only | `cs3_windows/` | `bun run test reachability` (2 cases, lexical) |
-| Settings level only | `cs3_windows/` | `bun run test settings-level` (6 cases, pure + lexical) |
-| Dead result rows only | `cs3_windows/` | `bun run test dead-rows` (8 cases, pure) |
-| Media proxy only | `cs3_windows/` | `bun run test proxy` (11 cases, stubbed origin) |
-| Subtitles only | `cs3_windows/` | `bun run test subtitles` (16 cases) |
-| Media decisions only | `cs3_windows/` | `bun run test media` (71 cases, no ffmpeg needed) |
-| Media pipeline only | `cs3_windows/` | `bun run test pipeline` (17 cases, real ffmpeg; skips itself without it) |
-| Source export only | `cs3_windows/` | `bun run test export` (13 cases, pure) |
-| Direct (non-torrent) indexer sources only | `cs3_windows/` | `bun run test direct-sources` (13 cases, pure) |
-| yt-dlp source mapping only | `cs3_windows/` | `bun run test ytdlp` (16 cases, pure) |
-| Repository catalogue only | `cs3_windows/` | `bun run test repositories` (9 cases, pure — fetches nothing) |
-| Repository/corpus liveness | repo root | `node tools/research/survey-repositories.mjs` — counts the live indexes; see PRD-43 |
-| Download identity only | `cs3_windows/` | `bun run test download-identity` (18 cases, pure) |
-| Native engine only | `cs3_windows/` | `bun run test native` (12 cases, spawns a real mpv; skips itself without it) |
-| Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
-| Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
-| Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
+| Main-process tests (all) | `cs3_windows/` | `bun run test` (~630 cases / 45 suites) or `bun run test:electron` |
+| Fast unit tests | `cs3_windows/` | `bun run test --fast` (43 suites, ~6s) |
+| Named suites | `cs3_windows/` | `bun run test <name>`: `errors`(8) `resume-point`(10) `libraryStore`(7) `issues`(21) `registry`(9) `recovery`(12) `torrent-contents`(24) `sidecar-log`(20) `cache`(10) `links`(15) `webview`(21) `torrent-metadata`(28) `source-scope`(17) `ott`(19) `native-providers`(50) `resume`(17) `resume-window`(10) `reachability`(2) `settings-level`(6) `dead-rows`(8) `proxy`(11) `subtitles`(16) `media`(71) `pipeline`(17, real ffmpeg) `export`(13) `direct-sources`(13) `ytdlp`(16) `repositories`(9) `download-identity`(18) `native`(12, real mpv) `ipc` |
+| Repository/corpus liveness | repo root | `node tools/research/survey-repositories.mjs` (PRD-43) |
+| Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — §5.1 |
+| Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — §5.2 |
+| Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars incl. `library-jvm-4.8.0.jar`) |
 | Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
-| Provider bridge, no JitPack | repo root | `node tools/package/build-bridge.mjs` — same jar, compiled against `sidecar/runtime/` |
+| Provider bridge, no JitPack | repo root | `node tools/package/build-bridge.mjs` — same jar, built against `sidecar/runtime/` |
 
 ### The one command that produces a distributable
-
-`tools/package/build-installer.mjs`, wired up as `bun run dist:win` in `cs3_windows/`. It owns
-the sequence above plus everything after it, because **the order is not guessable and skipping
-a step fails silently in the worst possible way**: `build-runtime.mjs` deliberately verifies
-what Maven produced rather than running Maven itself, so a package built without the sidecar
-step is a complete, installable app with no extension capability at all and nothing anywhere
-saying so.
+`tools/package/build-installer.mjs` = `bun run dist:win`. Order matters and skipping a step
+fails silently: `build-runtime.mjs` verifies what Maven produced rather than running Maven,
+so a package built without the sidecar step installs fine with **zero extension capability**
+and nothing says so.
 
 ```
-bun run dist:win           # everything, from Maven to two .exe files
-bun run dist:win:fast      # reuse jars and staging that already exist
+bun run dist:win           # everything, Maven to two .exe files
+bun run dist:win:fast      # reuse jars/staging that exist
 bun run dist:installer     # NSIS setup only
 bun run dist:portable      # portable exe only
-node ../tools/package/build-installer.mjs --help
 ```
+Order: preflight (Node 20+, Java 21+ preferring `tools/toolchain/jdk-*` over `JAVA_HOME`,
+`node_modules`) → `sidecar/pom.xml` → `runtime-deps` → bridge → `build-runtime.mjs --verify`
+→ `build-media-runtime.mjs --verify` → `tsc -b` → `vite build` → `electron-builder --win nsis portable`.
 
-What it does, in order: preflight (Node 20+, a **Java 21+** it finds by preferring
-`tools/toolchain/jdk-*` over `JAVA_HOME`, the app's `node_modules`) → `sidecar/pom.xml` →
-`runtime-deps` → the bridge → `build-runtime.mjs --verify` → `build-media-runtime.mjs --verify`
-→ `tsc -b` → `vite build` → `electron-builder --win nsis portable`.
+Non-obvious details:
+- **Bridge falls back to `build-bridge.mjs`** when Maven fails — `library-jvm` is jitpack-only and blocked egress 403s the POM before compiling any Kotlin. Fallback is for the network, not the build.
+- **`shell: true` only where a `.cmd` shim needs it.** cmd.exe splits unquoted paths on spaces (`C:\Program Files\nodejs\node.exe` → `C:\Program`). Local dev executables are probed across spellings (`tsc.exe` vs `tsc.cmd`, bun vs npm).
+- **Built CSS is grepped for `https://fonts.`** before packaging (Inter is vendored; a re-added `@import` would silently undo that).
 
-Three things in it are less obvious than they look:
+Four packaging bugs found the hard way:
+- **electron-builder 26 rejects unknown config keys** (`"//comment"` in `package.json`'s `build`). Config now lives in **`cs3_windows/electron-builder.yml`** (comments allowed); no `build` field in `package.json`.
+- **`npmRebuild: false`.** `@electron/rebuild` failed node-gyp on `bufferutil` (no VS) rebuilding a module that already ships `prebuilds/win32-x64`. All native deps here are N-API (`node-datachannel` `napi_versions [8]`; `utp-native`, `bufferutil`, `utf-8-validate` ship win32-x64 prebuilds) and N-API is ABI-stable across Node/Electron. **If a non-N-API native dep is ever added, set this back to `true`** and the build machine needs a C++ toolchain.
+- **A running `bun run dev` fails the package** with `EPERM … rename win-unpacked.tmp -> win-unpacked` — Vite watches `cs3_windows` recursively and holds a directory handle electron-builder needs to rename. `vite.config.ts` ignores `release/`, `media-runtime/`, `dist-electron/`; the installer script clears stale `*.tmp` first.
+- **`tar` on PATH ≠ the `tar` that reads 7z.** mpv ships as `.7z`; GNU tar (from Git) can't open it. Windows' own `System32\tar.exe` (libarchive) can, and is now named explicitly.
 
-- **The bridge falls back to `build-bridge.mjs` when Maven fails**, because `library-jvm` is
-  published only on jitpack and a blocked egress policy fails that module at dependency
-  resolution with a 403 on a POM and nothing about the Kotlin at fault. Falling back is a
-  workaround for the network, never for the build.
-- **`shell: true` is asked for only where a `.cmd` shim needs it.** cmd.exe splits an unquoted
-  path on its spaces, so blanket-shelling every spawn runs
-  `C:\Program Files
-odejs
-ode.exe` as `C:\Program` — which is what the first run of this
-  script did. Local dev-dependency executables are also probed across spellings, because bun
-  writes `tsc.exe` where npm writes `tsc.cmd` and checking one reports a working toolchain as
-  missing.
-- **The built CSS is grepped for `https://fonts.`** before packaging. Inter is vendored so a
-  packaged desktop app does not announce every launch to a third party, and a re-added
-  `@import` would undo that invisibly.
+**Measured 2026-08-29**, `bun run dist:win:fast`, 158s: `CloudStream-Desktop-1.0.0-x64-setup.exe` 271.9 MB, `…-portable.exe` 271.7 MB. Verify `release/win-unpacked/resources/`: `media/` has ffmpeg/ffprobe/mpv; `sidecar/` has `cs3-sidecar.jar` + jlinked JRE + 58 runtime jars — a package missing either installs/launches fine and runs no extension.
 
-Four things broke the first time this was run end to end, and each is the kind that names
-the wrong party:
+`--skip-jvm` / `--skip-media` exist for fast UI iteration; both warn in the final report.
 
-- **electron-builder 26 rejects unknown configuration keys**, including the `"//comment"`
-  keys `package.json`'s `build` field carried. That had been failing `electron:build` too.
-  The packaging config now lives in **`cs3_windows/electron-builder.yml`**, where comments
-  are native; there is no `build` field in `package.json` any more.
-- **`npmRebuild: false`.** `@electron/rebuild` ran node-gyp against `bufferutil` and failed
-  for want of Visual Studio — rebuilding from source a module that already ships the
-  `prebuilds/win32-x64` it needs. Every native module here is N-API (`node-datachannel`
-  declares `napi_versions [8]`; `utp-native`, `bufferutil` and `utf-8-validate` all ship
-  win32-x64 prebuilds), and N-API is ABI-stable across Node and Electron, so a rebuild
-  changes nothing. **If a non-N-API native dependency is ever added this must go back to
-  `true`**, and the build machine then needs the C++ toolchain.
-- **A running `bun run dev` fails the package**, and the message blames the wrong thing.
-  Vite watches `cs3_windows` recursively, which on Windows means holding an open directory
-  handle on anything appearing under it. electron-builder extracts Electron to
-  `release/win-unpacked.tmp` and renames it into place, and Windows refuses to rename a
-  directory somebody holds a handle on — so the build dies with
-  `EPERM … rename win-unpacked.tmp -> win-unpacked`, naming a permission it has. Verified
-  in both directions: the rename fails while the dev server runs and succeeds the moment it
-  is stopped. `vite.config.ts` now ignores `release/`, `media-runtime/` and `dist-electron/`,
-  none of which are source. The installer script also clears a stale `*.tmp` first, since an
-  interrupted run leaves one behind and produces the same EPERM from its own debris.
-- **`tar` on PATH is not necessarily the `tar` that reads 7z.** mpv ships as a `.7z`, and
-  `build-media-runtime.mjs` probed for `tar` by name — which on a machine with Git installed
-  finds GNU tar, which cannot open one. Windows' own `System32	ar.exe` is libarchive and
-  can, so it is now named explicitly. The symptom was
-  `Could not unpack mpv.7z. Install one of: 7z, or bsdtar` on a machine that had a capable
-  extractor all along.
+**NSIS**: `oneClick: false`, `perMachine: false` (per-user install, no admin/UAC). Portable target writes userData beside the exe (USB-portable). Both x64-only (ia32 can't load webtorrent's native `.node` binaries). **No code-signing cert** — SmartScreen will warn; this is a purchase, not a build flag. No `.ico` in repo — default Electron icon.
 
-**Measured 2026-08-29**, `bun run dist:win:fast`, 158s:
+On a fresh clone run sidecar build → runtime-deps → bridge, **in that order** (sidecar produces the android shim the bridge compiles against; runtime-deps puts `library-jvm` in place).
 
-```
-CloudStream-Desktop-1.0.0-x64-setup.exe      271.9 MB
-CloudStream-Desktop-1.0.0-x64-portable.exe   271.7 MB
-```
+**Bridge needs jitpack.io** (blocked in some cloud sessions — 403 on a POM before any Kotlin compiles). Jars are vendored in `sidecar/runtime/`; `tools/package/build-bridge.mjs` compiles the bridge against that directory with `kotlin-compiler-embeddable` (resolves from Central) + `jar`. Two non-obvious costs: the Kotlin compiler is itself compiled Kotlin needing `kotlin-stdlib`, `kotlin-reflect`, `kotlin-script-runtime`, `kotlin-daemon-embeddable`, `trove4j`, coroutines, **and `annotations-13.0`** on its own classpath (codegen resolves `@Nullable` from there); and the **previous** `cs3-provider-bridge.jar` must be excluded from the compile classpath or sources compile against last build's copy of themselves.
 
-Verified inside `release/win-unpacked/resources/`: `media/` holds ffmpeg, ffprobe and mpv;
-`sidecar/` holds `cs3-sidecar.jar`, the jlinked JRE and all 58 runtime jars. That is the
-check worth repeating after any change here — a package missing either directory installs
-and launches perfectly and can run no extension.
+**Sidecar needs Java 21+** (class file 65). `SidecarSupervisor.resolveJava` looks in `tools/toolchain/jdk-*` before PATH (fixed 2026-08-13 — previously any JAVA_HOME on Java 17 silently broke everything). Maven for sidecar builds lives in `tools/toolchain/apache-maven-3.9.16`, also not on PATH.
 
-`--skip-jvm` and `--skip-media` exist for fast UI iteration and both print a warning in the
-final report, because a package missing either is not one to hand to anyone.
+**A sidecar that cannot start must say so.** `ensureProvidersLoaded` used to silently `return` on a failed `ensureStarted()`, producing an infinite "initializing providers…" spinner. It now writes a `T4_BLOCKED` runtime report naming the cause to every plugin. Never add another silent early return on this path.
 
-**NSIS is configured `oneClick: false` with `perMachine: false`.** A per-user install needs no
-administrator and raises no UAC prompt, which is the difference between a download an ordinary
-person can run and one their machine refuses. The portable target writes its userData beside
-the exe, so a USB copy carries its own extensions, library and runtime. Both are x64-only and
-stated as such: an ia32 build cannot load the x64 native `.node` binaries webtorrent pulls in.
+Cloud environment toolchain: Java 21, Maven, Bun, Node 22.
 
-**There is no code-signing certificate**, so SmartScreen will warn on first run of the
-installer. That is a purchase, not a build flag, and it should not be claimed as solved. There
-is also no `.ico` in the repo, so the package carries the default Electron icon.
+**Almost no automated tests for Electron/React**, no CI (`.github/` absent). Exceptions:
+`electron/sharedDiscovery.test.mts` and the two media suites under `electron/media/`, run by
+`bun run test:electron` — Node strips types itself (`erasableSyntaxOnly`), no framework/transform.
+`.mts` is in `tsconfig.node.json`'s `include` so tests are typechecked too. These earn tests
+because `sharedDiscovery` failures are invisible (doubled scrape ≈ slow provider) and the media
+suites' inputs are expensive to reproduce (25GB file behind an expired link) while a regression
+is silent (`-c:v copy` on 10-bit HEVC → MP4 that downloads fine, plays nothing).
 
-On a fresh clone run all three **in that order**: the sidecar build produces the android
-shim the bridge compiles against, runtime-deps puts `library-jvm` in place, and the bridge
-needs both. Nothing can execute an extension until all three have run.
+Note `.ts` extensions on imports inside `electron/media/` — load-bearing: Node's type-stripping
+ESM loader won't resolve extensionless specifiers (`allowImportingTsExtensions` set in both tsconfigs).
 
-**The bridge build needs jitpack.io, which some cloud sessions cannot reach** —
-`library-jvm` is published there and nowhere else, and a blocked egress policy fails the
-build at dependency resolution before a line is compiled (a 403 on a POM, with nothing about
-the Kotlin at fault). The jars are already vendored in `sidecar/runtime/`, so the module can
-be compiled against that directory directly with `kotlin-compiler-embeddable` (it resolves
-from Central) and packaged with `jar`. **`tools/package/build-bridge.mjs` does exactly that**
-— it is a workaround for the network, not for the build, and the pom stays the reference.
+**`tsc` in `bun run build` typechecks nothing** — root `tsconfig.json` is solution-style
+(`"files": []` + two `references`), and plain `tsc` on that is a no-op. Use **`tsc -b`** (or
+`-p tsconfig.app.json` / `-p tsconfig.node.json`). Say "typechecks with `tsc -b`", not "tested".
 
-Two things about that script are not obvious and cost an afternoon each. The compiler is
-itself compiled Kotlin, so running it needs `kotlin-stdlib`, `kotlin-reflect`,
-`kotlin-script-runtime`, `kotlin-daemon-embeddable`, `trove4j`, coroutines **and**
-`annotations-13.0` on its *own* classpath — codegen resolves `@Nullable` from there and fails
-inside `FunctionCodegen` without it, which reads like a version conflict and is not one. And
-the previous `cs3-provider-bridge.jar` is excluded from the compile classpath, or the sources
-compile against last build's copy of themselves and a changed signature is invisible until
-something fails to link at runtime.
-
-The sidecar needs **Java 21 or newer** — it is compiled to class file 65. An older
-`JAVA_HOME` is detected and named rather than crashing the runtime at startup, and
-`SidecarSupervisor.resolveJava` now actually *looks* in `tools/toolchain/jdk-*` before
-falling back to PATH. It did not until 2026-08-13, and the consequence was severe: a
-machine with `JAVA_HOME` on Java 17 — an entirely ordinary setup — could not start the
-sidecar at all while a perfectly good JDK 21 sat checked in beside it. Maven for the
-sidecar builds lives in `tools/toolchain/apache-maven-3.9.16` and is likewise not on PATH.
-
-**A sidecar that cannot start must say so.** `ensureProvidersLoaded` used to `return`
-silently when `ensureStarted()` failed. Every installed extension then reported zero
-providers with no reason, which the extensions screen rendered as a permanent "JVM sidecar
-is initializing providers…" spinner — an infinite progress message for something that was
-never going to happen. It now writes a `T4_BLOCKED` runtime report naming the real cause to
-every installed plugin, and the UI shows it. If you add another early return on that path,
-carry a reason with it.
-
-Toolchain present in the cloud environment: Java 21, Maven, Bun, Node 22.
-
-There is **almost no automated test suite for the Electron/React side** and no CI workflow
-(`.github/` does not exist). The exceptions are `electron/sharedDiscovery.test.mts` and the two
-media suites under `electron/media/`, all run by `bun run test:electron`: Node strips the types
-itself — possible only because `erasableSyntaxOnly` is set — so there is no framework, no
-transform and no config to keep working. `.mts` is in `tsconfig.node.json`'s `include`, so the
-tests are typechecked too.
-
-Those modules earn tests where the rest of `electron/` has none, for two different reasons.
-`sharedDiscovery` because its failure modes are invisible: a doubled scrape reads as a slow
-provider and a wrongly-cancelled run reads as a flaky site, and neither would ever be traced
-back to it from a bug report. The media suites because their inputs are **expensive to
-reproduce and cheap to encode** — every row of the compatibility matrix was measured against a
-real 25 GB file behind a provider link that has since expired, and a regression there is silent
-in the worst way: choosing `-c:v copy` for a 10-bit HEVC file produces an MP4 that downloads
-perfectly and plays nothing, which is indistinguishable from a bad provider.
-
-Note the `.ts` extensions on imports inside `electron/media/`. They are load-bearing: Node's
-type stripping is an ESM loader and will not resolve an extensionless specifier, so without
-them the tests cannot import the modules they test. `allowImportingTsExtensions` is already set
-in both tsconfigs and the Rollup build is indifferent.
-
-**The `tsc` in `bun run build` typechecks nothing.** The root `tsconfig.json` is
-solution-style (`"files": []` plus two `references`), and plain `tsc` on such a config is a
-no-op — it does not build referenced projects. Use **`tsc -b`** (or
-`tsc -p tsconfig.app.json` / `-p tsconfig.node.json`) to get a real signal. Running
-`tsc -b` for the first time surfaced seven pre-existing errors, since fixed; the tree is
-clean now, so a new error is yours. Say "typechecks with `tsc -b`" rather than implying
-tests passed.
-
-**Electron cannot actually be launched in a headless cloud container.** Verify by
-typechecking and by reading; do not report "I ran the app" unless you really did.
+**Electron cannot be launched in a headless cloud container.** Verify by typechecking/reading; don't claim "I ran the app" unless you did.
 
 ### The runtime the app runs is not the one you just built
+`RuntimeProvisioner` copies sidecar + provider runtime into `%APPDATA%/<app>/cs3-runtime/` and
+resolves that copy **before** every build location — this decouples an installed app from its
+build location, and is the single most expensive trap in the repo:
+- `provisionRuntime()` used to ask `findRuntimeDir()` where to copy *from*, which answers with the app-managed copy first, then skipped the copy as "already there". First provision was the last.
+- Result: installed apps kept serving the shim/bridge they were first installed with. One report: `NoClassDefFoundError` for `DataStore`, `android/net/Uri`, `AppCompatActivity`, `DialogFragment`, `FragmentManager` — all classes shipped weeks earlier. 5 of 8 failing extensions were this bug alone.
 
-`RuntimeProvisioner` copies the sidecar and the provider runtime into
-`%APPDATA%/<app>/cs3-runtime/` and resolves that copy **before** every build location. That
-is what makes an installed app independent of where it was built, and it is also the single
-most expensive trap in this repo, because for a while nothing noticed when the copy drifted:
+Three fixes, all matter:
+1. **The copy carries a stamp** (`runtime-stamp.json`: generation + fingerprint of every jar's name/size/mtime). `getStatus()` reports `stale` separately from `ready`.
+2. **Provisioning reads from build locations only** (`findSourceComponents`), picks **newest** not first — `sidecar/dist/` is generated *from* `sidecar/runtime/` and goes stale the moment Maven runs again.
+3. **Translations drop when the sidecar changes.** DEX→JVM output is cached by archive hash alone; an absent stamp counts as changed.
 
-- `provisionRuntime()` asked `findRuntimeDir()` where to copy *from* — and that answers with
-  the app-managed copy first — then skipped the copy because the source "already" lived under
-  `baseDir`. The first provision was therefore the last one.
-- Installed apps kept serving the shim and bridge they were first installed with. A user
-  reported `NoClassDefFoundError` for `DataStore`, `android/net/Uri`, `AppCompatActivity`,
-  `DialogFragment` and `FragmentManager` — **every one of them a class that had shipped weeks
-  earlier.** Five of eight failing extensions in that report were this bug alone.
-
-Three things now prevent it, and all three matter:
-
-1. **The copy carries a stamp** (`runtime-stamp.json`: generation + a fingerprint of every
-   jar's name, size and mtime). `getStatus()` reports `stale` separately from `ready`,
-   because a stale runtime is complete and starts fine — folding it into `ready` would make a
-   working install look broken, and leaving it out is what produced the bug.
-2. **Provisioning reads from build locations only** (`findSourceComponents`), and picks the
-   **newest** rather than the first. `sidecar/dist/` is generated *from* `sidecar/runtime/`,
-   so in a dev checkout it is a snapshot that goes stale the moment Maven runs again — and it
-   sits earlier in the candidate list.
-3. **Translations are dropped when the sidecar changes.** DEX→JVM output is cached by archive
-   hash alone, so it survives a translator upgrade and keeps serving bytecode from the version
-   that had the bug. An absent stamp counts as changed: that is the upgrade case, and it is
-   the run most likely to be holding output from the broken `KotlinNameRepair`.
-
-**Bump `RUNTIME_GENERATION` whenever the shim, the bridge or the translator changes in a way
-an already-provisioned copy would get wrong.** If you are debugging a "class that should
-exist doesn't", check `%APPDATA%/<app>/cs3-runtime/runtime/` before anything else — compare
-its jars against `sidecar/runtime/`.
+**Bump `RUNTIME_GENERATION`** whenever shim/bridge/translator changes in a way an already-provisioned copy would get wrong. Debugging "class that should exist doesn't"? Check `%APPDATA%/<app>/cs3-runtime/runtime/` against `sidecar/runtime/` first.
 
 ---
 
@@ -340,3430 +171,706 @@ Manager    Service       Manager         Engine         Service         Store
 ```
 
 ### The IPC contract
+`electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration: false`.
+Namespaces: `api:*`, `torrent:*`, `playback:*`, `indexer:*`, `sources:*`, `download:*`,
+`extension:*`, `library:*`, `datastore:*`, `binary:*`, `dialog:*`.
 
-`electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration:
-false`. Channels are namespaced: `api:*`, `torrent:*`, `playback:*`, `indexer:*`,
-`sources:*`, `download:*`, `extension:*`, `library:*`, `datastore:*`, `binary:*`,
-`dialog:*`.
+- **`playback:*`** push-shaped: `playback:start` returns a session id immediately; updates arrive as `playback:update` snapshots. Player renders from snapshots before a stream exists.
+- **`search:*`** push-shaped for the same reason: `search:start` returns an opening snapshot; results/progress arrive as `search:update`; `search:cancel` abandons the rest. A search across 15 providers is 15 independent scrapes (measured: Cinevood 20s timeout, ARD 350ms) — request/response would spend the whole time on a spinner. `api:searchAll` remains for callers needing a full answer. Required breaking up `PluginManager.searchAll`'s single batched RPC (reply landed at slowest-provider speed) into one RPC per provider (`searchEach`), capped at 8 in flight (sidecar dispatches onto a core-sized bounded pool).
+- **`natives:*`** built-in provider roster — `natives:list/setEnabled/addAddon/removeAddon` (Stremio addons by manifest URL), `natives:addServer/removeServer` (Jellyfin/Emby; `addServer` takes a key, never returns one). Separate from `extension:*` (which is an inventory of *downloaded* things — repos/archives/hashes/tiers) because a compiled-in provider has no repository. See "native provider lane" below.
+- **`ott:*`** — `ott:listPlatforms/getCatalog/getCatalogPage/getSearchScope/getSuggestions/installSuggestion`. Answers "can I watch Netflix?" keyed by platform, always listing every platform with reachability. **`ott:installSuggestion` takes a repository id, never a URL** — accepting a URL from the renderer would let "set up Netflix" install arbitrary code.
+- `window:setAlwaysOnTop/getAlwaysOnTop` pins the app window; `mpv:setOnTop`/`mpv:setVideoEnabled` do the same for mpv's own window (see "Floating playback").
+- Also: `analytics:*`, `bookmarks:*`, `discover:*`, `subtitles:*`, `sources:getCacheStats/clearCache`.
+- **`issues:*`** — `issues:list/annotate/report/clear`: the extension issue ledger, deliberately a third surface beside `log:*`/`diagnostics:*` (see §5, "Counting the log").
+- **`extension:addRepository`** and **`installRepository`** are deliberately two actions (fetch+persist vs. tens of downloads/translations).
+- **`media:*`** — `media:inspect` classifies without starting; `media:prepare` inspects-decides-opens, the only source of a playable URL; `media:switchAudio/closeStream` drive a live session; `media:setCapabilities/getCodecProbes` carry renderer-measured decoder support; `media:getPlaybackDiagnostics` returns per-attempt telemetry. **No channel hands back an unclassified URL.** `media:prepare` also takes provider-declared `isDash`/`drm`, which outrank the probe — DRM in particular skips the probe entirely (ffprobe succeeds with correct codec names over undecodable encrypted payload).
+- `external:*` drives a handed-off player, pushes `external:update` with a `capability` flag. `player:getPreferences/setPreferences` hold volume/mute/speed/track languages. `download:getDeletePreference/setDeletePreference`. `extension:rollback` restores a replaced archive.
+- **`download:request`** (button press — reads task state, resumes/recovers/refuses, reports which) vs **`download:enqueue`** (explicit "create this task").
+- **`mpv:*`** — `mpv:open` (prepared URL only), transport/track controls, `mpv:update` snapshots, `mpv:getPolicy/setPolicy`. No raw-link channel, same reasoning as `media:*`.
+- Fallible handlers return an **envelope** `{ ok, error?, …payload }` (never reject) via `main.ts`'s `fail()` helper.
 
-`playback:*` is push-shaped, unlike the rest: `playback:start` returns a session id
-immediately and everything after arrives as `playback:update` snapshots on a
-`webContents.send` channel. That inversion is the point — the player renders from snapshots
-from the moment it opens, before any stream exists.
+**When crossing the IPC boundary, four things change together:** 1) service in `electron/`, 2) `ipcMain.handle('ns:name', …)` in `main.ts`, 3) method+type in `CloudStreamElectronAPI` in `preload.ts`, 4) caller in `src/`. Shared types: `cs3_windows/src/types/{api,plugin,torrent,download,player}.ts`, imported by both sides (intentional, not a layering mistake).
 
-`search:*` is push-shaped for the same reason. `search:start` returns an opening snapshot
-naming the sources it is about to ask; results, per-source outcomes and progress arrive as
-`search:update`, and `search:cancel` abandons the rest. A search across fifteen extension
-providers is fifteen independent scrapes of third-party sites and the slowest routinely
-takes 20–40s (measured: Cinevood times out at 20s while ARD answers in 350ms), so a
-request/response search spent that entire time showing a spinner over results it already
-had. `api:searchAll` still exists for callers that genuinely cannot use a partial answer.
-
-Making that work required breaking up `PluginManager.searchAll`. It issued **one** batched
-`providerSearch` RPC for every provider, and the sidecar collected the futures in order —
-so the reply landed at the speed of the slowest provider no matter how fast the others
-were. It is now one RPC per provider (`searchEach`), capped at 8 in flight because the
-sidecar dispatches each onto a bounded pool sized to the core count.
-
-`natives:*` is the built-in provider roster — `natives:list`, `natives:setEnabled`,
-`natives:addAddon` / `natives:removeAddon` (Stremio addons by manifest URL) and
-`natives:addServer` / `natives:removeServer` (the user's own Jellyfin or Emby).
-`addServer` takes a key and nothing ever sends one back.
-Separate from `extension:*` because it answers a different question: `extension:*` is an
-inventory of things that were **downloaded** — repositories, archives, hashes, updates,
-compatibility tiers — and none of those words means anything about a provider compiled into
-the binary. The only action on one is a switch, and the only thing the user needs told is
-why one is unavailable. See "The native provider lane" below.
-
-`ott:*` is the streaming-service surface — `ott:listPlatforms`, `ott:getCatalog`,
-`ott:getCatalogPage`, `ott:getSearchScope`, `ott:getSuggestions`,
-`ott:installSuggestion`. Separate from `extension:*` because it answers a different
-question: `extension:*` is an inventory keyed on repositories and archives, this is
-"can I watch Netflix?" keyed on the platform — and it has to answer even when the
-answer is no, so the list always contains every platform with how it is reachable
-rather than omitting the ones nothing serves.
-
-**`ott:installSuggestion` takes a repository id, never a URL.** The channel is
-reachable from the renderer and accepting an address would turn "set up Netflix"
-into a way to make the app install code from anywhere. Adding a repository by hand
-stays a separate, deliberate action on the extensions screen.
-
-`window:setAlwaysOnTop` / `window:getAlwaysOnTop` pin the application window;
-`mpv:setOnTop` and `mpv:setVideoEnabled` do the equivalent for the native engine's
-own window. See "Floating playback" below for why there are three mechanisms.
-
-Also namespaced: `analytics:*` (provider measurement, ranking weights, recommendations,
-and the erase control), `bookmarks:*` (saved detail pages), `discover:*` (home-screen
-catalogues and title enrichment), `subtitles:*` (online search, SubRip→WebVTT), `sources:getCacheStats` /
-`sources:clearCache`.
-
-`issues:*` is the extension issue ledger — `issues:list` (rows plus the tally plus the
-per-source breakdown), `issues:annotate` (mute/note), `issues:report`, `issues:clear`. It is
-deliberately a third surface beside `log:*` and `diagnostics:*`; see below for why none of
-the three can answer the others' question.
-
-`extension:addRepository` and `extension:installRepository` are new and are deliberately
-**two** actions. Adding is one fetch and a persisted row; installing is tens of downloads
-and DEX translations. Folding them together commits a user who wanted to browse.
-
-`media:*` is the compatibility engine's surface: `media:inspect` classifies a source without
-starting anything, `media:prepare` inspects-decides-opens and returns the URL to attach,
-`media:switchAudio` / `media:closeStream` drive a live session, `media:setCapabilities` /
-`media:getCodecProbes` carry what the renderer measured about its own decoders, and
-`media:getPlaybackDiagnostics` returns the per-attempt telemetry. There is deliberately **no**
-channel that hands back an unclassified playback URL.
-
-`media:prepare` also takes what the *provider* said about the source — `isDash` and `drm` —
-and those outrank anything the probe could conclude. `drm` in particular arrives *before* the
-probe and skips it: FFmpeg holds no keys, and a probe of an encrypted file does not fail, it
-succeeds with correct codec names over undecodable payload.
-
-`external:*` drives a handed-off player and pushes `external:update` snapshots back, with a
-`capability` that says whether those controls reach anything. `player:getPreferences` /
-`player:setPreferences` hold volume, mute, speed and track languages.
-`download:getDeletePreference` / `download:setDeletePreference` hold the delete behaviour, and
-`extension:rollback` puts back the archive an update replaced.
-
-`download:request` is the channel a **button press** uses; `download:enqueue` remains for
-callers that genuinely mean "create this task". The difference is that `request` reads the
-state of whatever already holds that variant and resumes, recovers, or refuses accordingly,
-answering with which of those it did — see the downloads section below.
-
-`mpv:*` drives the native engine — `mpv:open` (a *prepared* URL only), transport and track
-controls, `mpv:update` snapshots pushed like `playback:*`, and `mpv:getPolicy`/`mpv:setPolicy`
-for how eagerly it is used. It has no channel that takes a raw link either, for the same reason.
-
-Fallible handlers return an **envelope**, `{ ok: boolean; error?: string; …payload }`,
-instead of rejecting. `main.ts` has a `fail()` helper for this. A transport failure must
-surface as UI text the user can act on, never an unhandled rejection in the renderer.
-
-**When you add a feature that crosses the boundary, all four of these change together:**
-1. the service in `electron/`,
-2. `ipcMain.handle('ns:name', …)` in `electron/main.ts`,
-3. the method + its type in `CloudStreamElectronAPI` in `electron/preload.ts`,
-4. the caller in `src/`.
-
-Shared types live in `cs3_windows/src/types/{api,plugin,torrent,download,player}.ts` and
-are imported by **both** sides — `electron/` importing from `../src/types/` is intentional,
-not a layering mistake.
-
-### Services you will actually touch (`cs3_windows/electron/`)
+### Services (`cs3_windows/electron/`)
 
 | File | Responsibility |
 |---|---|
 | `main.ts` | Window, lifecycle, service wiring, every IPC handler. |
 | `preload.ts` | The typed API surface. |
-| `datastore.ts` | Persistence. Reimplements **Android's 6-bucket key grammar** (`_Bool`/`_Int`/`_String`/`_Float`/`_Long`/`_StringSet`) so Android backups import losslessly. Non-transferable keys (tokens, device ids, cache paths) are filtered on import by regex. |
-| `contentService.ts` | The content pipeline orchestrator: `search → MetadataProvider → getSources → IndexerRegistry → startStream → TorrentEngine`. Extension providers are consulted first; torrents are the fallback. A `cs3ext://` media URL bypasses indexers entirely — the provider already knows its links. |
-| `playbackSession.ts` | Owns one "user pressed play" interaction. Opens the player *before* a stream exists and streams discovery progress into it, so the viewer can start the best source found so far instead of waiting for the slowest indexer. Also owns in-player source switching and refresh. Retains the `SourceQuery`, which is what makes refresh possible without navigating back. |
-| `searchScope.ts` | Which sources a search may ask. **A selection is a strict filter, not a preference** — see below. |
-| `searchSession.ts` | One "the user pressed search" interaction. Push-shaped like `playback:*`: fans out per source, emits a snapshot as each answers, and can be cancelled. |
-| `searchSuggestions.ts` | Title autocomplete merged across Cinemeta + TVmaze + AniList, deduped on normalised title+year, misspelling-tolerant. Their blind spots do not overlap — see the file header for what was measured about each. |
-| `searchHistory.ts` | Past search *queries* (not results — a cached result set goes stale silently), stored via the datastore so backups carry it. |
-| `sourceCache.ts` | Resolved sources, with expiry tracked **per source**: magnets never expire, provider links carry a deadline read from the URL (`Expires`/`exp`/JWT claim, case-insensitively) or a short TTL. A cache hit can be partially stale — good magnets beside dead links — and `read()` reports that split. |
-| `subtitleService.ts` | Online subtitle search via the keyless OpenSubtitles v3 Stremio addon, keyed by IMDb id. Converts SubRip to WebVTT, which is **not optional**: `<track>` rejects `.srt` silently. |
-| `media/mediaInspector.ts` | ffprobe → `MediaMetadata`; transport and DRM classified from the manifest body, never the URL. |
-| `media/decisionEngine.ts` | Pure decision: metadata + host capability + DRM → `TransformationPlan`. Tested exhaustively; see the codec section. |
-| `media/playbackEngine.ts` | Inspect → decide → open, and the only way to obtain a URL to attach. Owns playback telemetry. |
-| `media/mpvEngine.ts` | The native engine. Spawns mpv, drives it over JSON-RPC, and reports snapshots. For the streams Chromium will never decode — see below. |
-| `mediaTranscoder.ts` | Executes a plan as a live fragmented-MP4 stream on loopback, plus embedded-subtitle extraction. |
-| `metadataProvider.ts` | TVmaze + AniList. **Catalogue metadata only, never streams.** Its key output is the IMDb id, which indexers match on far better than free text. |
+| `datastore.ts` | Reimplements Android's 6-bucket key grammar (`_Bool/_Int/_String/_Float/_Long/_StringSet`) for lossless Android backup import. Non-transferable keys filtered on import by regex. |
+| `contentService.ts` | `search → MetadataProvider → getSources → IndexerRegistry → startStream → TorrentEngine`. Extension providers first, torrents fallback. `cs3ext://` bypasses indexers. |
+| `playbackSession.ts` | One "Play" interaction; opens the player before a stream exists, streams discovery into it; owns in-player switching/refresh via retained `SourceQuery`. |
+| `searchScope.ts` | Which sources a search may ask — a selection is a strict filter, not a preference. |
+| `searchSession.ts` | One "Search" interaction; push-shaped, fans out per source, cancellable. |
+| `searchSuggestions.ts` | Autocomplete merged Cinemeta + TVmaze + AniList, deduped, misspelling-tolerant. |
+| `searchHistory.ts` | Past search *queries* only (not results — stale silently). |
+| `sourceCache.ts` | Per-source expiry: magnets never expire; provider links carry a deadline from the URL (`Expires`/`exp`/JWT) or a short TTL. |
+| `subtitleService.ts` | Keyless OpenSubtitles v3 Stremio addon by IMDb id; SubRip→WebVTT is mandatory (`<track>` rejects `.srt` silently). |
+| `media/mediaInspector.ts` | ffprobe → `MediaMetadata`; transport/DRM from manifest body, never URL. |
+| `media/decisionEngine.ts` | Pure: metadata+capability+DRM → `TransformationPlan`. |
+| `media/playbackEngine.ts` | Inspect→decide→open; the only source of a URL; owns telemetry. |
+| `media/mpvEngine.ts` | Native engine: spawns mpv, JSON-RPC, snapshots. |
+| `mediaTranscoder.ts` | Executes a plan as live fragmented-MP4 on loopback; embedded-subtitle extraction. |
+| `metadataProvider.ts` | TVmaze + AniList — catalogue metadata only, never streams. Key output: IMDb id. |
 | `cinemeta.ts` | Stremio Cinemeta metadata provider, prioritised in search. |
-| `pluginManager.ts` | `.cs3` repository discovery, plugin-list parsing (mirrors upstream `RepositoryManager.kt`), download + SHA-256 verification, Android-style install paths, then hands archives to the sidecar. Also owns the enable/disable cascade — see the extensions-screen section. |
-| `cs3/providerLinks.ts` | Reads a provider's reply without guessing: link type, DRM, playlist parts, audio-track headers. Pure and tested — every wrong answer here looks like a bad provider rather than a bad routing decision. |
-| `pluginAnalyzer.ts` | Static compatibility classification of a plugin before it is trusted. |
-| `cs3/sidecarSupervisor.ts` | Spawns and supervises the JVM child process; line-delimited JSON-RPC over stdio; never throws on a missing/broken sidecar. Also routes the *reverse* frames — see `webViewHost.ts`. |
-| `cs3/webViewHost.ts` | The browser the JVM cannot open for itself. Offscreen `BrowserWindow` per resolve, `webRequest` watching for the provider's intercept pattern, cookies harvested for `CloudflareKiller`. |
-| `cs3/webViewMatch.ts` | What a page's subrequests mean. Pure and tested, because every wrong answer here is attributed to the provider instead. |
-| `cs3/extensionUpdater.ts` | Over-the-air extension updates on a schedule, so a provider fix does not wait for an app release. |
-| `cs3/bootstrap.ts` | First-run install of the bundled repositories, and the adult-content opt-in. |
-| `cs3/diagnostics.ts` | Provider failures with the context that makes them reproducible. See below. |
-| `cs3/extensionIssues.ts` | The **durable tally** of distinct extension problems, across restarts and log rotation. `diagnostics` is one failure shaped to be pasted; the logger is a per-session transcript; this is the "count before fixing" list. See below. |
-| `cs3/providerRegistry.ts` | What each archive registered, keyed by size+mtime+runtime generation. Hydrates the provider list at launch **without starting the JVM** — the fix for a 57–67s first search. See below. |
-| `cs3/providerRecovery.ts` | Making a provider a saved page names answer again. `planRecovery` is pure and returns the ordered steps, because the button has to say what it will do — a repository fetch and a DEX translation — *before* it starts. It fixes the whole enable cascade, not just the provider switch: the old handler called `setProviderEnabled` alone, which on the common post-restore state (repository off, or extension not installed at all) completed successfully and changed nothing observable. It never adds a repository the app was not already told about — a `cs3ext://` address travels in library rows, and accepting a URL out of one would make "reopen my saved page" a way to install code from anywhere. |
-| `cs3/titleOutcomes.ts` | How each title last behaved, so a dead row is not clicked twice. |
-| `cs3/ottPlatforms.ts` | The OTT platform table and the rule for deciding which provider is one. Pure and tested — a matcher one character too loose fills the Prime Video page with a torrent aggregator called PrimeWire and nothing says so. |
-| `cs3/nativeProviderRegistry.ts` | The roster of providers compiled into the app, and the native mirror of `enabledProviderNames` — the adult gate and the disable cascade, in one place. |
-| `cs3/nativeProviders/types.ts` | The `NativeProvider` interface and `cs3native://` addressing. Pure. |
-| `cs3/nativeProviders/internetArchive.ts` | ~52,000 public-domain films, documentaries and classic TV. The query form is measured, not designed — see below. |
-| `cs3/nativeProviders/peerTube.ts` | Federated video via SepiaSearch. A video's files live on its **own** instance, not the search host. |
-| `cs3/nativeProviders/iptvOrg.ts` | 17,230 free-to-air live streams from the open iptv-org dataset; ~70% answer. |
-| `cs3/nativeProviders/stremioAddon.ts` | Any Stremio addon, by manifest URL. `idPrefixes` is a hard constraint — an addon 500s on an id it does not speak. |
-| `cs3/nativeProviders/jellyfin.ts` | The user's own Jellyfin/Emby server. The key travels as a header, never in a URL, and never reaches the renderer. |
-| `cs3/ottService.ts` | The same table against what is installed: availability, the search scope for a platform page, and the repositories to offer when nothing serves it. |
-| `download/resumePlan.ts` | Whether a partial download survives its link being replaced. Pure; both failure modes are silent and opposite. |
-| `download/resumeWindow.ts` | The 64 KB boundary probe that proves it — range support, real file length and a byte comparison in one request. |
-| `cs3/batchDownloader.ts` | Season/series batch download orchestration. |
-| `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, and remembered source choices. |
-| `cs3/bookmarkStore.ts` | Saved *detail pages*, with the provider, extension, repository and query that produced them. Deliberately **not** the library: that keys on a normalised title so one film from five providers is one entry, which is right for watch tracking and useless for "reopen the page I was on". Identity and origin are stored; resolved links are not, because they expire. |
-| `cs3/providerAnalytics.ts` | How every provider has actually behaved, counted. Aggregates only — no queries, no titles, no viewing history — because provider quality does not depend on any of them and this file is meant to be shareable. `empty` is tracked separately from `failure`: a provider with nothing for this title is working, and folding the two together would rank providers by catalogue breadth. |
-| `cs3/providerRanking.ts` | Weighted scoring over those counts. Criteria are **rows in a table**, not a formula: an id, a weight, a sample floor and a function to `0..1` or `null`. A `null` is excluded from the denominator rather than scored zero — a provider nobody has downloaded from must not rank below one whose downloads always fail. Rates are smoothed toward a neutral prior so a new extension starts mid-table and can never be permanently buried by one unlucky first call. |
-| `cs3/providerRecommendations.ts` | Turns scores into advice, and (only with `autoEnableProven`) into action. Nothing is ever auto-**disabled**: a site being down for a week is not consent to remove a source the user chose. |
-| `cs3/failureTaxonomy.ts` | `classifyFailure` — one closed set of causes, shared by the ranking, the diagnostics and the issue ledger. Counting free text produces a tally with one entry per failure; grouping by cause is what showed 113 load failures came from six missing classes. Also owns `groupingForm`, moved here from `diagnostics.ts` because that module imports `electron` and cannot be loaded under Node's type stripping. |
-| `cs3/sidecarStderr.ts` | What a line of JVM stderr *means*: level, the tag that printed it, and a cause. Pure and tested — it is the only attribution the corpus offers. |
-| `cs3/discovery.ts` | The home screen's catalogues. Stale-while-revalidate over Stremio's keyless Cinemeta catalogs (`top`/`year`/`imdbRating`, filterable by 19 genres, pageable) plus AniList for anime. Finds **nothing playable** — sources are resolved by providers when an item is opened. |
-| `cs3/titleEnricher.ts` | Resolves `Avengers End Game 720p Hindi Dubbed` to the film it is about. Conservative on purpose: a disagreeing year is disqualifying and the similarity bar is high enough that `Avengers` does not match `Avengers: Endgame`. An unenriched row is a small loss; a mislabelled one reads as data corruption. |
-| `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. Warmed at launch — see below. |
-| `torrent/torrentMetadata.ts` | `.torrent` bytes cached by infohash, verified against it. A cache hit means `add()` has the piece hashes synchronously and the swarm is needed only for bytes. Also builds the `xs` mirror URLs. |
-| `torrent/torrentContents.ts` | What is actually *in* a torrent, as something a person can browse: seasons, episodes, samples, extras. Pure and tested for the reason `ottPlatforms.ts` is — every wrong answer is silent and plausible, and the viewer attributes it to the torrent. Extension decides the kind, never the folder; a sample is recognised by size ratio as well as by name. |
-| `torrent/dhtNodeCache.ts` | The DHT routing table, node id and port, persisted. Turns a cold bootstrap into a warm one. |
-| `torrent/indexerRegistry.ts`, `indexers/*` | 17 built-in adapters — 4 Stremio stream addons, 10 JSON APIs, 3 HTML scrapers — plus Torznab (Jackett/Prowlarr). Counted from the registry switch on 2026-09-03; this line said 7 for a long time after it stopped being true. |
-| `torrent/ranker.ts`, `releaseParser.ts` | Release-name parsing (quality/codec/group/season/episode) and result ranking. |
-| `externalPlayerControl.ts` | Two-way control of VLC over its HTTP interface. Capability is declared per player, never assumed — see below. |
-| `media/inspectionStore.ts` | Persists what a probe found, keyed on the origin URL. The measurement only; the verdict is recomputed. |
-| `downloadService.ts`, `aria2Engine.ts`, `ytdlpEngine.ts`, `binaryDownloader.ts` | Downloads via aria2c RPC with an HTTP fallback; portable `aria2c`/`yt-dlp` binaries are fetched on first use. |
-| `src/utils/deadRows.ts` | Which search results are worth showing. `no-sources` hides; `app-error` never does — see below. |
-| `src/components/player/useFloatingPlayer.ts` | Picture-in-Picture, the window pin, the background policy and the Media Session record. |
-| `src/components/settings/settingsLevel.ts` | Simple versus Everything, and what `advanced` means. |
+| `pluginManager.ts` | `.cs3` repo discovery, plugin-list parsing, download+SHA-256, install paths, hands archives to sidecar; owns the enable/disable cascade. |
+| `cs3/providerLinks.ts` | Reads a provider's reply without guessing: link type, DRM, playlist parts, audio headers. |
+| `pluginAnalyzer.ts` | Static compatibility tiering before trust. |
+| `cs3/sidecarSupervisor.ts` | Spawns/supervises the JVM process; line-delimited JSON-RPC over stdio; never throws on a broken sidecar; routes reverse frames (see `webViewHost.ts`). |
+| `cs3/webViewHost.ts` | Offscreen `BrowserWindow` per resolve; `webRequest` watching; cookies harvested for `CloudflareKiller`. |
+| `cs3/webViewMatch.ts` | What a page's subrequests mean. Pure, tested. |
+| `cs3/extensionUpdater.ts` | Scheduled OTA extension updates. |
+| `cs3/bootstrap.ts` | First-run bundled-repo install + adult-content opt-in. |
+| `cs3/diagnostics.ts` | Provider failures with reproducible context. |
+| `cs3/extensionIssues.ts` | Durable tally of distinct extension problems across restarts/rotation. |
+| `cs3/providerRegistry.ts` | What each archive registered, keyed by size+mtime+generation; hydrates provider list without starting the JVM (57–67s→8ms fix). |
+| `cs3/providerRecovery.ts` | `planRecovery` (pure) — ordered steps to make a saved page's provider answer again; never adds an unknown repository. |
+| `cs3/titleOutcomes.ts` | Last-behaviour-per-title so dead rows aren't reclicked. |
+| `cs3/ottPlatforms.ts` | OTT platform table + name-matching rule. Pure, tested. |
+| `cs3/nativeProviderRegistry.ts` | Compiled-in provider roster; mirrors `enabledProviderNames` (adult gate + disable cascade). |
+| `cs3/nativeProviders/types.ts` | `NativeProvider` interface, `cs3native://` addressing. |
+| `cs3/nativeProviders/internetArchive.ts` | ~52,000 public-domain films/TV. |
+| `cs3/nativeProviders/peerTube.ts` | Federated video via SepiaSearch; files live on their own instance. |
+| `cs3/nativeProviders/iptvOrg.ts` | 17,230 free-to-air streams; ~70% answer. |
+| `cs3/nativeProviders/stremioAddon.ts` | Any Stremio addon by manifest URL; `idPrefixes` is a hard constraint. |
+| `cs3/nativeProviders/jellyfin.ts` | User's own Jellyfin/Emby; key travels as a header, never reaches renderer. |
+| `cs3/ottService.ts` | Platform table × what's installed: availability, search scope, install offers. |
+| `download/resumePlan.ts` | Pure decision: does a partial survive a link swap. |
+| `download/resumeWindow.ts` | 64KB boundary probe: range support + real length + byte compare, one request. |
+| `cs3/batchDownloader.ts` | Season/series batch orchestration. |
+| `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, remembered source choices. |
+| `cs3/bookmarkStore.ts` | Saved detail pages (provider/extension/repo/query) — not the library (that keys on normalised title). |
+| `cs3/providerAnalytics.ts` | Behaviour counts, aggregates only (no queries/titles/history). `empty` tracked separately from `failure`. |
+| `cs3/providerRanking.ts` | Weighted scoring, criteria as table rows; `null` excluded from denominator, not scored zero; rates smoothed toward neutral prior. |
+| `cs3/providerRecommendations.ts` | Scores → advice/action (`autoEnableProven`). Never auto-disables. |
+| `cs3/failureTaxonomy.ts` | `classifyFailure` — one closed cause set shared by ranking/diagnostics/ledger; also `groupingForm`. |
+| `cs3/sidecarStderr.ts` | JVM stderr line → level/tag/cause. |
+| `cs3/discovery.ts` | Home catalogues: stale-while-revalidate Cinemeta (`top/year/imdbRating`, 19 genres) + AniList. Finds nothing playable. |
+| `cs3/titleEnricher.ts` | Resolves messy release titles to canonical works; conservative (disagreeing year disqualifies). |
+| `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP with range support; sequential pieces; warmed at launch. |
+| `torrent/torrentMetadata.ts` | `.torrent` cached by infohash, self-verifying; builds `xs` mirror URLs. |
+| `torrent/torrentContents.ts` | Seasons/episodes/samples/extras from a torrent; sample recognised by size ratio too. |
+| `torrent/dhtNodeCache.ts` | Persisted DHT routing table/node id/port. |
+| `torrent/indexerRegistry.ts`, `indexers/*` | 17 built-in adapters (4 Stremio, 10 JSON, 3 HTML) + Torznab. |
+| `torrent/ranker.ts`, `releaseParser.ts` | Release parsing + result ranking. |
+| `externalPlayerControl.ts` | Two-way VLC control over HTTP; capability declared per player. |
+| `media/inspectionStore.ts` | Persists probe findings keyed on origin URL; verdict recomputed. |
+| `downloadService.ts`, `aria2Engine.ts`, `ytdlpEngine.ts`, `binaryDownloader.ts` | aria2c RPC + HTTP fallback; portable binaries fetched on first use. |
+| `src/utils/deadRows.ts` | Which search results to hide (`no-sources`) vs never hide (`app-error`). |
+| `src/components/player/useFloatingPlayer.ts` | PiP, window pin, background policy, Media Session record. |
+| `src/components/settings/settingsLevel.ts` | Simple vs Everything semantics. |
 
-### Shared primitives, and the duplication they replaced
+### Shared primitives that replaced duplication
 
-Several patterns had each been written out repeatedly. They are one implementation now,
-and the thing worth knowing about each is *why the copies differed*.
-
-**`src/utils/format.ts` — eight byte formatters that disagreed.** Not copies:
-
-| Call site | zero answers | base | MB decimals |
-|---|---|---|---|
-| `DownloadCenter` | `Unknown` | 1024 | 0 |
-| `PlayerDownloadPanel` | `0 MB` | 1024 | 0 |
-| `SourcePanel` | `—` | **1000** | 0 |
-| `HistoryView` | `Unknown size` | 1024 | 1 |
-| `SourcePicker` | `—` | 1024 | adaptive |
-| `ProvenancePanel` | `0 B` | 1024 | 2 |
-| `DownloadService` | `0 MB` | **1000** | 0 |
-| `FastChunkDownloader` | `0 MB` | 1024 | 1, plus a KB rung |
-
-The last two lived in `electron/` and were missed by the pass that found the first six,
-which only looked at `src/`. They are the sharpest row in the table: **one download
-reports its size in SI on the companion file written beside the film and in binary on
-the progress line above it.**
-
-A single `formatBytes` would have been shorter and would have changed what eight surfaces
-display, so the differences are **parameters** and every one is preserved exactly.
-`format.test.mts` computes its expectations from the old implementations, including the
-ones that look wrong.
-
-Two of those differences are deliberate and must survive any future tidy-up. **Release
-sizes use base 1000** because providers and trackers quote SI: a torrent listed as "4.3 GB"
-upstream must not be redrawn as "4.00 GB", or a viewer comparing our list against the site
-it came from reads them as different releases. **Download progress uses base 1024**, so the
-figure matches what the file manager will say about the same file once it lands. The test
-asserts both renderings of one byte count side by side so the divergence is visible.
-
-The zero placeholders are *not* deliberate, and neither is 1000-vs-1024 for what is
-arguably the same quantity. Both are flagged in the module header as a UI decision nobody
-has made.
-
-**`electron/util/jsonFileStore.ts` — five debounced-persistence implementations.** Owns
-coalescing, the unref'd timer, the explicit shutdown flush, and the rule that losing a
-cache is never worth throwing over. It deliberately does **not** own the data shape:
-`detailCache` drops entries past a TTL on load and `diagnostics` filters by retention, and
-those are real per-store policies rather than one sameness worth inventing.
-
-**`electron/util/disabledSet.ts` — three copies of the enable cascade's toggle.** The list
-stores *exceptions*, so a newly installed extension works without anyone opting it in;
-every mutation returns the whole stored list, so a failed write shows up as the toggle
-springing back rather than as a lie on screen; and bulk is the primitive, because enabling
-a repository is one write rather than twenty flushes to disk.
-
-**`preload.ts`'s `subscribe()` — fourteen listener/teardown pairs.** The teardown is the
-part that matters and the part easy to leave out: an earlier version of that file
-registered listeners that accumulated on every React remount, which reads as a handler
-firing five times for one update rather than as an error. `onExtensionUpdateEvent` keeps
-its own listener because it carries a discriminator beside the payload, and widening the
-helper to absorb one caller would cost every other subscriber its argument type.
-
-**`src/utils/errors.ts` — 82 copies of `x instanceof Error ? x.message : String(x)`**,
-across 37 files under four variable names. The most-repeated expression in the codebase,
-and repeating it was the smaller problem.
-
-Node's fetch throws `TypeError: fetch failed` and puts the real reason in `error.cause`, so
-that idiom reported every DNS failure, refused connection, TLS error and unreachable host
-as the same two words. Those two words reach the screen, the pasteable report and
-`ExtensionIssueLog` — and there `groupingForm` collapses the entire network family into
-**one row**, so a tally built to answer "how many distinct things are wrong" answered
-"one". Counting is the whole argument for that ledger and this was quietly defeating it.
-`indexerRegistry` had already worked it out locally; `describeError` is that fix promoted.
-
-It also keeps the distinction the taxonomy needs: **a timeout is a failure and a
-cancellation is not.** `AbortSignal.timeout` gives `TimeoutError`, a caller's own controller
-gives `AbortError`, and describing the second with the word "timeout" scores it against a
-provider for the app's own decision to stop waiting — which ranks the *slowest* providers
-down hardest, since those are the ones still running when the cancel lands. Nothing it
-returns is ever empty, either: an empty description renders as a UI element with nothing in
-it.
-
-**`src/utils/useDismissable.ts` — eight copies of dismiss-on-outside-click**, and the drift
-between them closed the film. `VideoPlayer` binds `keydown` on `window` and treats Escape as
-"close the open panel, or leave the player"; five of the eight listened on `document` in the
-**bubble** phase without stopping the event, and `window` is the last stop in that path. So
-the menu handled Escape and then the player handled the same Escape with no panel open and
-called `onBack()`. The rule now lives in one place: **whoever consumes the Escape stops it**,
-in the capture phase, and only when it actually closed something.
-
-**`torrent/indexers/base.ts` — `withEpisodeTerms` and `tryMirrors`**, seven and six copies
-across three files. The zero-padding in `S01E02` is the whole point of the first: drop it on
-one adapter and it searches `S1E2`, which matches nothing in any torrent index — the site
-answers with a clean empty list, and "this indexer has nothing for that episode" is the one
-failure shape nobody investigates. The two *anime* indexers keep their own rule; they number
-episodes absolutely and were never part of the group.
-
-**`src/utils/sourceIdentity.ts` — `normaliseReleaseName` and `hasRealInfoHash`**, which
-`downloadIdentity.ts` and `cs3/playedSource.ts` each carried byte-identically, down to the
-comment, while their headers already said they solve the same problem for the same reason.
-Had one drifted, downloads would dedupe on one rule and resume match on another with nothing
-reported: a resume quietly starting a different release, or a second copy of a file already
-on disk quietly beginning. Both silent, pointing opposite ways, neither traceable back.
-
-**`electron/anilist.ts` — three hand-rolled GraphQL POSTs**, drifted to three timeouts and
-two error messages for one service, and all three calling **global `fetch`**. See the note
-on the injected fetch below for why that matters. They also read `data` without looking at
-`errors`: GraphQL reports a bad query, a rate limit or a server fault as **HTTP 200** with an
-`errors` array beside a null `data`, so `response.ok` was true and each copy returned
-`undefined` — which every caller renders as "no results". AniList rate-limits per minute and
-this app can issue a query per keystroke, so its most common failure was being reported as an
-empty catalogue.
-
-Note that `util/disabledSet.ts` writes its fields out longhand rather than using
-constructor parameter properties. `erasableSyntaxOnly` is set across this project so Node
-can strip types and run the suites directly, and that syntax is not erasable.
+- **`src/utils/format.ts`** — 8 byte formatters disagreed on zero-text, base (1000 vs 1024), decimals: `DownloadCenter`("Unknown",1024,0), `PlayerDownloadPanel`("0 MB",1024,0), `SourcePanel`("—",**1000**,0), `HistoryView`("Unknown size",1024,1), `SourcePicker`("—",1024,adaptive), `ProvenancePanel`("0 B",1024,2), `DownloadService`("0 MB",**1000**,0), `FastChunkDownloader`("0 MB",1024,1+KB rung). Last two live in `electron/` — one download reported SI size on the companion file and binary on the progress line above it. Preserved as **parameters**, not unified; `format.test.mts` derives expectations from the old implementations. **Deliberate and must survive tidy-ups**: release sizes use base 1000 (match provider/tracker SI quotes); download progress uses base 1024 (match the OS file manager). Zero-placeholder differences are *not* deliberate (flagged, unresolved).
+- **`electron/util/jsonFileStore.ts`** — 5 debounced-persistence impls unified: coalescing, unref'd timer, shutdown flush, "losing a cache never throws". Does NOT own data shape (`detailCache` TTL-drops, `diagnostics` retention-filters — real per-store policy).
+- **`electron/util/disabledSet.ts`** — 3 copies of the enable-cascade toggle. Stores *exceptions* (new extensions work by default); every mutation returns the whole list; bulk is the primitive.
+- **`preload.ts`'s `subscribe()`** — 14 listener/teardown pairs; teardown prevents accumulation across React remounts. `onExtensionUpdateEvent` keeps its own listener (carries a discriminator).
+- **`src/utils/errors.ts`** — 82 copies of `x instanceof Error ? x.message : String(x)` across 37 files. Node's `fetch` throws `TypeError: fetch failed` with the real reason in `error.cause`; the naive idiom collapsed every DNS/refused/TLS/unreachable failure into 2 words, and `groupingForm` then merged the entire network family into **one row** in `ExtensionIssueLog`, defeating its whole purpose. `describeError` fixes this (promoted from `indexerRegistry`'s local fix). Also: **timeout ≠ cancellation** — `AbortSignal.timeout()`→`TimeoutError`, caller's own controller→`AbortError`; conflating them scores a provider for the app's own decision to stop waiting. Never returns empty.
+- **`src/utils/useDismissable.ts`** — 8 copies of dismiss-on-outside-click had drifted: `VideoPlayer` binds `keydown` on `window`, Escape closes the open panel or leaves the player; 5 of 8 listened on `document` in **bubble** phase without stopping the event, so a menu's Escape also reached the player and called `onBack()` — closing a menu ended playback. Fix: **whoever consumes Escape stops it, in capture phase, only when it actually closed something.** Uses `pointerdown` not `click` (click fires after release, so outside-click-close + trigger's own toggle would reopen it).
+- **`torrent/indexers/base.ts`** — `withEpisodeTerms`/`tryMirrors`, 7+6 copies. Zero-padding `S01E02` matters (drop it → `S1E2` matches nothing, reads as "indexer has nothing"). Two anime indexers keep their own rule (absolute episode numbering).
+- **`src/utils/sourceIdentity.ts`** — `normaliseReleaseName`/`hasRealInfoHash`, byte-identical duplicates in `downloadIdentity.ts` and `cs3/playedSource.ts`. Drift risk: downloads dedupe on one rule, resume matches another, silently and oppositely wrong.
+- **`electron/anilist.ts`** — 3 hand-rolled GraphQL POSTs, drifted timeouts/messages, all used **global `fetch`** (see injected-fetch rule below). Also read `data` without checking `errors` — GraphQL returns bad-query/rate-limit/server-fault as **HTTP 200** with `errors` + null `data`, so `response.ok` was true and every caller rendered "no results". AniList rate-limits per minute; app can query per keystroke.
+- Note: `util/disabledSet.ts` writes fields longhand (no constructor parameter properties) — `erasableSyntaxOnly` requires it (that syntax isn't erasable).
 
 ### Codecs: Chromium cannot decode a lot of what people actually stream
 
-Measured on this Electron build with `canPlayType`, not assumed. AAC, MP3, FLAC
-and Opus are fine; **AC-3, E-AC-3 and DTS all return `""`** in both MP4 and MKV.
+Measured with `canPlayType`. AAC/MP3/FLAC/Opus fine; **AC-3, E-AC-3, DTS return `""`** in
+both MP4/MKV. Worst failure mode: bare `video/x-matroska` reports `"maybe"` — container opens,
+video decodes, audio silently dropped (measured: 65,397 bytes video / 0 bytes audio, correct
+duration, no `error` event). Hits **series** hardest (HDTV/WEB-DL carries broadcast AC-3/E-AC-3
+vs film web-rips' AAC) — the provider was never the variable. Video is worse: Chromium decodes
+H.264/VP8/VP9/AV1 only; no HEVC (without platform decoders), MPEG-2, VC-1, MPEG-4 Part 2, WMV.
+Android has none of this (ExoPlayer → hardware decoders).
 
-The failure mode is the nastiest possible one: bare `video/x-matroska` still
-reports `"maybe"`, so the container opens, the video decodes normally, and the
-audio track is silently dropped. Playing an H.264 + AC-3 file and reading the
-decode counters gives **65,397 bytes of video and 0 bytes of audio**, correct
-duration, and no `error` event. The volume slider works perfectly on a stream
-that has no sound in it.
+#### The engine: inspect, decide, execute — in that order (rebuilt 2026-08-16, PRD-37/38)
 
-This is why the bug looked provider-specific and why it hit **series** hardest:
-TV releases are overwhelmingly HDTV/WEB-DL carrying broadcast AC-3/E-AC-3, while
-film web-rips usually carry AAC. The provider was never the variable.
-
-**Video has the same problem and it is worse.** Chromium decodes H.264, VP8, VP9
-and AV1; it does not decode HEVC outside builds with platform decoders, nor any
-of MPEG-2, VC-1, MPEG-4 Part 2 or WMV. HEVC is routine in 4K and 10-bit releases,
-so "the browser could not decode this file" was a growing dead end. Android does
-not have this problem — ExoPlayer hands the stream to the device's hardware
-decoders.
-
-#### The engine: inspect, decide, execute — in that order
-
-Rebuilt 2026-08-16 against PRD-37 and PRD-38. It was one file that decided *and*
-executed, with the decision made from whatever happened to be known at the moment
-the `<video>` element failed. It is now four, and the split is the fix rather than
-tidying:
+One file that decided-and-executed from whatever was known when `<video>` failed → now four:
 
 | File | Role |
 |---|---|
-| `media/mediaInspector.ts` | ffprobe → `MediaMetadata`. Also classifies the transport (progressive / HLS / DASH) from the **manifest body**, and reads DRM out of it. |
-| `media/decisionEngine.ts` | Pure. `(metadata, transport, rendererCaps, hostEncoder) → TransformationPlan`. No I/O, no URLs, no clock. |
-| `mediaTranscoder.ts` | Executes a plan as a live fragmented-MP4 stream on loopback. Builds ffmpeg arguments and nothing else. |
-| `media/playbackEngine.ts` | Assembles them, caches capability records per URL, and owns the telemetry. |
+| `media/mediaInspector.ts` | ffprobe → `MediaMetadata`; classifies transport (progressive/HLS/DASH) from manifest **body**; reads DRM. |
+| `media/decisionEngine.ts` | Pure `(metadata, transport, rendererCaps, hostEncoder) → TransformationPlan`. No I/O. |
+| `mediaTranscoder.ts` | Executes a plan as live fragmented-MP4 on loopback. |
+| `media/playbackEngine.ts` | Assembles them, caches capability records per URL, owns telemetry. |
 
-Shared types are in `src/types/media.ts` — `MediaMetadata`, `SourceCapabilityModel`,
-`TransformationPlan`, `PlaybackStrategyType`, `DrmConfiguration`.
+Shared types: `src/types/media.ts` (`MediaMetadata`, `SourceCapabilityModel`, `TransformationPlan`, `PlaybackStrategyType`, `DrmConfiguration`). Decision is pure so it's testable against the expensive-to-reproduce matrix (real 25GB file, now-expired link): `media/decisionEngine.test.mts` (35 cases), `media/pipeline.test.mts` (13 cases, real ffmpeg, skips itself without it) — both under `bun run test:electron`.
 
-**The decision is pure so that it can be tested, and it is tested because the
-measurements behind it are expensive to reproduce.** Every row of the matrix came
-from a real 25 GB file behind a provider link that has since expired.
-`media/decisionEngine.test.mts` (35 cases) pins the decisions;
-`media/pipeline.test.mts` (13 cases) runs real ffmpeg over synthesised fixtures and
-asserts what comes *out* is 8-bit H.264 + stereo AAC. Both run under
-`bun run test:electron`, and the pipeline suite skips itself when ffmpeg is absent.
+**Ordering is the bug fix.** Playback used to attach on mount while a probe ran beside it; Chromium's parser failed within ~150ms, `error` fired with the probe in flight, fallback ran `-c:v copy` on unknown video — re-wrapping undecodable HEVC and failing identically again. `media:prepare` is now the only source of a URL. **Assigning `video.src` from anything but a prepared response reintroduces this.**
 
-**The ordering is the whole bug fix.** Playback used to be attached on mount while
-a probe ran beside it. Chromium's parser failed on an unsupported bitstream within
-~150 ms, its `error` handler fired with the probe still in flight, and the fallback
-therefore ran `-c:v copy` on video it knew nothing about — re-wrapping an
-undecodable HEVC bitstream into MP4 and failing a second time in exactly the same
-way, which is why the bug looked like it had no fix. `media:prepare` now returns
-the URL to attach and there is no other way to obtain one. **If you add a code path
-that assigns `video.src` from anything but a prepared response, you have
-reintroduced it.**
-
-Four invariants, from PRD-37 §4.2, and where each lives:
+Four invariants (PRD-37 §4.2):
 
 | ID | Rule | Enforced in |
 |---|---|---|
-| INV-RACE-1 | Nothing is attached before inspection completes | `VideoPlayer` — no `?? streamUrl` fallback exists |
-| INV-RACE-2 | The gate is visible ("Inspecting media…") | `VideoPlayer`, `isInspecting` |
-| INV-RACE-3 | `-c:v copy` never runs on unverified codec info | `blindFallbackPlan` re-encodes |
-| INV-RACE-4 | Renderer capabilities registered before playback | `App.tsx` on mount → `media:setCapabilities` |
+| INV-RACE-1 | Nothing attached before inspection completes | `VideoPlayer` — no `?? streamUrl` fallback |
+| INV-RACE-2 | Gate is visible ("Inspecting media…") | `VideoPlayer`, `isInspecting` |
+| INV-RACE-3 | `-c:v copy` never on unverified codec info | `blindFallbackPlan` re-encodes |
+| INV-RACE-4 | Renderer capabilities registered before playback | `App.tsx` mount → `media:setCapabilities` |
 
-**Nothing is decided from the URL.** The implementation this replaced searched the
-link for `hevc`, `x265` and `10bit`, which is a guess about a filename some scraper
-produced — wrong in both directions: releases mislabelled by whoever named them,
-and bare `?id=…` Drive links carrying 10-bit HEVC with nothing to match on. The
-same rule covers transports: an `.m3u8` served from a `.php` URL and an `.mpd`
-served as `application/octet-stream` are both routine, so the first 64 KB of the
-body classifies it (`#EXTM3U` / `<MPD`).
+**Nothing is decided from the URL.** (Old impl searched filenames for `hevc`/`x265`/`10bit` — wrong both ways.) Transport likewise classified from first 64KB of body (`#EXTM3U`/`<MPD`), not URL/content-type.
 
-Three things about the plan are load-bearing:
+Load-bearing plan details:
+- **Software 4K guard is arithmetic, not heuristic.** Measured: 3840x2160 10-bit HEVC, libx264 `veryfast` native res = 11–13 FPS (0.47x realtime, Chromium drains buffer in ~3s then stalls forever); same encode at `scale=-2:1080` = 26–28 FPS (plays). So software-only hosts downscale >1080p; GPU-encoder or 16-thread hosts keep full res.
+- **A track switch re-derives the plan, never re-indexes it.** Pointing a copy-audio plan at a 6-channel AC-3 track → ffmpeg fails outright (`Cannot write moov atom before AC3 packets` — fragmented output writes header before first packet exists). `planForAudioTrack` is the only correct way to change tracks.
+- **Unplayable default audio is swapped only for one in the same language** (Movies4u ships 3× E-AC-3 5.1 beside AAC stereo of the same film — swap the AAC, never swap languages for cost).
+- `-allowed_extensions ALL` for HLS/DASH (Hdmovie2 serves MPEG-TS from `.png` URLs).
+- DASH remuxed by ffmpeg (Chromium chokes on raw `.mpd` XML), collapsing the adaptive ladder to one rendition; Widevine/ClearKey DASH is detected/reported, not played.
+- **Decodability is measured in the renderer** (`App.tsx` runs `canPlayType` over `VIDEO_CODEC_PROBES`), overriding the static `UNSUPPORTED_VIDEO` table **in both directions**.
+- **The hardware encoder is chosen by test-encoding**, never `ffmpeg -encoders` (that lists what the binary was built with, not what runs — measured: bundled build advertises nvenc/qsv/amf everywhere, only QSV opens without an NVIDIA GPU). Each candidate encodes one real frame with the exact args it'll be used with (also catches AMF's missing `-preset`).
 
-- **The software 4K guard is the fix for the "plays for 3–5 seconds then freezes"
-  report, and it is arithmetic rather than a heuristic.** Measured on a 3840x2160
-  10-bit HEVC source: libx264 `veryfast` at native resolution encodes 11–13 FPS —
-  0.47x realtime — so Chromium drains the buffer it was handed in about three
-  seconds and buffers forever. The same encode at `scale=-2:1080` runs 26–28 FPS,
-  above realtime, and plays. So a software-only host downscales anything over
-  1080p; a host with a working GPU encoder keeps full resolution, and so does a
-  16-thread machine, which clears realtime at 4K without help.
-- **A track switch re-derives the plan, it does not re-index it.** Caught by
-  `pipeline.test.mts` rather than reasoned about: pointing a copy-the-audio plan at
-  a 6-channel AC-3 track makes ffmpeg refuse outright with `Cannot write moov atom
-  before AC3 packets`, because AC-3 in MP4 takes its extradata from the first
-  packet and a fragmented output writes its header before one exists. The
-  user-visible form is the worst kind — the viewer picks the Hindi dub and playback
-  stops, blamed on the source. `planForAudioTrack` is the only correct way to
-  change tracks.
-- **An unplayable default audio track is swapped only for one in the same
-  language.** PRD-38 measured Movies4u shipping three E-AC-3 5.1 tracks beside an
-  AAC stereo of the same film, and copying the AAC is free where transcoding the
-  E-AC-3 is not. Silently swapping an English default for a Hindi AAC track because
-  it was cheaper would be a far worse bug than a few percent of one CPU core.
+Bite-prone rules: stereo downmix is deliberate (5.1→5.1 AAC decodes but routes to wrong outputs on most desktop setups); `-user_agent` is HTTP-demuxer-only (fatal on local paths, applied only to http(s) inputs); seeking restarts ffmpeg at target time (fragmented MP4 has no index, accuracy bounded by keyframe interval); probe enables multi-audio selection (no ffprobe = app can't even list a Japanese AC-3 dub); embedded text subtitles extracted on demand, bounded 3 min, cached (reads whole file — packets interleaved); bitmap subtitle tracks (PGS/DVB/VOBSUB) listed but never offered.
 
-Two more, further from the hot path:
+**DRM classified and (2026-08-21) acted on.** HLS AES-128/SAMPLE-AES are NOT DRM here (hls.js handles them in JS). ClearKey/Widevine/PlayReady/unrecognised → `requiresEmeDecryption`, FFmpeg bypassed entirely (probing encrypted content succeeds with correct codec names over garbage — see next section). ClearKey now decrypted (`src/utils/clearKeySession.ts` EME, or FFmpeg `-decryption_keys`). Widevine/PlayReady/DASH-under-DRM: named, not built.
 
-- **`-allowed_extensions ALL`** is passed for HLS and DASH. `Hdmovie2` serves its
-  MPEG-TS segments from `.png` URLs to get past CDN filters, and ffmpeg's HLS
-  demuxer refuses unknown extensions by default. There is no way to enumerate what
-  a provider will pick next, so the extension allow-list is opened while the
-  protocol whitelist stays closed — that is the boundary that actually matters.
-- **DASH is remuxed by ffmpeg rather than played by dash.js.** Handed an `.mpd`
-  directly, Chromium reports `Unable to parse XML declaration` — an XML document
-  arriving at a binary demuxer. ffmpeg's `dash` demuxer reads it properly and the
-  output joins the same fragmented-MP4 path as everything else, which avoids a
-  second player library. The cost is honest and worth knowing: it collapses the
-  adaptive ladder to one rendition. A Widevine or ClearKey DASH stream is
-  *detected* and reported, not played — see below.
-
-Two things about the surrounding path are load-bearing:
-
-- **What is decodable is measured in the renderer, not tabled in main.** Chromium's
-  HEVC support varies by build and platform, so `App.tsx` runs `canPlayType` over
-  `VIDEO_CODEC_PROBES` at startup and `setCapabilities` overrides the static
-  `UNSUPPORTED_VIDEO` set **in both directions** — a build that can decode HEVC is
-  not made to re-encode it for nothing.
-- **The hardware encoder is chosen by test-encoding, never by `ffmpeg -encoders`.**
-  That listing reports what the binary was *built* with, not what the machine can
-  run: the bundled build advertises `h264_nvenc`, `h264_qsv` and `h264_amf`
-  everywhere, and on the development machine only QSV opens — NVENC fails with
-  "Could not open encoder" for want of an NVIDIA GPU. Each candidate now encodes
-  one frame to null **with the exact arguments it would be used with**, which also
-  catches encoders that reject an option (AMF has no `-preset`). Getting this
-  wrong means picking an encoder that dies the moment a viewer presses play.
-
-Things that will bite if you change it:
-
-- **Stereo downmix is deliberate.** 5.1 AC-3 re-encoded as 5.1 AAC decodes but
-  routes to the wrong outputs on most desktop setups, which sounds like missing
-  dialogue — a different bug that looks like the same one.
-- **`-user_agent` is an HTTP demuxer option.** Passing it for a local path makes
-  ffmpeg fail outright with "Option user_agent not found". It is applied only to
-  `http(s)` inputs; omitting it for network input gets providers 403ing instead.
-- **Seeking restarts ffmpeg** at the target time, because a live fragmented MP4
-  has no index and `currentTime` does nothing. Accuracy is bounded by the
-  source's keyframe interval, since `-c:v copy` can only cut at a keyframe.
-- **The probe is also what makes multi-audio selection work.** A `<video>`
-  element does not expose tracks it cannot decode, so without ffprobe the app
-  cannot even tell the user a Japanese AC-3 dub exists.
-- **Embedded text subtitles are extracted on demand, and that is deliberate.**
-  `<track>` rejects SubRip and ASS silently, so a release carrying its own
-  forced-narrative track had none in the app — and the online search cannot help
-  an extension-sourced film with no IMDb id. Extraction reads the *whole* file,
-  because subtitle packets are interleaved through it, so a 25 GB remote MKV
-  cannot be subtitled quickly. It runs when the viewer picks the track, is bounded
-  at three minutes, and is cached. Bitmap tracks (PGS, DVB, VOBSUB) are listed as
-  present and never offered: an empty WebVTT named "English" reads as broken
-  subtitles rather than absent ones.
-
-**DRM is classified, and since 2026-08-21 the classification is also acted on.**
-HLS AES-128 and SAMPLE-AES are *not* DRM as far as this engine is concerned —
-hls.js fetches the key over HTTP and decrypts in JavaScript, and routing those to
-an EME path they do not need would break streams that work today. ClearKey,
-Widevine, PlayReady and any system this build cannot name are marked
-`requiresEmeDecryption` and FFmpeg is bypassed: it holds no keys, so probing one
-spends its timeout on encrypted noise. **ClearKey is now decrypted rather than
-merely named** — from the provider's own `kid`/`key`, either in the renderer
-through EME or by FFmpeg's `-decryption_keys`. **What is still not built:**
-Widevine/PlayReady CDMs and dash.js, so DASH under any DRM is detected and
-reported by name instead of failing as a corrupt file. See "DRM: classified
-before, decrypted now" in §5 for the three cases and the two encoding hazards.
-
-Two behaviours in `torrentEngine.ts` are load-bearing and easy to break:
-**file selection inside season packs** (deselect all, select one, or swarm bandwidth is
-split across ten episodes and nothing becomes playable) and **leading-bytes readiness**
-(playability is measured as contiguous leading pieces — the container header lives at the
-start of the file — not as overall percent complete).
+Torrent load-bearing behaviours: **file selection inside season packs** (deselect all, select one, or bandwidth splits across episodes and nothing plays) and **leading-bytes readiness** (measured as contiguous leading pieces, not overall %).
 
 ### Torrent startup: the client was cold, and it was never the swarm (2026-08-28)
 
-Reported as: the same torrent that a hosted service (seedr) has playing in about a
-second takes tens of seconds here — metadata, peers and first bytes all slow.
-
-The comparison is worth taking seriously rather than dismissing, because the peers are
-the same on both ends. What differs is **how long each client has been running**, and
-almost the whole gap decomposes into things a desktop app was paying on every launch and
-a service pays once, ever:
+Comparison to a hosted service (seedr, ~1s vs tens of seconds here) with identical peers.
+Gap = one-time costs a service pays once and a desktop app paid every launch:
 
 | Cost | Cold client | Warm service |
 |---|---|---|
-| TCP/uTP bind, DHT UDP bind, loopback HTTP bind | on the first Play | done weeks ago |
-| DHT bootstrap: DNS + round trip to `k-rpc`'s **three** hardcoded hosts | every launch | never |
-| Converging on an infohash from 3 contacts | several `find_node` rounds | ~1, from a dense table |
-| Being *reachable*: node id and DHT port both ephemeral | nobody can route to us | stable, so peers arrive |
-| The info dictionary (BEP-9, 16 KB chunks from a peer that must be found first) | 5–30s | already held |
+| TCP/uTP/DHT/loopback binds | on first Play | done weeks ago |
+| DHT bootstrap (DNS + round trip to `k-rpc`'s 3 hardcoded hosts) | every launch | never |
+| Converging on an infohash from 3 contacts | several `find_node` rounds | ~1, dense table |
+| Reachability (ephemeral node id/port) | nobody can route to us | stable |
+| Info dictionary (BEP-9, 16KB chunks) | 5–30s | already held |
 
-Five changes, and the first is the largest:
+Fixes:
+1. **`TorrentEngine.warmUp()`, 8s after window opens** (`TORRENT_WARMUP_DELAY_MS`), like `warmProviders()`. Never awaited/fatal.
+2. **DHT routing table/node id/port persist** (`dhtNodeCache.ts`, `userData/torrent-state/`). Contacts expire weekly; node id doesn't. `dhtPort` pinned to **6882** (WebTorrent's default 0 quietly cancelled the persisted id).
+   - **Saved contacts go through `DHT.addNode()`, never `bootstrap`.** `k-rpc` compares candidate-set length against `bootstrap.length` on every lookup round:
+     ```js
+     var closest = table.closest(target, self.k)
+     if (!closest.length || closest.length < self.bootstrap.length) {
+       closest = self.nodes.closest(target, self.k)
+       if (!closest.length || closest.length < self.bootstrap.length) bootstrap()
+     }
+     ```
+     200 saved contacts in `bootstrap` makes that permanently true — the per-lookup `table` (the convergence mechanism) is discarded every round, and `bootstrap()` fires the whole list in one burst bypassing the concurrency gate. `addNode` with no id pings through the queued path instead. Test pins `DHT_BOOTSTRAP_NODES.length < 20`.
+3. **`.torrent` metadata cached on disk by infohash** (`torrentMetadata.ts`), self-verifying (info dict sliced + SHA-1'd; mismatch deleted).
+4. **Magnet `xs` mirror links** — WebTorrent already races them against the swarm and discards mismatched infohashes; this module just builds the URLs. Setting: `torrent_http_metadata_cache`, a **getter** (not read-once), consulted per magnet.
+5. **`ut_pex` stated explicitly** — helps when the tracker is slow/dead.
+6. **Magnet `tr=` trackers merged into `announce`** (`trackersFromMagnet`/`mergeTrackers` in `indexers/base.ts`, beside `buildMagnet`) — a cached `.torrent` buffer used to discard the magnet's trackers entirely.
 
-1. **`TorrentEngine.warmUp()`, called 8s after the window opens** (`main.ts`,
-   `TORRENT_WARMUP_DELAY_MS`), exactly like `warmProviders()`. The client used to be
-   constructed lazily inside the first `startStream`, so every bind and the entire DHT
-   bootstrap sat on the critical path of a spinner. Never awaited and never fatal —
-   `startStream` still calls `ensureStarted` itself.
-2. **The DHT routing table, node id and port persist** (`dhtNodeCache.ts`, written to
-   `userData/torrent-state/`). Contacts expire after a week — a DHT contact is a
-   residential IP with a DHCP lease — but **the node id does not**, because a changing
-   identity is one no other node's routing table can hold. `dhtPort` is pinned to 6882:
-   WebTorrent defaults it to 0, which quietly cancelled the persisted id by moving the
-   port it named.
+Timing trade-offs: `METADATA_TIMEOUT_MS` 45s→25s + 12s dead-swarm bail (measures **known** peers `_peers`, not connected — reachability is `swarmHealth.ts`'s job); `PLAYABLE_THRESHOLD_BYTES` 8MB→4MB (can't go much lower — demuxer runs out, reads as a stall); tail window is **container-aware** (`tailPriorityBytes`) — MP4/MOV/AVI need trailing `moov`/`idx1`, Matroska doesn't (header at front), MPEG-TS has no trailing index at all (MKV is the modal container in this corpus).
 
-   **Saved contacts go in through `DHT.addNode()`, and must never go in `bootstrap`.**
-   The first revision of this put them at the head of the bootstrap list, which reads as
-   the obvious thing and is a net regression — this section previously described it as
-   the design. `k-rpc` treats `bootstrap` as a handful of well-known entry points and
-   compares its **length** against a candidate set capped at `k` (20), on every round of
-   every iterative lookup:
+`torrentMetadata.test.mts` (28 cases) — bencode reader is hand-written because the hash must cover the **exact original byte range** (a parse-re-encode round trip normalises key order and loses it).
 
-   ```js
-   var closest = table.closest(target, self.k)          // <= 20
-   if (!closest.length || closest.length < self.bootstrap.length) {
-     closest = self.nodes.closest(target, self.k)
-     if (!closest.length || closest.length < self.bootstrap.length) bootstrap()
-   }
-   ```
-
-   With 200 saved contacts in there that condition is permanently true, and two things
-   follow. The per-lookup `table` is discarded every round — and that is the *only* place
-   nodes learned from a `find_node` reply's compact node list are recorded, since
-   `self.nodes` is fed solely by peers that answered us directly, so the mechanism by
-   which the lookup converges is gone. And `bootstrap()` fires the whole list at the
-   socket in one burst through `socket.query`, bypassing the concurrency gate every other
-   query goes through. `addNode` with no id pings through the *queued* path and files each
-   responder under its real node id, which is what a warm routing table actually is. A
-   test pins `DHT_BOOTSTRAP_NODES.length < 20`.
-3. **`.torrent` metadata is cached on disk by infohash** (`torrentMetadata.ts`). Handed
-   a `.torrent`, `add()` has the file list, the piece length and every piece hash
-   *synchronously* — the swarm is then only needed for the bytes. Content-addressed, so
-   there is no invalidation problem, and **the read verifies its own contents**: the info
-   dictionary is sliced out and SHA-1'd, and a file that does not hash to its own name is
-   deleted rather than trusted.
-4. **A magnet carries `xs` links to public `.torrent` mirrors.** WebTorrent already
-   implements this — it fetches every `xs` in parallel with the swarm and **discards any
-   response whose infohash is not the one being resolved** (`_getMetadataFromServer`) — so
-   this module builds the URLs and adds nothing else. Writing a second race beside that
-   one would add a verification path to keep correct for no new capability. The privacy
-   arithmetic is in the module header: pressing Play already announces that infohash to a
-   dozen public trackers and across the DHT, which is more informative than one HTTPS GET;
-   it is a setting (`torrent_http_metadata_cache`) anyway.
-
-   **That last clause was not true when it was written** — the key had no writer and no UI
-   anywhere in the app, so the mirrors were on and unreachable. It is now a toggle in
-   Settings → Connection, and `TorrentEngine` takes it as a **getter** rather than a value:
-   read once at construction it would only apply after a restart, which for a privacy
-   control is close to not having one. It is consulted per magnet.
-5. **`ut_pex` is stated rather than left to the default.** On a swarm whose tracker is
-   slow or dead, PEX is frequently how the peer list actually grows.
-6. **A magnet's own `tr=` trackers are merged into `announce`, and this is a cache-hit
-   fix.** Handing `add()` a cached `.torrent` buffer discards the magnet entirely, so any
-   tracker the source named vanished on exactly the second open the cache exists to make
-   faster — a swarm that gets quieter the second time reads as the release dying.
-   `trackersFromMagnet` / `mergeTrackers` live in `indexers/base.ts` beside `buildMagnet`,
-   which they are the inverse of, and are tested there.
-
-Three timing changes fall out, and each is a trade rather than a fact:
-
-- **`METADATA_TIMEOUT_MS` 45s → 25s, with a 12s dead-swarm bail.** 45s is far longer than
-  a live swarm ever takes and it was paid *per candidate* — three dead sources in a ranked
-  list cost over two minutes before the fourth was tried. The bail measures **known** peers
-  (`_peers`), not connected ones: a peer we have heard of and cannot reach is a
-  reachability symptom with its own diagnosis in `swarmHealth.ts`, and reporting it as an
-  empty swarm sends the reader to find another source when the source was fine.
-- **`PLAYABLE_THRESHOLD_BYTES` 8 MB → 4 MB.** 8 MB is ~12s of a 5 Mbps encode, so a healthy
-  swarm was made to prove itself twice over. It cannot go much lower: below a couple of
-  megabytes the demuxer opens the container and immediately runs out, which reads as a
-  stall and sends the retry ladder after a source that was working.
-- **The tail window is container-aware** (`tailPriorityBytes`). It used to be one number
-  for everything, and it was the MP4 number. MP4/MOV/AVI genuinely cannot be opened without
-  their trailing `moov`/`idx1`; Matroska has its header and tracks at the front and only
-  loses seek accuracy, and MPEG-TS has no trailing index at all. So 4 MB of the opening
-  burst was being spent on data most streams do not block on — and MKV is the modal
-  container in this corpus.
-
-`torrentMetadata.test.mts` (28 cases, `bun run test:torrent-metadata`) pins the bencode
-reader and both caches. It is verified by mutation: moving the info dictionary's end by one
-byte fails 6 of them. The bencode reader is hand-written rather than a dependency because
-the hash must cover the **exact original byte range** — any parse-then-re-encode round trip
-through a general library normalises key order and loses it.
-
-**What this does not fix, and must not be claimed to.** Inbound reachability behind CGNAT,
-where no port forwarding helps; a genuinely dead swarm; and a host-side 403 or expired
-link. `swarmHealth.ts` still owns that diagnosis and its reasoning is unchanged.
+**Does not fix:** CGNAT reachability, genuinely dead swarms, host-side 403/expired links (still `swarmHealth.ts`'s job).
 
 ---
 
-## 5. The `.cs3` extension story (the part that surprises people)
+## 5. The `.cs3` extension story
 
-`.cs3` files are ZIP archives of **Android DEX bytecode** compiled against upstream's
-Kotlin provider API. Node and V8 cannot run them, at any configuration. That is not a
-barrier to *desktop* though, only to *JavaScript runtimes* — so:
+`.cs3` = ZIP of Android DEX bytecode compiled against upstream's Kotlin provider API. Not runnable by Node/V8 at any configuration, but not a barrier to desktop (only to JS runtimes):
+1. `sidecar/` is a **separate JVM OS process** (not thread/worker) — a hanging/crashing plugin degrades to "unavailable", never takes the app down.
+2. `DexTranslator`: DEX→JVM via **dex2jar 2.4.38**, once at install, cached by SHA-256. Original `.cs3` never modified.
+3. `LinkageAnalyzer` resolves every referenced type, assigns tier `T1`…`T4_BLOCKED`.
+4. `PluginHost` reproduces Android's load sequence: read `manifest.json` through the class loader, `loadClass`, construct reflectively, `load(context)`, observe self-registration.
+5. `sidecar/src/main/java/android/**` hand-written stubs of the 5 classes (`Log`, `Base64`, `Context`, `SharedPreferences`, +1) covering ~93% of the 32.4% of providers that import `android.*` at all (67.6% import none).
 
-1. `sidecar/` is a **separate JVM OS process** (not a thread, not a worker). A plugin that
-   hangs, exhausts memory, or calls `System.exit` must degrade to "provider unavailable",
-   not take the app down. Process boundaries give that unconditionally.
-2. `DexTranslator` converts DEX → JVM bytecode via **dex2jar 2.4.38**, once at install
-   time, cached by archive SHA-256. The original `.cs3` is never modified.
-3. `LinkageAnalyzer` resolves every referenced type against the runtime classpath and
-   assigns a compatibility tier (`T1`…`T4_BLOCKED`).
-4. `PluginHost` reproduces Android's load sequence exactly: read `manifest.json` *through
-   the class loader*, `loadClass` the entry, construct reflectively, call `load(context)`,
-   observe self-registration.
-5. `sidecar/src/main/java/android/**` are **hand-written stubs** of the Android APIs
-   plugins actually use — `Log`, `Base64`, `Context`, `SharedPreferences`. A survey of the
-   corpus found 67.6% of providers import no `android.*` at all, and those five classes
-   cover ~93% of the rest.
+### Upstream now publishes a jar, largely unread (2026-08-27 → wired 2026-08-28)
 
-### Upstream now publishes a jar, and nothing here reads it (2026-08-27)
+Upstream's Gradle plugin's `isCrossPlatform` flag emits a plain JVM `.jar` beside the `.cs3`;
+`ensureJarCompatibility` runs `jdeps --print-module-deps` and fails the build on any `android.`
+reference; `plugins.json` carries `jarUrl`/`jarHash`/`jarFileSize`. This artifact needs no
+translation — `DexTranslator`, `KotlinNameRepair`, the translation cache and its concurrency
+fixes all become dead code on this path. **Does NOT retire**: `jdeps` flags `android.*` only —
+a cross-platform jar still links `library-jvm` and can reach `:app` types the bridge supplies;
+`LinkageAnalyzer`/tiers still apply. Removes the *bytecode* problem, not the *classpath* one.
 
-Found by reading `recloudstream/gradle` `master` rather than by chasing a symptom. The Gradle
-plugin gained `isCrossPlatform`: set it, and `make` emits a plain JVM **`.jar`** beside the
-`.cs3`, `ensureJarCompatibility` runs **`jdeps --print-module-deps`** over it and *fails the
-build* if the output contains `android.`, and `writeCacheEntry` puts `jarUrl`, `jarHash` and
-`jarFileSize` into the plugin entry. **The published `plugins.json` already carries those three
-fields and `pluginManager` ignores all of them.**
+**M0 (PRD-41), built 2026-08-28.** Live-index count (larger than PRD assumed): official `recloudstream/extensions` 5/5 jars; `phisher98` 79 ext/**47** jars; `Kraptor123/cs-kraptor` 67/0. All jars matched declared `jarHash`/`jarFileSize`.
 
-That artifact needs no translation. For an archive that opts in, `DexTranslator`,
-`KotlinNameRepair`, the hash-keyed translation cache, the concurrent-translation nonce and the
-generation-keyed cache drop all become dead code on the load path — every one of which has been
-a real defect in this repository at least once. Note the corpus survey above: **67.6% of
-providers import no `android.*` at all**, so most of the corpus is already eligible and simply
-has not been asked.
+`PluginManager.chooseArtifact` prefers the jar, verified against **`jarHash`** (never `fileHash` — that's the `.cs3`'s digest and would always mismatch; a mismatch there must never be taken as permission to skip verification). `extensionUpdater` copies the three fields through on re-resolve. **Archive keeps its `.cs3` name** — `PluginArchive.detect` classifies by **contents** (`.dex` member vs `.class` members), never filename (filenames drift/get renamed).
 
-What it does **not** retire, and claiming otherwise would be overclaiming: `jdeps` flags
-`android.*` only. A cross-platform jar still links against `library-jvm` and can still reach the
-`:app` types the bridge supplies (`Plugin`, `DataStore`, `CloudflareKiller`, `syncproviders`).
-`LinkageAnalyzer` still runs and tiers still apply. This removes the *bytecode* problem, not the
-*classpath* one.
+**No `manifest.json` on the jar lane.** Entry class recovered by scanning for the `@CloudstreamPlugin` **ASM annotation** (verified on `recloudstream/DailymotionPlugin.class`: `Lcom/lagradost/cloudstream3/plugins/CloudstreamPlugin;`, extends `BasePlugin`) — stronger than a `*Plugin.class` naming convention. Rules: two annotated classes are both **reported, never arbitrated** (picking-first would make provider choice depend on archive zip ordering); an unparseable class file is **skipped, not fatal**. `PluginHost.prepare` is the only branch point for jar-vs-dex — a second copy of the load sequence would drift.
 
-There is currently no host anywhere that consumes that jar, which makes setting the flag worth
-nothing to an author today. Doc 41 §6.3 argues we should be that host and that this is the
-cheapest lever we have on the upstream ecosystem's portability.
+`PluginCompatibilityAnalyzer` had a real defect here: a jar reached the "no `classes.dex`" branch → `Unsupported`, score **0**, exact opposite of truth. Now reports `format: 'CSJ'`, 95%, `TierA_SourceJVM`.
 
-### …and now it does: the cross-platform jar lane (2026-08-28)
+Jar lane = **generation 9** (current value **12**, see `runtimeProvisioner.ts` — one paragraph per generation).
 
-PRD-41 **M0**, built. The section above was written from upstream's Gradle source; the first
-thing this pass did was count what the *live* indexes actually publish, and the answer is
-larger than the PRD assumed:
+`tools/e2e/provider-e2e.mjs --lane cs3` forces the DEX artifact for A/B comparison — M0's no-regression gate. **Measured** (`--repo phisher --plugins 6 --queries "dune,one piece"`): 3 archives loaded jar-lane with **zero `DexTranslator` invocations**, same tier/results as DEX lane; 6 loaded, 6 answering, 5 links resolved, 3 streams with bytes — PASS identically both ways. **Translation risk measured** (not assumed) against all 392 real plugins: 392 translated, 18,217 classes emitted, 0 verification failures, 6,617 Kotlin coroutine state machines, 0 failures (`docs/PRD/35`, `tools/dex-spike/`).
 
-| Repository | Extensions | Publishing `jarUrl` |
-|---|---|---|
-| `recloudstream/extensions` (official) | 5 | **5** |
-| `phisher98/cloudstream-extensions-phisher` | 79 | **47** |
-| `Kraptor123/cs-kraptor` | 67 | 0 |
-
-Every jar checked matched its declared `jarHash` and `jarFileSize` exactly. So this is not a
-lane anyone is being asked to adopt — **it is one a large part of the corpus already publishes
-into, with nothing reading it.**
-
-`PluginManager.chooseArtifact` now prefers the jar wherever one exists, verifying it against
-`jarHash` (**not** `fileHash` — that is the `.cs3`'s digest and would fail every
-cross-platform install; taking the mismatch as permission to skip verification would be worse
-than not checking at all). `extensionUpdater` copies the three fields through when it
-re-resolves against the live repository, or an update would quietly move a translation-free
-extension back onto the DEX lane with nothing saying so.
-
-**The archive keeps its `.cs3` path and file name, and that is deliberate.**
-`PluginArchive.detect` classifies by **contents**, never by extension: a `.dex` member means
-the DEX lane, `.class` members mean the jar lane. The file name is chosen by whoever
-downloaded it and is exactly the sort of thing that drifts — a repository renaming artifacts,
-a path written by an older build. Keying on it would also have meant touching
-`installPathFor`, `backupPathFor`, `archivePathFor`, the updater's existence checks and the
-missing-archive report, each a place to forget.
-
-**The one real difference at load time is that a published jar has no `manifest.json`.**
-Measured: a `.cs3` contains exactly two members, `manifest.json` and `classes.dex`; the jar
-beside it contains the module's compiled output and nothing else. Android's load sequence
-reads that file *through the class loader* to learn `pluginClassName` (step 5), and on this
-lane there is no file to read. The entry class is recovered the way upstream's own build finds
-it in the first place — by scanning for the **`@CloudstreamPlugin` annotation** with ASM.
-Verified on `recloudstream/DailymotionPlugin.class`, which carries
-`Lcom/lagradost/cloudstream3/plugins/CloudstreamPlugin;` and extends `BasePlugin`. That is a
-stronger signal than `*Plugin.class`, which is a convention authors are free to ignore.
-
-Two rules in `PluginArchive` are load-bearing:
-
-- **Two annotated classes are reported, never arbitrated.** Picking whichever the zip listed
-  first would make which provider loads a property of archive ordering — reproducible on the
-  machine it was built on and nowhere else.
-- **A class file ASM cannot parse is skipped, not fatal.** It is one member of an archive that
-  may hold fifty, and losing the extension over a class the plugin never touches is the wrong
-  trade.
-
-`PluginHost.prepare` is where the branch lives, and it is the *only* place it lives: `install`
-and `load` both need a jar of bytecode, an entry class, somewhere to read resources from, and a
-failure to report, and a second copy of the load sequence for the jar lane is how the two would
-silently drift apart. On the DEX lane the classpath is still two entries (translated jar +
-original archive, so `manifest.json` resolves as it does on Android); on the jar lane it is one,
-because there is nothing else in it to resolve.
-
-**`PluginCompatibilityAnalyzer` had to learn the lane too, and this was a real defect.** A jar
-reached the existing "no `classes.dex`" branch, which reports `Unsupported` with a score of
-**0** — the exact opposite of the truth for the one lane that skips translation entirely, shown
-on the install screen. It now reports `format: 'CSJ'`, 95%, `TierA_SourceJVM`, and says why:
-upstream's build ran `jdeps` over this jar and refused to publish it if a single `android.` type
-appeared.
-
-The jar lane is what **generation 9** was for (the current value is **12** — see
-`runtimeProvisioner.ts`, which carries one paragraph per generation). An already-provisioned
-sidecar has none of this: handed a jar it
-would call dex2jar, be told there is no `classes.dex`, and report a translation failure for an
-archive that never needed translating — while the upgraded host had already started preferring
-jars.
-
-`tools/e2e/provider-e2e.mjs` makes the same choice the app makes, and **`--lane cs3` forces the
-DEX artifact** so the same corpus can be run both ways and compared — which is the
-no-regression half of M0's gate. `PluginArchiveTest` (10 cases) pins detection and the
-annotation scan; the sidecar suite is 47.
-
-**Measured, `--repo phisher --plugins 6 --queries "dune,one piece"`, both lanes:**
-
-```
-                       auto (jar preferred)        --lane cs3
-AllMovieLandProvider   jar  T1_DROPIN              cs3  T1_DROPIN
-AllWish                jar  T1_DROPIN              cs3  T1_DROPIN
-Anikage                jar  T1_DROPIN              cs3  T1_DROPIN
-Anichi                 cs3  T3_DEGRADED            cs3  T3_DEGRADED   (publishes no jar)
-AniDb                  cs3  T3_DEGRADED            cs3  T3_DEGRADED   (publishes no jar)
-AniKoto                cs3  T1_DROPIN              cs3  T1_DROPIN     (publishes no jar)
-
-providers loaded 6 · answering 6 · links resolved 5 · streams with bytes 3 — PASS, identically
-```
-
-Three archives loaded through the jar lane with **zero `DexTranslator` invocations**, every
-one at `T1_DROPIN`, registering the same providers and answering the same queries as the DEX
-artifact beside it. That is M0's gate in both directions.
-
-**What this does not retire, repeated because it is the easy thing to overclaim:** `jdeps`
-flags `android.*` and nothing else. A cross-platform jar still links `library-jvm` and can still
-reach the `:app` types the bridge supplies. `LinkageAnalyzer` still runs, tiers still apply, and
-a jar can still be `T3_DEGRADED`. This removes the **bytecode** problem, not the **classpath**
-one.
-
-**Translation risk was measured, not assumed.** Against all 392 real community plugins:
-392 translated, 18,217 classes emitted, 0 verification failures, 6,617 Kotlin coroutine
-state machines, 0 failures — see `docs/PRD/35`, reproducible via `tools/dex-spike/`.
+**The jar lane collapsed four days later (2026-09-07).** Re-measured across all 36 catalogued repos: 958 extensions, **18 publishing jarUrl (1.9%)**, down from 12.0% on 2026-09-03. `phisher` 47→**0/81**; `xr3ed` 46→1/191 (verified: `plugins.json` entries no longer carry the fields at all). **Do not plan work assuming the corpus moves onto this lane.** Uncatalogued `.cs3` tail (122 repos not in the official list, 21/32 probed live, 1,158 extensions) is also **not worth taking**: only 19 publish a jar (1.6%), 3 of 4 largest are majority-NSFW. Trap: a declared `tvType` is a manifest default, not coverage (`Wiojelt/TurkSinema` declares every type on every extension).
 
 ### Provider execution: working as of 2026-08-13
 
-PRD-36 steps 1–4 are **done**, and this section previously said they were not. Providers
-now search, load and resolve playable links. Verified end-to-end against the real
-`InternetArchiveProvider` from `recloudstream/extensions`: tier `T1_DROPIN`, 26 search
-results, detail load, and 4 live HTTP video URLs (confirmed `HTTP 200`, `video/mp4`,
-`Accept-Ranges: bytes`).
+PRD-36 steps 1–4 done. Verified E2E against real `InternetArchiveProvider`: tier `T1_DROPIN`, 26 results, detail load, 4 live HTTP video URLs (200, `video/mp4`, `Accept-Ranges: bytes`).
 
-How the pieces fit:
+- `sidecar/runtime-deps/pom.xml` resolves `com.github.recloudstream.cloudstream:library-jvm` (pinned **4.8.0**) + full transitive runtime → `sidecar/runtime/`, 56 jars. Don't restate versions by hand — transitive resolution reproduces exactly what providers compiled against. Needs Google's Maven repo (`androidx.annotation:annotation-jvm`).
+- `sidecar/bridge/` (Kotlin) → `cs3-provider-bridge.jar`, must live in `sidecar/runtime/` (loaded by the same loader that owns `library-jvm.jar`, or `BasePlugin` resolves as two different Class objects). Reached reflectively; primitives in, JSON strings out.
+- RPC methods: `providerSearch`, `providerLoad`, `providerLoadLinks`, `providers`. Results re-addressed `cs3ext://<provider>/<handle>`.
 
-- `sidecar/runtime-deps/pom.xml` resolves `com.github.recloudstream.cloudstream:library-jvm`
-  (pinned **4.8.0**) plus its whole transitive runtime into `sidecar/runtime/` — 56 jars.
-  Upstream's POM declares every third-party version (jsoup, NiceHttp, jackson, ksoup, ktor,
-  rhino, fuzzywuzzy, coroutines…), so **do not restate them by hand**; transitive resolution
-  reproduces exactly what providers were compiled against. Needs Google's Maven repo too:
-  `androidx.annotation:annotation-jvm` is published only there.
-- `sidecar/bridge/` is a **Kotlin** module producing `cs3-provider-bridge.jar`, which is
-  copied into `sidecar/runtime/`. It must live there, not on the sidecar's own classpath:
-  provider instances are created by the plugin loader whose ancestry runs through the shared
-  loader that owns `library-jvm.jar`, and only code loaded by that same loader resolves the
-  identical `MainAPI` class. The sidecar reaches it reflectively across a deliberately
-  trivial surface — primitives in, JSON strings out.
-- RPC methods added: `providerSearch`, `providerLoad`, `providerLoadLinks`, `providers`.
-- `PluginManager.searchAll/loadMedia/loadLinks` are real now. Provider results are
-  re-addressed as `cs3ext://<provider>/<handle>` because a provider's own URLs carry nothing
-  identifying which provider produced them.
+Two doc-36-contradicting findings: (1) `BasePlugin`, `CloudstreamPlugin`, `APIHolder`, `ExtractorApi` all ship inside `library-jvm` 4.8.0 — the hand-built `cs3-app-shim.jar` doc 36 budgeted a week for wasn't needed. (2) `search(query, page)` is primary in 4.8.0, not `search(query)` (doc 36 says reverse) — bridge tries paginated first, falls back.
 
-Two findings that contradict PRD-36 and cost real debugging time:
+Also fixed: `DexTranslator`'s temp filename (SHA alone) collided on concurrent translation of the same archive (nonce added, atomic move kept); `PluginClassLoader` needed the **original `.cs3`** as a second classpath entry too (dex2jar only converts `classes.dex`, but `manifest.json` must resolve through the loader).
 
-1. **`BasePlugin`, `CloudstreamPlugin`, `APIHolder`, `ExtractorApi` all ship inside
-   `library-jvm` 4.8.0.** Doc 36 §3 treats them as `:app` types needing a hand-built
-   `cs3-app-shim.jar` (~1 week budgeted). Upstream moved them; that shim was not needed.
-2. **`search(query, page)` is the primary overload in 4.8.0, not `search(query)`.** Doc 36
-   §4 says the reverse. Calling only the single-argument form returns "unsupported" from the
-   base class for a modern provider. The bridge tries paginated first and falls back.
+**Never reintroduce a synthetic/placeholder source.** Empty result + a reason, always.
 
-Also fixed while getting there, both real bugs on the load path:
+Outstanding from doc 36: step 5 (jlink JRE), step 6 (OS sandbox). Step 7 (WebView) landed 2026-08-24 (§"The browser, finally").
 
-- `DexTranslator` derived its temp file name from the archive SHA alone, so two concurrent
-  translations of the *same* archive collided (`inspect` on install races `load`). The temp
-  name now carries a nonce; the final move stays atomic.
-- `PluginClassLoader` was given only the translated jar. dex2jar converts `classes.dex` and
-  nothing else, so `manifest.json` — which step 5 must read *through the loader* — was not
-  visible. The original `.cs3` is now a second classpath entry, which is what Android does.
+### Community extensions: shim rounds (chronological; count-before-fixing pattern throughout)
 
-**Never reintroduce a synthetic/placeholder source.** That rule is unchanged and still
-load-bearing. When nothing real is found, return an empty list *and a reason*.
+**Round 1 (2026-08-13), five defects found running `Bnyro/GermanProviders`:**
+1. `com.lagradost.cloudstream3.plugins.Plugin` is `:app`, not in `library-jvm` — every community `.cs3` (all extend `Plugin`, not `BasePlugin`) failed with `NoClassDefFoundError` before running. Supplied from `sidecar/bridge/` (must be loaded by the `library-jvm`-owning loader).
+2. **dex2jar corrupts Kotlin mangled names**: `kotlin.Result.constructor-impl` (hyphen) → rewritten to underscore, resolves against nothing (`Result` = `runCatching`'s compiled form — search/metadata worked, link resolution failed with Kotlin-internal errors). `KotlinNameRepair` fixes it. **If a provider works until you press play, check this first.** The repair was itself broken until 2026-08-13: `rewriteClass` tracked change via a *global* counter while `repairedName` memoised decisions per-class — the second class hitting a cached decision bumped no counter and had its correctly-rewritten bytes discarded. Failure depended on install count (shared repair instance across plugins in a session) — "works in a 3-plugin test, fails with 8 installed." Fixed: changed-ness tracked per class by the visitor, never re-derived from a skippable-cache counter.
+3. android.* shim built into `sidecar/target/`, never delivered to `sidecar/runtime/` (the plugin classpath).
+4. Dev classpath pointed at a directory that never existed (`sidecar/pom.xml`→`target/`, `runtime-deps`→`runtime/`, siblings) — every plugin `T4_BLOCKED`.
+5. `resolveJava` accepted any JVM — Java 17 → `UnsupportedClassVersionError` reported as "runtime crashed".
 
-Still outstanding from doc 36: step 5 (jlink a JRE) and step 6 (OS-level sandbox). Step 7,
-the WebView bridge, landed 2026-08-24 — see "The browser, finally" below.
+**Round 2 (2026-08-13),** `Kraptor123/cs-kraptor` 65/65 failing at `load` with `InvocationTargetException: null`:
+1. Reflection wrappers carry no message — `Main.describe` now walks to the first cause that says something; `errorKind` classification was already correct.
+2. **`SharedPreferences` was a class; Android's is an interface** — **112/392 plugins** reference it (highest-impact single fix). `invokeinterface` against a class → `IncompatibleClassChangeError` at first *use* (settings read), not load. Fixed: interface + `Editor`/listener nested interfaces, impl `JsonSharedPreferences`.
+3. `PluginData`, `PluginManager`, `RepositoryManager`, `RepositoryData` are `:app` types (same category as `Plugin`), supplied from `sidecar/bridge/`. Used by extensions to enumerate/delete host plugins/repos — **inventories return empty, mutations are no-ops, deliberately** (that state belongs to main process).
+4. `android.content.pm.PackageManager` missing; `Context.getPackageManager` returned `Object` (wrong descriptor — link failure, not just type-loss). Returns a manager, every op throws; `getPackagesForUid` returns `null` (Android's own answer). **Never forge `com.lagradost.cloudstream3`** — lying about the platform makes downstream bugs undiagnosable.
+5. `android.os.Process` missing — identity reads honest, `killProcess` refused (would kill the sidecar + every co-loaded extension).
 
-### Community extensions: five defects found by running them (2026-08-13)
+After all 5: AnimeciX loads at `T3_DEGRADED`; Filmpalast/EinschaltenIn/Serienstream load, register 3 `MainAPI` + 10 `ExtractorApi`, answer searches (8/33/21 results).
 
-`InternetArchiveProvider` worked because it is one of the few extensions that extends
-`BasePlugin`. Every *community* extension extends `Plugin`, and none of them ran. Found by
-installing `Bnyro/GermanProviders` and driving the whole pipeline; each of these blocked
-everything downstream of it, so they only surface one at a time.
-
-1. **`com.lagradost.cloudstream3.plugins.Plugin` is not published anywhere.** It lives in
-   the Android `:app` module; `library-jvm` has only `BasePlugin`. Every community `.cs3`
-   failed with `NoClassDefFoundError` before running a line. Now supplied by
-   `sidecar/bridge/` — it has to be that module, because the jar must be loaded by the
-   loader that owns `library-jvm.jar` or the `BasePlugin` it extends is a different Class
-   object than the plugin's own superclass resolves to. Note this is the *opposite* of
-   finding 1 above: some `:app` types did move into `library-jvm`, and `Plugin` did not.
-2. **dex2jar corrupts Kotlin's mangled method names.** Kotlin names inline-value-class
-   members with a hyphen (`kotlin.Result.constructor-impl`); dex2jar rewrites it to an
-   underscore, which resolves against nothing. `Result` is what `runCatching` compiles to,
-   so search and metadata worked and *link resolution* failed with a Kotlin-internal error.
-   `KotlinNameRepair` rewrites a reference only when the underscore form is absent from the
-   owner and the hyphen form exists with an identical descriptor. If a future symptom looks
-   like "provider works until you press play", check this first.
-
-   **The repair was itself broken until 2026-08-13, and it failed in a way designed to
-   fool you.** `rewriteClass` decided whether a class had changed by comparing a *global*
-   rewrite counter before and after, while `repairedName` memoises its decisions — so the
-   second class to reference `kotlin.Result.constructor_impl` took the cache path, bumped
-   no counter, and had its correctly-rewritten bytes discarded. Exactly one class per
-   distinct broken reference was ever repaired.
-
-   The reason this hid so well: the repair instance is shared across every plugin in a
-   session, so **the failure depends on how many extensions are installed**. A minimal
-   test with three plugins passed and streamed video; the same provider in an eight-plugin
-   run failed with `NoSuchMethodError`, because an earlier plugin had already claimed the
-   decision. "Works in a small test, fails in the real app" was the whole signature.
-   Changed-ness is now tracked per class by the visitor. Never re-derive it from a counter
-   that a cache can skip.
-3. **The android.* shim was built and never delivered.** It sat in `sidecar/target/`; the
-   plugin classpath is `sidecar/runtime/`. `android.content.Context` was unresolvable.
-4. **The dev runtime classpath pointed at a directory that has never existed.**
-   `sidecar/pom.xml` builds into `target/`, `runtime-deps` into `runtime/` — siblings. Every
-   plugin reported `T4_BLOCKED: library-jvm.jar is not present` regardless of the build.
-5. **`resolveJava` accepted any JVM that existed.** A `JAVA_HOME` on Java 17 produced
-   `UnsupportedClassVersionError`, reported only as "the extension runtime crashed".
-
-### Community extensions: the second round (2026-08-13)
-
-Found by pointing `tools/e2e/provider-e2e.mjs` at `Kraptor123/cs-kraptor`, whose **65
-plugins all failed at `load`** with `InvocationTargetException: null`. Each fix revealed the
-next, so they only surface one at a time — and the first one is why nobody could see any of
-them.
-
-1. **`InvocationTargetException` was reported verbatim, and its message is always null.**
-   Reflection wrappers carry no message of their own, so every plugin failure that came
-   through `Method.invoke` rendered as `InvocationTargetException: null` — naming the
-   reflection layer and saying nothing. `Main.describe` now walks to the first cause that
-   actually says something, and failures print their stack to stderr. `errorKind` had been
-   walking the chain correctly the whole time, so the *classification* was right while the
-   message was useless.
-2. **`SharedPreferences` was a class; Android's is an interface.** The single highest-impact
-   fix here: **112 of 392** surveyed plugins reference it. Extensions emit `invokeinterface`,
-   which against a class throws `IncompatibleClassChangeError: Found class …, but interface
-   was expected` — at first *use*, not at load, so a provider would register, answer a
-   search, and die on its first settings read. Now an interface (with `Editor` and the
-   listener nested as interfaces), implemented by `JsonSharedPreferences`.
-3. **`PluginData`, `PluginManager`, `RepositoryManager`, `RepositoryData` are `:app` types.**
-   Same category as `Plugin` (finding 1 above) and supplied the same way, from
-   `sidecar/bridge/`. Extensions use them to enumerate and *delete* the host's installed
-   plugins and repositories. **Every inventory returns empty and every mutation is a no-op,
-   deliberately** — that state belongs to the main process, which owns install paths, the
-   hash-keyed translation cache and the datastore records. Empty inventories mean the
-   cleanup loops iterate nothing and the destructive calls are never reached.
-4. **`android.content.pm.PackageManager` did not exist, and `Context.getPackageManager`
-   returned `Object`.** Both fatal, in that order: verification resolves every type a method
-   body names, so merely mentioning the type killed the load; and once it existed, an
-   `Object` return is a different descriptor from Android's
-   `()Landroid/content/pm/PackageManager;` and would have failed at the call site instead.
-   The manager is returned and every operation on it throws, which preserves DROP-12 while
-   letting the class link. `getPackagesForUid` returns `null` — Android's own answer for an
-   unknown uid, and truthful. Do **not** forge `com.lagradost.cloudstream3` here; lying to
-   plugin code about its platform makes every downstream bug undiagnosable.
-5. **`android.os.Process` did not exist.** Identity reads answer honestly; `killProcess` is
-   refused, because a plugin calling it would take down the sidecar and every other
-   extension sharing it.
-
-After these, AnimeciX loads and registers its provider plus a dozen `ExtractorApi`s at
-`T3_DEGRADED` (it still touches `android.content.pm.Signature`/`SigningInfo` on non-critical
-paths, which is exactly what that tier is for).
-
-After all five: Filmpalast, EinschaltenIn and Serienstream load, register 3 `MainAPI`
-providers and 10 `ExtractorApi`s, and answer searches — 8 results for "Matrix", 33 for
-"Breaking Bad", 21 for "Dune", with posters, plot and year on detail load.
-
-### Community extensions: the third round (2026-08-14)
-
-Found by counting, not guessing. A user's captured sidecar log held **113 load failures**
-across a full session, and grouping them by class showed the entire tail came from **six**
-missing types — no long tail at all:
+**Round 3 (2026-08-14),** counted a user's 113 load failures → 6 classes covered 100%:
 
 | Missing type | Failures | Category |
 |---|---|---|
-| `com.lagradost.cloudstream3.utils.DataStore` | 48 | `:app` type |
+| `com.lagradost.cloudstream3.utils.DataStore` | 48 | `:app` |
 | `androidx.appcompat.app.AppCompatActivity` | 23 | androidx UI |
-| `com.lagradost.cloudstream3.network.CloudflareKiller` | 16 | `:app` type |
+| `com.lagradost.cloudstream3.network.CloudflareKiller` | 16 | `:app` |
 | `android.net.Uri` | 16 | shim gap |
-| `androidx.fragment.app.DialogFragment` / `FragmentManager` | 10 | androidx UI |
+| `androidx.fragment.app.DialogFragment`/`FragmentManager` | 10 | androidx UI |
 
-**Count the log before fixing anything.** Six classes covered 100% of it; a
-plugin-by-plugin approach would have chased dozens of symptoms with one cause each.
+1. **`PluginHost.call` caught `ReflectiveOperationException` but not `LinkageError`.** `Class.getMethod` resolves *every* public method's param/return types, so a provider merely declaring `val interceptor = CloudflareKiller()` threw `NoClassDefFoundError` asking for its own **name**, after successfully registering — blamed the wrong class, aborted the whole load. `diffProviders` now isolates per-provider describe failures.
+2. `DataStore`/`CloudflareKiller` are `:app`, from `sidecar/bridge/`. `DataStore` needed a faithful reimplementation (most API is `inline fun … reified`; shipped `.cs3` carries a copy of the body calling `getSharedPrefs(context)`/`AppUtils.parseJson` directly). `CloudflareKiller` forwards (challenge needs WebView, doc 36 step 7). Both need `-opt-in=com.lagradost.cloudstream3.InternalAPI`.
+3. `android.net.Uri` implemented (not `java.net.URI` delegation — Android's parser never validates; scraped URLs routinely carry spaces/`|`/stray `%`). RFC 3986 Appendix B splitting, total (cannot fail). Asymmetry preserved: `getQueryParameter` decodes `+` as space, `Uri.decode` doesn't.
+4. androidx UI closure (`View`, `ViewGroup`, `LayoutInflater`, `Bundle`, `Dialog`, `DialogInterface`, `Window`, `Activity`, `Fragment`, `DialogFragment`, `FragmentManager`, `FragmentActivity`) exists so *scraping* logic (bundled with settings UI in one archive) can link — throws `UnsupportedAndroidApiException` on use (demotes tier, doesn't crash).
+5. Context handed to a plugin is now **`AppCompatActivity`** (`android/content/PluginHostContext.java`) — corpus's dominant shape is `activity = context as AppCompatActivity` as `load()`'s first statement (25 files). Converts total loss → scrapes-fine/no-settings-screen. Every inherited method still throws; only type identity conceded.
+6. `Context.getResources` returned `Object` (same descriptor bug as `getPackageManager` — different method to the JVM, `NoSuchMethodError`).
 
-1. **`PluginHost.call` caught `ReflectiveOperationException` but not `LinkageError`.** This
-   is the one to remember, because the class it named was never the class at fault.
-   `Class.getMethod` resolves the parameter and return types of *every* public method on the
-   class, so a provider that merely declares `override val interceptor = CloudflareKiller()`
-   threw `NoClassDefFoundError` when asked for its own **name**. It had already registered
-   successfully. `describeProvider` let the error escape and the whole plugin load aborted,
-   blaming a class the provider never called. `diffProviders` now also isolates per-provider
-   describe failures — one unlistable provider must not discard the dozen `ExtractorApi`s
-   registered beside it.
-2. **`DataStore` and `CloudflareKiller` are `:app` types**, supplied from `sidecar/bridge/`
-   like `Plugin` before them. `DataStore` had to be a faithful `object`-with-`Context`-
-   extensions reimplementation: most of its API is `inline fun … reified`, so a shipped
-   `.cs3` carries a *copy of the body* and calls `getSharedPrefs(context)` and
-   `AppUtils.parseJson` directly — a top-level function or a differently-shaped class would
-   compile here and link against nothing there. `CloudflareKiller` forwards rather than
-   bypasses; the challenge needs a WebView (doc 36 step 7) and cannot be solved by an HTTP
-   client. Both need `-opt-in=com.lagradost.cloudstream3.InternalAPI` on the Kotlin compiler.
-3. **`android.net.Uri` is implemented, not stubbed**, and does **not** delegate to
-   `java.net.URI`. Android's parser never validates; `java.net.URI` throws on spaces, `|`
-   and stray percent signs, all of which scraped URLs carry routinely. Component splitting
-   uses the RFC 3986 Appendix B expression, which is total, so parsing cannot fail. Note the
-   asymmetry Android has and this reproduces: `getQueryParameter` decodes `+` as a space and
-   `Uri.decode` does not.
-4. **The androidx UI closure exists so *providers* can link.** An extension's settings
-   screen and its scraper ship in one archive, so `View`, `ViewGroup`, `LayoutInflater`,
-   `Bundle`, `Dialog`, `DialogInterface`, `Window`, `Activity`, `Fragment`, `DialogFragment`,
-   `FragmentManager` and `FragmentActivity` all have to resolve or the scraping half is lost
-   too. They throw `UnsupportedAndroidApiException` on use, which demotes the tier rather
-   than reporting a crash.
-5. **The Context handed to a plugin is now an `AppCompatActivity`** — see
-   `android/content/PluginHostContext.java`. Supplying the *type* fixed the
-   `NoClassDefFoundError` and immediately exposed what was underneath: the dominant corpus
-   shape is not a lambda but the first statement of `load()`,
-   `activity = context as AppCompatActivity`, followed by `registerMainAPI(…)`. 25 files do
-   exactly that, and every one still lost all its providers — to `ClassCastException`
-   instead. Measured on Aniworld, which now loads and searches. The reference is almost
-   always just stored, so satisfying the cast converts a total loss into an extension that
-   scrapes and has no settings screen. Every inherited Activity method still throws; only
-   the type identity is conceded. One file in the corpus tests `is AppCompatActivity` and
-   will now take the UI branch — 25 against 1, and the failure it hits is the one that
-   branch was avoiding.
-6. **`Context.getResources` returned `Object`.** The same descriptor bug already fixed for
-   `getPackageManager`, still present and unreached until extensions got far enough into
-   `load()` to ask. `()Ljava/lang/Object;` is a different method from
-   `()Landroid/content/res/Resources;`, so the call site failed with `NoSuchMethodError`
-   before the `Resources` stub's own message could ever be seen.
+Also: **`androidx/**` must be excluded from `cs3-sidecar.jar`** alongside `android/**` — parent-first delegation means a stray copy there wins and fails to link against the excluded `android.content.Context`.
 
-Also worth knowing: **`androidx/**` must be excluded from `cs3-sidecar.jar`** alongside
-`android/**`. The shared runtime loader's parent is the sidecar's own loader, so delegation
-is parent-first into it — a stray `AppCompatActivity` there wins over the copy in `runtime/`
-and then fails to link, because its supertype chain ends at the `android.content.Context`
-that *is* excluded.
+Measured after all six (`--repo phisher --plugins 25`): 28 providers loaded (was 26), 12 answering, 7 links, 5 streams, zero of the six classes. All 5 repos (`--plugins 4`): 12 loaded, 7 answering, 3 streams, zero of the six, **no T4_BLOCKED at all** (10 T1_DROPIN, 3 T3_DEGRADED).
 
-Measured after all six, `--repo phisher --plugins 25`: **28 providers loaded** (was 26; both
-`ShowBox` and `Jellyfin` previously died at load), 12 answering, 7 links resolved, 5 streams
-delivering bytes, and **zero** occurrences of any of the six classes in the report.
+**Round 4 (2026-08-15),** user reported 8 Phisher extensions "No providers" — **5 of 8 were the stale-runtime trap** (§3), not real bugs (classes had shipped weeks earlier but the install still served old copies). The 3 real ones:
+1. `Context.getSystemService` threw for every name (Android returns `null`) — aborted `load()`'s first statement (memory-sizing check), lost StreamPlay's whole provider set. `"activity"` answers a real `ActivityManager` with this JVM's real `MemoryInfo` (DROP-9: never fake platform numbers).
+2. `android.os.Handler` absent — shim **works** (single-threaded daemon executor per handler, Android's per-Handler ordering guarantee preserved); `Looper.getMainLooper()` must return non-null.
+3. Whole `syncproviders` cluster is `:app` (`library-jvm` ships only `SyncIdName`). Supplied: `AuthAPI`, `AuthRepo`, `SyncAPI`(+nested), `SyncRepo`, `AccountManager`, `AniListApi`(+10 nested data classes), `UiText`, `ListSorting`, `SyncWatchType`. **Data classes faithful (Jackson binds by constructor param name — a rename silently binds null); behaviour refused (`null`, "not logged in").** Descriptor trap caught: `AccountManager.aniListApi` declared as `SyncRepo` (wrapper) compiled but failed at call sites with `NoSuchMethodError` — **a getter returning a supertype is a different method to the JVM.**
 
-Across all five repositories (`--plugins 4 --queries "matrix,one piece"`): PASS, 12 providers
-loaded, 7 answering, 3 streams with bytes, **zero** of the six classes, and **no `T4_BLOCKED`
-at all** — 10 `T1_DROPIN`, 3 `T3_DEGRADED`. `Aniworld`, `AniDB` and `MegaProvider` now load
-and search where they previously died at load; their remaining failures are the honest
-per-host kind (`Aniworld` gets a Google 403, `AniDB` times out).
-
-Still outstanding and now visible underneath: `com.lagradost.cloudstream3.syncproviders.
-providers.AniListApi$CoverImage` and `com.google.android.material.bottomsheet.
-BottomSheetDialogFragment`, both reached by Anichi during `loadLinks`. Same category as the
-above — an `:app` type and a Material Components type — and the same fix shape if they turn
-out to matter to more than one archive. **Count first.**
-
-### Community extensions: the fourth round (2026-08-15)
-
-A user reported eight Phisher extensions with "No providers", each naming a class.
-**Five of the eight were not extension bugs at all** — they were the stale-runtime trap in
-§3: `DataStore`, `android/net/Uri`, `AppCompatActivity`, `DialogFragment` and
-`FragmentManager` had all shipped weeks earlier and the installed app was still serving the
-copy it was first provisioned with. Check that directory before writing a shim.
-
-The remaining three were real, and each revealed the next exactly as before:
-
-1. **`Context.getSystemService` threw for every name; Android returns `null`.** The corpus
-   call site is the *first statement* of a provider's `load()`, unguarded, asking how much
-   memory the device has to size a buffer. Throwing there aborted the load and cost the
-   extension every provider it was about to register — StreamPlay lost all of them, and the
-   reported cause named `getSystemService` rather than anything actionable. `null` is both
-   the documented contract and the safer failure: a caller that checks gets Android's
-   behaviour, one that does not fails on the line that *uses* the service. `"activity"`
-   answers with a real `ActivityManager` whose `MemoryInfo` reports this JVM's actual
-   figures — DROP-9 forbids lying about the platform, and a fabricated memory number would
-   make the extension size its buffer wrongly.
-2. **`android.os.Handler` was absent, and the shim for it *works* rather than throwing.**
-   Almost every use in the corpus is a retry backoff, a debounce or a timeout guard — plain
-   scheduling the JVM does fine. Refusing would break working scraper code to make a point
-   about a platform difference that does not exist here. One single-threaded daemon executor
-   per handler, because Android guarantees ordering on one Handler and code written against
-   a Looper is entitled to assume it. `Looper.getMainLooper()` must return non-null:
-   `Handler(Looper.getMainLooper())` is how essentially everything that defers work is built.
-3. **The whole `syncproviders` cluster is `:app`.** `library-jvm` 4.8.0 ships only
-   `SyncIdName` out of that package. TorraStream died at `load` on `SyncRepo`; StreamPlay and
-   Anichi reach the same cluster. Supplied from `sidecar/bridge/`: `AuthAPI`, `AuthRepo`,
-   `SyncAPI` (+ its nested `SyncResult`, `LibraryList`, `LibraryMetadata`, `SyncStatus`),
-   `SyncRepo`, `AccountManager`, `AniListApi` with its ten nested data classes, plus
-   `UiText`, `ListSorting` and `SyncWatchType`.
-
-   **Data classes are faithful; behaviour is refused.** The data classes are Jackson binding
-   targets reached through `parseJson`, and `jackson-module-kotlin` binds by constructor
-   parameter *name* — a renamed property does not fail, it binds to null, and the resulting
-   "AniList returned no artwork" is close to untraceable. The operations answer null, because
-   there is no signed-in account here and a caller's "not logged in" branch is the right one.
-
-   One descriptor mistake was caught in the act and is worth remembering: declaring
-   `AccountManager.aniListApi` as `SyncRepo` (the wrapper) compiled fine and failed at
-   TorraStream's call site with
-   `NoSuchMethodError: AniListApi AccountManager$Companion.getAniListApi()`. **A getter
-   returning a supertype is a different method to the JVM.** The evidence said `AniListApi`;
-   the evidence won.
-
-Measured after all three, `--repo phisher --only <the eight>`: **seven of eight now load**
-(StreamPlay 2 providers, TorraStream 2, ShowBox 15 search results, StremioX 20 results and
-55 links, plus DoraBash, MovieBoxProvider and XDMovies). Across the repository at large,
-`--plugins 40`: **45 providers loaded, 20 answering, 12 links resolved, 8 streams delivering
-bytes, and zero `NoClassDefFoundError` of any kind.**
-
-**Still outstanding: Ultima.** It needs `com.lagradost.cloudstream3.CloudStreamApp`, behind
-which sit `MainActivity`, `CommonActivity`, `HomeViewModel`, `PluginWrapper`,
-`AppContextUtils` and `DataStoreHelper$ResumeWatchingResult`. That is a different category
-from everything above — Ultima is a host-UI replacement rather than a scraper, and shimming
-it means shimming the Android app itself. Left alone deliberately; one extension is not worth
-a fake `MainActivity`.
+Measured (`--only <the eight>`): 7/8 load. Repo-wide (`--plugins 40`): 45 loaded, 20 answering, 12 links, 8 streams, zero `NoClassDefFoundError`. **Outstanding: Ultima** — needs `CloudStreamApp`→`MainActivity`/`CommonActivity`/`HomeViewModel`/etc. — a host-UI replacement, not a scraper; left unshimmed deliberately.
 
 ### The bridge was discarding half of what Android hands back (2026-08-21)
 
-The four rounds of shim work above closed the *class* problem: providers load, scrape and
-resolve. What was still open is narrower and was invisible for exactly that reason — the
-providers were working and the bridge was throwing away part of their answer. Everything
-below was found by reading `ProviderBridge.encodeLink` against `library-jvm` 4.8.0 rather
-than by chasing a symptom, because none of it produces an error.
+Found by reading `ProviderBridge.encodeLink` against `library-jvm` 4.8.0 (produces no errors):
 
 | Discarded | Consequence |
 |---|---|
-| `DrmExtractorLink` — `kid`, `key`, `kty`, `uuid`, `licenseUrl`, `keyRequestParameters` | An encrypted stream arrived indistinguishable from an ordinary one |
-| `ExtractorLinkPlayList.playlist` | A multi-part title has **no top-level URL**; only the parts have one, so it was filtered out as malformed |
-| `LiveStreamLoadResponse` | Fell into the `else` branch. Every `TvType.Live` provider searched, opened a detail page and offered nothing to play |
-| `AudioFile.headers` | Separate audio tracks crossed as a bare URL, which most hosts that use them 403 |
-| `ExtractorLinkType` / `isDash` | Both present on the link and both ignored; the host re-derived the transport from the URL string |
+| `DrmExtractorLink` (`kid`,`key`,`kty`,`uuid`,`licenseUrl`,`keyRequestParameters`) | Encrypted stream looked ordinary |
+| `ExtractorLinkPlayList.playlist` | Multi-part title has no top-level URL — filtered as malformed |
+| `LiveStreamLoadResponse` | Every `TvType.Live` provider offered nothing to play |
+| `AudioFile.headers` | Separate audio tracks 403'd as bare URLs |
+| `ExtractorLinkType`/`isDash` | Ignored; transport re-guessed from URL string |
 
-**The transport was being guessed while the answer sat unread.** The old mapper matched
-`.m3u8`, `/hls/` and `?format=m3u8` against the address, which is wrong in both directions:
-providers serve playlists from `.php` URLs with no extension, and a progressive MP4 behind a
-path containing `dash` is not a manifest. On Android that field picks the `MediaSource`
-factory, and where a provider leaves it unset upstream's `INFER_TYPE` fills it in *before the
-link is emitted* — so by the time it reaches here it is the best classification that exists.
-The heuristics are kept as a fallback for archives built against a library that predates the
-field; what changed is that the provider is asked first.
+Transport now read from the provider's own declaration first (upstream's `INFER_TYPE` already fills it before emission), URL heuristics kept only as fallback for pre-field archives. `electron/cs3/providerLinks.ts` owns this, tested separately.
 
-`electron/cs3/providerLinks.ts` owns the reading, and it is separate and tested because every
-wrong answer here looks like a bad provider rather than a bad decision.
+**Torrent/magnet links from providers never reached the torrent engine** — `TORRENT`/`MAGNET` types were written into `directUrl` and handed to `MediaProxy` (HTTP-only); the swarm/piece-order/loopback machinery existed but was unreachable from this direction. Fixed: real infohash is the dedupe identity; `fileIndex` left **unset** (torrent-engine-meaningful — a stale list-position would pick a wrong episode).
 
-**Torrent links from providers never reached the torrent engine.** `ExtractorLinkType.TORRENT`
-and `MAGNET` are ordinary results upstream — Android hands them to its torrent player the way
-it hands an M3U8 to ExoPlayer. Here every one of them was written into `directUrl` and passed
-to `MediaProxy`, which speaks HTTP: a `magnet:` URI went in and nothing came out. The swarm,
-the sequential piece ordering and the loopback server had been in place the whole time and
-were simply never reached from this direction. Two things to keep straight now that they are:
-a magnet's **real infohash** is the dedupe identity (a provider and an indexer offering the
-same release must collapse to one row), and `fileIndex` must be left **unset** — it means
-"which file inside the archive" to the torrent engine, and the list position it used to carry
-would select an arbitrary episode of a season pack.
-
-**Multi-part titles are numbered rows, not one truncated row.** Android concatenates an
-`ExtractorLinkPlayList` into a single timeline and nothing here does yet. One row that plays
-part 1 and stops is the worse failure — a film that ends after forty minutes with no
-explanation reads as a broken source — so each part is its own row, labelled `part 2 of 3`.
-Visibly partial beats silently truncated. The whole part list still travels on every source,
-so a concatenating player would not have to re-resolve the link.
+**Multi-part titles are numbered rows** (`part 2 of 3`), not a silently-truncated single row — visibly partial beats silently truncated.
 
 ### DRM: classified before, decrypted now (2026-08-21)
 
-`EME_NATIVE` and `DrmConfiguration` have existed since PRD-37 and **nothing ever filled them
-in from a provider**. DRM was detected only by reading a manifest body, which happens after
-the probe — so an encrypted stream was handed to ffprobe first, and that is where the real
-damage was:
+Nothing filled `EME_NATIVE`/`DrmConfiguration` from a provider — DRM was detected only from
+manifest bodies, **after** the probe. Measured: ffprobe reads a synthesised CENC file and
+reports **correct codec names**, then decode produces `non-existing PPS`/`no frame!` — the
+probe succeeds with a lie, so encrypted streams reported as "file is corrupt".
 
-> Measured on a synthesised CENC file: ffprobe reads it and reports **correct codec names**,
-> then decoding produces pages of `non-existing PPS`, `no frame!`, `reference count
-> overflow`. The probe does not fail. It succeeds with a lie, and every decision made from
-> it is wrong — which is why encrypted provider streams reached users as "this file is
-> corrupt" rather than "this is encrypted".
+Provider declaration now short-circuits inspection (`PlaybackStreamRequest.drm`). Three cases:
+1. **ClearKey + browser-decodable payload** → `EME_NATIVE`, plays via `src/utils/clearKeySession.ts` (attaches `org.w3.clearkey` MediaKeys, answers licence locally from the key that came with the link).
+2. **ClearKey + browser-undecodable payload** → ordinary ladder + `-decryption_keys` on the plan. **Progressive only** (DASH demuxer: `Option decryption_key not found` is fatal to the whole command line).
+3. **Widevine/PlayReady/keyless ClearKey/unrecognised** → `EME_NATIVE`, named as unplayable (no CDM shipped).
 
-So a provider's declaration now short-circuits inspection entirely (`PlaybackStreamRequest.drm`),
-and the verdict distinguishes three cases that used to read identically:
+Two silent-failure hazards in `src/utils/clearKey.ts`: hex vs base64url told apart **by length only** (a 32-char string is ambiguous both ways at 24 vs 16 bytes — 16 bytes = 32 hex or 22 base64url, unambiguous); EME wants base64url, FFmpeg wants hex (both conversions in one file, tested against each other). `DrmType.unknown` kept distinct from `none` (folding in sends it back to be misdiagnosed).
 
-1. **ClearKey with a key, browser-decodable payload** → `EME_NATIVE`, and it now *plays*.
-   `src/utils/clearKeySession.ts` attaches `org.w3.clearkey` MediaKeys and answers the licence
-   request locally — a ClearKey licence is a JWK Set, and the key already came with the link,
-   so there is no server in the loop. Covers progressive CENC and, through hls.js, fMP4 CENC
-   in HLS.
-2. **ClearKey with a key, payload the browser cannot decode** → the ordinary ladder, with
-   `-decryption_keys` on the plan. Decrypting is not enough when the bitstream still has no
-   decoder; FFmpeg does both in one pass. **Progressive only** — measured, the DASH demuxer
-   answers `Option decryption_key not found`, which is *fatal to the whole command line*
-   rather than ignored. Same trap `-extension_picky` set, from the other direction.
-3. **Widevine, PlayReady, ClearKey without a key, or an unrecognised system** → `EME_NATIVE`
-   and named as such. Widevine needs a CDM this build does not ship (Android gets one from
-   the device); the message now says so rather than implying a broken source.
-
-Two encoding hazards live in `src/utils/clearKey.ts`, both of which fail *silently* into a
-stream that decrypts to noise:
-
-- **Hex and base64url are told apart by length, never by alphabet.**
-  `0123456789abcdef0123456789abcdef` is valid base64url *and* valid hex; read as base64 it
-  yields 24 bytes of the wrong key. 16 bytes is 32 hex characters or 22 base64url ones, and
-  that is unambiguous.
-- **EME wants base64url and FFmpeg wants hex.** Both conversions live in one file so they can
-  be tested against each other.
-
-`DrmType` gained `unknown` deliberately: an unrecognised system is exactly as unreadable to
-FFmpeg as a recognised one, and folding it into `none` sends it back to the probe to be
-misdiagnosed.
-
-**Still not built: DASH under any DRM.** Chromium cannot demux an `.mpd` without a JavaScript
-player driving MSE, FFmpeg refuses the keys, and this build ships no dash.js. That is the
-remaining gap and it is now *reported by name* instead of failing as a corrupt file.
+**Not built: DASH under any DRM** (Chromium can't demux `.mpd` without MSE+JS, FFmpeg refuses the keys) — reported by name now, not as corrupt.
 
 ### 4K, 8K and HDR (2026-08-21)
 
-**The software-encode guard was height-only and stopped being right above 4K.** It asked "is
-this taller than 1080?" and "are there fewer than 16 cores?", and 16 cores was measured at
-*3840x2160*. 8K is four times those pixels, so the machine that holds 1.0x at 4K holds about
-0.25x at 7680x4320 — and the guard waved it through at full resolution, producing exactly the
-stall it exists to prevent on the most expensive files in the corpus. The threshold is now
-pixels per second rather than a height, with `Math.max(1, …)` clamping it so **every verdict
-measured at or below 4K is unchanged**; it only ever tightens. Width is used where reported,
-because a 5120x2160 frame is not a 3840x2160 one.
+**Software-encode guard was height-only, wrong above 4K.** 16-core threshold was measured *at 4K* (3840×2160); 8K is 4× the pixels, so the same machine holds ~0.25x at 7680×4320 and the height-only guard waved it through at full res. Fixed: threshold is now **pixels-per-second**, `Math.max(1,…)`-clamped so every ≤4K verdict is unchanged (only tightens); width used where reported (5120×2160 ≠ 3840×2160). Above 4K, container remux also routes to mpv under `auto`.
 
-Above 4K, a container remux also routes to mpv under `auto`. The remux stays cheap and leaves
-Chromium decoding an 8K frame in software with four times a 4K surface behind it — this is
-the tier where "the browser can demux it" and "the machine can play it" come apart.
-
-**HDR that is re-encoded has to be tone-mapped, and was not.** `-pix_fmt yuv420p` converts the
-storage format and says nothing about the transfer function, so a PQ or HLG source re-encoded
-to 8-bit keeps HDR-referred values and is displayed as if they were SDR: washed out, flat,
-desaturated. Nothing errors. The file plays perfectly and looks wrong, which is why it
-survived. Measured on a synthesised PQ fixture, average saturation of the first frame:
+**HDR re-encode needs tone-mapping; didn't have it.** `-pix_fmt yuv420p` only converts storage format, not transfer function — PQ/HLG re-encoded to 8-bit keeps HDR-referred values displayed as SDR (washed out, no error). Measured (synthesised PQ fixture, first-frame stats):
 
 | | SATAVG | YAVG |
 |---|---|---|
-| SDR source (reference) | 112.6 | 124.7 |
-| Re-encoded, no tone-map (what shipped) | 22.8 | 97.4 |
-| Re-encoded with the zscale chain | **63.0** | 84.3 |
-| `tonemap` without `zscale` — the "graceful fallback" | 6.3 | 37.7 |
+| SDR reference | 112.6 | 124.7 |
+| Re-encoded, no tone-map (shipped) | 22.8 | 97.4 |
+| Re-encoded, zscale chain | **63.0** | 84.3 |
+| `tonemap` without `zscale` ("fallback") | 6.3 | 37.7 |
 
-**That last row is why there is no degraded fallback.** Fed non-linear PQ code values, the
-`tonemap` filter alone is not a worse tone-map, it is a wrong one — measurably worse than
-doing nothing. `toneMapFilters()` returns the chain when `zscale` is present and **nothing at
-all** when it is not. `zscale` comes from zimg, an optional dependency, so it is detected at
-startup exactly like `-extension_picky`; a filter the binary lacks fails the whole command
-line.
-
-Only a re-encode is tone-mapped. A copied stream carries its own metadata and is displayed
-correctly by whatever decodes it, and `-c:v copy` could not tone-map anyway.
-
-One trap while you are in `buildArgs`: ffmpeg takes **one** `-vf`. A second silently replaces
-the first, so the tone-map and the downscale share a chain rather than each pushing their own.
+**That last row is why there's no degraded fallback** — `tonemap` alone on PQ values is measurably *worse* than nothing. `toneMapFilters()` returns the chain only when `zscale` (zimg) is detected at startup, else nothing at all. Only re-encodes are tone-mapped (`-c:v copy` can't tone-map anyway). Trap: ffmpeg takes **one** `-vf` — tone-map and downscale must share a chain, not each push their own.
 
 ### The box now contains the player (2026-08-21)
 
-`extraResources` carried exactly one entry — the sidecar — so a freshly
-installed app had **no ffprobe, no ffmpeg and no mpv**. All three were fetched on
-first use, and `setupMpv` did not even try outside Windows: it printed
-`brew install mpv` and returned false.
+`extraResources` had only the sidecar — fresh installs had **no ffprobe/ffmpeg/mpv**, fetched
+on first use, and `setupMpv` didn't even try outside Windows. Consequence: `MpvEngine.isAvailable()`
+false → `shouldRouteToNativeEngine` false for **every** stream → every 4K HEVC file hit the
+0.47x-realtime software stall the native engine exists to avoid. **Default install was the
+worst configuration possible.**
 
-The consequence was not a missing convenience. `MpvEngine.isAvailable()` was
-false, so `shouldRouteToNativeEngine` returned false for **every** stream and the
-native engine was never used at all — every 4K HEVC file took the software
-transcode path, which is the 0.47x-realtime stall the engine exists to avoid.
-**The default install was the worst configuration this codebase can be in, and
-the good one was opt-in behind a download the user had to discover.**
+`tools/package/build-media-runtime.mjs` stages binaries into `cs3_windows/media-runtime/` → `extraResources` → `resources/media/`. **Fails the build** if a required component is missing (`--allow-missing` overrides deliberately). Bundled copy now wins over `userData/bin` (was reversed — same stale-shadow shape as §3's trap). **`yt-dlp` is the exception** — a downloaded copy is *newer* (extractors break weekly), kept resolving from `userData` first. mpv is `required: false` on Linux/macOS (distro packages wire VA-API/VideoToolbox correctly; a generic binary can't).
 
-`tools/package/build-media-runtime.mjs` stages the binaries per platform into
-`cs3_windows/media-runtime/`, `extraResources` copies that to `resources/media/`,
-and `electron:build` runs it. It **fails the build** when a required component is
-missing rather than producing a package quietly without its player;
-`--allow-missing` is the deliberate override.
-
-Two things about resolution order:
-
-- **The bundled copy wins**, where it used to lose. `resolveBinary` started at
-  `userData/bin`, which is the same shape as the stale-runtime trap in §3: a copy
-  fetched by an older version silently shadows the one this version was built
-  and tested against.
-- **`yt-dlp` is the exception**, and deliberately so. Its extractors break when a
-  site changes, which happens weekly, so a downloaded copy there is *newer*
-  rather than staler. It keeps the old order.
-
-On Linux and macOS mpv is `required: false` on purpose rather than by omission —
-the distribution's own package is the one wired to that platform's VA-API or
-VideoToolbox, and shipping a generic binary over it produces a player that
-cannot open the GPU. A distribution package should depend on `mpv`.
-
-**Chromium is now asked for the decoders the platform has.** `main.ts` set
-exactly one switch (`autoplay-policy`) and had never asked for
-`PlatformHEVCDecoderSupport`, available since Chrome 104 — so HEVC was
-re-encoded even on machines whose GPU decodes it for free. Enabling it cannot
-make a decision worse: `App.tsx` measures `canPlayType` at startup and overrides
-the static table **in both directions**, so a machine without the decoder still
-answers `""` and still gets the transcode.
+Chromium now gets `PlatformHEVCDecoderSupport` (Chrome 104+, previously never requested) — `App.tsx`'s `canPlayType` measurement overrides it in both directions, so this can't make a decision worse.
 
 ### DASH is played, not remuxed (2026-08-21)
 
-Shaka Player (`shaka-player`, Apache-2.0, an ordinary bundled dependency) now
-takes any DASH manifest whose payload the browser can decode — strategy
-`DASH_NATIVE`. The remux stays as the fallback for a payload Chromium cannot
-decode, because Shaka appends to the same MSE and cannot invent decoders either.
+Shaka Player (Apache-2.0) takes any DASH manifest the browser can decode (`DASH_NATIVE`); remux stays as fallback. Buys: full adaptive ladder (remux flattens to one rendition) + the only strategy that can play encrypted DASH (FFmpeg's demuxer rejects `-decryption_key` outright).
 
-What this buys, beyond not spending an ffmpeg process: the remux **flattens the
-adaptive ladder to one fixed rendition**, which is the thing DASH exists for.
-And it closes the gap the ClearKey work left open — `DASH_NATIVE` is the only
-strategy that can play encrypted DASH, because FFmpeg's DASH demuxer rejects
-`-decryption_key` outright.
+**The proxy had to learn DASH first — fixed an existing bug too**: manifests name segments relative to their own address; serving unmodified from loopback breaks resolution for both Shaka *and* ffmpeg's DASH demuxer (same relative-resolution rule) — the remux path was already broken for any manifest not spelling segments out in full. `MediaProxy` now rewrites MPDs: **directory routes** (`/base/<token>/<rest>`, since `SegmentTemplate` uses player-expanded `$Number$` placeholders — unlike HLS which lists every segment); `<BaseURL>` inserted/replaced; absolute `media`/`initialization`/`sourceURL` rewritten; suffix origin-checked (`resolvePrefixed` refuses cross-origin — else a directory route becomes an arbitrary-URL fetcher); manifest sniffing bounded to 4MB declared length. `mediaProxy.test.mts` (11 cases) — note: `wrap` returns loopback URLs untouched, so a 127.0.0.1 test origin is never proxied and tests nothing real.
 
-**The proxy had to learn DASH first, and that fixed an existing bug.** A manifest
-names its segments relative to its own address, so serving one unmodified from
-loopback makes the player resolve them against `…/stream/<token>` and ask for
-paths the proxy has no route for. This was never only a Shaka problem: **ffmpeg's
-DASH demuxer resolves relative segments exactly the same way**, so the remux path
-was already broken for every manifest that did not spell its segments out in
-full. `MediaProxy` now rewrites MPDs, and needed a shape it did not have:
+### Subtitles: ASS and the charset (2026-08-21)
 
-- **Directory routes** (`/base/<token>/<rest>`), because `SegmentTemplate` names
-  segments with `$Number$` placeholders the *player* expands. HLS never needed
-  this — a playlist lists every segment, so each got an exact route. A DASH
-  manifest has no list to rewrite, only a base to redirect.
-- A `<BaseURL>` is **inserted** when the manifest has none, replaced when it has
-  one, and absolute `media`/`initialization`/`sourceURL` attributes are rewritten
-  by directory so their placeholders survive.
-- The suffix arrives from the renderer, so `resolvePrefixed` refuses anything
-  that leaves the base's origin. Without that check a directory route becomes the
-  arbitrary-URL fetcher `wrap` deliberately is.
-- Manifest sniffing is **bounded by declared length** (4 MB). Reading a body to
-  identify it means buffering it, and a provider serving a 5 GB MKV as
-  `application/octet-stream` is routine.
+Android always had SubRip + WebVTT + SubStation Alpha, all through `juniversalchardet` first; desktop had neither. `.ass`/`.ssa` went through the SubRip converter (emitted `[Script Info]`/`Dialogue:` as cues — breaks most anime/fansubs). Every download decoded as UTF-8 unconditionally (`Response.text()`) — Windows-1252/GBK subtitles got correct timing + black-diamond garbage per accent.
 
-Pinned by `mediaProxy.test.mts` (11 cases). Note the origin there is a *stub*
-rather than a real server: `wrap` returns loopback URLs untouched by design, so a
-socket-backed origin on 127.0.0.1 tests nothing.
+`electron/subtitles/convert.ts` owns both. **UTF-8 is checked (fatal-mode `TextDecoder`), not detected** — statistical detector only sees provably-non-UTF-8 files. **A UTF-8 detection is then rejected if the decode produces U+FFFD** (`chardet` false-positives on 4-byte Windows-1252 strings; non-fatal `TextDecoder` substitutes rather than throwing, so the substitution char IS the error signal). ASS conversion reads the `Format:` line (order is per-file), bounds the `Dialogue:` split (commas in text), drops `\p1` drawing commands (vector coordinate dumps).
 
-### Subtitles: ASS and the charset, which Android has always had (2026-08-21)
+### Android vs Windows divergence, measured (2026-08-19)
 
-`docs/docs_cs3/05` records what the Android app does — SubRip, WebVTT **and**
-SubStation Alpha, every file through `juniversalchardet` first. Desktop did
-neither, and both failures are silent:
-
-- **`.ass` / `.ssa` went through the SubRip converter**, which emits
-  `[Script Info]` and `Dialogue:` lines as if they were cues. That is most of
-  anime and of fansubbed releases.
-- **Every download was decoded as UTF-8**, because `Response.text()` does that
-  unconditionally. A Windows-1252 or GBK subtitle then loads with correct timings
-  and a black diamond where each accent was — which reads as a bad upload.
-
-`electron/subtitles/convert.ts` owns both. Two rules in it are worth keeping:
-
-- **UTF-8 is checked, not detected.** `TextDecoder` in fatal mode either accepts
-  the bytes or throws, so the common case is answered exactly and the statistical
-  detector only sees files that are provably not UTF-8.
-- **A detection of UTF-8 is then rejected, and a decode producing U+FFFD is
-  treated as a failed decode.** `chardet` answers "UTF-8" for a four-byte
-  Windows-1252 string, and `TextDecoder` outside fatal mode substitutes rather
-  than throwing — so the substitution character *is* the error and is checked
-  for.
-
-ASS conversion reads the `Format:` line rather than assuming field positions
-(ASS declares its order per file), bounds the `Dialogue:` split so text
-containing a comma is not truncated, and drops `\p1` drawing commands — those are
-vector shapes, and printing their coordinate lists puts a wall of numbers over
-the picture.
-
-### Android vs Windows: where the two actually diverge now (2026-08-19)
-
-The recurring report is "this provider works in the Android app and fails here". Measured
-rather than assumed, with `provider-e2e.mjs --plugins 30` across all five bundled
-repositories:
-
-```
-providers loaded    66
-providers answering 24
-links resolved      18
-streams with bytes  16
-PASS — extensions load, scrape and stream
-```
-
-**`NoClassDefFoundError` occurrences across the whole run: 3, all of one class —
-`com.lagradost.cloudstream3.CloudStreamApp`.** That is Ultima, and it is the one deliberate
-exclusion on record: a host-UI replacement rather than a scraper, whose dependency chain runs
-through `MainActivity`, `CommonActivity` and `HomeViewModel`. Shimming it means shimming the
-Android app itself.
-
-So the answer to "what is the translation layer still missing?" is: for the corpus we can
-see, **nothing**. The four rounds of shim work documented above closed it. A provider that
-works on Android and fails here is now failing for a reason that is *not* a missing class,
-and looking for one is looking in the wrong place.
-
-The divergences that remain are runtime and platform, not translation:
-
-1. **TLS strictness.** `SSLHandshakeException: Received fatal alert: unrecognized_name`
-   appears in sidecar stderr against some provider hosts. This is a real Android/JVM
-   difference and not a provider bug: a server that does not recognise the SNI name sends a
-   *warning*-level `unrecognized_name` alert, Android's Conscrypt ignores it, and the stock
-   JVM treats it as fatal. The documented JVM workaround, `-Djsse.enableSNIExtension=false`,
-   is **not** applied here and should not be applied casually — it disables SNI for every
-   connection, and virtually every CDN in the corpus needs SNI to serve the right
-   certificate. Trading a handful of hosts for most of them is the wrong direction. A
-   correct fix is per-connection and belongs in the bridge's HTTP client; it is not built.
-   **The frequency is not yet measured** — the harness prints only the last 15 lines of
-   sidecar stderr, so the occurrences seen are a signal, not a rate. Count it properly before
-   spending effort on it.
-
-2. **No WebView — closed 2026-08-24.** This was the dominant gap and the recommended next
-   unit of work in three separate documents. Providers now get a real browser: the sidecar
-   can call back into the main process, the bridge supplies a `WebViewResolver` that
-   *shadows* `library-jvm`'s `TODO("Not yet implemented")` stub, and `CloudflareKiller`
-   solves challenges rather than forwarding them. See "The browser, finally" below for the
-   design and for what still differs from Android.
-
-3. **Host-side reality, which is not a divergence at all.** Expired signed URLs, hotlink
-   403s, dead swarms and slow sites fail identically on both platforms. The vendor matrix
-   (§5.2) counted these: of 72 non-playing streams, every one was a host refusing or
-   expiring a link, or a provider with nothing for that title. Attributing those to the
-   compatibility layer is the mistake that sends people looking for translation bugs that
-   are not there.
-
-**Count before fixing.** That rule produced the six-classes finding in the third round and it
-applies here in the other direction: the counting says the class problem is solved, which is
-why the next unit of effort went into the WebView bridge rather than into more shims. With
-that closed, the remaining named divergence is TLS strictness (1 above) — **and its frequency
-is still unmeasured**. Count it before spending anything on it.
+`provider-e2e.mjs --plugins 30`, all 5 repos: 66 loaded, 24 answering, 18 links, 16 streams — PASS. **`NoClassDefFoundError` count: 3, all one class** (`CloudStreamApp` = Ultima, the deliberate exclusion). **Conclusion: for the visible corpus, the translation/class problem is closed** — a provider failing here that works on Android is failing for a non-class reason. Real remaining divergences:
+1. **TLS strictness** — `SSLHandshakeException: unrecognized_name` — servers sending a *warning*-level SNI alert; Android's Conscrypt ignores it, stock JVM treats it fatal. **Do not apply `-Djsse.enableSNIExtension=false`** globally — disables SNI for every connection, breaking most CDNs to fix a few hosts. Correct fix is per-connection in the bridge's HTTP client; not built. **Frequency unmeasured** (harness only prints last 15 lines of stderr) — count before spending effort.
+2. **No WebView — closed 2026-08-24** (see "The browser, finally").
+3. Host-side reality (expired links, 403s, dead swarms) is not a divergence at all — of 72 non-playing streams in the vendor matrix, every one was host-side.
 
 ### A provider that is gone has to say which extension owned it (2026-08-24)
 
-Reported as a raw runtime exception on screen:
+Old: `IllegalArgumentException: No loaded provider is named "X". Loaded: [...100 more]` shown
+raw to the viewer. Fixed: `requireProvider` throws `PluginHost.ProviderNotLoadedException`
+(one line; loaded set to stderr only). `PluginManager.explainMissingProvider` answers *why*,
+reached via `errorKind: 'PROVIDER_NOT_LOADED'`:
 
-```
-IllegalArgumentException: No loaded provider is named "EinschaltenIn".
-Loaded: [Aniworld, Serienstream, Cinevood, … 100 more]
-```
-
-Two separate faults, and the visible one is the smaller.
-
-**The runtime appended its whole loaded set to the message**, and the host passed it
-through to the viewer. On a bootstrapped install that is a hundred provider names offered
-as the explanation for the one that did not work — a list of everything that *did* work,
-which is diagnostics and not an answer. `requireProvider` now throws
-`PluginHost.ProviderNotLoadedException` with a one-line message and prints the loaded set
-to stderr, where a diagnosis can find it.
-
-**And the host was not answering the question it is uniquely able to answer.** The runtime
-knows only that a name is absent. The host knows *why*, and each reason is a different
-action for the reader:
-
-| Cause | What the viewer is told |
+| Cause | Told to viewer |
 |---|---|
-| Provider, extension or repository switched off | which switch, and that Extensions is where it is |
-| Adult provider with the gate off | that, and where the gate is |
-| Two extensions claiming one name | which one lost it (`providerNameClashes`) |
-| Extension uninstalled | which extension it was, and to search again |
-| Extension installed but blocked at load | the `runtimeReports` reason verbatim |
-| Providers not loaded yet | that, rather than a failure |
+| Provider/extension/repo switched off | which switch, where |
+| Adult provider, gate off | that + where |
+| Two extensions claiming one name | which lost (`providerNameClashes`) |
+| Extension uninstalled | which one, search again |
+| Extension installed but blocked at load | verbatim `runtimeReports` reason |
+| Providers not loaded yet | that, not a failure |
 
-`PluginManager.explainMissingProvider` is that table, reached from `loadMedia` and
-`loadLinksDetailed` when the reply carries `errorKind: 'PROVIDER_NOT_LOADED'` — recognised
-by kind rather than by matching the sentence, which is why the sidecar has a named
-exception at all.
-
-Three supporting pieces, each of which was a gap on its own:
-
-- **Provider origins are persisted** (`cs3_provider_origins`), because this is read exactly
-  when the live tables cannot answer. A bookmark, a library entry, a cached source or an
-  open detail page addresses `cs3ext://EinschaltenIn/…` long after the extension behind it
-  was disabled or removed, and without a stored `provider name → extension` map the app can
-  only say the name is unknown.
-- **An installed archive that is missing from disk now gets a runtime report.**
-  `ensureProvidersLoaded` filtered those out of `pending` and said nothing, so the extension
-  ceased to exist with no report anywhere and every saved reference to its providers failed
-  by naming a *provider* rather than the missing file that caused it.
-- **`provider-missing` is its own `FailureKind`, and it is not scored.** Folding it into
-  `runtime-unavailable` would send the reader to the runtime status in Settings, which is
-  working and has nothing to tell them. And recording it as a provider failure would rank an
-  extension down for having been switched off — the silently-punitive behaviour the ranking
-  exists to avoid.
-
-`RUNTIME_GENERATION` is bumped to 7: an already-provisioned sidecar never sends the new
-error kind, so without it the host's branch is unreachable and the viewer keeps seeing the
-hundred-name exception.
+Supporting pieces: **provider origins persisted** (`cs3_provider_origins` — a bookmark/library entry addresses `cs3ext://X/…` long after X is gone); **a missing archive on disk gets a runtime report** (was silently filtered from `pending`); **`provider-missing` is its own unscored `FailureKind`** (scoring it would rank a switched-off extension down). `RUNTIME_GENERATION` → **7**.
 
 ### The forced retry never asked the engine that could have played it (2026-08-26)
 
-Reported as: none of a title's sources play or download, while the Android app plays the
-same list. Measured against the captured source list (`.temp/RRR_sources.md`, 54 sources):
-most of them are **healthy** — 206 with `Content-Range` and `video/x-matroska`, or a valid
-`.mpd`/`.m3u8` with no DRM — and five of a representative seven play through this app's own
-`MediaProxy` into mpv in about a second, including the CloudFront-signed DASH that needs a
-`Cookie` and the googleusercontent link that ignores `Range`. So the sources were not the
-variable, and neither was the proxy.
+Measured against 54 real sources (`.temp/RRR_sources.md`): most healthy, 5/7 representative
+ones play via `MediaProxy`→mpv in ~1s. Bug: `PlaybackEngine.prepare` hard-set `FULL_TRANSCODE`
+on the forced (post-element-failure) pass, bypassing `shouldRouteToNativeEngine` entirely —
+exactly when the native engine is most needed, it was guaranteed to re-encode instead. Traced:
+`hev1` 1080p probes `dash`/`hevc`, remuxed, fails in element, re-encoded frame-by-frame; same
+URL to mpv opens `d3d11va` in ~1s. Fixed: forced pass now routes to `NATIVE_MPV` when available
+and policy≠`off` (exclusions: `EME_NATIVE`/`requiresEmeDecryption` — mpv has no CDM). **The
+returned capability is rewritten** — `VideoPlayer` reads `capability.requiredStrategy`; handing
+back the pre-force model would loop the element on a source mpv could already play.
 
-**`PlaybackEngine.prepare` hard-set `FULL_TRANSCODE` on the forced pass and never consulted
-`shouldRouteToNativeEngine`.** `decideStrategy` routes to mpv properly; this path bypasses
-the decision entirely. The consequence is precise and backwards: the forced pass runs
-*exactly* when the element has already failed on a source — which is the definition of what
-the native engine exists for — and it was the one path guaranteed to answer with a software
-re-encode instead.
+Genuinely dead (recognise, don't re-debug): `workers.dev` 500/403, `r2.cloudflarestorage` 403 NotEntitled, pixeldrain 404, `hcdn3.hakunaymatata.com` DNS failure. Measurement trap: probing a manifest with `Range: bytes=1000000-` returns 416 (file is a few KB) — ask for a satisfiable range or none.
 
-Traced through a session log on MovieBox's DASH:
+### The timeline drew and never moved (2026-08-26) — four separate defects
 
-```
-ffprobe  /stream/17  container=dash videoCodec=hevc audioCodec=aac   1736ms   ok
-prepare  /stream/17  engine=ffmpeg  strategy=REMUX_CONTAINER
-prepare  /stream/17  engine=ffmpeg  strategy=FULL_TRANSCODE  probeLatencyMs=0
-```
+1. **`--force-seekable=yes` on Range-ignoring origins.** Host shapes: (a) 206+Content-Range+Accept-Ranges (honest); (b) 206+Content-Range, no Accept-Ranges (honest but silent); (c) `video-downloads.googleusercontent.com` — **200 + whole file from byte 0 regardless of Range asked** (not seekable, doesn't say so). On (c), mpv accepted the seek and satisfied it by reading-and-discarding from 0 — timeline never moves (**every Continue-Watching resume hit this, since resume = seek-before-first-frame**). Measured: the flag never helps (Range-honouring works either way) and actively hangs on Range-ignoring origins. Removed. `MediaProxy` now **states `Accept-Ranges` rather than forwarding it** (fixes case b), and refuses to serve byte-zero data as a mid-file range.
+2. **`MAX_ROUTES`(1000) below one film's cost** (~1200 routes/film for HLS) and **LRU evicted the wrong end** — oldest routes (master + variant playlists, just handed to the player) evicted first. Fixed: routes carry `createdAt` separate from `lastAccess`; never-served routes evicted only after all served ones, and among never-served, **newest first** (age = position in the document, not staleness — oldest are variants/opening segments, newest is film's end, dropping the tail is free/re-minted on demand).
+3. **Any un-Ranged body under 4MB was corrupted** — manifest-sniffing branch did `.text()` then `res.end(body)`, UTF-8-mangling binary bytes (704KB segment → 1.27MB garbage). Survived because media requests almost always carry Range. Fixed: read as bytes, decode only to sniff.
+4. **Abandoned probe requests kept downloading the whole file.** `pump`'s cleanup called `reader.releaseLock()` (detaches but doesn't stop — under Electron's `net.fetch`, the request lives in Chromium's network service and keeps running). On Range-ignoring hosts, 3 aborted probes × 3 sources = 9 concurrent full-file downloads competing with the real one. Fixed: reader cancelled + every upstream fetch carries an `AbortSignal` tied to the client socket. Guarded on `writableEnded` (close fires on normal finish too).
 
-An `hev1` 1080p stream probes as `dash`/`hevc`, is remuxed, fails in the element, and comes
-back here to be re-encoded frame by frame. The same URL handed to mpv opens with `d3d11va`
-in about a second — mpv carries its own FFmpeg and the platform's hardware decoders, so a
-bitstream that defeated Chromium is usually ordinary to it.
+Test traps: `MediaProxy.wrap` returns loopback URLs untouched (127.0.0.1 test origins are never proxied — test nothing); regression tests must be verified to FAIL with the bug restored (a stub that ends its own body passes trivially).
 
-The forced pass now routes to `NATIVE_MPV` when the engine is available and the policy is
-not `off`, and falls back to the re-encode when it is not. Two exclusions: `EME_NATIVE` and
-anything `requiresEmeDecryption`, because mpv holds no CDM and routing an encrypted stream
-to it converts a playable source into an unplayable one.
+**Segments disguised as images**: HDHub4U's playlists point at TikTok's image CDN — each segment is a real 70-byte PNG header + MPEG-TS glued behind it (`Content-Type: image/png`, valid PNG signature). No demuxer option helps; detection = PNG magic + sync-byte run at 188-byte stride on routes minted by a playlist rewrite only.
 
-**The returned capability is rewritten with it, and that half is load-bearing.**
-`VideoPlayer` reads `capability.requiredStrategy` to choose between the `<video>` element
-and `mpv:open`. Returning the pre-force model would hand the URL back to the element that
-had just failed on it — which fails, forces again, and spins the retry ladder on a source
-the native engine was ready to play.
+### The first search cost a minute, never the plugins (2026-08-26)
 
-**What is genuinely dead in that list, and worth recognising rather than re-debugging:**
-`workers.dev` mirrors answering `500` or `403 Quota exceeded`, `r2.cloudflarestorage`
-answering `403 NotEntitled`, pixeldrain `404`, and `hcdn3.hakunaymatata.com` failing to
-resolve at all (`ENOTFOUND`/`EAI_AGAIN`) — a DNS answer, not an app failure, and one the
-DNS-over-HTTPS setting can change.
-
-**One measurement trap.** Probing a manifest with `Range: bytes=1000000-` returns `416`,
-because an `.mpd` is a few kilobytes. Nine sources looked dead that way and every one was
-fine; a liveness scan has to ask for a range the file can actually satisfy, or none at all.
-
-### The timeline drew and never moved (2026-08-26)
-
-Reported as: the film downloads perfectly, and streaming the same link shows a timeline
-that is frozen — in the in-app player and in mpv as an external player alike. Three
-separate defects, found by measuring the sources rather than reading the player, and none
-of them is the one the symptom points at.
-
-The sources were captured from the app for two titles (`.temp/hulk_sources.csv`,
-`.temp/supergirl-…md`) and every one was characterised against the real host. That is what
-made the causes separable — they present identically.
-
-**1. `--force-seekable=yes` on an origin that ignores `Range`.** The flag had been in
-`mpvEngine` since the engine's first commit, as a blanket default. Measured across the
-corpus, hosts fall into three shapes and only one describes itself correctly:
-
-| Shape | Reply to a `Range` | Seekable |
-|---|---|---|
-| `sssrr.org`, r2.cloudflarestorage | 206 + `Content-Range` + `Accept-Ranges: bytes` | yes, and says so |
-| gdflix `workers.dev` mirrors | 206 + `Content-Range`, **no** `Accept-Ranges` | yes, and does not say so |
-| `video-downloads.googleusercontent.com` (GDFlix "Instant Download") | **200 + the whole file from byte zero**, whatever was asked | **no**, and does not say so |
-
-On the third, mpv accepted the seek, could not ask for the offset, and satisfied it by
-reading and discarding from byte zero. On a 3.24 GB link that never arrives: the tracks
-parse, the window opens with a timeline on it, and the position never moves. **Every resume
-from Continue Watching hit it, because a resume is a seek before the first frame** — which
-is why it looked like the app could not play that source at all while the downloader,
-which only ever reads forward, was fine.
-
-Measured on a synthesised fixture behind a Range-ignoring origin, seeking to 60s:
-
-| Origin | `--force-seekable` | Result |
-|---|---|---|
-| honours Range | yes | seeks to 60s |
-| honours Range | **no** | seeks to 60s — the flag buys nothing |
-| ignores Range | **yes** | grinds the whole file, no first frame |
-| ignores Range | no | starts at 0 immediately and plays |
-
-So the flag only ever converts a correct "cannot seek" into a hang, and it is gone.
-`MediaProxy` now **states `Accept-Ranges` rather than forwarding it**, in both directions,
-which is what restores seeking on the middle row without anything having to be forced. It
-also **refuses to serve byte-zero data as a mid-file range**: a `200` answering a
-`bytes=N-` used to be passed straight through, handing the player the opening of the film
-labelled as its middle.
-
-**2. `MAX_ROUTES` was below the cost of one film, and LRU evicted the wrong end.**
-Rewriting one HLS media playlist mints a route per segment — ~1200 for a two-hour film, in
-a single burst, against a cap of 1000. The routes evicted to make room were the *oldest*:
-the master playlist and the video variant playlists it had just handed the player.
-Measured on HDHub4U's `hdstream4u.com` master, tokens 4 and 5 — the two video variants —
-were gone before the first request for either, and the table held segments 306–1305. mpv
-read the master, asked for the variant it named, and got `404 Unknown stream` **from us**.
-
-Two changes, and the second matters more than the cap: routes now carry `createdAt`
-separately from `lastAccess`, a route that has never served a request is evicted only after
-every route that has, and **among never-served routes the newest go first**. For an
-unfetched route, age is not staleness — it is position in the document that minted it, so
-the oldest are the variants and the opening segments and the newest are the end of the
-film. Dropping the tail is free; the playlist re-mints it if playback ever gets there.
-
-**3. Any body under 4 MB with no `Range` was corrupted.** Pre-existing, and independent of
-the above. The manifest-sniffing branch did `await upstream.text()` and then `res.end(body)`
-— so a binary body small enough to reach it was decoded as UTF-8 and re-encoded, turning
-every byte that is not valid UTF-8 into three. A 704 KB HLS segment left the proxy 1.27 MB
-long and no longer a media file. It survived because media requests almost always carry a
-`Range`, which skips the branch entirely; only the occasional un-ranged first fetch of a
-small segment was hit, and it read as a bad source. The body is read as bytes now and
-decoded only to look at.
-
-
-**4. An abandoned request left the whole file downloading.** Found from a later session
-log, after the three above were fixed: `ffprobe timed out after 20000ms` three times on
-each googleusercontent source, then `The source could not be reached: The operation was
-aborted due to timeout` — while the same file probed in 2.4 s standalone. `pump`'s cleanup
-called `reader.releaseLock()`, which detaches the reader and **leaves the body open**.
-Under Node's fetch the transfer stops anyway; the main process runs on Electron's
-`net.fetch`, where the request lives in Chromium's network service and a detached body does
-not reliably stop it. On an origin that ignores `Range` and answers everything with the
-whole file, each abandoned probe is therefore a 3.24 GB download still running — three
-attempts across three sources is nine of them, against a link the viewer was already
-downloading at 4.2 MB/s. That is how a two-second probe becomes a twenty-second timeout,
-and why playback that had started buffered until the engine exited. The reader is cancelled
-now, and every upstream fetch carries an `AbortSignal` tied to the client socket — the
-signal is what reaches a request still blocked in DNS or TLS, before there is a body to
-cancel at all. Guarded on `writableEnded`, because `close` also fires on a normal finish.
-
-**Two traps worth not repeating.** `MediaProxy.wrap` returns loopback URLs *untouched* by
-design, so a test origin listening on 127.0.0.1 is never proxied and measures nothing —
-the test file's header says so, and it is still easy to do. And a regression test for this
-class of bug has to be checked by breaking the fix again: the assertions pass trivially
-against a stub that ends its own body, so the upstream in `mediaProxy.test.mts` is endless
-and the test is verified to FAIL with `releaseLock()` restored.
-
-**Segments disguised as images are unwrapped.** HDHub4U's playlists point at TikTok's image
-CDN, which serves only images, so each segment is a **real 70-byte PNG header with the
-MPEG-TS glued on behind it** — `Content-Type: image/png` and a valid PNG signature. This is
-a step beyond the `.png`-*named* segments `-extension_picky` was added for: there the bytes
-were already TS and only the name lied, so opening the extension allow-list was enough.
-Here the bytes lie too and no demuxer option helps — FFmpeg reads a PNG, finds no
-elementary stream, and stops with nothing in the log naming the cause. Measured on a real
-segment: 704,318 bytes in, a 70-byte prefix, then 3,745 consecutive sync bytes at the exact
-188-byte stride and a clean `h264 + aac` after the strip. Only routes minted by a playlist
-rewrite are examined, and only that signature — PNG magic followed by a sync run at the
-packet stride — counts, so a mis-detection would need a file that is simultaneously a valid
-PNG and a valid transport stream.
-
-**What is still not ours.** Of the 16 Supergirl sources, after these fixes the four
-r2.cloudflarestorage links, HUBCDN and all three HLS variants play. The rest fail at the
-host and are worth recognising rather than re-debugging: pixeldrain 404s, the Vidstack IP
-404s, and the googleusercontent links expire (they are signed with an 8-hour window, and
-answer `HTTP 400` after it). A `RefreshingSource` retry on those is correct behaviour.
-
-### The first search cost a minute, and it was never the plugins (2026-08-26)
-
-Reported as: the app is slow to start, and slow again the first time you search. Measured on
-the development machine's real install — **124 archives, 132 providers** — rather than
-reasoned about, and every obvious explanation turned out to be wrong.
-
-`PluginManager.ensureProvidersLoaded` loaded every installed archive into the JVM, in series,
-on the first search of **every launch**:
+Measured on 124 archives/132 providers:
 
 | Experiment | Result |
 |---|---|
-| Load all 124 archives (`load` RPC, serial) | **66.8s**, plus a 2.7s sidecar handshake |
-| `inspect` all 124 — DEX translate **+** `LinkageAnalyzer` | **1.4s** (mean 11ms) |
-| Load all, unload all, load all again **in the same JVM** | 57.1s, then **2.4s** |
-| Load all with 8 concurrent RPCs | 43.5s — and **176 providers attributed to the wrong extension** |
+| Load all 124 serially | 66.8s + 2.7s handshake |
+| `inspect` all 124 (translate+analyse) | 1.4s |
+| Load, unload, load again same JVM | 57.1s, then 2.4s |
+| Load all, 8 concurrent RPCs | 43.5s, **176 providers mis-attributed** |
 
-Read those in order, because each one kills a fix that looks obvious before it:
+Conclusions: translation isn't the cost (cached, 1.4s total); it's **demand-driven JVM class loading of the 56-jar classpath**, paid once per process (mostly disk — hot page cache measured 6.5s); **cannot be parallelised** — providers self-register into global `APIHolder.allProviders`, `diffProviders` reads its length before/after `load()`, so overlapping loads both read the same mark and steal each other's providers.
 
-1. **Translation is not the cost.** It is already cached by archive hash, and the whole
-   translate-plus-analyse pass over the corpus is 1.4 seconds. Caching `LinkageAnalyzer`
-   output — the first thing that suggests itself — would buy about a second of sixty.
-2. **Neither is plugin logic, or the network.** Reloading all 124 *in the same process*
-   costs 2.4s. The 57s is demand-driven **JVM class loading of the 56-jar runtime
-   classpath** — jsoup, ktor, jackson, coroutines — spread across whichever plugin first
-   touches each part. It is paid once per JVM process and it is mostly disk: a run
-   immediately after another, with the OS page cache hot, measured 6.5s for the same work.
-3. **And it cannot safely be parallelised.** Providers do not return themselves; they
-   self-register into the single global `APIHolder.allProviders`, and `diffProviders`
-   observes registration by remembering that list's *length* before `load()`. Two loads
-   overlapping both read from the same mark and each claims the other's providers. Nothing
-   prevented this — the host merely happened to issue loads in series, which made it latent
-   rather than absent.
-
-So the fix is not to make the load faster. It is to **stop doing it before anyone has asked
-for anything.**
-
-**`cs3/providerRegistry.ts` records what each archive registered**, keyed on
-`size:mtime:generation`. Almost everything the app does with providers needs only their
-descriptions — the scope picker, the extensions tree, the enable cascade, `cs3ext://`
-addressing, provenance, the adult gate — and none of that needs a live JVM object.
-
-**Measured end to end against the same 117 distinct archives: 6.6s → 8ms, 132 providers
-preserved identically, zero cache misses, and the sidecar is not started at all.**
-
-Four things about it are load-bearing:
-
-- **The runtime generation is part of the key.** The shim and the bridge decide what a
-  plugin *can* register — four rounds of shim work in this repo each changed exactly that —
-  so a row recorded under generation 7 is not an answer about generation 8, even though the
-  archive's bytes never moved. Same argument `RuntimeProvisioner` makes for dropping
-  translations, and the same failure if skipped.
-- **An archive that registers nothing is recorded too.** Extractor-only bundles register no
-  `MainAPI`, and there are plenty; treating `[]` as "no record" would make every one of them
-  pay the full JVM load on every launch forever.
-- **A failed activation withdraws the row.** Otherwise a permanently broken extension is
-  re-advertised every launch, fails, and is rediscovered — once per launch, with nothing
-  recording that it is permanent.
-- **`loadProviders(force)` now clears the cache.** Hydration answers from disk, so merely
-  clearing `providersLoaded` would re-read the same descriptions and change nothing — the
-  opposite of what a caller asking to reload wants.
-
-**Loading is now lazy and per-archive.** `ensureProviderActive(name)` loads the plugin behind
-one provider, deduped by an in-flight map — a search fans out to eight providers at once and
-several routinely come from one archive, so without it that archive is loaded eight times
-concurrently, which is the mis-attribution case arriving through the front door.
-`PluginHost.registrationLock` is the backstop; the in-flight map is the fix.
-
-**And the unavoidable cold cost moved off the path where someone is waiting.**
-`warmProviders()` runs 4s after the window opens and loads the rest in the background,
-serially. Same work, done while the viewer reads the home screen.
-
-If you add a code path that calls a provider, call `ensureProviderActive` first. A hydrated
-provider is addressable and has no code running behind it; the RPC will answer
-`PROVIDER_NOT_LOADED`, which `explainMissingProvider` will then explain as though the
-extension were disabled.
+Fix: **stop loading before anyone asks.** `cs3/providerRegistry.ts` records what each archive registered, keyed `size:mtime:generation` — hydrates the provider list from disk without starting the JVM (6.6s→8ms, 132 providers preserved, zero misses). **The generation is part of the key** (shim/bridge changes what a plugin *can* register). An archive registering nothing is still recorded (`[]` ≠ no record — else extractor-only bundles reload every launch forever). A failed activation withdraws the row. `loadProviders(force)` clears the cache. **Loading is lazy and per-archive** — `ensureProviderActive(name)`, deduped by an in-flight map (a search fanning to 8 providers from one archive would otherwise load it 8× concurrently — the mis-attribution bug through the front door). `warmProviders()` runs 4s after window-open, loads the rest serially in the background. **If you add a code path calling a provider, call `ensureProviderActive` first.**
 
 ### Counting the log, from inside the app (2026-08-26)
 
-The capture worked. What it produced was not usable, and the numbers say why. A real user's
-21 session files held **6,069 records, 5,407 of them sidecar stderr — 89% of everything the
-app recorded** — and `missingClass` matched **none** of them. The class problem really is
-closed (§5 says so and the count agrees); what fills the log now is something else, and the
-reader could not tell its parts apart:
+21 session files, 6,069 records, **5,407 (89%) sidecar stderr**, `missingClass` matched **none** (class problem confirmed closed). Log noise breakdown: `ApiError: ---` ×290 (pure punctuation), `PluginInstance: Adding … ExtractorApi` ×~200 (INFO chatter), JUL header lines ×151 (message is the *next* line), `[plugin D/tag]` Log-shim lines ×~150, real failures at `info` level ×74. Three defects: **level was wrong in the hiding direction** (unprefixed → `info`, so `Read timed out`/`Connection reset` sat beside registration chatter); **nothing carried who printed it** (tag was right there, unused); **JUL records are two lines read as two events**.
 
-| Shape, by frequency | What it is |
+`sidecarStderr.ts` now emits `source` (92.5% coverage) and (warn+ only) `cause` from the shared taxonomy. `cs3/extensionIssues.ts`: 5,407→~200 distinct problems, durable, third surface beside `Logger` (NDJSON per-launch transcript, answers "what happened") and `DiagnosticsLog` (one failure's tuple, answers "enough to paste"). Row key = `(cause, source, groupingForm(message))` — needs all three, stores **no URLs/queries/titles** (would be a viewing history).
+
+Classification bugs found building it: **stack-frame line numbers read as HTTP statuses** (`RealCall.java:519` matched `server-error`'s 3-digit test, 23 miscounts — `classifyFailure` now strips source locations first, `groupingForm` keeps bare integers so `HTTP 403`≠`HTTP 404`); **taxonomy only spoke Node's dialect** (tested `ECONNRESET`, missed JVM's `SocketException: Connection reset`, 108 miscounts); **cancellations counted as failures** (79× — scope-closing throws on every in-flight scrape when a new query starts; `cancelled` is now its own unscored kind). Plus two "stack read as message" bugs: a `PluginHost` stack frame made every plugin crash blamed on the sidecar (`describe` now classifies from head + `Caused by:` only, never `at` frames); `InvocationTargetException` was the attributed source (now reads the plugin's own loader frame). **Rest of the linkage family was unclassified** — `NoSuchMethodError`/`IncompatibleClassChangeError`/`AbstractMethodError`/`VerifyError` landed in `provider-error` (blames the scraper for a method *we* failed to provide) despite this repo having 3 worked examples of exactly that shape. Two new unscored `FailureKind`s: `cancelled`, `resource-leak` (OkHttp leak warning — was **every unclassified record**, 159×; scrape succeeded, socket leaked).
+
+**One regex bug found in the same pass**: `playbackSession.ts` had `/\b(\d{3})\b/` with `\b` literally replaced by backspace chars and the backslash eaten off `\d` — could never match, so `SourceCache.recordFailure`'s definitive-vs-counted HTTP-status parsing always saw "ambiguous." **Grep for `\x08` after any bulk edit — invisible in a diff.**
+
+### Community extensions: round 5 + OTT lane (2026-08-31)
+
+`Sushan64/NetMirror-Extension` (Netflix/Prime/Hotstar/Disney+ catalogues) verified: 2 members (`manifest.json`,`classes.dex`), 4 `MainAPI` subclasses registering **Netflix, Prime Video, Hotstar, Disney Plus**, all with `getMainPage`, loads `T1_DROPIN`. **Not `bundled`** — streaming half unverifiable from a cloud container (egress proxy 403s `CONNECT` to provider hosts); settle with `node tools/e2e/provider-e2e.mjs --repo NetMirror` on an ordinary network.
+
+`NivinCNC/CNCVerse-Cloud-Stream-Extension` gave **round 5**: 18 load failures/5 classes → 16 in top 3:
+
+| Missing type | Failures |
 |---|---|
-| `ApiError: ------------------` ×290 | upstream's `logError` divider — pure punctuation |
-| `PluginInstance: Adding Voe (…) ExtractorApi` ×~200 | registration chatter, at `INFO` |
-| `Aug 25, 2026 1:23:45 PM okhttp3…Platform log` ×151 | a JUL *header*, whose message is the next line |
-| `[plugin D/Ayzen] audinifer.com` ×~150 | the `android.util.Log` shim, carrying its own level |
-| `Exception in NiceHttp: … Connection reset` ×74 | a real failure, recorded at `info` |
+| `android.widget.CheckBox` | 7 |
+| `android.content.Intent` | 6 |
+| `android.app.AlertDialog` | 3 |
+| `com.lagradost.cloudstream3.ui.settings.Globals` (`:app`) | 1 |
+| Material `BottomSheetDialogFragment` (still outstanding) | 1 |
 
-Three defects, and the first is the one that mattered. **The level was wrong in the
-direction that hides things**: unprefixed lines fell back to `info`, so `Read timed out`,
-`Connection reset` and `UnknownHostException` — 240 occurrences — sat at the same level as
-200 lines of `Adding … ExtractorApi`, and a problems-only view showed neither. **Nothing
-carried who printed it**, though the tag is right there at the front of the line. **And a JUL
-record is two lines**, read as two events: 151 headers with no message, 151 messages with no
-origin.
+Underneath: `Drawable`(8), `Globals`(9). After all five: 18→1 failures, 29 providers registered. Rules: `Intent`/`AlertDialog.Builder` don't throw on construction (inert on Android too) — refusal sits on `startActivity`/`show`. **`Context.startActivity` stopped taking `Object`** (5th occurrence of the widened-supertype near-miss — see below). `CheckBox` needed 3 ancestors (`TextView`,`Button`,`CompoundButton` — ancestry resolved before defining). `Globals` is Kotlin in the bridge (Kotlin `object` + member extension function `fun Context.updateTv()` — a Java static-method class links against nothing), answers `PHONE` (desktop = pointer-driven windowed app). `Drawable` deliberately not abstract, no `draw(Canvas)` — every corpus use is as a type, never a base class.
 
-`sidecarStderr.ts` now emits `source` (92.5% coverage on that corpus) and, for `warn` and
-above only, `cause` from the shared taxonomy. Only problems get a cause — the taxonomy ends
-in a catch-all matching anything containing "Error", so classifying an informational line
-files registration chatter as a failure.
+### The `Object`-widening near-miss family — **8 occurrences on record**
 
-**`cs3/extensionIssues.ts` is the tally those fields make possible: 5,407 records → ~200
-distinct problems**, persisted across restarts and log rotation. It is a third surface beside
-the other two on purpose, because none of them can answer the others' question:
+**Rule: a parameter or return type widened to `Object` is not a type-safety loss, it renames the method** — an extension calling `getResources()Landroid/content/res/Resources;` against a shim declaring `()Ljava/lang/Object;` gets `NoSuchMethodError` at the call site; the shim's own careful refusal is never reached.
 
-| | Shape | Answers |
-|---|---|---|
-| `Logger` | NDJSON, **one file per launch**, rotated away | what happened, and in what order |
-| `DiagnosticsLog` | one failure's tuple, capped and time-windowed | enough to hand to a maintainer |
-| `ExtensionIssueLog` | one row per `(cause, source, groupingForm(message))`, durable | **how many distinct things are wrong** |
+Occurrences: `Context.getPackageManager`, `Context.getResources`, `AccountManager.aniListApi` (typed as wrapper `SyncRepo` not `AniListApi`), `Context.startActivity`, `Application.ActivityLifecycleCallbacks`, `CloudStreamApp$Companion.setKey` (erased-generic `Object`), `AccountManager.simklApi` (typed `SyncRepo`/`SyncAPI` not concrete `SimklApi`), plus (2026-09-09, found by **enumerating instead of waiting for #8**) `Context.getAssets`, `Context.getContentResolver`, `Window.setBackgroundDrawable`, `Fragment.getResources` (last one = the *same* method fixed once already, missed on a second class). New shims: `AssetManager`, `ContentResolver` (concede the type, refuse every op, like `PackageManager`).
 
-A row needs all three key parts: `cause` alone is eight rows for six thousand records;
-`message` alone is thousands, because a message carries a host and a duration; `source` is
-what makes a row *assignable*. It stores **no URLs, queries or titles** — this file is
-long-lived, and a long-lived file accumulating what someone searched for is a viewing history
-under another name.
+`RUNTIME_GENERATION` **12**. **`ShimSignatureTest` enumerates the rule**: no shim method may mention bare `Object` unless Android's own signature does, allow-list carries upstream's real signature per entry, **a stale allow-list entry fails too**. Verified by mutation; found nothing else (family is closed, not merely reduced).
 
-Building it found three real classification bugs, each invisible and each in the same
-direction — a plausible category on a real failure:
-
-- **Stack-frame line numbers were read as HTTP statuses.** `RealCall.java:519` contains a
-  three-digit integer and `server-error` tests for one, so `IOException: Canceled` under an
-  OkHttp stack was classified as the *host* returning a 5xx, 23 times. `classifyFailure` now
-  strips source locations first — and only there, because `groupingForm` must keep bare
-  integers so `HTTP 403` and `HTTP 404` stay apart.
-- **The taxonomy only spoke Node's dialect.** It tests `ECONNRESET`; the JVM says
-  `SocketException: Connection reset`. 108 network failures were filed as the extension
-  throwing.
-- **Cancellations were counted as failures.** 79 of them. Fifteen scrapes are in flight when
-  the viewer types a new query, and the scope closing throws in every one. `cancelled` is now
-  its own kind and the ledger drops it — counting it would rank the *slowest* providers down
-  hardest, since those are the ones still running when the cancel lands.
-
-Two more came from running the finished path over the whole corpus, and both are the same
-shape — a stack read as though it were a message:
-
-- **A frame naming the sidecar made every plugin crash the sidecar's fault.** Every plugin
-  failure passes through `com.cloudstream.desktop.sidecar.PluginHost`, and the
-  `runtime-unavailable` rule matches the word `sidecar`. `describe` now classifies from the
-  head plus `Caused by:` lines only — `at` frames are the route, not the reason.
-- **`InvocationTargetException` was the attributed source.** It names the reflection layer
-  and says nothing, which is the same mistake `Main.describe` was fixed for on the JVM side.
-  The plugin's own loader is right there in the frames — `at cs3-plugin-Ultima…//` — so that
-  is read instead.
-
-And one real taxonomy gap the finished ledger surfaced on its first run over the corpus:
-**the rest of the linkage family is ours too.** `NoClassDefFoundError` was classified as the
-runtime's problem; `NoSuchMethodError`, `IncompatibleClassChangeError`, `AbstractMethodError`
-and `VerifyError` were not — yet those are precisely what a *shim* produces, and this repo's
-own history is three worked examples: `SharedPreferences` as a class where Android's is an
-interface (`IncompatibleClassChangeError`, 112 plugins), `getResources` returning `Object`
-(`NoSuchMethodError`), and `AccountManager.aniListApi` declared as the wrapper type
-(`NoSuchMethodError` — a getter returning a supertype is a different method to the JVM). All
-of them were landing in `provider-error`, whose hint tells the reader to report it to the
-scraper's maintainer — for a method we failed to provide.
-
-Two new `FailureKind`s came out of it and **neither is scored**, for the reason
-`provider-missing` is not: `cancelled`, above, and `resource-leak` — OkHttp's "was leaked.
-Did you forget to close a response body?", which was **every unclassified problem record in
-the corpus** (159). The scrape succeeded; a socket leaked. Filing it as `provider-error`
-reports providers as having failed 159 times that did not fail at all.
-
-**One pre-existing bug fell out of the same pass.** `playbackSession.ts` carried
-`/\b(\d{3})\b/` with both `\b` escapes replaced by literal backspace characters and the
-backslash eaten off `\d` — a pattern requiring control characters and the letter "d", which
-can never match. It parses the HTTP status that `SourceCache.recordFailure` uses to decide
-whether a dead link is **dropped on sight** or needs three strikes, so *every* failure was
-reaching it as ambiguous: a definitive 404 was never dropped, and the dead link was served
-first again in between. Worth grepping for `\x08` after any bulk edit; it is invisible in a
-diff.
-
-### Community extensions: the fifth round, and the OTT lane (2026-08-31)
-
-Found by pointing the harness at two repositories nobody here had run before —
-`Sushan64/NetMirror-Extension` and `NivinCNC/CNCVerse-Cloud-Stream-Extension`,
-the two that carry the Netflix/Prime Video/Hotstar/Disney+ catalogues the
-Android community actually uses.
-
-**NetMirror is the whole reason the OTT feature can exist**, and what it
-registers was read out of the published archive rather than assumed. The
-downloaded `.cs3` hashes to its declared `fileHash`; inside are two members
-(`manifest.json`, `classes.dex`) and four `MainAPI` subclasses —
-`NetflixMirrorProvider`, `PrimeVideoMirrorProvider`, `HotStarMirrorProvider`,
-`DisneyPlusProvider` — registering the display names **Netflix**, **Prime
-Video**, **Hotstar** and **Disney Plus**, all four with a `getMainPage`. It
-loads at `T1_DROPIN`.
-
-**It is not `bundled`, and that is deliberate.** `bundled: true` is a claim the
-harness has driven the repository end to end. The load half passes; the
-streaming half cannot be verified from a cloud container, because the egress
-proxy answers `CONNECT` for the providers' own hosts (`net52.cc` and the rest)
-with 403. Anyone running this on an ordinary network can settle it with
-`node tools/e2e/provider-e2e.mjs --repo NetMirror` and flip the flag.
-
-**CNC Verse gave the fifth round of shim work.** Counted first, as the third
-round taught: `--plugins 20` produced **18 load failures across 5 classes**, and
-16 of them were in three.
-
-| Missing type | Failures | Category |
-|---|---|---|
-| `android.widget.CheckBox` | 7 | shim gap (settings dialogs) |
-| `android.content.Intent` | 6 | shim gap |
-| `android.app.AlertDialog` | 3 | shim gap |
-| `com.lagradost.cloudstream3.ui.settings.Globals` | 1 | `:app` type |
-| `com.google.android.material.…BottomSheetDialogFragment` | 1 | Material, still outstanding |
-
-Adding the top three surfaced two more underneath — `android.graphics.drawable.Drawable`
-(8) and `Globals` (9) — which is the same one-at-a-time pattern as every previous
-round. **After all five: 18 load failures to 1, and 0 to 29 providers registered.**
-Every plugin in that repository now loads.
-
-Four things about the new shims are load-bearing:
-
-- **`Intent` and `AlertDialog.Builder` do not throw on construction or
-  configuration.** Neither touches the platform on Android either — an `Intent`
-  is an inert value object and a builder describes a dialog — so refusing there
-  would break an expression whose only job is to build one. The refusal sits on
-  `startActivity` and `show`, which is where a platform is genuinely needed.
-- **`Context.startActivity` stopped taking `Object`.** It could not name `Intent`
-  before one existed, which made it a *different method* to the JVM: present,
-  and impossible for any extension to call. **That is the fifth time this
-  repository has made that exact near-miss** (`getResources` returning `Object`,
-  `aniListApi` typed as the wrapper, `setKey`, `simklApi`). The rule it keeps
-  breaking: a parameter or return type widened to a supertype does not merely
-  lose type safety, it renames the method. `Application.ActivityLifecycleCallbacks`
-  was fixed in the same pass for the same reason.
-- **`CheckBox` needed three ancestors** (`TextView`, `Button`, `CompoundButton`).
-  Verification resolves a class's whole ancestry before it can be defined, so a
-  shimmed `CheckBox` with missing parents fails exactly as loudly as no
-  `CheckBox` — while naming the wrong class.
-- **`Globals` is Kotlin, in the bridge, not a Java stub.** Upstream declares it
-  as an `object` with a *member extension function* (`fun Context.updateTv()`),
-  and both are Kotlin encodings — an `INSTANCE` field and a receiver-as-first-
-  parameter method. A Java class with static methods of the same names compiles
-  here and links against nothing there. It answers `PHONE`: desktop is a windowed
-  app driven by a pointer, which is the phone layout's assumptions and
-  emphatically not the 10-foot one.
-
-`Drawable` is deliberately **not** abstract and has no `draw(Canvas)`. Every
-counted occurrence uses it as a *type* — an icon field, a return — never as a
-base class, and declaring the abstract members would drag `Canvas`,
-`ColorFilter` and `PixelFormat` in to satisfy signatures nothing calls. If an
-extension ever subclasses it, its own override will fail to resolve `Canvas` and
-show up in the next count, which is the right way to learn that.
-
-### The eighth `Object` near-miss, found by enumerating instead of waiting (2026-09-09)
-
-A parameter or return type widened to `Object` does not merely lose type safety — **it
-renames the method.** An extension compiled against Android calls
-`getResources()Landroid/content/res/Resources;`; a shim declaring `()Ljava/lang/Object;` is
-a different method, so the call resolves against nothing, throws `NoSuchMethodError` at the
-call site, and the shim's own carefully worded refusal is never reached. The extension then
-loses every provider it was about to register, and the reported cause names the wrong class.
-
-That mistake is on record **seven times** in this repository, each found by a user hitting
-it. Four were still live, found by *enumerating the shim* rather than waiting for the
-eighth report:
-
-| Method | Declared | Android's descriptor |
-|---|---|---|
-| `Context.getAssets` | `Object` | `android/content/res/AssetManager` |
-| `Context.getContentResolver` | `Object` | `android/content/ContentResolver` |
-| `Window.setBackgroundDrawable` | `Object` | `android/graphics/drawable/Drawable` |
-| `Fragment.getResources` | `Object` | `android/content/res/Resources` |
-
-Two of them could already have named an existing shim type. `Fragment.getResources` is
-literally the method `Context.getResources` was fixed for, missed on a second class.
-`AssetManager` and `ContentResolver` are new and exist *to be named*: they concede the type
-and refuse every operation, exactly as `PackageManager` does.
-
-`RUNTIME_GENERATION` is **12**: a provisioned copy has neither new class and the old
-descriptors, so an upgraded host asking for either gets the failure this removes.
-
-**`ShimSignatureTest` now enumerates the rule**, so the eighth occurrence fails a test
-instead of an extension: no shim method may mention bare `Object` unless Android's own
-signature does, with an allow-list carrying the upstream signature per entry — and a
-**stale entry fails too**, or the list becomes a graveyard that silently permits the next
-one. Verified by mutation. Note the check found nothing else, which is the useful half of
-the result: the family is closed, not merely reduced.
-
-Also split `UnsupportedAndroidApiException`'s api identifier from its explanation. `api()`
-is documented as the `Class.method` **aggregation key**, and a shim wanting to explain
-itself was folding a whole sentence into it — so occurrences of one refusal grouped under
-prose and no two shims grouped alike, defeating the tally the type exists for. The
-two-argument constructor keeps them apart.
-
-**`errorKind` gained the rest of the linkage family** in the same pass. It classified
-`NoClassDefFoundError` and left `NoSuchMethodError`, `IncompatibleClassChangeError`,
-`AbstractMethodError`, `VerifyError` and the rest as `PLUGIN_ERROR` — "the extension threw",
-which sends the reader to blame a scraper's author for a method we failed to provide. A
-missing class is one way a shim is wrong and not the most common one; the rest are a class
-that is *present and wrong*, and this repo's history is three worked examples. The host's
-text classifier had been fixed for exactly these; the two ends must not disagree about one
-failure. `ExceptionInInitializerError` is the one exclusion — a `LinkageError` by
-inheritance and a plugin's own static initializer throwing in fact.
+Also: `UnsupportedAndroidApiException` now separates its `Class.method` aggregation key from its explanation (was folding prose into the key, defeating grouping). `errorKind` now classifies the **whole** `LinkageError` family (`NoSuchMethodError`, `IncompatibleClassChangeError`, `AbstractMethodError`, `VerifyError`, not just `NoClassDefFoundError`) — was `PLUGIN_ERROR` ("extension threw"), should be "our shim is wrong." `ExceptionInInitializerError` excluded (a plugin's own static-init throwing, despite being a `LinkageError` by inheritance).
 
 ### Two Play buttons that could not remember (2026-09-09)
 
-Both found on the one-click path, and neither produces an error.
-
-**A links handle was being stored as a row's reopenable address.** `progress.mediaUrl` is
-what a library or Continue Watching row is reopened by — a page, which `load()` fetches.
-`episode.url` is the opaque blob `loadLinks` consumes, which for much of the corpus is JSON.
-Both are strings under one field name, and the fix documented under "A title I saved now
-opens blank" had been applied to **one of the three** renderer call sites that write it. The
-two left were `App.handleQuickPlay` — the one-click Play from a search result or home card,
-so every series played that way wrote a dead address — and `DetailView.handlePlaySource`.
-It also silently disabled the next-episode prefetch on those paths, which refuses a links
-handle by design.
-
-`LibraryStore` now refuses one on the way in, which is the last place that can tell and the
-only one every writer passes through. **Dropping it loses nothing measurable**: progress
-keys on `canonicalKey(title, year)` plus season and episode, never on the URL, so the resume
-point survives and the UI can offer "find this title again" instead of an empty page.
-
-**And Play always restarted a series at episode one.** Correct exactly once and wrong on
-every visit after: someone six episodes in pressed Play on the poster and got the pilot.
-Nothing errors, so it is absorbed as "this app does not remember where I was" — the single
-thing a streaming app is expected to do. Nothing had to be fetched to fix it; the app
-already stored every episode's progress and the detail page already read it. The card path
-never asked, partly because `loadWatchState` lived in a file it could not import, and the
-detail hero handed over the first episode of the *displayed season* — so switching the
-season tab silently changed what Play meant.
-
-`src/utils/resumePoint.ts` is the rule, and pure because every branch is a wrong episode
-starting silently. A **null episode now means "Play"** rather than "play the series URL";
-callers naming a specific episode are unaffected. One rule in it is worth keeping: the
-**furthest** episode with history wins, never the most recently updated one — dipping back
-into episode 2 of a finished show writes a fresh timestamp on an early episode, and a
-recency rule would send every later Play backwards through a series already seen.
+1. **A links handle stored as a reopenable page address.** `App.handleQuickPlay` and `DetailView.handlePlaySource` (2 of 3 renderer call sites) wrote `episode.url` (opaque `loadLinks` blob, often JSON) instead of a page address into `progress.mediaUrl` — series played this way always wrote a dead address, and disabled next-episode prefetch. Fixed centrally: `LibraryStore` refuses a links-handle on the way in (progress keys on `canonicalKey(title,year)`+season+episode, never the URL — nothing lost).
+2. **Play always restarted a series at episode one.** `src/utils/resumePoint.ts` (pure): **null episode means "Play"** (not "play series URL"); the rule is **furthest episode with history wins**, never most-recently-updated (else re-watching an early episode of a finished show sends every later Play backwards).
 
 ### Escape closed the film (2026-09-09)
 
-Eight components carried their own dismiss-on-outside-click effect and had drifted on the
-one detail that matters. `VideoPlayer` binds `keydown` on `window` and treats Escape as
-"close the open panel, or leave the player". Five of the eight listened on `document` in the
-**bubble** phase without stopping the event, and `window` is the last stop in the bubble
-path — so the menu handled Escape, and then the player handled the same Escape with no panel
-open and called `onBack()`. Opening the copy menu inside the player and pressing Escape
-closed the menu *and ended playback*.
-
-`useDismissable` makes the correct behaviour the default: capture phase, and
-`stopPropagation` **only when it actually closed something** — an Escape a menu ignored must
-still reach whatever else wanted it. It is `pointerdown` rather than `click` for a related
-reason: `click` fires after the trigger has been released, so an outside-click close
-followed by the trigger's own toggle reopens the menu, and the control that opened it cannot
-close it.
+8 components each had their own dismiss-on-outside-click effect; `VideoPlayer` binds `keydown` on `window`, Escape = "close open panel, or leave player." 5/8 listened on `document` in bubble phase without stopping the event — menu handled Escape, then the player (last stop in bubble path) handled the same Escape with no panel open → `onBack()`. `useDismissable`: capture phase, `stopPropagation` **only when it actually closed something**; `pointerdown` not `click` (click fires after release — outside-click-close + trigger's own toggle would reopen it).
 
 ### The injected fetch is not optional (2026-09-09)
 
-`torrent/http.ts` exists so the main process can swap in Electron's `net.fetch`, which goes
-through Chromium's network stack and therefore honours `app.configureHostResolver` and the
-system proxy. **Node's `fetch` honours neither.** Five call sites used the global one — both
-AniList queries in `metadataProvider`, the seasonal-anime row in `homeProviders`, the OTT
-catalogue, and the mpv release feed — so the DNS-over-HTTPS setting silently did nothing for
-them. On a connection where that setting is the reason anything resolves at all, those were
-the rows that failed, and nothing connected the two.
+`torrent/http.ts` swaps in Electron's `net.fetch` (honours `app.configureHostResolver` + system proxy) — **Node's `fetch` honours neither.** 5 call sites used global `fetch` (both AniList queries in `metadataProvider`, seasonal-anime in `homeProviders`, OTT catalogue, mpv release feed) — DNS-over-HTTPS setting silently did nothing for them. **`externalPlayerControl` keeps global `fetch` deliberately** (loopback VLC control, no DNS/proxy involved). Rule: **anything reaching a third-party host goes through `torrent/http.ts`.** Also fixed: `OttCatalogService`'s films/series catalogues fetched under `Promise.all` — one 404 rejected both.
 
-`externalPlayerControl` keeps global `fetch` deliberately: it talks to VLC on loopback,
-where there is no DNS or proxy to honour. **Anything reaching a third-party host goes
-through `torrent/http.ts`.**
+### Provider catalogues: `getMainPage` (2026-08-31)
 
-`OttCatalogService` also stopped losing both catalogues when one 404s. Films and series are
-independent addon routes and were fetched under `Promise.all`, so a dead films catalogue
-rejected the pair and the caller served stale sections for a series catalogue that was
-answering perfectly.
-
-### Provider catalogues: `getMainPage`, finally (2026-08-31)
-
-`MainAPI.getMainPage` had no path through the bridge at all, so "show me this
-provider's catalogue" was unanswerable — the app could search a provider and
-open a title from it, and could not browse it. That is the Android home screen's
-entire content model, and it is what makes an OTT platform page more than a
-search box.
-
-`ProviderBridge.mainPageSections` reads the declared rows (a plain property; no
-network, but it does need the plugin *loaded*, because the property lives on the
-instance) and `ProviderBridge.mainPage` fetches one page of one row. Reached
-through `providerMainPageSections` / `providerMainPage` and
-`PluginManager.loadCatalog` / `loadCatalogPage`.
-
-Two things worth knowing:
-
-- **The request travels as separate primitives, not as a document.** The bridge
-  has a JSON *writer* and no parser, and a provider's row handle is an opaque
-  string that routinely contains delimiters — packing three fields into one
-  argument would need an escaping scheme to get wrong.
-- **A provider may answer one request with several rows.** Upstream's
-  `HomePageResponse` carries a list, and those are flattened onto the row that
-  was asked for. Rendering a provider's sub-rows as though the app had requested
-  them would put rows on screen the user cannot page.
-
-`page` is 1-based, matching upstream: providers written against the Android home
-screen treat 0 as "no such page".
+No bridge path existed for `MainAPI.getMainPage` — apps could search/open but not browse. `ProviderBridge.mainPageSections` (needs the plugin loaded) + `mainPage` (fetches one page of one row), via `providerMainPageSections`/`providerMainPage` → `PluginManager.loadCatalog`/`loadCatalogPage`. Request travels as separate primitives (row handles are opaque strings with delimiters — packing would need escaping). A provider answering with several rows: only the row asked for is used (others would put unpageable rows on screen). `page` is **1-based** (0 = "no such page" upstream).
 
 ### The OTT platform destinations (2026-08-31)
 
-`cs3/ottPlatforms.ts` maps provider display names onto Netflix, Prime Video,
-Disney+ Hotstar, Disney+, Sony LIV, ZEE5 and JioCinema. The desktop app has no
-privileged knowledge of what an extension registers — a `.cs3` is somebody
-else's Kotlin and the only identity it exposes is its `MainAPI.name` — so this
-can only ever be name matching, and the question is how to match without being
-wrong in either direction.
-
-| Too loose | Too tight |
-|---|---|
-| `PrimeWire` files under Prime Video. Someone opens Prime Video and browses a torrent aggregator. | A provider that renames itself disappears from its page and looks uninstalled. |
-
-Loose is far worse because it is *silent* — the page fills with plausible
-content from the wrong place. So exact names win first, and the patterns are
-anchored tightly enough that the false positives which exist in this corpus
-(`PrimeWire`, `Ahashare`, `Netfilm`) cannot reach them. Two overlaps are pinned
-by name because they would otherwise depend on declaration order: `Disney+
-Hotstar` normalises to `disneyhotstar` and must land on Hotstar, and `JioHotstar`
-likewise. The Disney pattern carries a trailing `m?` for a measured reason — CNC
-Verse ships a second extension suffixing every provider with `M`, so `DisneyM`
-sits beside `Disney`.
-
-**Sony LIV, ZEE5 and JioCinema have no provider named after them anywhere in the
-reachable ecosystem.** The community reaches them through aggregate scrapers —
-MovieBox and CNC Verse both advertise it. Dropping them from the catalogue would
-be tidier and would answer the wrong question: the user knows the platform, not
-the scraper. They are listed, and `providersFor` falls back to the providers
-those extensions registered, so the search box on that page asks something real.
-It is a fallback and never a merge: a platform with a provider of its own should
-not have a general scraper's results filed under its name.
-
-Four availability states — `ready`, `disabled`, `aggregate`, `missing` — because
-they need different things from the user: nothing, a switch, an explanation, or
-an install. **Collapsing them into "no content" is the failure this exists to
-avoid**: a user who turned a provider off last week being told the platform does
-not exist.
-
-**A platform is a set of providers, not one.** NetMirror registers `Netflix` and
-CNC Verse registers a `Netflix` of its own; `PluginManager.providers` is keyed on
-the name, so the first keeps it and the second is reported through
-`unavailableReason` — existing behaviour, and correct. The consequence is that
-installing a second OTT repository does not double the Netflix page; it adds
-whichever providers did not collide.
-
-**Search from a platform page is scoped by `SearchOptions.providers`**, an
-override honoured by `SearchScopeStore.override` with the same strictness as the
-stored scope and deliberately *never written to it*. A scope that outlives the
-page it came from is indistinguishable from a stuck filter, which is the failure
-the strict resolution rules already exist to prevent. An empty override searches
-nothing rather than everything.
-
-Browse asks **one** provider, not a merge. Catalogue rows are the provider's own
-editorial — "Trending Now" — and two providers' notions of trending are
-different lists that would interleave into something neither meant. The first
-provider publishing a catalogue wins the browse view; the rest are still
-searched. Paging is a button rather than an infinite scroll, because each page is
-a live scrape of someone else's server.
+`cs3/ottPlatforms.ts` maps provider names → Netflix/Prime Video/Disney+ Hotstar/Disney+/Sony LIV/ZEE5/JioCinema by **name matching only** (no other identity exists). Too-loose is far worse than too-tight (silent wrong-content fill vs. a renamed provider merely disappearing) — exact names win first, patterns anchored against known false positives (`PrimeWire`, `Ahashare`, `Netfilm`). Pinned overlaps: `Disney+ Hotstar`→Hotstar, `JioHotstar`→Hotstar; Disney pattern has trailing `m?` (CNC Verse suffixes every provider with `M`). **Sony LIV/ZEE5/JioCinema have no dedicated provider** — fall back to aggregate scrapers (MovieBox, CNC Verse) that advertise coverage, **fallback never merge**. Four availability states (`ready`/`disabled`/`aggregate`/`missing`) — collapsing to "no content" would tell a user who disabled a provider that the platform doesn't exist. A platform is a **set** of providers (name collisions resolved first-wins via `unavailableReason`). Search from a platform page uses `SearchOptions.providers` override, **never written back to the stored scope**. Browse asks **one** provider (editorial "Trending" rows from two providers would interleave into neither's meaning); first publisher wins browse, rest still searched; paging is a button (each page = a live scrape).
 
 ### A component built and never mounted (2026-08-31)
 
-`ExtensionUpdates` — check, update one, update all, the auto-update policy, live
-progress from the `extension:update*` events — was imported by nothing. Every
-channel it needs was registered in `main.ts` and exposed in `preload.ts`, so
-`ipcSurface.test.mts` was perfectly satisfied: **the IPC surface agreed with
-itself and simply had no caller.**
-
-That is the third direction this same failure has arrived from — a channel
-invoked and never registered, a channel registered and never invoked, and now a
-component built and never mounted. All three are invisible to `tsc` and to every
-other test, and all three look identical to a user: a feature that exists and
-cannot be reached.
-
-`src/componentReachability.test.mts` closes it lexically, and is verified by
-mutation. Three further orphans are allow-listed **with the component that
-superseded each** (`MediaComponentsCard` and `RuntimeProvisionerCard` by
-`UnifiedComponentManager`, `ProviderSelector` by `SearchScopePicker`), because an
-allow-list without reasons becomes precedent for the next one. A second case
-fails on a stale entry, so an entry that gets wired up has to be removed.
+`ExtensionUpdates` was fully wired IPC-wise and imported by nothing — third direction of this failure (channel invoked-never-registered; registered-never-invoked; now component-built-never-mounted), invisible to `tsc`/every test. `src/componentReachability.test.mts` closes it lexically (mutation-verified). Orphans allow-listed **with their superseding component** (`MediaComponentsCard`/`RuntimeProvisionerCard`→`UnifiedComponentManager`, `ProviderSelector`→`SearchScopePicker`) — an allow-list entry without a reason becomes precedent; a second test fails on stale entries.
 
 ### Ranking on the maintainer's own status (2026-08-31)
 
-On a fresh install every ranking criterion returns `null`, every provider scores
-the neutral midpoint, and the order is whatever the map iterated — which is
-exactly when a new user forms their opinion of the app.
-
-There is evidence available; it is just not ours. Every CloudStream repository
-index carries a per-plugin `status` — 0 down, 1 ok, 2 slow, 3 beta — set by
-whoever maintains the scraper. It has been parsed into `SitePlugin.status` all
-along and read by nothing.
-
-Quoting it is defensible in a way a hand-written table of "good providers" would
-not be: it is the author's own claim about their own extension, it updates when
-they update it, and it needs no judgement from us about third-party code. It is
-weighted **0.4** and `minSamples` **0** — a declaration is not a sample, and
-requiring three would exclude the criterion from every provider forever — and it
-loses to the counters the moment those have anything to say. A provider the
-maintainer calls healthy that has failed nine of ten searches here must rank
-below one marked beta that works.
-
-`ProviderRanking.setContext` supplies it after construction, because
-`PluginManager` and the ranking are both built in `main.ts` and each would
-otherwise need the other first. A ranking with no context is still correct: the
-criterion returns `null` and is excluded from the denominator, exactly as it is
-for a repository that publishes no status.
+Fresh installs had every criterion `null`, neutral-midpoint scores, arbitrary order. Repository indexes carry a per-plugin `status` (0 down/1 ok/2 slow/3 beta) already parsed into `SitePlugin.status` and unread. Weighted **0.4**, `minSamples` **0** (a declaration isn't a sample; requiring samples would exclude it forever), loses to real counters the moment those exist. `ProviderRanking.setContext` supplies it post-construction (avoids a construction-order cycle with `PluginManager`).
 
 ### Results that resolve to nothing are held back (2026-08-31)
 
-`TitleOutcomeStore` already recorded what happened last time a title was opened,
-and `PosterCard` already badged it — which stops someone clicking the *same*
-dead row twice and does nothing about a page full of them. `src/utils/deadRows.ts`
-holds those rows back, and the interesting part is the exclusion:
-
-**`app-error` is never hidden.** It means *our* runtime or transport failed, and
-filtering on it would turn one bug of ours into a catalogue that silently
-shrinks — reported as "the providers stopped working", by someone with no way to
-see that a hundred titles were removed on our own account. This repository has
-already had one translation bug come to look like a hundred broken providers.
-
-Two more rules keep the cure from being worse. **The whole page is never
-hidden**: a query where everything has failed before is exactly when the list is
-needed, to try one anyway or to recognise the title is the problem. And **the
-count is stated with the rows one click away**, because a results page quietly
-shorter than the search found is indistinguishable from a search that found
-less — the same complaint, from the other direction.
+`src/utils/deadRows.ts`. **`app-error` is never hidden** (our own failures must stay visible or a translation bug looks like a hundred broken providers). Whole page never hidden. Count is stated with the hidden rows one click away.
 
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 
-Run it before believing anything about extension health:
-
 ```
-node tools/e2e/provider-e2e.mjs                       # all five repositories
+node tools/e2e/provider-e2e.mjs                       # all repositories
 node tools/e2e/provider-e2e.mjs --repo MegaRepo       # one
 node tools/e2e/provider-e2e.mjs --plugins 3 --queries "one piece,dune" --json report.json
-node tools/e2e/provider-e2e.mjs --list                # what it knows about
-node tools/e2e/provider-e2e.mjs --repo phisher --only TorraStream,Ultima   # named extensions
+node tools/e2e/provider-e2e.mjs --list
+node tools/e2e/provider-e2e.mjs --repo phisher --only TorraStream,Ultima
+node tools/e2e/provider-e2e.mjs --lane cs3            # force DEX artifact, skip jar lane
 ```
+Drives the full chain: repo JSON → `.cs3` download+SHA-256 → DEX→JVM → `load()`→`search()`→`load()`→`loadLinks()`→ a 2MB range-GET off the real host, against Kraptor123/cs-kraptor, Bnyro/GermanProviders, Sushan64/NetMirror-Extension, NivinCNC/CNCVerse-Cloud-Stream-Extension, phisher98, rockhero1234/cinephile, self-similarity/MegaRepo. Exit 0 requires bytes, not just search results; `PARTIAL` = scraped but no link played. Talks stdio JSON-RPC directly to the sidecar, **no Electron** — pass+app-fails = bug in `cs3_windows/`; harness fails = bug in runtime/extension.
 
-It drives the whole chain — repository JSON → `.cs3` download + SHA-256 → DEX→JVM →
-`load()` → `search()` → `load()` → `loadLinks()` → **a 2 MB range-GET off the real host** —
-against Kraptor123/cs-kraptor, Bnyro/GermanProviders, Sushan64/NetMirror-Extension,
-NivinCNC/CNCVerse-Cloud-Stream-Extension, phisher98, rockhero1234/cinephile and
-self-similarity/MegaRepo. Exit 0 requires bytes, not just search results; `PARTIAL` means
-providers scraped but no link played.
+`fileHash` is `sha256-<hex>` — strip the prefix before comparing (app does via `installPlugin`).
 
-It talks to the sidecar over the same stdio JSON-RPC the main process uses, with **no
-Electron in the way**. That split is most of its value: if the harness passes and the app
-does not, the bug is in `cs3_windows/`; if the harness fails, it is in the runtime or the
-extension.
+**Where it still stops**: real extractors fail on *hosts* (Voe "encoded string not found", Vidsonic gets HTML expecting hex) — bot-protected, WebView territory, not translation. Don't weaken the extractor path to "fix" this.
 
-Measured 2026-08-13, all five repositories, 2 plugins each: 6 providers loaded, 4 answering
-(ARD 30/31 results, AllMovieLand 4/6, AllWish 2/1, Binged 18/18), and ARD resolved 5 links
-and delivered **2.00 MB of `video/mp4`, HTTP 206, `Accept-Ranges: bytes`**. The rest are
-honest per-source failures worth recognising rather than re-debugging:
+Repository URLs are project pages resolved to raw documents by probing branch/filename combos (`master/repo.json`, `builds/repo.json`, `builds/plugins.json` all in use).
 
-| Symptom | Cause |
-|---|---|
-| Aniworld — HTML `403` where JSON was expected | Google bot protection on the host, not translation |
-| Cinevood — `SocketTimeoutException` | the site is slow/unreachable from here |
-| Binged — "does not implement that operation" | `BingedReview` is a review catalogue; it has no `loadLinks`. Correct. |
-| Anichi — `NoClassDefFoundError: AniListApi$CoverImage` | an `:app` type absent from `library-jvm`; flagged `T3_DEGRADED` at load |
-| cs-kraptor — `InvocationTargetException: null` at load | not yet diagnosed |
+**Never reintroduce a synthetic/placeholder source.** Empty list + a reason, always.
 
-`fileHash` is published as `sha256-<hex>`. Strip the prefix before comparing — the app does
-(`installPlugin`), and the first version of the harness did not, which reported every
-download in the corpus as a hash mismatch.
+### Source discovery asks the originating provider first (2026-08-22, widened 2026-09-02)
 
-**Where it still stops.** `loadLinks` runs the real extractors and they fail on the *hosts*:
-Voe returns "encoded string not found", Vidsonic gets HTML where it expects hex. Those are
-bot-protected file hosts, which is doc 36 step 7 (WebView) territory, not a translation
-problem. Do not "fix" this by weakening the extractor path — the correct next step is the
-WebView bridge.
+Android returns one search row per provider, binding Play to that provider alone. This app merges rows across providers/catalogues (correct — one film shouldn't be seven rows) but `runDiscovery` used the merge as licence to fan out to **every** enabled provider+indexer, drawing 200 sources for a title 2 providers actually carried. `cs3/sourceScope.ts` restores the binding: default scope **`origin`** = only the providers whose results produced this row, no indexers; explicit **`all`** = everything. `cs3ext://` rows were always scoped correctly (the divergence only existed on merged catalogue rows). `origin` widens to `all` automatically when nothing claimed the title (home-screen items). Scope is part of the cache/in-flight key.
 
-Repository URLs: the curated list stores project pages (`https://github.com/owner/repo`),
-which return HTML. `pluginManager` resolves those to raw documents by probing branch and
-filename combinations, because there is no convention — `master/repo.json`,
-`builds/repo.json` and `builds/plugins.json` are all in use across the bundled list.
+**Auto-widen when origin finds nothing** (`shouldEscalateScope`/`ContentService.escalateToAllSources`, 2026-09-02): reported case found 137 sources (81/98 live links) behind a dead-end "Find more sources" button the app could have pressed itself. Goes through `getSources` (joins the shared in-flight map — a manual press during auto-widen doesn't double the fan-out); two independent recursion guards (`canWiden` already false at `all`, nested call passes `autoWiden:false`); **a failed escalation leaves the narrow (already-computed) answer standing**, never surfaces a worse error; fan-out's `load(base)` allowed to fail when the title is already known (escalation is enrichment, not discovery, once titled); prefetcher passes `autoWiden:false` (opening a detail page isn't a play commitment) and it's part of `sourceKey` (else Play would join a settled-for-narrow prefetch). `SearchProgress.widened`/`PlaybackSnapshot.widened` explain the (up to 3x) longer wait live. `explainEmptyResult` takes `escalated` to avoid re-suggesting an already-taken step.
 
-An earlier revision of this app registered installed plugins as fake providers backed by a
-metadata API and a **hardcoded demo video**. That was removed deliberately, and the
-codebase now carries comments saying so. **Never reintroduce a synthetic/placeholder
-source.** When nothing real is found, return an empty list *and a reason*. A system that
-cannot run must say so, not return empty results dressed up as "no matches found".
+### Search scope: selection is a strict filter, not a preference
 
-### Source discovery asks the originating provider first (2026-08-22)
-
-The recurring report is "some of the sources didn't work". The cause was not the
-sources; it was how many were being asked.
-
-**Android returns one search row per provider.** Opening a row binds you to the
-provider that produced it, and pressing play calls `loadLinks` on that provider
-alone. There is no fan-out and no torrent-indexer step at all.
-
-This app merges search rows, and that merge is right — four providers and three
-catalogues returning one film should be one row, not seven. What it lost was the
-binding. `searchMerge.primacy()` makes the *catalogue* row win, so the merged row
-is addressed by its `cs3meta://` URL, and `runDiscovery` took that as licence to
-ask **every enabled provider and every enabled indexer**. A title carried by two
-providers drew answers from two hundred sources: most had nothing, some were
-slow, some were dead, and all of them appeared in the list as sources that did
-not work.
-
-`cs3/sourceScope.ts` restores the binding without undoing the merge. The
-providers whose rows were merged are already recorded as `alternates`, and
-`ContentService.alternateRoutes` already remembered them — they were simply being
-used as *one more* input to a full fan-out rather than as the scope.
-
-| Scope | Who is asked |
-|---|---|
-| `origin` (default) | Only the providers whose search results produced this row. No indexers. |
-| `all` (explicit) | Every enabled provider and every enabled indexer. |
-
-Four things are worth keeping straight:
-
-- **A `cs3ext://` row was always right.** It is a provider's own result and has
-  always resolved from that provider alone. The divergence only ever existed on
-  the merged catalogue row.
-- **`origin` widens on its own when there is nothing to scope to.** A title
-  opened from the home screen was never searched for, so no provider claimed it.
-  Narrowing to an empty set there would return zero sources for every catalogue
-  item in the app, so it widens and reports `scopeUsed: 'all'` — which is what
-  stops the UI offering to widen a search that already did.
-- **Widening asks every provider even when routes are known.** The old condition
-  skipped the provider search whenever routes existed, which was correct while
-  routes were the only way to reach a provider. Under widening it makes "search
-  all sources" re-ask the same two providers and appear to do nothing. Already-
-  known providers are skipped per result instead, and the merged list is deduped
-  on `infoHash`.
-- **The scope is part of the cache key and the in-flight key.** Without that a
-  widened run is answered by the scoped result that just landed.
-
-The offer appears in two places and only when `canWiden` is true: the source
-panel, and the failure overlay — which is where it matters, because the sentence
-above it has just said the providers this title came from had nothing.
-
-### …and widens itself when that provider has nothing (2026-09-02)
-
-The section above got the scope right and left one case reading as a dead end.
-Reported verbatim from a user's screen:
-
-```
-No playable sources found
-HDO has no sources for this item.
-Try "Find more sources" to ask the other enabled providers.
-provider  HDO
-address   cs3ext://HDO/{"imdbID":"tt1754656",…,"movieName":"The Little Prince"}
-took      1398 ms
-```
-
-**Pressing that button found 137 sources** — five extensions (CineStream,
-Moviesmod, MovieBoxProviderIN, MovieLinkBDProvider) plus The Pirate Bay and
-Torrents-CSV — of which **81 of the 98 distinct HTTP links were still live when
-probed** (206 or 200, mostly `video/x-matroska`). So the screen was a dead end
-whose only useful action was a step the app was perfectly able to take itself.
-
-`shouldEscalateScope` in `cs3/sourceScope.ts` is that step, and the argument for
-it is narrow: `origin` scope is right *while it is paying for itself*. Its whole
-value — fewer third-party sites contacted, a faster answer, no dead links from
-providers that never carried the title — is a **saving on an answer nobody can
-play** the moment it returns zero. So it stays narrow when it finds something and
-widens when it does not.
-
-`ContentService.escalateToAllSources` runs it, and five things about it are
-load-bearing:
-
-- **It goes through `getSources`, not `discover`.** The widened run then lands in
-  the shared in-flight map under its own key, so a viewer pressing "Find more
-  sources" while it runs *joins* it rather than starting a second fan-out across
-  two hundred sites, and its answer lands in the `#all` cache entry so reopening
-  the title is instant.
-- **Two guards against recursion**, not one: `canWiden` is already false at `all`
-  scope, and the nested call passes `autoWiden: false` anyway. A missing guard
-  here does not produce one extra request, it produces unbounded fan-out across
-  the whole provider corpus. `sourceScope.test.mts` pins each guard *in
-  isolation* — the first draft asserted the scope guard only alongside
-  `canWiden: false`, so removing it failed nothing.
-- **A failed escalation leaves the narrow answer standing.** `fallback` is a
-  thunk producing exactly what the scoped pass would have returned. Letting the
-  widened run throw would replace "HDO has no sources for this item" with
-  whatever the fan-out hit — and for a **links-handle** address that is
-  `loadMedia`'s refusal, a sentence about a call the viewer never made. Same
-  rule as the `dataUrl` retry in `extensionSources`: a rescue that makes the
-  original failure worse is not one worth having.
-- **The fan-out's `load(base)` is now allowed to fail when a title is already
-  known.** Escalation is addressed by whatever the viewer was on, which is
-  routinely a provider's links blob, and `loadMedia` refuses those by design.
-  The detail is enrichment at that point; only the title is required. It still
-  throws when there is no `titleOverride`, because then it is not enrichment.
-  The `cs3ext://` path also refuses to escalate a links handle with no title —
-  the fan-out would have nothing to search for.
-- **The prefetcher passes `autoWiden: false`, and it is the only caller that
-  does.** Opening a detail page is not a commitment to watch — the same reason
-  that module waits `SETTLE_MS`, declines on a cache hit and runs one at a time.
-  The flag defaults **on** rather than off so the six real call sites do not each
-  have to opt in; the one that got forgotten would be a dead end nobody could
-  see. It is part of `sourceKey`, or a prefetch that settled for the narrow empty
-  answer would be joined by the play that wanted the wide one.
-
-**The wait is explained while it happens.** `SearchProgress.widened` is stamped
-on *every* event the widened run emits, not just the handover — the fan-out
-builds its own progress objects, so a one-shot flag appears for a frame and is
-overwritten by the next indexer answering. `PlaybackSnapshot.widened` latches it,
-and the overlay, the player's source panel and the detail picker each say "no
-sources where this title was found — asking every provider and indexer". Without
-it the wait silently triples, which is the shape of a hang.
-
-Afterwards `canWiden` is false, so nothing offers a button that would do nothing,
-and `explainEmptyResult` takes an `escalated` flag whose only effect is to stop
-the generic tail advising a step that has already been taken.
-
-### Search scope: selecting a source is a filter, not a preference
-
-`searchScope.ts` used to widen back to *every* source whenever the stored selection matched
-nothing currently installed (`kept.length > 0 ? kept : candidates`). Combined with a picker
-that could offer a name no provider actually had — it synthesised a fake provider named
-after the extension whenever an extension registered none — the result was the worst
-possible failure: the user picks one site, the button reads "1 source", and the app queries
-all two hundred. Resolution is strict now, and an unresolvable selection is *reported*
-(`missingProviders` / `missingIndexers`) rather than quietly ignored.
-
-The rules, all enforced in `SearchSession.plan()`:
-
-- **Nothing selected** → global: every enabled provider, plus the metadata catalogues.
-- **Providers selected** → exactly those, and **no catalogues**. Catalogue rows in a scoped
-  search would reintroduce the sources the user just excluded under a different name.
-- **Indexers selected** → those indexers are title-searched. They normally answer at
-  source-discovery time, so before this a scope of "just this torrent site" had nothing to
-  ask and returned a blank page.
-
-The hierarchy is **exactly three levels: repository → extension → provider**, and the
-provider is the selectable leaf. There is no fourth entity in the CloudStream model. What
-looked like duplication in the picker — `Fivemovierulz > Fivemovierulz` — was the ordinary
-case of an archive registering one provider named after itself, rendered at two levels;
-`SearchScopePicker` collapses that pair into one row. A provider name is globally unique by
-construction (`PluginManager.providers` is a `Map` keyed by name), which is why the name is
-also the scope identity, the `cs3ext://` address and the enable/disable key. Two extensions
-claiming one name is a genuine collision: the first keeps it and the loser is reported via
-`unavailableReason` instead of silently showing zero providers.
+Old: an unresolvable stored selection silently widened back to *everything* (`kept.length > 0 ? kept : candidates`), and the picker could offer fake provider names for extensions registering none — user picks 1 source, app queries 200. Now strict; unresolvable selections **reported** (`missingProviders`/`missingIndexers`). Rules in `SearchSession.plan()`: nothing selected → global (every provider + metadata catalogues); providers selected → exactly those, **no catalogues** (would reintroduce excluded sources under another name); indexers selected → title-searched directly. Hierarchy is exactly **repository → extension → provider** (provider = selectable leaf, globally-unique name = scope identity = `cs3ext://` address = enable/disable key; a name collision is real, first wins, loser reported via `unavailableReason`).
 
 ### The extensions screen: `src/components/extensions/`
 
-**Reconstructed 2026-08-21**, after the ignore-rule bug below meant the 2026-08-14 rebuild
-was never committed. Six of the originals — `primitives`, `FilterBar`, `BulkActionBar`,
-`ProvenancePanel`, `CompatibilityReport` and `useExtensionFilters` — were restored from the
-author's machine on 2026-08-22 and are now what the screen is built from; the container
-(`ExtensionsScreen`), the three views and `useExtensionCatalog` are the reconstruction.
-Where the two overlapped **the originals won**: `Toggle` carrying a `suppressedReason` says
-something the reconstruction's plain switch could not, and `TriStateCheckbox` has an
-`indeterminate` state a boolean cannot express. What follows describes the current files.
+Reconstructed 2026-08-21 (originally rebuilt 2026-08-14 as one 2,689-line component, 25 `useState` hooks, lost to an ignore-rule bug, six files restored from the author's machine 2026-08-22: `primitives`, `FilterBar`, `BulkActionBar`, `ProvenancePanel`, `CompatibilityReport`, `useExtensionFilters`; container/views/`useExtensionCatalog` reconstructed fresh — originals won where overlapping). Key fixes vs. the pre-2026-08-14 state:
+- **Disable ≠ uninstall, both now work** — `removeRepository` used to delete only the URL, leaving installed extensions running. Removing now cascades to uninstall; `setRepositoryEnabled`/`setExtensionEnabled` are the reversible alternative (keeps archives, no re-download).
+- **Enable cascade lives in `enabledProviderNames` only** — every consumer funnels through it once. `getProviderTree` recomputes the identical predicate as `effectivelyEnabled`; **if they disagree, the screen lies about what a search will ask.**
+- `enabled` vs `effectivelyEnabled` deliberately separate (a provider off because its repo is off must show the responsible ancestor, not look self-disabled).
+- Tag filters multi-select, derived/counted from installed data (old: hardcoded 3-option `<select>`, silently omitted NSFW/Live/Documentary/etc). **OR within a facet, AND across facets.**
+- Providers tab removed (was a second, desyncing copy of the tree's leaves).
+- Install progress is real (`onExtensionInstallProgress`; old code faked a scripted 250ms `setTimeout` sequence, +500ms invented delay per action).
+- Provenance (`repository ▸ extension ▸ provider` chain, maintainers, version, types, hash) on every row.
 
-Originally rebuilt 2026-08-14. It was one 2,689-line component — 25 `useState` hooks, four tabs and
-~2,000 lines of inline-styled JSX in a single function body — replaced by a container plus
-focused children (`useExtensionCatalog`, `useExtensionFilters`, `FilterBar`, `SourceTree`,
-`RepositoryCatalog`, `ExtensionCatalog`, `ProvenancePanel`, `BulkActionBar`,
-`CompatibilityReport`, `primitives`, `extensions.css`). Every feature was kept. What changed
-and why it matters:
+**`SearchScopePicker` filters on `effectivelyEnabled`, not `enabled`** — must keep doing so (a repo-disabled provider offered by name would search nothing and self-report via `missingProviders`).
 
-- **Disable is not uninstall, and both now work.** `removeRepository` used to delete the URL
-  and stop — the extensions it installed stayed on disk, loaded, and answering searches, so
-  "remove" changed nothing observable. That was the real shape of "I can't turn off the
-  default repositories". Removing now cascades to uninstall them and reports how many;
-  `setRepositoryEnabled` / `setExtensionEnabled` are the reversible alternative, keeping the
-  archives so re-enabling costs no downloads.
-- **The enable cascade lives in `enabledProviderNames` and nowhere else.** A provider answers
-  only when it, its extension, its repository and the adult gate all allow it. Every consumer
-  — search, scope picker, source discovery, playback, downloads — already funnels through
-  that one method, so the cascade is enforced once. `getProviderTree` recomputes the same
-  predicate as `effectivelyEnabled`; **if those two ever disagree the screen is lying about
-  what a search will ask.**
-- **`enabled` and `effectivelyEnabled` are deliberately separate** on every tree node.
-  Collapsing them loses the information the user needs: a provider greyed out because its
-  repository is off must not look like one they turned off themselves, or clicking its toggle
-  appears to do nothing. The UI shows the responsible ancestor instead.
-- **Tag filters are multi-select and derived from the data.** The old filter was a single
-  `<select>` with three hardcoded options (Movies/TV/Anime), which could not express "anime
-  or series" and silently omitted every other `TvType` — `NSFW`, `Live`, `Documentary`,
-  `AsianDrama`, `Cartoon` and the rest. Facets are now counted from what is installed, so a
-  tag with nothing behind it cannot be offered and a tag that exists cannot be hidden.
-  Semantics: **OR within a facet, AND across facets** — anything else feels broken.
-- **The Providers tab is gone.** It was a flattened re-listing of the tree's leaves with its
-  own filter and selection state, so toggling a provider in one view did not update the
-  other. Three tabs now split by *question*: what do I have (Sources), what could I add
-  (Repositories), what do the repositories offer (Extensions).
-- **Progress is real.** `onExtensionInstallProgress` existed and was ignored in favour of a
-  scripted `setTimeout` sequence — "Translating DEX bytecode to JVM…" for 250 ms whether or
-  not that was happening — which added ~500 ms of invented delay to every action.
-- **Provenance is on the row, not buried.** Every repository, extension and provider can show
-  its `repository ▸ extension ▸ provider` chain, maintainers, version, declared content
-  types, origin URL and hash. A provider row previously showed a name and a toggle, so a
-  provider that returned nothing could not be traced to whose code or whose repository.
+### Sources found while the page is being read (`cs3/sourcePrefetcher.ts`)
 
-**`SearchScopePicker` filters on `effectivelyEnabled`, not `enabled`**, and must keep doing
-so. It was the one consumer outside the extensions screen that read the provider's own switch
-directly; once repository-level disabling existed, that would have offered a provider the
-main process is going to drop — selecting it searches nothing and reports itself through
-`missingProviders`. Same class of failure as the widen-back bug above, from the other
-direction. Anything new that reads the tree to decide what may be searched has the same
-obligation.
+Play used to start a 15-provider scrape from cold; the detail-page reading window is free time to do it in. Safe only because of **in-flight sharing** (`sharedDiscovery.ts` — else Play would double every scrape): cancellation is by **consensus** (every caller's `AbortSignal` must withdraw); an aborted run is never joined (stays in the map until settled). Restrained: waits ~1.2s settle, skips on `hasFreshSources` (a `peek`, doesn't promote), one at a time (supersedes), togglable for metered connections. Detail page shows state ("3 sources ready"/"Finding sources…"); `waiting`/`idle` render nothing (no badge for a mere glance).
 
-### Sources are found while the page is being read
+### The mini player: `<video>` is never remounted
 
-Pressing Play used to begin a fifteen-provider scrape from cold. Meanwhile the viewer had
-been on the detail page for several seconds reading the plot — the exact window the work
-could have run in. `cs3/sourcePrefetcher.ts` uses it: a moment after a detail page settles,
-it runs the same discovery Play would, and the results land in `SourceCache` where Play
-finds them.
+Minimising is a **CSS geometry change to an element that stays mounted** (unmounting stops the stream, loses position, renegotiates the swarm). Chrome hidden with CSS, not conditional rendering (would lose open-panel/scroll state). Keyboard shortcuts disarmed in mini (space in a search box elsewhere mustn't pause). Drag/resize is owned, not `resize:both` (can't hold aspect ratio; handle is **top-left** since a corner-parked window's bottom-right handle would be off-screen). `useMiniFrame` clamps on window resize.
 
-**The in-flight sharing is what makes this safe rather than harmful**, and it is the reason
-`sharedDiscovery.ts` exists as its own module. Warming the cache only helps if pressing Play
-a second later *joins* the running discovery; without that it would start a second identical
-scrape beside the first, doubling the load on every community site involved and arriving no
-sooner. Two rules in there are load-bearing:
+### The home screen is discovered, not hardcoded (`cs3/discovery.ts`)
 
-- **Cancellation is by consensus.** Each caller brings its own `AbortSignal` and the work
-  stops only when *every* caller has withdrawn. Otherwise closing the detail page — which
-  happens immediately after Play — would cancel the discovery the player just joined.
-- **An aborted run is never joined.** It stays in the map until its promise settles, and
-  handing it to a new caller would return a cancelled result.
-
-Both are covered by `sharedDiscovery.test.mts`, along with late-joiner progress replay and
-the refresh rule (a cache-bypassing caller may not be served by a run that might have
-answered from cache; the reverse is fine).
-
-The prefetch itself is deliberately restrained, because opening a detail page is not a
-commitment to watch and speculative traffic is the fastest way to get an IP blocked by a
-scraper target:
-
-- nothing runs until the page has been open ~1.2s, so paging through six titles fires zero
-  scrapes rather than six;
-- nothing runs when `hasFreshSources` says the cache can already answer — a `peek`, so the
-  check neither writes nor promotes the entry;
-- one at a time, a new target superseding the old;
-- and it can be switched off, with the cost stated, for metered connections.
-
-The detail page shows the state on the artwork ("3 sources ready", "Finding sources…"),
-because invisible work is indistinguishable from no work — nobody expects Play to be instant
-unless something says so. `waiting` and `idle` deliberately render nothing: announcing the
-settle delay would put a badge on every title someone merely glanced at.
-
-Reuse and expiry are `SourceCache`'s existing behaviour, not a second policy: magnets never
-expire, provider links carry the deadline in their URL or a short TTL, and a partially stale
-entry serves its good half.
-
-### The mini player: the `<video>` element is never remounted
-
-Minimising is a **geometry change to an element that stays mounted** — the same node, in the
-same place in the tree, with `player--mini` and an inline position. That is not an
-implementation detail. The `<video>` *is* the playback: unmount it and the stream stops, the
-position is lost and the swarm is renegotiated. Anything that recreates the element to change
-its size has broken the feature it was trying to add.
-
-What that buys, and what it costs:
-
-- **Full chrome is hidden with CSS, not conditionally rendered.** Unmounting the controls
-  would unmount their state — open panels, scroll positions, the source list — and restoring
-  the player would drop all of it. The mini window gets its own much smaller control set,
-  because at 420px the real seek bar and eleven buttons are unusable.
-- **Keyboard shortcuts are disarmed in mini exactly as in hidden**, and it matters *more*
-  here: the window is visible, so it looks focused, while the whole point is that the viewer
-  is typing somewhere else. A space bar in the search box must not pause the film.
-- **The drag/resize gesture is owned rather than delegated to `resize: both`**, which cannot
-  hold an aspect ratio and puts its handle in the bottom-right corner — precisely where a
-  window parked in the corner of the screen is against the edge. The resize handle is
-  top-left for that reason. See `useMiniFrame`, which also clamps on window resize: a player
-  parked at the right edge of a maximised window is unreachable once it is restored, because
-  the part that has gone off screen is the drag handle.
-
-`MiniPlayerBar` remains for the `hidden` state, but every path in the app now minimises
-instead. Stepping out to Downloads used to blank the video and leave a bar saying it was
-still playing, which is a strange thing to tell someone about a film they were watching a
-second ago.
-
-### The home screen is discovered, not hardcoded
-
-It ran three fixed searches — `Spider-Man`, `One Piece`, `Stranger Things` — against every
-installed provider and called the result "Trending". The obvious problem is that the front
-page never changed. The real one is that **a site scraper has no opinion about what is
-popular**, so the label was a category error, and it cost the slowest scraper's timeout on
-every launch.
-
-`cs3/discovery.ts` answers from catalogue services instead. The binding constraint was that
-**the user must not have to obtain an API key**, which eliminated TMDB, Trakt, OMDb, Fanart
-and TheTVDB outright — a key embedded in a distributed client is both a licence violation and
-a key that gets revoked. What survives:
-
-- `cinemeta-catalogs.strem.io/{top,year,imdbRating}/catalog/{movie,series}/…` — keyless,
-  IMDb-keyed, filterable by 19 genres, pageable with `skip`. Its popularity numbers come from
-  Trakt and TMDB, so the ordering reflects the same signal the keyed services sell.
-- AniList's public GraphQL for seasonal anime. Kept separate from the Animation genre on
-  purpose: "Animation" on IMDb is mostly Western film, and an anime row built from it returns
-  Pixar.
-
-Two behaviours are load-bearing. **Stale-while-revalidate, with the "while" doing the work**:
-cached sections render instantly and are replaced a second later, so the page never shows a
-spinner after the first launch and still works offline. And **discovery finds nothing
-playable** — items are addressed by IMDb id and sources are resolved by the providers when
-one is opened. Keeping that boundary is what lets the page be fast and current at once.
-
-Personalised rows come from genres counted out of the local library. Nothing about the user
-leaves the machine: the genre picks which public catalogue URL to fetch, and the catalogue is
-not told who asked.
+Old: 3 fixed searches ("Spider-Man"/"One Piece"/"Stranger Things") against every provider, called "Trending" — a category error (scrapers have no popularity opinion) plus the slowest scraper's timeout on every launch. Now: keyless Cinemeta (`cinemeta-catalogs.strem.io/{top,year,imdbRating}`, IMDb-keyed, 19 genres, pageable via `skip`) + AniList seasonal anime (kept separate from the Animation genre — IMDb's "Animation" is mostly Western film). No API key ever (TMDB/Trakt/OMDb/Fanart/TheTVDB all eliminated — embedded key = licence violation + gets revoked). **Stale-while-revalidate** (cached sections render instantly, replaced a second later). **Finds nothing playable** — sources resolve only when a title opens. Personalised rows come from local-library genre counts (nothing about the user leaves the machine — only the catalogue URL choice is affected).
 
 ### Search scope: why it looked empty until you searched
 
-The picker only fetched when the menu opened, and that fetch loaded **every installed
-extension into the sidecar first** — minutes of DEX translation on a bootstrapped install,
-with nothing on screen saying so. Users opened it, saw nothing, closed it, ran a search, and
-found it populated afterwards. Searching appeared to be the fix because it awaited the very
-same load.
+Picker's menu-open fetch loaded **every installed extension into the sidecar first** (minutes of DEX translation, no progress shown) — searching "fixed" it only because search awaited the same load. Fixed: `getSearchScopeOptions(false)` on mount (instant, from what's already registered) vs `(true)` on open (pays the cost with visible progress via `extension:providerLoadProgress` per archive). Facets added (content type/language/extensions-vs-torrents), same OR/AND rule as extensions screen.
 
-Two calls now, and the split is the fix: `getSearchScopeOptions(false)` on mount answers
-instantly from whatever is already registered, and `getSearchScopeOptions(true)` on open pays
-the cost with a menu on screen to show progress in. `PluginManager` emits
-`extension:providerLoadProgress` per archive, so the tree fills in as the pass runs instead of
-appearing all at once at the end.
+### Provider ranking rules (`providerAnalytics`/`providerRanking`/`providerRecommendations`)
 
-The picker also gained facets — content type, language, and extensions-vs-torrents — derived
-from what is installed, counted rather than listed, with **OR within a facet and AND across
-facets**. Same rule as the extensions screen; anything else reads as broken.
+1. `empty` ≠ `failure` (an anime provider with nothing for *Dune* is correct; merging would bury specialists).
+2. Smoothed toward a neutral prior (else self-fulfilling: one lucky 100% beats 95%-over-400-calls and gets asked first forever).
+3. No-data criteria excluded from denominator, never scored zero.
+4. **Nothing is ever auto-disabled** (auto-*enable* is opt-in, score+sample-gated). A week-long outage isn't consent to remove a user's chosen source.
 
-### Provider ranking: measured, arguable, and never silently punitive
-
-`providerAnalytics` counts, `providerRanking` scores, `providerRecommendations` advises. Four
-rules keep it honest:
-
-1. **`empty` is not `failure`.** An anime provider with nothing for *Dune* is behaving
-   correctly. Merging them would rank by catalogue breadth and bury every specialist.
-2. **Smoothing toward a neutral prior**, or the ranking is self-fulfilling: a provider that
-   answered its single search scores 100%, sorts above one with 95% over four hundred calls,
-   gets asked first, and stays there.
-3. **A criterion with no data is excluded from the denominator**, never scored zero.
-4. **Nothing is ever auto-disabled.** Auto-*enable* is opt-in and gated on score *and* sample
-   count; a site being down for a week is not consent to remove a source the user picked.
-
-The settings panel shows every number, every criterion's sample count, and the erase button,
-because a system that reorders results on evidence nobody can see is one users learn to
-distrust the first time it is wrong — and with hundreds of third-party scrapers it will
-sometimes be wrong.
+Settings panel shows every number/sample-count + an erase button (opaque reordering breeds distrust).
 
 ### Floating playback: three mechanisms, not one setting (2026-08-31)
 
-Minimising meant one thing — a small window inside the app — which stops being
-useful the moment CloudStream is not the front window, which is exactly when
-someone minimises a film. There are four modes now (`mini`, `floating`, `pip`,
-`background`) and they are a **choice rather than a scale**, because they use
-different mechanisms with different reach:
+Four modes (`mini`/`floating`/`pip`/`background`) as a **choice**, not a scale — different mechanisms, different reach:
 
 | Mechanism | Moves | Works when |
 |---|---|---|
-| In-app mini window | nothing — a CSS geometry change | always, while this app is the front window |
-| Native Picture-in-Picture | the `<video>` element's rendering surface, to an OS window | only while the element is what is playing |
-| App window always-on-top | a window level | always, whatever is inside the window |
-| mpv `ontop` | a window level | only while the native engine holds the stream |
+| In-app mini window | nothing (CSS) | always, this app frontmost |
+| Native PiP | `<video>`'s surface, to an OS window | only while the element is what's playing |
+| App window always-on-top | window level | always |
+| mpv `ontop` | window level | only while mpv holds the stream |
 
-**The middle row is why this is not simply "pin the window".** PiP is what people
-mean by "like Chrome" — a real OS window with the system's own controls,
-resizable, above full-screen applications. It is also unavailable for exactly
-the content this app most often plays: a stream routed to mpv renders in mpv's
-window and a handoff to VLC renders in VLC's, and neither has an element to
-detach. So PiP is offered where it can work (`isPipSupported` checks the
-document, the element's `readyState` **and** that the native engine is not
-holding the stream) and the window pin is what makes the feature exist for a
-torrent stream or a 4K HEVC file.
+PiP is unavailable for exactly what this app most often plays (mpv/VLC handoffs render in their own windows, no element to detach) — `isPipSupported` checks readiness AND that the native engine isn't holding the stream; the window pin exists for that case. Element never remounted in any mode (audio-only hides picture via `visibility` not `display` — layout removal can stop decoding on some builds). Pin unapplies itself on unmount. `audio-only` genuinely stops decoding on mpv (`vid=no`) but is a no-op saving on the element (states this in its own help text). PiP rejection reasons surfaced as sentences (silent no-op buttons are the worst UX).
 
-Things that will bite:
+### Downloads: state machine
 
-- **The element is never remounted, in any mode.** Same rule as the in-app mini
-  player and the same reason: recreating it ends the stream, loses the position
-  and renegotiates the swarm. Audio-only hides the picture with `visibility`
-  rather than `display`, because an element removed from layout loses its
-  surface and some builds treat that as a reason to stop decoding — which would
-  silence the audio the mode exists to keep.
-- **The pin unapplies itself on unmount.** Leaving the app above every other
-  window after the player closed is invisible, survives navigation, and is
-  undone only by a control inside a player that no longer exists.
-- **`audio-only` is asymmetric and says so.** On the native engine it sets
-  `vid=no` and genuinely stops decoding — real work saved on a 4K file. On the
-  element there is nothing equivalent: an offscreen element keeps decoding what
-  it was given, and re-negotiating the source to a track-less stream would be a
-  far larger change than the setting is worth. The setting's own help text
-  states this rather than implying a saving that is not there.
-- **The Media Session record is set, or a PiP window's own buttons are dead
-  chrome.** A native PiP window draws play/pause and next/previous and wires
-  them to `navigator.mediaSession` action handlers; the OS uses the same record
-  for the keyboard's media keys. They are wired to the same `togglePlay` /
-  `seekTo` the on-screen controls use, so two sets of controls cannot disagree
-  about whether the film is paused.
-- **PiP is asked for, never assumed.** `requestPictureInPicture` rejects for
-  several ordinary reasons — no metadata yet, no gesture, a platform without it
-  — and every one of them looks identical from outside: a button that does
-  nothing. The rejection is reported as a sentence.
+**aria2 says `complete`, not `completed`** — a literal string-comparison typo meant `pollAria2Tasks` never matched; finished transfers sat at 100% "Downloading" forever, gid never released. `removed`/`paused` also unhandled. **Completion is now verified, not reported** — `finalizeCompletion` on all 3 engines checks file exists, no `.part` remains, size within 1% (many sources send no `Content-Length`) — else `Failed` with a retryable reason. **Delete is two actions** (`remove(id, deleteFile)`); "remember my choice" defaults off (a preference learned from one click nobody consciously set).
 
-The mini player also gained a real scrubber on its own row, a volume slider and
-the provider name. A mini window is where a source is most likely to fail
-unattended, and "it stopped" is only actionable if the row says whose it was.
+### A download is addressed by its source variant, not its title
 
-### Downloads: the state machine, and why 100% was not "done"
+Bug: duplicate detection matched by **title prefix** (`norm(t.title).startsWith(norm(title))`) — one film, any resolution, collapsed into one download slot; target path was also title-derived, so allowing two would corrupt one file via interleaved writes. `src/utils/downloadIdentity.ts`: torrents key on real infohash; everything else keys on the durable description (media+season+episode+provider+release name+resolution+quality+language+audio) — **never** on `infoHash` (synthesised per-URL, changes on re-resolve). Rules: provider stored, not the extractor host (`indexerName` changes between resolves); recovery matches variant key first, resolution-bound after (old: unconditional `directSources[0]` could silently rebind 2160p→480p and report success); target path carries the variant, de-duped with a numbered suffix at enqueue; batch downloader must not stamp a run-specific batch id into the identity field (broke recovery + caused duplicate re-queues).
 
-**aria2 says `complete`, not `completed`.** `Aria2Progress.status` declared the latter and
-`getStatus` passes `raw.status` straight through, so the comparison in `pollAria2Tasks`
-could never be true. Every finished aria2 transfer sat at 100% in `Downloading` for the life
-of the session, and its gid was never released, so the poller kept asking about it forever.
-Verified against a live aria2 daemon: `tellStatus` answers `"active"`, then `"complete"`.
-`removed` and `paused` were unhandled too — each a second way for a task to stick with no
-poll left that could change it.
+### A partial download must be *proved* to match before resuming (2026-08-31)
 
-**Completion is now verified rather than reported.** All three engines route through
-`finalizeCompletion`, because "the engine finished" and "there is a playable file" are
-different claims and a download list that reports the second knowing only the first is
-worthless. It requires: the target exists, no unfinalised `.part` remains beside it, and the
-size agrees with expectations where any exist — 1% tolerance, since plenty of sources send
-no `Content-Length` and a strict test would fail every one of them. Anything else is
-`Failed` **with the reason**, which is retryable.
+Old: compared provider-declared size, restarted if >20% different — both wrong (declared size often absent = check never ran; 20% is huge = wrong-encode tail-appends silently corrupted files that "finished"). Fixed: **one ranged 64KB request at the resume point** answers Range support (206) + real length (`Content-Range`) + byte-identity (tail comparison) in one shot. `download/resumePlan.ts` (pure), cheapest-first: identity → exact size → Range support → byte comparison. `no-range` is its own cause (server always sends the whole file — nothing wrong with either file). An unreadable comparison window **restarts** (not "assume match"). `download/resumeWindow.ts` tested against real servers — **the `res.resume()` trap appears a third time** (discards data, leaves transfer running) — both response and request destroyed now; regression test verified to FAIL with the bug restored.
 
-**Delete is two actions.** `remove(id, deleteFile)` — removing a finished film from the list
-and erasing it from disk are unrecoverably different, so the caller decides and
-`DeleteDownloadDialog` asks. The "remember my choice" box is off by default (a preference
-learned from one click is one nobody knows they set) and Settings → Downloads can put the
-prompt back, because a preference settable only inside a dialog you opted out of seeing
-cannot otherwise be undone.
+### Pressing Download is a request, not a command (`download:request`)
 
-### A download is addressed by its source variant, not by its title
+Old: any existing entry → "Already downloading" regardless of actual state (paused/failed/deleted). New: `Downloading/Retrying/RefreshingSource`→no-op+says so; `Queued`→no-op+says when; `Paused`→resumes; `Failed`→recovers (clears retry budget, re-resolves, retries); `Completed`→checked against filesystem, re-downloads if gone; nothing→starts.
 
-Reported as: downloading *The Incredible Hulk* in 2160p and then asking for the 1080p
-release answered `Already downloading` and did nothing. Two independent mistakes about
-identity sat underneath it, and each would have been enough on its own.
+### The player: three "nothing happened" bugs
 
-**Duplicate detection matched on the title, by prefix.** `VideoPlayer`'s `currentDownload`
-did `norm(t.title).startsWith(norm(title))`, plus a shared `mediaUrl` and a substring test
-on the task id. Every release of one film satisfies all three, so a viewer could hold
-exactly one copy of a title no matter which source produced it — and the progress badge in
-the player showed whichever transfer happened to be first in the queue.
-
-**And the target path was derived from the title too**, so allowing two to start would
-merely have moved the collision onto the disk: `Movies/The Incredible Hulk/The Incredible
-Hulk.mp4` for both, two engines interleaving bytes into one file, and both reporting
-success. A corrupt file that finishes is worse than a refusal.
-
-`src/utils/downloadIdentity.ts` owns the rule, and it is pure and tested because both
-halves fail *silently* and in opposite directions:
-
-| Too coarse | Too fine |
-|---|---|
-| The 1080p release is refused as a duplicate of the 2160p one | Every recovery starts a second download of bytes already on disk |
-| Visible, and reads as a broken button | Invisible, and reads as working |
-
-**The key has to be durable, not merely unique** — which is the same problem
-`cs3/playedSource.ts` solves for resuming, and it is solved the same way. A provider
-stream's `infoHash` is *synthesised* by `ContentService` from its URL, so a re-resolved link
-is a different id for a byte-identical file; keying on it produces the right-hand column
-above. So torrents key on their real infohash and everything else keys on the durable
-description: media + season + episode + provider + release name + resolution + quality +
-language + audio.
-
-Four things follow, and each is load-bearing:
-
-- **The provider is stored, not the extractor.** `indexerName` on an extension link is the
-  file host the provider picked ("Voe", "Server 3") and it changes between resolves of one
-  release. Two of the four call sites that built tasks stored it as `providerName` and two
-  stored the provider — which is also why `findMatchingSource`'s tier-1 match so often
-  missed.
-- **Recovery matches the variant key first, and is resolution-bound after that.** Its last
-  tier used to `return directSources[0]` unconditionally, so a failed 2160p download could
-  be silently rebound to an unrelated 480p rip, written into the folder labelled 2160p and
-  reported as complete. A task that finds nothing of its own resolution is now left
-  `Failed` with its reason.
-- **The target path carries the variant** (`Movies/<Title>/2160p · WEB-DL · Gdshine/…`).
-  `variantPathSegment` keeps it readable — this is a folder a person opens — so it can
-  collide between two releases from one provider at one resolution; `DownloadService`
-  resolves that at enqueue time with a numbered suffix, because only it can see the rest of
-  the queue.
-- **The batch downloader stamped its batch id into `providerName`** (`Gdshine
-  (batch-1755…)`). Nothing read it, and two things that do read that field broke: recovery
-  never matched a provider, and the identity changed on every run — so re-running a season
-  queued a second copy of every episode already in it.
-
-### A partial download has to be *proved* to match before it resumes (2026-08-31)
-
-Provider links are signed and short-lived, so a 4 GB film routinely outlives the
-URL serving it. `DownloadService` re-resolves the release and gets a different
-address for what is usually the same content — and then has to decide whether
-the partial file beside it is still the beginning of what that address will
-send.
-
-The old answer compared the provider's *declared* size against the task's and
-restarted when they differed by more than 20%. Both halves are wrong and they
-compound:
-
-- Declared sizes are frequently absent, and with none **the check did not run at
-  all** — the partial was appended to unconditionally.
-- **20% is enormous.** Two encodes of one film at one resolution differ by far
-  less, so appending the tail of encode B to the head of encode A produced a
-  file that finalised, reported success, and did not play. A corrupt download
-  that completes is worse than one that restarts, because nothing says it
-  happened; the viewer finds out when they sit down to watch.
-
-It is proved now. **One ranged request for the 64 KB window ending at the resume
-point answers all three questions at once**: `206` proves the server honours
-Range, `Content-Range: …/total` gives the real file length, and the body
-compares byte for byte against the tail of the `.part`. That is 64 KB against a
-multi-gigabyte transfer, and it turns "these look similar" into "these are the
-same file up to this offset".
-
-`download/resumePlan.ts` is the decision and is pure. Ordered cheapest-first:
-identity (provider, resolution, container) before anything that costs a request,
-then exact size equality, then Range support, then the byte comparison. Notes:
-
-- **`sameResolution` reads `parsed.resolution`**, matching `findMatchingSource`.
-  A resolution the release name did not state is "no opinion" — most direct
-  provider links carry no release name, and treating that as a difference would
-  refuse every resume.
-- **`containersAgree` only ever rejects on positive disagreement.** Most provider
-  links are `?id=…` with no extension, and a container check that refused those
-  would refuse nearly every resume — which is how a safety check comes to be
-  switched off wholesale.
-- **`no-range` is its own cause.** It is the one restart where nothing is wrong
-  with either file, and the honest thing to say is that this server sends the
-  whole file every time. Checked *after* the size arithmetic, so a real mismatch
-  gets the message it deserves.
-- **An unreadable window restarts.** A failed comparison is not evidence of a
-  match; defaulting it to `true` would put the corruption back with a safety
-  check standing in front of it.
-
-`download/resumeWindow.ts` is the socket half, tested against real servers
-because everything worth catching lives in the seam. **The `res.resume()` trap
-appears here for the third time in this repository** — it discards data and
-leaves the transfer running — so both the response and the request are
-destroyed. That regression test is verified by mutation, and its first draft was
-worthless: it asserted the probe *resolved* quickly, which is true with the bug
-present. It asserts the connection tears down now.
-
-Only `restart` is acted on in `markFailed`. `resume` is the default (every engine
-continues from a `.part`) and `complete` is carried by machinery that already
-exists — the transfer asks for `bytes=N-`, the server answers `416`, and
-`httpDownloader` finalises rather than erroring; aria2 routes its own range
-errors to that same downloader. Adding a rename there would bypass
-`finalizeCompletion`, which is the only thing that checks the file is present and
-the right size before claiming success.
-
-### Pressing Download is a request, not a command
-
-The other half of the same report. Every press on a title with any entry in the list
-answered `Already downloading`, including when that entry was paused (left paused), had
-failed (told to go and find the download panel), or had had its file deleted.
-
-`download:request` → `DownloadService.request` answers from the task's actual state and
-returns which of six things it did, so the renderer no longer phrases the outcome from a
-list it matched itself:
-
-| State | What a press does |
-|---|---|
-| `Downloading` / `Retrying` / `RefreshingSource` | nothing, and says so |
-| `Queued` | nothing; says it starts when a slot frees |
-| `Paused` — including every task after a restart, which `loadQueueFromStorage` parks there | resumes |
-| `Failed` | recovers: clears the retry budget, re-resolves the source, retries |
-| `Completed` | reports it — **after checking the file is still there**, and re-downloading if it is not |
-| nothing yet | starts one |
-
-`Completed` is checked against the filesystem rather than trusted because it is a claim
-about a file: a download whose file the viewer has since deleted or moved must be startable
-again, and reporting it as finished leaves the only useful action unavailable with the
-reason invisible.
-
-### The player: three bugs that all looked like "nothing happened"
-
-**`onRefresh` was `() => {}` on two of three player mount points.** Only the live
-`PlaybackSession` path had a working "Search again"; the path taken after picking a source
-from the detail page rendered the button and wired it to nothing — which reads as "the
-search found nothing new" rather than as a dead control. It now runs a real cache-bypassing
-discovery whose results stream into the open list, and reports when one cannot start.
-
-**Two sources could both show "Playing".** `isActive` compared `infoHash`, which for a
-provider stream is *synthetic* — the SHA-1 of its URL. Two extensions scraping the same file
-host produce the same id, so every copy lit up. Only the first match is marked now, and the
-React key is disambiguated so duplicates do not collapse into one row either.
-
-**Volume, mute, speed and track languages persist**, across media and restarts. Languages,
-never indices: audio track 2 is the Hindi dub on one release and the director's commentary
-on the next, so restoring an index would confidently select the wrong thing. The load is
-applied through the same ref the attach effect reads, or a source that attaches before the
-preference arrives spends its first seconds at full volume.
+`onRefresh` was a no-op on 2 of 3 player mount points (dead "Search again" button). `isActive` compared synthetic per-URL `infoHash` — two extensions scraping the same host both showed "Playing" (fixed: first match only, disambiguated React key). Volume/mute/speed/track-language persist by **language, never index** (track 2 is a different thing on every release) — load applied through the same ref the attach effect reads.
 
 ### Volume had two writers and no rule (2026-08-29)
 
-Reported as: the volume slider is flaky, and past a certain point in mpv the player
-crashes. Two distinct defects with one shared cause — volume is the only control in this
-app that is written from **both** ends, and nothing said which end wins.
+Player holds volume as a [0,1] fraction (`HTMLMediaElement.volume` contract); mpv (`volume-max` 130 default, OSC/keybindings can exceed 100) and VLC (0–256 scale, up to 512) can both report over-100 values from their own UI — divided by 100 and assigned, throwing `IndexSizeError` **inside a `useEffect`, unmounting the player**. Fixed at source: mpv launched `--volume-max=100`, VLC's reported level capped; `clampVolume` kept as a second line of defense in both `VideoPlayer` and `mpvEngine`. Echo suppression needs **two rules**: a 700ms window (`AUDIO_ECHO_MS`) ignoring incoming values while a local change settles, AND a value record (`engineAudio`) so an engine-originated value is never pushed back to that engine (else immediately re-derives a stale push that drags the UI backwards). Cleared on engine change (else the very first push to a fresh player is suppressed).
 
-**The crash is a range contract nobody was enforcing.** The player holds volume as a
-fraction of unity because that is what `HTMLMediaElement.volume` takes. Both other engines
-speak percentages and both can exceed unity from their *own* UI: mpv defaults
-`volume-max` to 130, and its OSC slider and the `add volume 5` bindings we install both
-walk past 100; VLC reports up to **512** on its 0–256 scale. That level arrived on a
-snapshot, was divided by 100 into something greater than 1, and was assigned to
-`video.volume` — whose setter throws `IndexSizeError` outside [0,1]. Thrown from inside a
-`useEffect`, that unmounts the player. "Turn it up past a point and it crashes."
-
-Fixed at the source in both engines rather than only at the element: mpv is launched with
-`--volume-max=100` and VLC's reported level is capped, so the two windows agree on what
-100% means — an OSC showing 120% beside a bar showing 100% is the next bug. `clampVolume`
-in `VideoPlayer` and in `mpvEngine` is the second line, kept because the element's
-contract is not something to be defensive about only where we remembered.
-
-**The flakiness is the echo, and it needs two rules, not one.** Every push to an engine
-comes back as an observed property change. Neither rule alone is enough:
-
-- **A time window** (`AUDIO_ECHO_MS`, 700 ms): while a locally-made change is settling,
-  incoming audio values are ignored. Without it, snapshots describing the volume from
-  *before* the drag still in progress arrive and yank the slider backwards under the
-  cursor.
-- **A value record** (`engineAudio`): a level that came *from* an engine is never sent
-  back *to* it. Without it, adopting mpv's level immediately re-derives a push of that
-  same level — by then several steps behind where the viewer has dragged mpv's own knob,
-  so our echo drags it backwards.
-
-`engineAudio` is cleared whenever the engine changes, or the suppression would skip the
-one push that matters — the first to a player that has never been told anything.
-
-### External players are driven, where driving them is possible
-
-The requirement is that transport controls keep working after a handoff. What is actually
-possible is not uniform, and `externalPlayerControl.ts` declares it per player rather than
-pretending:
+### External players: capability declared, never assumed
 
 | Player | Channel | Capability |
 |---|---|---|
-| mpv | JSON IPC — routed through `MpvEngine` | `full` |
-| VLC | its built-in HTTP interface | `full` |
-| MPC-HC/BE | web UI, **off unless the user enabled it**, no launch switch | `none` |
+| mpv | JSON IPC via `MpvEngine` | `full` |
+| VLC | built-in HTTP interface | `full` |
+| MPC-HC/BE | web UI, off unless user-enabled | `none` |
 | PotPlayer, IINA, Celluloid, SMPlayer | none | `none` |
 
-VLC is launched with `--extraintf http` on an OS-assigned loopback port behind a
-per-session password — that interface is unauthenticated by default, and binding it without
-one would hand playback control to anything else on the machine.
+VLC launched `--extraintf http` on an OS-assigned loopback port behind a per-session password (unauthenticated by default otherwise). **Capability can downgrade at runtime** (a no-HTTP-module VLC build plays fine, answers nothing — reports `none` after a grace period rather than offering dead controls). `transport` in `VideoPlayer` is the single "who holds this stream" answer (element/native/external); volume/mute/speed apply to all engines so a handoff-and-back doesn't reset to 100%.
 
-**Capability can downgrade at runtime.** A VLC built without its HTTP module launches, plays
-perfectly, and answers no request; after a grace period the snapshot reports `none` and the
-UI stops offering controls that cannot work. A seek bar that silently does nothing is worse
-than one the viewer was told about — that is the whole reason this is declared rather than
-assumed.
+### Probes remembered, verdicts recomputed (`media/inspectionStore.ts`)
 
-`transport` in `VideoPlayer` is the single derived answer to "who is holding this stream?" —
-element, native engine, or external — and every control reads it. Volume/mute/speed are
-applied to *all* engines rather than only the active one, so a handoff to VLC and back does
-not restore the volume to 100%.
-
-### Probes are remembered; verdicts are not
-
-`media/inspectionStore.ts` persists what ffprobe found, keyed on the **origin** URL — never
-the proxied one, whose port and token are minted per session and would miss on every restart
-while looking like they should hit.
-
-The split is the point. A **measurement** (container, codecs, bit depth, track list) is a
-fact about the file and never changes. A **verdict** is a function of that measurement *and*
-this machine: the renderer's decoders, whether a GPU encoder exists, whether mpv is
-installed, which routing policy is set. So only the measurement is stored and
-`decideStrategy` runs again every time. Caching the verdict would be the stale-cache bug in
-its most expensive form — install mpv, and every previously-played title keeps re-encoding
-because a record from last week says so.
-
-Query strings are deliberately **not** stripped to normalise signed URLs: two films behind
-one path template would then be served each other's codec lists. A signed URL simply misses
-and is re-probed.
-
-Measured: 97 ms saved on a local multi-track MKV, and the probe was 1.6–1.7 s per source
-against real provider streams in the vendor matrix — which is where it actually pays.
+Keyed on **origin** URL, never proxied (per-session token would always miss on restart). Measurement (codecs/bit depth/tracks) is a fact about the file, cached; verdict (depends on this machine's decoders/GPU/mpv/policy) always recomputed — caching it would be the stale-cache bug's most expensive form (install mpv, everything keeps re-encoding per a week-old record). Query strings NOT stripped (would merge distinct signed-URL films' codec lists).
 
 ### The library remembers which source actually played
 
-The library remembered *what* was watched and `bookmarkStore` remembered *which page* it
-came from. Neither remembered **which of thirty sources delivered it**, so returning to a
-title meant picking from the list again with nothing recording that the fourth row down is
-the only one that ever produced a frame.
+`PlayedSource` (per title+season+episode — episode-level, else ep6 overwrites ep5) holds the full `StoredSource` + an `origin` query. **The link is stored but never the identity** — `origin` re-resolves a fresh link for the same release. Recorded on playback (10s of real play, past every "started then stopped" failure), not selection. `library:resolvePlayedSource` returns `reused`/`refreshed`/`unavailable` (marked, not deleted — offers alternatives).
 
-`PlayedSource` (in `src/types/library.ts`, stored by `libraryStore`) is one slot per
-(title, season, episode) — per episode, because keying on the title alone would have episode
-6 overwrite what played episode 5. It holds the full `StoredSource` (provider, repository,
-extension, quality, capabilities, the link and its deadline) plus an `origin` query.
+`cs3/playedSource.ts`: torrents match real infohash; everything else matches the **durable triple** (provider, normalised release name, resolution) — never the synthetic per-URL `infoHash`. Strict (containment allowed either direction for decoration drift like `[Dual Audio]`) — a wrong-release match is worse than no match. **No recorded deadline = treated as expired** (guessing "expired" costs one provider call; guessing "still good" costs a full ffmpeg-startup + player-timeout before failing over anyway).
 
-**The link is stored but is never the identity.** A provider URL is a signed address on
-someone else's CDN, good for minutes; the durable half is `origin`, which is replayed to get
-a fresh link for the same release. That is why both are there.
+### Source list provenance + export
 
-**It is recorded on playback, not on selection.** `SourceMemory` already covers "what the
-viewer picked", and the two are different claims — a release chosen and then abandoned
-because it would not start is not one that works. `VideoPlayer` records after **10 seconds**
-of real playback, which is past every failure that presents as "it started and then stopped".
+`indexerName` on an extension link is the file **host** ("Voe"), not the provider — both lists now also carry `repository ▸ extension ▸ provider`, batched via `api:getProviderProvenanceMap`. `src/utils/sourceExport.ts`: CSV default (sortable/filterable), text/links-only alternatives. **Exported address is always the provider's, never loopback** (`sourceAddress` — loopback dies when the app closes). RFC 4180 quoting matters (`Dune, Part Two` unquoted silently shifts every later column, attributing links to the wrong provider).
 
-`library:resolvePlayedSource` returns one of three outcomes, and the caller is told which
-because they mean different things:
+### Playback failure: one surface, offers a download
 
-- `reused` — the stored link still holds; no provider contacted.
-- `refreshed` — it had expired, so the same release was re-resolved and the record updated
-  in place. Surfaced in the UI, because it explains the pause the viewer just sat through.
-- `unavailable` — the provider no longer offers it. The record is **marked, not deleted**
-  ("the one that used to work is gone" beats an entry that silently vanishes) and the
-  alternatives come back so it is a choice rather than a dead end.
+Old: two stacking overlays (`NativeEngineStage`'s own + `VideoPlayer`'s, both z-index-less under `.native-stage`, unreadable together). `player/PlaybackErrorPanel.tsx` is the single owner now (`.player__overlay` z-index 4 — above `.native-stage`(3), below `.player__top`(5) and `.player-panel`(7)). **First action is Download** — decoding and fetching are different capabilities (a 10-bit HEVC file can be undecodable here and download fine) — suppressed only when the source is actually dead (`describeUnreadableSource` reports `dead`).
 
-#### Matching a saved source after its link dies
+### Messages that overlapped: two flow columns
 
-`cs3/playedSource.ts`, and the reason it is its own tested module: **a provider source has
-no durable id.** Torrents do — an infohash addresses content. A provider stream's
-`infoHash` is *synthesised* by `ContentService` as the SHA-1 of its URL, purely so the
-ranker and the dedupe key have something to work with. Re-resolve that release an hour later,
-get a freshly signed URL, and the id is different for the identical file. **Matching on it
-alone can never re-find a provider source, which is the case this feature exists for.**
+4 absolutely-positioned, non-opaque message boxes could render through each other (they can co-occur genuinely). Now `.player__messages--top`/`--bottom` flow columns with `pointer-events:none` on the stack, `auto` per child.
 
-So: torrents match on infohash; everything else matches on the durable triple — provider,
-normalised release name, resolution. Strict on purpose, because returning the wrong release
-is worse than returning nothing: the viewer asked to resume *this* stream, and quietly
-starting a different cut, dub or a 480p rip is a failure they will attribute to the app
-losing their place. The one concession is containment in either direction, since providers
-append and drop decorations (a size, a mirror name, `[Dual Audio]`) between refreshes.
+### The native stage's control bar was unreachable
 
-A direct link with **no recorded deadline is treated as expired**, deliberately. The costs
-are asymmetric: guessing "still good" spends the ffmpeg startup and the player's timeout
-before failing over, while guessing "expired" costs one provider call and produces a stream
-that works.
+`NativeEngineStage` drew a full duplicate transport row under `z-index:3`, beneath `.player__controls`(5) — unclickable, and its flex overflow (`min-height:auto`/`min-width:auto` not overridden — **a flex item never shrinks below its content unless told to**) caused a scrollbar with nothing to scroll to. Only mpv-track-selection and mpv-fullscreen remain in the stage. `onPausedChange` now reports the engine's own `paused` up (the `<video>` element's events never fire for mpv playback). Buffering is deliberately NOT forwarded (that overlay's copy is torrent-specific and would lie about an HTTP stream).
 
-Pinned by `cs3/playedSource.test.mts` (12 cases), including that a provider source is
-re-found despite its synthetic id changing, and that nothing matching returns null rather
-than a nearby release.
+### The native provider lane (2026-09-07)
 
-### A source list has to say where it came from, and hand over its link
+Re-counting found (a) the jar lane had collapsed (see above) and (b) a real gap: **no native searchable provider lane existed** — `HomeProvider` had catalogue rows only, no `search`/`load`/`loadLinks`; Internet Archive/iptv-org/PeerTube/Jellyfin were all unreachable. `cs3/nativeProviderRegistry.ts` + `cs3/nativeProviders/` closes it — deliberately **not** PRD-41's `.csx` (sandboxed third-party format, large separate effort); this is code shipped inside the app, reviewed normally, no sandbox/signing needed.
 
-The in-player list and the detail page both showed a release name, a size, a
-seeder count and `indexerName`. For an extension link **`indexerName` is the
-extractor** — "Gdshine", "Voe", "Server 3" — a file host the provider picked. It
-is not the provider, so a source that started failing could not be traced to
-whose code or whose repository to turn off, which is the only action a user can
-actually take. Both lists now carry the `repository ▸ extension ▸ provider`
-chain beside the host, resolved through `api:getProviderProvenanceMap` — batched
-because a thirty-row list asking one at a time is thirty IPC round trips to read
-one in-memory Map.
+Rules: addressed `cs3native://<id>/<handle>`, **never** `cs3ext://` (else wrong-attribution failures); funnels through the same `enabledProviderNames`/adult-gate/`DisabledSet` cascade; shares the `providers` scope dimension (no third axis); `loadLinks` returns ordinary `ExtractorLink` (all downstream consumers already read it); failures classified through the shared taxonomy; **does not auto-escalate scope on empty** (the address already names an item in that provider's own catalogue — empty means genuinely unplayable, and 200 other sites can't fix it); detail route checked before `plugins.loadMedia` (else `null` misreports as "nothing knows this address"). `bun run test:native-providers` (50 cases, mutation-verified — bypassing the enable cascade fails 3).
 
-`src/utils/sourceExport.ts` is the shared format, used by the in-player panel,
-the detail page and the player's copy menu. **CSV is the default**: the useful
-operation on thirty sources is sorting and filtering them, and every machine
-already has something that does that. Text and links-only are the other two
-destinations — a chat window, and a downloader that wants one URL per line.
+Internet Archive gotchas: search **must** be `title:("<query>")` (bare terms OR across all fields + `sort=downloads desc` returns wildly wrong top hits — verified on 3/5 test titles); a `sort` key is **mandatory** (empty → empty result set, indistinguishable from "no such film") and `format:(MPEG4)` is a needed quality gate (ungated top "documentary" was a 3MB test clip with 1.25M downloads).
 
-**The exported address is always the provider's, never the loopback one.** By
-the time a stream is playing its URL is `http://127.0.0.1:<ephemeral>/…`, which
-names our own proxy and is dead when the app closes — a link that *looks* like
-it should work in a downloader and cannot. `sourceAddress` is the only way to
-get it, and `sourceExport.test.mts` (13 cases) pins that along with RFC 4180
-quoting, which matters more than it looks: a release called `Dune, Part Two`
-does not break an unquoted CSV, it silently shifts every later column by one and
-produces a spreadsheet of plausible rows with every link attributed to the wrong
-provider.
+**Any Stremio addon is a provider** — supports the protocol, so new addons need no adapter. Measured `api.strem.io/addonscollection.json` (95 addons): subtitles 42, catalog 40, meta 23, **stream 19** (previously consumed from exactly one hardcoded place). Rules: `idPrefixes` is a **hard constraint** (an addon can 500 on a foreign id scheme — Anime Kitsu on `tt…`); a declared `extra` list **under-reports** (TMDB declares no `search` extra but answers correctly anyway — attempt, don't trust the manifest); two deployments of one addon (public vs self-hosted debrid) are **two providers** (host is part of the local id). `externalUrl`/`ytId` streams dropped (open a webpage, not a stream — worse than no row).
 
-### Playback failure is one surface, and it offers a download
+Verified live: Internet Archive (HTTP 206, `video/mp4`, `ftypmp42`), PeerTube (4 links@1080p from origin instance), iptv-org, Cinemeta.
 
-There were two overlays, and they stacked. `NativeEngineStage` rendered its own
-full-bleed `.player__overlay` on an mpv failure **and** reported the same failure
-through `onError`, so `VideoPlayer` rendered its error overlay as well — two
-translucent black panels, each dimming the other, with two different sentences
-about one failure legible through each other. Both also sat under `.native-stage`
-(`z-index: 3`) while carrying no `z-index` of their own, so on the engine that
-fails most interestingly neither could be read at all.
+**Jellyfin/Emby is a provider** — can't exist as `.cs3` (no LAN route, no credential storage reason in an Android extension), and can't rot (a NAS doesn't 403/expire). Rules: API key travels as `X-Emby-Token` header **never in the URL** (URLs get written to disk everywhere — `MediaProxy`, `SourceCache`, diagnostics, export; exception: poster `src` can't carry a header, key omitted there); key never crosses the context bridge (`listServers()` strips it, tested); `static=true` (original file, not a server transcode — this app's own compatibility engine is better). A key valid but attached to no account returns empty `/Users`, not 401 — message names this honestly.
 
-`player/PlaybackErrorPanel.tsx` is the single owner now; the engine reports and
-the player renders. `.player__overlay` is `z-index: 4` — chosen against its
-neighbours, not for headroom: above `.native-stage` (3), below `.player__top` (5)
-so Back stays reachable, and below `.player-panel` (7) so "Choose another source"
-opens the list *over* the error that offered it.
-
-**The first action is Download, deliberately.** Decoding and fetching are
-different capabilities: a 10-bit HEVC file with Dolby audio can be undecodable
-here and completely ordinary to download, and every report of "it will not play"
-from a source that would have downloaded fine was a dead end the app put there
-itself. Offered only when the source is alive — `describeUnreadableSource`
-reporting `dead` suppresses the download, the external players and everything
-else that cannot help a 404.
-
-### Four messages that positioned themselves independently
-
-`.player__external-banner` at `top: 4.5rem`, `.player__audio-notice` at
-`top: 4.2rem`, `.player__strategy-note` at `bottom: 5.5rem`, `.player__toasts` at
-`bottom: 6.5rem` — four absolutely positioned boxes, none of them opaque. Any two
-that were true at once overlapped and rendered *through each other*. They can
-genuinely co-occur (a stream being converted, on a machine missing the components
-that would convert it, while a download finishes), so suppressing one was never
-the answer. They are two flow columns now — `.player__messages--top` and
-`--bottom` — and the stack carries the blur. `pointer-events: none` on the stack
-with `auto` on each child keeps the gaps click-through; the stack spans the width
-of the player and would otherwise swallow clicks on the picture.
-
-### The native stage drew a control bar nobody could click
-
-`NativeEngineStage` had a full transport row along its bottom edge: play, seek,
-volume, mute, track menus, fullscreen. Every one of those except the track menus
-was a duplicate — `VideoPlayer`'s own bar already routes `togglePlay`, `seekTo`
-and volume to mpv. And the duplicate was **unreachable**: `.player__controls` is
-`z-index: 5` and pinned to the bottom, the stage is `z-index: 3`, so the row sat
-underneath it receiving no clicks at all. Its overflow is also what produced the
-reported horizontal scrollbar with nothing to scroll to.
-
-Two flexbox faults were behind that overflow, and both are the same trap:
-`.native-stage__surface` had `flex: 1` with the default `min-height: auto`, so it
-refused to shrink below its own text and pushed the control row off the bottom of
-the player; `.native-stage__seek` had `flex: 1` with `min-width: auto`, so the
-range input's intrinsic width forced the row wider than the player. **A flex item
-does not shrink below its content unless you say so.**
-
-What is left in the stage is what the player's bar genuinely cannot do — mpv
-track selection and fullscreening mpv's own window — sitting in the surface where
-nothing covers it. Transport state now flows the other way: `onPausedChange`
-reports the engine's own `paused` up, because the play button reads the
-`<video>` element's events and those never fire here. It showed "Play" over a
-film that was playing, and the first press paused it. Buffering is deliberately
-*not* forwarded into `isBuffering` — that flag drives an overlay reading
-"Buffering from peers…", which is a torrent's story and a lie about an HTTP
-stream.
-
-### The native provider lane, and why the jar lane stopped being the answer (2026-09-07)
-
-Two findings from re-counting the ecosystem, and the second is the one that changes strategy.
-
-**The cross-platform jar lane collapsed.** PRD-43 measured 110 of 918 extensions publishing
-`jarUrl` on 2026-09-03 — 12.0%. Four days later, re-measured across all 36 catalogued
-repositories following every `pluginLists` entry:
-
-```
-958 extensions · 18 publishing jarUrl (1.9%)
-still on the lane: saimuelrepo 10/10 · recloudstream/extensions 5/5
-                   reflex_repo 1/2 · xr3ed 1/191 · gizlikeyif 1/111
-```
-
-`phisher` went from 47 jars to **0 of 81** and `xr3ed` from 46 to 1 of 191 — verified by
-reading the published `plugins.json` directly: the entries no longer carry `jarUrl`,
-`jarHash` or `jarFileSize` at all. The lane still works and `chooseArtifact` still prefers a
-jar where one exists; what changed is that almost nothing publishes one. **Do not plan work
-on the assumption that the corpus is moving onto it.**
-
-**And the uncatalogued `.cs3` tail is not worth taking.** 122 CloudStream repositories on
-GitHub are not in `official_repositories.json`; 21 of 32 probed have live indexes carrying
-1,158 extensions, of which **19 publish a jar (1.6%)** and three of the four largest are
-majority-NSFW (`7Escanor/BlackHole` 182/182, `vigarepo2` 190/437, `gameras1010-afk` 116/291).
-One trap worth naming: `Wiojelt/TurkSinema` reports `Documentary:56` across 56 extensions —
-every extension declaring every type. **A declared `tvType` is a manifest default, not
-coverage**, and any count taken from that field will be inflated by exactly this pattern.
-
-So the effort went where the sources actually are, and that turned out to be one gap:
-
-> **There was no native searchable provider lane.** `HomeProvider` supplies catalogue rows
-> and has no `search`, `load` or `loadLinks`; everything playable is a `.cs3` addressed
-> `cs3ext://` and run in the JVM. Every source that is not an Android archive — Internet
-> Archive, iptv-org, PeerTube, a Jellyfin server — was unreachable, and all for the same
-> reason.
-
-`cs3/nativeProviderRegistry.ts` plus `cs3/nativeProviders/` closes it. **This is deliberately
-not PRD-41's L2**: `.csx` is a user-installable, sandboxed, signed bundle format for
-third-party code, and that is a large piece of work. This is the other half — code that ships
-inside the app and is reviewed like any other module, so it needs no sandbox, no signing and
-no capability model. When `.csx` lands it produces the same values this does.
-
-Seven rules, each answering a failure already on record:
-
-- **Addressed `cs3native://<id>/<handle>`, never `cs3ext://`.**
-  `explainMissingProvider` resolves an unknown `cs3ext://` name against the extension tables
-  and reports which extension owned it — for a module compiled into the binary that is the
-  wrong-attribution failure that method exists to prevent. `NativeProviderRegistry.explain`
-  is the native counterpart.
-- **They funnel through the enable cascade.** `enabledProviderNames()` on the registry
-  mirrors `PluginManager`'s, reads the same `cs3_adult_content_enabled` key, and stores its
-  exceptions through the same `DisabledSet`. A lane registering providers anywhere else
-  re-opens the adult gate *and* the disable switch at once.
-- **They share the `providers` scope dimension rather than getting a third axis.** A native
-  and an extension provider are the same thing to everything downstream — a named source,
-  scoped by name, enabled by name. What differs is only who to ask, which is one partition in
-  `SearchSession.runProviders`.
-- **`loadLinks` returns `ExtractorLink`.** Not a new shape; `providerLinks.ts`, the
-  compatibility engine, `MediaProxy`, mpv routing and the download identity all already read
-  it.
-- **Failure is a reason, never a bare empty list**, classified through the shared
-  `classifyFailure` taxonomy so these group with everything else in the issue ledger.
-- **`nativeSources` does not escalate to a full fan-out when empty.** `shouldEscalateScope`
-  is right for an extension that has never heard of a title; here the address *names* an item
-  in that provider's own catalogue, so empty means that item is unplayable — which two
-  hundred third-party sites cannot fix and would misreport as the title being unavailable.
-- **The detail route is checked before `plugins.loadMedia`**, which answers `null` for an
-  address it does not know — and that null becomes "nothing knows how to open this address"
-  for every native row.
-
-Two things measured while building Internet Archive that would each have shipped as a bug:
-
-- **Search must be `title:("<query>")`.** The endpoint ORs bare terms across every field and
-  `sort=downloads desc` floats whatever is popular: bare `apollo 11` answers *Experiments in
-  the Revival of Organisms*, bare `night of the living dead` answers *Unus Annus*. The phrase
-  form is right on all five test titles; the bare form is wrong on three.
-- **A sort key is mandatory and `format:(MPEG4)` is a quality gate.** An empty `sort[]`
-  returns an *empty result set* rather than an error — indistinguishable from "no such film".
-  Ungated, the top documentary by downloads is a 3 MB test clip titled *Sample 1* with 1.25M
-  downloads.
-
-`bun run test:native-providers` (50 cases) pins all of it, and is verified by mutation:
-bypassing the enable cascade fails three. One of those three was rewritten after the
-mutation check — asserting "the result was empty" passed with the cascade removed, because a
-*failing* provider also returns empty, so it asserts the socket was never touched instead.
-
-**Any Stremio addon is a provider now**, which is the part of this that keeps paying: what is
-supported is the protocol, so an addon published next year needs no adapter. Measured across
-`api.strem.io/addonscollection.json` (95 addons) by resource: **subtitles 42 · catalog 40 ·
-meta 23 · stream 19**. Read that table against what the app consumed before — `catalog` on the
-home screen only, `stream` in the indexer registry, no `meta`, and `subtitles` from one
-hardcoded host. The single most-served resource in the ecosystem was the one we took from
-exactly one place.
-
-Three rules came out of probing real addons, and two invert what the manifest says:
-
-- **`idPrefixes` is a hard constraint.** Anime Kitsu answers **HTTP 500** for `tt0063350`, not
-  an empty list — an addon that speaks only `kitsu:`/`mal:`/`anilist:` treats an IMDb id as
-  malformed. Check the prefix before the request; an addon that cannot address an id is
-  skipped, not counted as failing.
-- **A declared `extra` list under-reports what works.** TMDB's catalogue declares only `genre`
-  and `skip`, and `search=dune` returns 23 correct results anyway. Search is *attempted* and a
-  refusal is read as "this catalogue does not search" — trusting the manifest would have
-  silently disabled search on one of the two best catalogue addons in the ecosystem.
-- **Two deployments of one addon are two providers.** Torrentio, Comet and MediaFusion all
-  have public and self-hosted instances, and a debrid-configured deployment is the *point* of
-  adding one — so the host is part of the local id or the second silently replaces the first.
-
-Also: `externalUrl` and `ytId` streams are dropped rather than offered. An `externalUrl` opens
-a web page, and a row that looks playable and is not is worse than no row.
-
-**Verified against live hosts**, driving the shipped classes rather than a harness copy:
-Internet Archive search → load → `loadLinks` → **HTTP 206, `video/mp4`, `ftypmp42`**; PeerTube
-4 links at 1080p from the origin instance; iptv-org catalogue, search and resolve; Cinemeta
-search and meta.
-
-**The user's own Jellyfin or Emby server is a provider**, and it is the clearest
-desktop-exclusive case there is. It *cannot* exist as a `.cs3`: an Android extension scrapes
-public websites and has no route to a server on your LAN, no way to hold your credentials and
-no reason to. It is also the only source in this app that cannot rot — every other one can
-403, expire or be taken down; a NAS in the next room does not. And it clears the keyless bar
-from the other side: the key is the user's own, for their own server, and there is no
-third-party service to revoke it.
-
-Three rules there are load-bearing:
-
-- **The API key travels as `X-Emby-Token`, never in the URL.** Jellyfin accepts `?api_key=`
-  and its own docs use it — but a URL is the one part of a request this codebase writes to
-  disk: `MediaProxy` mints routes from it, `SourceCache` persists it, `DiagnosticsLog` records
-  it and the source export copies it to a clipboard. The one exception is the poster `src`,
-  which cannot carry a header, so the key is simply omitted there.
-- **The key never crosses the context bridge.** `listServers()` strips it on the way out
-  rather than leaving each caller to remember; a test asserts it appears nowhere in
-  renderer-bound data.
-- **`static=true`.** The original file, not a server-side transcode — this app has its own
-  compatibility engine, and a second one running on the user's NAS would produce a worse
-  picture than the file it started from.
-
-Worth knowing: an API key that authenticates but is attached to no user account does **not**
-401. `/Users` comes back empty, and the honest message names that rather than reporting no
-results.
-
-**Their catalogues reach the home screen**, after the metadata rows rather than before.
-Cinemeta's "Trending now" is what somebody opening a streaming app expects at the top; a
-public-domain shelf and a list of free-to-air channels are worth having and are not that.
-These rows are also *playable* rather than metadata — opening one goes straight to that
-provider's own `loadLinks` — which is the opposite of `ottCatalog`'s caveat, and why the
-subtitle names the source. `DiscoveryService` takes the **same** registry instance
-`ContentService` owns, so a provider switched off in the extensions screen leaves the home
-screen in the same moment; two rosters would drift. Verified live: Documentaries 28 rows,
-Public-domain features 30, PeerTube documentaries 30, Movie channels 40.
-
-**Four catalogue rows had rotted** and are now marked with the measurement:
-`pitipitii` is gone permanently (GitHub answers **451, unavailable for legal reasons**),
-`fstream`'s host sits behind an Anubis bot wall serving HTML where JSON is expected, and
-`cloudstream_18plus` resolves to a plugin list that 404s. All three are `verified: false`.
+Native catalogues reach the home screen after metadata rows (`DiscoveryService` shares `ContentService`'s registry instance so a disabled provider vanishes from both simultaneously). Verified live counts: Documentaries 28, Public-domain features 30, PeerTube documentaries 30, Movie channels 40. **4 rotted catalogue rows marked `verified:false`**: `pitipitii` (GitHub 451), `fstream` (Anubis bot wall), `cloudstream_18plus` (404 plugin list).
 
 ### Two lanes that were already paid for (2026-09-03)
 
-Found by counting the roster for PRD-43 rather than from a bug report. Neither was a missing
-feature; both were built, funded and unreachable.
+**Non-torrent Stremio streams were discarded** — `StremioAddonIndexer.search` filtered to `infoHash`-carrying replies only, dropping every debrid/HTTP-only addon reply silently. `RawTorrent` gained a **direct URL half**, finished before magnet derivation (no swarm/piece-order/infohash needed). Identity shared with `ContentService.extensionSources`'s `directSourceIdentity` (`ext-` prefix, else two lanes finding the same host show as two sources). `seeders:1` fixed (swarm health meaningless for HTTP; `minSeeders` default 1 would hard-reject otherwise). `fileIdx` dropped on `url` streams (indexes a file *inside* a torrent; a direct link is already the file).
 
-**Every non-torrent Stremio stream was being discarded.** `StremioAddonIndexer.search` filtered
-its replies to the ones carrying an `infoHash`. A Stremio `stream` carries **either** `infoHash`
-**or** `url`, and the `url` half is what every debrid-fronted addon answers with — an
-already-cached link at line speed, the most reliable source shape in that ecosystem — plus
-everything an HTTP-only addon returns. There was no error and no diagnosis: the addon simply
-"found nothing".
+**yt-dlp had no caller** — `extractLinks`/`searchAndExtract` existed, referenced by nothing. Fixed transport detection (was `url.includes('.m3u8')` string-sniffing with `fmt.protocol` sitting unread — nothing decided from URLs, per repo-wide rule) and required **both** video+audio streams (a video-only DASH format plays silently — same AC-3-style bug shape). `ytsearch1:… trailer OR full feature` fallback removed (a trailer standing in for a film is a synthetic source). `YtDlpEngine.resolve` answers with a **reason** from yt-dlp's stderr (Unsupported URL / Video unavailable / geo-block are 3 different actionable outcomes). `--no-playlist` passed (else a series page resolves every entry). Two entry points, no IPC change: a pasted page URL is its own search row; `ContentService.discover` resolves `http(s)` bases through yt-dlp. **Not** resolved from the search box (typing ≠ consent to spawn a process per keystroke).
 
-The wall was the adapter contract, not the idea. `TorrentResult` has carried `directUrl` since
-extension providers started returning HTTP links; `RawTorrent` had nowhere to put one, so
-`finaliseResult` returned null. It now has a direct half, finished **before** any of the magnet
-derivation — there is no swarm, no piece order and no infohash to validate.
-
-Three rules in it are load-bearing:
-
-- **The identity is `directSourceIdentity`, shared with `ContentService.extensionSources`.** Same
-  function, same `ext-` prefix, so an addon and an extension that resolve a title to the same
-  file host collapse into one row in `dedupeByInfoHash`. Two schemes would show the viewer one
-  stream twice and call it two sources.
-- **`seeders: 1`, and no attempt to do better.** Swarm health is meaningless for an HTTP stream,
-  and `minSeeders` (1 by default) would hard-reject every direct source in `rankResults`. It
-  understates a cached debrid link, which is deliberate: the provider path has ranked its links
-  this way all along, and a special case here would make two identical sources sort differently
-  depending on which lane found them.
-- **`fileIdx` is dropped on a `url` stream.** It indexes a file *inside* a torrent, and a direct
-  link is already that file.
-
-**yt-dlp had no caller.** `extractLinks`/`searchAndExtract` existed and were referenced by
-nothing outside their own definitions — ~1,800 sites, binary already fetched and resolved by
-`binaryDownloader`. Same shape as the local-file capability that shipped with no entry point.
-Two defects were fixed on the way in, and both are rules this repository had already settled:
-
-- **The transport was read from the URL string** (`url.includes('.m3u8')`) with `fmt.protocol`
-  sitting unread in the same object. Nothing is decided from the URL — `cs3/providerLinks.ts`
-  exists for exactly this argument.
-- **Any format with a video *or* an audio stream was offered.** On every DASH site that means
-  the top rows are video-only, and a video-only row plays perfectly, in silence, with no `error`
-  event. That is the AC-3 signature, and a viewer diagnoses it as a broken app. `ytdlpSources.ts`
-  requires both halves, except on a manifest, which names its own tracks.
-
-The `ytsearch1:<query> official trailer OR full feature` fallback is gone. A trailer standing in
-for a film is a synthetic source under another name.
-
-`YtDlpEngine.resolve` answers with a **reason** rather than an empty array, lifted from yt-dlp's
-own stderr: "Unsupported URL", "Video unavailable" and a named geo-block are three different
-actions a viewer could take, and the old code made them one silent non-answer. It is bounded,
-and it passes `--no-playlist` — handed a series page, yt-dlp otherwise resolves every entry,
-turning one press into hundreds of extractions against somebody's site.
-
-**Two entry points, and no IPC surface changed**, because both paths already ran end to end: a
-pasted page URL becomes its own search row exactly as a pasted magnet does (`searchSession`), and
-`ContentService.discover` resolves an `http(s)` base through yt-dlp — where it previously fell
-through to a catalogue lookup and ended at "Could not determine a title to search for". The page
-is **not** resolved from the search box: typing is not consent to fetch a page, and a search that
-spawns a process per keystroke would be its own bug. A page yt-dlp cannot read still falls through
-to the ordinary search when a title is already known, so re-opening a history row whose media URL
-is an expired CDN address is not answered with a sentence about the dead link.
-
-`bun run test:direct-sources` (13) and `bun run test:ytdlp` (16). The first was verified by
-mutation: restoring the `infoHash` filter and removing the direct branch fails 9 of its 13.
-
-**The catalogue grew with them** — `xr3ed` (190 extensions, 47 on the jar lane), `hexated`,
-`arabic_extensions`, `indochannel`, and `codegeasse` behind the adult gate. None is `bundled`:
-that flag is still a claim `provider-e2e.mjs` has driven the repository end to end.
-`bun run test:repositories` (9) pins what that data file may claim — unique ids and addresses,
-https, a raw document rather than a project page, an adult repository never bundled, a bundled
-repository never unverified. It fetches nothing; liveness is
-`node tools/research/survey-repositories.mjs`, run deliberately, and a test that fails when a
-third-party host has a bad afternoon is one people learn to ignore.
+Repositories added: `xr3ed` (190 ext, 47 jar-lane), `hexated`, `arabic_extensions`, `indochannel`, `codegeasse` (adult-gated). None `bundled` (unproven by the harness).
 
 ### The source cache learns from playback
 
-It was already persistent with per-source expiry. What it lacked was any memory of a source
-having *failed*: `unplayable` lived on the session and died with the player, so the same
-dead link was served first again next time.
-
-`recordFailure` now decides between two responses, and the distinction is the whole policy.
-A **definitive** answer — 404, 410, or the host saying the file is gone — drops the source
-immediately, because no amount of retrying changes it. Anything else is **counted**: a
-timeout, a reset, a 5xx, or a 403 is the network or the host having a moment, and a cache
-that forgets everything on the first bad minute is worse than no cache. Three such failures
-drop it. `recordSuccess` clears the count, so a source that failed twice on a bad afternoon
-is not dropped by an unrelated blip a week later.
-
-403 is specifically **not** definitive: expired signed URLs and hotlink protection both
-answer 403 and both are recovered by re-resolving, which the expiry machinery already does.
-
-Pinned by `sourceCache.test.mts` (10 cases), including that removing the last source removes
-the entry rather than leaving an empty shell — `hit: true` with nothing in it makes the
-caller skip the discovery it needs.
+`recordFailure`: **definitive** (404/410/"file is gone") drops immediately; **counted** (timeout/reset/5xx/403) needs 3 strikes (`recordSuccess` clears the count). **403 is specifically not definitive** — expired signed URLs and hotlink protection both answer 403 and both recover by re-resolving.
 
 ### An extension update that breaks itself is put back
 
-`updatePlugin` now copies the working archive aside, installs, **loads the new one**, and
-restores the old one when it will not link. An update can download cleanly, verify its hash
-and write successfully while being built against a provider API this runtime does not have —
-and the first anyone knows is that every provider from that extension has silently vanished.
+`updatePlugin` copies the working archive aside, installs, **loads the new one**, restores the old on link failure. Only `T4_BLOCKED` counts as failure (`T3_DEGRADED` is normal for much of the corpus; a `null` report = sidecar unreachable, explicitly not a failure — DROP-34). One generation kept; `extension:rollback` exposes it manually (for scrapes-nothing-but-links-fine cases the load check can't see).
 
-`T4_BLOCKED` is the only verdict that counts as failure. `T3_DEGRADED` is the normal state of
-a large part of the corpus and refusing an update over it would block most of the ecosystem.
-A **null** report — the sidecar being unreachable — is explicitly not a failure either
-(DROP-34): rolling an update back because the JVM had not started yet would be its own bug.
+### The native engine: mpv (added 2026-08-19, `docs/roadmap/support_libmpv.md`)
 
-One generation is kept. `extension:rollback` exposes it manually, for the case the load check
-cannot see: an extension that links fine and then scrapes nothing.
-
-### The native engine: mpv, for the streams Chromium will never decode
-
-Added 2026-08-19 against `docs/roadmap/support_libmpv.md`. Everything in the codec
-section above is still true and still the fallback; what changed is that the transcoding
-ladder is no longer the *only* answer, and it stopped being the answer for the case where
-it was worst.
-
-The arithmetic that motivates it. A 4K HEVC 10-bit release — routine on GDFlix, Google
-Drive links and any decent torrent — has exactly one browser-side path: re-encode to 8-bit
-H.264. That costs a whole CPU core, throws away the HDR metadata, flattens 5.1 to stereo,
-and on a software-only host under 16 threads it downscales to 1080p because libx264 cannot
-hold realtime at 4K. mpv carries its own FFmpeg and hands the bitstream to D3D11VA, NVDEC,
-Vulkan or VideoToolbox. **Measured here: `d3d11va`, full resolution, nothing re-encoded.**
+4K HEVC 10-bit has exactly one browser path (re-encode to 8-bit H.264 — a whole CPU core, discards HDR, flattens 5.1, downscales under 16 threads). mpv carries its own FFmpeg + hands bitstreams to D3D11VA/NVDEC/Vulkan/VideoToolbox (measured: `d3d11va`, full resolution, nothing re-encoded).
 
 | File | Role |
 |---|---|
-| `media/mpvEngine.ts` | Spawns and supervises mpv; line-delimited JSON-RPC over a named pipe (Windows) or unix socket. Property observation, track lists, seek, tracks, subtitles. |
-| `src/types/mpv.ts` | The contract, imported by both sides. `MpvSnapshot` is what the player renders from. |
-| `src/components/player/NativeEngineStage.tsx` | The player surface for a routed stream: our controls, mpv's playback. |
+| `media/mpvEngine.ts` | Spawns/supervises mpv; line-delimited JSON-RPC over named pipe (Windows)/unix socket. |
+| `src/types/mpv.ts` | Contract; `MpvSnapshot` is what the player renders from. |
+| `src/components/player/NativeEngineStage.tsx` | Player surface for a routed stream. |
 | `binaryDownloader.setupMpv` | Fetches a portable build on demand. |
 
-**Routing is a decision, not a mode.** `shouldRouteToNativeEngine` runs *after* the
-browser-side decision rather than instead of it, so removing mpv from the machine reverts
-every verdict to exactly what it was — there is no second code path to keep correct. Three
-policies, stored in the datastore under `native_engine_policy`:
+**Routing is a decision, not a mode** — `shouldRouteToNativeEngine` runs *after* the browser-side decision (removing mpv reverts every verdict exactly). Policy (`native_engine_policy` in datastore): `off`; `auto` (default — anything the browser path would re-encode/downmix: above-stereo, or lossless/object-based audio at any channel count); `aggressive` (everything not already native). **The channel rule replaced a codec rule** after user reports showed the original lossless-only rule pushed nearly all TV (modal E-AC-3 5.1 WEB-DL) to software re-encode when the GPU decodes it free — the line is now channel count, not codec.
 
-- `off` — the ladder does everything, as before.
-- `auto` (default) — mpv takes any stream the browser path would have **re-encoded** or
-  **downmixed**: that is anything above stereo, plus lossless and object-based audio
-  (TrueHD, DTS-HD MA, DTS:X, FLAC, PCM) at any channel count.
-- `aggressive` — mpv takes everything that is not already playing natively, including a
-  stereo container remux that loses nothing.
+**A stream never reaches mpv without inspection** — no raw-URL entry point (`media:prepare` only, same INV-RACE-1 rule); `VideoPlayer` refuses to assign a `NATIVE_MPV` URL to the element.
 
-**The channel rule replaced a codec rule, and a user's catalogue is what settled it.** The
-first version routed only *lossless* audio, reasoning that AC-3/E-AC-3 5.1 was a recoverable
-loss and that routing it would push most television out of the in-app player. The report
-back was "this happens on most of the content", with `Audio re-encoded, video copied
-untouched: matroska,webm cannot be demuxed by the browser; EAC3 audio has no decoder here`
-on title after title. A 1080p WEB-DL carrying E-AC-3 5.1 in Matroska is the **modal**
-provider release, so the rule meant to protect the common case was degrading it: nearly
-every film and episode played as stereo while the 5.1 sat in a file the GPU decodes for
-free. The line is now channels, not codec — genuine stereo still stays in the app, where a
-remux costs nothing and loses nothing.
+Bite-prone: URL handed over is the proxied one, headers per-file via `loadfile`'s option map (one mpv process serves a whole series, headers differ per episode); `--no-config` (a user's own mpv config would silently change behaviour); `--ytdl=no` (yt-dlp fallback wastes ~8s on failures already diagnosed); `video-params/pixelformat` reports the **GPU surface type** once hardware decoding runs — read `hw-pixelformat` for the real format; `mpv.com` (not `.exe`) needed for stdout (GUI-subsystem binary has none); 7z extraction needs bsdtar (Windows' own tar, not PowerShell's `Expand-Archive`); mpv wired into `before-quit` (else outlives the app).
 
-**A stream never reaches mpv without being inspected first.** There is no `mpv:play(url)`
-that takes a raw link; `media:prepare` remains the only way to obtain a playable URL, and
-it returns `requiredStrategy: 'NATIVE_MPV'` with the proxied loopback address. INV-RACE-1
-applies to this engine exactly as it applies to the `<video>` element — a second entry
-point that skipped inspection would reintroduce PRD-37's original bug in a new decoder.
-`VideoPlayer` also refuses to assign a `NATIVE_MPV` URL to the element: Chromium would take
-it, fail, fire `error`, and the failover ladder would skip a source that is playing fine.
+**mpv's window draws its own controls (2026-08-24)** — it renders a **separate OS window**, so `--osc=no`/`--osd-level=0` left that window with zero controls while the app's own bar sat behind it. Now `--osc=yes`/`--osd-level=1`/`--input-vo-keyboard=yes`. **`--input-default-bindings` stays `no`** (defaults quit on `q`/`Q`/`Ctrl+q`, and mpv exiting-while-playing reports `ended`→advances to next episode) — bindings enumerated manually (`NATIVE_KEY_BINDINGS`) to match `VideoPlayer`'s own (`SKIP_SECONDS`=10 both). `end-file` reason `quit` now reports `idle`, not `ended`.
 
-Things that will bite:
+**What is not built: embedding.** mpv is a separate OS window driven over IPC (roadmap's recommended first step / Option A). True embedding needs libmpv's render API via a native addon (Option B). `MpvOpenRequest.windowHandle` exists, unused today.
 
-- **The URL handed over is the proxied one**, same rule as `externalPlayer`. Headers are
-  also passed per-file through `loadfile`'s option map rather than as process arguments,
-  because one long-lived mpv process serves a whole series and episode 2's `Referer` is not
-  episode 1's.
-- **`--no-config` is not tidiness.** Someone who uses mpv has configured it for mpv — key
-  bindings, an OSC, a profile forcing software decoding, `--save-position-on-quit`. Any of
-  those silently changes what this engine does, and the bug is invisible on every machine
-  but theirs.
-- **`--ytdl=no`.** Link resolution is the extensions' job and it is already done. Left on,
-  every failed load spends seconds shelling out to a downloader that cannot help — measured
-  at ~8s added to a failure mpv had already diagnosed as HTTP 522.
-- **`video-params/pixelformat` lies once hardware decoding is running.** It reports the GPU
-  surface type (`d3d11`, `cuda`), and the real format moves to `hw-pixelformat`. Reading
-  only the first makes every hardware-decoded file look like it has no bit depth — which is
-  the fact that put it on this path.
-- **`mpv.com` ships beside `mpv.exe`.** `mpv.exe` is a GUI-subsystem binary whose stdout
-  goes nowhere, so without the console front-end `--version` and `--hwdec=help` return
-  empty and every diagnostic about the engine is blank.
-- **The 7z archive needs bsdtar.** Windows' own `tar.exe` is libarchive and reads 7z;
-  PowerShell's `Expand-Archive` does not, so `extractZip`'s fallback cannot rescue this one.
-- **mpv is a child process with its own window** and is wired into `before-quit`. Without
-  that it outlives the app and keeps playing with nothing left on screen to stop it.
+### The second film would not play (2026-08-24) — four causes
 
-### mpv's window draws its own controls (2026-08-24)
+1. **Persistent probe cache keyed on the loopback address** (`/stream/1`, token minted per-process — second film decided from first film's codecs). Fixed: `MediaProxy.getTargetRoute` unwraps to the upstream URL; store refuses/prunes loopback keys.
+2. Idle mpv (`--idle=yes`) left a blank window on screen after `stop()`. Now quits.
+3. **Race**: `mpv:stop` (cleanup) and `mpv:open` (new mount) fired in the same tick, unordered — the old kill landed on the newly-started process. `MpvEngine.serialize` queues `open`/`stop`/`shutdown`; `shutdownNow` awaits the child's actual `exit` instead of a detached timer. `playback:stop` no longer stops mpv at all (not every session owns a stream — the detail page's picker starting a scrape used to kill the mini-player's film); closing the player is what closes mpv now.
+4. **Preparation effect keyed on object identity** — `activeSource?.directHeaders`/`.drm` are new objects on every `playback:update` (including buffer-stall pushes), causing stall→teardown→re-prepare→stall loops. Fixed: `activeSourceKey` (serialised) drives a `sourceConfig` memo. **Add new source fields to the key, not the dependency array.**
 
-`--osc=no`, `--osd-level=0`, `--input-default-bindings=no` and
-`--input-vo-keyboard=no` were all set on the reasoning that our control bar is the
-controller and mpv's would be a second one. That reasoning holds for an *embedded*
-surface and does not hold for what is actually built: mpv renders into a **separate OS
-window**, so the viewer looking at the picture was looking at a window with no controls
-in it, while the bar that drives it sat behind in a different window.
-
-So `--osc=yes` and `--osd-level=1` are on — mpv's built-in on-screen controller gives
-play/pause, a seek bar, volume and fullscreen — and `--input-vo-keyboard=yes` lets keys
-reach the window. Verified that the OSC still loads under `--no-config --load-scripts=no`:
-it is an internal script, and `--load-scripts` only governs the user's own script
-directory. None of this touches decode or network.
-
-**`--input-default-bindings` stays `no`, and the bindings are enumerated instead**
-(`NATIVE_KEY_BINDINGS`, applied with mpv's `keybind` command after the IPC channel is up).
-mpv's default set quits on `q`, `Q` and `Ctrl+q` — and an exit while playing is reported
-as `ended`, which `NativeEngineStage` turns into `onEnded()`, so a viewer pressing `q` to
-stop watching would be handed the next episode. The defaults also bind `s` to a screenshot
-written beside the working directory. Every enumerated binding matches what the same key
-already does in `VideoPlayer` (`SKIP_SECONDS` is 10 in both), because the two windows are
-one player and a key that seeks 10 in one and 60 in the other is worse than a dead key.
-
-Two consequences worth keeping:
-
-- **Nothing new syncs.** `pause`, `volume`, `mute`, `speed` and `fullscreen` are already in
-  `OBSERVED`, so whatever the viewer changes in mpv's window arrives back as a
-  `property-change` and our own control bar follows it. Adding a control that mpv can
-  change without an `OBSERVED` entry behind it would be the first thing here to need a
-  second sync path.
-- **`end-file` with reason `quit` now reports `idle`.** Closing mpv's window — or any
-  binding that quits — used to reach `child.on('exit')` while `state` was still `playing`,
-  which is the credits as far as that handler is concerned. The next episode started in a
-  new window. Same rule as `shutdownNow`, reached from mpv's side instead of ours.
-
-**What is not built: embedding.** mpv renders in its own window, driven over IPC — the
-roadmap's Option A, which it calls the recommended first step. Putting the video surface
-inside the Electron window needs libmpv's render API through a native addon (Option B).
-`MpvOpenRequest.windowHandle` exists and is passed to `--wid` for when that lands; nothing
-sets it today.
-
-### The second film would not play (2026-08-24)
-
-Reported as: the first title plays, and after that nothing does — a different film, a
-different source, or the same one again. Four causes, and none of them is the one the
-symptom points at.
-
-1. **The persistent probe cache was keyed on the loopback address.** `ContentService` wraps
-   a provider link through `MediaProxy` to attach its headers, producing
-   `http://127.0.0.1:<port>/stream/1`, and `PlaybackEngine.inspect` handed *that* to
-   `InspectionStore` — which persists. The token is minted per process, so `/stream/1` is
-   one film this run and a different one the next: the second film was decided from the
-   first film's codecs, and an HEVC release was attached as though it were H.264.
-   `MediaProxy.getTargetRoute` unwraps a loopback URL back to the upstream one, the
-   capability cache and the store are keyed on **that plus the headers**, and the store now
-   refuses loopback keys outright and prunes the ones already written.
-
-2. **An idle mpv left its window on screen.** `stop()` sent `['stop']` and left the process
-   alive under `--idle=yes`, so a blank standalone window floated over the app for every
-   source that was not routed to mpv, and for the player being closed. It quits now.
-
-3. **Which immediately created a race, and it is the ordinary source switch.**
-   `NativeEngineStage`'s effect cleanup fires `mpv:stop` and its body fires `mpv:open` in
-   the same tick, neither awaiting the other. Interleaved, the quit's `teardown()` — and the
-   `kill()` that used to be scheduled on a detached 1.5s timer — landed on the process the
-   open had just started. `MpvEngine.serialize` puts `open`, `stop` and `shutdown` on one
-   queue, and `shutdownNow` waits for the child's `exit` (~100ms typically) instead of
-   arming a timer at a process that may no longer be the one it meant. Pinned by three cases
-   in `mpvEngine.test.mts`; the pre-fix engine fails the first of them by timing out waiting
-   for the switched-to source to play.
-
-   Two smaller rules fell out of it. An explicit stop clears `state` **before** the quit,
-   because `child.on('exit')` reports `ended` when the process dies while playing and
-   `NativeEngineStage` turns an `ended` snapshot into `onEnded()` — the next-episode
-   advance. And `playback:stop` no longer stops mpv at all: not every session owns a stream,
-   and the detail page's source picker starts one through `startSourceDiscovery` purely to
-   scrape, so closing the picker killed the film playing in the mini player. Closing the
-   player is what must close mpv, and `handleClosePlayer`, `VideoPlayer`'s unmount and
-   `NativeEngineStage`'s teardown all do it directly.
-
-4. **The preparation effect depended on object identity, so playback restarted itself.**
-   `VideoPlayer`'s `media:prepare` effect listed `activeSource?.directHeaders` and
-   `activeSource?.drm` in its dependencies. Those come off a `playback:update` snapshot and
-   are therefore **new objects every time one arrives** — and `recordBufferStall` pushes one
-   on every buffer underrun. So a stall tore the stream down and re-prepared it, which
-   caused the next stall. Identity now comes from a serialised `activeSourceKey`, and the
-   effect depends on a `sourceConfig` memo keyed on that. **If you add a source field to
-   that effect, add it to the key, not to the dependency array.**
-
-`electron/media/mpvEngine.test.mts` (17 cases, `bun run test:native`) drives a real mpv
-process against a synthesised HEVC 10-bit / AC-3 5.1 Matroska fixture. It is not pure and
-should not be: every failure worth catching lives in the seam between two processes — the
-JSON framing, `request_id` correlation, the property observations that drive the timeline,
-`end-file` telling a dead link apart from the credits — and a mock would only ever assert
-what we assumed mpv does.
+`electron/media/mpvEngine.test.mts` (17 cases, real mpv against a synthesised HEVC10/AC-3-5.1 MKV fixture) — deliberately impure (the failures live in the inter-process seam).
 
 ### FFmpeg 7.1 silently broke the image-segment fix
 
-`-allowed_extensions ALL` — the documented answer to `Hdmovie2` serving MPEG-TS from `.png`
-URLs — **stopped working, and nothing in this repository changed on the day it did.**
-FFmpeg 7.1 added `-extension_picky`, defaulted it to *true*, and evaluates it before the
-allow-list. On the bundled build (n8.0) the old flag is inert and every provider serving
-extensionless or image-named segments fails with the exact message the fix was written
-against.
-
-Measured against a local HLS fixture with `.png` segments served as `image/png`:
-
-| Flags | Result |
-|---|---|
-| `-allowed_extensions ALL` | refused |
-| `-allowed_segment_extensions ALL` | refused |
-| `-extension_picky 0` | **probes cleanly** |
-
-The flag cannot simply be added: passing an option a binary does not know is fatal to the
-whole command line (`Option extension_picky not found`), and FFmpeg 7.0 is still in the
-download mirrors. So `detectExtensionPicky` asks the binary via `-h demuxer=hls` once at
-startup and again after any ffmpeg install, and `hlsDemuxerOptions()` includes the flag
-only where it exists. Pinned by `pipeline.test.mts`.
-
-Found by `tools/e2e/native-engine-matrix.mjs` on a real provider playlist, on its first
-run — which is the argument for that harness existing.
+`-allowed_extensions ALL` (fix for `.png`-served MPEG-TS) stopped working when FFmpeg 7.1 added `-extension_picky` (default true, evaluated **before** the allow-list) — with no repo-side change on the day it broke. Measured: only `-extension_picky 0` fixes it; the old flag alone still fails. Can't just add it (unknown option is fatal to the whole command line on FFmpeg 7.0, still in mirrors) — `detectExtensionPicky` probes `-h demuxer=hls` at startup and after any ffmpeg install; `hlsDemuxerOptions()` includes it only if present. Found by `tools/e2e/native-engine-matrix.mjs` on its first run.
 
 ### 5.2 The vendor coverage matrix — `tools/e2e/native-engine-matrix.mjs`
 
@@ -3773,980 +880,199 @@ node --experimental-strip-types tools/e2e/native-engine-matrix.mjs --plugins 12 
 node --experimental-strip-types tools/e2e/native-engine-matrix.mjs --only Cinefreak,HDhub4u
 node --experimental-strip-types tools/e2e/native-engine-matrix.mjs --titles hindi-movie,english-series
 ```
+Answers "given what extensions hand back, can this app put it on screen?" — imports the shipping `MediaInspector`/`decideStrategy` (not a reimplementation), then **actually plays** each candidate via headless mpv (`--vo=null --ao=null`, full demux/decode) for a few seconds, recording playhead progress + dropped frames. `--untimed` deliberately NOT passed (would hide sustained-realtime failures). Records **both** verdicts (with/without the native engine) — a differing row is a stream that used to be re-encoded and now isn't. Hindi-title coverage deliberate (dual-audio MKV, per-language 5.1 AC-3/E-AC-3, 10-bit HEVC cluster there).
 
-`provider-e2e.mjs` answers "does the extension corpus still run?". This answers the question
-after it: **given what those extensions hand back, can this app put it on screen?** Those are
-different failures with different owners — a provider resolving five links to 10-bit HEVC is
-working perfectly and is still, without the native engine, five links we could not play.
+### When we cannot play it: `externalPlayer.ts`
 
-It imports the shipping `MediaInspector` and `decideStrategy` rather than reimplementing
-them, so the strategy in the report is literally the one the app will choose for that URL;
-a harness with its own copy of the decision agrees with the product right until it matters.
-Every candidate stream is then **played for real by mpv for a few seconds**, headless
-(`--vo=null --ao=null`, which still runs the full demux and decode path), and the report
-carries how far the playhead got and how many frames dropped. `--untimed` is deliberately
-not passed — decoding as fast as the CPU allows would hide the exact failure being looked
-for, a stream that cannot sustain realtime.
+Detects VLC/mpv/MPC-HC/BE/PotPlayer, offers handoff. URL handed over is proxied (headers pre-applied — each player has an incompatible/absent way to set `Referer` itself). Nothing downloaded on the user's behalf (detected only; opens official download pages if none found). Suppressed when the source is dead (`describeUnreadableSource` — a 404 plays no better in VLC).
 
-Each row records **both** verdicts: what the strategy would have been without the engine and
-what it is with it. A row where they differ is a stream that used to be re-encoded and now
-is not, which is the only honest way to state what the engine bought.
+### Provider headers: a browser cannot send them
 
-Language coverage is deliberate rather than decorative. Hindi releases are where the hard
-cases cluster — dual-audio Matroska with per-language 5.1 AC-3/E-AC-3, 10-bit HEVC encodes,
-the multi-track files the audio-selection logic exists for — so a matrix of English titles
-alone reports a compatibility story that is true for half the catalogue.
-
-### When we cannot play it, hand it to something that can
-
-`externalPlayer.ts` detects VLC, mpv, MPC-HC/BE and PotPlayer and offers to open
-the stream in them. This is not a fallback for our bugs — there is a category of
-file Chromium will never decode, and VLC and mpv carry their own ffmpeg and play
-essentially anything.
-
-**The URL handed over is the proxied one.** External players each have their own
-incompatible way of setting a `Referer` (`--http-referrer`, `--http-header-fields`,
-nothing at all), and a provider link without its header is a 403 in any of them.
-The loopback URL has the headers applied already, so every player works with no
-per-player knowledge.
-
-**Nothing is downloaded on the user's behalf.** Players are detected, never
-fetched; when none is found the official download pages open in the browser.
-`shell:openExternal` re-checks the scheme because, unlike `setWindowOpenHandler`,
-it is reachable from the renderer with an arbitrary string.
-
-The offer is suppressed when the source is dead — a 404 plays no better in VLC,
-and sending someone to install a player that cannot help is worse than saying
-nothing. That distinction comes from `describeUnreadableSource`: when a probe
-returns nothing, the source is asked for its HTTP status with a one-byte range
-GET (HEAD is refused by some hosts). A reported failure turned out to be a plain
-404 while the message on screen was still guessing at codecs.
-
-### Provider links need the provider's headers, and a browser cannot send them
-
-Extension links routinely only answer when accompanied by the `Referer` the
-provider supplied. `ExtractorLink` carries it, and for a long time it reached the
-download engine and nothing else: playback handed the raw URL to `<video>`, which
-sends neither `Referer` nor a custom `User-Agent`. No renderer-side fix was
-possible — `Referer` is a forbidden header for `fetch`/XHR precisely so pages
-cannot forge it.
-
-One cause, two unrecognisably different symptoms:
-
-- **HLS** — `manifestLoadError` from hls.js, because the host 403'd the playlist.
-- **Progressive** — "could not decode this file", because *ffprobe* could not read
-  it either, so the player had no codec to name and fell through to the generic
-  message.
-
-`mediaProxy.ts` serves the stream from loopback with the headers applied, and
-`ContentService.startStream` wraps every `directUrl` through it. That fixes all
-three consumers at once — the media element, hls.js and ffprobe/ffmpeg — because
-they are all handed the same loopback URL. A link with no headers is passed
-through untouched rather than gaining a pointless hop.
-
-**HLS playlists are rewritten, not forwarded.** A manifest names its segments,
-keys and variant playlists by URL, and those requests would otherwise go straight
-from the renderer to the host without headers — succeeding on the manifest and
-then failing on every segment, which is worse than failing outright. Both forms
-are covered: bare URI lines and quoted `URI="…"` attributes (`EXT-X-KEY`,
-`EXT-X-MAP`, `EXT-X-MEDIA`). Relative URIs resolve against the *final* upstream
-URL so a playlist reached via redirect still resolves correctly.
-
-Bound to loopback only: it forwards arbitrary URLs with caller-supplied headers.
-
-**A loopback URL is returned from `wrap` untouched.** Everything that serves media
-locally — the torrent engine, this proxy, the transcoder — hands back
-`http://127.0.0.1:…`, which matches the scheme test. Without the guard the
-compatibility engine wraps a torrent stream in a second proxy hop that copies every
-byte for nothing, and re-wrapping this proxy's own output builds a chain that grows
-by one hop per call. There is nothing to gain either way: header injection exists to
-satisfy a third-party CDN's hotlink check, and our own servers set what they need.
-
-**A source that answers 4xx is failed over immediately, not converted.** Expired
-signed URLs from Cloudflare Workers and Googleusercontent are the routine case, and
-opening ffmpeg on one costs its startup plus the wait for the element to give up
-before the next mirror gets a turn. `PlaybackEngine.prepare` returns the failure as
-soon as `describeUnreadableSource` reports it dead, and the player asks the session
-for the next candidate.
+Extension links often need the provider's `Referer`, which `<video>`/hls.js/ffprobe cannot send (`Referer` is a forbidden fetch/XHR header). Same root cause, two symptoms (HLS: `manifestLoadError`; progressive: "could not decode" since ffprobe also failed). `mediaProxy.ts` serves from loopback with headers applied — fixes all three consumers at once. **HLS playlists are rewritten, not forwarded** (segments/keys/variant playlists would otherwise hit the host directly with no headers) — covers bare URI lines and quoted `EXT-X-KEY`/`EXT-X-MAP`/`EXT-X-MEDIA` attributes; relative URIs resolve against the *final* (post-redirect) upstream URL. **A loopback URL returned from `wrap` untouched** (else torrent/transcoder output gets double-wrapped, growing by one hop per call — nothing gained, header injection is for third-party CDN hotlink checks only). **A 4xx source fails over immediately** rather than being handed to ffmpeg (saves a wasted startup+timeout per expired/signed URL).
 
 ### Diagnosability: a message is not a report
 
-A failure message is a fact about a string. `Expected URL scheme 'http' or 'https'`
-names no provider, no query and no item, and by the time anyone investigates the
-query is gone and the provider was one of thirty. What makes a failure actionable
-is the **tuple**: which provider, on which query, for which item, at what address.
-
-`cs3/diagnostics.ts` records exactly that, persisted to its own file — not the
-datastore, because this is debugging exhaust that runs to hundreds of entries and
-has no business inside a user's backup next to their watch history. Recording
-happens in `PluginManager`, the only layer that knows which provider was asked.
-
-`loadLinks` was the worst offender and is the one to imitate: every failure
-returned `[]`, so a timeout, a thrown extractor and a provider that genuinely has
-nothing all produced one sentence. The empty list still goes back — a failed
-resolve is not an exception at that layer — but the reason goes to the log.
-
-`CopyErrorButton` renders a pasteable report, assembled in the main process
-because that is the only side holding the environment. It leads with app,
-Electron, platform and extension-runtime versions: the two questions every
-maintainer asks first are the two a reporter is least able to answer.
-
-**Two sizes, and the small one is the default.** It used to copy the whole
-session — up to three hundred entries — which is wrong in both directions:
-whoever receives it has to find the failure being described inside it, and
-whoever sends it has pasted an evening's viewing history into a chat window
-without meaning to. `mode: 'current'` selects by context (provider, url, title
-or query, within a recent window) and falls back to recent history *while saying
-so*, rather than silently implying unrelated entries describe the failure.
-
-Both modes deduplicate. Grouping normalises durations, byte counts and
-timestamps out of the key — those differ on every occurrence and never
-distinguish one failure from another — but **bare integers are left alone**,
-because `HTTP 403` and `HTTP 404` differ by one digit and mean opposite things.
-A shorter report that says something false is not an improvement. The report also
-leads with a `Failures by cause` tally: grouping by class is what turned 113 load
-failures into six missing types, and that is the shape a maintainer needs.
-
-**`loadLinksDetailed` is why the message can now be specific.** `loadLinks`
-returning a bare `[]` is the reason "the extension provider returned no playable
-links for this item" was the only thing anyone could ever be told — one sentence
-covering a timeout, a thrown extractor, a blocked host, a provider with no
-`loadLinks` at all, a title that genuinely has no sources, and a reply full of
-links with empty URLs. The empty list still goes back; what changed is that a
-`SourceDiagnosis` travels beside it, carrying the summary for the screen, a hint
-for the user, and the facts for the clipboard.
+`cs3/diagnostics.ts` records the **tuple** (provider, query, item, address) — a bare message like `Expected URL scheme 'http' or 'https'` names nothing actionable. Persisted to its own file, not the datastore (debugging exhaust, not backup-worthy, no viewing-history overlap). `CopyErrorButton`'s report leads with app/Electron/platform/runtime versions + a `Failures by cause` tally. Two sizes; **`mode:'current'` (context-scoped) is the default** (was: whole session, up to 300 entries — over-inclusive and under-targeted at once). Grouping normalises durations/byte-counts/timestamps out of the key but **keeps bare integers** (`HTTP 403` vs `404` must stay distinct). `loadLinksDetailed`/`SourceDiagnosis` replaced bare `[]` returns (which collapsed timeout/thrown-extractor/nothing-found/empty-links-in-reply into one sentence) with summary+hint+facts.
 
 ### The range probe was downloading the whole file
 
-Reported as a stalled download: `Babe Beach`, 4K HDHUB, **2 MB of 5.75 GB at 0 KB/s**. The
-link was alive and the source was fine.
-
-`FastChunkDownloader.probeUrl` asks for `bytes=0-0`, reads the headers, and called
-`res.resume()` before resolving. `resume()` discards the data — it does not stop the
-transfer. Against a server that honours Range that is harmless, because the body is one
-byte. Against a server that **ignores** Range it is not, and
-`video-downloads.googleusercontent.com` ignores it: measured on the reported link, it
-answers `200` with no `Accept-Ranges` and `Content-Length: 6,175,245,105`, so the probe kept
-pulling the file after it had already returned its answer — **5.6 MB in the five seconds
-after resolving, and still going.** The real download then ran beside it, competing for the
-same throttled signed URL. A few megabytes, then nothing.
-
-The probe now destroys the response and the request once it has the headers. Verified
-against the same URL: 0 bytes after resolving, where the old code reached 5.6 MB.
-
-Two things worth keeping straight while you are in there:
-
-- **`supportsRange` was never wrong.** It reads `206` or `Accept-Ranges: bytes`, and this
-  host offers neither, so `canParallelize` was already false and the sequential path was
-  already chosen. The bug was entirely in the abandoned probe connection — which is why it
-  looked like a network problem rather than a downloader one.
-- **A chunk worker used to accept `200`.** If a host changes its mind between the probe and
-  the transfer — signed-URL CDNs do this under load — a ranged request answered with `200`
-  is the whole file from byte zero, and writing it at that chunk's offset corrupts the
-  output while every worker downloads the entire file. It now fails the chunk with a reason.
-  A corrupt file that finishes is worse than a download that says why it stopped.
-
-Unrelated but reported alongside it: a `RefreshingSource` retry on a
-`googleusercontent.com` link is usually **correct behaviour, not a bug**. Those URLs are
-signed and short-lived; the second reported link answered `HTTP 400` outright, and
-re-resolving it from the provider is the only thing that can help.
+`FastChunkDownloader.probeUrl`'s `bytes=0-0` request called `res.resume()` (discards data, **does not stop the transfer**) before resolving — harmless against Range-honouring hosts, catastrophic against `video-downloads.googleusercontent.com` (ignores Range, returns 200+whole-6GB-file) — measured 5.6MB pulled in the 5s after "resolving," competing with the real download for the same throttled signed URL. Fixed: response+request destroyed once headers are read (verified: 0 bytes pulled after). Also: a chunk worker accepting `200` mid-transfer (host changed its mind under load) now **fails that chunk with a reason** instead of writing whole-file bytes at a chunk offset (silent corruption).
 
 ### Shipping: the box has to contain everything
 
-The target user has used Netflix and has not used a plugin manager. They install
-one thing and they stream. Two consequences, both structural:
+**The JVM ships inside the app** — old `electron-builder` packaged only `dist/`+`dist-electron/`+`node_modules/`, zero extension capability regardless of runtime code correctness. `tools/package/build-runtime.mjs` assembles `sidecar/dist/` (sidecar+`lib/`+`runtime/`+jlinked JRE, ~90MB) → `extraResources` → `resources/sidecar/` (where `SidecarSupervisor` looks when `app.isPackaged`).
 
-**The JVM ships inside the app.** `electron-builder` used to package `dist/`,
-`dist-electron/` and `node_modules/` and *nothing else* — no sidecar jar, no
-provider classpath, no Java — so a packaged build had no extension capability at
-all, and no amount of correct runtime code would have changed that.
-`tools/package/build-runtime.mjs` assembles `sidecar/dist/` (sidecar + `lib/` +
-`runtime/` + a jlinked JRE, ~90 MB) and `extraResources` copies it to
-`resources/sidecar/`, which is exactly where `SidecarSupervisor` looks when
-`app.isPackaged`.
-
-The jlink module list is curated rather than `ALL-MODULE-PATH`, and the entries
-that look optional are the ones that bite: `jdk.crypto.ec` (ECDHE — without it
-TLS fails against most sites, one provider at a time), `jdk.unsupported`
-(`sun.misc.Unsafe`, reached by coroutines/OkHttp/Jackson), `jdk.localedata` (a
-multilingual corpus parsing dates under a C locale silently returns nothing),
-`java.sql` (Jackson resolves `java.sql.Date` reflectively). Verify a change to
-that list by running the corpus against the linked runtime, not by checking that
-the build succeeded:
-
+jlink module list is curated, not `ALL-MODULE-PATH` — non-obvious-but-critical entries: `jdk.crypto.ec` (ECDHE, else TLS fails site-by-site), `jdk.unsupported` (`sun.misc.Unsafe`, reached by coroutines/OkHttp/Jackson), `jdk.localedata` (C-locale date parsing silently returns nothing for multilingual corpus), `java.sql` (Jackson reflects `java.sql.Date`). Verify by running the corpus, not just building:
 ```
 node tools/package/build-runtime.mjs --verify
 node tools/e2e/provider-e2e.mjs --java sidecar/dist/jre/bin/java.exe
 ```
 
-**First launch installs the verified repositories itself** (`cs3/bootstrap.ts`),
-in the background, with progress — an app that opens to an empty home screen
-until you find the extensions tab and install plugins one at a time has shipped a
-construction kit, not a product. It runs once (`BOOTSTRAP_VERSION`), caps at
-`PLUGINS_PER_REPOSITORY` because ~170 archives means ~170 DEX translations before
-the first search, and never blocks: the catalogues and indexers answer normally
-while providers arrive. Repositories opt in via `bundled: true`, which is a claim
-that `tools/e2e/provider-e2e.mjs` has driven them end-to-end.
+**First launch bootstraps repositories itself** (`cs3/bootstrap.ts`, background, progress shown, once per `BOOTSTRAP_VERSION`, capped at `PLUGINS_PER_REPOSITORY`, never blocks catalogues/indexers). `bundled:true` = a claim `provider-e2e.mjs` has driven that repo end-to-end.
 
-### Adult content is opt-in, and the gate is central
+**Adult content**: off by default, gate is `PluginManager.enabledProviderNames` (single funnel point — search/scope/discovery/playback/downloads all pass through it). A provider is adult if `supportedTypes` includes upstream's `NSFW` `TvType` (catches an adult provider bundled inside an otherwise-ordinary repo — measured: `indostream`, `cinephile`, `redowan`, `uk_extensions`, none wholly-adult, `cinephile` is bundled). `BootstrapService` also declines to *download* them while off (politeness, not the actual protection).
 
-Off by default. The enforcement point is `PluginManager.enabledProviderNames`,
-because search, the scope picker, source discovery, playback and downloads all
-funnel through it — filtering at each call site would be five places to forget.
-A provider is adult when its `supportedTypes` include upstream's `NSFW` `TvType`,
-which catches an adult provider bundled inside an otherwise ordinary repository.
-That is the real case: measured against the catalogue, **four** repositories
-publish NSFW-tagged plugins (`indostream`, `cinephile`, `redowan`,
-`uk_extensions`) and none is a wholly-adult repository — `cinephile` is in the
-bundled set. `BootstrapService` additionally declines to *download* them while
-the setting is off, which is politeness rather than protection; the gate above is
-the protection.
-
-### Sandbox: enforced vs. not
-
-Enforced — plugin cannot reach sidecar internals (`PluginClassLoader`, tested);
-`System.exit` cannot kill the app (process boundary); `System.loadLibrary` blocked via
-empty `java.library.path`; per-plugin scoped storage.
-**Not enforced** — raw network egress, process creation. Both need an OS-level sandbox
-(Windows job object + restricted token). They are reported by `status` as `sandboxGaps`
-and surfaced in the UI on purpose: a named gap can be closed; an implied-covered gap never
-gets fixed. Java's `SecurityManager` is not an option (JEP 411/486 removal).
+**Sandbox**: enforced — plugin can't reach sidecar internals (`PluginClassLoader`, tested); `System.exit` can't kill the app (process boundary); `System.loadLibrary` blocked (empty `java.library.path`); per-plugin scoped storage. **Not enforced** — raw network egress, process creation (need an OS-level sandbox: Windows job object + restricted token). Reported via `status.sandboxGaps`, surfaced in UI deliberately (a named gap gets fixed; an implied-covered one doesn't). `SecurityManager` unavailable (JEP 411/486 removal).
 
 ### A links handle is not a page address (2026-08-27)
 
-The single most frequent failure in a user's captured session, and it named the wrong party
-every time:
+Upstream's `MainAPI` has two incompatible handle kinds under one `String` type: `load(url)` (page address, fetched) vs `loadLinks(data)` (opaque provider-built blob, often JSON — VegaMovies array-of-objects, HDHub4U array-of-strings). Handing a links blob to `load()` reached OkHttp's `HttpUrl.get`, threw, was **scored against the provider by the ranking** and shown as the reason playback failed — provider was fine. Reached `load()` from 3 directions, unified into one predicate: `cs3/extensionAddress.ts`'s `looksLikeLinksHandle`. Test is narrow (JSON is definitely not a page; anything else might be — Internet Archive's `load()` takes a URL while `loadLinks` takes a bare id).
 
-```
-VegaMovies: IllegalArgumentException: Expected URL scheme 'http' or 'https'
-            but no scheme was found for [{"sou...
-  url: cs3ext://VegaMovies/[{"source":"https://vcloud.fit/ubvtmxgdjbx1xxu"}, …]
-```
+**"A title I saved now opens blank" — the persisted form of the same bug.** `DetailView` recorded `episode?.url ?? detail.url` (the playback handle) as `progress.mediaUrl`, breaking library/Continue-Watching/saved-page rows on the *second* visit. Fixed: `libraryStore.recordProgress` keys on `canonicalKey(title,year)`+season+episode (never `mediaUrl` — nothing orphaned). Pre-fix rows are unrecoverable (page address isn't derivable from a links blob); failure screen offers "Find `<title>` again" instead.
 
-Upstream's `MainAPI` has **two kinds of handle and they are not interchangeable**. `load(url)`
-takes a page address and fetches it. `loadLinks(data)` takes an opaque blob the provider built
-for itself — and a large part of the corpus puts JSON in it (VegaMovies an array of objects,
-HDHub4U an array of strings). Both are `String`, so nothing in the type system separates them,
-and `cs3ext://<provider>/<handle>` does not record which kind it is carrying.
+### CloudStream X (CSX) (2026-08-27) — two more shim gaps, both `Object`-widening variants
 
-Handing a links blob to `load()` reaches OkHttp's `HttpUrl.get`. The throw was recorded at
-stage `detail`, **scored against the provider by the ranking**, and shown to the viewer as the
-reason their title would not play. The provider was fine and the call should never have been
-made.
+1. `CloudStreamApp$Companion.setKey(String, Object)` — upstream's generic `fun <T> setKey` erases to `Object`; bridge had `setKey(String, String?)` (a different, uncallable method). **A Kotlin companion is not inherited** (`CloudStreamApp.Companion` gets nothing from `AcraApplication.Companion`).
+2. `AccountManager.simklApi` typed as the wrapper `SyncRepo`/`SyncAPI` instead of concrete `SimklApi` — 4th occurrence of the getter-returns-supertype near-miss.
 
-It reached `load()` from three directions, which is why the guard is one shared predicate
-(`cs3/extensionAddress.ts`, `looksLikeLinksHandle`) rather than three local checks:
+Also: **nothing was setting the application context** on either companion — `PluginHost.invokeLoad` now points both at the plugin's context before `load()`. And `newShimContext` hard-coded the literal `"plugin"` as scoped-storage id — **every extension shared one preferences file** (uses real `pluginId` now). `RUNTIME_GENERATION` **8**, `BOOTSTRAP_VERSION` **2** (delivers CSX to already-bootstrapped installs — `run()` filters on `!already.has(rawRepoUrl)`). Measured (`--repo CSX --plugins 10`, 5 queries): 11 loaded, 9 answering, 8 links, 7 streams — PASS; CineStream resolved 57/66 links for two Dune titles.
 
-1. **`resolveExtensionTarget`** looked up an episode list for any address carrying an episode
-   number — including one that already *was* the episode, which is what Continue Watching
-   hands over.
-2. **`extensionSources`** retried through `dataUrl` whenever the first attempt found no links,
-   without asking whether the address it had could be opened — **and did not catch the
-   throw**, so OkHttp's message replaced the real diagnosis and rejected the whole discovery.
-3. **`DetailView`** was handed a playback handle as an item URL. See below.
+**`build-bridge.mjs` couldn't find Maven on Windows** — `spawnSync('mvn')` without `shell:true` doesn't resolve `mvn.cmd`. `findMaven()` now tries platform spellings, prefers `tools/toolchain/apache-maven-*`.
 
-The test is deliberately narrow: JSON is definitely not a page, anything else might be.
-Internet Archive's `load()` takes `https://archive.org/details/<id>` while its `loadLinks`
-takes the bare id, so "must start with http" would refuse pages that work.
+**`InvalidHeader` (non-EXTM3U response) was falling into `unknown`** — now `unreadable-reply` (extension's parser is right to refuse; the fix is checking the source, not the scraper).
 
-### "A title I saved now opens blank" (2026-08-27)
+### Backing up an installation (2026-08-27, `electron/cs3/backupService.ts`)
 
-The same root cause, persisted. `DetailView` recorded `progress.mediaUrl` as
-`episode?.url ?? detail.url` — and `episode.url` is the **playback handle**. That address went
-into the library, Continue Watching and any page saved from one of those rows; clicking the row
-later called `load()` on it and the detail page came up empty. It reads as data rot, and it is
-not: it is the wrong address having been written, and it only ever manifests on the *second*
-route to a title.
-
-**Nothing is lost by storing the page instead.** `libraryStore.recordProgress` keys on
-`canonicalKey(title, year)` plus season and episode — not on `mediaUrl` — so no progress record
-is orphaned by the change, and the season and episode travel in their own fields. The handle
-that actually plays is still `request.mediaUrl`.
-
-Rows written before the fix cannot be repaired: the page address is not recoverable from a
-links blob. What *is* stored beside them is the title, so the failure screen now offers
-**"Find <title> again"**, which is the only thing that turns a permanently dead row back into a
-working page.
-
-### CloudStream X (CSX), and two shim gaps it found (2026-08-27)
-
-CSX is now `bundled: true`. Per §5's rule that the flag is a claim the harness has driven the
-repository end to end, `tools/e2e/provider-e2e.mjs` knows about it and was run before the flag
-was set. Two extensions stopped at `load()` and both were ours:
-
-1. **`CloudStreamApp$Companion.setKey(String, Object)`** — upstream declares
-   `fun <T> setKey(path, value)`, whose erased descriptor takes `Object`. The bridge carried a
-   `setKey(String, String?)`, which is a *different method* to the JVM: present, and impossible
-   to call. CineStream's `load()` opens with `Settings.initSeenProviders()` and died there.
-   **A Kotlin companion is not inherited** — `CloudStreamApp : AcraApplication()` gives
-   `CloudStreamApp.Companion` nothing from `AcraApplication.Companion` — so both names carry
-   the methods rather than one delegating to the other.
-2. **`AccountManager.simklApi`, typed `SimklApi`.** `SyncRepo.kt` said SIMKL was left out
-   because nothing had been observed to use it; CineStream's `CineSimklProvider` is that
-   observation. Typed as the concrete class, not `SyncAPI` or `SyncRepo` — a getter returning a
-   supertype is a different method. **That near-miss has now been made four times** in this
-   repo (`getResources` returning `Object`, `aniListApi` as the wrapper, `setKey`, this).
-
-**Nothing was setting the application context**, so even once the descriptors matched every
-helper would have been a silent no-op. `PluginHost.invokeLoad` now points both companions at
-the plugin's context immediately before `load()`. The same pass found `newShimContext`
-hard-coding the literal `"plugin"` as the scoped-storage id — so **every extension in the
-process shared one preferences file**, which was invisible while the helpers were stubs and is
-a collision the moment they write. It takes the real `pluginId` now.
-
-`RUNTIME_GENERATION` is **8**: both halves changed and a provisioned copy pairing one with the
-other is worse than either alone. `BOOTSTRAP_VERSION` is **2**, which is how an install that has
-already bootstrapped receives CSX — `run()` filters targets on `!already.has(rawRepoUrl)`, so a
-re-run installs only what is new and re-downloads nothing.
-
-**Measured after the fixes**, `--repo CSX --plugins 10` across five queries
-(dune, reacher, breaking bad, one piece, inception):
-
-```
-providers loaded    11
-providers answering  9
-links resolved       8
-streams with bytes   7
-PASS
-```
-
-CineStream alone resolved 57 links for *Dune: Part One* and 66 for *Dune: Prophecy*, and
-delivered 2.00 MB of `video/x-matroska` at HTTP 206 with ranges honoured. The remaining
-failures are host-side and worth recognising rather than re-debugging: BollyFlix times out,
-Online Movies Hindi resets the connection, GDIndex trips its own 5 MB `.text` guard.
-
-**`tools/package/build-bridge.mjs` could not find Maven on Windows.** `spawnSync('mvn')`
-without a shell does not resolve `mvn.cmd`, and every `dependency:get` failed with `ENOENT` —
-reported as *"could not obtain <artifact> from Maven Central. Is mvn on PATH?"*. It was on
-PATH. `findMaven()` now tries the platform's spellings and prefers `tools/toolchain/apache-maven-*`,
-for the same reason `SidecarSupervisor.resolveJava` prefers the checked-in JDK.
-
-### `InvalidHeader` was every unclassified record (2026-08-27)
-
-`InvalidHeader: Invalid file header. Header doesn't start with #EXTM3U` fell through to
-`unknown` — four IPTV providers failing identically on every search, never grouping, so one
-dead upstream read as scattered noise. It is `unreadable-reply`, not `provider-error`: the
-extension's parser is right to refuse, what changed is on the other end of the connection, and
-the reader's action is to check the source rather than to report a bug to the scraper's
-maintainer.
-
-### Backing up an installation (2026-08-27)
-
-`electron/cs3/backupService.ts`. There were two exports before it and neither answered the
-question: `datastore:exportBackup` writes the **Android** format for moving between the phone
-app and this one, and library/history each exported themselves — so moving to a new machine
-lost the repositories, the extensions switched off, the saved pages and the indexer
-configuration.
-
-**Sections are a table, not two switch statements.** A store added to the export and forgotten
-in the restore produces a file that looks complete and silently drops those rows on the way
-back; one entry cannot be half-added. An export-only section (the download queue) is reported
-as `export only` rather than as a restore of zero, so the two are distinguishable.
-
-Deliberately absent, each for its own reason: the `.cs3` archives and downloaded media (large,
-re-fetchable — the backup records *which*, which is the part that cannot be); tokens and device
-ids (filtered by `DatastoreManager.snapshot` on the way **out**, so they are never written into
-a file in someone's Downloads folder); diagnostics and logs (they describe the machine captured,
-not the one restored to); caches (everything in them expires, and a stale cache is worse than
-an empty one).
-
-**Restore merges rather than replaces**, so a preference added since the backup was taken does
-not silently revert; it snapshots the datastore first so the write can be undone; and a section
-that throws is recorded while the rest still restore, because a restore that stops halfway
-leaves a state neither the backup nor the previous one describes. 12 cases in
-`backupService.test.mts`, including that an unrelated JSON file is refused **by its format
-marker** — otherwise it would be fed to every section and answer "restored 0 rows from 9
-sections" instead of "that is not a CloudStream backup".
+Old exports (Android-format datastore export; separate library/history exports) missed repositories, disabled-state, saved pages, indexer config. **Sections are a table**, not switch statements (a store added to export-but-not-restore silently drops rows). Deliberately excluded: `.cs3` archives/media (large, re-fetchable — backup records *which*), tokens/device ids (filtered on export by `DatastoreManager.snapshot`), diagnostics/logs (describe the wrong machine), caches (stale is worse than empty). **Restore merges, never replaces** (snapshots first, undoable); a throwing section is recorded while the rest still restore. Unrelated JSON refused **by format marker** (else "restored 0 of 9 sections" instead of "not a CloudStream backup"). 12 cases in `backupService.test.mts`.
 
 ### Extensions: browse opens where you asked (2026-08-27)
 
-"What does this repository offer?" was a third tab, and reaching it threw away the list the
-question was asked from — the scroll position, the filter chips, and the neighbouring
-repositories being compared against. Comparing two catalogues cost three tab switches. It is
-now a full-width panel under the repository's own card (`grid-column: 1 / -1`, so a
-twenty-extension list does not render inside one 290px column and read as belonging to the
-card's neighbours), and the tab is gone. Two tabs remain: **Installed** and **Browse**.
-
-**Search reaches through a repository.** The query matched a repository's own name,
-description, language and shortcode and nothing else — so looking for a provider you know you
-have found nothing, even with the repository carrying it on screen. It now also matches the
-installed extensions and providers underneath, and the card says *why* it matched: a result
-with no visible reason reads as a broken filter.
+"What does this repo offer" used to be a third tab that discarded scroll/filter state. Now a full-width panel (`grid-column: 1 / -1`) under the repo's own card; two tabs remain (**Installed**/**Browse**). Search now reaches through a repo into its installed extensions/providers too, with a stated match reason.
 
 ### Settings: a level, not an Advanced tab (2026-08-31)
 
-The screen accumulated the way settings screens do — every decision worth
-exposing became a row — and the result is accurate and unusable. "Providers
-searched at once", "Torrent metadata mirrors", "Native engine policy" are all
-real controls with real effects and none of them means anything to somebody who
-installed this to watch a film.
+Moving technical rows to an "Advanced" tab fails because advanced-vs-simple isn't a *category* — it cuts across every subject (search settings, playback settings, etc.), splitting one topic across two places. Fixed: grouping stays by subject, a **level** filters within it (`SettingRow`/`SettingGroup` take `level`; an all-hidden group hides itself). **`advanced` means one specific thing: understanding the label requires knowing how the app is built** — not "rare," not "dangerous." `settingsLevel.test.mts` enforces this (refuses >50% advanced; catches redundant per-row+per-group marking; caught rows hidden for jargon labels **when renaming the label was the actual fix** — 6 renamed, e.g. "Detected native players"→"Players found on this computer"). Test-scanner traps: brace-depth tracking needed (not "nearest `<`" — breaks on `<SettingGroup icon={<RefreshCw />}…>`); rows and groups counted separately (else a marked group double-counts). **Simple is the default.** Stored in `localStorage`, not the datastore (per-viewer UI preference, not app behaviour/backup-worthy). `shouldShow` in a plain `.ts` (JSX can't load under Node's type-stripping); default is **an unclassified row is basic** (backwards would silently lose every future setting from Simple mode).
 
-**The obvious fix does not work, and this screen already tried it.** Moving the
-technical rows to an Advanced tab fails because "advanced" is not a category:
-the technical controls are *about* the same subjects as the simple ones — how
-many providers a search asks is a search setting, the probe budget is a playback
-setting. Grouping by audience rather than by subject puts two halves of one topic
-in two places, and the reader has to know which half they need before they can
-look.
+**Splitting it that way blanked the whole app (2026-09-01).** `SettingsLevel.tsx` (React) beside `settingsLevel.ts` (pure) — **on Windows' case-insensitive filesystem these are one name**, and module resolution tries `.ts` before `.tsx`, so the import silently resolved to the pure module (no hook/provider exports). A missing named export is an ESM **link** error — not catchable by `ErrorBoundary`, fails the whole `App.tsx` import graph, **blanks the entire window**. `tsc -b`/`vite build` both refuse it — the gap was shipping without running either. Fixed file: `SettingsLevelContext.tsx`; `componentReachability.test.mts` gained a case folding every module path to lowercase, checking uniqueness (mutation-verified). **Never name a `.tsx` and `.ts` alike but for casing.**
 
-So the grouping stays by subject and a **level** filters within it.
-`SettingRow` and `SettingGroup` take `level`, and a group whose rows have all
-hidden themselves hides too — otherwise Simple is a page of empty headings that
-reads as a failure to load.
-
-**`advanced` means one specific thing: understanding the *label* requires
-knowing how this app is built.** Not "rare" and not "dangerous". A control whose
-effect a viewer can describe without that — where downloads go, subtitle size,
-keep playing when I minimise — is basic however obscure it is.
-
-Applying that test changed the answer twice, both times because
-`settingsLevel.test.mts` said so. It refuses a file where over half the rows are
-advanced, and it caught rows marked individually inside groups that were already
-marked, and a batch of rows hidden for having jargon labels **when the labels
-were the problem**. Six are renamed instead — "Detected native players" is now
-"Players found on this computer" — and the toolbar-visibility rows came back,
-because "show the subtitles button" needs no knowledge of anything.
-
-Two traps in that test are worth keeping:
-
-- Its first tag scanner used "the nearest `<` before the match", which is wrong
-  the moment an attribute follows a JSX expression: in
-  `<SettingGroup icon={<RefreshCw />} level="advanced">` the nearest `<` is the
-  icon. It tracks brace depth now.
-- The ratio has to count rows and groups separately, or a marked *group* is
-  counted as a marked row and the file looks twice as filtered as it is.
-
-**Simple is the default**, and that is the part that matters: someone opening
-this screen is being asked, implicitly, which rows they should have an opinion
-about, and the honest answer for most people is about eight. The switch says
-what it is holding back, because a filtered list that does not admit it is
-filtered is the same failure as a scoped search that does not.
-
-Stored in `localStorage`, not the datastore: it describes how one person reads a
-screen, not how the app behaves, and has no business travelling in a backup to a
-machine somebody else uses. `shouldShow` lives in a plain `.ts` beside the
-provider because Node's type stripping cannot load JSX and the rule is the half
-worth testing — its default (**an unclassified row is basic**) is load-bearing,
-since backwards it would make Simple mode silently lose every setting added from
-then on.
-
-**And splitting it that way is what blanked the whole app (2026-09-01).** The
-React half was `SettingsLevel.tsx`, beside the pure `settingsLevel.ts`. On
-Windows' case-insensitive filesystem those are **one name**, and module
-resolution tries `.ts` before `.tsx` — so `import { useSettingsLevel } from
-'./SettingsLevel'` resolved to the pure rule, which exports `shouldShow` and
-neither the hook nor the provider.
-
-The consequence is out of all proportion to the cause, and that is the part
-worth remembering. A missing named export is an ESM **link** error, not a
-runtime one: it does not throw inside a component where `ErrorBoundary` could
-catch it and it names nothing on screen. It fails the entire `App.tsx` import
-graph, so **the window comes up blank** — every view, not just Settings. The
-last successful `dist/` predated the commit by three days and nothing said so,
-because `vite-plugin-electron` builds main and preload as separate environments
-and those two kept succeeding.
-
-`tsc -b` and `vite build` both refuse it outright, so the tooling was never the
-gap — the gap was shipping without running either. The file is
-`SettingsLevelContext.tsx` now, and `componentReachability.test.mts` grew a
-third case that folds every module path under `src/` and `electron/` to lower
-case and requires it to stay unique. It runs inside `test:electron`, which is
-what people actually run, and it is verified by mutation. **Never name a `.tsx`
-and a `.ts` alike but for their casing** — on the machine it is written on, it
-resolves.
-
-### Settings (2026-08-27)
-
-The tab bar was `overflow-x: auto` over a fixed set of eight tabs, so on an ordinary window
-reaching "Advanced" meant finding and dragging a horizontal scrollbar. It wraps now, and is
-sticky — because the new **All settings** view is one long page, and navigation that scrolls
-away is navigation you have to scroll back up to reach.
-
-`all` is a view, not a category: it renders exactly the same groups the tabs do, in tab order,
-with a heading before each. No control is duplicated, so the two views cannot disagree.
+Tab bar wraps + is sticky now (was `overflow-x:auto` over 8 fixed tabs). "All settings" is a view rendering the same groups in tab order (no duplication, can't disagree).
 
 ### Seven IPC channels were strings that had stopped matching (2026-08-27)
 
-Found by diffing the channel literals in `main.ts` against those in `preload.ts` — not by
-chasing a symptom, because none of these produces an error anyone would report as an error.
-`tsc` cannot see them: the channel is a string on both sides and the two files never refer to
-each other. The user-visible form is always a dead button or a silent no-op.
+Found by diffing channel literals in `main.ts` vs `preload.ts` (invisible to `tsc` — plain strings on both sides):
 
 | Channel | Was | Consequence |
 |---|---|---|
-| `binary:setupBinaries` | invoked, never registered | the first-run component installer **always failed** |
-| `runtime:repair` | invoked, never registered | the recovery path for a broken runtime, latent |
-| `discover:invalidated` | pushed, no listener | switching home catalogue left the old rows up for 6h |
-| `binary:check`, `binary:setup` | registered, unreachable | duplicate spellings of live handlers |
-| `extension:getRuntimeReport` | registered, unreachable | no way to say *why* an extension registered nothing |
-| `media:get/setProbeConfig` | registered, unreachable | the probe budget, unreachable by the users it affects |
+| `binary:setupBinaries` | invoked, never registered | first-run installer **always failed** |
+| `runtime:repair` | invoked, never registered | recovery path latent/unreachable |
+| `discover:invalidated` | pushed, no listener | stale home catalogue up to 6h |
+| `binary:check`/`binary:setup` | registered, unreachable | duplicate spellings |
+| `extension:getRuntimeReport` | registered, unreachable | no way to explain zero providers |
+| `media:get/setProbeConfig` | registered, unreachable | probe budget unreachable |
 
-**`ipcRenderer.invoke` on an unregistered channel rejects — it does not return an
-`{ ok: false }` envelope.** That is what made the first one invisible: `BinarySetupModal`
-caught the rejection and rendered `No handler registered for 'binary:setupBinaries'` as a
-friendly-sounding notice with "(HTTP fallback stream active)" after it. The user was told a
-fallback was active and had no way to know the button had done nothing. **A catch that
-reassures is worse than no catch.** Both halves were needed to hide it.
-
-**`electron/ipcSurface.test.mts` now pins all four diffs** (`bun run test:ipc`, and it runs
-first in `test:electron`). It is lexical rather than runtime — loading `main.ts` would boot
-the whole service graph, and the strings are what matter. Verified to fail in all three
-directions by mutation, because a parity test that passes trivially is worthless. Exceptions
-go in the commented allow-lists at the top, and "I will wire it later" is not a reason: an
-entry there is indistinguishable from a working feature to everyone who reads the code.
+**`ipcRenderer.invoke` on an unregistered channel rejects — no `{ok:false}` envelope.** `BinarySetupModal` caught the rejection and rendered a *reassuring* fallback notice — masking a totally broken button. **A catch that reassures is worse than no catch.** `electron/ipcSurface.test.mts` (`bun run test:ipc`, runs first in `test:electron`) pins all diffs lexically, mutation-verified in all 3 directions. Exceptions go in commented allow-lists — "I'll wire it later" is not a valid entry.
 
 ### Lifecycle: closing a window is not quitting (2026-08-27)
 
-`window-all-closed` ran `downloadService.stop()`, `extensionUpdater.stop()` and
-`pluginManager.shutdown()` **unconditionally**, with only `app.quit()` guarded by platform.
-On macOS the app then stayed in the dock holding a dead sidecar and a stopped queue, and
-`activate` opened a fresh window onto all of it — zero providers, every search empty, and
-nothing on screen explaining any of it. Every teardown moved into `before-quit`, which is the
-event that actually means "we are going away"; `window-all-closed` now only quits.
+`window-all-closed` used to tear down every service unconditionally (macOS: dock icon holding a dead sidecar; `activate` reopened onto the wreckage). All teardown moved to `before-quit`. **Shutdown raced against a 5s deadline** (WebTorrent's `destroy()`/an unresponsive mpv can hang; `before-quit` calls `preventDefault()`, else the window closes but the process survives, locking the cache dir for next launch). The pending service is logged as `shutdown_timeout`.
 
-**Shutdown is raced against a 5s deadline.** WebTorrent's `destroy()` and an unresponsive mpv
-both hang in the wild, and `before-quit` calls `preventDefault()` — so when one hung the
-window was gone, the process was not, and the only recourse was Task Manager, after which the
-next launch hit the locked cache directory this handler exists to prevent. Which service was
-still pending is logged as `shutdown_timeout`; that is the fact that makes the next fix
-possible and it costs one line. The old `if (!torrentEngine) return;` guard was dead (it is
-constructed eagerly) and would have skipped mpv, external players, the WebView host and
-`logger.shutdown()` if it had ever fired.
+### Navigation, shortcuts, menu (2026-08-27)
 
-### Navigation, shortcuts and the menu (2026-08-27)
+**A dropped file used to replace the whole app** — `setWindowOpenHandler` doesn't cover top-level navigation (Electron's default for a dropped file), and `setApplicationMenu(null)` meant no View→Reload existed to recover. `will-navigate`/`will-frame-navigate` now refuse it; the renderer's `drop` handler routes the file through `media:prepare` instead (this was always possible via `/local/<token>` — the capability existed with no entry point). **F12 was bound twice** — `before-input-event`'s `preventDefault()` suppressed the page's own F12 handler, making `ProviderInspector` (F12-only) unreachable; DevTools is `Ctrl+Shift+I` only now. **Reload gated on `app.isPackaged`** (`Ctrl+R` in a packaged build destroys the renderer mid-playback). **A real menu is back** (was `null` — broke `Cmd+C` in the search box on macOS since Cut/Copy/Paste are menu *roles* there, and removed Quit/About/zoom-reset); hidden behind Alt via `autoHideMenuBar`.
 
-**A dropped file used to replace the app.** `setWindowOpenHandler` covers `window.open`; it
-does not cover a top-level navigation, and Electron's default is to perform one. Dragging a
-video onto a media player's window is the most natural gesture a user has — and with
-`setApplicationMenu(null)` there was no View → Reload to get back, so the app was bricked
-until relaunch. `will-navigate` and `will-frame-navigate` refuse it now, and the gesture does
-the useful thing instead: the renderer's `drop` handler routes the file through
-`media:prepare` like any other source. **`MediaProxy` could always serve local files
-(`/local/<token>`) and the engine is source-agnostic — the capability was built and had no
-entry point,** so the app could finish a download and then not play it from disk. File → Open
-and drag-and-drop are both that entry point.
+### aria2 pinned to port 6800, silent on failure (2026-08-27)
 
-**F12 was bound twice and the app's own binding could never fire.** `before-input-event`
-toggled DevTools *and* called `preventDefault()`, which suppresses the page keyboard event —
-so `App.tsx`'s F12 handler never ran and `ProviderInspector`, which has no other entry point,
-was unreachable. DevTools is `Ctrl+Shift+I` only now. **Reload is gated on `app.isPackaged`**:
-`Ctrl+R` is browser muscle memory and in a packaged build it destroys the renderer — playback
-stops, the open page is lost, an in-flight search is abandoned.
+6800 collides most with aria2's own technical-audience users. `stdio:'ignore'` discarded the reason; `start()` returned `true` on `spawn` returning (a port conflict is not a spawn error — aria2 dies milliseconds later, `isRunning()` lies). Fixed: probes upward from 6800 by test-binding, captures stderr, confirms via `getVersion` RPC before reporting success; `getLastError()` carries the reason.
 
-**`Menu.setApplicationMenu(null)` cost more than chrome.** On macOS, Cut/Copy/Paste/Select-All
-are menu *roles*, not native text-field behaviour, so `Cmd+C` did nothing in the search box —
-and there was no Quit, no About and no zoom reset anywhere. A real menu is back, hidden behind
-Alt on Windows and Linux via `autoHideMenuBar`. It is also what makes any shortcut
-discoverable at all.
+### Media proxy tokens were `1`, `2`, `3` (2026-08-27)
 
-### `aria2` was pinned to port 6800 and told nobody when it failed (2026-08-27)
-
-6800 is aria2's documented default, so the people most likely to collide with it are the ones
-already running aria2 — which is this app's technical audience. `stdio: 'ignore'` discarded
-the reason, and `start()` returned `true` the moment `spawn` returned: **a port conflict is
-not a spawn error.** aria2 starts, fails to bind and exits a few milliseconds later, so
-`isRunning()` answered true for a dead process and every `addUri` after it failed with a
-message about the *download*. It now probes upward from 6800 by test-binding, captures stderr,
-and reports success only once the RPC actually answers (`getVersion`). `getLastError()` carries
-the reason. A silent downgrade to the slow HTTP path is the failure mode this repo keeps
-having to fix.
-
-### The media proxy's tokens were `1`, `2`, `3` (2026-08-27)
-
-Every response carries `Access-Control-Allow-Origin: *` so that ffprobe, hls.js, Shaka, mpv and
-an external VLC can all read from one door — which is correct and load-bearing. Combined with
-sequential tokens it meant **any page open in the user's browser could fetch
-`http://127.0.0.1:<port>/stream/1` cross-origin, read the body, and walk the integers to
-enumerate the session's viewing.** The ephemeral port is a speed bump, not a control. Tokens
-are 16 random bytes now (`[0-9a-f]{32}` in all five route regexes), `tokensByKey` keeps them
-stable so nothing downstream changed, and a `Host` header that does not name loopback is
-refused — binding to 127.0.0.1 says nothing about DNS rebinding. Pinned by two new cases in
-`mediaProxy.test.mts`; `fetch` refuses to set `Host`, so that one uses a raw `http.request`.
+`Access-Control-Allow-Origin: *` (correct, needed for ffprobe/hls.js/Shaka/mpv/external VLC) + sequential integer tokens meant **any page in the user's browser could cross-origin-fetch and enumerate the whole session's viewing** by walking integers. Tokens are now 16 random bytes (`[0-9a-f]{32}`), `tokensByKey` keeps them stable; a `Host` header not naming loopback is refused (binding to 127.0.0.1 alone doesn't prevent DNS rebinding).
 
 ### The font was fetched from Google on every launch (2026-08-27)
 
-`src/index.css` opened with `@import url('https://fonts.googleapis.com/…Inter…')`, so a
-*packaged desktop app* sent the user's IP and User-Agent to a third party on every start —
-invisibly, in an app whose users frequently run a VPN precisely to avoid that. It also failed
-silently offline and hung before falling back where the host is blocked. Inter is vendored
-into `src/assets/fonts/` (seven variable-font subsets, 213 KB; the non-latin ones stay because
-provider titles are not English even though the interface is) and `src/assets/inter.css` is
-generated from the Google CSS with the URLs rewritten. **Verify with
-`grep -oE 'https://fonts[^)"]*' dist/assets/*.css` after a build — it must find nothing.** This
-also unblocks a CSP, which would otherwise have to allow a third-party style and font origin.
+`@import url('https://fonts.googleapis.com/…')` in `src/index.css` — a packaged desktop app phoning a third party on every start, invisibly, plus a hang/silent-fail offline or on blocked hosts. Inter now vendored (`src/assets/fonts/`, 7 variable-font subsets, 213KB — non-latin subsets kept because provider titles aren't English). **Verify with `grep -oE 'https://fonts[^)"]*' dist/assets/*.css` after any build — must find nothing.**
 
 ### Licensing (2026-08-27)
 
-The repository had **no `LICENSE` file** while being a port of a GPL-3.0 Android application,
-vendoring 26 community extension repositories and bundling FFmpeg, mpv, aria2, yt-dlp and a
-JRE. `LICENSE` (GPL-3.0, fetched from gnu.org rather than reproduced from memory) and
-`THIRD-PARTY-NOTICES.md` now exist at the root, and `settings/AboutPanel.tsx` makes them
-reachable from a *packaged* build where the repository is not — GPL-3.0 §6 asks that whoever
-holds the binary can find the source. **The bundled FFmpeg builds are the GPL variants, not
-LGPL**, and the notice says so; "FFmpeg" unqualified would be the kind of accurate-sounding
-omission that file exists to avoid.
+No `LICENSE` file despite porting GPL-3.0 code + vendoring 26 extension repos + bundling FFmpeg/mpv/aria2/yt-dlp/JRE. `LICENSE` (GPL-3.0, from gnu.org) + `THIRD-PARTY-NOTICES.md` now at root, reachable from a packaged build via `settings/AboutPanel.tsx` (GPL-3.0 §6). **Bundled FFmpeg builds are GPL, not LGPL** — notice says so explicitly.
 
-### Shared renderer primitives added in the same pass
+### Shared renderer primitives (same pass)
 
-- **`src/utils/useFlash.ts`** — twenty-odd call sites wrote `setToast(m); setTimeout(() => setToast(null), N)`
-  with no cleanup. Two bugs: the timers **cross**, so flashing a second message two seconds
-  later has the *first* timer clear it early (which reads as the app dropping a confirmation,
-  exactly when someone is doing several things quickly); and every one set state after unmount,
-  which these views do constantly. Durations stay per call site — they range 1500–5000 ms and
-  unifying them would change what several screens do, the same argument `utils/format.ts` won.
-  Note `flash` is stable but the linter cannot know that the way it knows a `useState` setter
-  is, so it goes in dependency arrays.
-- **`src/components/Poster.tsx`** — `PosterCard` handled a *missing* `posterUrl` and had no
-  `onError`, so it handled the case that never happens and not the one that happens constantly:
-  scraped poster URLs expire and 403 on hotlink checks, and the result was Chromium's broken
-  image icon in the most-repeated component in the product. `HistoryView` had answered it with
-  `display: none`, which is an empty bordered box instead. Each call site keeps its own
-  `fallback`; flattening them to one glyph would be a worse screen, not a tidier one.
-- **`src/components/EmptyState.tsx`** — every list route was one sentence of body text, so an
-  empty library, an empty history and a search that found nothing were the same blank page. For
-  a new user **every screen except Home is empty**, which makes this the cheapest onboarding in
-  the app. The *action* is why it is a component: the search empty state now offers "Search all
-  sources", which clears the stored scope and re-runs — previously reachable only by finding
-  the scope picker and clearing it by hand.
+- `src/utils/useFlash.ts` — 20+ call sites' hand-rolled toast timers **crossed** (a second flash's timer got cleared early by the first) and leaked past unmount. Durations stay per-call-site (1500–5000ms, deliberate).
+- `src/components/Poster.tsx` — `PosterCard` had no `onError` for the actually-common case (expired/hotlink-blocked scraped poster URLs) — Chromium's broken-image icon everywhere. Per-call-site `fallback` kept (not one glyph).
+- `src/components/EmptyState.tsx` — every empty list route was identical one-sentence text; now has an *action* (search-empty offers "Search all sources", clearing the stored scope).
+- Also: global `:focus-visible` floor (8 `outline:none` sites had no replacement); `prefers-reduced-motion` honoured in the one stylesheet that wasn't; poster cards keyboard-reachable; window bounds persist+clamp to an existing display; offline banner (30 separate provider errors < one true sentence).
 
-Also: a global `:focus-visible` floor in `index.css` (eight `outline: none` sites, only some
-with replacements — in a full-screen dark app a missed one means the keyboard user simply
-loses the cursor); `prefers-reduced-motion` in `index.css`, which owns the `.spin` keyframe
-every loading indicator uses and was the one stylesheet of four not honouring it; the poster
-card is keyboard-reachable (`.poster-card:focus-visible` had been styled all along, which says
-someone meant it to be); window bounds persist and are clamped to a display that still exists;
-and an offline banner, because offline every provider fails separately and thirty honest
-errors are less useful than one true sentence.
-
-**Backlog:** `docs/roadmap/product-hardening-backlog.md` carries the remaining items with
-evidence, fixes and acceptance checks. Items marked `needs-app-run` there have not been
-verified in a running Electron app and should not be reported as done.
+**Backlog**: `docs/roadmap/product-hardening-backlog.md`. Items marked `needs-app-run` are unverified in a running Electron app — don't report as done.
 
 ---
 
 ## 6. Documentation: what to trust
 
-- `docs/PRD/00-index.md` — start here. Analysis baseline, the five findings (F-1…F-5) that
-  shape scope and cost.
-- `docs/PRD/31-cs3-dropin-compatibility.md` — the drop-in commitment and ADR-10.
-- `docs/PRD/33-cs3-desktop-current-architecture-and-implementation.md` — desktop
-  as-built. **Partially stale**: it references `electron/cs3ArchiveLoader.ts` and
-  `electron/jvmProviderBridge.ts`, which do not exist; that role is now
-  `cs3/sidecarSupervisor.ts` + the sidecar. It also contains absolute `D:\dipen\cs3\…`
-  paths from the author's Windows machine.
-- `docs/PRD/34` torrent architecture · `35` translation spike results · `36` the remaining
-  work to actually execute providers.
-- `docs/PRD/39-native-extension-and-playback-standards.md` — **proposed, nothing built**:
-  our own extension standard alongside `.cs3` (four lanes — `.cs3`, a QuickJS-sandboxed
-  `.csx` bundle, a Stremio-compatible addon URL, and yt-dlp), the `Source`/manifest wire
-  formats, repository signing, the engine ladder and format matrix, and the TLS/challenge
-  layer that actually decides how many sites work. It replaces doc 27 §6–§9. Read it
-  before designing anything plugin-shaped; do not treat it as as-built.
-- `docs/PRD/41-desktop-extension-platform-and-community-standard.md` — **proposed, nothing
-  built**, and the one to read instead of 39: it expands that sketch into a full
-  specification. Five lanes rather than four (doc 39 missed the upstream cross-platform jar
-  — see below), the repository/extension/SDK standards with schemas, ed25519 signing with
-  per-repository pinned keys, the capability sandbox, the unified metadata model (multi-source
-  ratings, crew, chapters, typed artwork, per-track audio language), the author CLI and
-  fixture harness, and the publishing model. §2 is a measured account of the *Android*
-  ecosystem read from upstream source on 2026-08-27 — repo/index/archive formats, the
-  four-field `manifest.json`, the hardcoded `apiVersion = 1`, the Levenshtein extractor
-  match — and is worth reading on its own before touching anything plugin-shaped.
-- `docs/PRD/43-source-and-provider-expansion.md` — **research, 2026-09-03; items 1–4 built**
-  (see its §0): where more sources come from. Its §3–§5 are counts against the live indexes,
-  taken before the additions. Its §4 named **four sources this app already paid for and could
-  not reach**; two are now wired (see "Two lanes that were already paid for" in §5), one is
-  the bundled `megarepo` — which can contribute nothing, because its only mechanism is the
-  `RepositoryManager` no-op in the bridge — and one is the subtitle service, still hardcoded to
-  a single host whose Stremio protocol we already implement twice. §6 maps every remaining
-  candidate onto PRD-41's five lanes, and the rule that falls out is load-bearing: **a direct
-  HTTP link is not an indexer result** — debrid answers, live channels, yt-dlp output and a
-  Jellyfin item are all *provider* sources, whatever found them.
-- `docs/PRD/44-user-and-developer-experience-research-and-roadmap.md` — **research +
-  proposal, §6–§8 not built.** The half 39 and 41 do not cover: not the wire formats but
-  what using and *authoring for* this feels like against Stremio, Kodi and upstream
-  CloudStream. Its §5 is the useful part and is not a competitor analysis at all — it is an
-  eight-shape taxonomy of how this product fails, derived from a 6,180-record session log
-  and from the defects recorded in this file. Read §6.1 before designing any failure UI:
-  *every message that names a problem carries the action that resolves it.* §4 is the
-  finding worth acting on — we specify five extension lanes and **none of them can be
-  authored without the Android toolchain**, so every extension in the reachable ecosystem
-  is an Android `.cs3` written for the phone app.
-- `docs/docs_cs3/` — the Android app's architecture, 9 documents, written from source.
+- `docs/PRD/00-index.md` — start here (F-1…F-5 findings, scope/cost baseline).
+- `docs/PRD/31` — drop-in compatibility commitment, ADR-10.
+- `docs/PRD/33` — desktop as-built, **partially stale**: references `electron/cs3ArchiveLoader.ts`/`jvmProviderBridge.ts` (don't exist — that role is `cs3/sidecarSupervisor.ts` + sidecar); has stale absolute Windows paths.
+- `docs/PRD/34` torrent architecture · `35` translation spike results · `36` provider execution roadmap.
+- `docs/PRD/39` — **proposed, nothing built**: 4-lane extension standard (`.cs3`, QuickJS `.csx`, Stremio addon URL, yt-dlp), wire formats, signing, engine ladder, TLS/challenge layer. Superseded by 41 (missed the upstream jar lane).
+- `docs/PRD/41` — **proposed, nothing built**, read instead of 39: 5 lanes, repo/extension/SDK schemas, ed25519 signing, capability sandbox, unified metadata model, author CLI. §2 is a measured Android-ecosystem account worth reading standalone.
+- `docs/PRD/43` — **research 2026-09-03; items 1–4 built** (§0). §4 named 4 already-paid-for unreached sources: 2 now wired ("Two lanes that were already paid for"), `megarepo` contributes nothing (only mechanism is a bridge no-op), subtitle service still single-hosted. §6's rule: **a direct HTTP link is not an indexer result** — debrid/live/yt-dlp/Jellyfin are all *provider* sources regardless of what found them.
+- `docs/PRD/44` — **research+proposal, §6–§8 not built**. §5: an 8-shape failure taxonomy from a 6,180-record log. Read §6.1 before any failure-UI design (every message names the action that resolves it). §4: none of the 5 specified extension lanes can be authored without the Android toolchain.
+- `docs/docs_cs3/` — Android app architecture, 9 documents, written from source.
 
-Requirement ids appear throughout code comments — `ARCH-2`, `SEC-7`, `DROP-12`, `DSK-57`,
-`AC-D4`, `RISK-D1`. They resolve inside `docs/PRD/`. Grep the id when a comment cites one;
-it will explain the constraint rather than the mechanism.
+Requirement ids in code comments (`ARCH-2`, `SEC-7`, `DROP-12`, `DSK-57`, `AC-D4`, `RISK-D1`, …) resolve inside `docs/PRD/` — grep the id.
 
-Rule of thumb: **PRD documents describe intent and reasoning; the code describes reality.**
-Where they disagree, trust the code and fix the doc.
+**Rule of thumb: PRD documents describe intent and reasoning; the code describes reality. Where they disagree, trust the code and fix the doc.**
 
 ---
 
 ## 7. Conventions
 
-- **Commits**: Conventional Commits with a scope drawn from the area —
-  `feat(library): …`, `feat(cs3): …`, `feat(torrent): …`, `feat(player): …`,
-  `docs: …`, `chore(cs3_windows): …`.
-- **Comments explain *why*, not *what*.** This codebase's comments are unusually dense with
-  rationale (why a dep is external, why the sidecar is a process, why file selection
-  matters). Match that register. Do not add narration of what the next line obviously does.
-- **TypeScript, `strict`.** Avoid `any`; the existing handful of `any`s are in IPC
-  plumbing, not a licence to add more.
-- **Never bundle main-process runtime deps.** `vite.config.ts` externalises everything in
-  `dependencies` plus node builtins in both bare and `node:` spellings. `webtorrent` pulls
-  native `.node` binaries (`node-datachannel`, `utp-native`) that cannot exist in a JS
-  bundle and must also be `asarUnpack`-ed for packaging.
+- **Commits**: Conventional Commits, scope from the area (`feat(library):`, `feat(cs3):`, `feat(torrent):`, `feat(player):`, `docs:`, `chore(cs3_windows):`).
+- **Comments explain *why*, not *what*.** Match the dense-rationale register already present. No narration of the obvious.
+- **TypeScript `strict`.** Avoid `any` (existing ones are IPC plumbing, not precedent).
+- **Never bundle main-process runtime deps.** `vite.config.ts` externalises `dependencies` + node builtins (bare and `node:` spellings). `webtorrent`'s native `.node` binaries (`node-datachannel`, `utp-native`) must also be `asarUnpack`-ed.
 - **External links open in the system browser**, never in-app (`setWindowOpenHandler`).
-- **Player controls hide from one place.** Visibility is a state machine polled on
-  a timer (`VideoPlayer`), not a chain of `setTimeout`s. The rule that keeps it
-  stable: a `mousemove` with zero `movementX`/`movementY` is never activity.
-  Chromium synthesises exactly that event when hiding the controls changes what
-  sits under a stationary cursor — and toggling `cursor: none` on idle does it
-  too — so treating synthetic events as activity created a genuine reveal/hide
-  feedback loop, seen as controls flashing while the mouse was not moving.
-- **Provider subtitles are a real source.** `loadLinks` returns subtitles
-  alongside links and `PluginManager.loadSubtitles` exposes them; `subtitles:search`
-  merges them ahead of OpenSubtitles. This matters most where OpenSubtitles cannot
-  help at all — extension-sourced content with no IMDb id — and the method existed
-  with no caller for some time, so a film played from an extension had no
-  subtitles even when the provider had handed them over with the video.
-- **Shutdown is explicit**: `downloadService.stop()`, `extensionUpdater.stop()`,
-  `pluginManager.shutdown()` (kills the JVM — otherwise you orphan a Java process), and
-  `torrentEngine.destroy()` on `before-quit` (otherwise: zombie process, locked cache dir).
-  If you add a service that owns a socket, file handle, timer, or child process, wire it
-  into these paths.
-- **stdout of the sidecar carries RPC frames and nothing else.** A stray `println` from
-  plugin code desynchronises the channel, so plugin logs, JVM warnings, and stack traces
-  are forced to stderr. Keep it that way.
+- **Player controls hide from one place** — a state machine polled on a timer (`VideoPlayer`), not `setTimeout` chains. A zero-`movementX/Y` `mousemove` is never activity (Chromium synthesises exactly that when hiding controls changes what's under the cursor — treating it as activity caused a flashing feedback loop).
+- **Provider subtitles are a real source** — `loadLinks` returns them; `subtitles:search` merges them ahead of OpenSubtitles (critical for extension-sourced content with no IMDb id).
+- **Shutdown is explicit**: `downloadService.stop()`, `extensionUpdater.stop()`, `pluginManager.shutdown()` (kills the JVM), `torrentEngine.destroy()`, all on `before-quit`. Any new service owning a socket/handle/timer/child process must wire into this.
+- **stdout of the sidecar carries RPC frames and nothing else.** A stray `println` desyncs the channel — plugin logs/JVM warnings/stack traces are forced to stderr. Keep it that way.
 
----
+### What was merged from `claude/refine` / `claude/android-media-desktop-dybtml`, and what wasn't (2026-08-23)
 
-### What was merged from `claude/refine` and `claude/android-media-desktop-dybtml`, and what was not (2026-08-23)
+Rule: take features/refinements, leave anything touching playback behaviour/request headers/the native engine (this branch's proven streaming stack is the asset being protected).
 
-Both branches were merged selectively onto `dev/feature-4`. The rule applied: take
-features and refinements, leave anything that changes playback behaviour, request
-headers, or the native engine — this branch streams the corpus well and that is the
-asset being protected.
+**`refine` forked at `881456a`, before this branch's streaming stack existed** — no `providerLinks.ts`, `subtitles/convert.ts`, `clearKey`/`shakaSession`, `build-media-runtime.mjs`, or (due to the unanchored `extensions/` ignore rule) extensions screen at all. **Cherry-pick additively; never take a whole-file rewrite from it.** This is why the 25-commit IPC refactor (`main.ts`→24 `ipc/*` modules, `60da305`) was **not merged** — its `main.ts` predates this branch's 222-channel surface (was written against 188) and would delete modules it never knew existed. It can be re-derived as a template later, not cherry-picked.
 
-**The structural fact that governs any future merge from `refine`: it forked at
-`881456a`, before this branch's streaming stack landed.** Its tree has no
-`providerLinks.ts`, no `subtitles/convert.ts`, no `clearKey`/`shakaSession`, no
-`build-media-runtime.mjs`, and — because it still carries the unanchored
-`extensions/` ignore rule described above — no extensions screen at all. Anything
-on that branch which *rewrites* `main.ts` or `preload.ts` wholesale is therefore
-written against a tree that never knew about those modules, and applying it would
-delete them. Cherry-pick additively from `refine`; never take a whole-file rewrite.
+Merged: `sourceScope.ts`, `swarmHealth.ts`, rebuilt extensions screen, `utils/format.ts`, `util/jsonFileStore.ts`/`disabledSet.ts`, `homeProviders.ts`/`homeProviderRegistry.ts`, source provenance/export, NewPipe downloader fix.
 
-That is why **the 25-commit IPC refactor (`main.ts` → 24 `ipc/*` modules) was not
-merged.** It is a genuine improvement and it is not lost — it can be re-derived
-against the current `main.ts`, using those modules as a template. What it cannot be
-is cherry-picked, because `60da305` replaces `main.ts` with a version assembled from
-a 188-channel surface that predates this branch's 222.
+Not merged (deliberately, each a behaviour change to a working path): `ext.to` gateway; mpv embedding/`mpvSurface.ts`; concurrent-open/end-of-playback `MpvEngine` changes; HEVC `hvc1` tagging/remux-container changes; `unreadableSource`'s loopback-failure split; media-module logging-init changes.
 
-Merged: provider-first source scope (`sourceScope.ts`), out-of-order torrent fetch
-and swarm-limit reporting (`swarmHealth.ts`), the rebuilt extensions screen, the
-formatter consolidation (`utils/format.ts`), `util/jsonFileStore.ts` and
-`util/disabledSet.ts`, the pluggable health-checked home catalogue
-(`homeProviders.ts`, `homeProviderRegistry.ts`), source provenance and export, and
-the NewPipe downloader fix.
-
-Not merged, deliberately: `ext.to` and the human-assisted access gateway; mpv
-embedding and the native-engine integration (`mpvSurface.ts`, `40e3d72`); the
-concurrent-open and end-of-playback changes to `MpvEngine`; the HEVC `hvc1` tagging
-and remux-container changes; `unreadableSource`'s loopback-failure split; and the
-logging-init changes that touch the media modules. Each is a behaviour change to a
-path that currently works.
-
-**One trap worth naming, because it would have shipped silently.** `refine`'s
-prebuilt `cs3-provider-bridge.jar` predates the `:app` activity shims on this branch
-(`CommonActivity`, `MainActivity`, `CloudStreamApp`, `AcraApplication`). Taking that
-binary to get the NewPipe fix would have carried the fix in and taken the shims back
-out — a regression with no compile error and no failing test, surfacing only as
-extensions losing their providers again. The jar is rebuilt from the union of both
-sources instead, and `RUNTIME_GENERATION` is bumped so installed copies under
-`%APPDATA%` are replaced. **Never take a prebuilt jar from a branch whose sources you
-have not compared.**
+**Never take a prebuilt jar from a branch whose sources you haven't compared** — `refine`'s prebuilt `cs3-provider-bridge.jar` predates this branch's `:app` activity shims (`CommonActivity`, `MainActivity`, `CloudStreamApp`, `AcraApplication`); taking it for an unrelated fix would have silently regressed all of them (no compile error, no failing test — just extensions losing providers again). Bridge rebuilt from the union of both sources; `RUNTIME_GENERATION` bumped.
 
 ### The browser, finally: the WebView bridge (2026-08-24)
 
-PRD-36 step 7, PRD-39 §7, and `docs/roadmap/android-parity.md` all named this as the
-highest-value outstanding work, independently. It is built.
-
-**The class that resolves perfectly and does nothing.** Unlike `Plugin`, `DataStore` or
-`CloudflareKiller`, `com.lagradost.cloudstream3.network.WebViewResolver` is **not** missing
-from `library-jvm` 4.8.0. It is published, it links, and a compatibility audit that counts
-`NoClassDefFoundError` sees nothing wrong with it — its JVM variant simply has a pass-through
-`intercept` and a `resolveUsingWebView` that is `TODO("Not yet implemented")`. So a provider
-needing a browser did not degrade: it threw `NotImplementedError`, or it silently took a
-Cloudflare interstitial for the page it asked for and reported no results. **That is why four
-rounds of counting missing classes never surfaced it**, and it is the standing argument for
-not treating "zero NoClassDefFoundError" as "zero compatibility gaps".
-
-Three pieces, and the first is the only hard one:
+**The class that resolves perfectly and does nothing**: `com.lagradost.cloudstream3.network.WebViewResolver` IS published in `library-jvm` 4.8.0 — but its JVM variant's `resolveUsingWebView` is `TODO("Not yet implemented")`. A class-resolution audit (counting `NoClassDefFoundError`) sees nothing wrong with it — this is why 4 rounds of shim work never surfaced the gap, and the standing argument against treating "zero NoClassDefFoundError" as "zero compatibility gaps."
 
 | Piece | File |
 |---|---|
-| The stdio protocol, run backwards | `sidecar/.../HostChannel.java` + `Main.handle` |
-| The handler the sidecar installs into the bridge | `bridge/.../HostBridge.kt` |
-| `WebViewResolver`, shadowing the library stub | `bridge/.../network/WebViewResolver.kt` |
-| The browser | `cs3_windows/electron/cs3/webViewHost.ts` |
-| What a subrequest means (pure, tested) | `cs3_windows/electron/cs3/webViewMatch.ts` |
+| stdio protocol, run backwards | `sidecar/.../HostChannel.java` + `Main.handle` |
+| sidecar-installed handler | `bridge/.../HostBridge.kt` |
+| `WebViewResolver`, shadowing the stub | `bridge/.../network/WebViewResolver.kt` |
+| the browser | `cs3_windows/electron/cs3/webViewHost.ts` |
+| subrequest meaning (pure, tested) | `cs3_windows/electron/cs3/webViewMatch.ts` |
 
-**Frames are told apart by a key, never a version.** The sidecar emits
-`{"hostCall":"webview.resolve","hostId":"h1","params":{…}}` and the host answers
-`{"hostReply":"h1","ok":true,"json":"…"}`. Both sides route on the presence of `hostCall` /
-`hostReply`, so a runtime provisioned before this existed still speaks the frames it always
-did. The payload travels as a JSON *string* under `json`, the same choice `providerLoad`
-makes in the other direction and for the same reason: it is already shaped for its reader,
-and re-parsing it through the sidecar's minimal writer would only add a place to lose fields.
+Frames told apart by key (`hostCall`/`hostReply`), never a version — old sidecars still speak the same frames. Payload travels as a JSON string under `json` (same choice as `providerLoad`, avoids a lossy re-parse). **Host replies complete on the stdin reader thread, not the bounded plugin-call pool** — else concurrent resolves under load deadlock the pool waiting on replies no thread can deliver.
 
-**Host replies complete on the stdin reader thread, and that is not an optimisation.** The
-sidecar runs plugin calls on a *bounded* pool. A provider waiting on a browser holds one of
-those threads; if delivering the reply also needed one, enough concurrent resolves would fill
-the pool with threads each waiting for a reply no remaining thread could deliver. That
-deadlock appears only under load, which is to say only in front of a user.
+**Classpath order in `PluginHost.shared()` is load-bearing** — `WebViewResolver` is the first class the bridge *overrides* rather than supplies fresh, and `URLClassLoader`/`Files.newDirectoryStream` order is otherwise filesystem-dependent (correct on the build machine, broken on a user's). Bridge sorted to the front; `WebViewBridgeTest` asserts both directions. **The shadow is verified a strict superset of the stub via `javap`** (adds Android-only members like `getWebViewUserAgent1` the JVM stub lacks — archives compiled against Android would otherwise `NoSuchMethodError` post-link).
 
-**Classpath order in `PluginHost.shared()` is now load-bearing.** Every type the bridge
-supplied before was one `library-jvm` does not publish, so whichever jar was reached first
-held the only copy. `WebViewResolver` is the first class the bridge *overrides*, a
-`URLClassLoader` searches its URLs in order, and `Files.newDirectoryStream` specifies none —
-so which implementation won would have been a property of the filesystem: correct on the
-machine it was built on, throwing `NotImplementedError` on a user's. The bridge is sorted to
-the front, and `WebViewBridgeTest` asserts both directions (with the bridge, ours loads;
-without it, the stub does — which is also where a future `library-jvm` that ships a real
-implementation would announce itself).
+A browser opens only on a genuine challenge (`Server: cloudflare` **and** 403/503, both — a bare 403 is usually hotlink protection a browser can't fix). Bite-prone: `backgroundThrottling:false` mandatory (hidden-window timers throttled → challenge pages hang); `cf_clearance` is `HttpOnly` (read from the session, not `document.cookie`); bypass ends on **cookie arrival** (`awaitCookie`), not a URL match (upstream's deliberately-unmatchable `.^`); certificate errors ignored **for this partition only** (never for the app's default session — this one never carries credentials, the found stream is re-fetched normally afterward); `webRequest` handlers installed **once**, dispatched by `webContentsId` (per-resolve registration would silently unhook concurrent resolves); Java regex→JS translation must be escape-aware (`\A`, `\p{Alpha}` are silent no-ops in JS — a naive global replace also corrupts escaped-backslash sequences, producing a "pattern that never matches" that reads as a dead host); blacklist matches the **path only** (query-string cache-busters routine; `/cdn-cgi/`/`recaptcha` never blocked — that's the challenge machinery itself). `RUNTIME_GENERATION` **6**.
 
-**The shadow is a strict superset of the stub, verified with `javap`.** Every constructor,
-overload, synthetic `$default` bridge and static accessor matches descriptor-for-descriptor.
-It adds the property getters and `getWebViewUserAgent1` that the *Android* artifact has and
-the JVM one does not — the archives we load were compiled against Android, so a member
-missing here fails at a call site with `NoSuchMethodError` long after the class has linked.
+**Honest gap vs Android**: Android streams intercepted requests to the callback live (a `true` mid-load destroys the view); here the whole batch arrives after the fact and a `true` truncates the reconstructed list at that point — every corpus use (collect/filter) survives this; only the early-stop-load-sooner behaviour is absent (a saving, not a semantic difference).
 
-**A browser is opened only when something actually needs one.** `CloudflareKiller` follows
-upstream's order: send the request, and open a browser only if the reply is a genuine
-challenge — `Server: cloudflare` **and** 403/503, both, never one. A bare 403 is far more
-often hotlink protection or an expired signed URL, neither of which a browser can help with.
-The corpus attaches this interceptor defensively, so opening a page per request would put a
-Chromium instance behind every scrape in the app.
+**Not yet measured: whether this actually rescues affected providers** — the harnesses (`provider-e2e.mjs`, `native-engine-matrix.mjs`) run with **no Electron**, so `hostCapabilities` reports none and every resolve declines. Only the seams are verified (31 sidecar tests, 21 matcher tests, `javap`). Closing this needs a headless Electron main process answering `webview.resolve`.
 
-Things that will bite:
+### Android parity audit (2026-08-23, `docs/roadmap/android-parity.md`)
 
-- **`backgroundThrottling: false` is mandatory.** A hidden window has its timers throttled,
-  and a challenge page is mostly timers. Left on, it takes minutes or never finishes — and
-  that reads as the site being slow rather than as our own setting.
-- **`cf_clearance` is `HttpOnly`**, so cookies are read from the session, never from
-  `document.cookie`, which comes back without the only cookie that matters. The bypass also
-  ends on that cookie *arriving* (`awaitCookie`) rather than on a URL match: upstream passes
-  the deliberately unmatchable `.^`, so without it every bypass runs its full 60s timeout.
-- **Certificate errors are ignored, for this partition only.** Android's resolver does
-  `handler.proceed()` on every SSL error and a real share of scraper hosts have bad certs.
-  What bounds it: the session is used only to solve challenges and watch URLs, never to
-  carry credentials, and the stream it finds is fetched afterwards through the ordinary path
-  with ordinary verification. Widening this to the app's default session would be a
-  different and much worse decision.
-- **`webRequest` handlers are per session and there is exactly one of each.** Registering
-  them per resolve means the second concurrent resolve silently unhooks the first — which
-  reads as a provider that intermittently finds nothing, but only when another provider
-  happens to be scraping at the same time. They are installed once and dispatch on
-  `webContentsId`.
-- **Java regexes are translated escape-aware, and refused when they cannot be.** JavaScript
-  accepts `\A` and `\p{Alpha}` as *identity escapes* — no error, and a pattern that matches
-  nothing a browser will ever request. A naive `replace(/\\A/g, '^')` is just as bad: it
-  also rewrites the `\A` inside `\\A`. A pattern silently treated as "never matches" spends
-  the full timeout on every link and comes back looking exactly like a host that is down,
-  attributed to the provider rather than to us.
-- **The blacklist reads the path, never the whole URL.** `?poster=…jpg` and `?v=….ts` cache
-  busters are routine, and cancelling the script they decorate breaks the page that was
-  about to solve the challenge. `/cdn-cgi/` and `recaptcha` are never blocked at all — that
-  is the challenge machinery itself.
-- **`RUNTIME_GENERATION` is 6.** Both halves changed and they must agree; a provisioned copy
-  pairing a new sidecar with an old bridge has a channel with nothing on the far end.
+Source-level comparison against checked-out Android at `a72f9e6c`. The `WebViewResolver` gap above was its most important finding (closed 2026-08-24) — invisible to a class-resolution audit precisely because the class resolves. **Lesson: a gap that a missing-class count can't see is not a gap that doesn't exist.** Two smaller rules: `SourcePrefetcher.schedule` is safe to call from anywhere (declines/dedupes/supersedes internally — player calls it at 70% of an episode); subtitle appearance is one record, two renderers (`src/utils/subtitleStyle.ts` maps to both `::cue` vars and mpv properties — `sub-pos` counts down from 100 where the CSS lift counts up).
 
-**What still differs from Android, honestly.** Android streams every intercepted request to
-`requestCallBack` as it happens, and returning `true` destroys the view mid-load. Here the
-browser is one RPC away and the answer arrives as a batch, so the callback runs afterwards in
-observation order and a `true` truncates the list at that point — which reconstructs what the
-list *would* have held. What it cannot do is stop the page loading any sooner. Every corpus
-call site uses the callback to collect or to filter, both of which survive; the early stop is
-a saving, not a semantic. `useOkhttp` is likewise carried and used only as the hint upstream
-documents it as: the browser has its own stack and its own cookie jar, and re-issuing every
-subrequest across a process boundary would cost more than it buys.
-
-**Not yet measured: whether this actually rescues the providers it should.** `Aniworld`'s
-Google 403 and the Voe/Vidsonic extractor failures were all attributed to this gap. The
-harnesses that would settle it — `tools/e2e/provider-e2e.mjs` and
-`tools/e2e/native-engine-matrix.mjs` — drive the sidecar over stdio with **no Electron in the
-way**, which is exactly what makes them useful and exactly why neither can exercise this: no
-Electron means no browser, so `hostCapabilities` reports none and every resolve declines with
-a reason. Verified here are the seams (31 sidecar tests, 21 for the matcher, `javap` on the
-shadow); the corpus claim is not, and should not be made until someone runs the app. Closing
-that properly means teaching one harness to host the channel — the cheapest version is a
-headless Electron main process that answers `webview.resolve` and nothing else.
-
-### Android parity: what was measured and what was closed (2026-08-23)
-
-`docs/roadmap/android-parity.md` records a source-level comparison against the checked-out
-Android tree at `a72f9e6c`. Four gaps were closed in that pass and are described there; the
-one that matters most is the one that was *not*:
-
-**`WebViewResolver` on the JVM was `TODO("Not yet implemented")` — closed 2026-08-24**, and
-the audit's reasoning is worth keeping even though the finding is gone. `library-jvm` ships a
-JVM variant whose `intercept` is a pass-through and whose `resolveUsingWebView` throws
-`NotImplementedError`, so a provider needing a browser did not degrade — it threw, or it
-silently received a Cloudflare interstitial as though it were the page it asked for. **This
-was invisible to a class-resolution audit, because the class resolves perfectly**, which is
-why four rounds of shim work never surfaced it. 45 plugin directories across 11 repositories
-reference it or `CloudflareKiller`.
-
-The blocker was direction, not capability: the stdio RPC ran main → sidecar only, so the JVM
-could not ask Electron to open a window. Electron *is* Chromium; the engine was already in
-the box. See "The browser, finally" in §5 for what was built and what still differs. The
-lesson generalises and is the reason to read that document before writing another shim: a
-gap that a missing-class count cannot see is not a gap that does not exist.
-
-Two smaller rules came out of the same pass and are easy to undo by accident:
-
-- **`SourcePrefetcher.schedule` is safe to call from anywhere**, including the player. It
-  declines when background loading is off, returns immediately when the cache can answer,
-  dedupes by target and supersedes rather than stacking. The player calls it at 70% of an
-  episode so the next one is not resolved from cold.
-- **Subtitle appearance is one record and two renderers.** `src/utils/subtitleStyle.ts` maps
-  the stored settings to both `::cue` variables and mpv properties, and it is tested against
-  itself because the failure is silent: the engine routes 4K HEVC to mpv on its own, so
-  styling only the element loses every setting on exactly the files that need them. Note
-  `sub-pos` counts down from 100 where the CSS lift counts up.
+---
 
 ## 8. Working agreements for agents
 
-- **Branching**: cloud/agent sessions develop on their assigned `claude/*` branch and push
-  there. Never push to `master` directly. Do not open a PR unless asked.
-- **Scope**: this repo has a lot of aspirational documentation. Implement what was asked;
-  do not start on `docs/PRD/36` step 4 because you read about it here.
-- **Do not vendor or commit** `.cs3` archives, `library-jvm.jar`, `node_modules/`,
-  `target/`, `dist/`, `dist-electron/`, or downloaded `aria2c`/`yt-dlp` binaries.
-  (`.gitignore` at root covers `target/`; `cs3_windows/.gitignore` covers `dist-electron/`, `dist/`, etc.)
-- **A jar unzipped in place is build output too, and nothing ignored it.** A `jar xf`
-  of `cs3-sidecar.jar` at the repo root leaves `META-INF/` and `com/` beside the sources
-  they were compiled from, and one branch carried all 28 files into a merge — 28 `.class`
-  files each with a `.java` under `sidecar/src/main/java/` two directories away. They are
-  ignored now (`/META-INF/`, `/com/`, anchored for the reason the next bullet gives). The
-  reason to care is not tidiness: a stale compiled copy of the sidecar sitting in the tree
-  is the `%APPDATA%` drift trap in §3 with the directories swapped, and it reads to whoever
-  finds it like a second, authoritative build.
-- **Anchor every ignore rule that names a runtime directory**, and check what a new one
-  matches before adding it. `cs3_windows/.gitignore` carried a bare `extensions/`, meant for
-  the app's runtime archive directory. A pattern with no leading slash matches a directory of
-  that name at **any depth**, so it also matched `src/components/extensions/` and silently
-  swallowed the entire extensions screen. `App.tsx` imported a module no clone contained, so
-  `tsc -b` *and* `vite build` failed on every fresh checkout — the app could not be built at
-  all. The rules are anchored now (`/extensions/`, `/data/`, `/bin/`); `data/` and `bin/` had
-  exactly the same reach. **The screen was rebuilt from the IPC surface on 2026-08-21** and is
-  a fresh implementation, not a recovery — if the original turns up on the author's machine,
-  compare rather than assuming either is newer.
-- **Report honestly.** "Typechecks with `bun run build`" is a true claim. "Tested" is not,
-  unless you ran `mvn test` or actually exercised the path. Legal/ecosystem context here
-  (GPL-3.0, third-party indexers, community plugin code) makes overclaiming expensive.
-- **Keep this file current.** If you change the IPC surface, add a service, move the
-  sidecar contract, or discover that a section above is wrong — update it in the same
-  commit. This file is the reason the next agent does not have to repeat your exploration.
+- **Branching**: cloud/agent sessions develop on their assigned `claude/*` branch, push there. Never push to `master` directly. No PR unless asked.
+- **Scope**: don't start on a PRD step because you read about it here — implement what was asked.
+- **Do not vendor/commit**: `.cs3` archives, `library-jvm.jar`, `node_modules/`, `target/`, `dist/`, `dist-electron/`, downloaded `aria2c`/`yt-dlp` binaries. (Root `.gitignore` covers `target/`; `cs3_windows/.gitignore` covers `dist-electron/`, `dist/`.)
+- **A `jar xf`'d sidecar jar is build output too, and nothing ignored it** — one branch merge carried 28 stray `.class` files beside their `.java` sources. Now ignored (`/META-INF/`, `/com/`, anchored). This matters because a stale compiled sidecar copy in the tree reads as a second, authoritative build.
+- **Anchor every ignore rule naming a runtime directory.** A bare `extensions/` in `cs3_windows/.gitignore` (meant for the runtime archive dir) matched **any depth**, silently swallowing `src/components/extensions/` — the whole extensions screen vanished from every fresh clone, breaking `tsc -b`/`vite build` unconditionally. Rules are anchored now (`/extensions/`, `/data/`, `/bin/`). The screen was rebuilt fresh on 2026-08-21, not recovered — if the original turns up, compare rather than assume.
+- **Report honestly.** "Typechecks with `bun run build`" is true; "tested" is not unless you ran `mvn test` or actually exercised the path. GPL-3.0/third-party-indexer/community-plugin context makes overclaiming expensive.
+- **Keep this file current.** Changing the IPC surface, adding a service, moving the sidecar contract, or finding a stale section — update it in the same commit.
