@@ -79,6 +79,7 @@ const PRESET_ALIASES = {
   'native-providers': ['electron/cs3/nativeProviders.test.mts'],
   discovery: ['electron/sharedDiscovery.test.mts'],
   'shared-discovery': ['electron/sharedDiscovery.test.mts'],
+  updater: ['electron/cs3/extensionUpdater.test.mts'],
 };
 
 // Colors for terminal output

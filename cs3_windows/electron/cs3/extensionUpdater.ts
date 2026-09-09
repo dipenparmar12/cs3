@@ -27,6 +27,10 @@ export interface AvailableUpdate {
   fileSize?: number;
   /** Author-supplied notes, when the repository carries them. */
   description?: string;
+  fileHash?: string;
+  jarUrl?: string;
+  jarHash?: string;
+  jarFileSize?: number;
 }
 
 export interface UpdateCheckResult {
@@ -247,6 +251,10 @@ export class ExtensionUpdater {
           downloadUrl: remote.url,
           fileSize: remote.fileSize,
           description: remote.description,
+          fileHash: remote.fileHash,
+          jarUrl: remote.jarUrl,
+          jarHash: remote.jarHash,
+          jarFileSize: remote.jarFileSize,
         });
       }
     });
@@ -296,6 +304,10 @@ export class ExtensionUpdater {
       repositoryUrl: update.repositoryUrl,
       fileSize: update.fileSize,
       description: update.description,
+      fileHash: update.fileHash,
+      jarUrl: update.jarUrl,
+      jarHash: update.jarHash,
+      jarFileSize: update.jarFileSize,
     };
 
     // Re-resolve against the live repository so the hash is the one the
@@ -359,15 +371,21 @@ export class ExtensionUpdater {
         this.plugins.archivePathFor(update.repositoryUrl, internalName)
       );
 
-      if (!verified.ok && preserved) {
-        const restored = await this.plugins.rollbackPlugin(update.repositoryUrl, internalName);
+      if (!verified.ok) {
+        let rollbackMsg = '';
+        if (preserved) {
+          const restored = await this.plugins.rollbackPlugin(update.repositoryUrl, internalName);
+          rollbackMsg = restored.ok
+            ? `v${update.installedVersion} has been restored.`
+            : `the previous version could not be restored: ${restored.message}`;
+        } else {
+          rollbackMsg = 'no previous version backup was available to restore.';
+        }
         const result: UpdateOutcome = {
           internalName,
           ok: false,
           fromVersion: update.installedVersion,
-          message: restored.ok
-            ? `${update.name} v${plugin.version} does not load (${verified.message}); v${update.installedVersion} has been restored.`
-            : `${update.name} v${plugin.version} does not load (${verified.message}), and the previous version could not be restored: ${restored.message}`,
+          message: `${update.name} v${plugin.version} does not load (${verified.message}); ${rollbackMsg}`,
         };
         this.emit('extension:updateFinished', result);
         return result;

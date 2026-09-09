@@ -158,8 +158,14 @@ export interface SystemRuntimeStatus {
  *
  * `ShimSignatureTest` now enumerates the rule the seven near-misses broke, so
  * the eighth fails a test instead of a user's extension.
+ *
+ * Generation 13 serializes concurrent DEX translations in `DexTranslator` with
+ * `TRANSLATION_LOCK`, catches OOM with explicit GC + backoff retry, performs
+ * post-translation GC when heap exceeds 70%, and scales the JVM max heap up to
+ * 4GB dynamically. This prevents JVM heap exhaustion and OOM crashes during
+ * bulk extension updates.
  */
-const RUNTIME_GENERATION = 12;
+const RUNTIME_GENERATION = 13;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {

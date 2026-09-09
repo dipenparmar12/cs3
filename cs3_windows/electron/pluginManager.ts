@@ -748,6 +748,7 @@ export class PluginManager {
   private installedRepoUrls = new Set<string>();
   private installedPlugins = new Map<string, PluginData & { meta: SitePlugin }>();
   private runtimeReports = new Map<string, PluginRuntimeReport>();
+  private previousPluginRecords = new Map<string, PluginData & { meta: SitePlugin }>();
 
   /**
    * Where provider failures are recorded, when the host supplies a log.
@@ -925,8 +926,20 @@ export class PluginManager {
   public preserveInstalledVersion(repoUrl: string, internalName: string): boolean {
     const current = this.installPathFor(repoUrl, internalName);
     if (!fs.existsSync(current)) return false;
+    const backup = this.backupPathFor(repoUrl, internalName);
     try {
-      fs.copyFileSync(current, this.backupPathFor(repoUrl, internalName));
+      if (fs.existsSync(backup)) {
+        try {
+          fs.chmodSync(backup, 0o666);
+        } catch {
+          // Ignore if chmod fails
+        }
+      }
+      fs.copyFileSync(current, backup);
+      const existing = this.installedPlugins.get(internalName);
+      if (existing) {
+        this.previousPluginRecords.set(internalName, { ...existing });
+      }
       return true;
     } catch (error) {
       console.warn('[plugins] could not preserve the previous version:', error);
@@ -962,6 +975,19 @@ export class PluginManager {
     }
 
     try {
+      await this.sidecar.call('unload', { pluginId: internalName });
+    } catch {
+      // Safe if sidecar is not running
+    }
+
+    try {
+      if (fs.existsSync(target)) {
+        try {
+          fs.chmodSync(target, 0o666);
+        } catch {
+          // Ignore if chmod fails
+        }
+      }
       fs.copyFileSync(backup, target);
     } catch (error) {
       return {
@@ -970,6 +996,12 @@ export class PluginManager {
           describeError(error)
         }`,
       };
+    }
+
+    const prev = this.previousPluginRecords.get(internalName);
+    if (prev) {
+      this.installedPlugins.set(internalName, prev);
+      this.persist();
     }
 
     /**
@@ -982,6 +1014,13 @@ export class PluginManager {
         ok: false,
         message: `The previous version was restored but still does not load: ${verification.message}`,
       };
+    }
+
+    this.providersLoaded = false;
+    try {
+      await this.loadProviders();
+    } catch (err) {
+      console.warn(`[pluginManager] Could not auto-load providers after rollback of ${internalName}:`, err);
     }
 
     return { ok: true, message: 'The previous version has been restored and loaded.' };
@@ -1432,11 +1471,15 @@ export class PluginManager {
 
       fs.writeFileSync(tempPath, buffer);
 
-      // The loader marks installed archives read-only, matching Android
-      // (PluginManager.kt:602). On Windows a rename over a read-only file
-      // fails, so an update would leave the old version in place while
-      // reporting success. Clear the flag on the outgoing file first.
       if (fs.existsSync(target)) {
+        // Drop from running sidecar first so its classloader closes open file
+        // handles to target. On Windows, open handles cause renameSync to fail with EPERM.
+        try {
+          await this.sidecar.call('unload', { pluginId: plugin.internalName });
+        } catch {
+          // Safe if sidecar is not running or plugin not yet loaded
+        }
+
         try {
           fs.chmodSync(target, 0o666);
         } catch {
@@ -1444,7 +1487,30 @@ export class PluginManager {
           // problem; nothing is lost by trying.
         }
       }
-      fs.renameSync(tempPath, target);
+
+      // On Windows, handle release may take a moment or AV might briefly check the file
+      let renameErr: unknown = null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          if (fs.existsSync(target)) {
+            try {
+              fs.chmodSync(target, 0o666);
+            } catch {}
+          }
+          fs.renameSync(tempPath, target);
+          renameErr = null;
+          break;
+        } catch (err: unknown) {
+          renameErr = err;
+          const code = (err as { code?: string })?.code;
+          if (attempt < 4 && (code === 'EPERM' || code === 'EBUSY')) {
+            await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
+            continue;
+          }
+          throw err;
+        }
+      }
+      if (renameErr) throw renameErr;
 
       const report = this.analyzer.analyzePlugin(plugin.name, plugin.internalName, target);
 
