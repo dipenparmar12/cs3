@@ -1,4 +1,5 @@
 import { fetchJson } from '../torrent/http.ts';
+import { anilistQuery } from '../anilist.ts';
 import { TvType, type SearchResponse } from '../../src/types/api.ts';
 import { buildCinemetaUrl } from '../cinemeta.ts';
 
@@ -258,32 +259,22 @@ export class AniListProvider implements HomeProvider {
     const perPage = Math.min(50, request.limit ?? 24);
     const page = Math.floor((request.skip ?? 0) / perPage) + 1;
 
-    const query = `
-      query($page: Int, $perPage: Int) {
-        Page(page: $page, perPage: $perPage) {
-          media(sort: TRENDING_DESC, type: ANIME, isAdult: false) {
-            title { romaji english }
-            coverImage { large }
-            seasonYear
-            format
-          }
-        }
-      }`;
-
-    const response = await fetch(ANILIST_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, variables: { page, perPage } }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) throw new Error(`AniList answered HTTP ${response.status}`);
-
-    const body = (await response.json()) as {
-      data?: { Page?: { media?: Array<Record<string, unknown>> } };
-    };
+    const data = await anilistQuery<{ Page?: { media?: Array<Record<string, unknown>> } }>(
+      `query($page: Int, $perPage: Int) {
+         Page(page: $page, perPage: $perPage) {
+           media(sort: TRENDING_DESC, type: ANIME, isAdult: false) {
+             title { romaji english }
+             coverImage { large }
+             seasonYear
+             format
+           }
+         }
+       }`,
+      { page, perPage }
+    );
 
     const out: SearchResponse[] = [];
-    for (const media of body.data?.Page?.media ?? []) {
+    for (const media of data.Page?.media ?? []) {
       const title = media.title as { romaji?: string; english?: string } | undefined;
       const name = title?.english || title?.romaji;
       if (!name) continue;
@@ -306,7 +297,6 @@ export class AniListProvider implements HomeProvider {
   }
 }
 
-const ANILIST_URL = 'https://graphql.anilist.co';
 
 // --- TMDB, only with the user's own key -------------------------------------
 

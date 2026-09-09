@@ -3,6 +3,7 @@ import path from 'path';
 import { app } from 'electron';
 import child_process from 'child_process';
 import { FastChunkDownloader, type DownloadProgress } from './fastDownloader';
+import { fetchJson } from './torrent/http';
 
 export interface BinaryTestResult {
   ok: boolean;
@@ -546,20 +547,21 @@ export class BinaryDownloader {
    */
   private async resolveMpvMirrors(): Promise<string[]> {
     try {
-      const response = await fetch(BinaryDownloader.MPV_RELEASE_API, {
+      // Through the shared client so this honours the DNS-over-HTTPS setting
+      // and the system proxy; a release feed the network cannot reach is
+      // exactly the case the fallback mirrors below exist for.
+      const release = await fetchJson<{
+        assets?: Array<{ name?: string; browser_download_url?: string }>;
+      }>(BinaryDownloader.MPV_RELEASE_API, {
         headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'cloudstream-desktop' },
-        signal: AbortSignal.timeout(10_000),
+        timeoutMs: 10_000,
       });
-      if (response.ok) {
-        const release = (await response.json()) as {
-          assets?: Array<{ name?: string; browser_download_url?: string }>;
-        };
-        const asset = (release.assets ?? []).find(
-          (candidate) => /^mpv-x86_64-\d/.test(candidate.name ?? '') && !/debug|dev/.test(candidate.name ?? '')
-        );
-        if (asset?.browser_download_url) {
-          return [asset.browser_download_url, `https://ghproxy.net/${asset.browser_download_url}`];
-        }
+      const asset = (release.assets ?? []).find(
+        (candidate) =>
+          /^mpv-x86_64-\d/.test(candidate.name ?? '') && !/debug|dev/.test(candidate.name ?? '')
+      );
+      if (asset?.browser_download_url) {
+        return [asset.browser_download_url, `https://ghproxy.net/${asset.browser_download_url}`];
       }
     } catch {
       /* the fallbacks below are exactly for this */

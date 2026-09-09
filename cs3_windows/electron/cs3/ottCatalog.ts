@@ -1,4 +1,5 @@
 import { TvType, type SearchResponse } from '../../src/types/api';
+import { fetchJson } from '../torrent/http.ts';
 
 /**
  * What is *on* Netflix, when no installed extension can say.
@@ -153,10 +154,19 @@ export class OttCatalogService {
      * series has to scan past forty films, and the addon gives no ordering that
      * would survive a merge.
      */
-    const [movies, series] = await Promise.all([
-      this.fetchOne(`${ADDON_BASE}/catalog/movie/${code}.json`, 'movie'),
-      this.fetchOne(`${ADDON_BASE}/catalog/series/${code}.json`, 'series'),
-    ]);
+    /*
+     * `allSettled`, so one dead catalogue does not take the other down. They
+     * are independent requests to independent addon routes and either can 404
+     * on its own — under `Promise.all` a films catalogue that had gone away
+     * rejected the pair, and the caller's `.catch` then served stale sections
+     * for a series catalogue that was answering perfectly.
+     */
+    const [movies, series] = (
+      await Promise.allSettled([
+        this.fetchOne(`${ADDON_BASE}/catalog/movie/${code}.json`, 'movie'),
+        this.fetchOne(`${ADDON_BASE}/catalog/series/${code}.json`, 'series'),
+      ])
+    ).map((outcome) => (outcome.status === 'fulfilled' ? outcome.value : []));
 
     const sections: OttCatalogSection[] = [];
     if (movies.length > 0) {
@@ -179,9 +189,12 @@ export class OttCatalogService {
   }
 
   private async fetchOne(url: string, type: 'movie' | 'series'): Promise<SearchResponse[]> {
-    const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!response.ok) return [];
-    const body = (await response.json()) as { metas?: StremioMeta[] };
+    // Through the shared client, not global `fetch`: that is what routes the
+    // request via Electron's `net.fetch` and so honours the DNS-over-HTTPS
+    // setting and the system proxy, as every other catalogue call here does.
+    const body = await fetchJson<{ metas?: StremioMeta[] }>(url, {
+      timeoutMs: FETCH_TIMEOUT_MS,
+    });
     return (body.metas ?? [])
       .map((meta) => this.toResult(meta, type))
       .filter((row): row is SearchResponse => row !== null);
