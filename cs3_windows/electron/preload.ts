@@ -38,6 +38,7 @@ import type { SearchSnapshot } from './searchSession';
 import type { DnsPreset, NetworkSettings } from './networkSettings';
 import type { SystemRuntimeStatus, RuntimeProgress } from './cs3/runtimeProvisioner';
 import type { Bookmark } from './cs3/bookmarkStore';
+import type { PageSnapshot, PageSnapshotInput } from './cs3/pageSnapshot.ts';
 import type { DiscoverySection } from './cs3/discovery';
 import type { PrefetchState } from './cs3/sourcePrefetcher';
 import type { EnrichedMetadata } from './cs3/titleEnricher';
@@ -1084,6 +1085,29 @@ export interface CloudStreamElectronAPI {
   ) => Promise<Envelope & { bookmark: Bookmark | null }>;
   markBookmarkOpened: (mediaUrl: string) => Promise<Envelope>;
 
+  // Saved page snapshots
+  /**
+   * The last copy of a page that actually loaded.
+   *
+   * Asked for *beside* the live load rather than after it fails, so a saved or
+   * library page draws immediately from what the app already knows and fills in
+   * as the provider answers. A page that has never been opened returns `null`,
+   * which is not an error — it is the first visit.
+   */
+  getPageSnapshot: (query: {
+    url?: string;
+    title?: string;
+    year?: number;
+  }) => Promise<Envelope & { snapshot: PageSnapshot | null }>;
+  /** Records what only this side knows: the query, and the row's other routes. */
+  rememberPage: (
+    input: PageSnapshotInput
+  ) => Promise<Envelope & { snapshot: PageSnapshot | null }>;
+  setPageSnapshotPinned: (
+    query: { url?: string; title?: string; year?: number },
+    pinned: boolean
+  ) => Promise<Envelope & { pinned: boolean }>;
+
   // Provider analytics and ranking
   /**
    * Measured behaviour and the score derived from it, together.
@@ -1937,6 +1961,11 @@ const api: CloudStreamElectronAPI = {
   removeBookmark: (mediaUrl) => ipcRenderer.invoke('bookmarks:remove', mediaUrl),
   setBookmarkNote: (mediaUrl, note) => ipcRenderer.invoke('bookmarks:setNote', mediaUrl, note),
   markBookmarkOpened: (mediaUrl) => ipcRenderer.invoke('bookmarks:markOpened', mediaUrl),
+
+  getPageSnapshot: (query) => ipcRenderer.invoke('pages:getSnapshot', query),
+  rememberPage: (input) => ipcRenderer.invoke('pages:remember', input),
+  setPageSnapshotPinned: (query, pinned) =>
+    ipcRenderer.invoke('pages:setPinned', query, pinned),
 
   getProviderLeaderboard: () => ipcRenderer.invoke('analytics:getLeaderboard'),
   getProviderRecommendations: (limit) =>

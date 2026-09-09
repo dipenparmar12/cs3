@@ -77,6 +77,11 @@ import {
 import { deadlineFromUrl } from './sourceCache';
 import { HistoryStore } from './cs3/historyStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
+import {
+  PageSnapshotStore,
+  type PageSnapshot,
+  type PageSnapshotInput,
+} from './cs3/pageSnapshot.ts';
 import { WebViewHost, type WebViewResolveRequest } from './cs3/webViewHost';
 import { DiscoveryService } from './cs3/discovery';
 import { SourcePrefetcher } from './cs3/sourcePrefetcher';
@@ -273,6 +278,17 @@ const batchDownloader = new BatchDownloader(contentService, downloadService);
 const libraryStore = new LibraryStore(datastore);
 const historyStore = new HistoryStore(datastore);
 const bookmarks = new BookmarkStore(datastore);
+/**
+ * The last-known-good copy of every detail page that has been opened.
+ *
+ * Wired into `contentService` rather than called from the IPC layer because
+ * that class is the single funnel every detail load passes through; capturing
+ * at the handler would miss the revalidation path and the native provider
+ * path, which are exactly the ones whose answers go stale. See
+ * `cs3/pageSnapshot.ts` for what a snapshot is and is not.
+ */
+const pageSnapshots = new PageSnapshotStore(app.getPath('userData'));
+contentService.setSnapshotStore(pageSnapshots);
 /**
  * The home screen's catalogue source, and the rows built from it.
  *
@@ -1273,6 +1289,9 @@ async function shutdownServices(): Promise<void> {
   extensionUpdater.stop();
   diagnostics.flush();
   providerAnalytics.flush();
+  // The pages opened in the last few seconds of a session are the ones most
+  // likely to be reopened in the first few of the next.
+  pageSnapshots.flush();
   // The ledger's write is debounced, and the failures worth keeping cluster at
   // shutdown — a session that ended badly is the one whose last seconds matter.
   issueLog.flush();
@@ -2066,7 +2085,15 @@ ipcMain.handle(
   'bookmarks:toggle',
   async (_, input: Parameters<BookmarkStore['toggle']>[0]) => {
     try {
-      return { ok: true, ...bookmarks.toggle(input) };
+      const result = bookmarks.toggle(input);
+      // Saving a page is the same statement as adding a title to the library:
+      // keep the copy that lets it open. Unsaving releases it to the cache
+      // again rather than deleting it — the page is still worth drawing fast.
+      pageSnapshots.setPinned(
+        { url: input?.mediaUrl, title: input?.title, year: input?.year },
+        result.saved
+      );
+      return { ok: true, ...result };
     } catch (error) {
       return { ...fail(error), saved: false, bookmark: null };
     }
@@ -2087,6 +2114,60 @@ ipcMain.handle('bookmarks:markOpened', async (_, mediaUrl: string) => {
   bookmarks.markOpened(mediaUrl);
   return { ok: true };
 });
+
+// --- saved page snapshots --------------------------------------------------
+
+/**
+ * The copy of a page that lets it draw before — and without — a provider.
+ *
+ * Read-shaped rather than push-shaped, unlike search and playback: there is no
+ * progress to stream, the answer is already on disk, and the caller wants it in
+ * the same tick it decides to render. Capture is not exposed at all; it happens
+ * in `ContentService.load` where every detail load already passes.
+ */
+ipcMain.handle(
+  'pages:getSnapshot',
+  async (_, query: { url?: string; title?: string; year?: number }) => {
+    try {
+      return { ok: true, snapshot: pageSnapshots.find(query ?? {}) };
+    } catch (error) {
+      return { ...fail(error), snapshot: null };
+    }
+  }
+);
+
+/**
+ * Context only the renderer has: which search produced this page, and which
+ * other addresses the merged row said would reach it.
+ *
+ * Marked unverified, because it is annotation rather than evidence — nothing
+ * here says the page still loads, and letting it move `verifiedAt` would make
+ * a stale copy claim to be fresh.
+ */
+ipcMain.handle('pages:remember', async (_, input: PageSnapshotInput) => {
+  try {
+    return { ok: true, snapshot: pageSnapshots.capture({ ...input, verified: false }) };
+  } catch (error) {
+    return { ...fail(error), snapshot: null };
+  }
+});
+
+/**
+ * Keeps a page out of the eviction pool, or lets it back in.
+ *
+ * Addressed by title as well as URL because the two stores that pin disagree on
+ * identity: a bookmark keys on the address, the library on the canonical title.
+ */
+ipcMain.handle(
+  'pages:setPinned',
+  async (_, query: { url?: string; title?: string; year?: number }, pinned: boolean) => {
+    try {
+      return { ok: true, pinned: pageSnapshots.setPinned(query ?? {}, pinned !== false) };
+    } catch (error) {
+      return { ...fail(error), pinned: false };
+    }
+  }
+);
 
 // --- provider analytics and ranking ---------------------------------------
 
@@ -4279,9 +4360,17 @@ ipcMain.handle('library:getEntries', async (_, status?: WatchStatus) =>
   libraryStore.getEntries(status)
 );
 
-ipcMain.handle('library:upsertEntry', async (_, input: Parameters<LibraryStore['upsertEntry']>[0]) =>
-  libraryStore.upsertEntry(input)
-);
+ipcMain.handle('library:upsertEntry', async (_, input: Parameters<LibraryStore['upsertEntry']>[0]) => {
+  const entry = libraryStore.upsertEntry(input);
+  /*
+   * Adding a title to the library is the statement that its page must keep
+   * opening. Pinning here rather than in the store keeps `LibraryStore` free of
+   * a dependency on the snapshot cache, and by title rather than URL because
+   * that is the identity a library entry actually has.
+   */
+  pageSnapshots.setPinned({ url: input?.mediaUrl, title: entry?.title, year: entry?.year }, true);
+  return entry;
+});
 
 ipcMain.handle('library:setStatus', async (_, key: string, status: WatchStatus) =>
   libraryStore.setStatus(key, status)
@@ -4721,6 +4810,35 @@ const backupService = new BackupService(
           const { id: _id, savedAt: _savedAt, openCount: _openCount, ...rest } = row ?? {};
           if (!rest?.mediaUrl) continue;
           bookmarks.save(rest);
+          count++;
+        }
+        return count;
+      },
+    },
+    {
+      /*
+       * The pages behind the library, not just the rows in it.
+       *
+       * Restoring a library onto a new machine without these reproduces the
+       * exact failure the snapshot store exists for: every row present, every
+       * page behind it blank, until each one has been successfully re-scraped
+       * once. Bounded on export to the pages the user actually kept — the rest
+       * is a cache and belongs on the machine that built it.
+       */
+      name: 'pageSnapshots',
+      label: 'Saved page content',
+      replaceable: true,
+      collect: () => pageSnapshots.list().filter((snapshot) => snapshot.pinned),
+      restore: (value: unknown, mode) => {
+        if (!Array.isArray(value)) return 0;
+        if (mode === 'replace') return pageSnapshots.replaceAll(value as PageSnapshot[]);
+        let count = 0;
+        for (const row of value as PageSnapshot[]) {
+          if (!row?.url || !row?.title) continue;
+          // Through `capture`, so the merge rule applies: a restored copy adds
+          // what this machine is missing and never blanks what it already has.
+          pageSnapshots.capture({ ...row, verified: false });
+          pageSnapshots.setPinned({ url: row.url }, true);
           count++;
         }
         return count;

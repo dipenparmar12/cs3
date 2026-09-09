@@ -24,6 +24,8 @@ import { CopyErrorButton } from '../components/CopyErrorButton';
 import { ProviderRecoveryPanel } from '../components/ProviderRecoveryPanel';
 import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
 import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
+import type { PageSnapshot } from '../../electron/cs3/pageSnapshot';
+import { detailFromSnapshot, mergeDetail, savedCopyAge } from '../utils/savedPage';
 
 export interface PlaybackRequest {
   streamUrl: string;
@@ -194,6 +196,24 @@ export const DetailView: React.FC<DetailViewProps> = ({
   /** How the background source search for this page is getting on. */
   const [prefetch, setPrefetch] = useState<PrefetchState | null>(null);
 
+  /**
+   * The stored copy of this page, and whether it is all we have.
+   *
+   * A saved page, a library row or a Continue Watching card carries an address
+   * and nothing else, so the page behind it used to be whatever the provider
+   * answered at that moment — and when the provider was switched off,
+   * uninstalled, rate-limited or had changed its page shape since, that was
+   * nothing. The user saw a complete row followed by an empty screen for
+   * content the app plainly knew about.
+   *
+   * The copy is asked for *beside* the live load rather than after it fails, so
+   * it does double duty: the page draws immediately instead of behind a
+   * spinner, and it is already in hand if every route comes back empty.
+   */
+  const [snapshot, setSnapshot] = useState<PageSnapshot | null>(null);
+  /** Set when the page on screen came from the copy rather than a provider. */
+  const [servedFromSnapshot, setServedFromSnapshot] = useState<string | null>(null);
+
   const [activeSeason, setActiveSeason] = useState<number>(1);
   const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
 
@@ -279,11 +299,42 @@ export const DetailView: React.FC<DetailViewProps> = ({
       setDisabledProvider(null);
       setDetail(null);
       setFellBackTo(null);
+      setSnapshot(null);
+      setServedFromSnapshot(null);
 
       if (!window.cloudstream) {
         setLoadError('Desktop bridge unavailable.');
         setIsLoading(false);
         return;
+      }
+
+      /**
+       * The stored copy, first and without waiting for anyone.
+       *
+       * Started before the provider is asked and awaited immediately, because
+       * it is a disk read on the other side of the bridge and costs a
+       * millisecond, while the scrape it precedes costs seconds. Drawing it now
+       * turns a spinner into a page for every title the user has opened before
+       * — and means that if every route below comes back empty, the answer is
+       * already on screen rather than an apology.
+       */
+      const stored = (
+        await window.cloudstream.getPageSnapshot?.({
+          url: mediaItem.url,
+          title: mediaItem.originalTitle || mediaItem.name,
+          year: mediaItem.year,
+        })
+      )?.snapshot ?? null;
+      if (cancelled) return;
+      if (stored) {
+        setSnapshot(stored);
+        setDetail(detailFromSnapshot(stored, mediaItem.url));
+        setServedFromSnapshot('loading');
+        // The page is on screen; the load below is now a refresh, not a wait.
+        setIsLoading(false);
+        const seasons = groupBySeason(stored.episodes ?? []);
+        const first = [...seasons.keys()].sort((a, b) => a - b)[0];
+        if (first !== undefined) setActiveSeason(first);
       }
 
       /**
@@ -300,7 +351,19 @@ export const DetailView: React.FC<DetailViewProps> = ({
        * Tried in merge order, which puts the routes carrying the strongest
        * identity first.
        */
-      const routes = [mediaItem.url, ...(mediaItem.alternates ?? []).map((a) => a.url)];
+      const routes = [
+        mediaItem.url,
+        ...(mediaItem.alternates ?? []).map((a) => a.url),
+        /*
+         * And the routes the stored copy remembers.
+         *
+         * A merged row's alternates live only for as long as that row is on
+         * screen. A saved page opened three weeks later has one address — the
+         * one that has since stopped working — and the two providers that also
+         * carried the title are known to the snapshot and to nothing else.
+         */
+        ...(stored?.routes ?? []),
+      ].filter((route, index, all) => route && all.indexOf(route) === index);
       const reasons: string[] = [];
 
       for (const [index, route] of routes.entries()) {
@@ -308,8 +371,9 @@ export const DetailView: React.FC<DetailViewProps> = ({
         if (cancelled) return;
 
         if (response.ok && response.detail) {
-          const data = response.detail as DetailData;
+          const data = mergeDetail(response.detail as DetailData, stored);
           setDetail(data);
+          setServedFromSnapshot(null);
           setDisabledProvider(null);
           window.cloudstream?.recordTitleOutcome?.(mediaItem.url, 'played');
 
@@ -325,10 +389,40 @@ export const DetailView: React.FC<DetailViewProps> = ({
             metadata: { imdbId: data.imdbId, provider: mediaItem.apiName },
           });
 
-          // Only worth saying when it is not the route the row advertised.
+          /*
+           * Only worth saying when it is not the route the row advertised.
+           *
+           * Named from the alternate that supplied it where one did; a route
+           * recovered from the stored copy has no name attached, and inventing
+           * one from a positional lookup into a list it did not come from would
+           * attribute the page to the wrong provider.
+           */
           setFellBackTo(
-            index > 0 ? (mediaItem.alternates?.[index - 1]?.apiName ?? 'another source') : null
+            index === 0
+              ? null
+              : ((mediaItem.alternates ?? []).find((alternate) => alternate.url === route)
+                  ?.apiName ?? 'another source')
           );
+          /**
+           * How the viewer got here, recorded alongside what they got.
+           *
+           * The main process captures the page itself; this is the half only
+           * this side knows — the query that surfaced the row, and the other
+           * providers the merge said also carried it. Both are what make a
+           * saved page recoverable a year later: the routes are tried before
+           * anything is declared missing, and the query is what "find it again"
+           * runs. Marked unverified on the far side, because it is annotation
+           * rather than evidence that the page still loads.
+           */
+          void window.cloudstream?.rememberPage?.({
+            url: route,
+            title: data.name,
+            originalTitle: mediaItem.originalTitle,
+            year: data.year,
+            routes: routes.filter((candidate) => candidate !== route),
+            origin: { searchQuery, provider: mediaItem.apiName },
+          });
+
           const seasons = groupBySeason(data.episodes ?? []);
           const first = [...seasons.keys()].sort((a, b) => a - b)[0];
           if (first !== undefined) setActiveSeason(first);
@@ -344,6 +438,34 @@ export const DetailView: React.FC<DetailViewProps> = ({
       // completely different responses from the user.
       const combined =
         reasons.length > 0 ? [...new Set(reasons)].join(' · ') : 'No source could open this title.';
+
+      /**
+       * Nothing answered — so the stored copy stands, and says so.
+       *
+       * This is the whole point of holding one. The failure screen below is
+       * correct for a title that has never opened here; for one the user saved,
+       * added to their library, or watched half of, it throws away everything
+       * the app knows and offers to search for a title it is already displaying
+       * in three other places. The page stays, the actions stay, and a banner
+       * names the reason and its age — which is also what makes it obvious that
+       * a re-resolve is worth trying rather than something being broken.
+       *
+       * `loadError` is deliberately left unset in this branch: it is what
+       * selects the failure screen, and the reason travels in
+       * `servedFromSnapshot` instead so it can be shown *with* the content.
+       */
+      if (stored) {
+        setDetail(detailFromSnapshot(stored, mediaItem.url));
+        setServedFromSnapshot(combined);
+        setIsLoading(false);
+        window.cloudstream?.recordTitleOutcome?.(
+          mediaItem.url,
+          'no-sources',
+          combined.slice(0, 300)
+        );
+        return;
+      }
+
       setLoadError(combined);
 
       /*
@@ -404,6 +526,9 @@ export const DetailView: React.FC<DetailViewProps> = ({
     return () => {
       cancelled = true;
     };
+    // `searchQuery` is read only to record provenance; a change to it must not
+    // re-run the load, so it is deliberately not a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mediaItem.url, mediaItem.alternates, reloadToken]);
 
   /**
@@ -415,10 +540,25 @@ export const DetailView: React.FC<DetailViewProps> = ({
    */
   useEffect(() => {
     const dispose = window.cloudstream?.onDetailUpdate?.(({ url, detail: fresh }) => {
-      setDetail((current) => (current && current.url === url ? (fresh as DetailData) : current));
+      // Merged rather than assigned, for the same reason the first load is: a
+      // revalidation that came back thinner than what is on screen must not
+      // strip the page while the viewer is reading it.
+      setDetail((current) =>
+        current && current.url === url ? mergeDetail(fresh as DetailData, snapshotRef.current) : current
+      );
     });
     return () => dispose?.();
   }, []);
+
+  /**
+   * The stored copy, readable from a listener that is subscribed once.
+   *
+   * Keyed into a ref rather than the effect's dependency list because
+   * resubscribing the detail-update listener on every snapshot change would
+   * drop refreshes that land in the gap.
+   */
+  const snapshotRef = useRef<PageSnapshot | null>(null);
+  snapshotRef.current = snapshot;
 
   const seasons = useMemo(() => groupBySeason(detail?.episodes ?? []), [detail]);
   const seasonNumbers = useMemo(
@@ -1118,6 +1258,61 @@ export const DetailView: React.FC<DetailViewProps> = ({
       <button className="btn btn-ghost detail-view__back" onClick={onBack}>
         <ArrowLeft size={16} /> Back
       </button>
+
+      {/*
+        The page is the saved copy, and that is said out loud.
+
+        Two states, deliberately distinguished. While the provider is still
+        being asked this is a quiet line: the content is real, it is simply not
+        yet confirmed, and an alarming banner for a state that resolves in two
+        seconds would train people to ignore the one that matters. Once every
+        route has failed it becomes the warning — with the reason, the age of
+        the copy, and a retry — because the difference between "showing you what
+        we saved" and "this title is broken" is the entire difference between a
+        recoverable page and a dead one.
+      */}
+      {servedFromSnapshot && (
+        <div
+          className={`detail-saved${
+            servedFromSnapshot === 'loading' ? ' detail-saved--quiet' : ''
+          }`}
+          role={servedFromSnapshot === 'loading' ? 'status' : 'alert'}
+        >
+          {servedFromSnapshot === 'loading' ? (
+            <>
+              <Loader2 size={13} className="spin" />
+              <span>Showing your saved copy while {mediaItem.apiName || 'the source'} answers…</span>
+            </>
+          ) : (
+            <>
+              <AlertTriangle size={14} />
+              <div className="detail-saved__body">
+                <strong>Showing your saved copy of this page.</strong>
+                <span className="detail-saved__why">
+                  {savedCopyAge(snapshot)} · {servedFromSnapshot}
+                </span>
+              </div>
+              <button
+                className="detail-saved__retry"
+                onClick={() => {
+                  setIsLoading(true);
+                  setReloadToken((token) => token + 1);
+                }}
+              >
+                Try again
+              </button>
+              {onSearch && (
+                <button
+                  className="detail-saved__retry"
+                  onClick={() => onSearch(mediaItem.originalTitle || mediaItem.name)}
+                >
+                  Find it again
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <DetailHero
         title={detail.name}

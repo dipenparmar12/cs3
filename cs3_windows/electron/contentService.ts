@@ -42,6 +42,7 @@ import { parseNativeAddress } from './cs3/nativeProviders/types.ts';
 import { classifyFailure } from './cs3/failureTaxonomy.ts';
 import { planSourceScope, shouldEscalateScope } from './cs3/sourceScope';
 import { describeError } from '../src/utils/errors.ts';
+import type { PageSnapshotStore } from './cs3/pageSnapshot.ts';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -338,6 +339,19 @@ export class ContentService {
     this.onDetailRefreshed = listener;
   }
 
+  /**
+   * Where every successful detail load is written down.
+   *
+   * Supplied after construction rather than taken as a constructor argument
+   * because a snapshot is an observer of this class, not a collaborator it
+   * needs: everything here works identically with no store attached, which is
+   * also what keeps the existing tests constructing a `ContentService` without
+   * one.
+   */
+  public setSnapshotStore(store: PageSnapshotStore): void {
+    this.snapshots = store;
+  }
+
   public getProxy(): MediaProxy {
     return this.proxy;
   }
@@ -419,17 +433,77 @@ export class ContentService {
    * network round trip for a plot and a poster the app had displayed minutes
    * earlier, and for extension-sourced titles it meant re-scraping a web page.
    */
+  private snapshots: PageSnapshotStore | null = null;
+
+  /**
+   * Writes down a page that just loaded, so it can be drawn again without one.
+   *
+   * Here rather than in the renderer because this is the single funnel every
+   * detail load passes through — catalogue, native provider and extension
+   * alike — and because the provider's ancestry is only knowable on this side
+   * of the bridge. A page is captured by being *looked at*; nothing asks the
+   * user to save anything first. See `cs3/pageSnapshot.ts`.
+   */
+  private rememberPage(url: string, detail: MetadataDetail, verified = true): void {
+    if (!this.snapshots || !detail?.name) return;
+    try {
+      const provenance = detail.apiName ? this.plugins.provenanceOf(detail.apiName) : undefined;
+      this.snapshots.capture({
+        url,
+        title: detail.name,
+        year: detail.year,
+        type: detail.type,
+        apiName: detail.apiName,
+        posterUrl: detail.posterUrl,
+        plot: detail.plot,
+        tags: detail.tags,
+        rating: detail.rating,
+        duration: detail.duration,
+        imdbId: detail.imdbId,
+        isLive: detail.isLive,
+        actors: detail.actors,
+        episodes: detail.episodes,
+        recommendations: detail.recommendations,
+        routes: this.alternateRoutes.get(url),
+        verified,
+        origin: {
+          // `provenanceOf` answers with the provider name alone for anything it
+          // does not own, which is exactly right for a catalogue: recording
+          // "Cinemeta" as an extension would be a lie about where the page came
+          // from, and this field is read to decide what to offer when it breaks.
+          provider: provenance?.repositoryId ? provenance.provider : undefined,
+          repositoryId: provenance?.repositoryId,
+          repositoryName: provenance?.repositoryName,
+          extensionInternalName: provenance?.extensionInternalName,
+          extensionName: provenance?.extensionName,
+          metadataSource: provenance?.repositoryId ? undefined : detail.apiName,
+        },
+      });
+    } catch {
+      // Losing a snapshot costs a re-scrape. Throwing here would cost the page.
+    }
+  }
+
   public async load(url: string): Promise<MetadataDetail | null> {
     const base = stripQuery(url);
 
     const cached = this.details.read(base);
     if (cached) {
       if (cached.stale) this.revalidateDetail(base);
+      /*
+       * A cache hit is captured too, but not counted as evidence the page still
+       * works — the detail cache predates the snapshot store, so without this
+       * every title a user already had cached would stay unsnapshotted until
+       * its entry expired, which is precisely the window in which they are most
+       * likely to open it from their library.
+       */
+      this.rememberPage(base, cached.detail, false);
       return cached.detail;
     }
 
     const detail = await this.fetchDetail(base);
     this.details.write(base, detail);
+    this.rememberPage(base, detail);
     return detail;
   }
 
@@ -451,6 +525,7 @@ export class ContentService {
       try {
         const fresh = await this.fetchDetail(base);
         this.details.write(base, fresh);
+        this.rememberPage(base, fresh);
         this.onDetailRefreshed?.(base, fresh);
       } catch {
         // Keep the stale entry: it is better than nothing, and the next visit

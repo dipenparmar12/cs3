@@ -285,6 +285,61 @@
   color: var(--text-muted);
 }
 .detail-view__back { align-self: flex-start; }
+
+/* --- "showing your saved copy" ------------------------------------------
+   Two weights for two states. The quiet one accompanies content that is real
+   and merely unconfirmed; the loud one accompanies content nothing could
+   confirm. Sharing one appearance would either alarm people for two seconds
+   every time a page loads, or hide the case that needs a decision. */
+.detail-saved {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--text-main);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+.detail-saved--quiet {
+  border-color: var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  padding: 0.4rem 0.7rem;
+}
+.detail-saved__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.detail-saved__why {
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+  /* A provider's reason can be a paragraph; two lines then an ellipsis keeps
+     the banner from pushing the page it is annotating off the screen. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.detail-saved__retry {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-main);
+  font-size: 0.74rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.detail-saved__retry:hover {
+  background: var(--bg-card-hover);
+}
 .detail-hero { display: flex; gap: 1.5rem; flex-wrap: wrap; }
 .detail-hero__poster { width: 210px; border-radius: 10px; flex-shrink: 0; }
 .detail-hero__body { flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 0.7rem; }
