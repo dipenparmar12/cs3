@@ -3796,120 +3796,121 @@
   white-space: nowrap;
 }
 
-.scope__menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  width: 330px;
+/* --- The source-scope dialog ---------------------------------------------
+
+   Sized in viewport units with hard ceilings: the tree wants every row it can
+   get on a large display, and the rail plus the list still have to fit on a
+   1366x768 laptop, which is what the `min()` pair is for. The old dropdown was
+   330px wide and 300px tall for a three-level tree of several hundred rows. */
+
+.scope-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(2px);
+}
+
+.scope-modal__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(980px, 100%);
+  height: min(760px, 86vh);
   background: var(--bg-card);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.65);
-  z-index: 9999;
-  padding: 0.6rem;
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
 }
 
-.scope__head {
+.scope-modal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.15rem 0.85rem;
+  border-bottom: 1px solid var(--border-color);
+}
+.scope-modal__head h2 {
+  margin: 0;
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: #fff;
+}
+.scope-modal__subtitle {
+  margin: 0.15rem 0 0;
+  font-size: 0.76rem;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.scope-modal__close {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  font-size: 0.72rem;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.scope-modal__close:hover {
+  background: var(--bg-card-hover);
+  color: #fff;
+}
+
+.scope-modal__body {
+  flex: 1 1 auto;
+  display: grid;
+  /* Two panes, because the two mechanisms are two different questions. A rail
+     that collapses under its content would put them back in one column. */
+  grid-template-columns: minmax(180px, 232px) minmax(0, 1fr);
+  min-height: 0;
+}
+
+/* --- filter rail --------------------------------------------------------- */
+
+.scope-modal__rail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 0.9rem 0.95rem;
+  border-right: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.16);
+  overflow-y: auto;
+}
+.scope-modal__rail-note {
+  margin: 0;
+  font-size: 0.71rem;
+  line-height: 1.45;
+  color: var(--text-subtle);
+}
+.scope-modal__facet h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.66rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-subtle);
-  padding: 0 0.2rem 0.4rem;
 }
-.scope__head-count {
-  font-variant-numeric: tabular-nums;
-  color: var(--accent-light);
-}
-
-.scope__search {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0.5rem;
-  margin-bottom: 0.4rem;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: rgba(0, 0, 0, 0.25);
-  color: var(--text-subtle);
-}
-.scope__search input {
-  flex: 1 1 auto;
-  min-width: 0;
-  border: none;
-  background: none;
-  color: var(--text-main);
-  font-size: 0.78rem;
-  outline: none;
-}
-.scope__search button {
-  flex: 0 0 auto;
-  border: none;
-  background: none;
-  color: var(--text-subtle);
-  cursor: pointer;
-  padding: 0;
-  display: flex;
-}
-
-.scope__hint,
-.scope__empty {
-  font-size: 0.72rem;
-  line-height: 1.4;
-  color: var(--text-subtle);
-  margin: 0.45rem 0 0;
-  padding: 0 0.2rem;
-}
-
-.scope__loading {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  padding: 0.4rem 0.2rem;
-}
-.scope__loading--quiet {
-  font-size: 0.7rem;
-  color: var(--text-subtle);
-  padding: 0.1rem 0.2rem 0.3rem;
-}
-
-/* Facets narrow what the tree contains, so they sit above it and are visually
-   distinct from the rows — a filter that looks like a row reads as a source. */
-.scope__facets {
+.scope-modal__facet-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
-  padding: 0.35rem 0.1rem 0.45rem;
-  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  margin-bottom: 0.35rem;
 }
-
-.scope__facet-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  align-items: center;
-}
-
-/* Groups are separated by a hairline rather than a gap: with a dozen language
-   chips the eye needs the boundary to read "OR within, AND across". */
-.scope__facet-group + .scope__facet-group {
-  padding-left: 0.4rem;
-  border-left: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-}
-
-.scope__chip {
+.scope-modal__chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.22rem;
-  font-size: 0.66rem;
+  gap: 0.28rem;
+  font-size: 0.71rem;
   line-height: 1;
-  padding: 0.24rem 0.42rem;
+  padding: 0.32rem 0.55rem;
   border-radius: 999px;
   border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
   background: transparent;
@@ -3918,64 +3919,221 @@
   white-space: nowrap;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
-
-.scope__chip:hover {
-  color: var(--text-primary);
+.scope-modal__chip:hover {
+  color: var(--text-main);
   border-color: var(--border-strong, rgba(255, 255, 255, 0.24));
 }
-
-.scope__chip--on {
+.scope-modal__chip--on {
   background: var(--accent, #e50914);
   border-color: var(--accent, #e50914);
   color: #fff;
 }
+.scope-modal__clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 0.72rem;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.scope-modal__clear:hover {
+  color: var(--text-main);
+}
 
-.scope__chip--clear {
-  margin-left: auto;
+/* --- source list --------------------------------------------------------- */
+
+.scope-modal__main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.9rem 0.95rem 0.5rem;
+  min-height: 0;
+  min-width: 0;
+}
+
+.scope-modal__search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-subtle);
+  flex: 0 0 auto;
+}
+.scope-modal__search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--text-main);
+  font-size: 0.84rem;
+  outline: none;
+}
+.scope-modal__search button {
+  flex: 0 0 auto;
+  display: flex;
+  border: none;
+  background: none;
+  color: var(--text-subtle);
+  cursor: pointer;
+  padding: 0;
+}
+
+.scope-modal__all {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: 0 0 auto;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: #fff;
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.scope-modal__all:hover {
+  background: var(--bg-card-hover);
+}
+.scope-modal__all--current {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.34);
+}
+.scope-modal__all-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.scope-modal__all-hint {
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--text-subtle);
+}
+
+/* The current scope, spelled out. Bounded so a hundred ticked providers cannot
+   push the tree they were ticked in off the bottom of the dialog. */
+.scope-modal__chosen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+  max-height: 5.4rem;
+  overflow-y: auto;
+  padding: 0.15rem 0.05rem;
+}
+.scope-modal__chosen-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.3rem 0.45rem 0.3rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--text-main);
+  cursor: pointer;
+  max-width: 15rem;
+}
+.scope-modal__chosen-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-modal__chosen-chip:hover {
+  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.14);
+}
+
+.scope-modal__progress {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+.scope-modal__progress--quiet {
+  font-size: 0.72rem;
+  color: var(--text-subtle);
+}
+
+.scope-modal__empty {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
   color: var(--text-subtle);
 }
 
 /* Windowed list: the inner wrapper is sized to the full row count so the
    scrollbar reflects everything, while only a visible slice is mounted. */
-.scope__list {
+.scope-modal__tree {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  margin: 0 -0.2rem;
+  margin: 0 -0.25rem;
+  border-radius: var(--radius-sm);
+}
+.scope-modal__tree:focus-visible {
+  outline: 2px solid var(--accent-primary, #3b82f6);
+  outline-offset: -2px;
 }
 
-.scope__row {
+.scope-modal__row {
   display: flex;
   align-items: center;
-  gap: 0.15rem;
+  gap: 0.2rem;
   width: 100%;
   border-radius: var(--radius-sm);
   color: var(--text-main);
-  font-size: 0.8rem;
+  font-size: 0.84rem;
   text-align: left;
 }
-.scope__row:hover {
+.scope-modal__row:hover {
   background: var(--bg-card-hover);
 }
+/* The keyboard cursor is not the selection: a row can be arrowed onto without
+   being ticked, and conflating the two makes arrow keys look destructive. */
+.scope-modal__row--active {
+  background: var(--bg-card-hover);
+  box-shadow: inset 2px 0 0 var(--accent-primary, #3b82f6);
+}
+.scope-modal__row--on .scope-modal__name {
+  color: #fff;
+}
 
-.scope__row--all {
-  gap: 0.5rem;
-  padding: 0.35rem 0.4rem;
-  border: none;
-  background: none;
-  cursor: pointer;
+/* Indentation is the hierarchy: repository, extension, provider. */
+.scope-modal__row--repo {
   font-weight: 600;
   color: #fff;
 }
-.scope__row--current {
-  background: rgba(59, 130, 246, 0.14);
+.scope-modal__row--d1 {
+  padding-left: 1.2rem;
+}
+.scope-modal__row--d2 {
+  padding-left: 2.4rem;
+  color: var(--text-muted);
 }
 
-.scope__twisty {
+.scope-modal__twisty {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
+  width: 20px;
   height: 100%;
   border: none;
   background: none;
@@ -3983,18 +4141,18 @@
   cursor: pointer;
   padding: 0;
 }
-.scope__twisty--empty {
+.scope-modal__twisty--empty {
   cursor: default;
 }
 
-.scope__pick {
+.scope-modal__pick {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.5rem;
   height: 100%;
-  padding: 0 0.3rem;
+  padding: 0 0.35rem;
   border: none;
   background: none;
   color: inherit;
@@ -4002,31 +4160,38 @@
   text-align: left;
   cursor: pointer;
 }
-.scope__pick:disabled {
+.scope-modal__pick:disabled {
   cursor: default;
   opacity: 0.55;
 }
+.scope-modal__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-modal__lang {
+  flex: 0 0 auto;
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  color: var(--text-subtle);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  border-radius: 3px;
+  padding: 0.05rem 0.22rem;
+}
+.scope-modal__count {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
 
-/* Indentation is the hierarchy: repository, extension, provider. */
-.scope__row--repo {
-  font-weight: 600;
-  color: #fff;
-}
-.scope__row--d1 {
-  padding-left: 1.1rem;
-}
-.scope__row--d2 {
-  padding-left: 2.2rem;
-  color: var(--text-muted);
-  font-size: 0.78rem;
-}
-
-.scope__note {
+.scope-modal__note {
   display: flex;
   align-items: center;
   margin: 0;
-  padding-left: 2.4rem;
-  font-size: 0.7rem;
+  padding-left: 2.6rem;
+  font-size: 0.74rem;
   line-height: 1.2;
   color: var(--text-subtle);
   overflow: hidden;
@@ -4034,46 +4199,53 @@
   white-space: nowrap;
 }
 
-.scope__foot {
+/* --- footer -------------------------------------------------------------- */
+
+.scope-modal__foot {
   display: flex;
-  gap: 0.4rem;
-  margin-top: 0.5rem;
-  padding-top: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1.15rem;
   border-top: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.16);
 }
-.scope__foot button {
-  flex: 1 1 0;
-  border: 1px solid var(--border-color);
-  background: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-main);
-  font-size: 0.72rem;
-  padding: 0.3rem 0.4rem;
-  cursor: pointer;
-}
-.scope__foot button:hover:not(:disabled) {
-  border-color: var(--accent-primary);
-  color: #fff;
-}
-.scope__foot button:disabled {
+.scope-modal__summary {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.4;
   color: var(--text-subtle);
-  cursor: default;
+  flex: 1 1 16rem;
+  min-width: 0;
 }
-
-.scope__name {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.scope__count,
-.scope__lang {
+.scope-modal__actions {
+  display: flex;
+  gap: 0.45rem;
   flex: 0 0 auto;
-  font-size: 0.68rem;
-  color: var(--text-subtle);
-  font-variant-numeric: tabular-nums;
 }
 
+/* Narrow windows: the rail sits above the list rather than squeezing it. */
+@media (max-width: 720px) {
+  .scope-modal {
+    padding: 0.75rem;
+  }
+  .scope-modal__panel {
+    height: 92vh;
+  }
+  .scope-modal__body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .scope-modal__rail {
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    max-height: 34%;
+  }
+}
+
+/* Still used: the tri-state checkbox is drawn by the dialog's rows and by the
+   "All sources" row alike. */
 .scope__box {
   flex: 0 0 auto;
   display: inline-flex;
