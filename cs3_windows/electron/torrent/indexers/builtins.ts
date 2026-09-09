@@ -5,6 +5,8 @@ import {
   infoHashFromMagnet,
   parseIntSafe,
   parseSize,
+  tryMirrors,
+  withEpisodeTerms,
   type RawTorrent,
   type TorrentIndexer,
 } from './base';
@@ -21,21 +23,6 @@ import type { IndexerQuery } from '../../../src/types/torrent';
  * carry its own proxy and FlareSolverr configuration.
  */
 
-async function tryMirrors<T>(
-  mirrors: readonly string[],
-  attempt: (base: string) => Promise<T>
-): Promise<T> {
-  let lastError: unknown = new Error('No mirrors configured');
-
-  for (const base of mirrors) {
-    try {
-      return await attempt(base);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError;
-}
 
 const xml = new XMLParser({
   ignoreAttributes: false,
@@ -207,14 +194,7 @@ export class EztvIndexer implements TorrentIndexer {
     const imdb = (query.imdbId ?? '').replace(/^tt/i, '');
     const limit = Math.min(query.limit ?? 50, 100);
 
-    const terms = [query.query];
-    if (query.season !== undefined && query.episode !== undefined) {
-      terms.push(
-        `S${String(query.season).padStart(2, '0')}E${String(query.episode).padStart(2, '0')}`
-      );
-    } else if (query.season !== undefined) {
-      terms.push(`S${String(query.season).padStart(2, '0')}`);
-    }
+    const terms = withEpisodeTerms(query);
 
     return tryMirrors(EztvIndexer.MIRRORS, async (base) => {
       let torrents: EztvTorrent[] = [];
@@ -230,9 +210,9 @@ export class EztvIndexer implements TorrentIndexer {
       }
 
       // If no torrents found via IMDb or no IMDb id, attempt EZTV ezrss search
-      if (torrents.length === 0 && terms.join(' ').trim()) {
+      if (torrents.length === 0 && terms.trim()) {
         try {
-          const rssUrl = `${base}/ezrss.xml?search=${encodeURIComponent(terms.join(' '))}`;
+          const rssUrl = `${base}/ezrss.xml?search=${encodeURIComponent(terms)}`;
           const body = await fetchText(rssUrl, { signal, timeoutMs: 15_000 });
           const doc = xml.parse(body);
           const items = asArray<Record<string, unknown>>(doc?.rss?.channel?.item);
@@ -495,17 +475,10 @@ export class LimeTorrentsIndexer implements TorrentIndexer {
   }
 
   async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
-    const terms = [query.query];
-    if (query.season !== undefined && query.episode !== undefined) {
-      terms.push(
-        `S${String(query.season).padStart(2, '0')}E${String(query.episode).padStart(2, '0')}`
-      );
-    } else if (query.season !== undefined) {
-      terms.push(`S${String(query.season).padStart(2, '0')}`);
-    }
+    const terms = withEpisodeTerms(query);
 
     return tryMirrors(LimeTorrentsIndexer.MIRRORS, async (base) => {
-      const url = `${base}/search/rss/${encodeURIComponent(terms.join(' '))}/`;
+      const url = `${base}/search/rss/${encodeURIComponent(terms)}/`;
       const body = await fetchText(url, { signal, timeoutMs: 20_000 });
       const doc = xml.parse(body);
       const items = asArray<Record<string, unknown>>(doc?.rss?.channel?.item);

@@ -4,6 +4,7 @@ import { app } from 'electron';
 import child_process from 'child_process';
 import { FastChunkDownloader, type DownloadProgress } from './fastDownloader';
 import { fetchJson } from './torrent/http';
+import { formatSetupSize } from '../src/utils/format.ts';
 
 export interface BinaryTestResult {
   ok: boolean;
@@ -747,7 +748,7 @@ export class BinaryDownloader {
   }
 
   public formatBytes(bytes: number): string {
-    return FastChunkDownloader.formatBytes(bytes);
+    return formatSetupSize(bytes);
   }
 
   /**

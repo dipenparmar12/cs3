@@ -5,6 +5,8 @@ import {
   infoHashFromMagnet,
   parseIntSafe,
   parseSize,
+  tryMirrors,
+  withEpisodeTerms,
   type RawTorrent,
   type TorrentIndexer,
 } from './base';
@@ -27,34 +29,7 @@ import type { IndexerQuery } from '../../../src/types/torrent';
  *    circuit breaker trips instead of the UI reporting "nothing matched".
  */
 
-async function tryMirrors<T>(
-  mirrors: readonly string[],
-  attempt: (base: string) => Promise<T>
-): Promise<T> {
-  let lastError: unknown = new Error('No mirrors configured');
 
-  for (const base of mirrors) {
-    try {
-      return await attempt(base);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError;
-}
-
-/** Folds a season/episode into free text, which is all these sites accept. */
-function withEpisodeTerms(query: IndexerQuery): string {
-  const terms = [query.query];
-  if (query.season !== undefined && query.episode !== undefined) {
-    terms.push(
-      `S${String(query.season).padStart(2, '0')}E${String(query.episode).padStart(2, '0')}`
-    );
-  } else if (query.season !== undefined) {
-    terms.push(`S${String(query.season).padStart(2, '0')}`);
-  }
-  return terms.join(' ');
-}
 
 // ---------------------------------------------------------------------------
 // 1337x — HTML, two hops (list page then detail page for the magnet)

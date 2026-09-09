@@ -333,3 +333,58 @@ export function finaliseResult(
     scoreReasons: [],
   };
 }
+
+/**
+ * A season/episode folded into free text, which is all most of these sites take.
+ *
+ * Seven adapters across three files carried this identically. It looks trivial
+ * enough to keep inline and is not: `S01E02` is the form indexers and release
+ * groups actually name episodes in, so the zero-padding is the whole thing.
+ * Drop it on one adapter and it searches `S1E2`, which matches almost nothing
+ * in any torrent index — the site answers with a clean empty list, the row
+ * reads as "this indexer has nothing for that episode", and it is the one
+ * failure shape nobody investigates.
+ *
+ * A season with no episode is deliberately still narrowed to `S01`: that is how
+ * season packs are named, and a bare title returns every episode of every
+ * season ahead of the pack.
+ */
+export function withEpisodeTerms(query: IndexerQuery): string {
+  const terms = [query.query];
+  if (query.season !== undefined && query.episode !== undefined) {
+    terms.push(
+      `S${String(query.season).padStart(2, '0')}E${String(query.episode).padStart(2, '0')}`
+    );
+  } else if (query.season !== undefined) {
+    terms.push(`S${String(query.season).padStart(2, '0')}`);
+  }
+  return terms.join(' ');
+}
+
+/**
+ * The first mirror that answers, or the last failure.
+ *
+ * Public indexers move domains constantly, so every adapter here carries a
+ * mirror list and needed the same loop around it. Two files had the identical
+ * function and four call sites had it written out inline.
+ *
+ * Rethrowing the *last* error rather than the first is the deliberate part: the
+ * first mirror in a list is usually the one that has been dead longest, and its
+ * `ENOTFOUND` says nothing about why the others declined. What the diagnostics
+ * screen needs is the reason the attempt that got furthest gave up.
+ */
+export async function tryMirrors<T>(
+  mirrors: readonly string[],
+  attempt: (base: string) => Promise<T>
+): Promise<T> {
+  let lastError: unknown = new Error('No mirrors configured');
+
+  for (const base of mirrors) {
+    try {
+      return await attempt(base);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}

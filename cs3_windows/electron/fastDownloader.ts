@@ -4,6 +4,7 @@ import http from 'http';
 import https from 'https';
 import type { IncomingMessage, ClientRequest } from 'http';
 import { URL } from 'url';
+import { formatEta, formatSetupSize, formatTransferRate } from '../src/utils/format.ts';
 
 export interface DownloadProgress {
   downloadedBytes: number;
@@ -182,9 +183,9 @@ export class FastChunkDownloader {
           const remainingBytes = Math.max(0, totalBytes - currentDownloaded);
           const etaSec = lastBytesPerSecond > 0 ? Math.ceil(remainingBytes / lastBytesPerSecond) : 0;
 
-          const speedFormatted = this.formatSpeed(lastBytesPerSecond);
-          const etaFormatted = this.formatEta(etaSec);
-          const statusText = `Downloading (${this.formatBytes(currentDownloaded)} / ${this.formatBytes(totalBytes)}) • ${speedFormatted} [${percent}%]${etaFormatted ? ` • ${etaFormatted}` : ''}`;
+          const speedFormatted = formatTransferRate(lastBytesPerSecond);
+          const etaFormatted = formatEta(etaSec);
+          const statusText = `Downloading (${formatSetupSize(currentDownloaded)} / ${formatSetupSize(totalBytes)}) • ${speedFormatted} [${percent}%]${etaFormatted ? ` • ${etaFormatted}` : ''}`;
 
           options.onProgress?.(
             {
@@ -249,7 +250,7 @@ export class FastChunkDownloader {
           totalBytes,
           percent: 100,
           bytesPerSecond: lastBytesPerSecond,
-          speedFormatted: this.formatSpeed(lastBytesPerSecond),
+          speedFormatted: formatTransferRate(lastBytesPerSecond),
           etaFormatted: 'Ready',
           chunksActive: 0,
         },
@@ -488,9 +489,9 @@ export class FastChunkDownloader {
             const remaining = Math.max(0, realTotal - downloadedBytes);
             const etaSec = lastSpeed > 0 ? Math.ceil(remaining / lastSpeed) : 0;
 
-            const speedFormatted = FastChunkDownloader.formatSpeed(lastSpeed);
-            const etaFormatted = FastChunkDownloader.formatEta(etaSec);
-            const statusText = `Downloading (${FastChunkDownloader.formatBytes(downloadedBytes)}${realTotal > 0 ? ` / ${FastChunkDownloader.formatBytes(realTotal)}` : ''}) • ${speedFormatted}${percent > 0 ? ` [${percent}%]` : ''}${etaFormatted ? ` • ${etaFormatted}` : ''}`;
+            const speedFormatted = formatTransferRate(lastSpeed);
+            const etaFormatted = formatEta(etaSec);
+            const statusText = `Downloading (${formatSetupSize(downloadedBytes)}${realTotal > 0 ? ` / ${formatSetupSize(realTotal)}` : ''}) • ${speedFormatted}${percent > 0 ? ` [${percent}%]` : ''}${etaFormatted ? ` • ${etaFormatted}` : ''}`;
 
             options.onProgress?.(
               {
@@ -647,26 +648,4 @@ export class FastChunkDownloader {
     throw new Error('Too many redirects encountered while probing URL.');
   }
 
-  public static formatBytes(bytes: number): string {
-    if (bytes <= 0) return '0 MB';
-    const mb = bytes / (1024 * 1024);
-    if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
-    if (mb >= 1) return `${mb.toFixed(1)} MB`;
-    return `${(bytes / 1024).toFixed(0)} KB`;
-  }
-
-  public static formatSpeed(bytesPerSecond: number): string {
-    if (bytesPerSecond <= 0) return '0 KB/s';
-    const mb = bytesPerSecond / (1024 * 1024);
-    if (mb >= 1) return `${mb.toFixed(1)} MB/s`;
-    return `${(bytesPerSecond / 1024).toFixed(0)} KB/s`;
-  }
-
-  public static formatEta(seconds: number): string {
-    if (!seconds || seconds <= 0 || !isFinite(seconds)) return '';
-    if (seconds < 60) return `${seconds}s remaining`;
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}m ${secs}s remaining`;
-  }
 }

@@ -1,5 +1,6 @@
 import type { StoredSource } from '../../src/types/library';
 import type { TorrentResult } from '../../src/types/torrent';
+import { hasRealInfoHash, normaliseReleaseName } from '../../src/utils/sourceIdentity.ts';
 
 /**
  * Finding a saved source again after its link has died.
@@ -17,21 +18,7 @@ import type { TorrentResult } from '../../src/types/torrent';
  * resolution. That triple is what a viewer means by "the same source".
  */
 
-/** Release names differ by punctuation and case across refreshes; identity does not. */
-function normalise(value: string | undefined): string {
-  return (value ?? '')
-    .toLowerCase()
-    .replace(/\.(mkv|mp4|avi|m4v|ts)$/i, '')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-}
 
-/** A real infohash addresses content; a synthetic one addresses a URL. */
-function hasRealInfoHash(source: { magnet?: string; torrentUrl?: string; infoHash?: string }): boolean {
-  if (source.magnet || source.torrentUrl) return true;
-  // `ContentService` prefixes the synthetic ones; a bare 40-hex string is real.
-  return /^[a-f0-9]{40}$/i.test(source.infoHash ?? '');
-}
 
 /**
  * Whether a stored link can still be handed to the player without re-resolving.
@@ -77,8 +64,8 @@ export function matchesRelease(saved: StoredSource, candidate: TorrentResult): b
    * "720p" is the distinction most viewers are actually expressing when they
    * pick a source.
    */
-  const savedProvider = normalise(saved.providerName ?? saved.indexerName);
-  const candidateProvider = normalise(candidate.indexerName);
+  const savedProvider = normaliseReleaseName(saved.providerName ?? saved.indexerName);
+  const candidateProvider = normaliseReleaseName(candidate.indexerName);
   if (!savedProvider || savedProvider !== candidateProvider) return false;
 
   const savedResolution = saved.resolution ?? saved.parsed?.resolution;
@@ -87,8 +74,8 @@ export function matchesRelease(saved: StoredSource, candidate: TorrentResult): b
     return false;
   }
 
-  const savedTitle = normalise(saved.title);
-  const candidateTitle = normalise(candidate.title);
+  const savedTitle = normaliseReleaseName(saved.title);
+  const candidateTitle = normaliseReleaseName(candidate.title);
   if (!savedTitle || !candidateTitle) return false;
   if (savedTitle === candidateTitle) return true;
 
@@ -115,6 +102,6 @@ export function pickReplacement(
   const matches = candidates.filter((candidate) => matchesRelease(saved, candidate));
   if (matches.length === 0) return null;
 
-  const savedTitle = normalise(saved.title);
-  return matches.find((candidate) => normalise(candidate.title) === savedTitle) ?? matches[0];
+  const savedTitle = normaliseReleaseName(saved.title);
+  return matches.find((candidate) => normaliseReleaseName(candidate.title) === savedTitle) ?? matches[0];
 }

@@ -8,6 +8,7 @@ import {
   variantFromSource,
   variantFromTask,
 } from '../src/utils/downloadIdentity.ts';
+import { formatInfoFileSize } from '../src/utils/format.ts';
 import type { DatastoreManager } from './datastore';
 import type { Aria2Engine } from './aria2Engine';
 import { MediaDownloadResolver } from './mediaDownloadResolver';
@@ -717,8 +718,8 @@ export class DownloadService {
     if (expected > 0 && actual < expected * 0.99) {
       this.markFailed(
         task,
-        `The transfer stopped early: ${DownloadService.formatBytes(actual)} of ` +
-          `${DownloadService.formatBytes(expected)} was written. Retry to resume it.`
+        `The transfer stopped early: ${formatInfoFileSize(actual)} of ` +
+          `${formatInfoFileSize(expected)} was written. Retry to resume it.`
       );
       return;
     }
@@ -800,7 +801,7 @@ export class DownloadService {
           variantKey: task.variantKey,
           targetFilePath: task.targetFilePath,
           fileSizeBytes: actualBytes || task.totalBytes,
-          fileSizeFormatted: DownloadService.formatBytes(actualBytes || task.totalBytes),
+          fileSizeFormatted: formatInfoFileSize(actualBytes || task.totalBytes),
           createdTime: createdAt,
           downloadCompletedAt: completedAt,
         },
@@ -828,7 +829,7 @@ export class DownloadService {
         `Quality:          ${task.quality || (task.resolution ? `${task.resolution}p` : 'Unknown')}`,
         task.languages?.length ? `Languages:        ${task.languages.join(', ')}` : null,
         task.audioCodecs?.length ? `Audio Codecs:     ${task.audioCodecs.join(', ')}` : null,
-        `File Size:        ${DownloadService.formatBytes(actualBytes || task.totalBytes)}`,
+        `File Size:        ${formatInfoFileSize(actualBytes || task.totalBytes)}`,
         `Downloaded Date:  ${completedAt}`,
         `Target File:      ${path.basename(task.targetFilePath)}`,
         `Task ID:          ${task.id}`,
@@ -853,12 +854,6 @@ export class DownloadService {
     } catch (error) {
       console.warn('[downloads] Failed to write download info companion files:', describeError(error));
     }
-  }
-
-  private static formatBytes(bytes: number): string {
-    if (!bytes || bytes < 0) return '0 MB';
-    const gb = bytes / 1e9;
-    return gb >= 1 ? `${gb.toFixed(2)} GB` : `${Math.round(bytes / 1e6)} MB`;
   }
 
   /**
