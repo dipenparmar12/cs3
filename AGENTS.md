@@ -73,9 +73,12 @@ cs3/
 | Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
-| Sidecar tests | `sidecar/` | `mvn test` (42 tests) |
-| Main-process tests (all) | `cs3_windows/` | `bun run test` (~580 cases across 42 suites, Node type-stripping; or `bun run test:electron`) |
-| Fast unit tests (skips slow) | `cs3_windows/` | `bun run test --fast` (40 unit suites in ~5s) |
+| Sidecar tests | `sidecar/` | `mvn test` (47 tests) |
+| Main-process tests (all) | `cs3_windows/` | `bun run test` (~630 cases across 45 suites, Node type-stripping; or `bun run test:electron`) |
+| Fast unit tests (skips slow) | `cs3_windows/` | `bun run test --fast` (43 unit suites in ~6s) |
+| Error descriptions only | `cs3_windows/` | `bun run test errors` (8 cases, pure) |
+| Resume point only | `cs3_windows/` | `bun run test resume-point` (10 cases, pure) |
+| Library addresses only | `cs3_windows/` | `bun run test libraryStore` (7 cases, pure) |
 | Extension issues only | `cs3_windows/` | `bun run test issues` (21 cases, pure) |
 | Provider registry only | `cs3_windows/` | `bun run test registry` (9 cases, temp dirs) |
 | Provider recovery only | `cs3_windows/` | `bun run test recovery` (12 cases, pure) |
@@ -515,10 +518,10 @@ not a layering mistake.
 
 ### Shared primitives, and the duplication they replaced
 
-Four patterns had each been written out repeatedly. They are one implementation now, and
-the thing worth knowing about each is *why the copies differed*.
+Several patterns had each been written out repeatedly. They are one implementation now,
+and the thing worth knowing about each is *why the copies differed*.
 
-**`src/utils/format.ts` — six byte formatters that disagreed.** Not copies:
+**`src/utils/format.ts` — eight byte formatters that disagreed.** Not copies:
 
 | Call site | zero answers | base | MB decimals |
 |---|---|---|---|
@@ -528,8 +531,15 @@ the thing worth knowing about each is *why the copies differed*.
 | `HistoryView` | `Unknown size` | 1024 | 1 |
 | `SourcePicker` | `—` | 1024 | adaptive |
 | `ProvenancePanel` | `0 B` | 1024 | 2 |
+| `DownloadService` | `0 MB` | **1000** | 0 |
+| `FastChunkDownloader` | `0 MB` | 1024 | 1, plus a KB rung |
 
-A single `formatBytes` would have been shorter and would have changed what six screens
+The last two lived in `electron/` and were missed by the pass that found the first six,
+which only looked at `src/`. They are the sharpest row in the table: **one download
+reports its size in SI on the companion file written beside the film and in binary on
+the progress line above it.**
+
+A single `formatBytes` would have been shorter and would have changed what eight surfaces
 display, so the differences are **parameters** and every one is preserved exactly.
 `format.test.mts` computes its expectations from the old implementations, including the
 ones that look wrong.
@@ -563,6 +573,57 @@ registered listeners that accumulated on every React remount, which reads as a h
 firing five times for one update rather than as an error. `onExtensionUpdateEvent` keeps
 its own listener because it carries a discriminator beside the payload, and widening the
 helper to absorb one caller would cost every other subscriber its argument type.
+
+**`src/utils/errors.ts` — 82 copies of `x instanceof Error ? x.message : String(x)`**,
+across 37 files under four variable names. The most-repeated expression in the codebase,
+and repeating it was the smaller problem.
+
+Node's fetch throws `TypeError: fetch failed` and puts the real reason in `error.cause`, so
+that idiom reported every DNS failure, refused connection, TLS error and unreachable host
+as the same two words. Those two words reach the screen, the pasteable report and
+`ExtensionIssueLog` — and there `groupingForm` collapses the entire network family into
+**one row**, so a tally built to answer "how many distinct things are wrong" answered
+"one". Counting is the whole argument for that ledger and this was quietly defeating it.
+`indexerRegistry` had already worked it out locally; `describeError` is that fix promoted.
+
+It also keeps the distinction the taxonomy needs: **a timeout is a failure and a
+cancellation is not.** `AbortSignal.timeout` gives `TimeoutError`, a caller's own controller
+gives `AbortError`, and describing the second with the word "timeout" scores it against a
+provider for the app's own decision to stop waiting — which ranks the *slowest* providers
+down hardest, since those are the ones still running when the cancel lands. Nothing it
+returns is ever empty, either: an empty description renders as a UI element with nothing in
+it.
+
+**`src/utils/useDismissable.ts` — eight copies of dismiss-on-outside-click**, and the drift
+between them closed the film. `VideoPlayer` binds `keydown` on `window` and treats Escape as
+"close the open panel, or leave the player"; five of the eight listened on `document` in the
+**bubble** phase without stopping the event, and `window` is the last stop in that path. So
+the menu handled Escape and then the player handled the same Escape with no panel open and
+called `onBack()`. The rule now lives in one place: **whoever consumes the Escape stops it**,
+in the capture phase, and only when it actually closed something.
+
+**`torrent/indexers/base.ts` — `withEpisodeTerms` and `tryMirrors`**, seven and six copies
+across three files. The zero-padding in `S01E02` is the whole point of the first: drop it on
+one adapter and it searches `S1E2`, which matches nothing in any torrent index — the site
+answers with a clean empty list, and "this indexer has nothing for that episode" is the one
+failure shape nobody investigates. The two *anime* indexers keep their own rule; they number
+episodes absolutely and were never part of the group.
+
+**`src/utils/sourceIdentity.ts` — `normaliseReleaseName` and `hasRealInfoHash`**, which
+`downloadIdentity.ts` and `cs3/playedSource.ts` each carried byte-identically, down to the
+comment, while their headers already said they solve the same problem for the same reason.
+Had one drifted, downloads would dedupe on one rule and resume match on another with nothing
+reported: a resume quietly starting a different release, or a second copy of a file already
+on disk quietly beginning. Both silent, pointing opposite ways, neither traceable back.
+
+**`electron/anilist.ts` — three hand-rolled GraphQL POSTs**, drifted to three timeouts and
+two error messages for one service, and all three calling **global `fetch`**. See the note
+on the injected fetch below for why that matters. They also read `data` without looking at
+`errors`: GraphQL reports a bad query, a rate limit or a server fault as **HTTP 200** with an
+`errors` array beside a null `data`, so `response.ok` was true and each copy returned
+`undefined` — which every caller renders as "no results". AniList rate-limits per minute and
+this app can issue a query per keystroke, so its most common failure was being reported as an
+empty catalogue.
 
 Note that `util/disabledSet.ts` writes its fields out longhand rather than using
 constructor parameter properties. `erasableSyntaxOnly` is set across this project so Node
@@ -968,7 +1029,7 @@ on the install screen. It now reports `format: 'CSJ'`, 95%, `TierA_SourceJVM`, a
 upstream's build ran `jdeps` over this jar and refused to publish it if a single `android.` type
 appeared.
 
-The jar lane is what **generation 9** was for (the current value is **11** — see
+The jar lane is what **generation 9** was for (the current value is **12** — see
 `runtimeProvisioner.ts`, which carries one paragraph per generation). An already-provisioned
 sidecar has none of this: handed a jar it
 would call dex2jar, be told there is no `classes.dex`, and report a translation failure for an
@@ -978,7 +1039,7 @@ jars.
 `tools/e2e/provider-e2e.mjs` makes the same choice the app makes, and **`--lane cs3` forces the
 DEX artifact** so the same corpus can be run both ways and compared — which is the
 no-regression half of M0's gate. `PluginArchiveTest` (10 cases) pins detection and the
-annotation scan; the sidecar suite is 42.
+annotation scan; the sidecar suite is 47.
 
 **Measured, `--repo phisher --plugins 6 --queries "dune,one piece"`, both lanes:**
 
@@ -2071,6 +2132,128 @@ base class, and declaring the abstract members would drag `Canvas`,
 `ColorFilter` and `PixelFormat` in to satisfy signatures nothing calls. If an
 extension ever subclasses it, its own override will fail to resolve `Canvas` and
 show up in the next count, which is the right way to learn that.
+
+### The eighth `Object` near-miss, found by enumerating instead of waiting (2026-09-09)
+
+A parameter or return type widened to `Object` does not merely lose type safety — **it
+renames the method.** An extension compiled against Android calls
+`getResources()Landroid/content/res/Resources;`; a shim declaring `()Ljava/lang/Object;` is
+a different method, so the call resolves against nothing, throws `NoSuchMethodError` at the
+call site, and the shim's own carefully worded refusal is never reached. The extension then
+loses every provider it was about to register, and the reported cause names the wrong class.
+
+That mistake is on record **seven times** in this repository, each found by a user hitting
+it. Four were still live, found by *enumerating the shim* rather than waiting for the
+eighth report:
+
+| Method | Declared | Android's descriptor |
+|---|---|---|
+| `Context.getAssets` | `Object` | `android/content/res/AssetManager` |
+| `Context.getContentResolver` | `Object` | `android/content/ContentResolver` |
+| `Window.setBackgroundDrawable` | `Object` | `android/graphics/drawable/Drawable` |
+| `Fragment.getResources` | `Object` | `android/content/res/Resources` |
+
+Two of them could already have named an existing shim type. `Fragment.getResources` is
+literally the method `Context.getResources` was fixed for, missed on a second class.
+`AssetManager` and `ContentResolver` are new and exist *to be named*: they concede the type
+and refuse every operation, exactly as `PackageManager` does.
+
+`RUNTIME_GENERATION` is **12**: a provisioned copy has neither new class and the old
+descriptors, so an upgraded host asking for either gets the failure this removes.
+
+**`ShimSignatureTest` now enumerates the rule**, so the eighth occurrence fails a test
+instead of an extension: no shim method may mention bare `Object` unless Android's own
+signature does, with an allow-list carrying the upstream signature per entry — and a
+**stale entry fails too**, or the list becomes a graveyard that silently permits the next
+one. Verified by mutation. Note the check found nothing else, which is the useful half of
+the result: the family is closed, not merely reduced.
+
+Also split `UnsupportedAndroidApiException`'s api identifier from its explanation. `api()`
+is documented as the `Class.method` **aggregation key**, and a shim wanting to explain
+itself was folding a whole sentence into it — so occurrences of one refusal grouped under
+prose and no two shims grouped alike, defeating the tally the type exists for. The
+two-argument constructor keeps them apart.
+
+**`errorKind` gained the rest of the linkage family** in the same pass. It classified
+`NoClassDefFoundError` and left `NoSuchMethodError`, `IncompatibleClassChangeError`,
+`AbstractMethodError`, `VerifyError` and the rest as `PLUGIN_ERROR` — "the extension threw",
+which sends the reader to blame a scraper's author for a method we failed to provide. A
+missing class is one way a shim is wrong and not the most common one; the rest are a class
+that is *present and wrong*, and this repo's history is three worked examples. The host's
+text classifier had been fixed for exactly these; the two ends must not disagree about one
+failure. `ExceptionInInitializerError` is the one exclusion — a `LinkageError` by
+inheritance and a plugin's own static initializer throwing in fact.
+
+### Two Play buttons that could not remember (2026-09-09)
+
+Both found on the one-click path, and neither produces an error.
+
+**A links handle was being stored as a row's reopenable address.** `progress.mediaUrl` is
+what a library or Continue Watching row is reopened by — a page, which `load()` fetches.
+`episode.url` is the opaque blob `loadLinks` consumes, which for much of the corpus is JSON.
+Both are strings under one field name, and the fix documented under "A title I saved now
+opens blank" had been applied to **one of the three** renderer call sites that write it. The
+two left were `App.handleQuickPlay` — the one-click Play from a search result or home card,
+so every series played that way wrote a dead address — and `DetailView.handlePlaySource`.
+It also silently disabled the next-episode prefetch on those paths, which refuses a links
+handle by design.
+
+`LibraryStore` now refuses one on the way in, which is the last place that can tell and the
+only one every writer passes through. **Dropping it loses nothing measurable**: progress
+keys on `canonicalKey(title, year)` plus season and episode, never on the URL, so the resume
+point survives and the UI can offer "find this title again" instead of an empty page.
+
+**And Play always restarted a series at episode one.** Correct exactly once and wrong on
+every visit after: someone six episodes in pressed Play on the poster and got the pilot.
+Nothing errors, so it is absorbed as "this app does not remember where I was" — the single
+thing a streaming app is expected to do. Nothing had to be fetched to fix it; the app
+already stored every episode's progress and the detail page already read it. The card path
+never asked, partly because `loadWatchState` lived in a file it could not import, and the
+detail hero handed over the first episode of the *displayed season* — so switching the
+season tab silently changed what Play meant.
+
+`src/utils/resumePoint.ts` is the rule, and pure because every branch is a wrong episode
+starting silently. A **null episode now means "Play"** rather than "play the series URL";
+callers naming a specific episode are unaffected. One rule in it is worth keeping: the
+**furthest** episode with history wins, never the most recently updated one — dipping back
+into episode 2 of a finished show writes a fresh timestamp on an early episode, and a
+recency rule would send every later Play backwards through a series already seen.
+
+### Escape closed the film (2026-09-09)
+
+Eight components carried their own dismiss-on-outside-click effect and had drifted on the
+one detail that matters. `VideoPlayer` binds `keydown` on `window` and treats Escape as
+"close the open panel, or leave the player". Five of the eight listened on `document` in the
+**bubble** phase without stopping the event, and `window` is the last stop in the bubble
+path — so the menu handled Escape, and then the player handled the same Escape with no panel
+open and called `onBack()`. Opening the copy menu inside the player and pressing Escape
+closed the menu *and ended playback*.
+
+`useDismissable` makes the correct behaviour the default: capture phase, and
+`stopPropagation` **only when it actually closed something** — an Escape a menu ignored must
+still reach whatever else wanted it. It is `pointerdown` rather than `click` for a related
+reason: `click` fires after the trigger has been released, so an outside-click close
+followed by the trigger's own toggle reopens the menu, and the control that opened it cannot
+close it.
+
+### The injected fetch is not optional (2026-09-09)
+
+`torrent/http.ts` exists so the main process can swap in Electron's `net.fetch`, which goes
+through Chromium's network stack and therefore honours `app.configureHostResolver` and the
+system proxy. **Node's `fetch` honours neither.** Five call sites used the global one — both
+AniList queries in `metadataProvider`, the seasonal-anime row in `homeProviders`, the OTT
+catalogue, and the mpv release feed — so the DNS-over-HTTPS setting silently did nothing for
+them. On a connection where that setting is the reason anything resolves at all, those were
+the rows that failed, and nothing connected the two.
+
+`externalPlayerControl` keeps global `fetch` deliberately: it talks to VLC on loopback,
+where there is no DNS or proxy to honour. **Anything reaching a third-party host goes
+through `torrent/http.ts`.**
+
+`OttCatalogService` also stopped losing both catalogues when one 404s. Films and series are
+independent addon routes and were fetched under `Promise.all`, so a dead films catalogue
+rejected the pair and the caller served stale sections for a series catalogue that was
+answering perfectly.
 
 ### Provider catalogues: `getMainPage`, finally (2026-08-31)
 
