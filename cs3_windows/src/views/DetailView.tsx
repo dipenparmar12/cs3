@@ -1029,7 +1029,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
           },
         },
         progress: {
-          mediaUrl: pendingEpisode?.url ?? detail.url,
+          // The page, not `pendingEpisode.url` — see the note on the same field
+          // in `playEpisodeDirectly`. An episode URL is the blob `loadLinks`
+          // consumes, and a library row addressed by one reopens blank.
+          mediaUrl: detail.url,
           year: detail.year,
           posterUrl: detail.posterUrl,
           season: pendingEpisode?.season,

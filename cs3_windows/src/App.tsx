@@ -933,7 +933,14 @@ export const App: React.FC = () => {
           providerProvenance: item.apiName ? { provider: item.apiName } : undefined,
           episodeTitle: first?.name,
           progress: {
-            mediaUrl: first?.url ?? item.url,
+            // The **page**, never the episode's playback handle — the same rule
+            // `DetailView.playEpisodeDirectly` documents at length. `first.url`
+            // is the opaque blob `loadLinks` wants, which for much of the corpus
+            // is JSON; storing it here writes it into the library and Continue
+            // Watching, and reopening that row calls `load()` on a links handle
+            // and comes up blank. It also silently disables the next-episode
+            // prefetch, which refuses a links handle by design.
+            mediaUrl: item.url,
             year: detail?.year ?? item.year,
             posterUrl: detail?.posterUrl ?? item.posterUrl,
             season: first?.season,
