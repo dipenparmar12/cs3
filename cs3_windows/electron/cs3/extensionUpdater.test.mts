@@ -105,6 +105,7 @@ test('ExtensionUpdater.updatePlugin drops cached update on successful installati
       repositoryUrl: 'https://example.test/repo.json',
       downloadUrl: 'https://example.test/AllMovieLandProvider.cs3',
       fileHash: 'sha256-5b9ce3b',
+      reason: 'newer',
     },
   ];
   datastore.setObject('extension_available_updates', cachedUpdates);
@@ -167,6 +168,7 @@ test('ExtensionUpdater.updatePlugin triggers rollback and retains cache if verif
       availableVersion: 2,
       repositoryUrl: 'https://example.test/repo.json',
       downloadUrl: 'https://example.test/Broken.cs3',
+      reason: 'newer',
     },
   ];
   datastore.setObject('extension_available_updates', cachedUpdates);
@@ -210,6 +212,7 @@ test('ExtensionUpdater.updatePlugin retains cache and returns failure if verific
       availableVersion: 2,
       repositoryUrl: 'https://example.test/repo.json',
       downloadUrl: 'https://example.test/Unpreserved.cs3',
+      reason: 'newer',
     },
   ];
   datastore.setObject('extension_available_updates', cachedUpdates);
@@ -237,3 +240,208 @@ test('ExtensionUpdater.updatePlugin retains cache and returns failure if verific
   assert.equal(updater.getCachedUpdates().length, 1, 'Cached update is kept even when no backup was preserved');
 });
 
+
+/**
+ * A maintainer fixing a scraper without bumping the version is the ordinary
+ * case in this ecosystem, not an edge one. Version-only comparison reported
+ * "up to date" for exactly the extensions that had stopped working.
+ */
+test('ExtensionUpdater.checkForUpdates offers a republished archive at the same version', async () => {
+  const datastore = new FakeDatastore();
+
+  const fakePlugins = {
+    getInstalledRepositories: () => ['https://example.test/repo.json'],
+    getInstalledPluginRecords: () => [
+      {
+        internalName: 'RepublishedProvider',
+        version: 7,
+        meta: {
+          internalName: 'RepublishedProvider',
+          name: 'RepublishedProvider',
+          version: 7,
+          status: 1,
+          url: 'https://example.test/Republished.cs3',
+          fileHash: 'sha256-AAAA',
+        },
+      },
+      {
+        internalName: 'UntouchedProvider',
+        version: 3,
+        meta: {
+          internalName: 'UntouchedProvider',
+          name: 'UntouchedProvider',
+          version: 3,
+          status: 1,
+          url: 'https://example.test/Untouched.cs3',
+          fileHash: 'sha256-CCCC',
+        },
+      },
+      {
+        internalName: 'NoHashProvider',
+        version: 2,
+        meta: {
+          internalName: 'NoHashProvider',
+          name: 'NoHashProvider',
+          version: 2,
+          status: 1,
+          url: 'https://example.test/NoHash.cs3',
+        },
+      },
+    ],
+    fetchRepository: async () => ({
+      repositoryUrl: 'https://example.test/repo.json',
+      name: 'Test Repo',
+      plugins: [
+        {
+          internalName: 'RepublishedProvider',
+          name: 'RepublishedProvider',
+          version: 7,
+          status: 1,
+          url: 'https://example.test/Republished.cs3',
+          // Same version, different bytes: the prefix and case differ from the
+          // installed record's spelling too, which must not read as a change.
+          fileHash: 'BBBB',
+        },
+        {
+          internalName: 'UntouchedProvider',
+          name: 'UntouchedProvider',
+          version: 3,
+          status: 1,
+          url: 'https://example.test/Untouched.cs3',
+          fileHash: 'sha256-cccc',
+        },
+        {
+          internalName: 'NoHashProvider',
+          name: 'NoHashProvider',
+          version: 2,
+          status: 1,
+          url: 'https://example.test/NoHash.cs3',
+        },
+      ],
+      warnings: [],
+    }),
+  } as unknown as PluginManager;
+
+  const updater = new ExtensionUpdater(datastore as unknown as DatastoreManager, fakePlugins);
+  const result = await updater.checkForUpdates();
+
+  assert.deepEqual(
+    result.updates.map((u) => u.internalName),
+    ['RepublishedProvider'],
+    'Only the archive whose published bytes changed is offered'
+  );
+  assert.equal(result.updates[0].reason, 'republished');
+  assert.equal(result.updates[0].availableVersion, 7);
+});
+
+test('ExtensionUpdater.updatePlugin resolves from the repository when nothing is cached', async () => {
+  const datastore = new FakeDatastore();
+  let installed: SitePlugin | null = null;
+  const fetched: string[] = [];
+
+  const fakePlugins = {
+    getInstalledRepositories: () => [
+      'https://example.test/other.json',
+      'https://example.test/repo.json',
+    ],
+    getInstalledPluginRecords: () => [
+      {
+        internalName: 'ColdCacheProvider',
+        version: 4,
+        meta: {
+          internalName: 'ColdCacheProvider',
+          name: 'ColdCacheProvider',
+          version: 4,
+          status: 1,
+          url: 'https://example.test/Cold.cs3',
+          repositoryUrl: 'https://example.test/repo.json',
+        },
+      },
+    ],
+    fetchRepository: async (url: string) => {
+      fetched.push(url);
+      return {
+        repositoryUrl: url,
+        name: 'Test Repo',
+        plugins: [
+          {
+            internalName: 'ColdCacheProvider',
+            name: 'ColdCacheProvider',
+            version: 9,
+            status: 1,
+            url: 'https://example.test/Cold-9.cs3',
+            fileHash: 'sha256-9999',
+          },
+        ],
+        warnings: [],
+      };
+    },
+    preserveInstalledVersion: () => true,
+    installPlugin: async (plugin: SitePlugin) => {
+      installed = plugin;
+      return { ok: true, message: 'installed' };
+    },
+    archivePathFor: () => 'C:/fake/path.cs3',
+    verifyInstalledPlugin: async () => ({ ok: true, tier: 'T1_DROPIN', message: 'loads' }),
+  } as unknown as PluginManager;
+
+  const updater = new ExtensionUpdater(datastore as unknown as DatastoreManager, fakePlugins);
+  const outcome = await updater.updatePlugin('ColdCacheProvider');
+
+  assert.ok(outcome.ok, outcome.message);
+  assert.equal(outcome.fromVersion, 4);
+  assert.equal(outcome.toVersion, 9);
+  assert.ok(installed, 'The install path was reached without a prior check');
+  // The extension's own repository is asked first, not whichever is listed first.
+  assert.equal(fetched[0], 'https://example.test/repo.json');
+});
+
+test('ExtensionUpdater.updateAll checks for updates when the cache is cold', async () => {
+  const datastore = new FakeDatastore();
+  const updated: string[] = [];
+
+  const fakePlugins = {
+    getInstalledRepositories: () => ['https://example.test/repo.json'],
+    getInstalledPluginRecords: () => [
+      {
+        internalName: 'StaleProvider',
+        version: 1,
+        meta: {
+          internalName: 'StaleProvider',
+          name: 'StaleProvider',
+          version: 1,
+          status: 1,
+          url: 'https://example.test/Stale.cs3',
+        },
+      },
+    ],
+    fetchRepository: async () => ({
+      repositoryUrl: 'https://example.test/repo.json',
+      name: 'Test Repo',
+      plugins: [
+        {
+          internalName: 'StaleProvider',
+          name: 'StaleProvider',
+          version: 2,
+          status: 1,
+          url: 'https://example.test/Stale-2.cs3',
+        },
+      ],
+      warnings: [],
+    }),
+    preserveInstalledVersion: () => true,
+    installPlugin: async (plugin: SitePlugin) => {
+      updated.push(plugin.internalName);
+      return { ok: true, message: 'installed' };
+    },
+    archivePathFor: () => 'C:/fake/path.cs3',
+    verifyInstalledPlugin: async () => ({ ok: true, tier: 'T1_DROPIN', message: 'loads' }),
+  } as unknown as PluginManager;
+
+  const updater = new ExtensionUpdater(datastore as unknown as DatastoreManager, fakePlugins);
+  const outcomes = await updater.updateAll();
+
+  assert.deepEqual(updated, ['StaleProvider'], 'Update all found the update it had not checked for');
+  assert.equal(outcomes.length, 1);
+  assert.ok(outcomes[0].ok);
+});

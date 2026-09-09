@@ -979,6 +979,7 @@ export class PluginManager {
     } catch {
       // Safe if sidecar is not running
     }
+    this.forgetLoadedExtension(internalName);
 
     try {
       if (fs.existsSync(target)) {
@@ -1016,12 +1017,7 @@ export class PluginManager {
       };
     }
 
-    this.providersLoaded = false;
-    try {
-      await this.loadProviders();
-    } catch (err) {
-      console.warn(`[pluginManager] Could not auto-load providers after rollback of ${internalName}:`, err);
-    }
+    await this.reloadInstalledExtension(internalName);
 
     return { ok: true, message: 'The previous version has been restored and loaded.' };
   }
@@ -1479,6 +1475,15 @@ export class PluginManager {
         } catch {
           // Safe if sidecar is not running or plugin not yet loaded
         }
+        /*
+         * Paired with the `unload` above rather than placed after the rename:
+         * a rename that fails still leaves the old copy dropped from the JVM,
+         * and a live claim surviving that would be a provider this process
+         * thinks is loaded and nothing can call. Before `inspect` runs further
+         * down, too — that records a fresh runtime report and clearing it
+         * afterwards would throw the new one away.
+         */
+        this.forgetLoadedExtension(plugin.internalName);
 
         try {
           fs.chmodSync(target, 0o666);
@@ -1535,13 +1540,8 @@ export class PluginManager {
       // be known before the user is told whether it works.
       const runtime = await this.inspect(plugin.internalName, target);
 
-      // Invalidate cached provider state and load the new extension into JVM sidecar immediately
-      this.providersLoaded = false;
-      try {
-        await this.loadProviders();
-      } catch (err) {
-        console.warn(`[pluginManager] Could not auto-load providers for ${plugin.internalName}:`, err);
-      }
+      // Into the running JVM now, so the extension answers without a restart.
+      await this.reloadInstalledExtension(plugin.internalName);
 
       this.notifyInstallProgress({
         internalName: plugin.internalName,
@@ -1613,6 +1613,59 @@ export class PluginManager {
     }
     void this.sidecar.call('unload', { pluginId: internalName });
     return true;
+  }
+
+  /**
+   * Drops everything this process believes about an extension's *loaded* state.
+   *
+   * Called whenever an archive on disk is replaced — an update, a rollback, a
+   * reinstall over the top. The sidecar is told to `unload` at those moments,
+   * and until this existed nothing on this side of the boundary was told
+   * anything: `liveInJvm` still held the name, so the next `activate` returned
+   * `true` without loading, and the providers stayed gone until the app was
+   * restarted. That is the "I updated the extension and now it finds nothing"
+   * report, and it is invisible from here because every layer reports success.
+   *
+   * Four things go, and all four matter. The live claim, or nothing reloads.
+   * The registry row, because it describes bytes that are no longer on disk and
+   * would hydrate the *old* provider set on next launch. The provider entries,
+   * because an extension that dropped a provider in the new version would keep
+   * answering for it. And the runtime report, because a failure recorded
+   * against the previous archive is not evidence about this one.
+   *
+   * Deliberately not `providersLoaded = false`: the caller reactivates this one
+   * archive, and re-running hydration for the other hundred and twenty is the
+   * cost that made updating twenty extensions take minutes.
+   */
+  private forgetLoadedExtension(internalName: string): void {
+    this.liveInJvm.delete(internalName);
+    this.registry?.forget(internalName);
+    this.runtimeReports.delete(internalName);
+    this.providerNameClashes.delete(internalName);
+    for (const [name, provider] of [...this.providers.entries()]) {
+      if (provider.pluginInternalName === internalName) this.providers.delete(name);
+    }
+  }
+
+  /**
+   * Reloads one replaced archive into the JVM, and only that one.
+   *
+   * The install path used to clear `providersLoaded` and call `loadProviders()`
+   * — a whole-catalogue pass — after every single install. On "update all" over
+   * twenty extensions that is twenty passes, each re-reading every installed
+   * archive's registration, and the user watches a progress bar that has
+   * nothing to do with the work being done. Loading the archive that actually
+   * changed is the same outcome for a fraction of the cost, and it is the only
+   * one that is correct after `forgetLoadedExtension` has dropped the row this
+   * extension would otherwise have hydrated from.
+   */
+  private async reloadInstalledExtension(internalName: string): Promise<boolean> {
+    try {
+      return await this.activate(internalName);
+    } catch (error) {
+      console.warn(`[pluginManager] could not reload ${internalName} after install:`, error);
+      return false;
+    }
   }
 
   public getInstalledPlugins(): SitePlugin[] {

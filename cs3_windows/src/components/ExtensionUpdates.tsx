@@ -387,7 +387,21 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff' }}>{u.name}</span>
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)', marginLeft: '0.5rem' }}>
-                    v{u.installedVersion} ➔ <strong>v{u.availableVersion}</strong>
+                    {/*
+                      A republish carries the same version number on both
+                      sides, so "v7 ➔ v7" reads as a bug in the updater rather
+                      than as what it is: the maintainer pushed a fix without
+                      bumping the field. Naming it is the whole difference.
+                    */}
+                    {u.reason === 'republished' ? (
+                      <>
+                        v{u.availableVersion} <strong>rebuilt</strong>
+                      </>
+                    ) : (
+                      <>
+                        v{u.installedVersion} ➔ <strong>v{u.availableVersion}</strong>
+                      </>
+                    )}
                     {u.fileSize ? ` (${(u.fileSize / 1024).toFixed(0)} KB)` : ''}
                   </span>
                 </div>
