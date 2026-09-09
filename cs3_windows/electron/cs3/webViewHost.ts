@@ -35,6 +35,7 @@ import {
   compilePatterns,
   type CompiledPattern,
 } from './webViewMatch';
+import { describeError } from '../../src/utils/errors.ts';
 
 const log = scopedLogger('runtime', { component: 'webview' });
 
@@ -389,7 +390,7 @@ export class WebViewHost {
         } catch (error) {
           log.debug('webview_script_failed', {
             url: request.url,
-            error: error instanceof Error ? error.message : String(error),
+            error: describeError(error),
           });
         }
       };
@@ -471,7 +472,7 @@ export class WebViewHost {
     } catch (error) {
       log.debug('webview_cookies_unreadable', {
         url,
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       });
       return {};
     }

@@ -31,6 +31,7 @@ import { BitSearchIndexer, TheRarbgIndexer, X1337Indexer } from './indexers/scra
 import { TorznabIndexer } from './indexers/torznab';
 import { dedupeByInfoHash, rankResults, type RankContext } from './ranker';
 import type { DatastoreManager } from '../datastore';
+import { describeError } from '../../src/utils/errors.ts';
 
 /**
  * Aggregates searches across every configured indexer.
@@ -599,21 +600,4 @@ export class IndexerRegistry {
     const { accepted, rejected } = rank(merged);
     return { results: accepted, rejected, indexerOutcomes: outcomes };
   }
-}
-
-function describeError(error: unknown): string {
-  if (error instanceof Error) {
-    // AbortSignal.timeout surfaces as TimeoutError; say so in plain language.
-    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
-      return 'Timed out';
-    }
-    // Node DNS/connection failures carry a `cause` with the useful detail.
-    const cause = (error as { cause?: { code?: string } }).cause;
-    if (cause?.code === 'ENOTFOUND') return 'Host not found (DNS blocked or domain moved)';
-    if (cause?.code === 'ECONNREFUSED') return 'Connection refused';
-    if (cause?.code === 'ETIMEDOUT') return 'Connection timed out';
-    if (cause?.code) return `${error.message} (${cause.code})`;
-    return error.message;
-  }
-  return String(error);
 }

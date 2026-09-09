@@ -2,6 +2,7 @@ import { fetchJson } from '../torrent/http.ts';
 import { anilistQuery } from '../anilist.ts';
 import { TvType, type SearchResponse } from '../../src/types/api.ts';
 import { buildCinemetaUrl } from '../cinemeta.ts';
+import { describeError } from '../../src/utils/errors.ts';
 
 /**
  * Where the home screen's catalogue comes from, as something replaceable.
@@ -462,7 +463,7 @@ export async function checkProvider(provider: HomeProvider): Promise<HomeProvide
 
     return { ...base, status: 'healthy', latencyMs, items: items.length, withArtwork };
   } catch (error) {
-    const raw = error instanceof Error ? error.message : String(error);
+    const raw = describeError(error);
     const needsKey = Boolean(provider.requiresKey) && /api key/i.test(raw);
     /**
      * `fetch failed` is what Node says for DNS failures, refused connections and

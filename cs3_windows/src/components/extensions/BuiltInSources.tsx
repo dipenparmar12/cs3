@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Library, Loader2, Plus, Trash2 } from 'lucide-react';
 import { Badge, Toggle } from './primitives';
 import type { NativeProviderSummary } from '../../types/plugin';
+import { describeError } from '../../utils/errors';
 
 /**
  * The providers compiled into the app, and the one control each of them has.
@@ -47,7 +48,7 @@ export const BuiltInSources: React.FC = () => {
         setError(response.error ?? 'The built-in provider list could not be read.');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(describeError(e));
     } finally {
       setLoading(false);
     }
@@ -66,7 +67,7 @@ export const BuiltInSources: React.FC = () => {
       if (response.ok) setProviders(response.providers);
       else setError(response.error ?? 'That change could not be saved.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(describeError(e));
     } finally {
       setBusy(null);
     }
@@ -90,7 +91,7 @@ export const BuiltInSources: React.FC = () => {
         setError(response.error ?? 'That addon could not be added.');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(describeError(e));
     } finally {
       setAdding(false);
     }
@@ -117,7 +118,7 @@ export const BuiltInSources: React.FC = () => {
         setServerKey('');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(describeError(e));
       setServerKey('');
     } finally {
       setAddingServer(false);
@@ -135,7 +136,7 @@ export const BuiltInSources: React.FC = () => {
       if (response.ok) setProviders(response.providers);
       else setError(response.error ?? 'That source could not be removed.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(describeError(e));
     } finally {
       setBusy(null);
     }

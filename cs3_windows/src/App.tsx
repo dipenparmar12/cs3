@@ -33,6 +33,7 @@ import { buildDownloadTask } from './utils/downloadIdentity';
 import type { TorrentResult } from './types/torrent';
 import type { PlaybackSnapshot } from '../electron/playbackSession';
 import type { SearchSnapshot } from '../electron/searchSession';
+import { describeError } from './utils/errors';
 
 /** One live playback session: its id, what asked for it, and its latest state. */
 interface ActiveSession {
@@ -611,7 +612,7 @@ export const App: React.FC = () => {
       if (response.snapshot) setSearch(response.snapshot);
       if (!response.ok && response.error) setSearchError(response.error);
     } catch (err) {
-      setSearchError(err instanceof Error ? err.message : String(err));
+      setSearchError(describeError(err));
     }
   }, []);
 

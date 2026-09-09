@@ -89,6 +89,7 @@ import type { HistoryEvent, HistoryFilter } from '../src/types/history';
 import type { StoredSource } from '../src/types/library';
 import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import type { MpvSnapshot } from '../src/types/mpv';
+import { describeError } from '../src/utils/errors.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -587,7 +588,7 @@ function installProcessGuards(): void {
       level: 'error',
       stage: 'runtime',
       source: 'main',
-      message: error instanceof Error ? error.message : String(error),
+      message: describeError(error),
       detail: error instanceof Error ? error.stack : undefined,
     });
     diagnostics.flush();
@@ -603,14 +604,14 @@ function installProcessGuards(): void {
     if (swallow(reason, 'unhandledRejection')) return;
     console.error('Unhandled rejection in main process:', reason);
     logger.error('app', 'unhandled_rejection', {
-      error: reason instanceof Error ? reason.message : String(reason),
+      error: describeError(reason),
       stack: reason instanceof Error ? reason.stack?.slice(0, 2000) : undefined,
     });
     diagnostics.record({
       level: 'error',
       stage: 'runtime',
       source: 'main',
-      message: reason instanceof Error ? reason.message : String(reason),
+      message: describeError(reason),
       detail: reason instanceof Error ? reason.stack : undefined,
     });
   });
@@ -1184,7 +1185,7 @@ app.whenReady().then(async () => {
       // A warm-up that fails costs latency on the next search and nothing else,
       // so it is recorded rather than surfaced.
       logger.warn('extension', 'provider_warmup_failed', {
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       });
     });
   }, PROVIDER_WARMUP_DELAY_MS).unref?.();
@@ -1208,7 +1209,7 @@ app.whenReady().then(async () => {
       // `startStream` still calls `ensureStarted` itself, so a failed warm-up
       // costs latency on the first play and nothing else.
       logger.warn('torrent', 'engine_warmup_failed', {
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       });
     });
   }, TORRENT_WARMUP_DELAY_MS).unref?.();
@@ -1330,7 +1331,7 @@ app.on('before-quit', async (event) => {
     // because a service that throws here is one that leaked something — and the
     // next launch is where that shows up.
     logger.warn('app', 'shutdown_incomplete', {
-      error: error instanceof Error ? error.message : String(error),
+      error: describeError(error),
     });
   }
   // Last, and synchronous: nothing after this point gets written.
@@ -1340,7 +1341,7 @@ app.on('before-quit', async (event) => {
 
 /** Normalises a thrown value into an IPC-safe result envelope. */
 function fail(error: unknown): { ok: false; error: string } {
-  return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  return { ok: false, error: describeError(error) };
 }
 
 // --- content -------------------------------------------------------------
@@ -2267,7 +2268,7 @@ ipcMain.handle('runtime:repair', async () => {
     const provisioner = pluginManager.getSidecar().getProvisioner();
     await provisioner.cleanRuntime().catch((error) => {
       logger.warn('runtime', 'repair_clean_failed', {
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       });
     });
     const ready = await provisioner.provisionRuntime();
@@ -2824,7 +2825,7 @@ async function describeUnreadableSource(url: string): Promise<{
     return {
       dead: true,
       reason: `The source could not be reached: ${
-        error instanceof Error ? error.message : String(error)
+        describeError(error)
       }`,
     };
   }
@@ -4239,7 +4240,7 @@ ipcMain.handle('network:test', async () => {
           enabled: target.enabled,
           ok: false,
           latencyMs: Date.now() - started,
-          error: error instanceof Error ? error.message : String(error),
+          error: describeError(error),
         };
       }
     })

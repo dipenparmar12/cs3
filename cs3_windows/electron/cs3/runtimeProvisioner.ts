@@ -5,6 +5,7 @@ import path from 'path';
 import { spawnSync } from 'child_process';
 
 import { FastChunkDownloader, type DownloadProgress as FastProgress } from '../fastDownloader';
+import { describeError } from '../../src/utils/errors.ts';
 
 export interface SystemRuntimeStatus {
   ready: boolean;
@@ -787,7 +788,7 @@ export class RuntimeProvisioner {
           throw new Error(finalStatus.reason ?? 'Runtime verification failed.');
         }
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
+        const errorMsg = describeError(err);
         this.notifyProgress({
           step: 'error',
           progress: 0,
@@ -819,7 +820,7 @@ export class RuntimeProvisioner {
         }
         return await this.provisionRuntime();
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
+        const errorMsg = describeError(err);
         this.notifyProgress({
           step: 'error',
           progress: 0,

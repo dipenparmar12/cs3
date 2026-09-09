@@ -1,6 +1,7 @@
 import type { SitePlugin } from '../../src/types/plugin';
 import type { DatastoreManager } from '../datastore';
 import type { PluginManager } from '../pluginManager';
+import { describeError } from '../../src/utils/errors.ts';
 
 /**
  * Over-the-air updates for installed extensions.
@@ -219,7 +220,7 @@ export class ExtensionUpdater {
       if (outcome.status === 'rejected') {
         warnings.push(
           `${repoUrl} could not be checked: ${
-            outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)
+            describeError(outcome.reason)
           }`
         );
         return;

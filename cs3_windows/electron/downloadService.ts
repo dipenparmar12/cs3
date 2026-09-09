@@ -22,6 +22,7 @@ import type { TorrentResult } from '../src/types/torrent';
 import type { HistoryStore } from './cs3/historyStore';
 import type { HistoryAction, HistoryStatus } from '../src/types/history';
 import { scopedLogger } from './logging/logger.ts';
+import { describeError } from '../src/utils/errors.ts';
 
 const log = scopedLogger('download');
 
@@ -533,7 +534,7 @@ export class DownloadService {
     try {
       fs.mkdirSync(outputDir, { recursive: true });
     } catch (error) {
-      this.markFailed(task, `Could not create the download folder: ${describe(error)}`);
+      this.markFailed(task, `Could not create the download folder: ${describeError(error)}`);
       return;
     }
 
@@ -590,7 +591,7 @@ export class DownloadService {
       task.targetFilePath = handle.diskPath;
       this.saveQueueToStorage();
     } catch (error) {
-      this.markFailed(task, describe(error));
+      this.markFailed(task, describeError(error));
     }
   }
 
@@ -850,7 +851,7 @@ export class DownloadService {
       fs.writeFileSync(txtPath, readableText, 'utf8');
       log.info('download_info_files_written', { jsonPath, txtPath, taskId: task.id });
     } catch (error) {
-      console.warn('[downloads] Failed to write download info companion files:', describe(error));
+      console.warn('[downloads] Failed to write download info companion files:', describeError(error));
     }
   }
 
@@ -1360,7 +1361,7 @@ export class DownloadService {
       try {
         fs.rmSync(task.targetFilePath, { force: true });
       } catch (error) {
-        console.warn('[downloads] could not delete file for removed task:', describe(error));
+        console.warn('[downloads] could not delete file for removed task:', describeError(error));
       }
     }
 
@@ -1379,8 +1380,4 @@ export class DownloadService {
     this.handles.clear();
     this.aria2.stop();
   }
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

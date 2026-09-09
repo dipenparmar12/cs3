@@ -1,5 +1,6 @@
 import type { ContentService, SourceQuery } from '../contentService';
 import type { DatastoreManager } from '../datastore';
+import { describeError } from '../../src/utils/errors.ts';
 
 /**
  * Starts looking for sources while the viewer is still reading the synopsis.
@@ -201,7 +202,7 @@ export class SourcePrefetcher {
         status: 'failed',
         count: 0,
         fromCache: false,
-        reason: error instanceof Error ? error.message : String(error),
+        reason: describeError(error),
       });
     } finally {
       if (this.controller === controller) this.controller = null;

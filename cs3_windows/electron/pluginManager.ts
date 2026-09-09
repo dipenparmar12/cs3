@@ -73,6 +73,7 @@ import {
   type RecoveryOutcome,
   type RecoveryPlan,
 } from './cs3/providerRecovery.js';
+import { describeError } from '../src/utils/errors.ts';
 
 export interface RepositoryFetchResult {
   repositoryUrl: string;
@@ -966,7 +967,7 @@ export class PluginManager {
       return {
         ok: false,
         message: `The previous version could not be restored: ${
-          error instanceof Error ? error.message : String(error)
+          describeError(error)
         }`,
       };
     }
@@ -1028,7 +1029,7 @@ export class PluginManager {
     } catch (error) {
       return {
         ok: false,
-        message: error instanceof Error ? error.message : String(error),
+        message: describeError(error),
       };
     }
   }
@@ -1092,7 +1093,7 @@ export class PluginManager {
       if (result.status === 'rejected') {
         warnings.push(
           `Plugin list ${repo.pluginLists[index]} could not be read: ${
-            result.reason instanceof Error ? result.reason.message : String(result.reason)
+            describeError(result.reason)
           }`
         );
         return;
@@ -1160,7 +1161,7 @@ export class PluginManager {
       return {
         ok: false,
         message: `That repository could not be read: ${
-          error instanceof Error ? error.message : String(error)
+          describeError(error)
         }`,
       };
     }
@@ -1215,7 +1216,7 @@ export class PluginManager {
       return {
         ok: false,
         message: `That repository could not be read: ${
-          error instanceof Error ? error.message : String(error)
+          describeError(error)
         }`,
         installed: 0,
         failed: 0,
@@ -1507,7 +1508,7 @@ export class PluginManager {
       }
       return {
         ok: false,
-        message: error instanceof Error ? error.message : String(error),
+        message: describeError(error),
       };
     }
   }
@@ -2114,7 +2115,7 @@ export class PluginManager {
           ok: false,
           provider,
           done: [],
-          error: error instanceof Error ? error.message : String(error),
+          error: describeError(error),
         });
       }
     }
@@ -2180,7 +2181,7 @@ export class PluginManager {
         }
         done.push({ kind: step.kind, target: step.target, ok: true });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         done.push({ kind: step.kind, target: step.target, ok: false, error: message });
         return { ok: false, provider, done, error: message };
       }

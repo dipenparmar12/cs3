@@ -51,6 +51,7 @@ import type {
   NativeProvider,
 } from './nativeProviders/types.ts';
 import { parseNativeAddress } from './nativeProviders/types.ts';
+import { describeError } from '../../src/utils/errors.ts';
 
 const log = getLogger().child('provider', { component: 'native' });
 
@@ -135,7 +136,7 @@ export class NativeProviderRegistry {
       } catch (error) {
         log.warn('stored_server_unusable', {
           server: server.localId,
-          error: error instanceof Error ? error.message : String(error),
+          error: describeError(error),
         });
       }
     }
@@ -154,7 +155,7 @@ export class NativeProviderRegistry {
       } catch (error) {
         log.warn('stored_addon_unusable', {
           addon: addon.localId,
-          error: error instanceof Error ? error.message : String(error),
+          error: describeError(error),
         });
       }
     }
@@ -396,7 +397,7 @@ export class NativeProviderRegistry {
       } else if (!signal.aborted) {
         log.warn('native_search_failed', {
           provider: targets[index]?.id,
-          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+          error: describeError(result.reason),
         });
       }
     });

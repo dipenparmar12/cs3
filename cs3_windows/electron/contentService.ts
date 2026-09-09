@@ -41,6 +41,7 @@ import { NativeProviderRegistry } from './cs3/nativeProviderRegistry.ts';
 import { parseNativeAddress } from './cs3/nativeProviders/types.ts';
 import { classifyFailure } from './cs3/failureTaxonomy.ts';
 import { planSourceScope, shouldEscalateScope } from './cs3/sourceScope';
+import { describeError } from '../src/utils/errors.ts';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -692,7 +693,7 @@ export class ContentService {
       });
       return response;
     } catch (error) {
-      finish({ status: 'threw', error: error instanceof Error ? error.message : String(error) });
+      finish({ status: 'threw', error: describeError(error) });
       throw error;
     }
   }
@@ -1373,7 +1374,7 @@ export class ContentService {
     } catch (error) {
       log.warn('escalation_failed', {
         mediaId: request.mediaUrl,
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       });
       return fallback();
     }
@@ -1633,7 +1634,7 @@ export class ContentService {
     try {
       links = await provider.loadLinks(parsed.handle, controller.signal);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeError(error);
       return {
         sources: [],
         diagnosis: {
@@ -2015,7 +2016,7 @@ export class ContentService {
       try {
         handle = await this.startStream(source, season, episode);
       } catch (error) {
-        failed(source, error instanceof Error ? error.message : String(error));
+        failed(source, describeError(error));
         continue;
       }
 

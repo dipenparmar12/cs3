@@ -2,6 +2,7 @@ import type { DatastoreManager } from '../datastore';
 import type { PluginManager } from '../pluginManager';
 import type { SitePlugin } from '../../src/types/plugin';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from '../officialRepositories';
+import { describeError } from '../../src/utils/errors.ts';
 
 /**
  * Makes a fresh install work without the user configuring anything.
@@ -140,7 +141,7 @@ export class BootstrapService {
     this.running = this.run()
       .catch((error) => {
         // Bootstrap failing is a degraded first run, never a failed launch.
-        this.progress.message = error instanceof Error ? error.message : String(error);
+        this.progress.message = describeError(error);
       })
       .finally(() => {
         /**
@@ -223,7 +224,7 @@ export class BootstrapService {
         this.progress.total += usable.length;
       } catch (error) {
         this.progress.failed += 1;
-        this.progress.message = `${repo.name}: ${error instanceof Error ? error.message : String(error)}`;
+        this.progress.message = `${repo.name}: ${describeError(error)}`;
       }
       this.emit();
     }

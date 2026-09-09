@@ -49,6 +49,7 @@ import {
   subtitleMpvProperties,
   type SubtitleStyle,
 } from '../utils/subtitleStyle';
+import { describeError } from '../utils/errors';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -1219,7 +1220,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             if (cancelled) return;
             setError(
               `This DASH stream could not be played: ${
-                err instanceof Error ? err.message : String(err)
+                describeError(err)
               }`
             );
           });
@@ -1356,7 +1357,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           if (cancelled) return;
           setError(
             `This stream is ClearKey-encrypted and the browser refused the key: ${
-              err instanceof Error ? err.message : String(err)
+              describeError(err)
             }`
           );
         });

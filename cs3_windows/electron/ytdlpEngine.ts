@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { app } from 'electron';
 import type { YtDlpInfo } from './ytdlpSources.ts';
+import { describeError } from '../src/utils/errors.ts';
 
 /** How long one page resolve may take before it is abandoned. */
 const RESOLVE_TIMEOUT_MS = 45_000;
@@ -100,7 +101,7 @@ export class YtDlpEngine {
       child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (error) {
       options.onError(
-        `Could not start yt-dlp: ${error instanceof Error ? error.message : String(error)}`
+        `Could not start yt-dlp: ${describeError(error)}`
       );
       return { cancel: () => undefined };
     }

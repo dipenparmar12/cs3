@@ -5,6 +5,7 @@ import type {
   UpdateOutcome,
   UpdateSettings,
 } from '../../electron/cs3/extensionUpdater';
+import { describeError } from '../utils/errors';
 
 export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdated }) => {
   const [updates, setUpdates] = useState<AvailableUpdate[]>([]);
@@ -88,7 +89,7 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
       );
     } catch (err) {
       setChecking(false);
-      setMessage(`Check failed: ${err instanceof Error ? err.message : String(err)}`);
+      setMessage(`Check failed: ${describeError(err)}`);
     }
   }, [api]);
 
@@ -103,7 +104,7 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
         setUpdates(Array.isArray(cached) ? cached : []);
         if (outcome.ok) onUpdated?.();
       } catch (err) {
-        setMessage(`Update failed: ${err instanceof Error ? err.message : String(err)}`);
+        setMessage(`Update failed: ${describeError(err)}`);
       } finally {
         setBusy((prev) => {
           const next = new Set(prev);
@@ -127,7 +128,7 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
       setUpdates(Array.isArray(cached) ? cached : []);
       onUpdated?.();
     } catch (err) {
-      setMessage(`Update all failed: ${err instanceof Error ? err.message : String(err)}`);
+      setMessage(`Update all failed: ${describeError(err)}`);
     } finally {
       setProgress(null);
     }

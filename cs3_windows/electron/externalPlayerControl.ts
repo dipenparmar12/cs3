@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'child_process';
 import net from 'net';
 import type { ExternalPlaybackSnapshot, ExternalControlCapability } from '../src/types/player';
+import { describeError } from '../src/utils/errors.ts';
 
 /**
  * Two-way control of a player that is not ours.
@@ -150,7 +151,7 @@ export class VlcController {
     try {
       this.process = spawn(executable, args, { detached: false, stdio: 'ignore' });
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: describeError(error) };
     }
 
     this.process.on('exit', () => {

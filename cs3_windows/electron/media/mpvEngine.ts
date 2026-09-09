@@ -11,6 +11,7 @@ import type {
   MpvTrack,
 } from '../../src/types/mpv';
 import { scopedLogger } from '../logging/logger.ts';
+import { describeError } from '../../src/utils/errors.ts';
 
 const log = scopedLogger('mpv');
 
@@ -489,7 +490,7 @@ export class MpvEngine {
         windowsHide: true,
       });
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: describeError(error) };
     }
 
     this.process = child;
@@ -773,7 +774,7 @@ export class MpvEngine {
       } catch (error) {
         clearTimeout(timer);
         this.pending.delete(requestId);
-        resolve({ ok: false, error: error instanceof Error ? error.message : String(error) });
+        resolve({ ok: false, error: describeError(error) });
       }
     });
   }

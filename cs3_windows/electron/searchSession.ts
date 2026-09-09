@@ -12,6 +12,7 @@ import {
   type ScopeResolution,
   type SearchScopeReport,
 } from './searchScope';
+import { describeError } from '../src/utils/errors.ts';
 
 /**
  * One "the user pressed search" interaction, from first keystroke to done.
@@ -234,7 +235,7 @@ export class SearchSession {
     } catch (error) {
       // A failure here is the orchestration failing, not a source: it still has
       // to reach the user as a terminal snapshot rather than a silent stall.
-      this.emptyReason = error instanceof Error ? error.message : String(error);
+      this.emptyReason = describeError(error);
     } finally {
       if (!this.cancelled) {
         this.finished = true;
@@ -342,7 +343,7 @@ export class SearchSession {
     } catch (error) {
       if (this.controller.signal.aborted) return;
       this.record(name, name, 'provider', [], {
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
         latencyMs: Date.now() - started,
       });
     }
@@ -423,7 +424,7 @@ export class SearchSession {
     } catch (error) {
       if (this.controller.signal.aborted) return;
       this.record(id, name, kind, [], {
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
         latencyMs: Date.now() - started,
       });
     }

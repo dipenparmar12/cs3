@@ -4,6 +4,7 @@ import type { ContentService, SourceQuery, StreamAttempt } from './contentServic
 import type { StreamHandle } from './torrent/torrentEngine';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
 import type { BufferHealthMetrics } from '../src/types/media';
+import { describeError } from '../src/utils/errors.ts';
 
 /**
  * Owns one "the user pressed play" interaction, from the first click to the
@@ -329,7 +330,7 @@ export class PlaybackSessionManager {
       if (response.widenedAutomatically) session.widened = true;
     } catch (error) {
       if (session.disposed || controller.signal.aborted) return;
-      session.emptyReason = error instanceof Error ? error.message : String(error);
+      session.emptyReason = describeError(error);
     } finally {
       if (!session.disposed && session.discovery === controller) {
         session.searchDone = true;
@@ -662,7 +663,7 @@ export class PlaybackSessionManager {
       }
 
       session.phase = 'error';
-      session.error = error instanceof Error ? error.message : String(error);
+      session.error = describeError(error);
       // A failed switch leaves the previous stream alone, so the viewer is
       // returned to something that still plays rather than a dead player.
       session.started = Boolean(previousInfoHash);

@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import { scopedLogger } from '../logging/logger.ts';
+import { describeError } from '../../src/utils/errors.ts';
 
 const log = scopedLogger('sources');
 
@@ -274,7 +275,7 @@ export class SourceLease {
       log.error('lease_refresh_failed', {
         sourceId: this.sourceId,
         attempt: this.refreshAttempts,
-        error: err instanceof Error ? err.message : String(err),
+        error: describeError(err),
       });
       throw err;
     }

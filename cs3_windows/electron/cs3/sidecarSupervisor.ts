@@ -6,6 +6,7 @@ import { RuntimeProvisioner } from './runtimeProvisioner';
 import { scopedLogger } from '../logging/logger';
 import { SidecarStderrReader } from './sidecarStderr';
 import { getIssueLog } from './extensionIssues';
+import { describeError } from '../../src/utils/errors.ts';
 
 export interface RpcResult {
   ok: boolean;
@@ -234,7 +235,7 @@ export class SidecarSupervisor {
       );
     } catch (error) {
       this.startFailure = `The extension runtime failed to start: ${
-        error instanceof Error ? error.message : String(error)
+        describeError(error)
       }`;
       return false;
     }
@@ -453,7 +454,7 @@ export class SidecarSupervisor {
         );
       } catch (error) {
         sidecarLog.warn('host_call_reply_failed', {
-          error: error instanceof Error ? error.message : String(error),
+          error: describeError(error),
         });
       }
     };
@@ -468,7 +469,7 @@ export class SidecarSupervisor {
       const result = await handler(method, params);
       reply((result ?? { ok: false, error: `${method} produced no answer.` }) as Record<string, unknown>);
     } catch (error) {
-      reply({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      reply({ ok: false, error: describeError(error) });
     }
   }
 
@@ -532,7 +533,7 @@ export class SidecarSupervisor {
           ok: false,
           errorKind: 'SIDECAR_UNAVAILABLE',
           error: `Could not reach the extension runtime: ${
-            error instanceof Error ? error.message : String(error)
+            describeError(error)
           }`,
         });
       }

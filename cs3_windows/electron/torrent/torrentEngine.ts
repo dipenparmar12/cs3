@@ -18,6 +18,7 @@ import {
 import type { SwarmReport } from '../../src/types/torrent';
 import { TorrentMetadataCache, metadataCacheUrls } from './torrentMetadata';
 import { DhtNodeCache, DEFAULT_DHT_PORT, DHT_BOOTSTRAP_NODES } from './dhtNodeCache';
+import { describeError } from '../../src/utils/errors.ts';
 
 /**
  * Streaming torrent engine.
@@ -387,7 +388,7 @@ export class TorrentEngine {
     } catch (error) {
       console.warn(
         `[torrent] ports ${DEFAULT_TORRENT_PORT}/${DEFAULT_DHT_PORT} unavailable (${
-          error instanceof Error ? error.message : String(error)
+          describeError(error)
         }); falling back to OS-assigned ports`
       );
       /**
@@ -1017,7 +1018,7 @@ export class TorrentEngine {
     } catch (error) {
       // WebTorrent throws synchronously on a duplicate; recover by adopting the
       // torrent that is already there.
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeError(error);
       if (knownHash && /duplicate/i.test(message)) {
         const existing = await Promise.resolve(client.get(knownHash));
         if (existing) return existing.ready ? existing : this.awaitReady(existing, client);
@@ -1105,7 +1106,7 @@ export class TorrentEngine {
         if (settled) return;
         settled = true;
         cleanup();
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         this.lastError.set(torrent.infoHash, message);
         reject(new Error(message));
       });
