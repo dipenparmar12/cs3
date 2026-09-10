@@ -62,9 +62,9 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (47 tests) |
-| Main-process tests (all) | `cs3_windows/` | `bun run test` (50 suites; the runner reports suites, not a case total) or `bun run test:electron` |
-| Fast unit tests | `cs3_windows/` | `bun run test --fast` (48 suites, ~10s) |
-| Named suites | `cs3_windows/` | `bun run test <name>`: `errors`(8) `resume-point`(10) `libraryStore`(7) `issues`(21) `registry`(9) `recovery`(12) `torrent-contents`(24) `sidecar-log`(20) `cache`(10) `links`(15) `webview`(21) `torrent-metadata`(28) `source-scope`(17) `ott`(19) `native-providers`(50) `resume`(17) `resume-window`(10) `reachability`(2) `settings-level`(6) `dead-rows`(8) `proxy`(11) `subtitles`(16) `media`(71) `pipeline`(17, real ffmpeg) `export`(13) `direct-sources`(13) `ytdlp`(16) `repositories`(9) `download-identity`(18) `native`(12, real mpv) `ipc` `pageSnapshot`(12) `savedPage`(8) `sourceScopeModel`(5) `searchOrder`(5) `extensionUpdater`(8) |
+| Main-process tests (all) | `cs3_windows/` | `bun run test` (56 suites; the runner reports suites, not a case total) or `bun run test:electron` |
+| Fast unit tests | `cs3_windows/` | `bun run test --fast` (54 suites, ~11s) |
+| Named suites | `cs3_windows/` | `bun run test <name>`: `errors`(8) `resume-point`(10) `libraryStore`(7) `issues`(21) `registry`(9) `recovery`(12) `torrent-contents`(24) `sidecar-log`(20) `cache`(10) `links`(15) `webview`(21) `torrent-metadata`(28) `source-scope`(17) `ott`(19) `native-providers`(50) `resume`(17) `resume-window`(10) `reachability`(2) `settings-level`(6) `dead-rows`(8) `proxy`(11) `subtitles`(16) `media`(71) `pipeline`(17, real ffmpeg) `export`(13) `direct-sources`(13) `ytdlp`(16) `repositories`(9) `download-identity`(18) `native`(12, real mpv) `ipc` `pageSnapshot`(12) `savedPage`(8) `sourceScopeModel`(5) `searchOrder`(5) `extensionUpdater`(8) `playback-recovery`(16) `indexer-budget`(22) `bot-challenge`(17) `source-profiles`(30) `failure-taxonomy`(12) `provider-health`(12) |
 | Repository/corpus liveness | repo root | `node tools/research/survey-repositories.mjs` (PRD-43) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — §5.2 |
@@ -182,6 +182,9 @@ Namespaces: `api:*`, `torrent:*`, `playback:*`, `indexer:*`, `sources:*`, `downl
 - `window:setAlwaysOnTop/getAlwaysOnTop` pins the app window; `mpv:setOnTop`/`mpv:setVideoEnabled` do the same for mpv's own window (see "Floating playback").
 - Also: `analytics:*`, `bookmarks:*`, `discover:*`, `subtitles:*`, `sources:getCacheStats/clearCache`.
 - **`issues:*`** — `issues:list/annotate/report/clear`: the extension issue ledger, deliberately a third surface beside `log:*`/`diagnostics:*` (see §5, "Counting the log").
+- **`profiles:*`** — `profiles:list/activate/create/rename/duplicate/delete`: named search configurations. Every one answers with the **whole** state (list + active id + unnamed draft), like `disabledSet.ts` returns the whole list — those three have to agree and rebuilding them from a delta is how they stop agreeing. **Profiles sit above `SearchScopeStore`, not beside it**: each change resolves to the same `SearchScope` the five scope-reading paths already use and writes it through, so nothing downstream learns profiles exist. `search:setScope` routes through the profile layer for the same reason.
+- **`download:preview`** answers where a download would land and what the press would do, read-only — the renderer cannot compute the path (folder layout, variant segment and collision suffix are decided from the whole queue). `download:get/setConfirmPreference` (`ask`|`immediate`, default **`immediate`**) gates the confirmation dialog.
+- **`extension:getAdultMode/setAdultMode/unlockAdultForSession/lockAdultForSession`** — the three-state gate. `mode` is the setting, `allowed` is whether adult providers are offered *right now*; under `ask` those differ. **The unlock is in-memory only and never persisted** — one that survived a restart would make `ask` into `on` with extra steps — and `unlockAdultForSession` refuses unless the mode is already `ask`, so a renderer cannot use it to change the setting.
 - **`pages:*`** — `pages:getSnapshot/remember/setPinned`: the stored copy of a detail page. Deliberately read-shaped, unlike `search:*`/`playback:*` — the answer is already on disk and the caller wants it in the tick it decides to render. **Capture is not exposed**; it happens in `ContentService.load`, the one funnel every detail load passes through and the only side that knows a provider's ancestry.
 - **`extension:addRepository`** and **`installRepository`** are deliberately two actions (fetch+persist vs. tens of downloads/translations).
 - **`media:*`** — `media:inspect` classifies without starting; `media:prepare` inspects-decides-opens, the only source of a playable URL; `media:switchAudio/closeStream` drive a live session; `media:setCapabilities/getCodecProbes` carry renderer-measured decoder support; `media:getPlaybackDiagnostics` returns per-attempt telemetry. **No channel hands back an unclassified URL.** `media:prepare` also takes provider-declared `isDash`/`drm`, which outrank the probe — DRM in particular skips the probe entirely (ffprobe succeeds with correct codec names over undecodable encrypted payload).
@@ -243,10 +246,12 @@ Namespaces: `api:*`, `torrent:*`, `playback:*`, `indexer:*`, `sources:*`, `downl
 | `cs3/bookmarkStore.ts` | Saved detail pages (provider/extension/repo/query) — not the library (that keys on normalised title). |
 | `cs3/pageSnapshot.ts` | Last-known-good copy of every detail page opened, plus its routes and origin — so a saved page never opens blank. |
 | `cs3/searchOrder.ts` | Which provider the fan-out asks first; refuses any ordering that is not the same set. |
+| `cs3/sourceProfiles.ts` | Named search configurations — the state machine. Pure, tested. **All sources is a mode, not an erasure.** |
+| `cs3/sourceProfileStore.ts` | Persists profiles and writes the effective scope through to `SearchScopeStore`. Profiles sit *above* scope; nothing downstream knows they exist. |
 | `cs3/providerAnalytics.ts` | Behaviour counts, aggregates only (no queries/titles/history). `empty` tracked separately from `failure`. |
 | `cs3/providerRanking.ts` | Weighted scoring, criteria as table rows; `null` excluded from denominator, not scored zero; rates smoothed toward neutral prior. |
 | `cs3/providerRecommendations.ts` | Scores → advice/action (`autoEnableProven`). Never auto-disables. |
-| `cs3/failureTaxonomy.ts` | `classifyFailure` — one closed cause set shared by ranking/diagnostics/ledger; also `groupingForm`. |
+| `cs3/failureTaxonomy.ts` | `classifyFailure` — one closed cause set shared by ranking/diagnostics/ledger; also `groupingForm` and **`UNSCORED_FAILURE_KINDS`**. |
 | `cs3/sidecarStderr.ts` | JVM stderr line → level/tag/cause. |
 | `cs3/discovery.ts` | Home catalogues: stale-while-revalidate Cinemeta (`top/year/imdbRating`, 19 genres) + AniList. Finds nothing playable. |
 | `cs3/titleEnricher.ts` | Resolves messy release titles to canonical works; conservative (disagreeing year disqualifies). |
@@ -254,13 +259,17 @@ Namespaces: `api:*`, `torrent:*`, `playback:*`, `indexer:*`, `sources:*`, `downl
 | `torrent/torrentMetadata.ts` | `.torrent` cached by infohash, self-verifying; builds `xs` mirror URLs. |
 | `torrent/torrentContents.ts` | Seasons/episodes/samples/extras from a torrent; sample recognised by size ratio too. |
 | `torrent/dhtNodeCache.ts` | Persisted DHT routing table/node id/port. |
-| `torrent/indexerRegistry.ts`, `indexers/*` | 17 built-in adapters (4 Stremio, 10 JSON, 3 HTML) + Torznab. |
+| `torrent/indexerRegistry.ts`, `indexers/*` | 19 built-in adapters (4 Stremio, 12 JSON/RSS, 3 HTML) + Torznab. |
+| `torrent/indexerBudget.ts` | Per-indexer deadline from measured latency, escalating cooldown, fastest-first order. Pure, tested. |
+| `torrent/botChallenge.ts` | Challenge vs block vs rate limit. Pure, tested; decides whether opening a browser is worth it. |
 | `torrent/ranker.ts`, `releaseParser.ts` | Release parsing + result ranking. |
 | `externalPlayerControl.ts` | Two-way VLC control over HTTP; capability declared per player. |
 | `media/inspectionStore.ts` | Persists probe findings keyed on origin URL; verdict recomputed. |
 | `downloadService.ts`, `aria2Engine.ts`, `ytdlpEngine.ts`, `binaryDownloader.ts` | aria2c RPC + HTTP fallback; portable binaries fetched on first use. |
 | `src/utils/savedPage.ts` | Draws a page from its snapshot, and folds a live answer over it without blanking. |
 | `src/components/search/sourceScopeModel.ts` | The scope dialog's row/facet vocabulary and tri-state rule. Pure, tested. |
+| `src/components/search/providerHealth.ts` | The ranking's band as a word a chooser can act on. Pure, tested; **unmeasured is never "average"**. |
+| `src/components/player/playbackRecovery.ts` | What a transport failure costs next: reload, rebuild the buffer, or hand the source to another engine. Pure, tested. |
 | `src/utils/deadRows.ts` | Which search results to hide (`no-sources`) vs never hide (`app-error`). |
 | `src/components/player/useFloatingPlayer.ts` | PiP, window pin, background policy, Media Session record. |
 | `src/components/settings/settingsLevel.ts` | Simple vs Everything semantics. |
@@ -756,6 +765,234 @@ of the way: it keeps the sidecar's bounded pool busy with a 56-jar classpath whi
 queue behind it. It now waits **between archives** (never mid-archive — a half-registered
 provider) while any search runs, bounded at 120s so a continuously-searching session still warms
 up, falling back past that to exactly the prior behaviour.
+
+### Two of three transports could not fail their way back (2026-09-10)
+
+The failover ladder — element `error` → re-decide with `force` → route to mpv →
+skip the source — was wired to the `<video>` element only. hls.js's fatal error
+handler read, in full:
+
+```ts
+hls.on(Hls.Events.ERROR, (_evt, data) => {
+  if (data.fatal) setError(`Playback error: ${data.details}`);
+});
+```
+
+A dead end, and Shaka's `.catch` was the same shape. So `Playback error:
+fragParsingError` was the whole of what a viewer got from an HLS stream whose
+segments had downloaded intact — with mpv idle, the ffmpeg path untried and the
+next candidate never reached. **This is the reported "it downloads but it will
+not stream"**: the transport that fails most often was the one with no way back.
+Measured case: Castle TV's MPEG-TS ladder, which mpv opens without comment.
+
+`src/components/player/playbackRecovery.ts` (pure, 16 tests) decides by *what
+would change the outcome*: nothing arrived → fetch again within a budget; bytes
+arrived and could not be read → hand to another engine (re-fetching identical
+bytes produces an identical refusal); budget spent → the source is genuinely
+unplayable. `fragParsingError` escalates on sight; `bufferStalledError` gets one
+`recoverMediaError()` first. 403 is still retried, 404 is not — same rule as
+`SourceCache`.
+
+**Three separate "the error outlived the failure" bugs** in the same pass, all
+producing the reported "it says it cannot stream while mpv is playing":
+
+1. `setError(null)` sat **below** the `NATIVE_MPV` early return in the attach
+   effect. The session gives up on source A, advances to B, B comes back
+   `NATIVE_MPV`, the effect returns one line later — and A's message is still on
+   screen over B playing perfectly. Clear before the branch, not after it.
+2. `NativeEngineStage` renders `null` for as long as it holds an error and had
+   no way to clear one, so a failure on the way to playback left a blank stage
+   under an error panel. It now clears on `state === 'playing'` **for its own
+   `url`** — a late snapshot describing the previous source must not retire this
+   one's failure.
+3. The `[streamUrl]` reset effect reset every ref except the error.
+
+Also: a `playing` listener on the element clears the error, because `play` fires
+when `play()` is *called* and only `playing` means frames are being presented.
+
+### A search cost what its worst indexer cost (2026-09-10)
+
+Every indexer got a flat 20s and they all ran at once. The circuit breaker made
+that cheaper, not cheap: three consecutive failures to open, so a permanently
+blocked scraper cost three full timeouts before being skipped, then five minutes
+later cost three more.
+
+`torrent/indexerBudget.ts` (pure, 22 tests) decides from measurement:
+- **Deadline = p90 of that indexer's own recent successes × 2.5, clamped
+  [4s, 20s].** No history → the full budget; judging a source before it has
+  answered is how a slow-but-working one gets designated dead. p90 not mean, so
+  an occasional 3s tail is inside the budget rather than becoming a timeout that
+  counts against it. **Only successes shape it** — else timing out buys a longer
+  deadline.
+- **A timeout weighs 1.5× an error** toward tripping. A 404 costs one round trip;
+  a timeout costs the whole search.
+- **Cooldown escalates** 5m → 15m → 45m → 2h, and **any success resets the
+  ladder** — an indexer that recovered is not on probation months later.
+- Fastest-first ordering, with **unproven ahead of recovering** (putting the
+  unproven last is how a new indexer never accumulates history).
+
+The aggregate also stops waiting for stragglers (`STRAGGLER_GRACE_MS`, floored
+by `MIN_SEARCH_MS`). Nothing is cancelled and no result is lost — every indexer
+runs to its own deadline and still reports through `onProgress`. This bounds the
+*wait*, not the work.
+
+### A Cloudflare challenge looked exactly like a ban (2026-09-10)
+
+`requestOnce` threw `HTTP 403 Forbidden` for a challenge, a country block and a
+hotlink refusal alike; `withRetry` does not retry a 4xx; three of those skipped
+the indexer. **Worse: Cloudflare's managed challenge is routinely served as HTTP
+200** with an interstitial body — cheerio parsed zero rows and the adapter
+reported "no results", a search that silently got smaller.
+
+`torrent/botChallenge.ts` (pure, 17 tests) separates challenge / block /
+rate-limit, and `WebViewHost` — which has solved these for `.cs3` extensions
+since 2026-08-24 and which the torrent lane could not reach — now solves the
+solvable ones once per host via `setChallengeSolver` in `main.ts`. Rules:
+- **A block or a rate limit never opens a window.** A browser passes neither, and
+  at a rate limit it makes things worse (a dozen subrequests where the scrape
+  made one). `503` + `Retry-After` is checked *before* the challenge markers.
+- A 403 behind Cloudflare with **no body to read** is given the benefit of the
+  doubt — guessing "block" costs a working indexer, guessing "challenge" costs
+  one browser window that finds out.
+- Challenge markers are narrow: a listing page whose footer says "secured by
+  Cloudflare" is a working page.
+- **The clearance is sent with the User-Agent that earned it** (they are bound)
+  and is **held in memory only** — restoring one from disk onto a new IP
+  produces a failure indistinguishable from a fresh challenge.
+- `fetchDocument` is separate from `fetchText`: HTML scrapes send what Chrome
+  actually sends (`Sec-Fetch-*`, `Upgrade-Insecure-Requests`, a real `Accept`),
+  and RSS/JSON endpoints must **not** be asked for a document. The UA has always
+  claimed to be Chrome while the request beside it asked for a wildcard `Accept`
+  with no fetch metadata — a combination no Chrome produces, and exactly what
+  bot detection scores.
+
+Added TokyoTosho and AniDex, both **off by default**: the anime lane had one
+broad source (Nyaa) and a spare that aggregates it (AnimeTosho), so one outage
+took both — and Nyaa's `c=1_2` filter removes raws and non-English releases
+before a query is typed. **Neither has been driven against a live host.**
+
+### "All sources" was a way to lose your selection (2026-09-10)
+
+The scope picker's All-sources button was `persist(new Set(), new Set())` — an
+*erasure*. Eleven providers picked out of two hundred, gone on one press, with
+no undo and no record of what was lost.
+
+**All sources is a mode now, not an erasure.** `cs3/sourceProfiles.ts` (pure, 30
+tests) holds three things that can drive the scope: All sources, a saved profile,
+or the unnamed draft — and the draft survives every switch. Rules worth knowing:
+- Editing while a profile is active edits **that profile**; editing while All
+  sources is active writes to the **draft**, never into whichever profile was
+  last used.
+- Deleting the active profile falls back to **All sources**, never to the next in
+  the list — silently searching a different user-defined set is worse than
+  searching everything, because only one of those is obvious from the button.
+- **A facet filter alone is not a narrowed scope.** Facets decide which rows the
+  picker shows; a button reading "1 source" over a search of two hundred is the
+  lie `SearchScopeStore` was fixed to stop telling.
+- A profile may narrow the adult gate and can **never** widen it.
+- A corrupt stored record degrades to empty rather than throwing.
+
+An upgrading user's existing `SearchScopeStore` selection is adopted as the draft
+on first use (`adoptExistingScope`), deliberately not at construction — doing it
+at startup would silently widen the next search.
+
+### Providers were being scored for things that were not their fault (2026-09-10)
+
+The ranking's guards lived in the **callers**: `loadLinksDetailed` wrote
+`if (kind !== 'provider-missing')` out by hand and `searchEach` had none at all,
+so whether the ranking followed its own two stated rules depended on which call
+site produced the failure — and `searchEach`, the busiest, followed neither.
+
+**`UNSCORED_FAILURE_KINDS` is now in the taxonomy and `ProviderAnalytics.observe`
+consults it.** A failure of an unscored kind is **not recorded at all**, not
+recorded-and-discounted: counting it in `attempts` alone still moves the success
+rate, which is the number the ranking is built on. Members: `cancelled`,
+`provider-missing`, `resource-leak`, and now **`unsupported-operation`**.
+
+Measured on one real search: Disney, Marvel, Pixar and Star Wars are
+catalogue-only providers, each answered "does not implement that operation", and
+each was recorded as a failed search — four permanent penalties per query against
+providers working exactly as designed, plus four sentences in the message the
+viewer reads. They have their own `SearchSourceOutcome` state now
+(`unsupported`), read "Browse only — this source has no search" in grey, and
+`explainEmpty` excludes them when deciding whether *all* sources failed.
+
+**A cancellation with no message was filed as an extension crash.**
+`kotlinx.coroutines.JobCancellationException` — the bare class name, which is
+what `describe()` produces when the exception carries none, and a cancelled
+coroutine carries none — classified as `provider-error`. The word-boundary form
+needed a non-word character after "Cancellation" and found `E`, and one before
+it and found the `b` of "Job". The one shape this actually takes fell through
+both. **Found by writing the test, not by reading the regex.**
+
+**A guess we made was blamed on the provider.** `extensionSources` calls
+`loadLinks` before `load` — correctly, since plenty of providers' link handle is
+a page address. For the ones whose handle is their own JSON, that first call
+throws inside the provider (`JsonParseException: Unrecognized token 'https'` —
+BollyFlix, HDO, CineSimkl, three sessions, one shape). The retry works and the
+viewer gets their film, while the doomed first call was logged at error level as
+"the site has probably changed" and counted against the provider.
+`looksLikePageAddress` is the mirror of `looksLikeLinksHandle` and marks that
+call **speculative**: still made, still diagnosed (when the retry also fails it
+is the only account of what the viewer asked for), logged as a guess at `warn`,
+never scored. A test pins that the two predicates can never both be true.
+
+### The ranking was measured for a screen nobody opens (2026-09-10)
+
+Success rate, latency, whether links resolve, whether anything played — measured
+since `providerRanking` was written, read by exactly one settings panel with
+eight weighted criteria and a re-weighting slider. That panel is right for tuning
+the ranking and wrong for the person looking at two hundred providers wondering
+which to switch on.
+
+`src/components/search/providerHealth.ts` (pure, 12 tests) puts Excellent / Good
+/ Average / Poor on the provider rows in the scope picker. It reads
+`score.band` rather than re-deriving one — **two places computing "is this any
+good" is how the settings panel and the source list come to disagree in front of
+one user**. `unproven` keeps its own answer and is never folded into the middle
+of the scale: on a fresh install that is every provider, and a label reading as
+mediocre is the silently-punitive behaviour the ranking exists to avoid.
+Unmeasured rows draw **no badge at all**. A pinned or blocked provider is
+described as a choice, not measured as a quality.
+
+### The adult gate needed a middle (2026-09-10)
+
+Two states could not express what someone on a shared machine wants: these
+providers installed and working and *not on screen by default*. `off` throws away
+the configuration; `on` leaves it in front of whoever opens the app next. `ask`
+keeps the setup and starts every launch hidden.
+
+**The unlock is a field, never a datastore key** — one that survived a restart
+would make `ask` into `on` with extra steps, which is the opposite of what it is
+chosen for. `unlockAdultForSession` refuses unless the mode is already `ask`:
+the channel is reachable from the renderer and revealing must never become a way
+to change the setting, which is where the consent step lives. The old boolean is
+migrated from and kept in step on every write, because it is a datastore key and
+therefore travels in Android-format backups — leaving it stale would restore an
+install whose two records of one decision disagree. `isAdultAllowed()` keeps its
+signature, so the single funnel through `enabledProviderNames` is untouched.
+
+### Two other things, same pass (2026-09-10)
+
+**`.btn-ghost` had no colour and nothing set `color-scheme`.** `.btn` declares
+none either, so twenty ghost buttons fell through to Chromium's `buttontext` —
+near-black on `--bg-card` — along with every native `<select>` popup. Reported as
+the Reset button's contrast; it was every one of them. `.btn` also had no
+`:disabled` rule while a dozen bespoke buttons in `sources.css` each grew their
+own, so Reset looked pressable in the state where it is disabled. **The app is
+dark-only and had never told the browser so.**
+
+**Pressing Download can ask first** (`ask` | `immediate`, default `immediate` —
+the delete prompt asks because deletion is unrecoverable; a download is a
+cancellable transfer). The gate is in `App.handleEnqueueDownload`, the one funnel
+all four press sites reach, and it works by resolving a promise the callers
+already awaited — so nothing on their side changed. `download:preview` supplies
+the real destination; a path composed in the renderer would be wrong exactly when
+it matters, on the second release of a film already downloading.
+
+**The always-on-top pin left the player's transport row.** It changes nothing
+about playback, applies only while minimised, and `PlayerSettings` has had the
+same toggle all along.
 
 ### Two Play buttons that could not remember (2026-09-09)
 
