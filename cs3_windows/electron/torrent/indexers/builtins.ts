@@ -519,3 +519,158 @@ export class LimeTorrentsIndexer implements TorrentIndexer {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// TokyoTosho — RSS, running since 2004, no bot protection
+// ---------------------------------------------------------------------------
+
+/**
+ * The anime index that is still there when Nyaa is not.
+ *
+ * Added because the anime lane had a single point of failure: `NyaaIndexer` is
+ * the one anime source with broad coverage, and Nyaa is also one of the sites
+ * that gets challenged and mirror-rotated most. AnimeTosho aggregates Nyaa, so
+ * a Nyaa outage takes both. TokyoTosho is an independent index with its own
+ * submissions, a plain RSS endpoint, no interstitial and twenty years of
+ * uptime — which makes it the useful thing to have beside Nyaa rather than
+ * another view of it.
+ *
+ * `type=1` is the anime category. Its RSS gives size, seeders and leechers as
+ * free text in the description rather than as elements, which is why the
+ * parsing below reads a sentence instead of fields.
+ */
+export class TokyoToshoIndexer implements TorrentIndexer {
+  readonly id = 'tokyotosho';
+  readonly name = 'TokyoTosho';
+  readonly specialises = 'anime' as const;
+
+  private static readonly MIRRORS = ['https://www.tokyotosho.info'] as const;
+
+  canHandle(query: IndexerQuery): boolean {
+    return Boolean(query.query);
+  }
+
+  async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
+    const terms = [query.query];
+    if (query.episode !== undefined) terms.push(String(query.episode).padStart(2, '0'));
+    const search = encodeURIComponent(terms.join(' '));
+
+    return tryMirrors(TokyoToshoIndexer.MIRRORS, async (base) => {
+      const body = await fetchText(`${base}/rss.php?terms=${search}&type=1`, {
+        signal,
+        timeoutMs: 20_000,
+      });
+      const doc = xml.parse(body);
+      const items = asArray<Record<string, unknown>>(doc?.rss?.channel?.item);
+
+      return items
+        .map((item): RawTorrent | null => {
+          const title = String(item.title ?? '').trim();
+          const link = typeof item.link === 'string' ? item.link : '';
+          if (!title || !link) return null;
+
+          /**
+           * The magnet is the link itself, or is derived from it.
+           *
+           * TokyoTosho serves both `magnet:` links and `.torrent` URLs
+           * depending on the submission, so the infohash is read out of the
+           * magnet when there is one and left absent when there is not —
+           * `finaliseResult` handles a torrent-URL-only row, and inventing a
+           * hash from the URL would produce an identity that addresses nothing.
+           */
+          const magnet = link.startsWith('magnet:') ? link : undefined;
+          const infoHash = magnet ? infoHashFromMagnet(magnet) ?? '' : '';
+          const torrentUrl = magnet ? undefined : link;
+          if (!infoHash && !torrentUrl) return null;
+
+          const description = String(item.description ?? '');
+          const size = description.match(/Size:\s*([\d.,]+\s*[KMGT]i?B)/i)?.[1];
+          const seeders = description.match(/S:\s*([\d,]+)/i)?.[1];
+          const leechers = description.match(/L:\s*([\d,]+)/i)?.[1];
+
+          return {
+            title,
+            infoHash,
+            magnet: infoHash ? buildMagnet(infoHash, title) : undefined,
+            torrentUrl,
+            sizeBytes: parseSize(size),
+            seeders: parseIntSafe(seeders?.replace(/,/g, '')),
+            leechers: parseIntSafe(leechers?.replace(/,/g, '')),
+            publishedAt: item.pubDate ? Date.parse(String(item.pubDate)) : undefined,
+            category: 'Anime',
+          };
+        })
+        .filter((r): r is RawTorrent => r !== null);
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AniDex — RSS, carries the infohash as an element
+// ---------------------------------------------------------------------------
+
+/**
+ * Anime with the release groups Nyaa's English category filters out.
+ *
+ * The gap this fills is not volume, it is *which* releases: `NyaaIndexer` asks
+ * for `c=1_2` ("Anime — English-translated"), which is right for the common
+ * case and silently excludes raws, dual-audio remuxes and non-English subs.
+ * A viewer looking for a Japanese-audio release is searching a catalogue that
+ * was filtered before they typed anything.
+ *
+ * Shipped disabled, like every other site-specific indexer here — see the
+ * header of `scrapers.ts` for why defaults serve the blocked user rather than
+ * the unblocked one.
+ */
+export class AniDexIndexer implements TorrentIndexer {
+  readonly id = 'anidex';
+  readonly name = 'AniDex';
+  readonly specialises = 'anime' as const;
+
+  private static readonly MIRRORS = ['https://anidex.info'] as const;
+
+  canHandle(query: IndexerQuery): boolean {
+    return Boolean(query.query);
+  }
+
+  async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
+    const terms = [query.query];
+    if (query.episode !== undefined) terms.push(String(query.episode).padStart(2, '0'));
+    const search = encodeURIComponent(terms.join(' '));
+
+    return tryMirrors(AniDexIndexer.MIRRORS, async (base) => {
+      const body = await fetchText(`${base}/rss/?q=${search}`, { signal, timeoutMs: 20_000 });
+      const doc = xml.parse(body);
+      const items = asArray<Record<string, unknown>>(doc?.rss?.channel?.item);
+
+      return items
+        .map((item): RawTorrent | null => {
+          const title = String(item.title ?? '').trim();
+          if (!title) return null;
+
+          // The feed carries the hash directly on newer entries and only a
+          // magnet on older ones; either is enough, neither is guessed at.
+          const magnetish = String(item.link ?? '');
+          const infoHash = (
+            String(item.infohash ?? '') || (magnetish ? infoHashFromMagnet(magnetish) ?? '' : '')
+          ).toLowerCase();
+          if (!/^[a-f0-9]{40}$/.test(infoHash)) return null;
+
+          const description = String(item.description ?? '');
+          const size = description.match(/([\d.,]+\s*[KMGT]i?B)/i)?.[1];
+
+          return {
+            title,
+            infoHash,
+            magnet: buildMagnet(infoHash, title),
+            sizeBytes: parseSize(size),
+            seeders: parseIntSafe(item.seeders),
+            leechers: parseIntSafe(item.leechers),
+            publishedAt: item.pubDate ? Date.parse(String(item.pubDate)) : undefined,
+            category: 'Anime',
+          };
+        })
+        .filter((r): r is RawTorrent => r !== null);
+    });
+  }
+}

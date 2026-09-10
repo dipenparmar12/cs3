@@ -21,7 +21,7 @@ import {
   NetworkSettingsStore,
   type NetworkSettings,
 } from './networkSettings';
-import { setHttpFetch } from './torrent/http';
+import { setChallengeSolver, setHttpFetch } from './torrent/http';
 import { ResilientFetch, classifyNetworkError } from './networkResilience';
 import { BinaryDownloader } from './binaryDownloader';
 import { MpvEngine } from './media/mpvEngine';
@@ -489,6 +489,44 @@ const resilientFetch = new ResilientFetch({
   diagnostics,
 });
 setHttpFetch((input, init) => resilientFetch.fetch(input, init));
+
+/**
+ * The browser, lent to the torrent indexers.
+ *
+ * `WebViewHost` has solved Cloudflare challenges for `.cs3` extensions since
+ * 2026-08-24, and nothing in the torrent lane could reach it — so the scrapers
+ * that get challenged most (1337x, BitSearch, TheRARBG) answered `HTTP 403`,
+ * were counted as failures, and were eventually skipped for good. The same
+ * browser, the same persistent session, the same `cf_clearance`.
+ *
+ * Only the solvable kind gets here: `withRetry` asks once, for a verdict
+ * `botChallenge.ts` has already decided a browser can pass. A WAF block or a
+ * rate limit never opens a window.
+ *
+ * The User-Agent is returned alongside the cookie because a `cf_clearance` is
+ * bound to the one that earned it — reissuing the request under our default UA
+ * would be challenged again, which is indistinguishable from the bypass having
+ * failed.
+ */
+setChallengeSolver(async (url) => {
+  if (!webViewHost.isAvailable()) return null;
+  const answer = await webViewHost.resolve({
+    url,
+    // Upstream's own choice for this: `CloudflareKiller` has no URL to
+    // intercept, so the only signal the challenge is done is the cookie.
+    interceptUrl: '.^',
+    awaitCookie: 'cf_clearance',
+    timeoutMs: 45_000,
+  });
+  const cookies = answer.cookies ?? {};
+  if (!answer.ok || !cookies.cf_clearance) return null;
+  return {
+    cookie: Object.entries(cookies)
+      .map(([name, value]) => `${name}=${value}`)
+      .join('; '),
+    userAgent: answer.userAgent,
+  };
+});
 
 /**
  * The Universal Media Compatibility Engine (PRD-37).

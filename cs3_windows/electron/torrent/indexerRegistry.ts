@@ -9,11 +9,13 @@ import { DEFAULT_SOURCE_PREFERENCES, IndexerKind } from '../../src/types/torrent
 import { TvType } from '../../src/types/api';
 import { finaliseResult, type TorrentIndexer } from './indexers/base';
 import {
+  AniDexIndexer,
   AnimeToshoIndexer,
   EztvIndexer,
   LimeTorrentsIndexer,
   NyaaIndexer,
   SubsPleaseIndexer,
+  TokyoToshoIndexer,
   YtsIndexer,
 } from './indexers/builtins';
 import {
@@ -32,6 +34,16 @@ import { TorznabIndexer } from './indexers/torznab';
 import { dedupeByInfoHash, rankResults, type RankContext } from './ranker';
 import type { DatastoreManager } from '../datastore';
 import { describeError } from '../../src/utils/errors.ts';
+import {
+  EMPTY_OBSERVATION,
+  TIMEOUT_CEILING_MS,
+  describeSkip,
+  isSkipped,
+  observe,
+  searchOrder,
+  timeoutFor,
+  type IndexerObservation,
+} from './indexerBudget.ts';
 
 /**
  * Aggregates searches across every configured indexer.
@@ -47,9 +59,23 @@ import { describeError } from '../../src/utils/errors.ts';
  *    results, which is indistinguishable from "nothing matched".
  */
 
-const CIRCUIT_FAILURE_THRESHOLD = 3;
-const CIRCUIT_COOLDOWN_MS = 5 * 60 * 1000;
-const PER_INDEXER_TIMEOUT_MS = 20_000;
+/**
+ * How long an aggregate search waits for the stragglers once it has answers.
+ *
+ * Not a timeout — every indexer still runs to its own deadline and its results
+ * are still collected. This bounds the *wait*: once every fast indexer has
+ * answered, there is no reason a viewer sits in front of a spinner for the one
+ * scraper that is going to spend its whole budget and throw. Measured against
+ * the reported case: Torrentio answers in about 400 ms and Cinevood takes the
+ * full twenty seconds to fail.
+ *
+ * Generous enough that a merely slow indexer still contributes, and the caller
+ * gets partial results streamed through `onProgress` throughout either way.
+ */
+const STRAGGLER_GRACE_MS = 6_000;
+
+/** Nothing is abandoned before this, however fast the first answers arrive. */
+const MIN_SEARCH_MS = 2_500;
 
 const SETTINGS_KEY_INDEXERS = 'torrent_indexer_configs';
 const SETTINGS_KEY_INDEXER_VERSION = 'torrent_indexer_configs_version';
@@ -116,15 +142,48 @@ export const DEFAULT_INDEXER_CONFIGS: IndexerConfig[] = [
   { id: 'bitsearch', name: 'BitSearch', kind: IndexerKind.Builtin, enabled: true },
   { id: 'therarbg', name: 'TheRARBG', kind: IndexerKind.Builtin, enabled: true },
   { id: 'mediafusion', name: 'MediaFusion', kind: IndexerKind.Builtin, enabled: false },
+  /**
+   * Anime, beyond the one source that currently carries it.
+   *
+   * Nyaa is the only broad anime index enabled here, and AnimeTosho aggregates
+   * Nyaa — so a Nyaa outage or a challenge takes both, and the anime lane has a
+   * single point of failure with a spare that shares it. TokyoTosho is an
+   * independent index; AniDex carries the raws and non-English releases that
+   * Nyaa's `c=1_2` category filter removes before a query is even typed.
+   *
+   * Off by default, like every site-specific indexer here, and for the reason
+   * stated at the top of `scrapers.ts`: defaults should serve the user behind a
+   * block, who gets nothing from these but timeouts.
+   */
+  {
+    id: 'tokyotosho',
+    name: 'TokyoTosho',
+    kind: IndexerKind.Builtin,
+    enabled: false,
+    supportedTypes: ANIME_TYPES,
+  },
+  {
+    id: 'anidex',
+    name: 'AniDex',
+    kind: IndexerKind.Builtin,
+    enabled: false,
+    supportedTypes: ANIME_TYPES,
+  },
 ];
 
 /** Schema version for the stored indexer list, so defaults can be re-seeded. */
-const INDEXER_CONFIG_VERSION = 4;
+const INDEXER_CONFIG_VERSION = 5;
 
+/**
+ * What is remembered about one indexer between searches.
+ *
+ * The measurements live in `observation` and the decisions made from them live
+ * in `indexerBudget.ts`; everything else here is display copy for the health
+ * panel. Splitting it that way is what let the deadline and the cooldown ladder
+ * be tested without a network, a datastore or a clock.
+ */
 interface CircuitState {
-  consecutiveFailures: number;
-  openedAt?: number;
-  lastOk?: number;
+  observation: IndexerObservation;
   lastError?: string;
   lastLatencyMs?: number;
   lastResultCount?: number;
@@ -290,6 +349,10 @@ export class IndexerRegistry {
         return new EztvIndexer();
       case 'nyaa':
         return new NyaaIndexer();
+      case 'tokyotosho':
+        return new TokyoToshoIndexer();
+      case 'anidex':
+        return new AniDexIndexer();
       default:
         return null;
     }
@@ -311,7 +374,11 @@ export class IndexerRegistry {
 
     const started = Date.now();
     try {
-      const results = await adapter.search(probe, AbortSignal.timeout(PER_INDEXER_TIMEOUT_MS));
+      // The full ceiling, deliberately, and not the measured budget: someone
+      // pressing "test" is asking whether this indexer works at all, and
+      // answering "no" because it exceeded a deadline derived from its own
+      // good days would be the least useful possible reply.
+      const results = await adapter.search(probe, AbortSignal.timeout(TIMEOUT_CEILING_MS));
       return {
         ok: true,
         message: `OK — ${results.length} results in ${Date.now() - started} ms`,
@@ -326,44 +393,56 @@ export class IndexerRegistry {
   private circuitFor(id: string): CircuitState {
     let state = this.circuits.get(id);
     if (!state) {
-      state = { consecutiveFailures: 0 };
+      state = { observation: EMPTY_OBSERVATION };
       this.circuits.set(id, state);
     }
     return state;
   }
 
   private isCircuitOpen(id: string): boolean {
-    const state = this.circuitFor(id);
-    if (state.consecutiveFailures < CIRCUIT_FAILURE_THRESHOLD) return false;
-    if (!state.openedAt) return false;
+    return isSkipped(this.circuitFor(id).observation);
+  }
 
-    if (Date.now() - state.openedAt > CIRCUIT_COOLDOWN_MS) {
-      // Cooldown elapsed — allow one probe through.
-      state.consecutiveFailures = CIRCUIT_FAILURE_THRESHOLD - 1;
-      state.openedAt = undefined;
-      return false;
-    }
-    return true;
+  /** The observations, in the shape `searchOrder` and `timeoutFor` want. */
+  private observations(): Map<string, IndexerObservation> {
+    const out = new Map<string, IndexerObservation>();
+    for (const [id, state] of this.circuits) out.set(id, state.observation);
+    return out;
   }
 
   private recordSuccess(id: string, latencyMs: number, count: number): void {
     const state = this.circuitFor(id);
-    state.consecutiveFailures = 0;
-    state.openedAt = undefined;
-    state.lastOk = Date.now();
+    state.observation = observe(state.observation, 'ok', latencyMs);
     state.lastError = undefined;
     state.lastLatencyMs = latencyMs;
     state.lastResultCount = count;
   }
 
+  /**
+   * A failure, classified by what it cost.
+   *
+   * `timeout` and `error` are counted separately because they are not
+   * comparable evidence: an indexer that answers 404 has told us something in
+   * one round trip, and one that times out has spent the viewer's entire search
+   * telling us nothing. See `indexerBudget.ts` for what the distinction buys.
+   *
+   * Our own deadline and the remote's own slowness both arrive as
+   * `TimeoutError` from `AbortSignal.timeout`; the repo-wide rule that a
+   * cancellation is not a failure still holds, and a caller abandoning the
+   * search produces `AbortError`, which is not recorded here at all.
+   */
   private recordFailure(id: string, error: unknown, latencyMs: number): void {
     const state = this.circuitFor(id);
-    state.consecutiveFailures += 1;
+    const name = error instanceof Error ? error.name : '';
+    if (name === 'AbortError') return;
+
+    state.observation = observe(
+      state.observation,
+      name === 'TimeoutError' ? 'timeout' : 'error',
+      latencyMs
+    );
     state.lastError = describeError(error);
     state.lastLatencyMs = latencyMs;
-    if (state.consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD && !state.openedAt) {
-      state.openedAt = Date.now();
-    }
   }
 
   /**
@@ -395,6 +474,8 @@ export class IndexerRegistry {
       yts: 'https://yts.mx/',
       eztv: 'https://eztvx.to/',
       nyaa: 'https://nyaa.si/',
+      tokyotosho: 'https://www.tokyotosho.info/',
+      anidex: 'https://anidex.info/',
       '1337x': 'https://1337x.to/',
       x1337: 'https://1337x.to/',
       bitsearch: 'https://bitsearch.to/',
@@ -422,12 +503,17 @@ export class IndexerRegistry {
         id: config.id,
         name: config.name,
         enabled: config.enabled,
-        lastOk: state.lastOk,
+        lastOk: state.observation.lastOk,
         lastError: state.lastError,
         lastLatencyMs: state.lastLatencyMs,
         lastResultCount: state.lastResultCount,
-        consecutiveFailures: state.consecutiveFailures,
+        consecutiveFailures: state.observation.consecutiveFailures,
         isCircuitOpen: this.isCircuitOpen(config.id),
+        // How long it stays skipped, which the old flat five minutes made not
+        // worth saying. "Back in two hours" and "back in five minutes" are
+        // different answers to "why did this search find less than usual".
+        pausedFor: describeSkip(state.observation) || undefined,
+        budgetMs: timeoutFor(state.observation),
       };
     });
   }
@@ -501,7 +587,9 @@ export class IndexerRegistry {
     // Which indexers will actually be queried is decided synchronously, before
     // any of them start, because `totalRelevant` is the denominator the UI
     // shows ("searched 3 of 5") and it must not climb as tasks resolve.
-    const runnable: Array<{ config: IndexerConfig; adapter: TorrentIndexer }> = [];
+    // `id` is lifted out of `config` so `searchOrder` can rank these without
+    // knowing what an indexer config is.
+    const runnable: Array<{ id: string; config: IndexerConfig; adapter: TorrentIndexer }> = [];
 
     for (const config of this.configs) {
       if (!config.enabled) {
@@ -526,7 +614,12 @@ export class IndexerRegistry {
           ok: false,
           count: 0,
           latencyMs: 0,
-          skipped: 'Temporarily disabled after repeated failures',
+          // Names the cause and the wait. "Temporarily disabled after repeated
+          // failures" was true of a site down for a minute and of one that has
+          // been refusing us for a fortnight.
+          skipped:
+            describeSkip(this.circuitFor(config.id).observation) ||
+            'Temporarily disabled after repeated failures',
         });
         continue;
       }
@@ -548,7 +641,7 @@ export class IndexerRegistry {
         continue;
       }
 
-      runnable.push({ config, adapter });
+      runnable.push({ id: config.id, config, adapter });
     }
 
     totalRelevant = runnable.length;
@@ -556,10 +649,31 @@ export class IndexerRegistry {
     // otherwise a session waiting on `done` never resolves.
     if (totalRelevant === 0) report('', false);
 
-    const tasks = runnable.map(async ({ config, adapter }) => {
+    /**
+     * Fastest first.
+     *
+     * The fan-out is parallel, so this changes nothing about when any single
+     * indexer starts. What it changes is which of them have answered by the
+     * time the straggler grace below starts counting — the point is to make
+     * "the useful answers are in" a moment that arrives early.
+     */
+    const ordered = searchOrder(runnable, this.observations());
+
+    const tasks = ordered.map(async ({ config, adapter }) => {
       const started = Date.now();
       try {
-        const raw = await adapter.search(query, AbortSignal.timeout(PER_INDEXER_TIMEOUT_MS));
+        /**
+         * Its own deadline, from its own measured latency.
+         *
+         * Every indexer used to get twenty seconds, so every search cost what
+         * its worst member cost. An indexer that has answered its last ten
+         * searches in under a second has told us what it needs; one that has
+         * never answered still gets the full twenty, because judging a source
+         * before it has had a chance is how a slow-but-working one gets
+         * designated dead.
+         */
+        const budget = timeoutFor(this.circuitFor(config.id).observation, TIMEOUT_CEILING_MS);
+        const raw = await adapter.search(query, AbortSignal.timeout(budget));
         const latency = Date.now() - started;
 
         const normalised = raw
@@ -593,9 +707,41 @@ export class IndexerRegistry {
       }
     });
 
-    // `allSettled` is deliberate: a rejected task must not collapse the search.
-    const finished = await Promise.allSettled(tasks);
-    const merged = finished.flatMap((s) => (s.status === 'fulfilled' ? s.value : []));
+    /**
+     * Waits for everyone, but not indefinitely for the last one.
+     *
+     * `allSettled` is deliberate — a rejected task must not collapse the
+     * search — but on its own it makes the aggregate cost exactly what its
+     * slowest member costs, which is the complaint this whole pass is about.
+     * So the wait ends when either every indexer has settled *or* the
+     * stragglers have had `STRAGGLER_GRACE_MS` past the point where the rest
+     * finished, whichever comes first.
+     *
+     * Nothing is cancelled and nothing is lost: an indexer still running keeps
+     * running to its own deadline, still records its outcome, and still reaches
+     * the caller through `onProgress`. This bounds the *wait*, not the work —
+     * which is why `MIN_SEARCH_MS` exists too, so a single instant answer from
+     * a cache cannot cut the others off before they have started.
+     */
+    const settledAll = Promise.allSettled(tasks);
+    const finished = await Promise.race([
+      settledAll,
+      new Promise<null>((resolve) => {
+        const timer = setTimeout(
+          () => resolve(null),
+          Math.max(MIN_SEARCH_MS, STRAGGLER_GRACE_MS)
+        );
+        // The app must be able to quit while a dead scraper is still hanging.
+        timer.unref?.();
+        void settledAll.then(() => {
+          clearTimeout(timer);
+        });
+      }),
+    ]);
+
+    const merged = (finished ?? []).flatMap((s) =>
+      s.status === 'fulfilled' ? s.value : []
+    );
 
     const { accepted, rejected } = rank(merged);
     return { results: accepted, rejected, indexerOutcomes: outcomes };
