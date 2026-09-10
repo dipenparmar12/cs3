@@ -62,9 +62,9 @@ cs3/
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (47 tests) |
-| Main-process tests (all) | `cs3_windows/` | `bun run test` (56 suites; the runner reports suites, not a case total) or `bun run test:electron` |
-| Fast unit tests | `cs3_windows/` | `bun run test --fast` (54 suites, ~11s) |
-| Named suites | `cs3_windows/` | `bun run test <name>`: `errors`(8) `resume-point`(10) `libraryStore`(7) `issues`(21) `registry`(9) `recovery`(12) `torrent-contents`(24) `sidecar-log`(20) `cache`(10) `links`(15) `webview`(21) `torrent-metadata`(28) `source-scope`(17) `ott`(19) `native-providers`(50) `resume`(17) `resume-window`(10) `reachability`(2) `settings-level`(6) `dead-rows`(8) `proxy`(11) `subtitles`(16) `media`(71) `pipeline`(17, real ffmpeg) `export`(13) `direct-sources`(13) `ytdlp`(16) `repositories`(9) `download-identity`(18) `native`(12, real mpv) `ipc` `pageSnapshot`(12) `savedPage`(8) `sourceScopeModel`(5) `searchOrder`(5) `extensionUpdater`(8) `playback-recovery`(16) `indexer-budget`(22) `bot-challenge`(17) `source-profiles`(30) `failure-taxonomy`(12) `provider-health`(12) |
+| Main-process tests (all) | `cs3_windows/` | `bun run test` (57 suites; the runner reports suites, not a case total) or `bun run test:electron` |
+| Fast unit tests | `cs3_windows/` | `bun run test --fast` (55 suites, ~13s) |
+| Named suites | `cs3_windows/` | `bun run test <name>`: `errors`(8) `resume-point`(10) `libraryStore`(7) `issues`(21) `registry`(9) `recovery`(12) `torrent-contents`(24) `sidecar-log`(20) `cache`(10) `links`(15) `webview`(21) `torrent-metadata`(28) `source-scope`(17) `ott`(19) `native-providers`(50) `resume`(17) `resume-window`(10) `reachability`(2) `settings-level`(6) `dead-rows`(8) `proxy`(11) `subtitles`(16) `media`(71) `pipeline`(17, real ffmpeg) `export`(13) `direct-sources`(13) `ytdlp`(16) `repositories`(9) `download-identity`(18) `native`(12, real mpv) `ipc` `pageSnapshot`(12) `savedPage`(8) `sourceScopeModel`(5) `searchOrder`(5) `extensionUpdater`(8) `playback-recovery`(16) `indexer-budget`(22) `bot-challenge`(17) `source-profiles`(30) `failure-taxonomy`(12) `provider-health`(12) `host-deadline`(10) |
 | Repository/corpus liveness | repo root | `node tools/research/survey-repositories.mjs` (PRD-43) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — §5.2 |
@@ -223,6 +223,7 @@ Namespaces: `api:*`, `torrent:*`, `playback:*`, `indexer:*`, `sources:*`, `downl
 | `cs3/sidecarSupervisor.ts` | Spawns/supervises the JVM process; line-delimited JSON-RPC over stdio; never throws on a broken sidecar; routes reverse frames (see `webViewHost.ts`). |
 | `cs3/webViewHost.ts` | Offscreen `BrowserWindow` per resolve; `webRequest` watching; cookies harvested for `CloudflareKiller`. |
 | `cs3/webViewMatch.ts` | What a page's subrequests mean. Pure, tested. |
+| `cs3/hostDeadline.ts` | How long the host may work on a call the sidecar is waiting on. Pure, tested; **the worker stops before the waiter does**. |
 | `cs3/extensionUpdater.ts` | Scheduled OTA extension updates. |
 | `cs3/bootstrap.ts` | First-run bundled-repo install + adult-content opt-in. |
 | `cs3/diagnostics.ts` | Provider failures with reproducible context. |
@@ -403,7 +404,7 @@ a cross-platform jar still links `library-jvm` and can reach `:app` types the br
 
 `PluginCompatibilityAnalyzer` had a real defect here: a jar reached the "no `classes.dex`" branch → `Unsupported`, score **0**, exact opposite of truth. Now reports `format: 'CSJ'`, 95%, `TierA_SourceJVM`.
 
-Jar lane = **generation 9** (current value **12**, see `runtimeProvisioner.ts` — one paragraph per generation).
+Jar lane = **generation 9** (current value **14**, see `runtimeProvisioner.ts` — one paragraph per generation).
 
 `tools/e2e/provider-e2e.mjs --lane cs3` forces the DEX artifact for A/B comparison — M0's no-regression gate. **Measured** (`--repo phisher --plugins 6 --queries "dune,one piece"`): 3 archives loaded jar-lane with **zero `DexTranslator` invocations**, same tier/results as DEX lane; 6 loaded, 6 answering, 5 links resolved, 3 streams with bytes — PASS identically both ways. **Translation risk measured** (not assumed) against all 392 real plugins: 392 translated, 18,217 classes emitted, 0 verification failures, 6,617 Kotlin coroutine state machines, 0 failures (`docs/PRD/35`, `tools/dex-spike/`).
 
@@ -765,6 +766,127 @@ of the way: it keeps the sidecar's bounded pool busy with a 56-jar classpath whi
 queue behind it. It now waits **between archives** (never mid-archive — a half-registered
 provider) while any search runs, bounded at 120s so a continuously-searching session still warms
 up, falling back past that to exactly the prior behaviour.
+
+### The browser's answer was always a moment too late (2026-09-10)
+
+The reverse channel carries one deadline and both ends spent it. The JVM waits
+`timeoutMs` in `HostChannel.call`; `WebViewHost.resolve` took the same number as
+its *work budget* and drove Chromium for all of it. So an answer produced at the
+end of the budget arrived after the only thread that wanted it had stopped
+waiting, and `HostChannel.complete` dropped it — "a reply with nobody waiting"
+is its own documented normal case.
+
+Counted over three sessions of ordinary use, from the app's own log:
+
+| | |
+|---|---|
+| resolves | 214 |
+| matched | 49 — **every one inside 6.5s** |
+| ran to the full 15s budget | 165 |
+| of those, answered at | 15021–15273 ms, against a 15000 ms wait |
+| of those, kept | **0** |
+
+Forty-one minutes of browser work in three sessions, thrown away tens of
+milliseconds past the line, having already cost the viewer the entire wait. With
+`MAX_CONCURRENT` at 3 those waits queue, so a season pack's worth of links spends
+minutes discovering nothing on purpose. **This is most of what "it just sits
+there and then says no sources" means on a provider that needs a browser** — and
+it is not a browser that does not work: `hgcloud.to` matched 49 times out of 49.
+
+`cs3/hostDeadline.ts` (pure, 10 tests) states the rule the channel was missing:
+**the side doing the work finishes first, so the side waiting for it is still
+listening.** The repository already says this in the forward direction —
+`Main.timeoutFor` gives a plugin call ten seconds less than the RPC carrying it
+so that "the inner one wins" and the message can name the provider that hung.
+The reverse channel was built four months later and never got it.
+
+The reserve is flat (1.5s) because what it pays for is flat — serialise, one
+pipe write, one parse on the stdin reader — and it is sized far above the
+measured overshoot because that overshoot is not the round trip. It is our own
+timer firing late while three Chromium pages and a transcode compete for the
+machine, and a margin that only just covers an idle host is not a margin. It is
+capped at a quarter of the deadline so a caller asking for little still gets
+most of it to work in.
+
+`webview_resolve` now logs `budgetMs` and `deadlineMs` beside the duration.
+Without them a late answer and a slow site are the same line, which is why this
+survived from 2026-08-24 to now.
+
+### A page that needs a click, and what Android actually does about it (2026-09-10)
+
+Reported as: `hblinks.co`, `new4.filepress.baby`, `new3.gdflix.io` all open fine
+in a browser and lead to a real file after a step or two, and the log throws them
+away —
+
+```
+INFO M3u8Helper: M3u8 Playlist is not a "Master Playlist" nor a "Media Playlist".
+Removing this link as it is invalid: https://hblinks.co/archives/105234
+```
+
+**We already have what Android has, and it is worth writing down so nobody ports
+it twice.** `loadExtractor` in `library-jvm` 4.8.0 tries three things in order,
+and all three are in `commonMain`, so the JVM build has them and our shipped
+`library-jvm-4.8.0.jar` contains the classes (`ShortLink`, `Levenshtein`,
+`ExtractorApiKt$loadExtractor$*` — checked in the jar, not assumed):
+
+1. `unshortenLinkSafe` — walks known shorteners before matching.
+2. Prefix match with the scheme stripped.
+3. **`Levenshtein.partialRatio(mainUrl, url) > 80`** — a deliberate fuzzy pass,
+   commented upstream as "to match mirror domains - like example.com,
+   example.net". This is what lets an extractor registered for `hblinks.dad`
+   claim `hblinks.co`, and what makes the wildcard `mainUrl`s the corpus is full
+   of (`https://*.gdflix.*/`, `https://new15.gdflix.*/`) work at all.
+
+The only jvm-side `TODO("Not yet implemented")` in that library is
+`WebViewResolver.jvm.kt`, which the bridge already shadows. So the M3u8Helper
+lines above are the extension's own behaviour and appear identically on Android:
+that provider hands those URLs to `M3u8Helper` directly rather than through
+`loadExtractor`, and an `Hblinks` extractor is registered and never invoked.
+**Not a desktop gap, and not ours to fix by porting.** What *was* ours is the
+previous section: those hosts are exactly the ones a browser has to finish, and
+the browser's answers were being discarded.
+
+### The 18+ filter had no chip, and one of its repositories had no plugins (2026-09-10)
+
+Two unrelated halves of the same complaint.
+
+**The chip.** `TYPE_TABS` left `NSFW` out, reasoning that a tab for it would
+appear for people who never asked. But `tabsFor` right underneath builds tabs
+from the results in hand and drops any that would be empty, and adult providers
+are withdrawn before results are ever built. With the gate off there are no such
+rows and the tab cannot exist; with it on the rows arrive and could only be
+reached through "All", mixed into everything else. The stated reason was already
+handled by the mechanism below it. The scope picker never had this problem — it
+derives its facets from `supportedTypes` on whatever providers are visible, so
+its chip has always appeared and disappeared with the gate.
+
+**The repository.** Of four adult repositories in the catalogue, three answer
+(`cxxx` 69 extensions, `gizlikeyif` 111, `codegeasse` 34 — probed live). The
+fourth, `cloudstream_18plus`, was marked `verified: false` on 2026-09-07 because
+its plugin list 404s. It still does: its `repo.json` wrapper points at a *third
+party's* list (`Rowdy-Avocado/18plus-Extensions`) that has gone. The repository's
+own `builds/plugins.json` is alive and carries **49 extensions**, so the entry
+now addresses that directly as a `pluginList` — which is what `documentKind`
+exists to express. Turning the gate on reaches 263 extensions rather than 214.
+
+### Round 6, one class: `android.widget.Toast` (2026-09-10)
+
+Eleven `NoClassDefFoundError: android/widget/Toast` in one user's sessions. The
+cost is out of all proportion to what the class does, for round 3's reason:
+`Class.getMethod` resolves every public method's parameter and return types, so
+an extension that merely *declares* a method mentioning `Toast` fails while
+being described — after it has already registered — and the whole load is
+abandoned naming a class nobody called.
+
+**It is the first widget shim here that does not throw on use.** A dialog is
+load-bearing: the flow stops and waits for an answer, so pretending it appeared
+would let a provider act on a choice nobody made. Android's `Toast.show()`
+returns immediately, tells its caller nothing and cannot fail, so a provider that
+posts one has no branch depending on it — refusing would convert a call with no
+consequences into an aborted scrape, in the one case the extension author could
+not have written differently. The text goes to stderr in the `Log` shim's shape
+instead, where `sidecarStderr` classifies it and the issue ledger counts it. Not
+displayed, but not discarded. `RUNTIME_GENERATION` **14**.
 
 ### Two of three transports could not fail their way back (2026-09-10)
 

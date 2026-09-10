@@ -82,6 +82,7 @@ const PRESET_ALIASES = {
   'source-profiles': ['electron/cs3/sourceProfiles.test.mts'],
   'failure-taxonomy': ['electron/cs3/failureTaxonomy.test.mts'],
   'provider-health': ['src/components/search/providerHealth.test.mts'],
+  'host-deadline': ['electron/cs3/hostDeadline.test.mts'],
   'native-providers': ['electron/cs3/nativeProviders.test.mts'],
   discovery: ['electron/sharedDiscovery.test.mts'],
   'shared-discovery': ['electron/sharedDiscovery.test.mts'],

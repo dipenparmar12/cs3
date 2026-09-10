@@ -164,8 +164,24 @@ export interface SystemRuntimeStatus {
  * post-translation GC when heap exceeds 70%, and scales the JVM max heap up to
  * 4GB dynamically. This prevents JVM heap exhaustion and OOM crashes during
  * bulk extension updates.
+ *
+ * Generation 14 is `android.widget.Toast`, counted at 11 `NoClassDefFoundError`
+ * in one user's sessions. The class does nothing on a desktop and costs a whole
+ * extension load anyway, for round 3's reason: `Class.getMethod` resolves every
+ * public method's parameter and return types, so declaring a method that merely
+ * mentions `Toast` fails while the provider is being described — after it has
+ * registered — and the load is abandoned naming a class nobody called.
+ *
+ * It is the first widget shim here that does not throw on use, and the
+ * asymmetry is deliberate: a dialog is load-bearing and pretending it appeared
+ * would let a provider act on a choice nobody made, whereas Android's own
+ * `Toast.show()` returns immediately and tells its caller nothing, so refusing
+ * it would turn a call with no consequences into an aborted scrape. The text
+ * goes to stderr in the `Log` shim's shape instead, where `sidecarStderr`
+ * classifies it and the issue ledger can count it — not displayed, but not
+ * discarded either.
  */
-const RUNTIME_GENERATION = 13;
+const RUNTIME_GENERATION = 14;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {
