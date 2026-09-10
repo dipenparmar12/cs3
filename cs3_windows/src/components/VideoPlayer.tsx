@@ -830,7 +830,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const result = await window.cloudstream?.requestDownload?.(task);
     notify(
       result?.message ?? `Download started — ${episodeTitle || title}`,
-      result && result.action !== 'active' && result.action !== 'queued' ? 'good' : 'info'
+      // `cancelled` is a success the viewer chose against; colouring it as an
+      // achievement would congratulate them for not downloading.
+      result &&
+        result.action !== 'active' &&
+        result.action !== 'queued' &&
+        result.action !== 'cancelled'
+        ? 'good'
+        : 'info'
     );
     try {
       await window.cloudstream?.recordHistoryEvent?.({

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Download, FolderOpen, HardDrive, X } from 'lucide-react';
 import type { DownloadTask } from '../types/download';
-import { formatBytes } from '../utils/format';
+import { formatReleaseSize } from '../utils/format';
 
 export type DownloadConfirmPreference = 'ask' | 'immediate';
 
@@ -83,7 +83,7 @@ export const DownloadConfirmDialog: React.FC<{
    * for why download *progress* uses 1024 and this deliberately does not.
    */
   if (task.totalBytes > 0) {
-    rows.push(['Estimated size', formatBytes(task.totalBytes, { base: 1000, decimals: 1 })]);
+    rows.push(['Estimated size', formatReleaseSize(task.totalBytes)]);
   }
 
   const resuming = preview?.existingState === 'Paused';

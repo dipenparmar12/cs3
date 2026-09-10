@@ -2,6 +2,23 @@
 @import './assets/inter.css';
 
 :root {
+  /**
+   * The app is dark, and until now it had never told the browser so.
+   *
+   * Without this, every control Chromium paints itself defaults to the light
+   * scheme: `buttontext` resolves to near-black, form controls get white
+   * backgrounds, and a native `<select>` popup opens as a white sheet in the
+   * middle of a dark panel. The visible symptom was the Reset button in the
+   * source-scope dialog — `.btn-ghost` declares no `color` of its own, so it
+   * inherited nothing and rendered as black text on `--bg-card`, reported as
+   * "poor contrast in dark mode". It was never one button: it is every
+   * `.btn-ghost` in the app, and every select popup besides.
+   *
+   * The buttons below also carry explicit colours now, so that the fix does not
+   * depend on this line alone.
+   */
+  color-scheme: dark;
+
   --bg-dark: #0c0f17;
   --bg-card: #161b26;
   --bg-card-hover: #1e2535;
@@ -361,6 +378,26 @@ body {
   height: 36px;
   padding: 0;
   border-radius: var(--radius-md);
+}
+
+/**
+ * Disabled, and looking it.
+ *
+ * `.btn` had no disabled rule at all — while a dozen bespoke buttons in
+ * `sources.css` each grew their own — so a disabled `.btn` rendered exactly like
+ * an enabled one and simply ignored the click. "Reset" in the source-scope
+ * dialog is disabled in its most common state (nothing chosen), which is where
+ * this was reported: a button that looks pressable, is not, and says nothing.
+ */
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+}
+.btn:disabled:hover,
+.btn[aria-disabled='true']:hover {
+  background-color: inherit;
+  border-color: inherit;
 }
 
 /* Tags & Badges */

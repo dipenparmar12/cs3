@@ -12,6 +12,11 @@ import { DownloadCenter } from './components/DownloadCenter';
 import { ProviderInspector } from './components/ProviderInspector';
 import { ExtensionsScreen } from './components/extensions/ExtensionsScreen';
 import { BinarySetupModal } from './components/BinarySetupModal';
+import {
+  DownloadConfirmDialog,
+  type DownloadConfirmPreference,
+  type DownloadPreview,
+} from './components/DownloadConfirmDialog';
 import { HomeView } from './views/HomeView';
 import { SearchView, EMPTY_SEARCH_UI, type SearchUiState } from './views/SearchView';
 import {
@@ -1200,6 +1205,83 @@ export const App: React.FC = () => {
     return dispose;
   }, [playbackRefresh?.sessionId]);
 
+  /**
+   * Whether pressing Download asks first, and the pending question if it does.
+   *
+   * The preference is mirrored into a ref because `handleEnqueueDownload` is
+   * not a `useCallback` and is handed to children that keep it across renders —
+   * reading state there would read whatever the closure captured, which is the
+   * value at mount for the whole life of a detail page.
+   *
+   * The question itself is a promise resolved by the dialog. That inversion is
+   * what let the gate go in front of the existing funnel without touching a
+   * single caller: `onEnqueueDownload(task)` already returned a promise every
+   * caller awaited, so a press that now waits for a human looks exactly like a
+   * press that waits for the queue.
+   */
+  const [confirmPreference, setConfirmPreference] =
+    useState<DownloadConfirmPreference>('immediate');
+  const confirmPreferenceRef = useRef<DownloadConfirmPreference>('immediate');
+  const [pendingDownload, setPendingDownload] = useState<{
+    task: DownloadTask;
+    preview: DownloadPreview | null;
+    decide: (confirmed: boolean, remember: boolean) => void;
+  } | null>(null);
+
+  useEffect(() => {
+    confirmPreferenceRef.current = confirmPreference;
+  }, [confirmPreference]);
+
+  useEffect(() => {
+    void window.cloudstream?.getDownloadConfirmPreference?.().then((response) => {
+      if (response?.ok && response.preference) setConfirmPreference(response.preference);
+    });
+  }, []);
+
+  /**
+   * Puts the dialog up and waits for an answer.
+   *
+   * The destination comes from `download:preview` and is fetched *after* the
+   * dialog is on screen, not before: a round trip to the main process before
+   * anything appears reads as a dead button, and the dialog is perfectly
+   * legible with one row still resolving.
+   */
+  const askBeforeDownloading = (task: DownloadTask): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      setPendingDownload({
+        task,
+        preview: null,
+        decide: (confirmed, remember) => {
+          setPendingDownload(null);
+          if (remember) {
+            setConfirmPreference('immediate');
+            confirmPreferenceRef.current = 'immediate';
+            void window.cloudstream?.setDownloadConfirmPreference?.('immediate');
+          }
+          resolve(confirmed);
+        },
+      });
+
+      void window.cloudstream?.previewDownload?.(task).then((response) => {
+        if (!response?.ok) return;
+        setPendingDownload((current) =>
+          // Only if this is still the same question. A second press while the
+          // first dialog was open would otherwise stamp one task's destination
+          // onto another task's dialog.
+          current && current.task.id === task.id
+            ? {
+                ...current,
+                preview: {
+                  targetPath: response.targetPath,
+                  directory: response.directory,
+                  existingState: response.existingState,
+                },
+              }
+            : current
+        );
+      });
+    });
+
   const handlePlayNow = useCallback(() => {
     if (!sessionRef.current) return;
     window.cloudstream?.playbackPlayNow(sessionRef.current.id);
@@ -1218,6 +1300,25 @@ export const App: React.FC = () => {
     if (!window.cloudstream) {
       return { ok: false, action: 'started', message: 'Desktop bridge unavailable.' };
     }
+
+    /**
+     * The confirmation gate, in front of the one funnel every press reaches.
+     *
+     * Deliberately here and not in each button. There are four places that can
+     * start a download — the detail page's source list, the in-player source
+     * panel, the player's own Download action and the season batch dialog — and
+     * a preference implemented per-button is a preference that holds in three
+     * places out of four. It is also why this is a promise the callers already
+     * await: nothing had to change on their side for the press to become
+     * askable.
+     */
+    if (confirmPreferenceRef.current === 'ask') {
+      const confirmed = await askBeforeDownloading(task);
+      if (!confirmed) {
+        return { ok: true, action: 'cancelled', message: 'Download cancelled' };
+      }
+    }
+
     const result = await window.cloudstream.requestDownload(task);
 
     try {
@@ -1755,6 +1856,22 @@ export const App: React.FC = () => {
         onClose={() => setIsBinaryModalOpen(false)}
         onSuccess={handleBinarySetupSuccess}
       />
+
+      {/*
+        The download confirmation, mounted here rather than in any of the four
+        places that can start a download — the gate is in `handleEnqueueDownload`
+        and this is that function's surface. The player renders over everything,
+        so a dialog owned by the detail page would be invisible for presses made
+        from inside playback.
+      */}
+      {pendingDownload && (
+        <DownloadConfirmDialog
+          task={pendingDownload.task}
+          preview={pendingDownload.preview}
+          onConfirm={(remember) => pendingDownload.decide(true, remember)}
+          onCancel={() => pendingDownload.decide(false, false)}
+        />
+      )}
 
       {/* Dismissed by clicking it, because it reports something the viewer
           asked for and may want to read twice — not a status that ages out. */}

@@ -93,6 +93,14 @@ export const DownloadAction = {
   Queued: 'queued',
   /** The file is already on disk. */
   Completed: 'completed',
+  /**
+   * The viewer was asked first and said no.
+   *
+   * Distinct from a failure: `ok` is true, because refusing a download is a
+   * successful outcome of pressing Download. Callers that flash the message
+   * must not colour this as an achievement — nothing was started.
+   */
+  Cancelled: 'cancelled',
 } as const;
 export type DownloadAction = (typeof DownloadAction)[keyof typeof DownloadAction];
 
@@ -100,7 +108,7 @@ export type DownloadAction = (typeof DownloadAction)[keyof typeof DownloadAction
  * The answer to "the viewer pressed Download".
  *
  * Pressing Download is a request about a variant, not a command to create a
- * task, so the reply says which of six things happened. The version this
+ * task, so the reply says which of seven things happened. The version this
  * replaced returned nothing and the UI guessed — which is how a paused download
  * came to answer `Already downloading` and do nothing at all.
  */

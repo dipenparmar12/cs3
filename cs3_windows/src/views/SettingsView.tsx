@@ -111,6 +111,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const [deletePreference, setDeletePreference] = useState<'ask' | 'list-only' | 'list-and-file'>(
     'ask'
   );
+  /**
+   * Whether pressing Download asks first.
+   *
+   * `immediate` by default and deliberately unlike the delete preference above:
+   * that one guards something unrecoverable, this one guards a transfer the
+   * queue can cancel. The reason to turn it on is not safety, it is that every
+   * row in a source list reads "Download" while committing to wildly different
+   * files — so the prompt is where size, language, release and destination
+   * become visible before the bytes start.
+   */
+  const [confirmDownloads, setConfirmDownloads] = useState<'ask' | 'immediate'>('immediate');
   const [useLiveStreams, setUseLiveStreams] = useState(true);
   const [torrentMirrors, setTorrentMirrors] = useState(true);
   const { message: statusMessage, flash } = useFlash<string>(3000);
@@ -174,7 +185,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
     void window.cloudstream?.getDeleteDownloadPreference().then((response) => {
       if (response?.ok) setDeletePreference(response.preference);
     });
+    void window.cloudstream?.getDownloadConfirmPreference?.().then((response) => {
+      if (response?.ok) setConfirmDownloads(response.preference);
+    });
   }, []);
+
+  const handleChangeConfirmPreference = async (preference: 'ask' | 'immediate') => {
+    setConfirmDownloads(preference);
+    await window.cloudstream?.setDownloadConfirmPreference?.(preference);
+    flash(
+      preference === 'ask'
+        ? 'You will be shown what you are downloading before it starts.'
+        : 'Downloads now start as soon as you press Download.'
+    );
+  };
 
   const handleChangeDeletePreference = async (
     preference: 'ask' | 'list-only' | 'list-and-file'
@@ -437,6 +461,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
               <button onClick={handleSelectDirectory} className="btn btn-secondary">
                 Change folder
               </button>
+            </SettingRow>
+          </SettingGroup>
+
+          <SettingGroup title="Starting downloads" icon={<Download size={15} />}>
+            <SettingRow
+              label="When you press Download"
+              note={
+                confirmDownloads === 'ask'
+                  ? 'Show what will be downloaded first'
+                  : 'Start straight away'
+              }
+              hint={
+                <>
+                  Every source in the list is labelled "Download", but they are not the same
+                  download — one release can be sixteen gigabytes and another nine hundred
+                  megabytes of the same film, in different languages, going to different
+                  folders. Asking first shows the size, the language, the release and where it
+                  is being saved, and lets you back out. Starting straight away is the default.
+                </>
+              }
+            >
+              <select
+                value={confirmDownloads}
+                onChange={(e) =>
+                  handleChangeConfirmPreference(e.target.value as 'ask' | 'immediate')
+                }
+                aria-label="Download confirmation"
+              >
+                <option value="immediate">Start downloading immediately</option>
+                <option value="ask">Always ask before downloading</option>
+              </select>
             </SettingRow>
           </SettingGroup>
 
