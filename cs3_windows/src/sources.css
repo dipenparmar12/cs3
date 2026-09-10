@@ -7065,3 +7065,49 @@
 }
 .profile-menu button:hover { background: var(--bg-card-hover); }
 .profile-menu__danger { color: var(--status-error); }
+
+/* --- provider health, in the list where the switch is ---------------------
+   A word, not a number, and only when there is evidence for it. `unknown` has
+   no rule here on purpose: an unmeasured provider draws nothing, so a fresh
+   install is not two hundred badges saying the app has no opinion. */
+.scope-modal__health {
+  font-size: .66rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  padding: .1rem .34rem;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* Colour carries the reading, and the label repeats it — the badge has to work
+   for someone who cannot tell the greens from the ambers. */
+.scope-modal__health--excellent { background: rgba(16, 185, 129, .16); color: #34d399; }
+.scope-modal__health--good      { background: rgba(59, 130, 246, .16); color: #7dabf8; }
+.scope-modal__health--average   { background: rgba(245, 158, 11, .16); color: #fbbf24; }
+.scope-modal__health--poor      { background: rgba(239, 68, 68, .16);  color: #f87171; }
+
+/* --- adult content: three states ------------------------------------------
+   Cards rather than a <select>, because the difference between the middle
+   option and the other two is a sentence, not a word — and hiding that
+   sentence in a dropdown is how someone picks "Ask" expecting it to persist. */
+.adult-setting__modes { display: flex; flex-direction: column; gap: .45rem; margin: .75rem 0; }
+.adult-setting__mode {
+  display: flex; flex-direction: column; gap: .15rem;
+  text-align: left; padding: .6rem .7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-elevated, rgba(255,255,255,.03));
+  color: inherit; cursor: pointer;
+}
+.adult-setting__mode:hover:not(:disabled) { border-color: rgba(255,255,255,.28); }
+.adult-setting__mode--on { border-color: var(--accent-primary); background: rgba(59,130,246,.1); }
+.adult-setting__mode strong { font-size: .88rem; font-weight: 600; }
+.adult-setting__mode em { font-style: normal; font-size: .78rem; color: var(--text-muted); line-height: 1.45; }
+
+.adult-setting__session {
+  display: flex; align-items: center; flex-wrap: wrap; gap: .5rem;
+  padding: .55rem .7rem; border-radius: 8px;
+  background: rgba(0,0,0,.18); font-size: .82rem;
+}
+.adult-setting__session .btn { display: inline-flex; align-items: center; gap: .3rem; }
+.adult-setting__current { font-size: .78rem; margin-top: .5rem; }

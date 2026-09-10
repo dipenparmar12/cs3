@@ -383,6 +383,25 @@ export interface CloudStreamElectronAPI {
   setAdultAllowed: (
     enabled: boolean
   ) => Promise<Envelope & { enabled: boolean; providers: string[] }>;
+  /**
+   * The gate, in three states rather than two.
+   *
+   * `mode` is the setting and `allowed` is whether adult providers are being
+   * offered right now; under `ask` those differ until someone asks. The unlock
+   * lasts only for this run of the app — a middle setting that persisted its
+   * unlock would be "on" with extra steps, which is the opposite of what
+   * someone sharing a machine chooses it for.
+   */
+  getAdultMode: () => Promise<Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean }>;
+  setAdultMode: (
+    mode: 'off' | 'ask' | 'on'
+  ) => Promise<Envelope & { mode: 'off' | 'ask' | 'on'; allowed?: boolean; providers?: string[] }>;
+  unlockAdultForSession: () => Promise<
+    Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean; providers: string[] }
+  >;
+  lockAdultForSession: () => Promise<
+    Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean; providers: string[] }
+  >;
 
   getExtensionProviders: () => Promise<
     Envelope & { providers: ExtensionProvider[]; disabled: string[] }
@@ -1825,6 +1844,10 @@ const api: CloudStreamElectronAPI = {
   onBootstrapProgress: (callback) => subscribe('extension:bootstrapProgress', callback),
   getAdultAllowed: () => ipcRenderer.invoke('extension:getAdultAllowed'),
   setAdultAllowed: (enabled) => ipcRenderer.invoke('extension:setAdultAllowed', enabled),
+  getAdultMode: () => ipcRenderer.invoke('extension:getAdultMode'),
+  setAdultMode: (mode) => ipcRenderer.invoke('extension:setAdultMode', mode),
+  unlockAdultForSession: () => ipcRenderer.invoke('extension:unlockAdultForSession'),
+  lockAdultForSession: () => ipcRenderer.invoke('extension:lockAdultForSession'),
 
   getExtensionProviders: () => ipcRenderer.invoke('extension:getProviders'),
   setProviderEnabled: (name, enabled) =>

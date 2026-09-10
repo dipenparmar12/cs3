@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import type { ProviderLoadProgress } from '../../../electron/pluginManager';
+import { isWorthShowing, type ProviderHealth } from './providerHealth';
 import {
   prettyType,
   stateOf,
@@ -108,6 +109,14 @@ export interface SourceScopeDialogProps {
    * about. `SearchScopePicker` owns all data and state; that is unchanged.
    */
   profileBar?: React.ReactNode;
+  /**
+   * How well a provider has worked here, looked up per row.
+   *
+   * A function rather than a map so the dialog does not have to know how the
+   * leaderboard is fetched or keyed, and optional so this component still
+   * renders in full when analytics are switched off — which they can be.
+   */
+  healthFor?: (provider: string) => ProviderHealth | undefined;
 }
 
 export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
@@ -136,6 +145,7 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   onReset,
   onClose,
   profileBar,
+  healthFor,
 }) => {
   const dialog = useRef<HTMLDivElement | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
@@ -611,6 +621,34 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                             {row.members.length > 1 && (
                               <span className="scope-modal__count">{row.members.length}</span>
                             )}
+                            {/*
+                              How well this source has actually worked here.
+
+                              The ranking has measured success rate, latency and
+                              whether anything played since it was written, and
+                              exactly one settings panel read it — which is the
+                              wrong screen: the question "is this worth switching
+                              on" is asked here, in front of the switch.
+
+                              Only measured verdicts are drawn. Two hundred
+                              "Not measured" badges on a fresh install would
+                              teach the viewer to ignore the column before it
+                              ever had anything to say.
+                            */}
+                            {(() => {
+                              const health =
+                                row.kind === 'leaf' && !row.isIndexer
+                                  ? healthFor?.(row.members[0])
+                                  : undefined;
+                              return health && isWorthShowing(health) ? (
+                                <span
+                                  className={`scope-modal__health scope-modal__health--${health.level}`}
+                                  title={health.detail}
+                                >
+                                  {health.label}
+                                </span>
+                              ) : null;
+                            })()}
                           </button>
                         </div>
                       );

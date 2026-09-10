@@ -81,6 +81,7 @@ const PRESET_ALIASES = {
   'bot-challenge': ['electron/torrent/botChallenge.test.mts'],
   'source-profiles': ['electron/cs3/sourceProfiles.test.mts'],
   'failure-taxonomy': ['electron/cs3/failureTaxonomy.test.mts'],
+  'provider-health': ['src/components/search/providerHealth.test.mts'],
   'native-providers': ['electron/cs3/nativeProviders.test.mts'],
   discovery: ['electron/sharedDiscovery.test.mts'],
   'shared-discovery': ['electron/sharedDiscovery.test.mts'],

@@ -11,6 +11,7 @@ import type { ProviderTreeRepository, ProviderTreeProvider } from '../types/plug
 import type { ProviderLoadProgress } from '../../electron/pluginManager';
 import { SourceScopeDialog } from './search/SourceScopeDialog';
 import { SourceProfileBar, type ProfileSummary } from './search/SourceProfileBar';
+import { healthIndex, type ProviderHealth } from './search/providerHealth';
 import {
   stateOf,
   type ChosenSource,
@@ -244,6 +245,23 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   useEffect(() => {
     void window.cloudstream?.listSourceProfiles?.().then(applyProfiles);
   }, [applyProfiles]);
+
+  /**
+   * How well each provider has actually worked here.
+   *
+   * Fetched when the dialog opens rather than on mount: it is a whole
+   * leaderboard, nothing on the collapsed trigger uses it, and the numbers move
+   * slowly enough that a snapshot taken at open is as good as a live one.
+   * Failing to load it is not an error — the rows simply carry no badge, which
+   * is also what happens when the user has analytics switched off.
+   */
+  const [health, setHealth] = useState<Map<string, ProviderHealth>>(new Map());
+  useEffect(() => {
+    if (!open) return;
+    void window.cloudstream?.getProviderLeaderboard?.().then((response) => {
+      if (response?.ok) setHealth(healthIndex(response.scores ?? []));
+    });
+  }, [open]);
 
   const persist = useCallback(
     (nextProviders: Set<string>, nextIndexers: Set<string>) => {
@@ -622,6 +640,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
              rather than overwriting it with an empty one. */
           onReset={() => void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles)}
           onClose={close}
+          healthFor={(provider) => health.get(provider)}
           profileBar={
             <SourceProfileBar
               profiles={profiles}

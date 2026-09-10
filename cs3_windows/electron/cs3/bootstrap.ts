@@ -31,6 +31,7 @@ import { describeError } from '../../src/utils/errors.ts';
 
 const KEY_BOOTSTRAP_DONE = 'cs3_bootstrap_completed_version';
 const KEY_ADULT_ENABLED = 'cs3_adult_content_enabled';
+const KEY_ADULT_MODE = 'cs3_adult_content_mode';
 
 /**
  * Bumped when the bundled set changes, so an existing install picks up newly
@@ -84,6 +85,11 @@ export interface BootstrapProgress {
 
 export class BootstrapService {
   private datastore: DatastoreManager;
+  /**
+   * In memory, never on disk. See `adultMode` — an unlock that survived a
+   * restart would make `ask` into `on` with extra steps.
+   */
+  private adultUnlockedThisSession = false;
   private plugins: PluginManager;
   private notifier: ((progress: BootstrapProgress) => void) | null = null;
   private progress: BootstrapProgress = { phase: 'idle', installed: 0, failed: 0, total: 0 };
@@ -110,11 +116,68 @@ export class BootstrapService {
    * turning it off must take effect immediately, everywhere.
    */
   public isAdultAllowed(): boolean {
-    return this.datastore.getBool(KEY_ADULT_ENABLED, false);
+    const mode = this.adultMode();
+    if (mode === 'on') return true;
+    if (mode === 'off') return false;
+    return this.adultUnlockedThisSession;
+  }
+
+  /**
+   * Three answers, because two could not express the useful middle one.
+   *
+   * `off` and `on` are what they always were. `ask` keeps adult providers
+   * installed and configured but hidden until the viewer asks for them, and the
+   * asking lasts **only for this run of the app** — `adultUnlockedThisSession`
+   * is deliberately a field and never touches the datastore. A middle setting
+   * that quietly persisted its unlock would be `on` with extra steps, which is
+   * the opposite of what someone sharing a machine is choosing it for.
+   *
+   * Migrated from the boolean rather than replacing it: the old key is still
+   * read when no mode has been stored, so an existing install that had adult
+   * content on keeps it on.
+   */
+  public adultMode(): 'off' | 'ask' | 'on' {
+    const stored = this.datastore.getString(KEY_ADULT_MODE, '');
+    if (stored === 'off' || stored === 'ask' || stored === 'on') return stored;
+    return this.datastore.getBool(KEY_ADULT_ENABLED, false) ? 'on' : 'off';
+  }
+
+  public setAdultMode(mode: 'off' | 'ask' | 'on'): 'off' | 'ask' | 'on' {
+    this.datastore.setString(KEY_ADULT_MODE, mode);
+    /**
+     * The old boolean is kept in step, not abandoned.
+     *
+     * `cs3_adult_content_enabled` is a datastore key, which means it travels in
+     * Android-format backups. Leaving it stale would restore an install whose
+     * two records of the same decision disagree — and `ask` maps to `false`
+     * there because a backup carries no session.
+     */
+    this.datastore.setBool(KEY_ADULT_ENABLED, mode === 'on');
+    // Switching away from `ask` ends any unlock; switching *to* it starts locked.
+    this.adultUnlockedThisSession = false;
+    return mode;
+  }
+
+  /**
+   * Reveals adult providers for the rest of this run.
+   *
+   * A no-op unless the mode is `ask`. That guard matters: this is reachable
+   * over IPC, and a renderer calling it while the setting is `off` must not be
+   * able to turn the gate on — the setting owns that decision and the consent
+   * step lives with it.
+   */
+  public unlockAdultForSession(): boolean {
+    if (this.adultMode() !== 'ask') return this.isAdultAllowed();
+    this.adultUnlockedThisSession = true;
+    return true;
+  }
+
+  public lockAdultForSession(): void {
+    this.adultUnlockedThisSession = false;
   }
 
   public setAdultAllowed(enabled: boolean): boolean {
-    this.datastore.setBool(KEY_ADULT_ENABLED, enabled);
+    this.setAdultMode(enabled ? 'on' : 'off');
     return enabled;
   }
 

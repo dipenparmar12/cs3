@@ -3932,6 +3932,60 @@ ipcMain.handle('extension:setAdultAllowed', async (_, enabled: boolean) => {
   return { ok: true, enabled: value, providers: await pluginManager.listEnabledProviders() };
 });
 
+/**
+ * The three-state gate.
+ *
+ * `allowed` and `mode` are both reported because they answer different
+ * questions: the mode is the setting, `allowed` is whether adult providers are
+ * being offered *right now*, and under `ask` those differ until someone asks.
+ */
+ipcMain.handle('extension:getAdultMode', async () => ({
+  ok: true,
+  mode: bootstrap.adultMode(),
+  allowed: bootstrap.isAdultAllowed(),
+}));
+
+ipcMain.handle('extension:setAdultMode', async (_, mode: 'off' | 'ask' | 'on') => {
+  if (mode !== 'off' && mode !== 'ask' && mode !== 'on') {
+    return { ...fail(new Error(`Unknown adult content mode: ${mode}`)), mode: bootstrap.adultMode() };
+  }
+  const value = bootstrap.setAdultMode(mode);
+  return {
+    ok: true,
+    mode: value,
+    allowed: bootstrap.isAdultAllowed(),
+    providers: await pluginManager.listEnabledProviders(),
+  };
+});
+
+/**
+ * Reveals adult providers for the rest of this run of the app.
+ *
+ * Refused unless the setting is `ask` — `BootstrapService.unlockAdultForSession`
+ * enforces that, and it matters because this channel is reachable from the
+ * renderer: revealing must never be a way to change the setting, which is where
+ * the consent step lives.
+ */
+ipcMain.handle('extension:unlockAdultForSession', async () => {
+  const allowed = bootstrap.unlockAdultForSession();
+  return {
+    ok: true,
+    mode: bootstrap.adultMode(),
+    allowed,
+    providers: await pluginManager.listEnabledProviders(),
+  };
+});
+
+ipcMain.handle('extension:lockAdultForSession', async () => {
+  bootstrap.lockAdultForSession();
+  return {
+    ok: true,
+    mode: bootstrap.adultMode(),
+    allowed: bootstrap.isAdultAllowed(),
+    providers: await pluginManager.listEnabledProviders(),
+  };
+});
+
 ipcMain.handle('extension:fetchRepository', async (_, repoUrl: string) => {
   try {
     return { ok: true, repository: await pluginManager.fetchRepository(repoUrl) };
