@@ -9,6 +9,25 @@ import type {
   SearchSuggestion,
 } from '../src/types/api';
 import type { OttPlatformView } from './cs3/ottPlatforms';
+import type { ProfileState, SourceProfile } from './cs3/sourceProfiles.ts';
+
+/**
+ * The whole profile picture, answered by every profile call.
+ *
+ * `label` and `narrowed` are derived in the main process rather than in the
+ * renderer so the scope button and the search itself cannot disagree about
+ * whether anything is narrowed — the disagreement that produced a button
+ * reading "1 source" over a search of two hundred.
+ */
+export interface SourceProfileSnapshot {
+  ok: boolean;
+  error?: string;
+  profiles: SourceProfile[];
+  activeId: string;
+  draft: ProfileState['draft'];
+  label: string;
+  narrowed: boolean;
+}
 import type { NativeProviderSummary } from './cs3/nativeProviderRegistry';
 import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
 import type { SwarmReport } from '../src/types/torrent';
@@ -431,6 +450,25 @@ export interface CloudStreamElectronAPI {
     }
   >;
   setSearchScope: (scope: Partial<SearchScope>) => Promise<SearchScope>;
+
+  /**
+   * Named search configurations.
+   *
+   * The reason these exist rather than one selection: "All sources" used to be
+   * wired to an *erasure*, so checking something across everything threw away a
+   * carefully built list of eleven providers with no undo. Switching is now
+   * free in both directions, and a selection worth keeping can be given a name.
+   *
+   * Every call answers with the whole state — list, active id and the unnamed
+   * draft — rather than an acknowledgement, because those three have to agree
+   * and rebuilding them from a delta is how they stop agreeing.
+   */
+  listSourceProfiles: () => Promise<SourceProfileSnapshot>;
+  activateSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
+  createSourceProfile: (name: string) => Promise<SourceProfileSnapshot>;
+  renameSourceProfile: (id: string, name: string) => Promise<SourceProfileSnapshot>;
+  duplicateSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
+  deleteSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
   /** Fires as each installed extension is loaded, so lists can fill in. */
   onProviderLoadProgress: (
     callback: (progress: ProviderLoadProgress) => void
@@ -1916,6 +1954,12 @@ const api: CloudStreamElectronAPI = {
   getWindowAlwaysOnTop: () => ipcRenderer.invoke('window:getAlwaysOnTop'),
   setMpvOnTop: (onTop) => ipcRenderer.invoke('mpv:setOnTop', onTop),
   setMpvVideoEnabled: (enabled) => ipcRenderer.invoke('mpv:setVideoEnabled', enabled),
+  listSourceProfiles: () => ipcRenderer.invoke('profiles:list'),
+  activateSourceProfile: (id) => ipcRenderer.invoke('profiles:activate', id),
+  createSourceProfile: (name) => ipcRenderer.invoke('profiles:create', name),
+  renameSourceProfile: (id, name) => ipcRenderer.invoke('profiles:rename', id, name),
+  duplicateSourceProfile: (id) => ipcRenderer.invoke('profiles:duplicate', id),
+  deleteSourceProfile: (id) => ipcRenderer.invoke('profiles:delete', id),
   getDeleteDownloadPreference: () => ipcRenderer.invoke('download:getDeletePreference'),
   setDeleteDownloadPreference: (preference) =>
     ipcRenderer.invoke('download:setDeletePreference', preference),

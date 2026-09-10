@@ -98,6 +98,16 @@ export interface SourceScopeDialogProps {
   onSelectAll: () => void;
   onReset: () => void;
   onClose: () => void;
+  /**
+   * The profile bar, passed in already built.
+   *
+   * A node rather than the data and callbacks, because this component is
+   * presentation over a source tree and the profile bar is presentation over a
+   * different store entirely — threading six more props through here to reach
+   * one row would make the dialog the owner of something it has nothing to say
+   * about. `SearchScopePicker` owns all data and state; that is unchanged.
+   */
+  profileBar?: React.ReactNode;
 }
 
 export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
@@ -125,6 +135,7 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   onSelectAll,
   onReset,
   onClose,
+  profileBar,
 }) => {
   const dialog = useRef<HTMLDivElement | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
@@ -404,6 +415,8 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
           </aside>
 
           <section className="scope-modal__main" aria-label="Sources">
+            {profileBar}
+
             <div className="scope-modal__search">
               <Search size={15} />
               <input
@@ -427,8 +440,14 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
               An empty selection and a fully-ticked one search the same sources
               today, but they age differently: this one follows whatever is
               installed, while ticking everything pins the set as it is now.
+
+              Hidden when the profile bar is present, which offers the same
+              choice one row above and — unlike this button — does not reach it
+              by erasing the selection. Two controls that look alike and differ
+              only in whether they destroy something is the worst version of
+              this, so only one is on screen.
             */}
-            <button
+            {!profileBar && <button
               className={`scope-modal__all${totalChosen === 0 ? ' scope-modal__all--current' : ''}`}
               onClick={onReset}
               aria-pressed={totalChosen === 0}
@@ -442,7 +461,7 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                 </span>
               </span>
               <span className="scope-modal__count">{totalAvailable}</span>
-            </button>
+            </button>}
 
             {/*
               What is actually scoped, spelled out.

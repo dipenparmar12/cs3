@@ -10,6 +10,7 @@ import { ChevronDown, Filter } from 'lucide-react';
 import type { ProviderTreeRepository, ProviderTreeProvider } from '../types/plugin';
 import type { ProviderLoadProgress } from '../../electron/pluginManager';
 import { SourceScopeDialog } from './search/SourceScopeDialog';
+import { SourceProfileBar, type ProfileSummary } from './search/SourceProfileBar';
 import {
   stateOf,
   type ChosenSource,
@@ -198,14 +199,65 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const persist = useCallback((nextProviders: Set<string>, nextIndexers: Set<string>) => {
-    setProviders(nextProviders);
-    setChosenIndexers(nextIndexers);
-    void window.cloudstream?.setSearchScope({
-      providers: [...nextProviders],
-      indexers: [...nextIndexers],
-    });
+  /**
+   * Saved source sets, and which one is driving the search.
+   *
+   * Held here rather than inside `SourceProfileBar` for the same reason every
+   * other list in this component is: the bar is presentation, and the selection
+   * it switches between is the same selection the tree below it edits. Two
+   * owners would let the pills and the checkboxes disagree about what is
+   * scoped, which is the disagreement the whole scope model exists to prevent.
+   */
+  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [activeProfile, setActiveProfile] = useState<string>('all');
+  const [draftCount, setDraftCount] = useState(0);
+
+  /**
+   * Applies a profile answer to everything on screen.
+   *
+   * The main process is the authority on what the scope now is — it resolved
+   * the profile, wrote it through to `SearchScopeStore`, and answered with the
+   * result — so the tree is redrawn from that answer rather than from what the
+   * click was expected to do.
+   */
+  const applyProfiles = useCallback((snapshot: {
+    ok?: boolean;
+    profiles?: ProfileSummary[];
+    activeId?: string;
+    draft?: { providers?: string[]; indexers?: string[] };
+  } | undefined) => {
+    if (!snapshot?.ok) return;
+    setProfiles(snapshot.profiles ?? []);
+    setActiveProfile(snapshot.activeId ?? 'all');
+    const draft = snapshot.draft ?? {};
+    setDraftCount((draft.providers?.length ?? 0) + (draft.indexers?.length ?? 0));
+
+    const active = (snapshot.profiles ?? []).find((p) => p.id === snapshot.activeId);
+    const scoped =
+      snapshot.activeId === 'all'
+        ? { providers: [] as string[], indexers: [] as string[] }
+        : active ?? { providers: draft.providers ?? [], indexers: draft.indexers ?? [] };
+    setProviders(new Set(scoped.providers));
+    setChosenIndexers(new Set(scoped.indexers));
   }, []);
+
+  useEffect(() => {
+    void window.cloudstream?.listSourceProfiles?.().then(applyProfiles);
+  }, [applyProfiles]);
+
+  const persist = useCallback(
+    (nextProviders: Set<string>, nextIndexers: Set<string>) => {
+      setProviders(nextProviders);
+      setChosenIndexers(nextIndexers);
+      // Goes through the profile layer, which decides whether this edits the
+      // active profile or forks to the unnamed draft, then writes the effective
+      // scope through to the store every search path already reads.
+      void window.cloudstream
+        ?.setSearchScope({ providers: [...nextProviders], indexers: [...nextIndexers] })
+        .then(() => window.cloudstream?.listSourceProfiles?.().then(applyProfiles));
+    },
+    [applyProfiles]
+  );
 
   /** Every selectable source, split by which dimension of the scope it lives in. */
   const universe = useMemo(() => {
@@ -566,8 +618,33 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
           onToggleCollapse={toggleCollapse}
           onDeselect={deselect}
           onSelectAll={() => persist(new Set(universe.providers), new Set(universe.indexers))}
-          onReset={() => persist(new Set(), new Set())}
+          /* Reset is now "switch to All sources", which keeps the selection
+             rather than overwriting it with an empty one. */
+          onReset={() => void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles)}
           onClose={close}
+          profileBar={
+            <SourceProfileBar
+              profiles={profiles}
+              activeId={activeProfile}
+              hasDraft={draftCount > 0}
+              draftCount={draftCount}
+              onActivate={(id) =>
+                void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles)
+              }
+              onCreate={(name) =>
+                void window.cloudstream?.createSourceProfile?.(name).then(applyProfiles)
+              }
+              onRename={(id, name) =>
+                void window.cloudstream?.renameSourceProfile?.(id, name).then(applyProfiles)
+              }
+              onDuplicate={(id) =>
+                void window.cloudstream?.duplicateSourceProfile?.(id).then(applyProfiles)
+              }
+              onDelete={(id) =>
+                void window.cloudstream?.deleteSourceProfile?.(id).then(applyProfiles)
+              }
+            />
+          }
         />
       )}
     </div>

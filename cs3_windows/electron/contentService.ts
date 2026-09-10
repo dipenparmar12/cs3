@@ -33,6 +33,7 @@ import { scopedLogger } from './logging/logger.ts';
 
 const log = scopedLogger('sources');
 import { SearchScopeStore } from './searchScope';
+import { SourceProfileStore } from './cs3/sourceProfileStore.ts';
 import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
 import { SharedDiscovery } from './sharedDiscovery';
@@ -239,6 +240,7 @@ export class ContentService {
   private plugins: PluginManager;
   private cache: SourceCache;
   private scope: SearchScopeStore;
+  private profiles: SourceProfileStore;
   private searches: SearchSessionManager;
   /** Providers that ship with the app; see `cs3/nativeProviderRegistry.ts`. */
   private natives: NativeProviderRegistry;
@@ -298,6 +300,15 @@ export class ContentService {
     this.engine = engine;
     this.cache = new SourceCache(datastore);
     this.scope = new SearchScopeStore(datastore);
+    /**
+     * Profiles sit *above* the scope store, not beside it.
+     *
+     * Everything downstream — search, discovery, streaming, downloading,
+     * refresh — keeps reading one `SearchScope` and never learns that
+     * profiles exist. See `sourceProfileStore.ts` for why that indirection
+     * is the whole design rather than an extra layer.
+     */
+    this.profiles = new SourceProfileStore(datastore, this.scope);
     this.natives = new NativeProviderRegistry(datastore);
     this.searches = new SearchSessionManager({
       plugins: this.plugins,
@@ -316,6 +327,10 @@ export class ContentService {
 
   public getScope(): SearchScopeStore {
     return this.scope;
+  }
+
+  public getProfiles(): SourceProfileStore {
+    return this.profiles;
   }
 
   public getSearches(): SearchSessionManager {

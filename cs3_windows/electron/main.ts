@@ -4356,9 +4356,77 @@ ipcMain.handle('search:getScopeOptions', async (_, ensureLoaded = true) => {
   }
 });
 
-ipcMain.handle('search:setScope', async (_, scope: Partial<SearchScope>) =>
-  contentService.getScope().set(scope)
-);
+/**
+ * Scope edits route through the profile store, not straight at the scope.
+ *
+ * `SearchScopeStore` is downstream of profiles now: every profile switch writes
+ * the effective scope into it, so a direct write here would be overwritten by
+ * the next switch. Sending the edit through the profiles layer is what makes
+ * "tick a box" and "switch profile" the same kind of event, and is why the
+ * five paths that read scope did not have to change.
+ */
+ipcMain.handle('search:setScope', async (_, scope: Partial<SearchScope>) => {
+  const profiles = contentService.getProfiles();
+  profiles.edit({ providers: scope.providers, indexers: scope.indexers });
+  return contentService.getScope().get();
+});
+
+// --- source profiles ------------------------------------------------------
+
+/**
+ * Named search configurations.
+ *
+ * Every one of these answers with the whole state rather than an
+ * acknowledgement, for the same reason `disabledSet.ts` returns the whole list
+ * on every mutation: the renderer holds a list, a selection and an active id
+ * that have to agree, and reconstructing that from a delta is how they come to
+ * disagree.
+ */
+function profileSnapshot() {
+  const profiles = contentService.getProfiles();
+  const state = profiles.get();
+  return {
+    ok: true as const,
+    profiles: state.profiles,
+    activeId: state.activeId,
+    draft: state.draft,
+    label: profiles.activeLabel(),
+    narrowed: profiles.isNarrowed(),
+  };
+}
+
+ipcMain.handle('profiles:list', async () => {
+  // Adopting here rather than at construction: a user upgrading into this
+  // feature has a selection in the old store and no profiles, and overwriting
+  // one with the other at startup would silently widen their next search.
+  contentService.getProfiles().adoptExistingScope();
+  return profileSnapshot();
+});
+
+ipcMain.handle('profiles:activate', async (_, id: string) => {
+  contentService.getProfiles().activate(String(id ?? ''));
+  return profileSnapshot();
+});
+
+ipcMain.handle('profiles:create', async (_, name: string) => {
+  contentService.getProfiles().create(String(name ?? ''));
+  return profileSnapshot();
+});
+
+ipcMain.handle('profiles:rename', async (_, id: string, name: string) => {
+  contentService.getProfiles().rename(String(id ?? ''), String(name ?? ''));
+  return profileSnapshot();
+});
+
+ipcMain.handle('profiles:duplicate', async (_, id: string) => {
+  contentService.getProfiles().duplicate(String(id ?? ''));
+  return profileSnapshot();
+});
+
+ipcMain.handle('profiles:delete', async (_, id: string) => {
+  contentService.getProfiles().remove(String(id ?? ''));
+  return profileSnapshot();
+});
 
 // --- network / DNS --------------------------------------------------------
 

@@ -79,6 +79,7 @@ const PRESET_ALIASES = {
   'playback-recovery': ['src/components/player/playbackRecovery.test.mts'],
   'indexer-budget': ['electron/torrent/indexerBudget.test.mts'],
   'bot-challenge': ['electron/torrent/botChallenge.test.mts'],
+  'source-profiles': ['electron/cs3/sourceProfiles.test.mts'],
   'native-providers': ['electron/cs3/nativeProviders.test.mts'],
   discovery: ['electron/sharedDiscovery.test.mts'],
   'shared-discovery': ['electron/sharedDiscovery.test.mts'],

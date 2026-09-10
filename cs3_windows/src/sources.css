@@ -6986,3 +6986,77 @@
 
 .download-confirm__actions { display: flex; justify-content: flex-end; gap: .5rem; }
 .download-confirm__actions .btn { display: inline-flex; align-items: center; gap: .35rem; }
+
+/* --- source profiles ------------------------------------------------------
+   A row of pills above the source tree, not a settings screen. A profile is
+   only ever edited in the moment you notice it is wrong, so its management
+   lives behind the pill it belongs to. */
+.profile-bar {
+  display: flex; align-items: flex-start; gap: .5rem;
+  padding: .6rem .9rem;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, .12);
+}
+.profile-bar--naming { align-items: center; }
+.profile-bar--naming input {
+  flex: 1; min-width: 0;
+  background: var(--bg-input); color: var(--text-main);
+  border: 1px solid var(--border-color); border-radius: 6px;
+  padding: .35rem .55rem; font-size: .84rem;
+}
+
+/* Wraps rather than scrolls: a horizontal scroller hides the pill on the end,
+   and the pill on the end is the one just created. */
+.profile-bar__pills { display: flex; flex-wrap: wrap; gap: .35rem; flex: 1; min-width: 0; }
+.profile-bar__save { flex-shrink: 0; display: inline-flex; align-items: center; gap: .3rem; }
+
+.profile-pill-group { position: relative; display: inline-flex; }
+
+.profile-pill {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .3rem .6rem;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card-hover);
+  color: var(--text-main);
+  font-size: .8rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.profile-pill:hover { border-color: rgba(255, 255, 255, .28); }
+.profile-pill--on {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #fff;
+}
+.profile-pill__count {
+  font-size: .7rem; font-variant-numeric: tabular-nums;
+  padding: 0 .3rem; border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, .25);
+}
+
+/* Joined to its pill so the pair reads as one control. */
+.profile-pill-group .profile-pill { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.profile-pill__more {
+  border: 1px solid var(--border-color); border-left: none;
+  border-top-right-radius: var(--radius-full); border-bottom-right-radius: var(--radius-full);
+  background: var(--bg-card-hover); color: var(--text-muted);
+  padding: 0 .45rem; font-size: .8rem; line-height: 1; cursor: pointer;
+}
+.profile-pill__more:hover { color: var(--text-main); border-color: rgba(255, 255, 255, .28); }
+
+.profile-menu {
+  position: absolute; top: calc(100% + .3rem); right: 0; z-index: 20;
+  display: flex; flex-direction: column; min-width: 150px;
+  background: var(--bg-card); border: 1px solid var(--border-color);
+  border-radius: 8px; padding: .25rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+}
+.profile-menu button {
+  display: flex; align-items: center; gap: .45rem;
+  padding: .4rem .5rem; border: none; border-radius: 5px;
+  background: transparent; color: var(--text-main);
+  font-size: .82rem; text-align: left; cursor: pointer;
+}
+.profile-menu button:hover { background: var(--bg-card-hover); }
+.profile-menu__danger { color: var(--status-error); }
