@@ -7,7 +7,7 @@ import {
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
   SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
   HardDriveDownload, FolderDown, GripHorizontal, Maximize2, Minimize2, X,
-  Search, PictureInPicture2, Pin, PinOff,
+  Search, PictureInPicture2,
 } from 'lucide-react';
 import type { SwarmReport, TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
@@ -42,6 +42,13 @@ import {
 } from './player/useFloatingPlayer';
 import { PlayerCopyMenu } from './player/PlayerCopyMenu';
 import { PlaybackErrorPanel } from './player/PlaybackErrorPanel';
+import {
+  EMPTY_BUDGET,
+  classifyDashFailure,
+  classifyHlsFailure,
+  spend,
+  type RecoveryBudget,
+} from './player/playbackRecovery';
 import { formatTimecode, formatTransferRate } from '../utils/format';
 import {
   DEFAULT_SUBTITLE_STYLE,
@@ -1040,6 +1047,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const forceTranscodeRef = useRef<(() => void) | null>(null);
   const forcedFor = useRef<string | null>(null);
   /**
+   * The one rung every transport steps onto when it gives up.
+   *
+   * The `<video>` element reached the ladder above through its `error` event;
+   * hls.js and Shaka did not reach it at all — each printed a sentence and
+   * stopped, which is why an HLS stream the browser could not demux was
+   * reported as unplayable while mpv sat idle and the next candidate went
+   * untried. They call this instead, so "the browser could not play it" means
+   * the same thing and costs the same next move regardless of which of the
+   * three was holding the stream.
+   */
+  const escalateRef = useRef<((message: string) => void) | null>(null);
+  /**
+   * What this stream has already spent on transport-level recovery.
+   *
+   * A ref, not state: hls.js reports errors from inside its own loop and a
+   * re-render between the error and the decision would lose the count — and a
+   * lost count is an unbounded retry loop against a source that is never going
+   * to load.
+   */
+  const recoveryBudget = useRef<RecoveryBudget>(EMPTY_BUDGET);
+  /**
    * Where in the film the current ffmpeg process was started.
    *
    * A live fragmented MP4 has no index, so `currentTime` counts from the seek
@@ -1138,6 +1166,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     // There is deliberately no `?? streamUrl` fallback here — that expression is
     // precisely what attached unclassified URLs and created the race.
     if (!video || !streamUrl || !prepared?.ok || !prepared.playbackUrl) return;
+
+    /**
+     * Whatever failed before this decision has nothing to say about it.
+     *
+     * This was below the native-engine return, and that placement is the whole
+     * of the reported "it says it cannot stream while mpv is playing the film".
+     * The session gives up on source A, sets its message, advances to source B;
+     * B is prepared, comes back `NATIVE_MPV`, this effect returns on the line
+     * below — and A's message is still on screen, over B playing perfectly in
+     * mpv. Clearing before the branch, not after it, is the fix.
+     */
+    setError(null);
+    recoveryBudget.current = EMPTY_BUDGET;
+
     /**
      * A native-engine stream must not also be assigned here. Chromium would
      * take the URL, fail to decode it, fire `error`, and trip the failover
@@ -1146,7 +1188,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
      */
     if (prepared.capability.requiredStrategy === 'NATIVE_MPV') return;
 
-    setError(null);
     setQualities([]);
     setQuality(AUTO_QUALITY);
     let hls: Hls | null = null;
@@ -1218,11 +1259,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           })
           .catch((err: unknown) => {
             if (cancelled) return;
-            setError(
-              `This DASH stream could not be played: ${
-                describeError(err)
-              }`
+            /**
+             * Shaka is the only thing here that can drive an `.mpd` through MSE,
+             * so its refusal exhausts the browser-side options rather than
+             * ending the attempt — the remux and native rungs below it are still
+             * untried, and mpv reads DASH through its own FFmpeg. This used to
+             * stop at the sentence.
+             */
+            const action = classifyDashFailure(
+              `This DASH stream could not be played by the browser: ${describeError(err)}`
             );
+            escalateRef.current?.(action.kind === 'escalate' ? action.reason : describeError(err));
           });
         return;
       }
@@ -1245,8 +1292,45 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           );
         });
 
+        /**
+         * hls.js's failures, finally wired to the ladder the element has had all
+         * along.
+         *
+         * This handler used to be `if (data.fatal) setError(data.details)` and
+         * nothing else — so `Playback error: fragParsingError` was the whole of
+         * what a viewer got from a stream whose segments had downloaded intact
+         * and which mpv would have opened without comment. `classifyHlsFailure`
+         * decides between fetching again, rebuilding the buffer, and handing the
+         * source to the next engine; see that module for why each error belongs
+         * where it does.
+         */
         hls.on(Hls.Events.ERROR, (_evt, data) => {
-          if (data.fatal) setError(`Playback error: ${data.details}`);
+          const action = classifyHlsFailure({
+            fatal: data.fatal === true,
+            type: String(data.type),
+            details: String(data.details),
+            spent: recoveryBudget.current,
+            responseCode: data.response?.code,
+          });
+          recoveryBudget.current = spend(recoveryBudget.current, action);
+
+          switch (action.kind) {
+            case 'ignore':
+              return;
+            case 'reload':
+              // The message is shown because a silent multi-second pause reads
+              // as a frozen player; `playing` clears it when the fetch lands.
+              setError(action.reason);
+              hls?.startLoad();
+              return;
+            case 'recover-media':
+              setError(action.reason);
+              hls?.recoverMediaError();
+              return;
+            case 'escalate':
+              escalateRef.current?.(action.reason);
+              return;
+          }
         });
       } else {
         // Either the source itself (DIRECT) or the conversion's loopback URL. The
@@ -1647,14 +1731,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
      * from the one where nothing can be done.
      */
     const onError = () => {
-      // The source answering 404 outranks anything guessed about codecs.
-      const failure = probeFailureRef.current;
-      if (failure) {
-        // A dead source is not a conversion problem; remuxing a 404 is pointless.
-        setError(failure.reason);
-        skipRef.current?.(failure.reason);
-        return;
-      }
       const model = preparedRef.current?.capability;
       const codec = model?.metadata?.video?.codec;
       const depth = model?.metadata?.video?.bitDepth ?? 8;
@@ -1664,21 +1740,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           } stream.`
         : 'The player could not decode this file.';
 
-      // Convert first, abandon second. See `forceTranscodeRef`.
-      if (forcedFor.current !== streamUrl) {
-        setError(`${message} Converting it and trying again…`);
-        forceTranscodeRef.current?.();
-        return;
-      }
+      escalateRef.current?.(message);
+    };
 
-      setError(message);
-      skipRef.current?.(message);
+    /**
+     * Playback that has actually started is the end of every failure before it.
+     *
+     * `play` fires when `play()` is *called*; `playing` fires when frames are
+     * genuinely being presented, which is the only event that can honestly
+     * retire an error message. Without this the recovery ladder could rescue a
+     * stream — reload a segment, rebuild a buffer, hand it to ffmpeg — and leave
+     * the error panel it raised on the way sitting over the film it fixed.
+     */
+    const onPlaying = () => {
+      setIsPlaying(true);
+      setError(null);
     };
 
     video.addEventListener('timeupdate', onTime);
     video.addEventListener('progress', onTime);
     video.addEventListener('loadedmetadata', onMeta);
     video.addEventListener('play', onPlay);
+    video.addEventListener('playing', onPlaying);
     video.addEventListener('pause', onPause);
     video.addEventListener('error', onError);
 
@@ -1687,6 +1770,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.removeEventListener('progress', onTime);
       video.removeEventListener('loadedmetadata', onMeta);
       video.removeEventListener('play', onPlay);
+      video.removeEventListener('playing', onPlaying);
       video.removeEventListener('pause', onPause);
       video.removeEventListener('error', onError);
     };
@@ -2434,10 +2518,50 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       : null;
   }, [sourceSession?.onSourceUnplayable, streamUrl]);
 
-  // A new stream invalidates everything learned about the previous one.
+  /**
+   * "The browser could not play this" — one meaning, one consequence.
+   *
+   * Every transport ends up here: the `<video>` element's `error` event, hls.js's
+   * fatal errors, Shaka's rejected load. What follows is the same ladder in all
+   * three cases, and that is the point — the element had it, the other two did
+   * not, and a source that hls.js could not demux was therefore abandoned with
+   * mpv idle, the ffmpeg path untried and the next candidate never reached.
+   *
+   * Order matters and is the same as it always was: a dead link outranks
+   * anything guessed about codecs (there is nothing to convert and no decoder
+   * that would help); otherwise convert first — which now means mpv first, see
+   * `PlaybackEngine.prepare` — and abandon the source only once that has been
+   * tried too.
+   */
+  useEffect(() => {
+    escalateRef.current = (message: string) => {
+      const failure = probeFailureRef.current;
+      if (failure) {
+        setError(failure.reason);
+        skipRef.current?.(failure.reason);
+        return;
+      }
+
+      if (forcedFor.current !== streamUrl) {
+        setError(`${message} Trying another engine…`);
+        forceTranscodeRef.current?.();
+        return;
+      }
+
+      setError(message);
+      skipRef.current?.(message);
+    };
+  }, [streamUrl]);
+
+  // A new stream invalidates everything learned about the previous one —
+  // including its failure. A message about the source that was just abandoned,
+  // left standing over the source that replaced it, is indistinguishable from
+  // the new one failing too.
   useEffect(() => {
     forcedFor.current = null;
     skippedFor.current = null;
+    recoveryBudget.current = EMPTY_BUDGET;
+    setError(null);
     setPlaybackOffset(0);
     setAudioNeedsComponents(false);
   }, [streamUrl]);
@@ -2918,6 +3042,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }}
           onFallbackToBuiltIn={() => forceTranscodeRef.current?.()}
           onError={(message) => setError(message)}
+          /* The engine is playing. Whatever raised the panel — this engine's own
+             earlier attempt, or the rung of the ladder that handed the source
+             here — has been answered by the film being on screen. */
+          onRecovered={() => setError(null)}
         />
       )}
 
@@ -3166,27 +3294,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </button>
         )}
         {/*
-          The pin is the mechanism that always works, so it is shown whether or
-          not PiP is available — it is the whole answer for an mpv-routed 4K
-          file or a torrent stream.
+          The window pin is a *setting*, and it lives in Player Settings.
+
+          It was a button here, beside play, seek and the track menus — none of
+          which it resembles. It changes nothing about playback: it is a window
+          manager preference, it applies only while the player is minimised, and
+          it is the kind of thing someone decides once and never touches again.
+          A control that answers "how should this app's window behave" sitting in
+          the row that answers "what is this film doing" is a category error, and
+          it cost a slot in the one row where every slot is playback.
+
+          `alwaysOnTop` is still read here — `useFloatingPlayer` applies it when
+          the player is minimised — and is still written from
+          `PlayerSettings`'s "Keep window on top" toggle, which is where it has
+          always also been. Only the duplicate in the transport row is gone.
         */}
-        <button
-          className={`icon-button${alwaysOnTop ? ' icon-button--on' : ''}`}
-          onClick={() => {
-            const next = !alwaysOnTop;
-            setAlwaysOnTop(next);
-            void window.cloudstream?.setPlayerPreferences({ alwaysOnTop: next });
-          }}
-          aria-pressed={alwaysOnTop}
-          aria-label={alwaysOnTop ? 'Stop keeping the window on top' : 'Keep the window on top'}
-          title={
-            alwaysOnTop
-              ? 'The window stays above other applications while minimised'
-              : 'Keep this window above other applications while minimised'
-          }
-        >
-          {alwaysOnTop ? <Pin size={18} /> : <PinOff size={18} />}
-        </button>
         <div className="player__titles">
           <div className="player__title-row">
             <h2>{title}</h2>

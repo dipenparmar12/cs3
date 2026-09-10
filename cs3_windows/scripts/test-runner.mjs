@@ -76,6 +76,7 @@ const PRESET_ALIASES = {
   reachability: ['src/componentReachability.test.mts'],
   'settings-level': ['src/components/settings/settingsLevel.test.mts'],
   'dead-rows': ['src/utils/deadRows.test.mts'],
+  'playback-recovery': ['src/components/player/playbackRecovery.test.mts'],
   'native-providers': ['electron/cs3/nativeProviders.test.mts'],
   discovery: ['electron/sharedDiscovery.test.mts'],
   'shared-discovery': ['electron/sharedDiscovery.test.mts'],
