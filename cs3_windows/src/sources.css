@@ -3765,6 +3765,11 @@
 .search-sources__row--failed .search-sources__detail {
   color: #f87171;
 }
+/* Not red. A browse-only catalogue is not a fault, and colouring it as one is
+   how a working search came to look like four broken providers. */
+.search-sources__row--unsupported .search-sources__detail {
+  color: var(--text-subtle);
+}
 .search-sources__name {
   flex: 1 1 auto;
   color: var(--text-main);

@@ -80,6 +80,7 @@ const PRESET_ALIASES = {
   'indexer-budget': ['electron/torrent/indexerBudget.test.mts'],
   'bot-challenge': ['electron/torrent/botChallenge.test.mts'],
   'source-profiles': ['electron/cs3/sourceProfiles.test.mts'],
+  'failure-taxonomy': ['electron/cs3/failureTaxonomy.test.mts'],
   'native-providers': ['electron/cs3/nativeProviders.test.mts'],
   discovery: ['electron/sharedDiscovery.test.mts'],
   'shared-discovery': ['electron/sharedDiscovery.test.mts'],

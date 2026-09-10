@@ -13,6 +13,7 @@ import {
   type SearchScopeReport,
 } from './searchScope';
 import { describeError } from '../src/utils/errors.ts';
+import { classifyFailure } from './cs3/failureTaxonomy.ts';
 
 /**
  * One "the user pressed search" interaction, from first keystroke to done.
@@ -45,7 +46,16 @@ export interface SearchSourceOutcome {
   id: string;
   name: string;
   kind: SearchSourceKind;
-  state: 'pending' | 'ok' | 'failed';
+  /**
+   * `unsupported` is not a failure and is deliberately its own state.
+   *
+   * A catalogue-only provider — Disney, Marvel, Pixar and Star Wars in the
+   * measured case — answers "does not implement that operation" to every search
+   * it will ever be given. Counting those as failures put "4 failed" on a
+   * search that worked and four sentences of noise in the copied report, and
+   * ranked four correctly-working providers down once per query.
+   */
+  state: 'pending' | 'ok' | 'failed' | 'unsupported';
   /** Rows this source contributed, before merging. */
   count: number;
   latencyMs?: number;
@@ -444,7 +454,11 @@ export class SearchSession {
       id,
       name,
       kind,
-      state: extra.error ? 'failed' : 'ok',
+      state: extra.error
+        ? classifyFailure(extra.error) === 'unsupported-operation'
+          ? 'unsupported'
+          : 'failed'
+        : 'ok',
       count: results.length,
       latencyMs: extra.latencyMs,
       error: extra.error,
@@ -515,7 +529,16 @@ export class SearchSession {
         : 'No providers, indexers or catalogues are enabled. Install an extension, or enable an indexer in Settings → Sources.';
     }
 
-    if (failed.length === outcomes.length) {
+    /**
+     * "All sources failed" has to mean all of them, and has to mean failed.
+     *
+     * Providers that do not implement search are excluded from both halves: a
+     * search across two catalogue providers and one scraper that timed out is
+     * one failure, not three, and saying otherwise turns a slow site into an
+     * app-wide outage in the only sentence the viewer reads.
+     */
+    const attempted = outcomes.filter((outcome) => outcome.state !== 'unsupported');
+    if (attempted.length > 0 && failed.length === attempted.length) {
       const reasons = [...new Set(failed.map((outcome) => outcome.error ?? 'unknown error'))];
       return `All ${failed.length} source(s) failed: ${reasons.slice(0, 3).join('; ')}`;
     }

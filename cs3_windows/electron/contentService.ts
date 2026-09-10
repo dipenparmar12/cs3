@@ -20,6 +20,7 @@ import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
 import {
   looksLikeLinksHandle,
+  looksLikePageAddress,
   parseExtensionUrl,
   type AnalyticsSink,
   type PluginManager,
@@ -1517,7 +1518,21 @@ export class ContentService {
     const providerName = target.startsWith('cs3ext://')
       ? decodeURIComponent(target.slice('cs3ext://'.length).split('/')[0] ?? '') || undefined
       : undefined;
-    let attempt = await this.plugins.loadLinksDetailed(target);
+    /**
+     * A page address handed to `loadLinks` is a guess, and is marked as one.
+     *
+     * The order below cannot simply be reversed — plenty of providers' link
+     * handle really is a URL — so the first call stays. What changes is that
+     * when it is made against something that is definitely a page address, its
+     * failure is not counted against the provider and is logged as a guess
+     * rather than as "the site has probably changed". Measured on three
+     * providers in three sessions (BollyFlix, HDO, CineSimkl), all of which
+     * went on to work on the retry immediately below.
+     */
+    const speculative = looksLikePageAddress(
+      target.startsWith('cs3ext://') ? parseExtensionUrl(target)?.target ?? '' : target
+    );
+    let attempt = await this.plugins.loadLinksDetailed(target, { speculative });
     let links = attempt.links;
     let diagnosis = attempt.diagnosis;
 

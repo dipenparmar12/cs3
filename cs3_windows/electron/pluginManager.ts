@@ -4,10 +4,11 @@ import fs from 'fs';
 import {
   buildExtensionUrl,
   looksLikeLinksHandle,
+  looksLikePageAddress,
   parseExtensionUrl,
 } from './cs3/extensionAddress.ts';
 
-export { buildExtensionUrl, looksLikeLinksHandle, parseExtensionUrl };
+export { buildExtensionUrl, looksLikeLinksHandle, looksLikePageAddress, parseExtensionUrl };
 import path from 'path';
 import crypto from 'crypto';
 import { app } from 'electron';
@@ -3596,8 +3597,26 @@ export class PluginManager {
    * resolve is not an exception at this layer; what changes is that the caller
    * can now say which of the six it was.
    */
+  /**
+   * @param options.speculative
+   *   This call is a guess, so its failure is not evidence about the provider.
+   *
+   *   `ContentService.extensionSources` tries `loadLinks` before `load` because
+   *   many providers' link handle really is a page address — but for the ones
+   *   whose handle is their own JSON, that first call throws inside the
+   *   provider (`JsonParseException: Unrecognized token 'https'`, seen from
+   *   BollyFlix, HDO and CineSimkl in three separate sessions). The retry then
+   *   works and the viewer gets their film, while the doomed first call was
+   *   logged as "the site has probably changed" and counted against a provider
+   *   that did nothing wrong.
+   *
+   *   Marked rather than skipped: the diagnosis is still produced and still
+   *   returned, because when the retry *also* fails it is the only account of
+   *   what the viewer asked for. What a guess must never do is move a score.
+   */
   public async loadLinksDetailed(
-    url: string
+    url: string,
+    options: { speculative?: boolean } = {}
   ): Promise<{ links: ExtractorLink[]; diagnosis?: SourceDiagnosis }> {
     const ref = parseExtensionUrl(url);
     if (!ref) {
@@ -3614,6 +3633,7 @@ export class PluginManager {
       };
     }
     await this.ensureProviderActive(ref.provider);
+    const speculative = options.speculative === true;
 
     const startedAt = Date.now();
     const response = await this.sidecar.call(
@@ -3630,11 +3650,16 @@ export class PluginManager {
       options: { hint?: string; error?: string; extra?: DiagnosisFact[]; level?: 'error' | 'warn' } = {}
     ): { links: ExtractorLink[]; diagnosis: SourceDiagnosis } => {
       this.diagnostics?.record({
-        level: options.level ?? 'error',
+        // A guess that did not come off is a `warn`, not an `error`. The log is
+        // meant to be a tool for finding real problems, and this one produced
+        // an error line per film for providers that were working.
+        level: speculative ? 'warn' : (options.level ?? 'error'),
         stage: 'links',
         source: ref.provider,
         url,
-        message: summary,
+        message: speculative
+          ? `${summary} (asked speculatively with a page address; retrying properly)`
+          : summary,
         detail: options.error,
       });
       /**
@@ -3645,7 +3670,10 @@ export class PluginManager {
        * would rank it down for having been turned off, and the ranking is
        * meant never to be silently punitive.
        */
-      if (kind !== 'provider-missing') {
+      // `provider-missing` is filtered centrally now (see `UNSCORED_FAILURE_KINDS`);
+      // what is decided here is the thing only this call site knows — whether
+      // the call was worth making at all.
+      if (!speculative) {
         this.analytics?.observe({
           provider: ref.provider,
           stage: 'links',
