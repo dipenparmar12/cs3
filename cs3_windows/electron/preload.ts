@@ -829,6 +829,30 @@ export interface CloudStreamElectronAPI {
   setDeleteDownloadPreference: (
     preference: 'ask' | 'list-only' | 'list-and-file'
   ) => Promise<Envelope & { preference?: string }>;
+  /**
+   * Whether pressing Download asks first. Defaults to `immediate`, which is
+   * what the button has always done.
+   */
+  getDownloadConfirmPreference: () => Promise<Envelope & { preference: 'ask' | 'immediate' }>;
+  setDownloadConfirmPreference: (
+    preference: 'ask' | 'immediate'
+  ) => Promise<Envelope & { preference?: string }>;
+  /**
+   * Where a download would land and what the press would do — read-only.
+   *
+   * The renderer cannot work the path out: the folder layout, the variant
+   * segment and the collision suffix are decided in the main process from the
+   * whole queue. Asking is the only way for a confirmation dialog to name the
+   * real destination rather than a plausible one.
+   */
+  previewDownload: (task: DownloadTask) => Promise<
+    Envelope & {
+      targetPath?: string;
+      directory?: string;
+      existingState?: string;
+      existingTaskId?: string;
+    }
+  >;
   getDownloadQueue: () => Promise<DownloadTask[]>;
   /**
    * A finished download, as a URL the player can open.
@@ -1895,6 +1919,10 @@ const api: CloudStreamElectronAPI = {
   getDeleteDownloadPreference: () => ipcRenderer.invoke('download:getDeletePreference'),
   setDeleteDownloadPreference: (preference) =>
     ipcRenderer.invoke('download:setDeletePreference', preference),
+  getDownloadConfirmPreference: () => ipcRenderer.invoke('download:getConfirmPreference'),
+  setDownloadConfirmPreference: (preference) =>
+    ipcRenderer.invoke('download:setConfirmPreference', preference),
+  previewDownload: (task) => ipcRenderer.invoke('download:preview', task),
   getDownloadQueue: () => ipcRenderer.invoke('download:getQueue'),
   getPlayableDownloadUrl: (filePath) => ipcRenderer.invoke('download:getPlayableUrl', filePath),
   revealInFolder: (filePath) => ipcRenderer.invoke('download:revealInFolder', filePath),

@@ -3472,6 +3472,26 @@ const DELETE_PREFERENCE_KEY = 'download_delete_behavior';
 type DeletePreference = 'ask' | 'list-only' | 'list-and-file';
 
 /**
+ * Whether pressing Download asks first.
+ *
+ * Two values, not three, and the asymmetry with the delete preference above is
+ * deliberate. Deleting is unrecoverable, so its safe default is to ask.
+ * Downloading is not: the worst outcome of a mistaken press is a file in the
+ * wrong folder and some bandwidth, both of which the queue already lets you
+ * cancel. So the default stays `immediate`, which is what the button has always
+ * done — a preference that changes existing behaviour on upgrade is a bug
+ * report, not a feature.
+ *
+ * What makes asking worth offering at all is that a press commits to a
+ * *particular* variant: this 16 GB 2160p release from this provider in this
+ * language, into this folder. Someone downloading over a metered connection or
+ * onto a small disk is choosing between rows that all read "Download", and the
+ * dialog is where those differences become visible before the bytes start.
+ */
+const DOWNLOAD_CONFIRM_KEY = 'download_confirm_behavior';
+type DownloadConfirmPreference = 'ask' | 'immediate';
+
+/**
  * Player preferences that belong to the viewer rather than to a film.
  *
  * Volume, mute and speed persist across media and across restarts because they
@@ -3643,6 +3663,47 @@ ipcMain.handle('download:setDeletePreference', async (_, preference: DeletePrefe
   }
   datastore.setString(DELETE_PREFERENCE_KEY, preference, true);
   return { ok: true, preference };
+});
+
+ipcMain.handle('download:getConfirmPreference', async () => {
+  const stored = datastore.getString(DOWNLOAD_CONFIRM_KEY, 'immediate', true);
+  const preference: DownloadConfirmPreference = stored === 'ask' ? 'ask' : 'immediate';
+  return { ok: true, preference };
+});
+
+ipcMain.handle('download:setConfirmPreference', async (_, preference: DownloadConfirmPreference) => {
+  if (preference !== 'ask' && preference !== 'immediate') {
+    return { ok: false, error: `Unknown download confirmation preference: ${preference}` };
+  }
+  datastore.setString(DOWNLOAD_CONFIRM_KEY, preference, true);
+  return { ok: true, preference };
+});
+
+/**
+ * Where this download would land, and what pressing Download would actually do.
+ *
+ * The confirmation dialog cannot work this out for itself: the folder layout,
+ * the variant segment and the collision suffix are all decided in
+ * `MediaDownloadResolver` and `DownloadService`, from the rest of the queue —
+ * which the renderer has never seen. A dialog that guessed the path would be
+ * wrong exactly when it matters (the second release of one film), and a dialog
+ * that showed no path would be answering a different question from the one the
+ * viewer is asking.
+ *
+ * It also reports the existing task, if there is one, because "Download" on a
+ * paused transfer means resume and on a finished one means nothing at all —
+ * `download:request` has known that since it replaced the old "Already
+ * downloading" refusal, and the dialog should say it before the press rather
+ * than after.
+ *
+ * Read-only: it claims no path and creates no task.
+ */
+ipcMain.handle('download:preview', async (_, task: DownloadTask) => {
+  try {
+    return { ok: true, ...downloadService.preview(task) };
+  } catch (error) {
+    return fail(error);
+  }
 });
 ipcMain.handle('download:getQueue', async () => downloadService.getTasks());
 

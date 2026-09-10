@@ -433,6 +433,39 @@ export class DownloadService {
    * A press is a request for the file to make progress. Six states, six useful
    * answers, and only one of them is "nothing to do".
    */
+  /**
+   * What `request` would do with this task, without doing any of it.
+   *
+   * Exists for the confirmation dialog, which has to describe a press before it
+   * happens. Everything here is already computed by `request` and
+   * `claimTargetPath`; the difference is that this claims nothing — no id, no
+   * queue entry, and deliberately no reserved path, because a dialog the viewer
+   * cancels must leave the queue exactly as it found it.
+   *
+   * The path is therefore the *unclaimed* one: if two dialogs were open at once
+   * on colliding variants they would both name the same file, and the second
+   * press would get the numbered suffix it did not see. That is the right
+   * trade — a suffix that appears is a cosmetic surprise; a path reserved by a
+   * dialog nobody confirmed is a leak.
+   */
+  public preview(task: DownloadTask): {
+    targetPath: string;
+    directory: string;
+    existingState?: DownloadState;
+    existingTaskId?: string;
+  } {
+    const variantKey = task.variantKey || downloadVariantKey(variantFromTask(task));
+    const existing = this.findByVariant(variantKey);
+    const targetPath =
+      existing?.targetFilePath || this.resolver.generateTargetFilePath(task);
+    return {
+      targetPath,
+      directory: path.dirname(targetPath),
+      existingState: existing?.state,
+      existingTaskId: existing?.id,
+    };
+  }
+
   public async request(task: DownloadTask): Promise<DownloadRequestResult> {
     const variantKey = task.variantKey || downloadVariantKey(variantFromTask(task));
     task.variantKey = variantKey;
