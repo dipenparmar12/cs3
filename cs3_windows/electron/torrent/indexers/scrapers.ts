@@ -1,10 +1,12 @@
 import * as cheerio from 'cheerio';
-import { fetchJson, fetchText } from '../http';
+import { fetchDocument, fetchJson } from '../http';
 import {
   buildMagnet,
   infoHashFromMagnet,
   parseIntSafe,
   parseSize,
+  tryMirrors,
+  withEpisodeTerms,
   type RawTorrent,
   type TorrentIndexer,
 } from './base';
@@ -26,35 +28,6 @@ import type { IndexerQuery } from '../../../src/types/torrent';
  *  - treats a page that parses to zero rows as a failure, so the registry's
  *    circuit breaker trips instead of the UI reporting "nothing matched".
  */
-
-async function tryMirrors<T>(
-  mirrors: readonly string[],
-  attempt: (base: string) => Promise<T>
-): Promise<T> {
-  let lastError: unknown = new Error('No mirrors configured');
-
-  for (const base of mirrors) {
-    try {
-      return await attempt(base);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError;
-}
-
-/** Folds a season/episode into free text, which is all these sites accept. */
-function withEpisodeTerms(query: IndexerQuery): string {
-  const terms = [query.query];
-  if (query.season !== undefined && query.episode !== undefined) {
-    terms.push(
-      `S${String(query.season).padStart(2, '0')}E${String(query.episode).padStart(2, '0')}`
-    );
-  } else if (query.season !== undefined) {
-    terms.push(`S${String(query.season).padStart(2, '0')}`);
-  }
-  return terms.join(' ');
-}
 
 // ---------------------------------------------------------------------------
 // 1337x — HTML, two hops (list page then detail page for the magnet)
@@ -90,12 +63,12 @@ export class X1337Indexer implements TorrentIndexer {
     return tryMirrors(X1337Indexer.MIRRORS, async (base) => {
       let listing = '';
       try {
-        listing = await fetchText(
+        listing = await fetchDocument(
           `${base}/sort-search/${search}/seeders/desc/1/`,
           { signal, timeoutMs: 20_000 }
         );
       } catch {
-        listing = await fetchText(
+        listing = await fetchDocument(
           `${base}/search/${search}/1/`,
           { signal, timeoutMs: 20_000 }
         );
@@ -141,7 +114,7 @@ export class X1337Indexer implements TorrentIndexer {
       const detailed = await Promise.all(
         wanted.map(async (row): Promise<RawTorrent | null> => {
           try {
-            const page = await fetchText(row.detailUrl, { signal, timeoutMs: 15_000, retries: 0 });
+            const page = await fetchDocument(row.detailUrl, { signal, timeoutMs: 15_000, retries: 0 });
             const magnet = cheerio.load(page)('a[href^="magnet:"]').first().attr('href');
             if (!magnet) return null;
 
@@ -194,7 +167,7 @@ export class BitSearchIndexer implements TorrentIndexer {
     const search = encodeURIComponent(withEpisodeTerms(query));
 
     return tryMirrors(BitSearchIndexer.MIRRORS, async (base) => {
-      const page = await fetchText(`${base}/search?q=${search}&sort=seeders`, {
+      const page = await fetchDocument(`${base}/search?q=${search}&sort=seeders`, {
         signal,
         timeoutMs: 20_000,
       });

@@ -34,6 +34,10 @@ const SLOW_TESTS = new Set([
 // Known preset aliases mapped from the legacy package.json scripts
 const PRESET_ALIASES = {
   ipc: ['electron/ipcSurface.test.mts'],
+  'module-reachability': ['electron/moduleReachability.test.mts'],
+  'playback-failover': ['electron/playbackFailover.test.mts'],
+  'experience-mode': ['src/utils/experienceMode.test.mts'],
+  'share-link': ['src/utils/shareLink.test.mts'],
   address: ['electron/cs3/extensionAddress.test.mts'],
   backup: ['electron/cs3/backupService.test.mts'],
   recovery: ['electron/cs3/providerRecovery.test.mts'],
@@ -42,6 +46,7 @@ const PRESET_ALIASES = {
     'electron/cs3/webViewMatch.test.mts',
   ],
   pipeline: ['electron/media/pipeline.test.mts'],
+  'mpv-emit': ['electron/media/mpvEmitPolicy.test.mts'],
   lease: ['electron/media/sourceLease.test.mts'],
   telemetry: ['electron/media/playbackTelemetry.test.mts'],
   container: ['electron/media/containerInspection.test.mts'],
@@ -76,9 +81,17 @@ const PRESET_ALIASES = {
   reachability: ['src/componentReachability.test.mts'],
   'settings-level': ['src/components/settings/settingsLevel.test.mts'],
   'dead-rows': ['src/utils/deadRows.test.mts'],
+  'playback-recovery': ['src/components/player/playbackRecovery.test.mts'],
+  'indexer-budget': ['electron/torrent/indexerBudget.test.mts'],
+  'bot-challenge': ['electron/torrent/botChallenge.test.mts'],
+  'source-profiles': ['electron/cs3/sourceProfiles.test.mts'],
+  'failure-taxonomy': ['electron/cs3/failureTaxonomy.test.mts'],
+  'provider-health': ['src/components/search/providerHealth.test.mts'],
+  'host-deadline': ['electron/cs3/hostDeadline.test.mts'],
   'native-providers': ['electron/cs3/nativeProviders.test.mts'],
   discovery: ['electron/sharedDiscovery.test.mts'],
   'shared-discovery': ['electron/sharedDiscovery.test.mts'],
+  updater: ['electron/cs3/extensionUpdater.test.mts'],
 };
 
 // Colors for terminal output

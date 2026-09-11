@@ -8,10 +8,14 @@ import { TvType, type SearchResponse } from '../types/api';
  * types upstream (`Anime`, `AnimeMovie`, `OVA`) that all mean "anime" to the
  * person reading the screen.
  *
- * `NSFW` is deliberately absent. Adult providers are withdrawn before results
- * are ever built (`PluginManager.enabledProviderNames`), so a tab for it would
- * be empty for everyone who has not opted in — and a category label nobody
- * asked for on the screen of everyone who has not.
+ * `NSFW` is here, and was left out for a reason that `tabsFor` below already
+ * handles. The worry was a category label appearing for everyone who had not
+ * opted in — but tabs are built from the results in hand and dropped when they
+ * would be empty, and adult providers are withdrawn before results are ever
+ * built (`PluginManager.enabledProviderNames`). With the gate off there are no
+ * such rows, so the tab does not exist; with it on the rows arrive and could
+ * only be reached by "All", mixed in with everything else. Someone who has
+ * deliberately turned the gate on is the one person entitled to filter by it.
  *
  * Shared by the search and home screens so the two cannot drift into offering
  * different names for the same thing.
@@ -23,6 +27,9 @@ export const TYPE_TABS: Array<{ id: string; label: string; types: TvType[] }> = 
   { id: 'documentary', label: 'Documentaries', types: [TvType.Documentary] },
   { id: 'live', label: 'Live', types: [TvType.Live] },
   { id: 'torrent', label: 'Torrents', types: [TvType.Torrent] },
+  // Last, so that it is never the tab beside "All" on a screen where it does
+  // appear. `tabsFor` removes it entirely when nothing is filed under it.
+  { id: 'adult', label: '18+ Adult', types: [TvType.NSFW] },
 ];
 
 /** Every type a row can be filed under. */

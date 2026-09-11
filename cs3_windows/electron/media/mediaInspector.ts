@@ -10,6 +10,7 @@ import type { InspectionStrategyType } from './playbackTelemetry.ts';
 import { isPlayableAudioCodec, requiresEmeDecryption } from './decisionEngine.ts';
 import { runTool } from './runTool.ts';
 import { scopedLogger } from '../logging/logger.ts';
+import { describeError } from '../../src/utils/errors.ts';
 
 const log = scopedLogger('ffprobe');
 
@@ -109,7 +110,7 @@ export async function detectExtensionPicky(
     setFfmpegExtensionPicky(supported);
     return supported;
   } catch (error) {
-    log.warn('detect_extension_picky_failed', { error: error instanceof Error ? error.message : String(error) });
+    log.warn('detect_extension_picky_failed', { error: describeError(error) });
     setFfmpegExtensionPicky(false);
     return false;
   }
@@ -715,7 +716,7 @@ export class MediaInspector {
       });
       return result;
     } catch (error) {
-      finish({ status: 'threw', error: error instanceof Error ? error.message : String(error) });
+      finish({ status: 'threw', error: describeError(error) });
       throw error;
     }
   }

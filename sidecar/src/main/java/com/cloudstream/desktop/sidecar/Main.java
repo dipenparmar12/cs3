@@ -223,7 +223,7 @@ public final class Main {
      * An unimplemented Android API in particular is a compatibility finding that
      * demotes the plugin's tier (DROP-7, DROP-28), not a generic error.
      */
-    private static String errorKind(Throwable t) {
+    static String errorKind(Throwable t) {
         for (Throwable c = t; c != null; c = c.getCause()) {
             String n = c.getClass().getName();
             /**
@@ -235,7 +235,34 @@ public final class Main {
              */
             if (c instanceof PluginHost.ProviderNotLoadedException) return "PROVIDER_NOT_LOADED";
             if (n.equals("android.content.UnsupportedAndroidApiException")) return "UNSUPPORTED_ANDROID_API";
-            if (c instanceof NoClassDefFoundError || c instanceof ClassNotFoundException) return "LINKAGE_FAILED";
+            /**
+             * The whole linkage family, not only the missing-class half.
+             *
+             * A missing class is one way a shim can be wrong and not the most
+             * common one. The rest are a class that is <em>present and wrong</em>:
+             * {@code SharedPreferences} declared as a class where Android's is an
+             * interface ({@code IncompatibleClassChangeError}, 112 plugins),
+             * {@code Context.getResources} returning {@code Object}
+             * ({@code NoSuchMethodError}), {@code AccountManager.aniListApi}
+             * typed as the wrapper. Every one of those is a defect here, and
+             * every one was reported as {@code PLUGIN_ERROR} — which reads as
+             * the extension having thrown, and sends the reader to blame a
+             * scraper's author for a method we failed to provide.
+             *
+             * The host's own text classifier was fixed for exactly this and
+             * files them as {@code runtime-unavailable}; the two must not
+             * disagree about the same failure.
+             *
+             * <p>{@code ExceptionInInitializerError} is the one exclusion. It is
+             * a {@code LinkageError} by inheritance and a plugin's own static
+             * initializer throwing in fact, so claiming it here would stop the
+             * walk one frame short of the cause that actually matters — and
+             * report the plugin's own bug as ours.
+             */
+            if ((c instanceof LinkageError && !(c instanceof ExceptionInInitializerError))
+                    || c instanceof ClassNotFoundException) {
+                return "LINKAGE_FAILED";
+            }
             if (c instanceof OutOfMemoryError) return "OUT_OF_MEMORY";
             if (c instanceof StackOverflowError) return "STACK_OVERFLOW";
         }

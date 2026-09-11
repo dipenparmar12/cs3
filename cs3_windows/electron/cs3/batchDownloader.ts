@@ -3,6 +3,7 @@ import type { DownloadService } from '../downloadService';
 import type { DownloadTask } from '../../src/types/download';
 import type { TorrentResult } from '../../src/types/torrent';
 import { buildDownloadTask } from '../../src/utils/downloadIdentity.ts';
+import { describeError } from '../../src/utils/errors.ts';
 
 /**
  * Queues a whole season — or a whole series — from a single choice.
@@ -167,7 +168,7 @@ export class BatchDownloader {
         progress.failed++;
         progress.failures.push({
           episode: label,
-          reason: error instanceof Error ? error.message : String(error),
+          reason: describeError(error),
         });
       }
 

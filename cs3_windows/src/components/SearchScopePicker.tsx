@@ -6,21 +6,19 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import {
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Filter,
-  Globe,
-  Loader2,
-  Minus,
-  Package,
-  Radio,
-  Search,
-  X,
-} from 'lucide-react';
+import { ChevronDown, Filter } from 'lucide-react';
 import type { ProviderTreeRepository, ProviderTreeProvider } from '../types/plugin';
 import type { ProviderLoadProgress } from '../../electron/pluginManager';
+import { SourceScopeDialog } from './search/SourceScopeDialog';
+import { SourceProfileBar, type ProfileSummary } from './search/SourceProfileBar';
+import { healthIndex, type ProviderHealth } from './search/providerHealth';
+import {
+  stateOf,
+  type ChosenSource,
+  type Facets,
+  type FacetSelection,
+  type Row,
+} from './search/sourceScopeModel';
 
 /**
  * Whether a provider can be offered as a search scope.
@@ -72,29 +70,6 @@ interface IndexerNode {
   name: string;
 }
 
-type CheckState = 'on' | 'off' | 'mixed';
-
-/**
- * One rendered line.
- *
- * The tree is flattened to a uniform row list so the menu can render a window
- * of it. Check state is derived at paint time from `members` rather than stored
- * here, which keeps ticking a box from rebuilding the list.
- */
-interface Row {
-  key: string;
-  kind: 'repo' | 'ext' | 'leaf' | 'note';
-  depth: 0 | 1 | 2;
-  label: string;
-  /** Provider names or indexer ids this row toggles; a leaf toggles one. */
-  members: string[];
-  expanded?: boolean;
-  lang?: string;
-  title?: string;
-  isIndexer: boolean;
-  icon?: 'package' | 'radio';
-}
-
 interface SearchScopePickerProps {
   /** Bumped by the parent when extensions change, to force a refetch. */
   refreshKey?: number;
@@ -107,65 +82,16 @@ interface SearchScopePickerProps {
   onScopeChange?: () => void;
 }
 
-const ROW_HEIGHT = 28;
-const VIEWPORT_HEIGHT = 300;
-const OVERSCAN = 6;
-
-/**
- * The facets a scope can be narrowed by, before anything is ticked.
- *
- * Derived from what is installed rather than hard-coded, for the same reason
- * the extensions screen's filters are: a fixed list of Movies/TV/Anime cannot
- * express "anime or series" and silently omits every other `TvType` the corpus
- * actually declares — `NSFW`, `Live`, `Documentary`, `AsianDrama`, `Cartoon`.
- * A facet with nothing behind it is not offered; one that exists cannot be
- * hidden.
- *
- * Semantics are **OR within a facet, AND across facets**, matching the
- * extensions screen. Anything else reads as broken.
- */
-interface Facets {
-  types: string[];
-  languages: string[];
-}
-
-interface FacetSelection {
-  types: Set<string>;
-  languages: Set<string>;
-  /** Hide extensions, or hide torrent indexers. Never both. */
-  kinds: Set<'extension' | 'indexer'>;
-}
-
 const EMPTY_SELECTION: FacetSelection = {
   types: new Set(),
   languages: new Set(),
   kinds: new Set(),
 };
 
-/** Upstream's `TvType` names are PascalCase; the menu is not. */
-function prettyType(value: string): string {
-  return value.replace(/([a-z])([A-Z])/g, '$1 $2');
-}
-
 /** Names differing only in case, spacing or punctuation are the same name. */
 function normalise(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
-
-function stateOf(members: string[], selected: Set<string>): CheckState {
-  if (members.length === 0) return 'off';
-  let on = 0;
-  for (const member of members) if (selected.has(member)) on += 1;
-  if (on === 0) return 'off';
-  return on === members.length ? 'on' : 'mixed';
-}
-
-const Box: React.FC<{ state: CheckState }> = ({ state }) => (
-  <span className={`scope__box scope__box--${state}`} aria-hidden>
-    {state === 'on' && <Check size={11} strokeWidth={3} />}
-    {state === 'mixed' && <Minus size={11} strokeWidth={3} />}
-  </span>
-);
 
 export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   refreshKey = 0,
@@ -185,11 +111,8 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   const deferredQuery = useDeferredValue(query);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [facets, setFacets] = useState<FacetSelection>(EMPTY_SELECTION);
-  const [scrollTop, setScrollTop] = useState(0);
 
-  const wrapper = useRef<HTMLDivElement | null>(null);
-  const scroller = useRef<HTMLDivElement | null>(null);
-  /** The scope as it was when the menu opened, to detect a real change on close. */
+  /** The scope as it was when the dialog opened, to detect a real change on close. */
   const openedWith = useRef<string>('');
 
   /**
@@ -277,30 +200,82 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  /**
+   * Saved source sets, and which one is driving the search.
+   *
+   * Held here rather than inside `SourceProfileBar` for the same reason every
+   * other list in this component is: the bar is presentation, and the selection
+   * it switches between is the same selection the tree below it edits. Two
+   * owners would let the pills and the checkboxes disagree about what is
+   * scoped, which is the disagreement the whole scope model exists to prevent.
+   */
+  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [activeProfile, setActiveProfile] = useState<string>('all');
+  const [draftCount, setDraftCount] = useState(0);
+
+  /**
+   * Applies a profile answer to everything on screen.
+   *
+   * The main process is the authority on what the scope now is — it resolved
+   * the profile, wrote it through to `SearchScopeStore`, and answered with the
+   * result — so the tree is redrawn from that answer rather than from what the
+   * click was expected to do.
+   */
+  const applyProfiles = useCallback((snapshot: {
+    ok?: boolean;
+    profiles?: ProfileSummary[];
+    activeId?: string;
+    draft?: { providers?: string[]; indexers?: string[] };
+  } | undefined) => {
+    if (!snapshot?.ok) return;
+    setProfiles(snapshot.profiles ?? []);
+    setActiveProfile(snapshot.activeId ?? 'all');
+    const draft = snapshot.draft ?? {};
+    setDraftCount((draft.providers?.length ?? 0) + (draft.indexers?.length ?? 0));
+
+    const active = (snapshot.profiles ?? []).find((p) => p.id === snapshot.activeId);
+    const scoped =
+      snapshot.activeId === 'all'
+        ? { providers: [] as string[], indexers: [] as string[] }
+        : active ?? { providers: draft.providers ?? [], indexers: draft.indexers ?? [] };
+    setProviders(new Set(scoped.providers));
+    setChosenIndexers(new Set(scoped.indexers));
+  }, []);
+
+  useEffect(() => {
+    void window.cloudstream?.listSourceProfiles?.().then(applyProfiles);
+  }, [applyProfiles]);
+
+  /**
+   * How well each provider has actually worked here.
+   *
+   * Fetched when the dialog opens rather than on mount: it is a whole
+   * leaderboard, nothing on the collapsed trigger uses it, and the numbers move
+   * slowly enough that a snapshot taken at open is as good as a live one.
+   * Failing to load it is not an error — the rows simply carry no badge, which
+   * is also what happens when the user has analytics switched off.
+   */
+  const [health, setHealth] = useState<Map<string, ProviderHealth>>(new Map());
   useEffect(() => {
     if (!open) return;
-    const onOutside = (event: PointerEvent) => {
-      if (wrapper.current && !wrapper.current.contains(event.target as Node)) close();
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close();
-    };
-    document.addEventListener('pointerdown', onOutside, true);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onOutside, true);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open, close]);
-
-  const persist = useCallback((nextProviders: Set<string>, nextIndexers: Set<string>) => {
-    setProviders(nextProviders);
-    setChosenIndexers(nextIndexers);
-    void window.cloudstream?.setSearchScope({
-      providers: [...nextProviders],
-      indexers: [...nextIndexers],
+    void window.cloudstream?.getProviderLeaderboard?.().then((response) => {
+      if (response?.ok) setHealth(healthIndex(response.scores ?? []));
     });
-  }, []);
+  }, [open]);
+
+  const persist = useCallback(
+    (nextProviders: Set<string>, nextIndexers: Set<string>) => {
+      setProviders(nextProviders);
+      setChosenIndexers(nextIndexers);
+      // Goes through the profile layer, which decides whether this edits the
+      // active profile or forks to the unnamed draft, then writes the effective
+      // scope through to the store every search path already reads.
+      void window.cloudstream
+        ?.setSearchScope({ providers: [...nextProviders], indexers: [...nextIndexers] })
+        .then(() => window.cloudstream?.listSourceProfiles?.().then(applyProfiles));
+    },
+    [applyProfiles]
+  );
 
   /** Every selectable source, split by which dimension of the scope it lives in. */
   const universe = useMemo(() => {
@@ -552,11 +527,6 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     return out;
   }, [repositories, indexers, deferredQuery, collapsed, matchesFacets, facetsActive, indexersVisible]);
 
-  useEffect(() => {
-    setScrollTop(0);
-    if (scroller.current) scroller.current.scrollTop = 0;
-  }, [deferredQuery]);
-
   const toggleRow = (row: Row) => {
     if (row.members.length === 0) return;
     const target = row.isIndexer ? chosenIndexers : providers;
@@ -582,24 +552,55 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   const totalChosen = providers.size + chosenIndexers.size;
   const totalAvailable = universe.providers.length + universe.indexers.length;
 
+  /**
+   * What is scoped, as names rather than a number.
+   *
+   * Indexers are resolved through their roster because the scope stores ids
+   * (`yts`, `nyaa`) and nobody scoped their search to `1337x-api`. A provider
+   * that has since been uninstalled keeps its own name as the label rather than
+   * disappearing from the strip: a selection nothing can serve has to stay
+   * visible or it cannot be removed, and `missingProviders` would report it as
+   * a mystery.
+   */
+  const chosen = useMemo<ChosenSource[]>(() => {
+    const indexerNames = new Map(indexers.map((indexer) => [indexer.id, indexer.name]));
+    return [
+      ...[...providers].sort().map((name) => ({ id: name, label: name, isIndexer: false })),
+      ...[...chosenIndexers]
+        .sort()
+        .map((id) => ({ id, label: indexerNames.get(id) ?? id, isIndexer: true })),
+    ];
+  }, [providers, chosenIndexers, indexers]);
+
+  const deselect = useCallback(
+    (source: ChosenSource) => {
+      if (source.isIndexer) {
+        const next = new Set(chosenIndexers);
+        next.delete(source.id);
+        persist(providers, next);
+        return;
+      }
+      const next = new Set(providers);
+      next.delete(source.id);
+      persist(next, chosenIndexers);
+    },
+    [providers, chosenIndexers, persist]
+  );
+
   const label =
     totalChosen === 0
       ? 'All sources'
       : totalChosen === 1
-        ? [...providers, ...chosenIndexers][0]
+        ? chosen[0]?.label ?? '1 source'
         : `${totalChosen} sources`;
 
-  const first = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
-  const last = Math.min(rows.length, Math.ceil((scrollTop + VIEWPORT_HEIGHT) / ROW_HEIGHT) + OVERSCAN);
-  const visible = rows.slice(first, last);
-
   return (
-    <div className="scope" ref={wrapper}>
+    <div className="scope">
       <button
         className={`btn btn-secondary scope__trigger${totalChosen > 0 ? ' scope__trigger--active' : ''}`}
         onClick={() => (open ? close() : setOpen(true))}
         aria-expanded={open}
-        aria-haspopup="true"
+        aria-haspopup="dialog"
         title={
           totalChosen === 0
             ? 'Searching every enabled source'
@@ -612,243 +613,58 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       </button>
 
       {open && (
-        <div className="scope__menu" role="group" aria-label="Search scope">
-          <div className="scope__head">
-            <span>Search scope</span>
-            <span className="scope__head-count">
-              {totalChosen === 0 ? 'global' : `${totalChosen} of ${totalAvailable}`}
-            </span>
-          </div>
-
-          <div className="scope__search">
-            <Search size={13} />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search sources…"
-              aria-label="Search sources"
-              autoFocus
-            />
-            {query && (
-              <button onClick={() => setQuery('')} title="Clear" aria-label="Clear source search">
-                <X size={12} />
-              </button>
-            )}
-          </div>
-
-          {/*
-            The default, stated as a row rather than only as an absence. An empty
-            selection and a fully-ticked one search the same sources today, but
-            they age differently: this one follows whatever is installed, while
-            ticking everything pins the set as it is right now.
-          */}
-          <button
-            className={`scope__row scope__row--all${totalChosen === 0 ? ' scope__row--current' : ''}`}
-            onClick={() => persist(new Set(), new Set())}
-          >
-            <Box state={totalChosen === 0 ? 'on' : 'off'} />
-            <Globe size={13} />
-            <span className="scope__name">All sources</span>
-            <span className="scope__count">{totalAvailable}</span>
-          </button>
-
-          {/*
-            Facets, derived from what is installed.
-
-            Placed above the tree rather than inside it because they narrow what
-            the tree contains — a filter rendered as a row of the thing it
-            filters reads as another selectable source.
-          */}
-          {(available.types.length > 0 ||
-            available.languages.length > 0 ||
-            indexers.length > 0) && (
-            <div className="scope__facets">
-              {indexers.length > 0 && universe.providers.length > 0 && (
-                <div className="scope__facet-group" role="group" aria-label="Source kind">
-                  <button
-                    className={`scope__chip${facets.kinds.has('extension') ? ' scope__chip--on' : ''}`}
-                    onClick={() => toggleFacet('kinds', 'extension')}
-                    title="Show only extension providers"
-                  >
-                    <Package size={11} /> Extensions
-                  </button>
-                  <button
-                    className={`scope__chip${facets.kinds.has('indexer') ? ' scope__chip--on' : ''}`}
-                    onClick={() => toggleFacet('kinds', 'indexer')}
-                    title="Show only torrent indexers"
-                  >
-                    <Radio size={11} /> Torrents
-                  </button>
-                </div>
-              )}
-
-              {available.types.length > 0 && (
-                <div className="scope__facet-group" role="group" aria-label="Content type">
-                  {available.types.map((type) => (
-                    <button
-                      key={type}
-                      className={`scope__chip${facets.types.has(type) ? ' scope__chip--on' : ''}`}
-                      onClick={() => toggleFacet('types', type)}
-                    >
-                      {prettyType(type)}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {available.languages.length > 1 && (
-                <div className="scope__facet-group" role="group" aria-label="Language">
-                  {available.languages.slice(0, 12).map((lang) => (
-                    <button
-                      key={lang}
-                      className={`scope__chip${facets.languages.has(lang) ? ' scope__chip--on' : ''}`}
-                      onClick={() => toggleFacet('languages', lang)}
-                    >
-                      {lang.toUpperCase()}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {facetsActive && (
-                <button
-                  className="scope__chip scope__chip--clear"
-                  onClick={() => setFacets(EMPTY_SELECTION)}
-                >
-                  <X size={11} /> Clear filters
-                </button>
-              )}
-            </div>
-          )}
-
-          {/*
-            Progress, with a number in it.
-
-            "Loading extensions…" for four minutes is indistinguishable from a
-            hang, and that is precisely how long this can take on a bootstrapped
-            install. Saying which archive and how many are left turns the same
-            wait into something a user can judge.
-          */}
-          {progress?.running && (
-            <div className="scope__loading scope__loading--quiet">
-              <Loader2 size={12} className="spin" />
-              <span>
-                Loading extensions — {progress.loaded} of {progress.total}
-                {progress.providers > 0 ? `, ${progress.providers} providers so far` : ''}
-                {progress.current ? ` · ${progress.current}` : ''}
-              </span>
-            </div>
-          )}
-
-          {/* Only takes the panel over when there is nothing to show yet; a
-              refresh over an existing tree is a quiet line, not a blank menu. */}
-          {loading && !loaded && !progress?.running && (
-            <div className="scope__loading">
-              <Loader2 size={14} className="spin" /> Loading extensions…
-            </div>
-          )}
-          {loading && loaded && !progress?.running && (
-            <div className="scope__loading scope__loading--quiet">
-              <Loader2 size={12} className="spin" /> Refreshing…
-            </div>
-          )}
-
-          {!loading && rows.length === 0 && (
-            <p className="scope__empty">
-              {deferredQuery.trim()
-                ? `Nothing matches "${deferredQuery.trim()}".`
-                : facetsActive
-                  ? 'No source matches these filters.'
-                  : progress?.running
-                    ? 'Loading the installed extensions…'
-                    : 'No extension providers are installed. Add a repository in Extensions.'}
-            </p>
-          )}
-
-          {rows.length > 0 && (
-            <div
-              className="scope__list"
-              ref={scroller}
-              style={{ height: Math.min(VIEWPORT_HEIGHT, rows.length * ROW_HEIGHT) }}
-              onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-            >
-              <div style={{ height: rows.length * ROW_HEIGHT, position: 'relative' }}>
-                <div style={{ transform: `translateY(${first * ROW_HEIGHT}px)` }}>
-                  {visible.map((row) => {
-                    if (row.kind === 'note') {
-                      return (
-                        <p key={row.key} className="scope__note" style={{ height: ROW_HEIGHT }}>
-                          {row.label}
-                        </p>
-                      );
-                    }
-
-                    const selected = row.isIndexer ? chosenIndexers : providers;
-                    const state = stateOf(row.members, selected);
-                    const collapsible = row.expanded !== undefined;
-
-                    return (
-                      <div
-                        key={row.key}
-                        className={`scope__row scope__row--${row.kind} scope__row--d${row.depth}`}
-                        style={{ height: ROW_HEIGHT }}
-                        title={row.title}
-                      >
-                        {collapsible ? (
-                          <button
-                            className="scope__twisty"
-                            onClick={() => toggleCollapse(row.key)}
-                            aria-label={row.expanded ? 'Collapse' : 'Expand'}
-                            aria-expanded={row.expanded}
-                          >
-                            {row.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                          </button>
-                        ) : (
-                          <span className="scope__twisty scope__twisty--empty" />
-                        )}
-
-                        <button
-                          className="scope__pick"
-                          onClick={() => toggleRow(row)}
-                          disabled={row.members.length === 0}
-                        >
-                          <Box state={state} />
-                          {row.icon === 'package' && <Package size={13} />}
-                          {row.icon === 'radio' && <Radio size={13} />}
-                          <span className="scope__name">{row.label}</span>
-                          {row.lang && <span className="scope__lang">{row.lang.toUpperCase()}</span>}
-                          {row.members.length > 1 && (
-                            <span className="scope__count">{row.members.length}</span>
-                          )}
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="scope__foot">
-            <button
-              onClick={() =>
-                persist(new Set(universe.providers), new Set(universe.indexers))
+        <SourceScopeDialog
+          rows={rows}
+          available={available}
+          facets={facets}
+          facetsActive={facetsActive}
+          onToggleFacet={toggleFacet}
+          onClearFacets={() => setFacets(EMPTY_SELECTION)}
+          query={query}
+          onQueryChange={setQuery}
+          providers={providers}
+          indexers={chosenIndexers}
+          chosen={chosen}
+          totalChosen={totalChosen}
+          totalAvailable={totalAvailable}
+          hasExtensions={universe.providers.length > 0}
+          hasIndexers={indexers.length > 0}
+          progress={progress}
+          loading={loading}
+          loaded={loaded}
+          onToggleRow={toggleRow}
+          onToggleCollapse={toggleCollapse}
+          onDeselect={deselect}
+          onSelectAll={() => persist(new Set(universe.providers), new Set(universe.indexers))}
+          /* Reset is now "switch to All sources", which keeps the selection
+             rather than overwriting it with an empty one. */
+          onReset={() => void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles)}
+          onClose={close}
+          healthFor={(provider) => health.get(provider)}
+          profileBar={
+            <SourceProfileBar
+              profiles={profiles}
+              activeId={activeProfile}
+              hasDraft={draftCount > 0}
+              draftCount={draftCount}
+              onActivate={(id) =>
+                void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles)
               }
-              disabled={totalAvailable === 0}
-            >
-              Select all
-            </button>
-            <button onClick={() => persist(new Set(), new Set())} disabled={totalChosen === 0}>
-              Reset to all sources
-            </button>
-          </div>
-
-          <p className="scope__hint">
-            {totalChosen === 0
-              ? 'Searching every enabled provider, catalogue and indexer.'
-              : 'Only the selected sources are searched. Catalogue metadata is not consulted while the scope is narrowed.'}
-          </p>
-        </div>
+              onCreate={(name) =>
+                void window.cloudstream?.createSourceProfile?.(name).then(applyProfiles)
+              }
+              onRename={(id, name) =>
+                void window.cloudstream?.renameSourceProfile?.(id, name).then(applyProfiles)
+              }
+              onDuplicate={(id) =>
+                void window.cloudstream?.duplicateSourceProfile?.(id).then(applyProfiles)
+              }
+              onDelete={(id) =>
+                void window.cloudstream?.deleteSourceProfile?.(id).then(applyProfiles)
+              }
+            />
+          }
+        />
       )}
     </div>
   );

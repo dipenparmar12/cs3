@@ -51,6 +51,15 @@ interface NativeEngineStageProps {
   /** "Play it here instead" — the ffmpeg ladder, forced. */
   onFallbackToBuiltIn?: () => void;
   onError?: (message: string) => void;
+  /**
+   * The engine started playing after having reported a failure.
+   *
+   * Separate from `onPausedChange` because the player must distinguish
+   * "playing" from "playing, and the message on screen is now a lie" — only
+   * the second one may retire an error panel that some other rung of the
+   * ladder raised.
+   */
+  onRecovered?: () => void;
 }
 
 /** mpv gives a track a title, a language, both or neither. All four read badly raw. */
@@ -78,6 +87,7 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
   onEnded,
   onFallbackToBuiltIn,
   onError,
+  onRecovered,
 }) => {
   const [snapshot, setSnapshot] = useState<MpvSnapshot | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -147,6 +157,22 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
       return;
     }
 
+    /**
+     * An engine that is playing has un-failed, and both surfaces have to hear it.
+     *
+     * This stage renders `null` for as long as `openError` is set (see the
+     * comment on that branch), and the player keeps whatever message it was
+     * given until something clears it — so a failure on the way to playback left
+     * a blank stage under an error panel, over a film mpv had gone on to play.
+     * The snapshot's `url` is what was handed to `mpv:open`, so it is checked:
+     * a late snapshot describing the *previous* source must not retire this
+     * one's failure.
+     */
+    if (openError && snapshot.url === url && snapshot.state === 'playing') {
+      setOpenError(null);
+      onRecovered?.();
+    }
+
     if (snapshot.positionSeconds >= 0) {
       onProgress?.(snapshot.positionSeconds, snapshot.durationSeconds);
     }
@@ -163,7 +189,7 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
       endedRef.current = true;
       onEnded?.();
     }
-  }, [snapshot, onProgress, onPausedChange, onEnded, onError]);
+  }, [snapshot, url, openError, onProgress, onPausedChange, onEnded, onError, onRecovered]);
 
   const loading = !snapshot || snapshot.state === 'loading' || snapshot.state === 'buffering';
 

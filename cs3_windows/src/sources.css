@@ -285,6 +285,61 @@
   color: var(--text-muted);
 }
 .detail-view__back { align-self: flex-start; }
+
+/* --- "showing your saved copy" ------------------------------------------
+   Two weights for two states. The quiet one accompanies content that is real
+   and merely unconfirmed; the loud one accompanies content nothing could
+   confirm. Sharing one appearance would either alarm people for two seconds
+   every time a page loads, or hide the case that needs a decision. */
+.detail-saved {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--text-main);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+.detail-saved--quiet {
+  border-color: var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  padding: 0.4rem 0.7rem;
+}
+.detail-saved__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.detail-saved__why {
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+  /* A provider's reason can be a paragraph; two lines then an ellipsis keeps
+     the banner from pushing the page it is annotating off the screen. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.detail-saved__retry {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-main);
+  font-size: 0.74rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.detail-saved__retry:hover {
+  background: var(--bg-card-hover);
+}
 .detail-hero { display: flex; gap: 1.5rem; flex-wrap: wrap; }
 .detail-hero__poster { width: 210px; border-radius: 10px; flex-shrink: 0; }
 .detail-hero__body { flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 0.7rem; }
@@ -1794,7 +1849,30 @@
 }
 .icon-button:hover { background: rgba(255, 255, 255, 0.1); }
 .btn-sm { padding: 0.3rem 0.6rem; font-size: 0.78rem; }
-.btn-ghost { background: transparent; border: 1px solid rgba(255, 255, 255, 0.12); }
+/**
+ * The transparent button variant, with a colour of its own.
+ *
+ * It had none, and `.btn` has none either, so this fell through to Chromium's
+ * `buttontext` — near-black, on a `--bg-card` panel. Twenty call sites, all
+ * unreadable; the one that got reported was "Reset" in the source-scope dialog
+ * because that is where two of them sit side by side. `color-scheme: dark` in
+ * `index.css` fixes the fallback as well, and this fixes it without relying on
+ * the fallback.
+ *
+ * Hover and active are stated rather than inherited for the same reason: a
+ * transparent control with no state feedback reads as decoration.
+ */
+.btn-ghost {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-main);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #fff;
+}
+.btn-ghost:active:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
 
 /* --- Settings: Sources --- */
 
@@ -3687,6 +3765,11 @@
 .search-sources__row--failed .search-sources__detail {
   color: #f87171;
 }
+/* Not red. A browse-only catalogue is not a fault, and colouring it as one is
+   how a working search came to look like four broken providers. */
+.search-sources__row--unsupported .search-sources__detail {
+  color: var(--text-subtle);
+}
 .search-sources__name {
   flex: 1 1 auto;
   color: var(--text-main);
@@ -3741,120 +3824,121 @@
   white-space: nowrap;
 }
 
-.scope__menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  width: 330px;
+/* --- The source-scope dialog ---------------------------------------------
+
+   Sized in viewport units with hard ceilings: the tree wants every row it can
+   get on a large display, and the rail plus the list still have to fit on a
+   1366x768 laptop, which is what the `min()` pair is for. The old dropdown was
+   330px wide and 300px tall for a three-level tree of several hundred rows. */
+
+.scope-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(2px);
+}
+
+.scope-modal__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(980px, 100%);
+  height: min(760px, 86vh);
   background: var(--bg-card);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.65);
-  z-index: 9999;
-  padding: 0.6rem;
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
 }
 
-.scope__head {
+.scope-modal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.15rem 0.85rem;
+  border-bottom: 1px solid var(--border-color);
+}
+.scope-modal__head h2 {
+  margin: 0;
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: #fff;
+}
+.scope-modal__subtitle {
+  margin: 0.15rem 0 0;
+  font-size: 0.76rem;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.scope-modal__close {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  font-size: 0.72rem;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.scope-modal__close:hover {
+  background: var(--bg-card-hover);
+  color: #fff;
+}
+
+.scope-modal__body {
+  flex: 1 1 auto;
+  display: grid;
+  /* Two panes, because the two mechanisms are two different questions. A rail
+     that collapses under its content would put them back in one column. */
+  grid-template-columns: minmax(180px, 232px) minmax(0, 1fr);
+  min-height: 0;
+}
+
+/* --- filter rail --------------------------------------------------------- */
+
+.scope-modal__rail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 0.9rem 0.95rem;
+  border-right: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.16);
+  overflow-y: auto;
+}
+.scope-modal__rail-note {
+  margin: 0;
+  font-size: 0.71rem;
+  line-height: 1.45;
+  color: var(--text-subtle);
+}
+.scope-modal__facet h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.66rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-subtle);
-  padding: 0 0.2rem 0.4rem;
 }
-.scope__head-count {
-  font-variant-numeric: tabular-nums;
-  color: var(--accent-light);
-}
-
-.scope__search {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0.5rem;
-  margin-bottom: 0.4rem;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: rgba(0, 0, 0, 0.25);
-  color: var(--text-subtle);
-}
-.scope__search input {
-  flex: 1 1 auto;
-  min-width: 0;
-  border: none;
-  background: none;
-  color: var(--text-main);
-  font-size: 0.78rem;
-  outline: none;
-}
-.scope__search button {
-  flex: 0 0 auto;
-  border: none;
-  background: none;
-  color: var(--text-subtle);
-  cursor: pointer;
-  padding: 0;
-  display: flex;
-}
-
-.scope__hint,
-.scope__empty {
-  font-size: 0.72rem;
-  line-height: 1.4;
-  color: var(--text-subtle);
-  margin: 0.45rem 0 0;
-  padding: 0 0.2rem;
-}
-
-.scope__loading {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  padding: 0.4rem 0.2rem;
-}
-.scope__loading--quiet {
-  font-size: 0.7rem;
-  color: var(--text-subtle);
-  padding: 0.1rem 0.2rem 0.3rem;
-}
-
-/* Facets narrow what the tree contains, so they sit above it and are visually
-   distinct from the rows — a filter that looks like a row reads as a source. */
-.scope__facets {
+.scope-modal__facet-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
-  padding: 0.35rem 0.1rem 0.45rem;
-  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  margin-bottom: 0.35rem;
 }
-
-.scope__facet-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  align-items: center;
-}
-
-/* Groups are separated by a hairline rather than a gap: with a dozen language
-   chips the eye needs the boundary to read "OR within, AND across". */
-.scope__facet-group + .scope__facet-group {
-  padding-left: 0.4rem;
-  border-left: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-}
-
-.scope__chip {
+.scope-modal__chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.22rem;
-  font-size: 0.66rem;
+  gap: 0.28rem;
+  font-size: 0.71rem;
   line-height: 1;
-  padding: 0.24rem 0.42rem;
+  padding: 0.32rem 0.55rem;
   border-radius: 999px;
   border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
   background: transparent;
@@ -3863,64 +3947,221 @@
   white-space: nowrap;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
-
-.scope__chip:hover {
-  color: var(--text-primary);
+.scope-modal__chip:hover {
+  color: var(--text-main);
   border-color: var(--border-strong, rgba(255, 255, 255, 0.24));
 }
-
-.scope__chip--on {
+.scope-modal__chip--on {
   background: var(--accent, #e50914);
   border-color: var(--accent, #e50914);
   color: #fff;
 }
+.scope-modal__clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 0.72rem;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.scope-modal__clear:hover {
+  color: var(--text-main);
+}
 
-.scope__chip--clear {
-  margin-left: auto;
+/* --- source list --------------------------------------------------------- */
+
+.scope-modal__main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.9rem 0.95rem 0.5rem;
+  min-height: 0;
+  min-width: 0;
+}
+
+.scope-modal__search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-subtle);
+  flex: 0 0 auto;
+}
+.scope-modal__search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--text-main);
+  font-size: 0.84rem;
+  outline: none;
+}
+.scope-modal__search button {
+  flex: 0 0 auto;
+  display: flex;
+  border: none;
+  background: none;
+  color: var(--text-subtle);
+  cursor: pointer;
+  padding: 0;
+}
+
+.scope-modal__all {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: 0 0 auto;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: #fff;
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.scope-modal__all:hover {
+  background: var(--bg-card-hover);
+}
+.scope-modal__all--current {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.34);
+}
+.scope-modal__all-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.scope-modal__all-hint {
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--text-subtle);
+}
+
+/* The current scope, spelled out. Bounded so a hundred ticked providers cannot
+   push the tree they were ticked in off the bottom of the dialog. */
+.scope-modal__chosen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+  max-height: 5.4rem;
+  overflow-y: auto;
+  padding: 0.15rem 0.05rem;
+}
+.scope-modal__chosen-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.3rem 0.45rem 0.3rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--text-main);
+  cursor: pointer;
+  max-width: 15rem;
+}
+.scope-modal__chosen-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-modal__chosen-chip:hover {
+  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.14);
+}
+
+.scope-modal__progress {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+.scope-modal__progress--quiet {
+  font-size: 0.72rem;
+  color: var(--text-subtle);
+}
+
+.scope-modal__empty {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
   color: var(--text-subtle);
 }
 
 /* Windowed list: the inner wrapper is sized to the full row count so the
    scrollbar reflects everything, while only a visible slice is mounted. */
-.scope__list {
+.scope-modal__tree {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  margin: 0 -0.2rem;
+  margin: 0 -0.25rem;
+  border-radius: var(--radius-sm);
+}
+.scope-modal__tree:focus-visible {
+  outline: 2px solid var(--accent-primary, #3b82f6);
+  outline-offset: -2px;
 }
 
-.scope__row {
+.scope-modal__row {
   display: flex;
   align-items: center;
-  gap: 0.15rem;
+  gap: 0.2rem;
   width: 100%;
   border-radius: var(--radius-sm);
   color: var(--text-main);
-  font-size: 0.8rem;
+  font-size: 0.84rem;
   text-align: left;
 }
-.scope__row:hover {
+.scope-modal__row:hover {
   background: var(--bg-card-hover);
 }
+/* The keyboard cursor is not the selection: a row can be arrowed onto without
+   being ticked, and conflating the two makes arrow keys look destructive. */
+.scope-modal__row--active {
+  background: var(--bg-card-hover);
+  box-shadow: inset 2px 0 0 var(--accent-primary, #3b82f6);
+}
+.scope-modal__row--on .scope-modal__name {
+  color: #fff;
+}
 
-.scope__row--all {
-  gap: 0.5rem;
-  padding: 0.35rem 0.4rem;
-  border: none;
-  background: none;
-  cursor: pointer;
+/* Indentation is the hierarchy: repository, extension, provider. */
+.scope-modal__row--repo {
   font-weight: 600;
   color: #fff;
 }
-.scope__row--current {
-  background: rgba(59, 130, 246, 0.14);
+.scope-modal__row--d1 {
+  padding-left: 1.2rem;
+}
+.scope-modal__row--d2 {
+  padding-left: 2.4rem;
+  color: var(--text-muted);
 }
 
-.scope__twisty {
+.scope-modal__twisty {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
+  width: 20px;
   height: 100%;
   border: none;
   background: none;
@@ -3928,18 +4169,18 @@
   cursor: pointer;
   padding: 0;
 }
-.scope__twisty--empty {
+.scope-modal__twisty--empty {
   cursor: default;
 }
 
-.scope__pick {
+.scope-modal__pick {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.5rem;
   height: 100%;
-  padding: 0 0.3rem;
+  padding: 0 0.35rem;
   border: none;
   background: none;
   color: inherit;
@@ -3947,31 +4188,38 @@
   text-align: left;
   cursor: pointer;
 }
-.scope__pick:disabled {
+.scope-modal__pick:disabled {
   cursor: default;
   opacity: 0.55;
 }
+.scope-modal__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-modal__lang {
+  flex: 0 0 auto;
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  color: var(--text-subtle);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  border-radius: 3px;
+  padding: 0.05rem 0.22rem;
+}
+.scope-modal__count {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
 
-/* Indentation is the hierarchy: repository, extension, provider. */
-.scope__row--repo {
-  font-weight: 600;
-  color: #fff;
-}
-.scope__row--d1 {
-  padding-left: 1.1rem;
-}
-.scope__row--d2 {
-  padding-left: 2.2rem;
-  color: var(--text-muted);
-  font-size: 0.78rem;
-}
-
-.scope__note {
+.scope-modal__note {
   display: flex;
   align-items: center;
   margin: 0;
-  padding-left: 2.4rem;
-  font-size: 0.7rem;
+  padding-left: 2.6rem;
+  font-size: 0.74rem;
   line-height: 1.2;
   color: var(--text-subtle);
   overflow: hidden;
@@ -3979,46 +4227,53 @@
   white-space: nowrap;
 }
 
-.scope__foot {
+/* --- footer -------------------------------------------------------------- */
+
+.scope-modal__foot {
   display: flex;
-  gap: 0.4rem;
-  margin-top: 0.5rem;
-  padding-top: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1.15rem;
   border-top: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.16);
 }
-.scope__foot button {
-  flex: 1 1 0;
-  border: 1px solid var(--border-color);
-  background: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-main);
-  font-size: 0.72rem;
-  padding: 0.3rem 0.4rem;
-  cursor: pointer;
-}
-.scope__foot button:hover:not(:disabled) {
-  border-color: var(--accent-primary);
-  color: #fff;
-}
-.scope__foot button:disabled {
+.scope-modal__summary {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.4;
   color: var(--text-subtle);
-  cursor: default;
+  flex: 1 1 16rem;
+  min-width: 0;
 }
-
-.scope__name {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.scope__count,
-.scope__lang {
+.scope-modal__actions {
+  display: flex;
+  gap: 0.45rem;
   flex: 0 0 auto;
-  font-size: 0.68rem;
-  color: var(--text-subtle);
-  font-variant-numeric: tabular-nums;
 }
 
+/* Narrow windows: the rail sits above the list rather than squeezing it. */
+@media (max-width: 720px) {
+  .scope-modal {
+    padding: 0.75rem;
+  }
+  .scope-modal__panel {
+    height: 92vh;
+  }
+  .scope-modal__body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .scope-modal__rail {
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    max-height: 34%;
+  }
+}
+
+/* Still used: the tri-state checkbox is drawn by the dialog's rows and by the
+   "All sources" row alike. */
 .scope__box {
   flex: 0 0 auto;
   display: inline-flex;
@@ -5496,6 +5751,38 @@
   max-width: 52ch;
 }
 .playback-error__origin { font-weight: 600; color: rgba(147, 197, 253, 0.9); }
+
+/*
+  The original message, once asked for.
+  A link rather than a button chrome-wise: it reveals text, it does not act on
+  the failure, and it must not compete with the actions below it.
+*/
+.playback-error__detail-toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.playback-error__detail-toggle:hover { color: var(--text); }
+.playback-error__detail {
+  margin: 0;
+  max-width: 52ch;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.28);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.72);
+  /* Same reason as the message above: these arrive as unbroken tokens. */
+  overflow-wrap: anywhere;
+}
 .playback-error__actions {
   display: flex;
   flex-wrap: wrap;
@@ -6685,3 +6972,196 @@
 }
 .search-bar__attach:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
 .search-bar__attach:disabled { opacity: 0.6; cursor: default; }
+
+/* --- download confirmation ------------------------------------------------
+   A summary, not a warning. The delete prompt beside it presents two
+   equal-weight destructive choices; this one has a plain Cancel/Confirm pair
+   because there is only one action and it is reversible — what the dialog is
+   for is the *facts* above the buttons, so those get the room. */
+.download-confirm { max-width: 460px; display: flex; flex-direction: column; gap: .9rem; padding: 1.25rem; }
+
+.download-confirm__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.download-confirm__head h3 { margin: 0; font-size: 1.02rem; }
+
+.download-confirm__title {
+  margin: 0; font-size: .95rem; font-weight: 600;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem;
+}
+.download-confirm__episode {
+  font-size: .78rem; font-weight: 600; letter-spacing: .02em;
+  padding: .1rem .35rem; border-radius: 4px;
+  background: var(--bg-elevated, rgba(255,255,255,.08)); color: var(--text-muted);
+}
+.download-confirm__episode-title { font-size: .82rem; font-weight: 400; color: var(--text-muted); }
+
+/* Two columns so the labels line up and the eye can run down the values. The
+   value column wraps: release names are long and truncating the one row that
+   distinguishes two downloads would defeat the dialog. */
+.download-confirm__facts {
+  display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: .3rem .9rem; margin: 0; font-size: .84rem;
+}
+.download-confirm__facts dt { color: var(--text-muted); }
+.download-confirm__facts dd { margin: 0; overflow-wrap: anywhere; }
+
+.download-confirm__where {
+  display: flex; align-items: center; gap: .45rem;
+  font-size: .8rem; color: var(--text-muted);
+  padding: .5rem .6rem; border-radius: 6px;
+  background: var(--bg-elevated, rgba(255,255,255,.04));
+}
+/* The folder, not the whole path — the filename is derived and predictable,
+   the directory is the part someone might want to change. Full path on hover. */
+.download-confirm__where span { overflow-wrap: anywhere; }
+
+.download-confirm__note {
+  display: flex; align-items: center; gap: .4rem;
+  margin: 0; font-size: .78rem; color: var(--text-muted);
+}
+
+.download-confirm__remember { display: flex; align-items: center; gap: .5rem; font-size: .85rem; cursor: pointer; }
+
+.download-confirm__actions { display: flex; justify-content: flex-end; gap: .5rem; }
+.download-confirm__actions .btn { display: inline-flex; align-items: center; gap: .35rem; }
+
+/* --- source profiles ------------------------------------------------------
+   A row of pills above the source tree, not a settings screen. A profile is
+   only ever edited in the moment you notice it is wrong, so its management
+   lives behind the pill it belongs to. */
+.profile-bar {
+  display: flex; align-items: flex-start; gap: .5rem;
+  padding: .6rem .9rem;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, .12);
+}
+.profile-bar--naming { align-items: center; }
+.profile-bar--naming input {
+  flex: 1; min-width: 0;
+  background: var(--bg-input); color: var(--text-main);
+  border: 1px solid var(--border-color); border-radius: 6px;
+  padding: .35rem .55rem; font-size: .84rem;
+}
+
+/* Wraps rather than scrolls: a horizontal scroller hides the pill on the end,
+   and the pill on the end is the one just created. */
+.profile-bar__pills { display: flex; flex-wrap: wrap; gap: .35rem; flex: 1; min-width: 0; }
+.profile-bar__save { flex-shrink: 0; display: inline-flex; align-items: center; gap: .3rem; }
+
+.profile-pill-group { position: relative; display: inline-flex; }
+
+.profile-pill {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .3rem .6rem;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card-hover);
+  color: var(--text-main);
+  font-size: .8rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.profile-pill:hover { border-color: rgba(255, 255, 255, .28); }
+.profile-pill--on {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #fff;
+}
+.profile-pill__count {
+  font-size: .7rem; font-variant-numeric: tabular-nums;
+  padding: 0 .3rem; border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, .25);
+}
+
+/* Joined to its pill so the pair reads as one control. */
+.profile-pill-group .profile-pill { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.profile-pill__more {
+  border: 1px solid var(--border-color); border-left: none;
+  border-top-right-radius: var(--radius-full); border-bottom-right-radius: var(--radius-full);
+  background: var(--bg-card-hover); color: var(--text-muted);
+  padding: 0 .45rem; font-size: .8rem; line-height: 1; cursor: pointer;
+}
+.profile-pill__more:hover { color: var(--text-main); border-color: rgba(255, 255, 255, .28); }
+
+.profile-menu {
+  position: absolute; top: calc(100% + .3rem); right: 0; z-index: 20;
+  display: flex; flex-direction: column; min-width: 150px;
+  background: var(--bg-card); border: 1px solid var(--border-color);
+  border-radius: 8px; padding: .25rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+}
+.profile-menu button {
+  display: flex; align-items: center; gap: .45rem;
+  padding: .4rem .5rem; border: none; border-radius: 5px;
+  background: transparent; color: var(--text-main);
+  font-size: .82rem; text-align: left; cursor: pointer;
+}
+.profile-menu button:hover { background: var(--bg-card-hover); }
+.profile-menu__danger { color: var(--status-error); }
+
+/* --- provider health, in the list where the switch is ---------------------
+   A word, not a number, and only when there is evidence for it. `unknown` has
+   no rule here on purpose: an unmeasured provider draws nothing, so a fresh
+   install is not two hundred badges saying the app has no opinion. */
+.scope-modal__health {
+  font-size: .66rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  padding: .1rem .34rem;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* Colour carries the reading, and the label repeats it — the badge has to work
+   for someone who cannot tell the greens from the ambers. */
+.scope-modal__health--excellent { background: rgba(16, 185, 129, .16); color: #34d399; }
+.scope-modal__health--good      { background: rgba(59, 130, 246, .16); color: #7dabf8; }
+.scope-modal__health--average   { background: rgba(245, 158, 11, .16); color: #fbbf24; }
+.scope-modal__health--poor      { background: rgba(239, 68, 68, .16);  color: #f87171; }
+
+/* --- adult content: three states ------------------------------------------
+   Cards rather than a <select>, because the difference between the middle
+   option and the other two is a sentence, not a word — and hiding that
+   sentence in a dropdown is how someone picks "Ask" expecting it to persist. */
+.adult-setting__modes { display: flex; flex-direction: column; gap: .45rem; margin: .75rem 0; }
+.adult-setting__mode {
+  display: flex; flex-direction: column; gap: .15rem;
+  text-align: left; padding: .6rem .7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-elevated, rgba(255,255,255,.03));
+  color: inherit; cursor: pointer;
+}
+.adult-setting__mode:hover:not(:disabled) { border-color: rgba(255,255,255,.28); }
+.adult-setting__mode--on { border-color: var(--accent-primary); background: rgba(59,130,246,.1); }
+.adult-setting__mode strong { font-size: .88rem; font-weight: 600; }
+.adult-setting__mode em { font-style: normal; font-size: .78rem; color: var(--text-muted); line-height: 1.45; }
+
+.adult-setting__session {
+  display: flex; align-items: center; flex-wrap: wrap; gap: .5rem;
+  padding: .55rem .7rem; border-radius: 8px;
+  background: rgba(0,0,0,.18); font-size: .82rem;
+}
+.adult-setting__session .btn { display: inline-flex; align-items: center; gap: .3rem; }
+.adult-setting__current { font-size: .78rem; margin-top: .5rem; }
+
+
+/*
+  Share, wherever it appears.
+  Sized to sit in a `.detail-actions` row without a class of its own, and to
+  shrink to an icon inside dense rows and the player's control bar.
+*/
+.share-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.42rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.share-button:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.06)); }
+.share-button--compact { padding: 0.35rem; border-radius: 50%; }

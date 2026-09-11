@@ -85,6 +85,21 @@ export function parseCinemetaUrl(
   return { type: match[1] as 'movie' | 'series', imdbId: match[2] };
 }
 
+/**
+ * The typeless form `cs3meta://tt1234567`, which the OTT catalogue minted
+ * before it addressed rows through `buildCinemetaUrl`.
+ *
+ * Kept because those addresses are on disk — bookmarks, page snapshots and
+ * library rows written by every build shipped so far — and fixing the minting
+ * site does nothing for a row someone saved last week. The type is absent
+ * rather than guessable, so the caller has to discover it; this only says the
+ * address is one of ours and names the title it points at.
+ */
+export function parseBareImdbUrl(url: string): string | null {
+  const match = url.match(/^cs3meta:\/\/(tt\d+)(?:[/?#]|$)/);
+  return match ? match[1] : null;
+}
+
 /** `releaseInfo` is "2024", "2008–2013", or "2019–". Take the first year. */
 function parseYear(releaseInfo: string | undefined): number | undefined {
   const match = releaseInfo?.match(/(\d{4})/);

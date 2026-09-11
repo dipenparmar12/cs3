@@ -1,4 +1,5 @@
 import { fetchJson, fetchText } from './torrent/http';
+import { anilistQuery } from './anilist.ts';
 import { TvType, type Episode, type LoadResponse, type SearchResponse } from '../src/types/api';
 
 /**
@@ -141,34 +142,23 @@ export class MetadataProvider {
   }
 
   private async searchAniList(query: string, signal?: AbortSignal): Promise<SearchResponse[]> {
-    const body = JSON.stringify({
-      query: `
-        query ($search: String) {
-          Page(perPage: 15) {
-            media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
-              id
-              title { romaji english }
-              coverImage { extraLarge large }
-              startDate { year }
-              format
-            }
-          }
-        }`,
-      variables: { search: query },
-    });
+    const data = await anilistQuery<{ Page?: { media?: AniListMedia[] } }>(
+      `query ($search: String) {
+         Page(perPage: 15) {
+           media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
+             id
+             title { romaji english }
+             coverImage { extraLarge large }
+             startDate { year }
+             format
+           }
+         }
+       }`,
+      { search: query },
+      { signal }
+    );
 
-    const response = await fetch('https://graphql.anilist.co', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body,
-      signal: signal ?? AbortSignal.timeout(12_000),
-    });
-    if (!response.ok) throw new Error(`AniList HTTP ${response.status}`);
-
-    const json = (await response.json()) as { data?: { Page?: { media?: AniListMedia[] } } };
-    const media = json.data?.Page?.media ?? [];
-
-    return media
+    return (data.Page?.media ?? [])
       .filter((item): item is AniListMedia => Boolean(item?.id))
       .map<SearchResponse>((item) => ({
         name: item.title?.english || item.title?.romaji || query,
@@ -231,31 +221,22 @@ export class MetadataProvider {
   }
 
   private async loadAniList(id: string, signal?: AbortSignal): Promise<MetadataDetail | null> {
-    const body = JSON.stringify({
-      query: `
-        query ($id: Int) {
-          Media(id: $id, type: ANIME) {
-            id idMal
-            title { romaji english native }
-            coverImage { extraLarge large }
-            bannerImage
-            startDate { year }
-            episodes duration format genres averageScore description status
-          }
-        }`,
-      variables: { id: parseInt(id, 10) },
-    });
+    const data = await anilistQuery<{ Media?: AniListMedia }>(
+      `query ($id: Int) {
+         Media(id: $id, type: ANIME) {
+           id idMal
+           title { romaji english native }
+           coverImage { extraLarge large }
+           bannerImage
+           startDate { year }
+           episodes duration format genres averageScore description status
+         }
+       }`,
+      { id: parseInt(id, 10) },
+      { signal }
+    );
 
-    const response = await fetch('https://graphql.anilist.co', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body,
-      signal: signal ?? AbortSignal.timeout(12_000),
-    });
-    if (!response.ok) throw new Error(`AniList HTTP ${response.status}`);
-
-    const json = (await response.json()) as { data?: { Media?: AniListMedia } };
-    const media = json.data?.Media;
+    const media = data.Media;
     if (!media?.id) return null;
 
     const title = media.title?.english || media.title?.romaji || 'Unknown';

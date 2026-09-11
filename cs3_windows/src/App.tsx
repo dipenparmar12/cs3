@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { FileDown, WifiOff } from 'lucide-react';
+import { FileDown, WifiOff, Link2,
+} from 'lucide-react';
 import type { PlayedSource } from './types/library';
 import { Sidebar } from './components/Sidebar';
 import type { ActiveTab } from './components/Sidebar';
@@ -12,6 +13,11 @@ import { DownloadCenter } from './components/DownloadCenter';
 import { ProviderInspector } from './components/ProviderInspector';
 import { ExtensionsScreen } from './components/extensions/ExtensionsScreen';
 import { BinarySetupModal } from './components/BinarySetupModal';
+import {
+  DownloadConfirmDialog,
+  type DownloadConfirmPreference,
+  type DownloadPreview,
+} from './components/DownloadConfirmDialog';
 import { HomeView } from './views/HomeView';
 import { SearchView, EMPTY_SEARCH_UI, type SearchUiState } from './views/SearchView';
 import {
@@ -33,6 +39,11 @@ import { buildDownloadTask } from './utils/downloadIdentity';
 import type { TorrentResult } from './types/torrent';
 import type { PlaybackSnapshot } from '../electron/playbackSession';
 import type { SearchSnapshot } from '../electron/searchSession';
+import { describeError } from './utils/errors';
+import { pickResumePoint } from './utils/resumePoint';
+import { historyEventForTask } from './utils/historyEvent';
+import { decodeShareLink } from './utils/shareLink';
+import { loadWatchState } from './components/player/seriesContext';
 
 /** One live playback session: its id, what asked for it, and its latest state. */
 interface ActiveSession {
@@ -66,6 +77,14 @@ export const App: React.FC = () => {
   const savedScroll = useRef(0);
 
   const [selectedMedia, setSelectedMedia] = useState<SearchResponse | null>(null);
+  /**
+   * Why a shared link did not open, if it did not.
+   *
+   * Its own banner rather than a thrown error: the app is working, one link is
+   * not, and the person holding it can do something about it once told which
+   * kind of wrong it is — resend, or update.
+   */
+  const [shareProblem, setShareProblem] = useState<string | null>(null);
   const [playback, setPlayback] = useState<PlaybackRequest | null>(null);
   const [switchingTo, setSwitchingTo] = useState<Episode | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
@@ -474,6 +493,45 @@ export const App: React.FC = () => {
     setOpenTorrent(result.infoHash);
   }, []);
 
+  /**
+   * A `cloudstream://` link somebody was sent.
+   *
+   * The whole promise of the feature is that the recipient does nothing: the
+   * page opens, the app resolves fresh sources with *their* providers, and the
+   * sender's expired links are never involved. So this maps the payload onto
+   * the same `SearchResponse` the search results produce and hands it to the
+   * same `handleSelectMedia` a click would — one entry point, so a shared link
+   * and a search result cannot drift into behaving differently.
+   *
+   * The sender's provider becomes `apiName`, which is a *preference*: the
+   * detail page resolves against whatever the recipient has, and a provider
+   * they do not own degrades to the ordinary search rather than an error. That
+   * is the "missing provider" case, and it is handled by not being special.
+   */
+  const handleShareLink = useCallback((link: string) => {
+    const result = decodeShareLink(link);
+    if (!result.ok) {
+      setShareProblem(result.reason);
+      return;
+    }
+    const { payload } = result;
+    setShareProblem(null);
+    setSelectedMedia({
+      name: payload.title,
+      originalTitle: payload.originalTitle,
+      url: payload.url,
+      apiName: payload.provider ?? payload.repository ?? 'Shared link',
+      type: payload.type === 'movie' ? ('Movie' as TvType) : undefined,
+      posterUrl: payload.poster,
+      year: payload.year,
+      imdbId: payload.id,
+    });
+  }, []);
+
+  useEffect(() => {
+    return window.cloudstream?.onOpenShareLink?.(handleShareLink);
+  }, [handleShareLink]);
+
   useEffect(() => {
     return window.cloudstream?.onOpenLocalFile?.((filePath) => {
       // The main process hands over whatever was opened or associated; which
@@ -611,7 +669,7 @@ export const App: React.FC = () => {
       if (response.snapshot) setSearch(response.snapshot);
       if (!response.ok && response.error) setSearchError(response.error);
     } catch (err) {
-      setSearchError(err instanceof Error ? err.message : String(err));
+      setSearchError(describeError(err));
     }
   }, []);
 
@@ -903,8 +961,17 @@ export const App: React.FC = () => {
    * appears to do nothing for half a second reads as broken. `preparing` holds
    * the player open in its resolving state until the real session exists.
    *
-   * A series starts at its first episode. Handing a series URL to source
-   * discovery finds season packs at best, and nothing at all more often.
+   * A series resolves to a specific episode rather than to the series URL:
+   * handing a series URL to source discovery finds season packs at best, and
+   * nothing at all more often.
+   *
+   * **Which** episode is the viewer's watch history, not always the first. This
+   * path started every series at its pilot, which is right exactly once and
+   * wrong on every visit after — someone six episodes in pressed Play on the
+   * poster and got episode one. Nothing errors and nothing looks broken, so it
+   * is absorbed as "this app does not remember where I was", which is the one
+   * thing a streaming app is expected to do. The detail page had always read
+   * this history; only the card path never asked. See `pickResumePoint`.
    */
   const handleQuickPlay = useCallback(
     async (item: SearchResponse) => {
@@ -917,10 +984,12 @@ export const App: React.FC = () => {
         const response = await window.cloudstream?.loadMedia(item.url);
         const detail = response?.ok ? response.detail : null;
 
-        const episodes = detail?.episodes ?? [];
-        const first = [...episodes].sort(
-          (a, b) => (a.season ?? 1) - (b.season ?? 1) || (a.episode ?? 0) - (b.episode ?? 0)
-        )[0];
+        // Both reads are local — the datastore, not a provider — so they cost
+        // nothing against the round trip that just resolved the detail.
+        const watchState = await loadWatchState(item.url);
+        const { episode: first, resumeAt } = pickResumePoint(detail?.episodes ?? [], watchState, {
+          isLive: detail?.isLive,
+        });
 
         await startSession({
           request: {
@@ -933,11 +1002,19 @@ export const App: React.FC = () => {
           providerProvenance: item.apiName ? { provider: item.apiName } : undefined,
           episodeTitle: first?.name,
           progress: {
-            mediaUrl: first?.url ?? item.url,
+            // The **page**, never the episode's playback handle — the same rule
+            // `DetailView.playEpisodeDirectly` documents at length. `first.url`
+            // is the opaque blob `loadLinks` wants, which for much of the corpus
+            // is JSON; storing it here writes it into the library and Continue
+            // Watching, and reopening that row calls `load()` on a links handle
+            // and comes up blank. It also silently disables the next-episode
+            // prefetch, which refuses a links handle by design.
+            mediaUrl: item.url,
             year: detail?.year ?? item.year,
             posterUrl: detail?.posterUrl ?? item.posterUrl,
             season: first?.season,
             episode: first?.episode,
+            resumeAt,
           },
           subtitleContext: {
             imdbId: (detail as { imdbId?: string } | null)?.imdbId,
@@ -1178,6 +1255,83 @@ export const App: React.FC = () => {
     return dispose;
   }, [playbackRefresh?.sessionId]);
 
+  /**
+   * Whether pressing Download asks first, and the pending question if it does.
+   *
+   * The preference is mirrored into a ref because `handleEnqueueDownload` is
+   * not a `useCallback` and is handed to children that keep it across renders —
+   * reading state there would read whatever the closure captured, which is the
+   * value at mount for the whole life of a detail page.
+   *
+   * The question itself is a promise resolved by the dialog. That inversion is
+   * what let the gate go in front of the existing funnel without touching a
+   * single caller: `onEnqueueDownload(task)` already returned a promise every
+   * caller awaited, so a press that now waits for a human looks exactly like a
+   * press that waits for the queue.
+   */
+  const [confirmPreference, setConfirmPreference] =
+    useState<DownloadConfirmPreference>('immediate');
+  const confirmPreferenceRef = useRef<DownloadConfirmPreference>('immediate');
+  const [pendingDownload, setPendingDownload] = useState<{
+    task: DownloadTask;
+    preview: DownloadPreview | null;
+    decide: (confirmed: boolean, remember: boolean) => void;
+  } | null>(null);
+
+  useEffect(() => {
+    confirmPreferenceRef.current = confirmPreference;
+  }, [confirmPreference]);
+
+  useEffect(() => {
+    void window.cloudstream?.getDownloadConfirmPreference?.().then((response) => {
+      if (response?.ok && response.preference) setConfirmPreference(response.preference);
+    });
+  }, []);
+
+  /**
+   * Puts the dialog up and waits for an answer.
+   *
+   * The destination comes from `download:preview` and is fetched *after* the
+   * dialog is on screen, not before: a round trip to the main process before
+   * anything appears reads as a dead button, and the dialog is perfectly
+   * legible with one row still resolving.
+   */
+  const askBeforeDownloading = (task: DownloadTask): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      setPendingDownload({
+        task,
+        preview: null,
+        decide: (confirmed, remember) => {
+          setPendingDownload(null);
+          if (remember) {
+            setConfirmPreference('immediate');
+            confirmPreferenceRef.current = 'immediate';
+            void window.cloudstream?.setDownloadConfirmPreference?.('immediate');
+          }
+          resolve(confirmed);
+        },
+      });
+
+      void window.cloudstream?.previewDownload?.(task).then((response) => {
+        if (!response?.ok) return;
+        setPendingDownload((current) =>
+          // Only if this is still the same question. A second press while the
+          // first dialog was open would otherwise stamp one task's destination
+          // onto another task's dialog.
+          current && current.task.id === task.id
+            ? {
+                ...current,
+                preview: {
+                  targetPath: response.targetPath,
+                  directory: response.directory,
+                  existingState: response.existingState,
+                },
+              }
+            : current
+        );
+      });
+    });
+
   const handlePlayNow = useCallback(() => {
     if (!sessionRef.current) return;
     window.cloudstream?.playbackPlayNow(sessionRef.current.id);
@@ -1196,37 +1350,31 @@ export const App: React.FC = () => {
     if (!window.cloudstream) {
       return { ok: false, action: 'started', message: 'Desktop bridge unavailable.' };
     }
+
+    /**
+     * The confirmation gate, in front of the one funnel every press reaches.
+     *
+     * Deliberately here and not in each button. There are four places that can
+     * start a download — the detail page's source list, the in-player source
+     * panel, the player's own Download action and the season batch dialog — and
+     * a preference implemented per-button is a preference that holds in three
+     * places out of four. It is also why this is a promise the callers already
+     * await: nothing had to change on their side for the press to become
+     * askable.
+     */
+    if (confirmPreferenceRef.current === 'ask') {
+      const confirmed = await askBeforeDownloading(task);
+      if (!confirmed) {
+        return { ok: true, action: 'cancelled', message: 'Download cancelled' };
+      }
+    }
+
     const result = await window.cloudstream.requestDownload(task);
 
     try {
-      await window.cloudstream.recordHistoryEvent?.({
-        title: task.parentTitle || task.title,
-        parentTitle: task.parentTitle,
-        mediaUrl: task.parentMediaUrl || task.mediaUrl || task.link.url,
-        parentMediaUrl: task.parentMediaUrl,
-        posterUrl: task.posterUrl,
-        season: task.seasonNumber,
-        episode: task.episodeNumber,
-        episodeTitle: task.episodeTitle,
-        type:
-          task.mediaType ||
-          (task.seasonNumber !== undefined || task.episodeNumber !== undefined
-            ? 'series'
-            : 'movie'),
-        year: task.year,
-        originalTitle: task.originalTitle,
-        action: 'download_started',
-        status: 'Attempted',
-        source: {
-          providerName: task.providerName,
-          sourceName: task.link.name,
-          directUrl: task.link.url,
-          directHeaders: task.headers,
-          quality: task.quality ? `${task.quality}p` : undefined,
-          resolution: task.resolution,
-          sizeBytes: task.totalBytes,
-        },
-      });
+      await window.cloudstream.recordHistoryEvent?.(
+        historyEventForTask(task, 'download_started', 'Attempted')
+      );
     } catch {}
 
     const queue = await window.cloudstream.getDownloadQueue();
@@ -1296,6 +1444,18 @@ export const App: React.FC = () => {
               <strong>Drop to open</strong>
               <span>A .torrent file, a video, or a magnet link</span>
             </div>
+          </div>
+        )}
+
+        {shareProblem && (
+          <div className="offline-banner" role="status">
+            <Link2 size={15} aria-hidden />
+            <span>
+              <strong>That shared link could not be opened.</strong> {shareProblem}
+            </span>
+            <button type="button" className="btn btn-ghost" onClick={() => setShareProblem(null)}>
+              Dismiss
+            </button>
           </div>
         )}
 
@@ -1733,6 +1893,22 @@ export const App: React.FC = () => {
         onClose={() => setIsBinaryModalOpen(false)}
         onSuccess={handleBinarySetupSuccess}
       />
+
+      {/*
+        The download confirmation, mounted here rather than in any of the four
+        places that can start a download — the gate is in `handleEnqueueDownload`
+        and this is that function's surface. The player renders over everything,
+        so a dialog owned by the detail page would be invisible for presses made
+        from inside playback.
+      */}
+      {pendingDownload && (
+        <DownloadConfirmDialog
+          task={pendingDownload.task}
+          preview={pendingDownload.preview}
+          onConfirm={(remember) => pendingDownload.decide(true, remember)}
+          onCancel={() => pendingDownload.decide(false, false)}
+        />
+      )}
 
       {/* Dismissed by clicking it, because it reports something the viewer
           asked for and may want to read twice — not a status that ages out. */}

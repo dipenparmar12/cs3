@@ -22,7 +22,10 @@ import {
   formatBytes,
   formatCompactBytes,
   formatDownloadSize,
+  formatEta,
   formatHistorySize,
+  formatInfoFileSize,
+  formatSetupSize,
   formatPanelSize,
   formatReleaseSize,
   formatRuntime,
@@ -179,6 +182,67 @@ test('formatRuntime reads as prose and omits itself when unknown', () => {
   // placeholder into a row that has plenty of real metadata in it.
   assert.equal(formatRuntime(0), null);
   assert.equal(formatRuntime(undefined), null);
+});
+
+
+// --- the two that lived in electron/ ---------------------------------------
+
+/**
+ * These are the seventh and eighth byte formatters, and they were missed by the
+ * consolidation that found the first six because that pass only looked at
+ * `src/`. Their expectations below are computed from the implementations they
+ * replace, exactly as the original six were — including the parts that look
+ * wrong, because preserving what a shipped surface displays is the point.
+ */
+test('formatInfoFileSize reproduces the download-info companion exactly', () => {
+  const before = (bytes: number): string => {
+    if (!bytes || bytes < 0) return '0 MB';
+    const gb = bytes / 1e9;
+    return gb >= 1 ? `${gb.toFixed(2)} GB` : `${Math.round(bytes / 1e6)} MB`;
+  };
+  for (const bytes of [0, -1, 1, 999, 1_000_000, 999_999_999, 1e9, 4.3e9, 1.5e10]) {
+    assert.equal(formatInfoFileSize(bytes), before(bytes), String(bytes));
+  }
+});
+
+test('formatInfoFileSize and formatDownloadSize still disagree, on purpose', () => {
+  /**
+   * The companion file uses SI and the download list uses binary, for one film.
+   * That divergence is flagged rather than fixed — it is a UI decision, not a
+   * refactor — and the two renderings sit side by side here so it stays visible
+   * to whoever makes it.
+   */
+  const film = 4_294_967_296; // exactly 4 GiB
+  assert.equal(formatInfoFileSize(film), '4.29 GB');
+  assert.equal(formatDownloadSize(film), '4.00 GB');
+});
+
+test('formatSetupSize keeps its kilobyte rung', () => {
+  const before = (bytes: number): string => {
+    if (bytes <= 0) return '0 MB';
+    const mb = bytes / (1024 * 1024);
+    if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
+    if (mb >= 1) return `${mb.toFixed(1)} MB`;
+    return `${(bytes / 1024).toFixed(0)} KB`;
+  };
+  for (const bytes of [0, -1, 1, 1024, 100_000, 1_048_576, 5_000_000, 1_073_741_824, 5e9]) {
+    assert.equal(formatSetupSize(bytes), before(bytes), String(bytes));
+  }
+  // The rung itself: a first-run installer reading `0.1 MB` where it could read
+  // `98 KB` looks stalled exactly when a new user is judging whether this works.
+  assert.equal(formatSetupSize(100_000), '98 KB');
+});
+
+test('formatEta returns nothing rather than a placeholder', () => {
+  // Every caller interpolates this behind a `?` guard, so a placeholder would
+  // put "unknown remaining" into the status line for the first seconds of
+  // every download, before a rate has been measured.
+  assert.equal(formatEta(0), '');
+  assert.equal(formatEta(-5), '');
+  assert.equal(formatEta(Number.POSITIVE_INFINITY), '');
+  assert.equal(formatEta(NaN), '');
+  assert.equal(formatEta(45), '45s remaining');
+  assert.equal(formatEta(125), '2m 5s remaining');
 });
 
 // --- runner ----------------------------------------------------------------

@@ -11,6 +11,8 @@ import type {
   MpvTrack,
 } from '../../src/types/mpv';
 import { scopedLogger } from '../logging/logger.ts';
+import { describeError } from '../../src/utils/errors.ts';
+import { COALESCE_MS, isSignificantChange } from './mpvEmitPolicy.ts';
 
 const log = scopedLogger('mpv');
 
@@ -206,6 +208,19 @@ export class MpvEngine {
   private lastLoggedState: MpvSnapshot['state'] | null = null;
   private lastError: string | null = null;
   private startedAt = 0;
+
+  /**
+   * The last snapshot actually handed to {@link MpvEngineDeps.onUpdate}, and the
+   * timer holding one back. See {@link isSignificantChange} for what may wait.
+   *
+   * Measured, because the rate is the whole reason this exists: observing
+   * `time-pos` delivers a `property-change` **once per presented frame**, not
+   * once a second — 25/s for a 25fps file, 60/s for a 60fps one — and every one
+   * of them ran `snapshot()` and two `webContents.send` calls, each of which
+   * sets renderer state and re-renders the largest component in the app.
+   */
+  private lastDelivered: MpvSnapshot | null = null;
+  private coalesceTimer: NodeJS.Timeout | null = null;
 
   private cachedVersion: string | null = null;
   private cachedPath: string | null = null;
@@ -489,7 +504,7 @@ export class MpvEngine {
         windowsHide: true,
       });
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: describeError(error) };
     }
 
     this.process = child;
@@ -773,7 +788,7 @@ export class MpvEngine {
       } catch (error) {
         clearTimeout(timer);
         this.pending.delete(requestId);
-        resolve({ ok: false, error: error instanceof Error ? error.message : String(error) });
+        resolve({ ok: false, error: describeError(error) });
       }
     });
   }
@@ -1051,9 +1066,10 @@ export class MpvEngine {
      * and the sequence in the log is the sequence that actually happened —
      * which is the whole point of recording a state machine.
      *
-     * Only *changes* are recorded. `time-pos` alone fires about once a second
-     * for the length of a film, and logging an unchanged `playing` each time
-     * would bury the transitions that matter under two thousand that do not.
+     * Only *changes* are recorded. `time-pos` alone fires once per presented
+     * frame for the length of a film — 25/s on a 25fps file, measured — and
+     * logging an unchanged `playing` each time would bury the transitions that
+     * matter under tens of thousands that do not.
      */
     if (snapshot.state !== this.lastLoggedState) {
       const previous = this.lastLoggedState;
@@ -1075,6 +1091,44 @@ export class MpvEngine {
       });
     }
 
+    /**
+     * A decision goes now; a moving number may wait one tick.
+     *
+     * Delivering every frame's `time-pos` cost a full render of `VideoPlayer`
+     * and `NativeEngineStage` at the video's frame rate, for the length of a
+     * film, and only ever while the native engine held the stream — which is
+     * exactly the condition under which the window was reported to stop
+     * answering. `isSignificantChange` decides; the default for a field nobody
+     * has classified is "deliver", so the next field to drive a decision cannot
+     * be delayed by omission.
+     */
+    if (isSignificantChange(this.lastDelivered, snapshot)) {
+      this.deliver(snapshot);
+      return;
+    }
+
+    // Nothing to decide on. The next tick will carry this and whatever else has
+    // moved by then — a snapshot is whole state, so the later one says
+    // everything this one would have.
+    if (this.coalesceTimer) return;
+    this.coalesceTimer = setTimeout(() => {
+      this.coalesceTimer = null;
+      // Re-read rather than closing over `snapshot`: by now the playhead has
+      // moved again, and the point is to send the current position, not the one
+      // that happened to start the timer.
+      this.deliver(this.snapshot());
+    }, COALESCE_MS);
+    // A pending playhead update must never be the reason the process stays up.
+    this.coalesceTimer.unref?.();
+  }
+
+  /** Hands a snapshot to the renderer and records it as the baseline. */
+  private deliver(snapshot: MpvSnapshot): void {
+    if (this.coalesceTimer) {
+      clearTimeout(this.coalesceTimer);
+      this.coalesceTimer = null;
+    }
+    this.lastDelivered = snapshot;
     try {
       this.deps.onUpdate(snapshot);
     } catch {
@@ -1275,6 +1329,17 @@ export class MpvEngine {
   }
 
   private teardown(): void {
+    if (this.coalesceTimer) {
+      clearTimeout(this.coalesceTimer);
+      this.coalesceTimer = null;
+    }
+    /**
+     * The baseline goes with the process. A new session's first snapshot must
+     * read as significant — otherwise the opening state of the next file is
+     * compared against the last file's and could be held back as "unchanged".
+     */
+    this.lastDelivered = null;
+
     for (const [, pending] of this.pending) {
       clearTimeout(pending.timer);
       pending.resolve({ ok: false, error: 'The native engine stopped.' });

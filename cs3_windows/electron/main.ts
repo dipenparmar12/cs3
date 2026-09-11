@@ -21,7 +21,7 @@ import {
   NetworkSettingsStore,
   type NetworkSettings,
 } from './networkSettings';
-import { setHttpFetch } from './torrent/http';
+import { setChallengeSolver, setHttpFetch } from './torrent/http';
 import { ResilientFetch, classifyNetworkError } from './networkResilience';
 import { BinaryDownloader } from './binaryDownloader';
 import { MpvEngine } from './media/mpvEngine';
@@ -77,6 +77,11 @@ import {
 import { deadlineFromUrl } from './sourceCache';
 import { HistoryStore } from './cs3/historyStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
+import {
+  PageSnapshotStore,
+  type PageSnapshot,
+  type PageSnapshotInput,
+} from './cs3/pageSnapshot.ts';
 import { WebViewHost, type WebViewResolveRequest } from './cs3/webViewHost';
 import { DiscoveryService } from './cs3/discovery';
 import { SourcePrefetcher } from './cs3/sourcePrefetcher';
@@ -89,6 +94,8 @@ import type { HistoryEvent, HistoryFilter } from '../src/types/history';
 import type { StoredSource } from '../src/types/library';
 import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import type { MpvSnapshot } from '../src/types/mpv';
+import { describeError } from '../src/utils/errors.ts';
+import { SHARE_SCHEME } from '../src/utils/shareLink.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -273,6 +280,17 @@ const libraryStore = new LibraryStore(datastore);
 const historyStore = new HistoryStore(datastore);
 const bookmarks = new BookmarkStore(datastore);
 /**
+ * The last-known-good copy of every detail page that has been opened.
+ *
+ * Wired into `contentService` rather than called from the IPC layer because
+ * that class is the single funnel every detail load passes through; capturing
+ * at the handler would miss the revalidation path and the native provider
+ * path, which are exactly the ones whose answers go stale. See
+ * `cs3/pageSnapshot.ts` for what a snapshot is and is not.
+ */
+const pageSnapshots = new PageSnapshotStore(app.getPath('userData'));
+contentService.setSnapshotStore(pageSnapshots);
+/**
  * The home screen's catalogue source, and the rows built from it.
  *
  * The registry is constructed first because `DiscoveryService` resolves the
@@ -338,6 +356,17 @@ providerRanking.setContext({
     return typeof status === 'number' ? status : undefined;
   },
 });
+
+/**
+ * The ranking decides who a search asks first.
+ *
+ * Wired here rather than inside `PluginManager` because that class must stay
+ * constructible without analytics — the provider harnesses build one with no
+ * Electron app around it. It is an ordering and nothing more: `applySearchOrder`
+ * refuses any answer that is not the same set of providers, so a scoring bug
+ * can cost a little latency and can never quietly shrink a search.
+ */
+pluginManager.setSearchOrder((names) => providerRanking.rank(names));
 const providerRecommender = new ProviderRecommender(
   providerAnalytics,
   providerRanking,
@@ -461,6 +490,44 @@ const resilientFetch = new ResilientFetch({
   diagnostics,
 });
 setHttpFetch((input, init) => resilientFetch.fetch(input, init));
+
+/**
+ * The browser, lent to the torrent indexers.
+ *
+ * `WebViewHost` has solved Cloudflare challenges for `.cs3` extensions since
+ * 2026-08-24, and nothing in the torrent lane could reach it — so the scrapers
+ * that get challenged most (1337x, BitSearch, TheRARBG) answered `HTTP 403`,
+ * were counted as failures, and were eventually skipped for good. The same
+ * browser, the same persistent session, the same `cf_clearance`.
+ *
+ * Only the solvable kind gets here: `withRetry` asks once, for a verdict
+ * `botChallenge.ts` has already decided a browser can pass. A WAF block or a
+ * rate limit never opens a window.
+ *
+ * The User-Agent is returned alongside the cookie because a `cf_clearance` is
+ * bound to the one that earned it — reissuing the request under our default UA
+ * would be challenged again, which is indistinguishable from the bypass having
+ * failed.
+ */
+setChallengeSolver(async (url) => {
+  if (!webViewHost.isAvailable()) return null;
+  const answer = await webViewHost.resolve({
+    url,
+    // Upstream's own choice for this: `CloudflareKiller` has no URL to
+    // intercept, so the only signal the challenge is done is the cookie.
+    interceptUrl: '.^',
+    awaitCookie: 'cf_clearance',
+    timeoutMs: 45_000,
+  });
+  const cookies = answer.cookies ?? {};
+  if (!answer.ok || !cookies.cf_clearance) return null;
+  return {
+    cookie: Object.entries(cookies)
+      .map(([name, value]) => `${name}=${value}`)
+      .join('; '),
+    userAgent: answer.userAgent,
+  };
+});
 
 /**
  * The Universal Media Compatibility Engine (PRD-37).
@@ -587,7 +654,7 @@ function installProcessGuards(): void {
       level: 'error',
       stage: 'runtime',
       source: 'main',
-      message: error instanceof Error ? error.message : String(error),
+      message: describeError(error),
       detail: error instanceof Error ? error.stack : undefined,
     });
     diagnostics.flush();
@@ -603,14 +670,14 @@ function installProcessGuards(): void {
     if (swallow(reason, 'unhandledRejection')) return;
     console.error('Unhandled rejection in main process:', reason);
     logger.error('app', 'unhandled_rejection', {
-      error: reason instanceof Error ? reason.message : String(reason),
+      error: describeError(reason),
       stack: reason instanceof Error ? reason.stack?.slice(0, 2000) : undefined,
     });
     diagnostics.record({
       level: 'error',
       stage: 'runtime',
       source: 'main',
-      message: reason instanceof Error ? reason.message : String(reason),
+      message: describeError(reason),
       detail: reason instanceof Error ? reason.stack : undefined,
     });
   });
@@ -1009,6 +1076,9 @@ function openableFromArgv(argv: string[]): string | null {
     if (argument.startsWith('-')) continue;
     if (/^magnet:\?/i.test(argument)) return argument;
     if (/\.torrent$/i.test(argument)) return argument;
+    // A share link arrives the same way on Windows: as an argv entry, because
+    // the registered protocol handler is this executable.
+    if (new RegExp(`^${SHARE_SCHEME}://`, 'i').test(argument)) return argument;
   }
   return null;
 }
@@ -1016,11 +1086,36 @@ function openableFromArgv(argv: string[]): string | null {
 /** Held until the renderer exists, since a launch beats the window. */
 let pendingOpen: string | null = openableFromArgv(process.argv);
 
+/**
+ * Hands whatever we were launched with to the renderer.
+ *
+ * Two kinds travel this one path because they arrive by the same mechanisms — a
+ * command-line argument on Windows, `open-file`/`open-url` on macOS — and
+ * splitting them into two pending slots would mean a share link and a dropped
+ * torrent could each silently discard the other.
+ *
+ * They are told apart *here* rather than in the renderer, because the channel a
+ * message arrives on is what the renderer keys its behaviour on, and a single
+ * channel carrying two unrelated payload shapes is how one of them ends up
+ * handled by the wrong screen.
+ */
 function deliverPendingOpen(): void {
   if (!pendingOpen || !mainWindow || mainWindow.isDestroyed()) return;
   const target = pendingOpen;
   pendingOpen = null;
-  mainWindow.webContents.send('app:openLocalFile', target);
+  /**
+   * Two literal sends rather than one computed channel name.
+   *
+   * `ipcSurface.test.mts` pins the channel surface by scanning for these
+   * literals on both sides, and a computed name is invisible to it — which is
+   * how a channel ends up sent and never listened for. The duplication is the
+   * price of that guarantee, and it is two lines.
+   */
+  if (new RegExp(`^${SHARE_SCHEME}://`, 'i').test(target)) {
+    mainWindow.webContents.send('app:openShareLink', target);
+  } else {
+    mainWindow.webContents.send('app:openLocalFile', target);
+  }
 }
 
 /*
@@ -1051,12 +1146,41 @@ app.on('open-file', (event, filePath) => {
   deliverPendingOpen();
 });
 
-// And a magnet, which arrives as a protocol rather than a file.
+// And a magnet or a share link, which arrive as a protocol rather than a file.
 app.on('open-url', (event, url) => {
   event.preventDefault();
   pendingOpen = url;
   deliverPendingOpen();
 });
+
+/**
+ * Registering as the handler for `cloudstream://`.
+ *
+ * Done unconditionally rather than only when packaged, because the dev build is
+ * where the flow is actually exercised — but the dev build is launched *through*
+ * Electron, so Windows has to be told which executable and which argument to
+ * pass, or it registers `electron.exe` with no script and the link opens an
+ * empty app.
+ *
+ * Failure here is not fatal and is deliberately quiet: on Linux this depends on
+ * a desktop entry the packager owns, and an app that refused to start because
+ * it could not claim a protocol would be worse than one that cannot be opened
+ * from a chat window.
+ */
+function registerShareProtocol(): void {
+  try {
+    if (process.defaultApp && process.argv.length >= 2) {
+      app.setAsDefaultProtocolClient(SHARE_SCHEME, process.execPath, [
+        path.resolve(process.argv[1]),
+      ]);
+    } else {
+      app.setAsDefaultProtocolClient(SHARE_SCHEME);
+    }
+  } catch {
+    // Sharing still works; only opening a link from outside the app does not.
+  }
+}
+registerShareProtocol();
 
 app.whenReady().then(async () => {
   /**
@@ -1184,7 +1308,7 @@ app.whenReady().then(async () => {
       // A warm-up that fails costs latency on the next search and nothing else,
       // so it is recorded rather than surfaced.
       logger.warn('extension', 'provider_warmup_failed', {
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       });
     });
   }, PROVIDER_WARMUP_DELAY_MS).unref?.();
@@ -1208,7 +1332,7 @@ app.whenReady().then(async () => {
       // `startStream` still calls `ensureStarted` itself, so a failed warm-up
       // costs latency on the first play and nothing else.
       logger.warn('torrent', 'engine_warmup_failed', {
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       });
     });
   }, TORRENT_WARMUP_DELAY_MS).unref?.();
@@ -1272,6 +1396,9 @@ async function shutdownServices(): Promise<void> {
   extensionUpdater.stop();
   diagnostics.flush();
   providerAnalytics.flush();
+  // The pages opened in the last few seconds of a session are the ones most
+  // likely to be reopened in the first few of the next.
+  pageSnapshots.flush();
   // The ledger's write is debounced, and the failures worth keeping cluster at
   // shutdown — a session that ended badly is the one whose last seconds matter.
   issueLog.flush();
@@ -1330,7 +1457,7 @@ app.on('before-quit', async (event) => {
     // because a service that throws here is one that leaked something — and the
     // next launch is where that shows up.
     logger.warn('app', 'shutdown_incomplete', {
-      error: error instanceof Error ? error.message : String(error),
+      error: describeError(error),
     });
   }
   // Last, and synchronous: nothing after this point gets written.
@@ -1340,7 +1467,7 @@ app.on('before-quit', async (event) => {
 
 /** Normalises a thrown value into an IPC-safe result envelope. */
 function fail(error: unknown): { ok: false; error: string } {
-  return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  return { ok: false, error: describeError(error) };
 }
 
 // --- content -------------------------------------------------------------
@@ -2065,7 +2192,15 @@ ipcMain.handle(
   'bookmarks:toggle',
   async (_, input: Parameters<BookmarkStore['toggle']>[0]) => {
     try {
-      return { ok: true, ...bookmarks.toggle(input) };
+      const result = bookmarks.toggle(input);
+      // Saving a page is the same statement as adding a title to the library:
+      // keep the copy that lets it open. Unsaving releases it to the cache
+      // again rather than deleting it — the page is still worth drawing fast.
+      pageSnapshots.setPinned(
+        { url: input?.mediaUrl, title: input?.title, year: input?.year },
+        result.saved
+      );
+      return { ok: true, ...result };
     } catch (error) {
       return { ...fail(error), saved: false, bookmark: null };
     }
@@ -2086,6 +2221,60 @@ ipcMain.handle('bookmarks:markOpened', async (_, mediaUrl: string) => {
   bookmarks.markOpened(mediaUrl);
   return { ok: true };
 });
+
+// --- saved page snapshots --------------------------------------------------
+
+/**
+ * The copy of a page that lets it draw before — and without — a provider.
+ *
+ * Read-shaped rather than push-shaped, unlike search and playback: there is no
+ * progress to stream, the answer is already on disk, and the caller wants it in
+ * the same tick it decides to render. Capture is not exposed at all; it happens
+ * in `ContentService.load` where every detail load already passes.
+ */
+ipcMain.handle(
+  'pages:getSnapshot',
+  async (_, query: { url?: string; title?: string; year?: number }) => {
+    try {
+      return { ok: true, snapshot: pageSnapshots.find(query ?? {}) };
+    } catch (error) {
+      return { ...fail(error), snapshot: null };
+    }
+  }
+);
+
+/**
+ * Context only the renderer has: which search produced this page, and which
+ * other addresses the merged row said would reach it.
+ *
+ * Marked unverified, because it is annotation rather than evidence — nothing
+ * here says the page still loads, and letting it move `verifiedAt` would make
+ * a stale copy claim to be fresh.
+ */
+ipcMain.handle('pages:remember', async (_, input: PageSnapshotInput) => {
+  try {
+    return { ok: true, snapshot: pageSnapshots.capture({ ...input, verified: false }) };
+  } catch (error) {
+    return { ...fail(error), snapshot: null };
+  }
+});
+
+/**
+ * Keeps a page out of the eviction pool, or lets it back in.
+ *
+ * Addressed by title as well as URL because the two stores that pin disagree on
+ * identity: a bookmark keys on the address, the library on the canonical title.
+ */
+ipcMain.handle(
+  'pages:setPinned',
+  async (_, query: { url?: string; title?: string; year?: number }, pinned: boolean) => {
+    try {
+      return { ok: true, pinned: pageSnapshots.setPinned(query ?? {}, pinned !== false) };
+    } catch (error) {
+      return { ...fail(error), pinned: false };
+    }
+  }
+);
 
 // --- provider analytics and ranking ---------------------------------------
 
@@ -2267,7 +2456,7 @@ ipcMain.handle('runtime:repair', async () => {
     const provisioner = pluginManager.getSidecar().getProvisioner();
     await provisioner.cleanRuntime().catch((error) => {
       logger.warn('runtime', 'repair_clean_failed', {
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       });
     });
     const ready = await provisioner.provisionRuntime();
@@ -2823,9 +3012,7 @@ async function describeUnreadableSource(url: string): Promise<{
   } catch (error) {
     return {
       dead: true,
-      reason: `The source could not be reached: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      reason: `The source could not be reached: ${describeError(error)}`,
     };
   }
 }
@@ -3381,6 +3568,26 @@ const DELETE_PREFERENCE_KEY = 'download_delete_behavior';
 type DeletePreference = 'ask' | 'list-only' | 'list-and-file';
 
 /**
+ * Whether pressing Download asks first.
+ *
+ * Two values, not three, and the asymmetry with the delete preference above is
+ * deliberate. Deleting is unrecoverable, so its safe default is to ask.
+ * Downloading is not: the worst outcome of a mistaken press is a file in the
+ * wrong folder and some bandwidth, both of which the queue already lets you
+ * cancel. So the default stays `immediate`, which is what the button has always
+ * done — a preference that changes existing behaviour on upgrade is a bug
+ * report, not a feature.
+ *
+ * What makes asking worth offering at all is that a press commits to a
+ * *particular* variant: this 16 GB 2160p release from this provider in this
+ * language, into this folder. Someone downloading over a metered connection or
+ * onto a small disk is choosing between rows that all read "Download", and the
+ * dialog is where those differences become visible before the bytes start.
+ */
+const DOWNLOAD_CONFIRM_KEY = 'download_confirm_behavior';
+type DownloadConfirmPreference = 'ask' | 'immediate';
+
+/**
  * Player preferences that belong to the viewer rather than to a film.
  *
  * Volume, mute and speed persist across media and across restarts because they
@@ -3552,6 +3759,47 @@ ipcMain.handle('download:setDeletePreference', async (_, preference: DeletePrefe
   }
   datastore.setString(DELETE_PREFERENCE_KEY, preference, true);
   return { ok: true, preference };
+});
+
+ipcMain.handle('download:getConfirmPreference', async () => {
+  const stored = datastore.getString(DOWNLOAD_CONFIRM_KEY, 'immediate', true);
+  const preference: DownloadConfirmPreference = stored === 'ask' ? 'ask' : 'immediate';
+  return { ok: true, preference };
+});
+
+ipcMain.handle('download:setConfirmPreference', async (_, preference: DownloadConfirmPreference) => {
+  if (preference !== 'ask' && preference !== 'immediate') {
+    return { ok: false, error: `Unknown download confirmation preference: ${preference}` };
+  }
+  datastore.setString(DOWNLOAD_CONFIRM_KEY, preference, true);
+  return { ok: true, preference };
+});
+
+/**
+ * Where this download would land, and what pressing Download would actually do.
+ *
+ * The confirmation dialog cannot work this out for itself: the folder layout,
+ * the variant segment and the collision suffix are all decided in
+ * `MediaDownloadResolver` and `DownloadService`, from the rest of the queue —
+ * which the renderer has never seen. A dialog that guessed the path would be
+ * wrong exactly when it matters (the second release of one film), and a dialog
+ * that showed no path would be answering a different question from the one the
+ * viewer is asking.
+ *
+ * It also reports the existing task, if there is one, because "Download" on a
+ * paused transfer means resume and on a finished one means nothing at all —
+ * `download:request` has known that since it replaced the old "Already
+ * downloading" refusal, and the dialog should say it before the press rather
+ * than after.
+ *
+ * Read-only: it claims no path and creates no task.
+ */
+ipcMain.handle('download:preview', async (_, task: DownloadTask) => {
+  try {
+    return { ok: true, ...downloadService.preview(task) };
+  } catch (error) {
+    return fail(error);
+  }
 });
 ipcMain.handle('download:getQueue', async () => downloadService.getTasks());
 
@@ -3740,6 +3988,60 @@ ipcMain.handle('extension:getAdultAllowed', async () => bootstrap.isAdultAllowed
 ipcMain.handle('extension:setAdultAllowed', async (_, enabled: boolean) => {
   const value = bootstrap.setAdultAllowed(Boolean(enabled));
   return { ok: true, enabled: value, providers: await pluginManager.listEnabledProviders() };
+});
+
+/**
+ * The three-state gate.
+ *
+ * `allowed` and `mode` are both reported because they answer different
+ * questions: the mode is the setting, `allowed` is whether adult providers are
+ * being offered *right now*, and under `ask` those differ until someone asks.
+ */
+ipcMain.handle('extension:getAdultMode', async () => ({
+  ok: true,
+  mode: bootstrap.adultMode(),
+  allowed: bootstrap.isAdultAllowed(),
+}));
+
+ipcMain.handle('extension:setAdultMode', async (_, mode: 'off' | 'ask' | 'on') => {
+  if (mode !== 'off' && mode !== 'ask' && mode !== 'on') {
+    return { ...fail(new Error(`Unknown adult content mode: ${mode}`)), mode: bootstrap.adultMode() };
+  }
+  const value = bootstrap.setAdultMode(mode);
+  return {
+    ok: true,
+    mode: value,
+    allowed: bootstrap.isAdultAllowed(),
+    providers: await pluginManager.listEnabledProviders(),
+  };
+});
+
+/**
+ * Reveals adult providers for the rest of this run of the app.
+ *
+ * Refused unless the setting is `ask` — `BootstrapService.unlockAdultForSession`
+ * enforces that, and it matters because this channel is reachable from the
+ * renderer: revealing must never be a way to change the setting, which is where
+ * the consent step lives.
+ */
+ipcMain.handle('extension:unlockAdultForSession', async () => {
+  const allowed = bootstrap.unlockAdultForSession();
+  return {
+    ok: true,
+    mode: bootstrap.adultMode(),
+    allowed,
+    providers: await pluginManager.listEnabledProviders(),
+  };
+});
+
+ipcMain.handle('extension:lockAdultForSession', async () => {
+  bootstrap.lockAdultForSession();
+  return {
+    ok: true,
+    mode: bootstrap.adultMode(),
+    allowed: bootstrap.isAdultAllowed(),
+    providers: await pluginManager.listEnabledProviders(),
+  };
 });
 
 ipcMain.handle('extension:fetchRepository', async (_, repoUrl: string) => {
@@ -4166,9 +4468,77 @@ ipcMain.handle('search:getScopeOptions', async (_, ensureLoaded = true) => {
   }
 });
 
-ipcMain.handle('search:setScope', async (_, scope: Partial<SearchScope>) =>
-  contentService.getScope().set(scope)
-);
+/**
+ * Scope edits route through the profile store, not straight at the scope.
+ *
+ * `SearchScopeStore` is downstream of profiles now: every profile switch writes
+ * the effective scope into it, so a direct write here would be overwritten by
+ * the next switch. Sending the edit through the profiles layer is what makes
+ * "tick a box" and "switch profile" the same kind of event, and is why the
+ * five paths that read scope did not have to change.
+ */
+ipcMain.handle('search:setScope', async (_, scope: Partial<SearchScope>) => {
+  const profiles = contentService.getProfiles();
+  profiles.edit({ providers: scope.providers, indexers: scope.indexers });
+  return contentService.getScope().get();
+});
+
+// --- source profiles ------------------------------------------------------
+
+/**
+ * Named search configurations.
+ *
+ * Every one of these answers with the whole state rather than an
+ * acknowledgement, for the same reason `disabledSet.ts` returns the whole list
+ * on every mutation: the renderer holds a list, a selection and an active id
+ * that have to agree, and reconstructing that from a delta is how they come to
+ * disagree.
+ */
+function profileSnapshot() {
+  const profiles = contentService.getProfiles();
+  const state = profiles.get();
+  return {
+    ok: true as const,
+    profiles: state.profiles,
+    activeId: state.activeId,
+    draft: state.draft,
+    label: profiles.activeLabel(),
+    narrowed: profiles.isNarrowed(),
+  };
+}
+
+ipcMain.handle('profiles:list', async () => {
+  // Adopting here rather than at construction: a user upgrading into this
+  // feature has a selection in the old store and no profiles, and overwriting
+  // one with the other at startup would silently widen their next search.
+  contentService.getProfiles().adoptExistingScope();
+  return profileSnapshot();
+});
+
+ipcMain.handle('profiles:activate', async (_, id: string) => {
+  contentService.getProfiles().activate(String(id ?? ''));
+  return profileSnapshot();
+});
+
+ipcMain.handle('profiles:create', async (_, name: string) => {
+  contentService.getProfiles().create(String(name ?? ''));
+  return profileSnapshot();
+});
+
+ipcMain.handle('profiles:rename', async (_, id: string, name: string) => {
+  contentService.getProfiles().rename(String(id ?? ''), String(name ?? ''));
+  return profileSnapshot();
+});
+
+ipcMain.handle('profiles:duplicate', async (_, id: string) => {
+  contentService.getProfiles().duplicate(String(id ?? ''));
+  return profileSnapshot();
+});
+
+ipcMain.handle('profiles:delete', async (_, id: string) => {
+  contentService.getProfiles().remove(String(id ?? ''));
+  return profileSnapshot();
+});
 
 // --- network / DNS --------------------------------------------------------
 
@@ -4239,7 +4609,7 @@ ipcMain.handle('network:test', async () => {
           enabled: target.enabled,
           ok: false,
           latencyMs: Date.now() - started,
-          error: error instanceof Error ? error.message : String(error),
+          error: describeError(error),
         };
       }
     })
@@ -4280,9 +4650,17 @@ ipcMain.handle('library:getEntries', async (_, status?: WatchStatus) =>
   libraryStore.getEntries(status)
 );
 
-ipcMain.handle('library:upsertEntry', async (_, input: Parameters<LibraryStore['upsertEntry']>[0]) =>
-  libraryStore.upsertEntry(input)
-);
+ipcMain.handle('library:upsertEntry', async (_, input: Parameters<LibraryStore['upsertEntry']>[0]) => {
+  const entry = libraryStore.upsertEntry(input);
+  /*
+   * Adding a title to the library is the statement that its page must keep
+   * opening. Pinning here rather than in the store keeps `LibraryStore` free of
+   * a dependency on the snapshot cache, and by title rather than URL because
+   * that is the identity a library entry actually has.
+   */
+  pageSnapshots.setPinned({ url: input?.mediaUrl, title: entry?.title, year: entry?.year }, true);
+  return entry;
+});
 
 ipcMain.handle('library:setStatus', async (_, key: string, status: WatchStatus) =>
   libraryStore.setStatus(key, status)
@@ -4722,6 +5100,35 @@ const backupService = new BackupService(
           const { id: _id, savedAt: _savedAt, openCount: _openCount, ...rest } = row ?? {};
           if (!rest?.mediaUrl) continue;
           bookmarks.save(rest);
+          count++;
+        }
+        return count;
+      },
+    },
+    {
+      /*
+       * The pages behind the library, not just the rows in it.
+       *
+       * Restoring a library onto a new machine without these reproduces the
+       * exact failure the snapshot store exists for: every row present, every
+       * page behind it blank, until each one has been successfully re-scraped
+       * once. Bounded on export to the pages the user actually kept — the rest
+       * is a cache and belongs on the machine that built it.
+       */
+      name: 'pageSnapshots',
+      label: 'Saved page content',
+      replaceable: true,
+      collect: () => pageSnapshots.list().filter((snapshot) => snapshot.pinned),
+      restore: (value: unknown, mode) => {
+        if (!Array.isArray(value)) return 0;
+        if (mode === 'replace') return pageSnapshots.replaceAll(value as PageSnapshot[]);
+        let count = 0;
+        for (const row of value as PageSnapshot[]) {
+          if (!row?.url || !row?.title) continue;
+          // Through `capture`, so the merge rule applies: a restored copy adds
+          // what this machine is missing and never blanks what it already has.
+          pageSnapshots.capture({ ...row, verified: false });
+          pageSnapshots.setPinned({ url: row.url }, true);
           count++;
         }
         return count;

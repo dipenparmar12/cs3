@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { describeError } from '../../src/utils/errors.ts';
 
 /**
  * One file that is this installation, and can become it again somewhere else.
@@ -209,7 +210,7 @@ export class BackupService {
       fs.renameSync(temp, filePath);
       return { ok: true, path: filePath, bytes: Buffer.byteLength(json) };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: describeError(error) };
     }
   }
 
@@ -222,7 +223,7 @@ export class BackupService {
       const { contents: _contents, ...rest } = parsed;
       return { ok: true, envelope: rest };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: describeError(error) };
     }
   }
 
@@ -258,7 +259,7 @@ export class BackupService {
       return {
         ok: false,
         sections: [],
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       };
     }
 
@@ -303,7 +304,7 @@ export class BackupService {
         report.push({
           name: section.name,
           restored: 0,
-          note: error instanceof Error ? error.message : String(error),
+          note: describeError(error),
         });
       }
     }

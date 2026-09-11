@@ -235,14 +235,86 @@ class SidecarTest {
         assertNull(other.getSharedPreferences("s", 0).getString("token", null));
     }
 
+    /**
+     * AC-D5: a refusal names the API it refused — and is reachable.
+     *
+     * This asserted that {@code getAssets()} itself throws, which was true and
+     * untestable from an extension: the signature was
+     * {@code ()Ljava/lang/Object;}, a different method to the JVM than the
+     * {@code ()Landroid/content/res/AssetManager;} a plugin compiled against
+     * Android calls. The refusal was unreachable behind a
+     * {@code NoSuchMethodError} that named nothing. Same correction as
+     * {@code getResources} and {@code getPackageManager} before it: the call
+     * links, and the refusal moves to the accessor where it can be seen.
+     */
+    /**
+     * A shim that is present and wrong is still ours.
+     *
+     * A missing class is one way the compatibility layer fails and not the
+     * most common one. The rest are a class that links and then does not
+     * behave: `SharedPreferences` declared as a class where Android's is an
+     * interface (`IncompatibleClassChangeError`, 112 plugins in the corpus),
+     * `Context.getResources` returning `Object` (`NoSuchMethodError`),
+     * `AccountManager.aniListApi` typed as the wrapper. Every one of those was
+     * reported as PLUGIN_ERROR — "the extension threw" — which sends the reader
+     * to blame a scraper's author for a method we failed to provide.
+     */
+    @Test
+    void theWholeLinkageFamilyIsReportedAsOurs() {
+        for (Throwable linkage : new Throwable[] {
+                new NoClassDefFoundError("com/lagradost/Missing"),
+                new NoSuchMethodError("android.content.res.Resources Context.getResources()"),
+                new NoSuchFieldError("INSTANCE"),
+                new IncompatibleClassChangeError("Found class, but interface was expected"),
+                new AbstractMethodError("MainAPI.search"),
+                new VerifyError("bad type on operand stack"),
+                new UnsupportedClassVersionError("class file version 65"),
+                new IllegalAccessError("tried to access method"),
+                new ClassNotFoundException("android.net.Uri"),
+        }) {
+            assertEquals("LINKAGE_FAILED", Main.errorKind(linkage), linkage.toString());
+            // Reflection wraps everything on the plugin path; the walk has to
+            // reach through it or the classification never fires in practice.
+            assertEquals(
+                    "LINKAGE_FAILED",
+                    Main.errorKind(new java.lang.reflect.InvocationTargetException(linkage)),
+                    "wrapped: " + linkage);
+        }
+    }
+
+    /**
+     * The one LinkageError that is not ours.
+     *
+     * `ExceptionInInitializerError` is a LinkageError by inheritance and a
+     * plugin's own static initializer throwing in fact. Claiming it would stop
+     * the cause walk one frame short of what actually matters and report the
+     * plugin's bug as the runtime's.
+     */
+    @Test
+    void aPluginsOwnStaticInitializerIsNotALinkageFailure() {
+        var thrown = new ExceptionInInitializerError(new IllegalStateException("no api key"));
+        assertEquals("PLUGIN_ERROR", Main.errorKind(thrown));
+
+        // Unless what it wrapped really was a linkage failure, which is the
+        // shape a missing shim class takes inside a static block.
+        var nested = new ExceptionInInitializerError(new NoClassDefFoundError("android/net/Uri"));
+        assertEquals("LINKAGE_FAILED", Main.errorKind(nested));
+    }
+
     @Test
     void unsupportedAndroidApiNamesTheApiItRefused() {
-        var e = assertThrows(android.content.UnsupportedAndroidApiException.class,
-                () -> android.content.Context.cs3CreateScoped("p", "/tmp").getAssets());
+        android.content.res.AssetManager assets =
+                android.content.Context.cs3CreateScoped("p", "/tmp").getAssets();
+        assertNotNull(assets);
 
-        // AC-D5: the message must identify the API, not just fail.
-        assertTrue(e.getMessage().contains("android.content.Context.getAssets"));
-        assertEquals("android.content.Context.getAssets", e.api());
+        var e = assertThrows(android.content.UnsupportedAndroidApiException.class,
+                () -> assets.open("config.json"));
+        assertTrue(e.getMessage().contains("AssetManager.open"));
+        assertEquals("AssetManager.open", e.api());
+
+        // `close` is deliberately silent: callers put it in a `finally`, and
+        // throwing there replaces the real failure with one raised cleaning up.
+        assertDoesNotThrow(assets::close);
     }
 
     /**
@@ -330,6 +402,19 @@ class SidecarTest {
         var e = assertThrows(android.content.UnsupportedAndroidApiException.class,
                 () -> resources.getString(1));
         assertTrue(e.getMessage().contains("Resources.getString"));
+
+        /**
+         * `api()` is the aggregation key and must stay a bare `Class.method`.
+         *
+         * A shim that wants to explain itself used to fold the explanation into
+         * this field, so the key became a sentence and every refusal grouped
+         * under a different one — the tally the exception exists to make
+         * possible had one row per occurrence. The explanation belongs in the
+         * message, which is what the two-argument constructor separates.
+         */
+        assertEquals("Resources.getString", e.api());
+        assertTrue(e.getMessage().contains("Android resource table"),
+                "the explanation still has to reach the reader");
 
         // Android's documented answer for "no such resource", and truthful here.
         assertEquals(0, resources.getIdentifier("x", "id", "pkg"));

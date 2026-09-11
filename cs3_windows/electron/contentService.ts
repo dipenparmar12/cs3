@@ -6,7 +6,12 @@ import type {
   TorrentResult,
 } from '../src/types/torrent';
 import { MetadataProvider, parseMetadataUrl, type MetadataDetail } from './metadataProvider';
-import { CinemetaProvider, parseCinemetaUrl } from './cinemeta';
+import {
+  CinemetaProvider,
+  parseBareImdbUrl,
+  parseCinemetaUrl,
+  type CinemetaDetail,
+} from './cinemeta';
 import {
   IndexerRegistry,
   type AggregateSearchResult,
@@ -20,6 +25,7 @@ import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
 import {
   looksLikeLinksHandle,
+  looksLikePageAddress,
   parseExtensionUrl,
   type AnalyticsSink,
   type PluginManager,
@@ -33,6 +39,7 @@ import { scopedLogger } from './logging/logger.ts';
 
 const log = scopedLogger('sources');
 import { SearchScopeStore } from './searchScope';
+import { SourceProfileStore } from './cs3/sourceProfileStore.ts';
 import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
 import { SharedDiscovery } from './sharedDiscovery';
@@ -41,6 +48,8 @@ import { NativeProviderRegistry } from './cs3/nativeProviderRegistry.ts';
 import { parseNativeAddress } from './cs3/nativeProviders/types.ts';
 import { classifyFailure } from './cs3/failureTaxonomy.ts';
 import { planSourceScope, shouldEscalateScope } from './cs3/sourceScope';
+import { describeError } from '../src/utils/errors.ts';
+import type { PageSnapshotStore } from './cs3/pageSnapshot.ts';
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -75,6 +84,16 @@ export interface StreamAttempt {
   error: string;
   /** The extension provider behind this source, when it came from one. */
   providerName?: string;
+  /**
+   * Which source this was, so a caller can rule out exactly what was tried.
+   *
+   * `startBestStream` is handed a list and tries only the first `maxAttempts`
+   * of it, so "the candidates" and "the ones attempted" are different sets. A
+   * caller that retires the former walks off the end of the list in one step —
+   * measured: a 70-source title retired 64 untried sources on its second pass
+   * and reported that nothing was left.
+   */
+  infoHash?: string;
 }
 
 export interface AutoStreamResult {
@@ -229,6 +248,33 @@ function stripQuery(url: string): string {
   return index >= 0 ? url.slice(0, index) : url;
 }
 
+/** Shared by both catalogue addresses so the two cannot answer differently. */
+function catalogueDetail(detail: CinemetaDetail, base: string): MetadataDetail {
+  return {
+    name: detail.name,
+    url: base,
+    apiName: 'Catalogue',
+    type: detail.type,
+    posterUrl: detail.posterUrl,
+    year: detail.year,
+    plot: detail.plot,
+    rating: detail.rating,
+    tags: detail.tags,
+    actors: detail.actors,
+    duration: detail.duration,
+    runtimeMinutes: detail.runtimeMinutes,
+    // The whole point of this path: an IMDb id, for every type.
+    imdbId: detail.imdbId,
+    episodes: detail.episodes,
+  };
+}
+
+function catalogueMiss(imdbId: string): Error {
+  return new Error(
+    `The catalogue has no entry for ${imdbId}. It may have been removed, or Cinemeta may be unreachable from this network — Settings → Connection can test that.`
+  );
+}
+
 export class ContentService {
   private cinemeta = new CinemetaProvider();
   private metadata = new MetadataProvider();
@@ -237,6 +283,7 @@ export class ContentService {
   private plugins: PluginManager;
   private cache: SourceCache;
   private scope: SearchScopeStore;
+  private profiles: SourceProfileStore;
   private searches: SearchSessionManager;
   /** Providers that ship with the app; see `cs3/nativeProviderRegistry.ts`. */
   private natives: NativeProviderRegistry;
@@ -296,6 +343,15 @@ export class ContentService {
     this.engine = engine;
     this.cache = new SourceCache(datastore);
     this.scope = new SearchScopeStore(datastore);
+    /**
+     * Profiles sit *above* the scope store, not beside it.
+     *
+     * Everything downstream — search, discovery, streaming, downloading,
+     * refresh — keeps reading one `SearchScope` and never learns that
+     * profiles exist. See `sourceProfileStore.ts` for why that indirection
+     * is the whole design rather than an extra layer.
+     */
+    this.profiles = new SourceProfileStore(datastore, this.scope);
     this.natives = new NativeProviderRegistry(datastore);
     this.searches = new SearchSessionManager({
       plugins: this.plugins,
@@ -314,6 +370,10 @@ export class ContentService {
 
   public getScope(): SearchScopeStore {
     return this.scope;
+  }
+
+  public getProfiles(): SourceProfileStore {
+    return this.profiles;
   }
 
   public getSearches(): SearchSessionManager {
@@ -335,6 +395,19 @@ export class ContentService {
   /** Wired by `main.ts` so a refreshed title reaches whoever is viewing it. */
   public setDetailListener(listener: (url: string, detail: MetadataDetail) => void): void {
     this.onDetailRefreshed = listener;
+  }
+
+  /**
+   * Where every successful detail load is written down.
+   *
+   * Supplied after construction rather than taken as a constructor argument
+   * because a snapshot is an observer of this class, not a collaborator it
+   * needs: everything here works identically with no store attached, which is
+   * also what keeps the existing tests constructing a `ContentService` without
+   * one.
+   */
+  public setSnapshotStore(store: PageSnapshotStore): void {
+    this.snapshots = store;
   }
 
   public getProxy(): MediaProxy {
@@ -418,17 +491,77 @@ export class ContentService {
    * network round trip for a plot and a poster the app had displayed minutes
    * earlier, and for extension-sourced titles it meant re-scraping a web page.
    */
+  private snapshots: PageSnapshotStore | null = null;
+
+  /**
+   * Writes down a page that just loaded, so it can be drawn again without one.
+   *
+   * Here rather than in the renderer because this is the single funnel every
+   * detail load passes through — catalogue, native provider and extension
+   * alike — and because the provider's ancestry is only knowable on this side
+   * of the bridge. A page is captured by being *looked at*; nothing asks the
+   * user to save anything first. See `cs3/pageSnapshot.ts`.
+   */
+  private rememberPage(url: string, detail: MetadataDetail, verified = true): void {
+    if (!this.snapshots || !detail?.name) return;
+    try {
+      const provenance = detail.apiName ? this.plugins.provenanceOf(detail.apiName) : undefined;
+      this.snapshots.capture({
+        url,
+        title: detail.name,
+        year: detail.year,
+        type: detail.type,
+        apiName: detail.apiName,
+        posterUrl: detail.posterUrl,
+        plot: detail.plot,
+        tags: detail.tags,
+        rating: detail.rating,
+        duration: detail.duration,
+        imdbId: detail.imdbId,
+        isLive: detail.isLive,
+        actors: detail.actors,
+        episodes: detail.episodes,
+        recommendations: detail.recommendations,
+        routes: this.alternateRoutes.get(url),
+        verified,
+        origin: {
+          // `provenanceOf` answers with the provider name alone for anything it
+          // does not own, which is exactly right for a catalogue: recording
+          // "Cinemeta" as an extension would be a lie about where the page came
+          // from, and this field is read to decide what to offer when it breaks.
+          provider: provenance?.repositoryId ? provenance.provider : undefined,
+          repositoryId: provenance?.repositoryId,
+          repositoryName: provenance?.repositoryName,
+          extensionInternalName: provenance?.extensionInternalName,
+          extensionName: provenance?.extensionName,
+          metadataSource: provenance?.repositoryId ? undefined : detail.apiName,
+        },
+      });
+    } catch {
+      // Losing a snapshot costs a re-scrape. Throwing here would cost the page.
+    }
+  }
+
   public async load(url: string): Promise<MetadataDetail | null> {
     const base = stripQuery(url);
 
     const cached = this.details.read(base);
     if (cached) {
       if (cached.stale) this.revalidateDetail(base);
+      /*
+       * A cache hit is captured too, but not counted as evidence the page still
+       * works — the detail cache predates the snapshot store, so without this
+       * every title a user already had cached would stay unsnapshotted until
+       * its entry expired, which is precisely the window in which they are most
+       * likely to open it from their library.
+       */
+      this.rememberPage(base, cached.detail, false);
       return cached.detail;
     }
 
     const detail = await this.fetchDetail(base);
     this.details.write(base, detail);
+    this.rememberPage(base, detail);
     return detail;
   }
 
@@ -450,6 +583,7 @@ export class ContentService {
       try {
         const fresh = await this.fetchDetail(base);
         this.details.write(base, fresh);
+        this.rememberPage(base, fresh);
         this.onDetailRefreshed?.(base, fresh);
       } catch {
         // Keep the stale entry: it is better than nothing, and the next visit
@@ -468,29 +602,26 @@ export class ContentService {
       // Named, like the provider path: "the catalogue has no entry" and "the
       // catalogue is unreachable" need different reactions from the user, and
       // a null told them neither.
-      if (!detail) {
-        throw new Error(
-          `The catalogue has no entry for ${cinemetaRef.imdbId}. It may have been removed, or Cinemeta may be unreachable from this network — Settings → Connection can test that.`
-        );
-      }
+      if (!detail) throw catalogueMiss(cinemetaRef.imdbId);
+      return catalogueDetail(detail, base);
+    }
 
-      return {
-        name: detail.name,
-        url: base,
-        apiName: 'Catalogue',
-        type: detail.type,
-        posterUrl: detail.posterUrl,
-        year: detail.year,
-        plot: detail.plot,
-        rating: detail.rating,
-        tags: detail.tags,
-        actors: detail.actors,
-        duration: detail.duration,
-        runtimeMinutes: detail.runtimeMinutes,
-        // The whole point of this path: an IMDb id, for every type.
-        imdbId: detail.imdbId,
-        episodes: detail.episodes,
-      };
+    /**
+     * `cs3meta://tt1234567` — a saved OTT catalogue row from before those rows
+     * carried a type. The type has to be discovered because the address never
+     * recorded it; movie is tried first because the catalogue is mostly films,
+     * and the miss costs one 404 against an API that is already the cheapest
+     * thing in this function.
+     */
+    const bareImdbId = parseBareImdbUrl(base);
+    if (bareImdbId) {
+      for (const type of ['movie', 'series'] as const) {
+        // A wrong type answers 404, which `fetchJson` throws; that is this
+        // loop's "try the other one", not a failure worth reporting.
+        const detail = await this.cinemeta.load(type, bareImdbId).catch(() => null);
+        if (detail) return catalogueDetail(detail, base);
+      }
+      throw catalogueMiss(bareImdbId);
     }
 
     if (parseMetadataUrl(base)) {
@@ -692,7 +823,7 @@ export class ContentService {
       });
       return response;
     } catch (error) {
-      finish({ status: 'threw', error: error instanceof Error ? error.message : String(error) });
+      finish({ status: 'threw', error: describeError(error) });
       throw error;
     }
   }
@@ -1373,7 +1504,7 @@ export class ContentService {
     } catch (error) {
       log.warn('escalation_failed', {
         mediaId: request.mediaUrl,
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       });
       return fallback();
     }
@@ -1426,7 +1557,21 @@ export class ContentService {
     const providerName = target.startsWith('cs3ext://')
       ? decodeURIComponent(target.slice('cs3ext://'.length).split('/')[0] ?? '') || undefined
       : undefined;
-    let attempt = await this.plugins.loadLinksDetailed(target);
+    /**
+     * A page address handed to `loadLinks` is a guess, and is marked as one.
+     *
+     * The order below cannot simply be reversed — plenty of providers' link
+     * handle really is a URL — so the first call stays. What changes is that
+     * when it is made against something that is definitely a page address, its
+     * failure is not counted against the provider and is logged as a guess
+     * rather than as "the site has probably changed". Measured on three
+     * providers in three sessions (BollyFlix, HDO, CineSimkl), all of which
+     * went on to work on the retry immediately below.
+     */
+    const speculative = looksLikePageAddress(
+      target.startsWith('cs3ext://') ? parseExtensionUrl(target)?.target ?? '' : target
+    );
+    let attempt = await this.plugins.loadLinksDetailed(target, { speculative });
     let links = attempt.links;
     let diagnosis = attempt.diagnosis;
 
@@ -1633,7 +1778,7 @@ export class ContentService {
     try {
       links = await provider.loadLinks(parsed.handle, controller.signal);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeError(error);
       return {
         sources: [],
         diagnosis: {
@@ -1988,6 +2133,7 @@ export class ContentService {
         title: source.title,
         indexerName: source.indexerName,
         providerName: source.providerName,
+        infoHash: source.infoHash,
         error,
       });
       if (source.providerName) {
@@ -2015,7 +2161,7 @@ export class ContentService {
       try {
         handle = await this.startStream(source, season, episode);
       } catch (error) {
-        failed(source, error instanceof Error ? error.message : String(error));
+        failed(source, describeError(error));
         continue;
       }
 
@@ -2069,8 +2215,18 @@ export class ContentService {
     }
 
     const detail = attempts.map((a) => `${a.title} (${a.indexerName}): ${a.error}`).join('; ');
-    throw new Error(
-      `Tried ${attempts.length} source${attempts.length === 1 ? '' : 's'} and none started. ${detail}`
+    /**
+     * The attempts ride on the error, because the caller needs them.
+     *
+     * Everything this walk learned is otherwise only in the message, and a
+     * caller deciding what to try next cannot act on prose. `PlaybackSession`
+     * reads these to rule out exactly the sources that were tried and no more.
+     */
+    throw Object.assign(
+      new Error(
+        `Tried ${attempts.length} source${attempts.length === 1 ? '' : 's'} and none started. ${detail}`
+      ),
+      { attempts: [...attempts] }
     );
   }
 

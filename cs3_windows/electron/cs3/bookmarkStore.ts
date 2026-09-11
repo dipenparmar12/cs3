@@ -1,5 +1,6 @@
 import type { DatastoreManager } from '../datastore';
 import type { TvType } from '../../src/types/api';
+import { prune } from '../util/prune.ts';
 
 /**
  * Saved detail pages, with enough origin to reopen the same one.
@@ -232,11 +233,3 @@ export class BookmarkStore {
   }
 }
 
-/** Drops undefined keys so a merge cannot overwrite a known value with nothing. */
-function prune<T extends object>(value: T): Partial<T> {
-  const out: Partial<T> = {};
-  for (const [key, entry] of Object.entries(value) as Array<[keyof T, T[keyof T]]>) {
-    if (entry !== undefined && entry !== null && entry !== '') out[key] = entry;
-  }
-  return out;
-}

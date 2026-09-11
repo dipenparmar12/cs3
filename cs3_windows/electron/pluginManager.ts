@@ -4,10 +4,11 @@ import fs from 'fs';
 import {
   buildExtensionUrl,
   looksLikeLinksHandle,
+  looksLikePageAddress,
   parseExtensionUrl,
 } from './cs3/extensionAddress.ts';
 
-export { buildExtensionUrl, looksLikeLinksHandle, parseExtensionUrl };
+export { buildExtensionUrl, looksLikeLinksHandle, looksLikePageAddress, parseExtensionUrl };
 import path from 'path';
 import crypto from 'crypto';
 import { app } from 'electron';
@@ -28,6 +29,7 @@ import { SidecarSupervisor } from './cs3/sidecarSupervisor';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from './officialRepositories';
 import { getIssueLog } from './cs3/extensionIssues';
 import { ProviderRegistryCache, type CachedProvider } from './cs3/providerRegistry';
+import { applySearchOrder } from './cs3/searchOrder.ts';
 import { classifyFailure, FAILURE_KIND_LABELS } from './cs3/failureTaxonomy';
 import { mapProviderLink } from './cs3/providerLinks';
 import type { FailureKind } from '../src/types/analytics';
@@ -73,6 +75,7 @@ import {
   type RecoveryOutcome,
   type RecoveryPlan,
 } from './cs3/providerRecovery.js';
+import { describeError } from '../src/utils/errors.ts';
 
 export interface RepositoryFetchResult {
   repositoryUrl: string;
@@ -391,6 +394,19 @@ function isAdultProvider(provider: ExtensionProvider): boolean {
  * merely timing out.
  */
 const PROVIDER_CALL_TIMEOUT_MS = 60_000;
+
+/** How often the background warm-up re-checks whether a search is still running. */
+const WARMUP_YIELD_POLL_MS = 250;
+
+/**
+ * How long the warm-up will defer to searches before proceeding anyway.
+ *
+ * Long enough to cover an ordinary fan-out across a large install including the
+ * slowest providers, short enough that a session spent searching continuously
+ * still gets warmed up eventually. Past it the warm-up accepts the contention,
+ * which is what it did unconditionally before.
+ */
+const WARMUP_YIELD_LIMIT_MS = 120_000;
 
 
 
@@ -747,6 +763,7 @@ export class PluginManager {
   private installedRepoUrls = new Set<string>();
   private installedPlugins = new Map<string, PluginData & { meta: SitePlugin }>();
   private runtimeReports = new Map<string, PluginRuntimeReport>();
+  private previousPluginRecords = new Map<string, PluginData & { meta: SitePlugin }>();
 
   /**
    * Where provider failures are recorded, when the host supplies a log.
@@ -801,6 +818,28 @@ export class PluginManager {
    * draw a scope picker and needs a live object only to make a call.
    */
   private readonly liveInJvm = new Set<string>();
+
+  /**
+   * Who the fan-out asks first, supplied by `main.ts` from the ranking.
+   *
+   * A sink rather than a dependency, on the same terms as `analytics` and
+   * `diagnostics`: this class must stay constructible in a tool or a test with
+   * no ranking around it, and an absent order is simply the registry's own,
+   * which is what it was before. See `cs3/searchOrder.ts`.
+   */
+  private searchOrder: ((names: string[]) => string[]) | null = null;
+
+  /**
+   * How many searches are running, so the warm-up can stay out of their way.
+   *
+   * The background warm-up is deliberately serial because concurrency
+   * mis-attributes providers, but serial is not the same as out of the way: it
+   * still loads a 56-jar classpath continuously, and a search starting eight
+   * seconds after launch contends with it for the sidecar's bounded pool for
+   * every one of those loads. The warm-up exists to make searches faster; it
+   * should not be the reason one is slow.
+   */
+  private liveSearches = 0;
 
   /** In-flight activations, so two concurrent searches load a plugin once. */
   private readonly activating = new Map<string, Promise<boolean>>();
@@ -924,8 +963,20 @@ export class PluginManager {
   public preserveInstalledVersion(repoUrl: string, internalName: string): boolean {
     const current = this.installPathFor(repoUrl, internalName);
     if (!fs.existsSync(current)) return false;
+    const backup = this.backupPathFor(repoUrl, internalName);
     try {
-      fs.copyFileSync(current, this.backupPathFor(repoUrl, internalName));
+      if (fs.existsSync(backup)) {
+        try {
+          fs.chmodSync(backup, 0o666);
+        } catch {
+          // Ignore if chmod fails
+        }
+      }
+      fs.copyFileSync(current, backup);
+      const existing = this.installedPlugins.get(internalName);
+      if (existing) {
+        this.previousPluginRecords.set(internalName, { ...existing });
+      }
       return true;
     } catch (error) {
       console.warn('[plugins] could not preserve the previous version:', error);
@@ -961,14 +1012,34 @@ export class PluginManager {
     }
 
     try {
+      await this.sidecar.call('unload', { pluginId: internalName });
+    } catch {
+      // Safe if sidecar is not running
+    }
+    this.forgetLoadedExtension(internalName);
+
+    try {
+      if (fs.existsSync(target)) {
+        try {
+          fs.chmodSync(target, 0o666);
+        } catch {
+          // Ignore if chmod fails
+        }
+      }
       fs.copyFileSync(backup, target);
     } catch (error) {
       return {
         ok: false,
         message: `The previous version could not be restored: ${
-          error instanceof Error ? error.message : String(error)
+          describeError(error)
         }`,
       };
+    }
+
+    const prev = this.previousPluginRecords.get(internalName);
+    if (prev) {
+      this.installedPlugins.set(internalName, prev);
+      this.persist();
     }
 
     /**
@@ -982,6 +1053,8 @@ export class PluginManager {
         message: `The previous version was restored but still does not load: ${verification.message}`,
       };
     }
+
+    await this.reloadInstalledExtension(internalName);
 
     return { ok: true, message: 'The previous version has been restored and loaded.' };
   }
@@ -1028,7 +1101,7 @@ export class PluginManager {
     } catch (error) {
       return {
         ok: false,
-        message: error instanceof Error ? error.message : String(error),
+        message: describeError(error),
       };
     }
   }
@@ -1092,7 +1165,7 @@ export class PluginManager {
       if (result.status === 'rejected') {
         warnings.push(
           `Plugin list ${repo.pluginLists[index]} could not be read: ${
-            result.reason instanceof Error ? result.reason.message : String(result.reason)
+            describeError(result.reason)
           }`
         );
         return;
@@ -1160,7 +1233,7 @@ export class PluginManager {
       return {
         ok: false,
         message: `That repository could not be read: ${
-          error instanceof Error ? error.message : String(error)
+          describeError(error)
         }`,
       };
     }
@@ -1215,7 +1288,7 @@ export class PluginManager {
       return {
         ok: false,
         message: `That repository could not be read: ${
-          error instanceof Error ? error.message : String(error)
+          describeError(error)
         }`,
         installed: 0,
         failed: 0,
@@ -1431,11 +1504,24 @@ export class PluginManager {
 
       fs.writeFileSync(tempPath, buffer);
 
-      // The loader marks installed archives read-only, matching Android
-      // (PluginManager.kt:602). On Windows a rename over a read-only file
-      // fails, so an update would leave the old version in place while
-      // reporting success. Clear the flag on the outgoing file first.
       if (fs.existsSync(target)) {
+        // Drop from running sidecar first so its classloader closes open file
+        // handles to target. On Windows, open handles cause renameSync to fail with EPERM.
+        try {
+          await this.sidecar.call('unload', { pluginId: plugin.internalName });
+        } catch {
+          // Safe if sidecar is not running or plugin not yet loaded
+        }
+        /*
+         * Paired with the `unload` above rather than placed after the rename:
+         * a rename that fails still leaves the old copy dropped from the JVM,
+         * and a live claim surviving that would be a provider this process
+         * thinks is loaded and nothing can call. Before `inspect` runs further
+         * down, too — that records a fresh runtime report and clearing it
+         * afterwards would throw the new one away.
+         */
+        this.forgetLoadedExtension(plugin.internalName);
+
         try {
           fs.chmodSync(target, 0o666);
         } catch {
@@ -1443,7 +1529,30 @@ export class PluginManager {
           // problem; nothing is lost by trying.
         }
       }
-      fs.renameSync(tempPath, target);
+
+      // On Windows, handle release may take a moment or AV might briefly check the file
+      let renameErr: unknown = null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          if (fs.existsSync(target)) {
+            try {
+              fs.chmodSync(target, 0o666);
+            } catch {}
+          }
+          fs.renameSync(tempPath, target);
+          renameErr = null;
+          break;
+        } catch (err: unknown) {
+          renameErr = err;
+          const code = (err as { code?: string })?.code;
+          if (attempt < 4 && (code === 'EPERM' || code === 'EBUSY')) {
+            await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
+            continue;
+          }
+          throw err;
+        }
+      }
+      if (renameErr) throw renameErr;
 
       const report = this.analyzer.analyzePlugin(plugin.name, plugin.internalName, target);
 
@@ -1468,13 +1577,8 @@ export class PluginManager {
       // be known before the user is told whether it works.
       const runtime = await this.inspect(plugin.internalName, target);
 
-      // Invalidate cached provider state and load the new extension into JVM sidecar immediately
-      this.providersLoaded = false;
-      try {
-        await this.loadProviders();
-      } catch (err) {
-        console.warn(`[pluginManager] Could not auto-load providers for ${plugin.internalName}:`, err);
-      }
+      // Into the running JVM now, so the extension answers without a restart.
+      await this.reloadInstalledExtension(plugin.internalName);
 
       this.notifyInstallProgress({
         internalName: plugin.internalName,
@@ -1507,7 +1611,7 @@ export class PluginManager {
       }
       return {
         ok: false,
-        message: error instanceof Error ? error.message : String(error),
+        message: describeError(error),
       };
     }
   }
@@ -1546,6 +1650,59 @@ export class PluginManager {
     }
     void this.sidecar.call('unload', { pluginId: internalName });
     return true;
+  }
+
+  /**
+   * Drops everything this process believes about an extension's *loaded* state.
+   *
+   * Called whenever an archive on disk is replaced — an update, a rollback, a
+   * reinstall over the top. The sidecar is told to `unload` at those moments,
+   * and until this existed nothing on this side of the boundary was told
+   * anything: `liveInJvm` still held the name, so the next `activate` returned
+   * `true` without loading, and the providers stayed gone until the app was
+   * restarted. That is the "I updated the extension and now it finds nothing"
+   * report, and it is invisible from here because every layer reports success.
+   *
+   * Four things go, and all four matter. The live claim, or nothing reloads.
+   * The registry row, because it describes bytes that are no longer on disk and
+   * would hydrate the *old* provider set on next launch. The provider entries,
+   * because an extension that dropped a provider in the new version would keep
+   * answering for it. And the runtime report, because a failure recorded
+   * against the previous archive is not evidence about this one.
+   *
+   * Deliberately not `providersLoaded = false`: the caller reactivates this one
+   * archive, and re-running hydration for the other hundred and twenty is the
+   * cost that made updating twenty extensions take minutes.
+   */
+  private forgetLoadedExtension(internalName: string): void {
+    this.liveInJvm.delete(internalName);
+    this.registry?.forget(internalName);
+    this.runtimeReports.delete(internalName);
+    this.providerNameClashes.delete(internalName);
+    for (const [name, provider] of [...this.providers.entries()]) {
+      if (provider.pluginInternalName === internalName) this.providers.delete(name);
+    }
+  }
+
+  /**
+   * Reloads one replaced archive into the JVM, and only that one.
+   *
+   * The install path used to clear `providersLoaded` and call `loadProviders()`
+   * — a whole-catalogue pass — after every single install. On "update all" over
+   * twenty extensions that is twenty passes, each re-reading every installed
+   * archive's registration, and the user watches a progress bar that has
+   * nothing to do with the work being done. Loading the archive that actually
+   * changed is the same outcome for a fraction of the cost, and it is the only
+   * one that is correct after `forgetLoadedExtension` has dropped the row this
+   * extension would otherwise have hydrated from.
+   */
+  private async reloadInstalledExtension(internalName: string): Promise<boolean> {
+    try {
+      return await this.activate(internalName);
+    } catch (error) {
+      console.warn(`[pluginManager] could not reload ${internalName} after install:`, error);
+      return false;
+    }
   }
 
   public getInstalledPlugins(): SitePlugin[] {
@@ -1701,6 +1858,18 @@ export class PluginManager {
         // A listener that throws must not stop the load it is watching.
       }
     }
+  }
+
+  /**
+   * Wired by `main.ts`; decides which providers a search reaches first.
+   *
+   * Never which providers a search reaches — `applySearchOrder` refuses any
+   * ordering that is not the same set, because a reordering that quietly drops
+   * a provider makes a search ask less than the user selected and call the
+   * difference "no results".
+   */
+  public setSearchOrder(order: (names: string[]) => string[]): void {
+    this.searchOrder = order;
   }
 
   /** Wired by `main.ts`; provider outcomes are counted from here onwards. */
@@ -2114,7 +2283,7 @@ export class PluginManager {
           ok: false,
           provider,
           done: [],
-          error: error instanceof Error ? error.message : String(error),
+          error: describeError(error),
         });
       }
     }
@@ -2180,7 +2349,7 @@ export class PluginManager {
         }
         done.push({ kind: step.kind, target: step.target, ok: true });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         done.push({ kind: step.kind, target: step.target, ok: false, error: message });
         return { ok: false, provider, done, error: message };
       }
@@ -2669,7 +2838,36 @@ export class PluginManager {
     for (const record of [...this.installedPlugins.values()]) {
       if (signal?.aborted) return;
       if (this.liveInJvm.has(record.internalName)) continue;
+      // Between archives, not during one: a load that has started must finish
+      // or the provider is left half-registered.
+      await this.waitForSearchesToFinish(signal);
+      if (signal?.aborted) return;
       await this.activate(record.internalName);
+    }
+  }
+
+  /**
+   * Holds the warm-up while a search is running.
+   *
+   * The warm-up exists so a later search does not pay the class-loading cost.
+   * Paying it *during* a search is the one case where it makes things worse,
+   * and being serial does not prevent that — it still keeps the sidecar's
+   * bounded pool busy with a 56-jar classpath while eight scrapes queue behind
+   * it. Waiting costs the warm-up nothing: it has no deadline, and the searched
+   * providers are being loaded by the search anyway.
+   *
+   * Bounded, because a search that never settles must not stop the warm-up for
+   * the rest of the session. Past the cap it proceeds and accepts the
+   * contention, which is exactly the behaviour that existed before.
+   */
+  private async waitForSearchesToFinish(signal?: AbortSignal): Promise<void> {
+    const deadline = Date.now() + WARMUP_YIELD_LIMIT_MS;
+    while (this.liveSearches > 0 && Date.now() < deadline) {
+      if (signal?.aborted) return;
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, WARMUP_YIELD_POLL_MS);
+        timer.unref?.();
+      });
     }
   }
 
@@ -2867,9 +3065,19 @@ export class PluginManager {
     await this.ensureProvidersLoaded();
     if (signal?.aborted) return;
 
-    const targets = this.narrowToEnabled(only);
+    /*
+     * Best-first, so the first screen of results arrives sooner.
+     *
+     * The set is identical either way — this is a sequence, not a filter — but
+     * with eight lanes and thirty providers the sequence decides how long the
+     * screen stays empty. A lane spent timing out on a dead provider is a lane
+     * not spent on one that answers in three hundred milliseconds, and the app
+     * has been measuring which is which all along without using it here.
+     */
+    const targets = applySearchOrder(this.narrowToEnabled(only), this.searchOrder);
     if (targets.length === 0) return;
 
+    this.liveSearches += 1;
     let next = 0;
     const worker = async (): Promise<void> => {
       while (next < targets.length) {
@@ -2886,7 +3094,13 @@ export class PluginManager {
     // Read per search, not cached: changing it in settings takes effect on the
     // next search rather than the next launch.
     const lanes = Math.min(this.searchConcurrency(), targets.length);
-    await Promise.all(Array.from({ length: lanes }, worker));
+    try {
+      await Promise.all(Array.from({ length: lanes }, worker));
+    } finally {
+      // In a `finally`, because a cancelled search still has to release the
+      // warm-up — otherwise the first abandoned search stops it for the session.
+      this.liveSearches = Math.max(0, this.liveSearches - 1);
+    }
   }
 
   /** How many provider searches this app runs at once. */
@@ -3383,8 +3597,26 @@ export class PluginManager {
    * resolve is not an exception at this layer; what changes is that the caller
    * can now say which of the six it was.
    */
+  /**
+   * @param options.speculative
+   *   This call is a guess, so its failure is not evidence about the provider.
+   *
+   *   `ContentService.extensionSources` tries `loadLinks` before `load` because
+   *   many providers' link handle really is a page address — but for the ones
+   *   whose handle is their own JSON, that first call throws inside the
+   *   provider (`JsonParseException: Unrecognized token 'https'`, seen from
+   *   BollyFlix, HDO and CineSimkl in three separate sessions). The retry then
+   *   works and the viewer gets their film, while the doomed first call was
+   *   logged as "the site has probably changed" and counted against a provider
+   *   that did nothing wrong.
+   *
+   *   Marked rather than skipped: the diagnosis is still produced and still
+   *   returned, because when the retry *also* fails it is the only account of
+   *   what the viewer asked for. What a guess must never do is move a score.
+   */
   public async loadLinksDetailed(
-    url: string
+    url: string,
+    options: { speculative?: boolean } = {}
   ): Promise<{ links: ExtractorLink[]; diagnosis?: SourceDiagnosis }> {
     const ref = parseExtensionUrl(url);
     if (!ref) {
@@ -3401,6 +3633,7 @@ export class PluginManager {
       };
     }
     await this.ensureProviderActive(ref.provider);
+    const speculative = options.speculative === true;
 
     const startedAt = Date.now();
     const response = await this.sidecar.call(
@@ -3417,11 +3650,16 @@ export class PluginManager {
       options: { hint?: string; error?: string; extra?: DiagnosisFact[]; level?: 'error' | 'warn' } = {}
     ): { links: ExtractorLink[]; diagnosis: SourceDiagnosis } => {
       this.diagnostics?.record({
-        level: options.level ?? 'error',
+        // A guess that did not come off is a `warn`, not an `error`. The log is
+        // meant to be a tool for finding real problems, and this one produced
+        // an error line per film for providers that were working.
+        level: speculative ? 'warn' : (options.level ?? 'error'),
         stage: 'links',
         source: ref.provider,
         url,
-        message: summary,
+        message: speculative
+          ? `${summary} (asked speculatively with a page address; retrying properly)`
+          : summary,
         detail: options.error,
       });
       /**
@@ -3432,7 +3670,10 @@ export class PluginManager {
        * would rank it down for having been turned off, and the ranking is
        * meant never to be silently punitive.
        */
-      if (kind !== 'provider-missing') {
+      // `provider-missing` is filtered centrally now (see `UNSCORED_FAILURE_KINDS`);
+      // what is decided here is the thing only this call site knows — whether
+      // the call was worth making at all.
+      if (!speculative) {
         this.analytics?.observe({
           provider: ref.provider,
           stage: 'links',

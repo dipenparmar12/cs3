@@ -8,6 +8,8 @@ import {
   variantFromSource,
   variantFromTask,
 } from '../src/utils/downloadIdentity.ts';
+import { formatInfoFileSize } from '../src/utils/format.ts';
+import { historyEventForTask } from '../src/utils/historyEvent.ts';
 import type { DatastoreManager } from './datastore';
 import type { Aria2Engine } from './aria2Engine';
 import { MediaDownloadResolver } from './mediaDownloadResolver';
@@ -22,6 +24,7 @@ import type { TorrentResult } from '../src/types/torrent';
 import type { HistoryStore } from './cs3/historyStore';
 import type { HistoryAction, HistoryStatus } from '../src/types/history';
 import { scopedLogger } from './logging/logger.ts';
+import { describeError } from '../src/utils/errors.ts';
 
 const log = scopedLogger('download');
 
@@ -92,35 +95,7 @@ export class DownloadService {
   ): void {
     if (!this.historyStore) return;
     try {
-      this.historyStore.record({
-        title: task.parentTitle || task.title,
-        parentTitle: task.parentTitle,
-        mediaUrl: task.parentMediaUrl || task.mediaUrl || task.link.url,
-        parentMediaUrl: task.parentMediaUrl,
-        posterUrl: task.posterUrl,
-        season: task.seasonNumber,
-        episode: task.episodeNumber,
-        episodeTitle: task.episodeTitle,
-        type:
-          task.mediaType ||
-          (task.seasonNumber !== undefined || task.episodeNumber !== undefined
-            ? 'series'
-            : 'movie'),
-        year: task.year,
-        originalTitle: task.originalTitle,
-        action,
-        status,
-        failureReason,
-        source: {
-          providerName: task.providerName,
-          sourceName: task.link.name,
-          directUrl: task.link.url,
-          directHeaders: task.headers,
-          quality: task.quality ? `${task.quality}p` : undefined,
-          resolution: task.resolution,
-          sizeBytes: task.totalBytes,
-        },
-      });
+      this.historyStore.record(historyEventForTask(task, action, status, failureReason));
     } catch (e) {
       console.warn('[downloadService] Failed to record history event:', e);
     }
@@ -431,6 +406,39 @@ export class DownloadService {
    * A press is a request for the file to make progress. Six states, six useful
    * answers, and only one of them is "nothing to do".
    */
+  /**
+   * What `request` would do with this task, without doing any of it.
+   *
+   * Exists for the confirmation dialog, which has to describe a press before it
+   * happens. Everything here is already computed by `request` and
+   * `claimTargetPath`; the difference is that this claims nothing — no id, no
+   * queue entry, and deliberately no reserved path, because a dialog the viewer
+   * cancels must leave the queue exactly as it found it.
+   *
+   * The path is therefore the *unclaimed* one: if two dialogs were open at once
+   * on colliding variants they would both name the same file, and the second
+   * press would get the numbered suffix it did not see. That is the right
+   * trade — a suffix that appears is a cosmetic surprise; a path reserved by a
+   * dialog nobody confirmed is a leak.
+   */
+  public preview(task: DownloadTask): {
+    targetPath: string;
+    directory: string;
+    existingState?: DownloadState;
+    existingTaskId?: string;
+  } {
+    const variantKey = task.variantKey || downloadVariantKey(variantFromTask(task));
+    const existing = this.findByVariant(variantKey);
+    const targetPath =
+      existing?.targetFilePath || this.resolver.generateTargetFilePath(task);
+    return {
+      targetPath,
+      directory: path.dirname(targetPath),
+      existingState: existing?.state,
+      existingTaskId: existing?.id,
+    };
+  }
+
   public async request(task: DownloadTask): Promise<DownloadRequestResult> {
     const variantKey = task.variantKey || downloadVariantKey(variantFromTask(task));
     task.variantKey = variantKey;
@@ -533,7 +541,7 @@ export class DownloadService {
     try {
       fs.mkdirSync(outputDir, { recursive: true });
     } catch (error) {
-      this.markFailed(task, `Could not create the download folder: ${describe(error)}`);
+      this.markFailed(task, `Could not create the download folder: ${describeError(error)}`);
       return;
     }
 
@@ -590,7 +598,7 @@ export class DownloadService {
       task.targetFilePath = handle.diskPath;
       this.saveQueueToStorage();
     } catch (error) {
-      this.markFailed(task, describe(error));
+      this.markFailed(task, describeError(error));
     }
   }
 
@@ -716,8 +724,8 @@ export class DownloadService {
     if (expected > 0 && actual < expected * 0.99) {
       this.markFailed(
         task,
-        `The transfer stopped early: ${DownloadService.formatBytes(actual)} of ` +
-          `${DownloadService.formatBytes(expected)} was written. Retry to resume it.`
+        `The transfer stopped early: ${formatInfoFileSize(actual)} of ` +
+          `${formatInfoFileSize(expected)} was written. Retry to resume it.`
       );
       return;
     }
@@ -799,7 +807,7 @@ export class DownloadService {
           variantKey: task.variantKey,
           targetFilePath: task.targetFilePath,
           fileSizeBytes: actualBytes || task.totalBytes,
-          fileSizeFormatted: DownloadService.formatBytes(actualBytes || task.totalBytes),
+          fileSizeFormatted: formatInfoFileSize(actualBytes || task.totalBytes),
           createdTime: createdAt,
           downloadCompletedAt: completedAt,
         },
@@ -827,7 +835,7 @@ export class DownloadService {
         `Quality:          ${task.quality || (task.resolution ? `${task.resolution}p` : 'Unknown')}`,
         task.languages?.length ? `Languages:        ${task.languages.join(', ')}` : null,
         task.audioCodecs?.length ? `Audio Codecs:     ${task.audioCodecs.join(', ')}` : null,
-        `File Size:        ${DownloadService.formatBytes(actualBytes || task.totalBytes)}`,
+        `File Size:        ${formatInfoFileSize(actualBytes || task.totalBytes)}`,
         `Downloaded Date:  ${completedAt}`,
         `Target File:      ${path.basename(task.targetFilePath)}`,
         `Task ID:          ${task.id}`,
@@ -850,14 +858,8 @@ export class DownloadService {
       fs.writeFileSync(txtPath, readableText, 'utf8');
       log.info('download_info_files_written', { jsonPath, txtPath, taskId: task.id });
     } catch (error) {
-      console.warn('[downloads] Failed to write download info companion files:', describe(error));
+      console.warn('[downloads] Failed to write download info companion files:', describeError(error));
     }
-  }
-
-  private static formatBytes(bytes: number): string {
-    if (!bytes || bytes < 0) return '0 MB';
-    const gb = bytes / 1e9;
-    return gb >= 1 ? `${gb.toFixed(2)} GB` : `${Math.round(bytes / 1e6)} MB`;
   }
 
   /**
@@ -1360,7 +1362,7 @@ export class DownloadService {
       try {
         fs.rmSync(task.targetFilePath, { force: true });
       } catch (error) {
-        console.warn('[downloads] could not delete file for removed task:', describe(error));
+        console.warn('[downloads] could not delete file for removed task:', describeError(error));
       }
     }
 
@@ -1379,8 +1381,4 @@ export class DownloadService {
     this.handles.clear();
     this.aria2.stop();
   }
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

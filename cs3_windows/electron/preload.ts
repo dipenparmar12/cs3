@@ -9,6 +9,25 @@ import type {
   SearchSuggestion,
 } from '../src/types/api';
 import type { OttPlatformView } from './cs3/ottPlatforms';
+import type { ProfileState, SourceProfile } from './cs3/sourceProfiles.ts';
+
+/**
+ * The whole profile picture, answered by every profile call.
+ *
+ * `label` and `narrowed` are derived in the main process rather than in the
+ * renderer so the scope button and the search itself cannot disagree about
+ * whether anything is narrowed — the disagreement that produced a button
+ * reading "1 source" over a search of two hundred.
+ */
+export interface SourceProfileSnapshot {
+  ok: boolean;
+  error?: string;
+  profiles: SourceProfile[];
+  activeId: string;
+  draft: ProfileState['draft'];
+  label: string;
+  narrowed: boolean;
+}
 import type { NativeProviderSummary } from './cs3/nativeProviderRegistry';
 import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
 import type { SwarmReport } from '../src/types/torrent';
@@ -38,6 +57,7 @@ import type { SearchSnapshot } from './searchSession';
 import type { DnsPreset, NetworkSettings } from './networkSettings';
 import type { SystemRuntimeStatus, RuntimeProgress } from './cs3/runtimeProvisioner';
 import type { Bookmark } from './cs3/bookmarkStore';
+import type { PageSnapshot, PageSnapshotInput } from './cs3/pageSnapshot.ts';
 import type { DiscoverySection } from './cs3/discovery';
 import type { PrefetchState } from './cs3/sourcePrefetcher';
 import type { EnrichedMetadata } from './cs3/titleEnricher';
@@ -363,6 +383,25 @@ export interface CloudStreamElectronAPI {
   setAdultAllowed: (
     enabled: boolean
   ) => Promise<Envelope & { enabled: boolean; providers: string[] }>;
+  /**
+   * The gate, in three states rather than two.
+   *
+   * `mode` is the setting and `allowed` is whether adult providers are being
+   * offered right now; under `ask` those differ until someone asks. The unlock
+   * lasts only for this run of the app — a middle setting that persisted its
+   * unlock would be "on" with extra steps, which is the opposite of what
+   * someone sharing a machine chooses it for.
+   */
+  getAdultMode: () => Promise<Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean }>;
+  setAdultMode: (
+    mode: 'off' | 'ask' | 'on'
+  ) => Promise<Envelope & { mode: 'off' | 'ask' | 'on'; allowed?: boolean; providers?: string[] }>;
+  unlockAdultForSession: () => Promise<
+    Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean; providers: string[] }
+  >;
+  lockAdultForSession: () => Promise<
+    Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean; providers: string[] }
+  >;
 
   getExtensionProviders: () => Promise<
     Envelope & { providers: ExtensionProvider[]; disabled: string[] }
@@ -430,6 +469,25 @@ export interface CloudStreamElectronAPI {
     }
   >;
   setSearchScope: (scope: Partial<SearchScope>) => Promise<SearchScope>;
+
+  /**
+   * Named search configurations.
+   *
+   * The reason these exist rather than one selection: "All sources" used to be
+   * wired to an *erasure*, so checking something across everything threw away a
+   * carefully built list of eleven providers with no undo. Switching is now
+   * free in both directions, and a selection worth keeping can be given a name.
+   *
+   * Every call answers with the whole state — list, active id and the unnamed
+   * draft — rather than an acknowledgement, because those three have to agree
+   * and rebuilding them from a delta is how they stop agreeing.
+   */
+  listSourceProfiles: () => Promise<SourceProfileSnapshot>;
+  activateSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
+  createSourceProfile: (name: string) => Promise<SourceProfileSnapshot>;
+  renameSourceProfile: (id: string, name: string) => Promise<SourceProfileSnapshot>;
+  duplicateSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
+  deleteSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
   /** Fires as each installed extension is loaded, so lists can fill in. */
   onProviderLoadProgress: (
     callback: (progress: ProviderLoadProgress) => void
@@ -828,6 +886,30 @@ export interface CloudStreamElectronAPI {
   setDeleteDownloadPreference: (
     preference: 'ask' | 'list-only' | 'list-and-file'
   ) => Promise<Envelope & { preference?: string }>;
+  /**
+   * Whether pressing Download asks first. Defaults to `immediate`, which is
+   * what the button has always done.
+   */
+  getDownloadConfirmPreference: () => Promise<Envelope & { preference: 'ask' | 'immediate' }>;
+  setDownloadConfirmPreference: (
+    preference: 'ask' | 'immediate'
+  ) => Promise<Envelope & { preference?: string }>;
+  /**
+   * Where a download would land and what the press would do — read-only.
+   *
+   * The renderer cannot work the path out: the folder layout, the variant
+   * segment and the collision suffix are decided in the main process from the
+   * whole queue. Asking is the only way for a confirmation dialog to name the
+   * real destination rather than a plausible one.
+   */
+  previewDownload: (task: DownloadTask) => Promise<
+    Envelope & {
+      targetPath?: string;
+      directory?: string;
+      existingState?: string;
+      existingTaskId?: string;
+    }
+  >;
   getDownloadQueue: () => Promise<DownloadTask[]>;
   /**
    * A finished download, as a URL the player can open.
@@ -1083,6 +1165,29 @@ export interface CloudStreamElectronAPI {
     note?: string
   ) => Promise<Envelope & { bookmark: Bookmark | null }>;
   markBookmarkOpened: (mediaUrl: string) => Promise<Envelope>;
+
+  // Saved page snapshots
+  /**
+   * The last copy of a page that actually loaded.
+   *
+   * Asked for *beside* the live load rather than after it fails, so a saved or
+   * library page draws immediately from what the app already knows and fills in
+   * as the provider answers. A page that has never been opened returns `null`,
+   * which is not an error — it is the first visit.
+   */
+  getPageSnapshot: (query: {
+    url?: string;
+    title?: string;
+    year?: number;
+  }) => Promise<Envelope & { snapshot: PageSnapshot | null }>;
+  /** Records what only this side knows: the query, and the row's other routes. */
+  rememberPage: (
+    input: PageSnapshotInput
+  ) => Promise<Envelope & { snapshot: PageSnapshot | null }>;
+  setPageSnapshotPinned: (
+    query: { url?: string; title?: string; year?: number },
+    pinned: boolean
+  ) => Promise<Envelope & { pinned: boolean }>;
 
   // Provider analytics and ranking
   /**
@@ -1654,6 +1759,8 @@ export interface CloudStreamElectronAPI {
   onShowLicences: (callback: () => void) => () => void;
   /** A file the user picked from File → Open, to be prepared and played. */
   onOpenLocalFile: (callback: (filePath: string) => void) => () => void;
+  /** A `cloudstream://` link the app was opened with, or handed while running. */
+  onOpenShareLink: (callback: (link: string) => void) => () => void;
 }
 
 export type { TorrentFileEntry };
@@ -1739,6 +1846,10 @@ const api: CloudStreamElectronAPI = {
   onBootstrapProgress: (callback) => subscribe('extension:bootstrapProgress', callback),
   getAdultAllowed: () => ipcRenderer.invoke('extension:getAdultAllowed'),
   setAdultAllowed: (enabled) => ipcRenderer.invoke('extension:setAdultAllowed', enabled),
+  getAdultMode: () => ipcRenderer.invoke('extension:getAdultMode'),
+  setAdultMode: (mode) => ipcRenderer.invoke('extension:setAdultMode', mode),
+  unlockAdultForSession: () => ipcRenderer.invoke('extension:unlockAdultForSession'),
+  lockAdultForSession: () => ipcRenderer.invoke('extension:lockAdultForSession'),
 
   getExtensionProviders: () => ipcRenderer.invoke('extension:getProviders'),
   setProviderEnabled: (name, enabled) =>
@@ -1868,9 +1979,19 @@ const api: CloudStreamElectronAPI = {
   getWindowAlwaysOnTop: () => ipcRenderer.invoke('window:getAlwaysOnTop'),
   setMpvOnTop: (onTop) => ipcRenderer.invoke('mpv:setOnTop', onTop),
   setMpvVideoEnabled: (enabled) => ipcRenderer.invoke('mpv:setVideoEnabled', enabled),
+  listSourceProfiles: () => ipcRenderer.invoke('profiles:list'),
+  activateSourceProfile: (id) => ipcRenderer.invoke('profiles:activate', id),
+  createSourceProfile: (name) => ipcRenderer.invoke('profiles:create', name),
+  renameSourceProfile: (id, name) => ipcRenderer.invoke('profiles:rename', id, name),
+  duplicateSourceProfile: (id) => ipcRenderer.invoke('profiles:duplicate', id),
+  deleteSourceProfile: (id) => ipcRenderer.invoke('profiles:delete', id),
   getDeleteDownloadPreference: () => ipcRenderer.invoke('download:getDeletePreference'),
   setDeleteDownloadPreference: (preference) =>
     ipcRenderer.invoke('download:setDeletePreference', preference),
+  getDownloadConfirmPreference: () => ipcRenderer.invoke('download:getConfirmPreference'),
+  setDownloadConfirmPreference: (preference) =>
+    ipcRenderer.invoke('download:setConfirmPreference', preference),
+  previewDownload: (task) => ipcRenderer.invoke('download:preview', task),
   getDownloadQueue: () => ipcRenderer.invoke('download:getQueue'),
   getPlayableDownloadUrl: (filePath) => ipcRenderer.invoke('download:getPlayableUrl', filePath),
   revealInFolder: (filePath) => ipcRenderer.invoke('download:revealInFolder', filePath),
@@ -1937,6 +2058,11 @@ const api: CloudStreamElectronAPI = {
   removeBookmark: (mediaUrl) => ipcRenderer.invoke('bookmarks:remove', mediaUrl),
   setBookmarkNote: (mediaUrl, note) => ipcRenderer.invoke('bookmarks:setNote', mediaUrl, note),
   markBookmarkOpened: (mediaUrl) => ipcRenderer.invoke('bookmarks:markOpened', mediaUrl),
+
+  getPageSnapshot: (query) => ipcRenderer.invoke('pages:getSnapshot', query),
+  rememberPage: (input) => ipcRenderer.invoke('pages:remember', input),
+  setPageSnapshotPinned: (query, pinned) =>
+    ipcRenderer.invoke('pages:setPinned', query, pinned),
 
   getProviderLeaderboard: () => ipcRenderer.invoke('analytics:getLeaderboard'),
   getProviderRecommendations: (limit) =>
@@ -2082,6 +2208,7 @@ const api: CloudStreamElectronAPI = {
   onToggleInspector: (callback) => subscribe('app:toggleInspector', callback),
   onShowLicences: (callback) => subscribe('app:showLicences', callback),
   onOpenLocalFile: (callback) => subscribe('app:openLocalFile', callback),
+  onOpenShareLink: (callback) => subscribe('app:openShareLink', callback),
 };
 
 contextBridge.exposeInMainWorld('cloudstream', api);

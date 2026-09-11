@@ -28,6 +28,8 @@ import { ProviderRankingPanel } from '../components/settings/ProviderRankingPane
 import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
 import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
+import { settingsLevelFor } from '../utils/experienceMode';
+import { useExperienceMode, useSetExperienceMode } from '../utils/ExperienceModeContext';
 import {
   SettingsLevelProvider,
   type SettingsLevel,
@@ -81,25 +83,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
    * of how this person reads a screen, not of how the app behaves, and it has
    * no business travelling in a backup to a machine somebody else uses.
    */
-  const [level, setLevel] = useState<SettingsLevel>(() => {
-    try {
-      return localStorage.getItem('cs3.settings.level') === 'everything'
-        ? 'everything'
-        : 'simple';
-    } catch {
-      // Private windows and blocked site data both throw here.
-      return 'simple';
-    }
-  });
-
-  const changeLevel = (next: SettingsLevel) => {
-    setLevel(next);
-    try {
-      localStorage.setItem('cs3.settings.level', next);
-    } catch {
-      // A preference that cannot be stored still applies for this session.
-    }
-  };
+  /**
+   * Derived from the app-wide mode rather than stored again here.
+   *
+   * This screen owned the switch first, under its own key. It is now one
+   * question — "do you want to see how this is built" — asked once and answered
+   * for the player, the source list and every error as well as for these rows.
+   * Two stored values would have to agree about what technical means, and the
+   * day they disagreed this screen and the player would be telling one person
+   * two different things about the same preference.
+   */
+  const mode = useExperienceMode();
+  const setMode = useSetExperienceMode();
+  const level: SettingsLevel = settingsLevelFor(mode);
+  const changeLevel = (next: SettingsLevel) =>
+    setMode(next === 'everything' ? 'developer' : 'standard');
   const [downloadDir, setDownloadDir] = useState('%USERPROFILE%\\Downloads\\CloudStream');
   /**
    * The delete-behaviour preference, resettable here.
@@ -111,6 +109,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const [deletePreference, setDeletePreference] = useState<'ask' | 'list-only' | 'list-and-file'>(
     'ask'
   );
+  /**
+   * Whether pressing Download asks first.
+   *
+   * `immediate` by default and deliberately unlike the delete preference above:
+   * that one guards something unrecoverable, this one guards a transfer the
+   * queue can cancel. The reason to turn it on is not safety, it is that every
+   * row in a source list reads "Download" while committing to wildly different
+   * files — so the prompt is where size, language, release and destination
+   * become visible before the bytes start.
+   */
+  const [confirmDownloads, setConfirmDownloads] = useState<'ask' | 'immediate'>('immediate');
   const [useLiveStreams, setUseLiveStreams] = useState(true);
   const [torrentMirrors, setTorrentMirrors] = useState(true);
   const { message: statusMessage, flash } = useFlash<string>(3000);
@@ -174,7 +183,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
     void window.cloudstream?.getDeleteDownloadPreference().then((response) => {
       if (response?.ok) setDeletePreference(response.preference);
     });
+    void window.cloudstream?.getDownloadConfirmPreference?.().then((response) => {
+      if (response?.ok) setConfirmDownloads(response.preference);
+    });
   }, []);
+
+  const handleChangeConfirmPreference = async (preference: 'ask' | 'immediate') => {
+    setConfirmDownloads(preference);
+    await window.cloudstream?.setDownloadConfirmPreference?.(preference);
+    flash(
+      preference === 'ask'
+        ? 'You will be shown what you are downloading before it starts.'
+        : 'Downloads now start as soon as you press Download.'
+    );
+  };
 
   const handleChangeDeletePreference = async (
     preference: 'ask' | 'list-only' | 'list-and-file'
@@ -274,7 +296,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             aria-pressed={level === 'simple'}
             onClick={() => changeLevel('simple')}
           >
-            Just the essentials
+            Just watching
           </button>
           <button
             type="button"
@@ -284,12 +306,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             aria-pressed={level === 'everything'}
             onClick={() => changeLevel('everything')}
           >
-            Everything
+            Developer mode
           </button>
+          {/*
+            This switch stopped being about this screen. It now decides what the
+            player, the source list and every error message say as well, so the
+            note has to describe that rather than "rows on this page" — a
+            toggle whose visible effect is wider than its label is how a person
+            ends up changing something they did not mean to.
+          */}
           <span className="settings__level-note">
             {level === 'simple'
-              ? 'Technical options are hidden. Nothing is switched off — they still apply.'
-              : 'Showing every option, including ones that need some knowledge of how the app works.'}
+              ? 'Technical details are hidden across the app. Nothing is switched off — it all still applies.'
+              : 'Showing diagnostics, provider and engine details, logs and debugging tools everywhere.'}
           </span>
         </div>
       </header>
@@ -437,6 +466,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
               <button onClick={handleSelectDirectory} className="btn btn-secondary">
                 Change folder
               </button>
+            </SettingRow>
+          </SettingGroup>
+
+          <SettingGroup title="Starting downloads" icon={<Download size={15} />}>
+            <SettingRow
+              label="When you press Download"
+              note={
+                confirmDownloads === 'ask'
+                  ? 'Show what will be downloaded first'
+                  : 'Start straight away'
+              }
+              hint={
+                <>
+                  Every source in the list is labelled "Download", but they are not the same
+                  download — one release can be sixteen gigabytes and another nine hundred
+                  megabytes of the same film, in different languages, going to different
+                  folders. Asking first shows the size, the language, the release and where it
+                  is being saved, and lets you back out. Starting straight away is the default.
+                </>
+              }
+            >
+              <select
+                value={confirmDownloads}
+                onChange={(e) =>
+                  handleChangeConfirmPreference(e.target.value as 'ask' | 'immediate')
+                }
+                aria-label="Download confirmation"
+              >
+                <option value="immediate">Start downloading immediately</option>
+                <option value="ask">Always ask before downloading</option>
+              </select>
             </SettingRow>
           </SettingGroup>
 

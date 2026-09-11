@@ -1,11 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { app } from 'electron';
 import { RuntimeProvisioner } from './runtimeProvisioner';
 import { scopedLogger } from '../logging/logger';
 import { SidecarStderrReader } from './sidecarStderr';
 import { getIssueLog } from './extensionIssues';
+import { describeError } from '../../src/utils/errors.ts';
 
 export interface RpcResult {
   ok: boolean;
@@ -200,26 +202,26 @@ export class SidecarSupervisor {
     const classpath = [jarPath, path.join(libDir, '*')].join(path.delimiter);
     const runtimeClasspath = this.resolveRuntimeDir();
 
+    const totalMem = os.totalmem();
+    const maxHeapMb =
+      totalMem >= 16 * 1024 * 1024 * 1024
+        ? 4096
+        : totalMem >= 8 * 1024 * 1024 * 1024
+          ? 3072
+          : 2048;
+
     try {
       this.proc = spawn(
         java,
         [
           /*
-           * 512m was not enough, and the failure named the wrong thing.
-           * Reported as `TRANSLATION_FAILED: OutOfMemoryError: Java heap
-           * space` against MovieBoxProviderIN — a 79 KB archive, which reads
-           * as absurd until you look at what translation does: dex2jar holds
-           * the whole DEX graph plus every emitted class in memory at once,
-           * and a small archive can carry a very large one. The extension was
-           * reported as incompatible when nothing was wrong with it.
-           *
-           * The ceiling is what the JVM is *allowed* to reach, not what it
-           * reserves, so raising it costs an idle sidecar nothing. It is still
-           * bounded rather than left to the default — this process runs
-           * third-party code, and an unbounded heap turns one runaway plugin
-           * into the machine swapping.
+           * Scale max heap with system RAM (up to 4096m on >=16GB systems,
+           * 3072m on >=8GB, 2048m minimum). dex2jar holds the entire DEX
+           * graph in memory during translation, and multiple large plugins
+           * (e.g. StreamPlay 1MB+, CineStream ~700KB) in bulk update batches
+           * require substantial heap space to avoid OutOfMemoryError.
            */
-          '-Xmx1536m',
+          `-Xmx${maxHeapMb}m`,
           // DROP-24: an empty library path makes System.loadLibrary fail, so a
           // plugin cannot pull in native code.
           '-Djava.library.path=',
@@ -234,7 +236,7 @@ export class SidecarSupervisor {
       );
     } catch (error) {
       this.startFailure = `The extension runtime failed to start: ${
-        error instanceof Error ? error.message : String(error)
+        describeError(error)
       }`;
       return false;
     }
@@ -453,7 +455,7 @@ export class SidecarSupervisor {
         );
       } catch (error) {
         sidecarLog.warn('host_call_reply_failed', {
-          error: error instanceof Error ? error.message : String(error),
+          error: describeError(error),
         });
       }
     };
@@ -468,7 +470,7 @@ export class SidecarSupervisor {
       const result = await handler(method, params);
       reply((result ?? { ok: false, error: `${method} produced no answer.` }) as Record<string, unknown>);
     } catch (error) {
-      reply({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      reply({ ok: false, error: describeError(error) });
     }
   }
 
@@ -532,7 +534,7 @@ export class SidecarSupervisor {
           ok: false,
           errorKind: 'SIDECAR_UNAVAILABLE',
           error: `Could not reach the extension runtime: ${
-            error instanceof Error ? error.message : String(error)
+            describeError(error)
           }`,
         });
       }

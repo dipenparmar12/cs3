@@ -39,7 +39,23 @@ const RULES: Rule[] = [
    * own decision to stop waiting. `ExtensionIssueLog` drops these rather than
    * listing them — there is nothing to fix.
    */
-  { kind: 'cancelled', test: /\b(?:cancell?ed|Cancelling|CancellationException|JobCancellation)\b/i },
+  /**
+   * `CancellationException` is matched unanchored, and that is the fix.
+   *
+   * The word-boundary version missed the single most common form of this:
+   * `kotlinx.coroutines.JobCancellationException` with no message after it.
+   * `\bJobCancellation\b` needs a non-word character after "Cancellation" and
+   * finds `E`; `\bCancellationException\b` needs one before it and finds the
+   * `b` of "Job". So the one shape a message-less cancellation actually takes
+   * fell through to `provider-error` — "the extension threw" — which is the
+   * exact misattribution this rule exists to stop, still leaking through the
+   * bare class name.
+   *
+   * A bare class name is not an unusual case: `describe()` produces one
+   * whenever the exception carries no message, and a cancelled coroutine
+   * carries none.
+   */
+  { kind: 'cancelled', test: /\b(?:cancell?ed|Cancelling)\b|CancellationException/i },
 
   /**
    * First, because it is unambiguous and because the rules below would misread
@@ -153,6 +169,51 @@ export function classifyFailure(message: string | undefined | null): FailureKind
     if (rule.test.test(subject)) return rule.kind;
   }
   return 'unknown';
+}
+
+/**
+ * Categories that say nothing about whether a provider works.
+ *
+ * The ranking's fourth rule is that it is never silently punitive, and its
+ * first is that `empty` is not `failure`. Both were being broken by the same
+ * gap: the guards lived in the *callers*. `loadLinksDetailed` had
+ * `if (kind !== 'provider-missing')` written out inline and `searchEach` had
+ * nothing at all, so a category the ranking is not supposed to score was
+ * scored or not depending on which call site produced it.
+ *
+ * What is in here, and why each is not evidence:
+ *
+ *  - **`cancelled`** — the app stopped waiting. Typing a second query cancels
+ *    fifteen in-flight scrapes and the coroutine scope throws in every one of
+ *    them; ranking a provider down for our own decision is the same mistake as
+ *    folding `empty` into `failure`.
+ *  - **`provider-missing`** — the extension is switched off, uninstalled or
+ *    blocked at load. Nothing about the scraper was exercised, and scoring it
+ *    ranks a provider down for having been turned off.
+ *  - **`unsupported-operation`** — the provider does not implement that step,
+ *    and never will. Measured on a real search: Disney, Marvel, Pixar and Star
+ *    Wars are catalogue-only providers, each of which answered
+ *    "does not implement that operation" and each of which was recorded as a
+ *    failed search. Four permanent, self-inflicted penalties per query, against
+ *    providers that are working exactly as designed — and four sentences of
+ *    noise in the message shown to the viewer.
+ *  - **`resource-leak`** — the scrape *succeeded* and left a socket open. It
+ *    costs memory, not a stream, and it is a bug report for the maintainer
+ *    rather than a reason to stop asking.
+ *
+ * Kept here, beside the labels, so that adding a category forces a decision
+ * about whether it is evidence.
+ */
+export const UNSCORED_FAILURE_KINDS: ReadonlySet<FailureKind> = new Set<FailureKind>([
+  'cancelled',
+  'provider-missing',
+  'unsupported-operation',
+  'resource-leak',
+]);
+
+/** Whether a failure of this kind should count against the provider that produced it. */
+export function isScoredFailure(kind: FailureKind): boolean {
+  return !UNSCORED_FAILURE_KINDS.has(kind);
 }
 
 /**

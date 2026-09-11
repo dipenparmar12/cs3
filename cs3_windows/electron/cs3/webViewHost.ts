@@ -35,6 +35,8 @@ import {
   compilePatterns,
   type CompiledPattern,
 } from './webViewMatch';
+import { describeError } from '../../src/utils/errors.ts';
+import { hostBudget } from './hostDeadline.ts';
 
 const log = scopedLogger('runtime', { component: 'webview' });
 
@@ -252,7 +254,19 @@ export class WebViewHost {
     const ses = this.ensureSession();
     this.installHandlers(ses);
 
-    const timeoutMs = Math.min(Math.max(request.timeoutMs ?? 60_000, 1_000), MAX_TIMEOUT_MS);
+    /*
+     * The browser stops before the sidecar does, never with it.
+     *
+     * `timeoutMs` is the caller's *deadline*, not a work budget: the JVM waits
+     * exactly that long in `HostChannel.call` and drops whatever arrives after.
+     * Spending all of it here meant every resolve that used its budget answered
+     * a few tens of milliseconds too late and was thrown away having already
+     * cost the viewer the whole wait — measured at 165 of 214 resolves. See
+     * `hostDeadline.ts`; `Main.timeoutFor` states the same rule for calls going
+     * the other way.
+     */
+    const deadlineMs = request.timeoutMs ?? 60_000;
+    const timeoutMs = hostBudget(deadlineMs, { ceilingMs: MAX_TIMEOUT_MS });
     const patterns = { intercept, additional: compilePatterns(request.additionalUrls ?? []) };
     const scriptResults: string[] = [];
     const done = log.begin('webview_resolve', { url: request.url });
@@ -389,7 +403,7 @@ export class WebViewHost {
         } catch (error) {
           log.debug('webview_script_failed', {
             url: request.url,
-            error: error instanceof Error ? error.message : String(error),
+            error: describeError(error),
           });
         }
       };
@@ -425,7 +439,16 @@ export class WebViewHost {
       const extra = resolution?.extra ?? [];
       const cookies = await this.readCookies(ses, request.url);
 
-      done({ matched: Boolean(matched), extra: extra.length, cookies: Object.keys(cookies).length });
+      // `budgetMs` beside the duration is what makes a late answer visible at
+      // all: the failure it exists to catch looks identical to a slow site
+      // unless you can see what the deadline was.
+      done({
+        matched: Boolean(matched),
+        extra: extra.length,
+        cookies: Object.keys(cookies).length,
+        budgetMs: timeoutMs,
+        deadlineMs,
+      });
       // A cookie-driven resolve matches no URL by design, so "found nothing" is
       // not failure there — the cookies *are* the answer.
       const satisfied = Boolean(matched) || (request.awaitCookie ? request.awaitCookie in cookies : false);
@@ -471,7 +494,7 @@ export class WebViewHost {
     } catch (error) {
       log.debug('webview_cookies_unreadable', {
         url,
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       });
       return {};
     }
