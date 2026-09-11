@@ -29,6 +29,20 @@ import { describeError } from '../src/utils/errors.ts';
 
 export type PlaybackPhase = 'searching' | 'starting' | 'playing' | 'error';
 
+/**
+ * How many times a failed start may continue on to the rest of the list.
+ *
+ * The walk has to be bounded by time, not just by termination. `startBestStream`
+ * tries four candidates per pass and a dead swarm costs the 12s bail rather than
+ * the full 25s readiness budget, so two continuations is at most nine sources
+ * and roughly a minute and a half of all-dead swarms before the viewer is told.
+ * Unbounded, a title with seventy sources could walk for half an hour.
+ *
+ * Running out is reported with the count, so "we tried nine of seventy" is
+ * visible rather than looking like the list was never walked at all.
+ */
+const MAX_AUTO_ADVANCES = 2;
+
 export interface PlaybackSnapshot {
   sessionId: string;
   phase: PlaybackPhase;
@@ -394,7 +408,14 @@ export class PlaybackSessionManager {
     // worse answer than saying it did not work, and making them wait out a
     // readiness check before anything happens is what made choosing a source
     // feel like it had been ignored.
-    await this.beginStream(session, [chosen], { failover: false, immediate: true });
+    await this.beginStream(session, [chosen], {
+      failover: false,
+      immediate: true,
+      // And it stays the only one attempted even if it fails — see
+      // `userChoice` on `beginStream`, which is what keeps the paragraph above
+      // true now that a failed start otherwise walks on to the next source.
+      userChoice: true,
+    });
     return this.snapshot(session);
   }
 
@@ -550,10 +571,49 @@ export class PlaybackSessionManager {
     return this.snapshot(session);
   }
 
+  /**
+   * Retires the candidates that were just tried and answers with what is left.
+   *
+   * The retiring is what makes the walk terminate: `unplayable` only grows, and
+   * the next pass is this session's sources minus that set, so each failure
+   * strictly shortens the list. It is the same set `skipCurrentSource` keeps,
+   * deliberately — a source the viewer skipped by hand and one that failed to
+   * start are both "do not offer this again in this session", and two sets
+   * would disagree the moment one path forgot to write to the other.
+   *
+   * Sources with no `infoHash` cannot be retired (nothing identifies them), so
+   * they are excluded from what comes back rather than risking a loop that
+   * retries the same unidentifiable source forever.
+   */
+  private retireAndRemain(session: Session, tried: TorrentResult[]): TorrentResult[] {
+    for (const source of tried) {
+      if (source.infoHash) session.unplayable.add(source.infoHash);
+    }
+    return session.sources.filter(
+      (source) => source.infoHash && !session.unplayable.has(source.infoHash)
+    );
+  }
+
   private async beginStream(
     session: Session,
     candidates: TorrentResult[],
-    options: { failover?: boolean; isRecovery?: boolean; immediate?: boolean } = {}
+    options: {
+      failover?: boolean;
+      isRecovery?: boolean;
+      immediate?: boolean;
+      /** How many times this walk has already continued past a failed start. */
+      autoAdvances?: number;
+      /**
+       * The viewer named this source themselves, so it is the only one tried.
+       *
+       * A failed start otherwise continues down the list, which is right when
+       * the app chose the source and wrong when a person did: they picked a
+       * particular release — for its language, its size, its audio — and
+       * quietly playing a different one answers a question they did not ask.
+       * `selectSource` sets this; nothing else should.
+       */
+      userChoice?: boolean;
+    } = {}
   ): Promise<void> {
     const generation = ++session.generation;
     const previousInfoHash = session.activeInfoHash;
@@ -662,8 +722,62 @@ export class PlaybackSessionManager {
         }
       }
 
+      /**
+       * A start that failed walks on to the next source. It used to stop here.
+       *
+       * `startBestStream` has its own four-candidate walk, but the two paths
+       * that reach this method with `failover: false` hand it a **single**
+       * candidate — an explicit pick from the source list, and each step of
+       * `skipCurrentSource`. For those, one dead source was the end of the
+       * session: reported as `Tried 1 source and none started`, with the rest
+       * of the list untouched.
+       *
+       * The branch above already did exactly this walk, but only when the
+       * candidate carried a `directUrl` — so a provider link that expired was
+       * recovered and a torrent whose swarm was dead was not. That asymmetry
+       * was not a decision about torrents; it is what "expired link" recovery
+       * happened to be written against. **Measured**: a real session found 70
+       * sources for one episode, tried one 120-seeder torrent, and stopped —
+       * with a 3,564-seeder release sitting four rows down.
+       *
+       * Termination is structural rather than a counter: every candidate just
+       * tried is recorded `unplayable`, and the next pass is computed by
+       * excluding that set, so the list strictly shrinks. `attempts` is carried
+       * across passes so the player can still say how far down it has got.
+       */
+      const advance = (options.autoAdvances ?? 0) + 1;
+      const mayAdvance = !options.userChoice && advance <= MAX_AUTO_ADVANCES;
+      const remaining = mayAdvance ? this.retireAndRemain(session, candidates) : [];
+      if (remaining.length > 0) {
+        const history = [...session.attempts];
+        await this.beginStream(session, remaining, {
+          ...options,
+          failover: true,
+          autoAdvances: advance,
+        });
+        session.attempts = [...history, ...session.attempts];
+        return;
+      }
+
       session.phase = 'error';
-      session.error = describeError(error);
+      /**
+       * The count is the session's, not the last pass's.
+       *
+       * `startBestStream` reports what *it* tried, which after a walk is the
+       * final four rather than everything — "tried 4 sources" under a list of
+       * seventy reads as the app never having walked it. `unplayable` is the
+       * session's own record, so it can say how far it actually got and how
+       * much is left for the viewer to pick from by hand.
+       */
+      const tried = session.unplayable.size;
+      const untried = session.sources.filter(
+        (source) => !source.infoHash || !session.unplayable.has(source.infoHash)
+      ).length;
+      session.error =
+        tried > 1 && untried > 0
+          ? `${describeError(error)} ${tried} of ${session.sources.length} sources were tried; ` +
+            `${untried} more are listed if you want to choose one.`
+          : describeError(error);
       // A failed switch leaves the previous stream alone, so the viewer is
       // returned to something that still plays rather than a dead player.
       session.started = Boolean(previousInfoHash);
