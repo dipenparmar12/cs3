@@ -12,6 +12,40 @@ file you are in. **If this contradicts the code, the code wins — fix this file
 
 ## 7. Torrents and indexers
 
+### 7.0 A failed start walks the list; a chosen source does not
+
+Reported as **"Tried 1 source and none started"** on a title with **70 sources** — the app
+tried one 120-seeder torrent whose swarm was dead and stopped, with a 3,564-seeder release
+four rows down that was never asked.
+
+`startBestStream` has its own four-candidate walk, but the two paths reaching
+`PlaybackSession.beginStream` with `failover: false` hand it a **single** candidate (an explicit
+pick, and each step of `skipCurrentSource`). Its `catch` recovered only when the candidate
+carried a `directUrl` — the branch written for expired provider links — so a torrent fell
+straight through to `phase = 'error'`. The asymmetry was never a decision about torrents; it is
+what that branch happened to be written against.
+
+Now a failed start retires what it tried and continues. Three rules hold it together:
+
+- **Retire what was *attempted*, not what was offered.** `startBestStream` is handed a list and
+  tries the first `maxAttempts` of it, so the two sets differ. Retiring the offered list walked
+  off the end in one pass — measured while building this: a 70-source title retired 64 untried
+  sources on its second pass and reported nothing left. The attempts now ride on the thrown
+  error (`StreamAttempt.infoHash`), which is the only way a caller can act on them; the message
+  alone is prose.
+- **Termination is structural.** Retired sources go into the same `unplayable` set
+  `skipCurrentSource` keeps — one set, because "skipped by hand" and "failed to start" are both
+  *do not offer this again* — so the remaining list strictly shrinks.
+- **Bounded by `MAX_AUTO_ADVANCES` (2)**, i.e. at most nine sources, because termination is not
+  enough: 70 dead swarms at the 12s bail would walk for half an hour. Running out reports the
+  session's own count ("9 of 70 sources were tried"), not the last pass's, which read as the
+  list never having been walked.
+
+**The opposite rule is deliberate and tested beside it**: `selectSource` tries exactly what the
+viewer picked and stops (`userChoice: true`). Someone who chose a release for its language or
+audio has not asked for a different one. A fix for the first rule that breaks this one passes
+every case in `playbackFailover.test.mts` except the last.
+
 ### 7.1 Startup: the client was cold, it was never the swarm
 
 Compared against a hosted service (~1s vs tens of seconds) with identical peers. The gap is one-time costs a service pays once and a desktop app paid every launch: socket binds, DHT bootstrap (DNS + round trip to `k-rpc`'s 3 hardcoded hosts), converging on an infohash from 3 contacts, reachability from an ephemeral node id/port, and the info dictionary (BEP-9, 5–30s).
