@@ -30,7 +30,7 @@ Reject and rewrite anything with these traits:
 - Over-abstraction, wrapper-on-wrapper, or a new layer with one consumer.
 - Code that would need a team to understand, debug or extend.
 
-**This repo's specific counter-pressure:** it is a reverse-engineering project, so some apparent over-engineering is *load-bearing* and recorded as such in `AGENTS.md` (the JVM sidecar as a separate process; the DEX→JVM translator; the android shim; `hostDeadline`; `providerRegistry`'s cache key including the generation; two implementations of the snapshot merge rule). **Never simplify away something `AGENTS.md` gives a measured reason for.** If you think a documented design is wrong, say so explicitly with evidence — don't quietly remove it.
+**This repo's specific counter-pressure:** it is a reverse-engineering project, so some apparent over-engineering is *load-bearing* and recorded as such in `AGENTS.md` and `docs/agents/` (the JVM sidecar as a separate process; the DEX→JVM translator; the android shim; `hostDeadline`; `providerRegistry`'s cache key including the generation; two implementations of the snapshot merge rule). **Never simplify away something `AGENTS.md` gives a measured reason for.** If you think a documented design is wrong, say so explicitly with evidence — don't quietly remove it.
 
 ---
 
@@ -38,7 +38,16 @@ Reject and rewrite anything with these traits:
 
 **Never review code in isolation. Do this before any judgement.**
 
-1. **Read `AGENTS.md` first.** It is the map, and it records the traps, the measurements and the deliberate decisions. Most "this looks wrong" findings are already answered there.
+1. **Read `AGENTS.md` first, then the domain file for the area you are reviewing.** `AGENTS.md` is the core — repo map, build, IPC contract, service table, cross-cutting rules. The detail lives beside it:
+
+   | Area | File |
+   |---|---|
+   | `.cs3`, sidecar, shim, bridge, WebView, native providers | `docs/agents/extensions.md` (§5) |
+   | `<video>`, ffmpeg, mpv, media proxy, DRM, subtitles | `docs/agents/media.md` (§6) |
+   | WebTorrent, indexers, search, scope, ranking | `docs/agents/torrents-and-search.md` (§7–8) |
+   | Library, saved pages, downloads, settings, lifecycle | `docs/agents/library-and-ui.md` (§9–11) |
+
+   Between them they record the traps, the measurements and the deliberate decisions. **Most "this looks wrong" findings are already answered there** — reviewing a domain without reading its file produces confident, wrong recommendations.
 2. **Understand the requirement**: the task, the PRD section (`docs/PRD/`, grep any `ARCH-`/`SEC-`/`DROP-`/`DSK-` id found in comments), the Android behaviour (`docs/docs_cs3/`), the existing implementation, the IPC surface, the shipped behaviour today.
 3. **Understand what was achieved**: what works, what is partial, what is a workaround, what debt was added.
 4. **Compare requirement vs implementation**: satisfied / missing / scope creep / unnecessary / incorrect / dead.
@@ -273,7 +282,7 @@ Breaking changes, IPC compatibility, migration, datastore/backup impact, test im
 - [ ] No new hard-coded values or one-off helpers
 - [ ] No new main-thread blocking or unbounded push
 - [ ] IPC: all four sides changed together
-- [ ] `AGENTS.md` updated in the same commit
+- [ ] `AGENTS.md` (map/build/IPC/cross-cutting) or the right `docs/agents/*.md` (domain detail) updated in the same commit
 - [ ] Maintainable by one developer
 
 ### 11. Decision
@@ -287,7 +296,7 @@ Block or require changes when the code fails the single-developer maintainabilit
 
 - Never review before understanding the requirement.
 - Never remove logic before verifying the behaviour it protects.
-- **Never simplify away something `AGENTS.md` gives a measured reason for** — challenge it explicitly with evidence instead.
+- **Never simplify away something `AGENTS.md` or a `docs/agents/*.md` file gives a measured reason for** — challenge it explicitly with evidence instead.
 - Never introduce an abstraction with one real consumer.
 - Never duplicate an existing primitive.
 - Always prefer deletion over wrapping.
