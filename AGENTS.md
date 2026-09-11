@@ -273,30 +273,130 @@ Fallible handlers return an **envelope** `{ ok, error?, …payload }` and never 
 
 ---
 
-## Domain notes — read the right file before you work
+## Domain notes
 
-This file is the map, the build, the IPC contract and the rules that apply everywhere. The
-hard-won detail for each area lives in `docs/agents/`, kept out of here so every session does
-not pay for all of it. **Section numbers are continuous across the set**, so a cross-reference
-like `§6.10` resolves whichever file you are in.
+Four areas carry more hard-won detail than one file should load every session, so their depth
+lives in `docs/agents/`. **Each capsule below is self-contained**: the mechanism, the modules
+that implement it, and the rules that must not be broken. You can work from a capsule alone.
+Open the domain file when you need the *why* — the measurement behind a number, the failure a
+rule prevents, or the history of a design you are about to change.
 
-| Before you touch… | Read | Holds |
-|---|---|---|
-| `.cs3` archives, the sidecar, the android/`:app` shim, `PluginManager`, the bridge, the WebView channel, native providers | **`docs/agents/extensions.md`** (§5) | Load sequence and tiers · six shim rounds and the rules they produced · the `Object`-widening family · the jar lane · diagnosis and the failure taxonomy · lazy provider loading · extension updates · the WebView deadline rule · sandbox and the adult gate |
-| `<video>`, ffmpeg, ffprobe, mpv, the media proxy, DRM, subtitles, external players | **`docs/agents/media.md`** (§6) | What Chromium cannot decode · inspect→decide→execute and its four invariants · transformation-plan rules · DRM · DASH · the proxy · mpv · the failure ladder · the main-thread freeze · PRD-40.1's half-built Tier 1 |
-| WebTorrent, DHT, indexers, the search fan-out, scope, profiles, provider ranking | **`docs/agents/torrents-and-search.md`** (§7–8) | Cold-client startup costs · per-indexer budgets · Cloudflare challenge vs ban · scope as a strict filter · discovery scope and auto-widening · ranking rules and what must never be scored · source profiles · the scope picker |
-| The library, saved pages, resume, downloads, the settings screen, window lifecycle | **`docs/agents/library-and-ui.md`** (§9–11) | Links handle vs page address · page snapshots and the never-blank rule · played-source identity · download identity, resume proof and the request/command split · backup · settings levels and reachability guards · lifecycle and navigation |
+**Section numbers are continuous across the set**, so a cross-reference like `§6.10` resolves
+whichever file you are in. The domain files carry the same authority as this one.
 
-**Four rules from those files are general enough to state here**, because breaking them from
-outside the domain is how they were broken before:
+---
 
-- **Nothing is decided from a URL string.** Transport, codec, DRM and container come from the
-  body or the provider's own declaration.
-- **`media:prepare` is the only source of a playable URL.** Assigning `video.src` — or handing
-  mpv a link — from anything else reintroduces a fixed race.
-- **A later load may add and may correct, but may never blank.** Silence about a field is not
-  an answer about that field.
-- **If you add a code path that calls a provider, call `ensureProviderActive` first.**
+### §5 — Extensions, the sidecar and the android shim → `docs/agents/extensions.md`
+
+**Mechanism.** A `.cs3` is a ZIP of Android DEX bytecode compiled against upstream's Kotlin
+provider API. `sidecar/` is a **separate JVM OS process** (not a thread), so a hanging plugin
+degrades to "unavailable" instead of taking the app down. `DexTranslator` converts DEX→JVM via
+dex2jar once at install, cached by SHA-256; `LinkageAnalyzer` assigns a tier `T1_DROPIN`…
+`T4_BLOCKED`; `PluginHost` reproduces Android's load sequence; hand-written `android/**` stubs
+cover the platform classes providers reach for. Providers are addressed `cs3ext://<provider>/<handle>`.
+
+**Modules.** `sidecar/` (Java) · `sidecar/bridge/` (Kotlin, supplies `:app` types) ·
+`electron/pluginManager.ts` (repos, download, SHA-256, enable cascade) ·
+`cs3/sidecarSupervisor.ts` (JSON-RPC over stdio) · `cs3/providerRegistry.ts` (what each archive
+registered) · `cs3/webViewHost.ts` (Cloudflare challenges) · `cs3/extensionIssues.ts` +
+`failureTaxonomy.ts` (diagnosis) · `cs3/nativeProviders/*` (compiled-in providers).
+
+**Rules:**
+- **Call `ensureProviderActive(name)` before using a provider.** Loading is lazy and per-archive, deduped by an in-flight map.
+- **Provider loading cannot be parallelised** — providers self-register into a global, and overlapping loads steal each other's providers (measured: 176 mis-attributed).
+- **Bump `RUNTIME_GENERATION`** whenever the shim, bridge or translator changes (currently **14**). The app runs a *copy* in `%APPDATA%`, not what you just built.
+- **`cs3-provider-bridge.jar` must live in `sidecar/runtime/`** — same loader as `library-jvm.jar`, or `BasePlugin` resolves as two different classes.
+- **The sidecar's stdout carries RPC frames and nothing else.** A stray `println` desyncs the channel; logs go to stderr.
+- **Shim rule: concede the type, refuse the operation.** Never widen a parameter or return type to `Object` (it renames the method — `ShimSignatureTest` enforces this); never forge the package name; never fake a platform number.
+- **`PluginHost.call` must catch `LinkageError`, not just `ReflectiveOperationException`** — `Class.getMethod` resolves every public method's types, so one missing class kills a whole extension after it registered.
+- **A provider that works until you press Play** → check `KotlinNameRepair` first (dex2jar corrupts Kotlin mangled names).
+- **Never reintroduce a synthetic or placeholder source.** Empty result plus a reason, always.
+- **The adult gate is `PluginManager.enabledProviderNames`** — the single funnel search, scope, discovery, playback and downloads all pass through.
+- **Built-in providers use `cs3native://`, never `cs3ext://`** (wrong-attribution failures).
+- **The WebView host must finish before the sidecar stops waiting** (`cs3/hostDeadline.ts`) — the reverse channel carries one deadline and both ends used to spend it.
+- The upstream jar lane exists but only **1.9%** of the corpus publishes one — don't plan work assuming it.
+
+---
+
+### §6 — Playback and the media engine → `docs/agents/media.md`
+
+**Mechanism.** Chromium cannot decode much of what people stream — **AC-3, E-AC-3 and DTS return `""`**, and bare `video/x-matroska` reports `"maybe"` then drops audio silently; no HEVC without platform decoders. So playback is **inspect → decide → execute**: ffprobe produces `MediaMetadata`, a *pure* decision function turns metadata + renderer capabilities + host encoder into a `TransformationPlan`, and the plan is executed as live fragmented-MP4 on loopback, played natively, or handed to **mpv** (its own window, driven over JSON IPC, hardware decode). `MediaProxy` serves everything from loopback because a browser cannot send the provider's `Referer`.
+
+**Modules.** `media/mediaInspector.ts` · `media/decisionEngine.ts` (pure, tested) ·
+`media/playbackEngine.ts` (the only source of a playable URL) · `media/mpvEngine.ts` +
+`mpvEmitPolicy.ts` · `mediaTranscoder.ts` · `mediaProxy.ts` · `media/inspectionStore.ts` ·
+`subtitles/convert.ts` · `src/components/VideoPlayer.tsx` + `player/playbackRecovery.ts`.
+
+**Rules:**
+- **`media:prepare` is the only source of a playable URL.** Assigning `video.src` — or handing mpv a link — from anything else reintroduces a fixed race. No channel returns an unclassified URL.
+- **Nothing is decided from a URL string.** Transport comes from the first 64KB of body (`#EXTM3U`/`<MPD`); codecs from the probe; DRM from the provider's declaration or the manifest.
+- **`-c:v copy` never runs on unverified codec info** — re-wrapping undecodable HEVC fails identically and looks like a different bug.
+- **Renderer capabilities are registered before playback** (`App.tsx` → `media:setCapabilities`) and override the static table **in both directions**.
+- **A track switch re-derives the plan** (`planForAudioTrack`) — never re-index an existing one, or ffmpeg fails outright.
+- **The software 4K guard is arithmetic, not a heuristic** — pixels per second, not height.
+- **HDR re-encodes get the full `zscale` tone-map chain or none at all** — `tonemap` alone is measurably worse than nothing.
+- **mpv:** hand it the **proxied** URL; `--no-config`; `--volume-max=100`; `--input-default-bindings=no` (defaults quit on `q`, which reads as "film ended"); use `mpv.com`, not `.exe`; wire it into `before-quit`.
+- **Nothing reaches the main thread per frame or per chunk.** mpv snapshots are coalesced (`mpvEmitPolicy.ts`, 200ms) and proxy route eviction is scheduled, not per-mint — both were "not responding" freezes.
+- **Probes are cached by *origin* URL; verdicts are always recomputed** — a verdict depends on this machine's decoders.
+- **A loopback URL returned from `wrap` is untouched**, or output gets double-wrapped one hop per call.
+- **PRD-40.1's `sourceLease.ts` and `playbackTelemetry.ts` are built, tested and never wired** — green suites over unreachable code. See §6.11 before touching either.
+
+---
+
+### §7–8 — Torrents, indexers, search and ranking → `docs/agents/torrents-and-search.md`
+
+**Mechanism.** Torrents run on WebTorrent with a loopback HTTP server doing range requests and
+sequential pieces, warmed at launch because the costs are cold-client costs (DHT bootstrap,
+info dictionary), never the swarm. Search fans out **8 providers at a time**, push-shaped via
+`search:update`, ordered by measured provider health. 19 built-in indexers each get a deadline
+derived from their own measured latency. Scope decides which sources a search may ask.
+
+**Modules.** `torrent/torrentEngine.ts` · `torrentMetadata.ts` · `dhtNodeCache.ts` ·
+`indexerRegistry.ts` + `indexers/*` · `indexerBudget.ts` · `botChallenge.ts` · `swarmHealth.ts` ·
+`searchSession.ts` · `searchScope.ts` · `cs3/sourceScope.ts` · `cs3/searchOrder.ts` ·
+`providerAnalytics.ts` + `providerRanking.ts` · `cs3/sourceProfiles.ts`.
+
+**Rules:**
+- **A scope selection is a strict filter, not a preference.** An unresolvable selection is *reported*, never silently widened back to everything. Providers selected ⇒ exactly those, no catalogues.
+- **Discovery defaults to `origin` scope** (only the providers that produced the row), widening to `all` automatically when nothing is found. A failed escalation leaves the narrow answer standing.
+- **`searchOrder` falls back to the original order** if the ranking returns anything that is not the same set. Silently searching fewer sources and calling it "no results" is the worst failure this app has.
+- **`empty` ≠ `failure`.** An anime provider with nothing for *Dune* is correct.
+- **An unscored failure is not recorded at all** (`UNSCORED_FAILURE_KINDS`) — recording it in `attempts` alone still moves the success rate.
+- **Nothing is ever auto-disabled.** Auto-*enable* is opt-in and gated.
+- **Indexer deadline = p90 of that indexer's own successes × 2.5, clamped [4s, 20s]**; only successes shape it, or timing out buys a longer deadline. Cooldown escalates; any success resets it.
+- **A block or a rate limit never opens a browser** — only a genuine challenge does. A Cloudflare challenge is routinely served as **HTTP 200**.
+- **DHT: saved contacts go through `addNode()`, never `bootstrap`**; `dhtPort` is pinned to 6882.
+- **All sources is a mode, not an erasure** — it must never throw away a saved selection.
+- **Zero-pad episode terms** (`S01E02`); `S1E2` matches nothing and reads as "the indexer has nothing".
+
+---
+
+### §9–11 — Library, downloads, UI and lifecycle → `docs/agents/library-and-ui.md`
+
+**Mechanism.** The library keys on `canonicalKey(title, year)` plus season and episode — never
+on a URL, so nothing is orphaned when an address dies. Every detail page opened is written down
+as a snapshot (display copy, provenance chain, every address known to reach the work) so a saved
+page never opens blank. Downloads are addressed by **source variant**, not title. The settings
+screen groups by subject and filters by *level*. All teardown happens on `before-quit`.
+
+**Modules.** `cs3/libraryStore.ts` · `cs3/pageSnapshot.ts` + `src/utils/savedPage.ts` ·
+`cs3/playedSource.ts` · `cs3/bookmarkStore.ts` · `downloadService.ts` + `aria2Engine.ts` ·
+`download/resumePlan.ts` + `resumeWindow.ts` · `src/utils/downloadIdentity.ts` ·
+`src/utils/resumePoint.ts` · `settings/settingsLevel.ts` · `cs3/backupService.ts`.
+
+**Rules:**
+- **A links handle is not a page address** (`cs3/extensionAddress.ts`). `loadLinks` takes an opaque provider blob, often JSON; `load` takes a fetchable URL. Storing one as the other is how saved rows opened blank.
+- **`recordProgress` keys on `canonicalKey` + season + episode, never `mediaUrl`.**
+- **A null episode means "Play"**, and the resume rule is *furthest episode with history wins* — never most-recently-updated.
+- **A later load may add and may correct, but may never blank.** Episode listings are all-or-nothing, never field-merged.
+- **A download is identified by its variant** (media + season + episode + provider + release name + resolution + quality + language + audio), never by title and never by a synthesised per-URL `infoHash`.
+- **A partial download must be *proved* to match before resuming** — one ranged 64KB request answers range support, real length and byte identity together.
+- **Completion is verified, not reported** — file exists, no `.part`, size within 1%.
+- **`res.resume()` discards data but does not stop the transfer** (this has bitten three times) — destroy both request and response.
+- **All teardown is on `before-quit`**, never `window-all-closed`. Any new service owning a socket, handle, timer or child process wires in there.
+- **Escape is consumed in capture phase, only when it actually closed something** — otherwise closing a menu ends playback.
+- **Never name a `.tsx` and `.ts` alike but for casing** — one name on Windows; the wrong resolution blanked the whole window.
+- **Four reachability guards exist** (channel invoked/registered, component mounted, module constructed) — see §10.
 
 ---
 
