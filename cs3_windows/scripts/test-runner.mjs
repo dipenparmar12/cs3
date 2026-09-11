@@ -34,6 +34,7 @@ const SLOW_TESTS = new Set([
 // Known preset aliases mapped from the legacy package.json scripts
 const PRESET_ALIASES = {
   ipc: ['electron/ipcSurface.test.mts'],
+  'module-reachability': ['electron/moduleReachability.test.mts'],
   address: ['electron/cs3/extensionAddress.test.mts'],
   backup: ['electron/cs3/backupService.test.mts'],
   recovery: ['electron/cs3/providerRecovery.test.mts'],
@@ -42,6 +43,7 @@ const PRESET_ALIASES = {
     'electron/cs3/webViewMatch.test.mts',
   ],
   pipeline: ['electron/media/pipeline.test.mts'],
+  'mpv-emit': ['electron/media/mpvEmitPolicy.test.mts'],
   lease: ['electron/media/sourceLease.test.mts'],
   telemetry: ['electron/media/playbackTelemetry.test.mts'],
   container: ['electron/media/containerInspection.test.mts'],

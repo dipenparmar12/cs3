@@ -2,6 +2,7 @@ import path from 'path';
 import { JsonFileStore } from '../util/jsonFileStore.ts';
 import { canonicalKey } from './libraryStore.ts';
 import type { Episode, SearchResponse, TvType } from '../../src/types/api';
+import { prune } from '../util/prune.ts';
 
 /**
  * The last detail page that actually worked, kept so it can be shown again.
@@ -468,11 +469,3 @@ function capList<T>(value: T[] | undefined, max: number): T[] | undefined {
   return value.length > max ? value.slice(0, max) : value;
 }
 
-/** Drops empty keys so a merge cannot overwrite a known value with nothing. */
-function prune<T extends object>(value: T): Partial<T> {
-  const out: Partial<T> = {};
-  for (const [key, entry] of Object.entries(value) as Array<[keyof T, T[keyof T]]>) {
-    if (entry !== undefined && entry !== null && entry !== '') out[key] = entry;
-  }
-  return out;
-}

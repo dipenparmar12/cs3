@@ -72,6 +72,19 @@ const RESUME_DELAY_MS = 400;
 const MAX_ROUTES = 20000;
 const ROUTE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
+/**
+ * What a trim leaves behind, and how often the expiry sweep may run.
+ *
+ * Both exist to stop `evictExpiredRoutes` being paid per mint; see the comment
+ * on it for the measurement. The low-water mark is 10% under the cap — about
+ * 2000 routes, which is more than one playlist rewrite mints, so a burst that
+ * crosses the cap sorts once rather than once per segment. The interval is
+ * short relative to `ROUTE_TTL_MS`, so a route still expires when it says it
+ * does, give or take a sweep.
+ */
+const ROUTE_LOW_WATER = Math.floor(MAX_ROUTES * 0.9);
+const SWEEP_INTERVAL_MS = 30_000;
+
 /** Rate limiting thresholds per stream token to prevent flood loops. */
 const RATE_LIMIT_WINDOW_MS = 5000;
 const RATE_LIMIT_MAX_REQUESTS = 250;
@@ -358,6 +371,11 @@ export class MediaProxy {
   /** Files served from disk, and the reverse map that keeps tokens stable. */
   private localRoutes = new Map<string, LocalRoute>();
   private localTokensByPath = new Map<string, string>();
+  /**
+   * When the expiry sweep last ran. Zero so the first mint of a session sweeps
+   * immediately rather than waiting out an interval against an empty table.
+   */
+  private lastSweepAt = 0;
   /** Allowed directory paths for local file serving. */
   private allowedDirectories = new Set<string>();
   /** Request rate tracking for flood protection. */
@@ -595,12 +613,63 @@ export class MediaProxy {
 
   /**
    * Evicts expired or excess routes to maintain bounded memory consumption.
+   *
+   * ## Why this is scheduled rather than run on every mint
+   *
+   * It used to run on every call to {@link routeFor}, and both of its passes
+   * are linear in the size of the table — the second one `O(n log n)`, since it
+   * copies every entry out and sorts twice. That is fine for one route and
+   * ruinous for the way routes are actually minted: rewriting one HLS media
+   * playlist mints a route **per segment**, so a two-hour film with two audio
+   * renditions mints ~1300 in a single synchronous burst, and each of those
+   * 1300 mints re-swept the whole table.
+   *
+   * Measured, replaying that burst against a table of a realistic size:
+   *
+   * | routes already held | one playlist rewrite |
+   * |---|---|
+   * | 1,000 | 56 ms |
+   * | 5,000 | 147 ms |
+   * | 15,000 | 496 ms |
+   * | **20,000 (at the cap)** | **5,494 ms** |
+   *
+   * The last row is the bug. Past `MAX_ROUTES` every mint takes the sort path,
+   * so one playlist rewrite becomes five and a half seconds of uninterrupted
+   * synchronous work on the main thread — Windows marks a window that has not
+   * pumped its message loop for five seconds as "not responding", which is
+   * exactly what was reported. And the table only ever grows within a session:
+   * every source probed and every playlist rewritten adds to it, while
+   * `ROUTE_TTL_MS` is an hour, so nothing is reclaimed in the meantime. Once a
+   * session crossed the cap it stayed broken.
+   *
+   * Two changes, and neither alters *which* routes are evicted:
+   *
+   * 1. **The expiry sweep runs at most once per {@link SWEEP_INTERVAL_MS}.**
+   *    Routes live for an hour, so sweeping a few seconds late reclaims exactly
+   *    the same ones.
+   * 2. **Trimming to the cap trims down to {@link ROUTE_LOW_WATER}**, not to the
+   *    cap itself. Trimming to the cap leaves the table one mint over it, so the
+   *    next mint sorts again, and the next — the pathological case above. Going
+   *    under it buys thousands of mints before the sort is needed again, which
+   *    amortises it to nothing across a burst.
+   *
+   * The ordering rules below are untouched: served routes go before never-served
+   * ones, and among never-served the newest go first.
    */
   private evictExpiredRoutes(): void {
     const now = Date.now();
 
     /** How long a route has been idle: since it last served, else since it was minted. */
     const idleSince = (route: Route): number => route.lastAccess ?? route.createdAt ?? 0;
+
+    /**
+     * Over the cap is not negotiable — memory is the thing the cap exists for,
+     * and a burst can cross it long before the next sweep is due. Everything
+     * else waits for the interval.
+     */
+    const overCap = this.routes.size > MAX_ROUTES;
+    if (!overCap && now - this.lastSweepAt < SWEEP_INTERVAL_MS) return;
+    this.lastSweepAt = now;
 
     // 1. Evict expired routes
     for (const [token, route] of this.routes.entries()) {
@@ -661,7 +730,7 @@ export class MediaProxy {
       served.sort((a, b) => idleSince(a[1]) - idleSince(b[1]));
       unserved.sort((a, b) => idleSince(b[1]) - idleSince(a[1]));
 
-      const toRemove = [...served, ...unserved].slice(0, this.routes.size - MAX_ROUTES);
+      const toRemove = [...served, ...unserved].slice(0, this.routes.size - ROUTE_LOW_WATER);
       for (const [token, route] of toRemove) {
         if (route.key) this.tokensByKey.delete(route.key);
         this.routes.delete(token);

@@ -40,6 +40,7 @@ import type { PlaybackSnapshot } from '../electron/playbackSession';
 import type { SearchSnapshot } from '../electron/searchSession';
 import { describeError } from './utils/errors';
 import { pickResumePoint } from './utils/resumePoint';
+import { historyEventForTask } from './utils/historyEvent';
 import { loadWatchState } from './components/player/seriesContext';
 
 /** One live playback session: its id, what asked for it, and its latest state. */
@@ -1322,34 +1323,9 @@ export const App: React.FC = () => {
     const result = await window.cloudstream.requestDownload(task);
 
     try {
-      await window.cloudstream.recordHistoryEvent?.({
-        title: task.parentTitle || task.title,
-        parentTitle: task.parentTitle,
-        mediaUrl: task.parentMediaUrl || task.mediaUrl || task.link.url,
-        parentMediaUrl: task.parentMediaUrl,
-        posterUrl: task.posterUrl,
-        season: task.seasonNumber,
-        episode: task.episodeNumber,
-        episodeTitle: task.episodeTitle,
-        type:
-          task.mediaType ||
-          (task.seasonNumber !== undefined || task.episodeNumber !== undefined
-            ? 'series'
-            : 'movie'),
-        year: task.year,
-        originalTitle: task.originalTitle,
-        action: 'download_started',
-        status: 'Attempted',
-        source: {
-          providerName: task.providerName,
-          sourceName: task.link.name,
-          directUrl: task.link.url,
-          directHeaders: task.headers,
-          quality: task.quality ? `${task.quality}p` : undefined,
-          resolution: task.resolution,
-          sizeBytes: task.totalBytes,
-        },
-      });
+      await window.cloudstream.recordHistoryEvent?.(
+        historyEventForTask(task, 'download_started', 'Attempted')
+      );
     } catch {}
 
     const queue = await window.cloudstream.getDownloadQueue();

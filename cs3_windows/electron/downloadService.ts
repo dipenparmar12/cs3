@@ -9,6 +9,7 @@ import {
   variantFromTask,
 } from '../src/utils/downloadIdentity.ts';
 import { formatInfoFileSize } from '../src/utils/format.ts';
+import { historyEventForTask } from '../src/utils/historyEvent.ts';
 import type { DatastoreManager } from './datastore';
 import type { Aria2Engine } from './aria2Engine';
 import { MediaDownloadResolver } from './mediaDownloadResolver';
@@ -94,35 +95,7 @@ export class DownloadService {
   ): void {
     if (!this.historyStore) return;
     try {
-      this.historyStore.record({
-        title: task.parentTitle || task.title,
-        parentTitle: task.parentTitle,
-        mediaUrl: task.parentMediaUrl || task.mediaUrl || task.link.url,
-        parentMediaUrl: task.parentMediaUrl,
-        posterUrl: task.posterUrl,
-        season: task.seasonNumber,
-        episode: task.episodeNumber,
-        episodeTitle: task.episodeTitle,
-        type:
-          task.mediaType ||
-          (task.seasonNumber !== undefined || task.episodeNumber !== undefined
-            ? 'series'
-            : 'movie'),
-        year: task.year,
-        originalTitle: task.originalTitle,
-        action,
-        status,
-        failureReason,
-        source: {
-          providerName: task.providerName,
-          sourceName: task.link.name,
-          directUrl: task.link.url,
-          directHeaders: task.headers,
-          quality: task.quality ? `${task.quality}p` : undefined,
-          resolution: task.resolution,
-          sizeBytes: task.totalBytes,
-        },
-      });
+      this.historyStore.record(historyEventForTask(task, action, status, failureReason));
     } catch (e) {
       console.warn('[downloadService] Failed to record history event:', e);
     }

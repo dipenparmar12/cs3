@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFlash } from '../utils/useFlash';
+import { historyEventForTask } from '../utils/historyEvent';
 import Hls from 'hls.js';
 import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
 import {
@@ -840,34 +841,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         : 'info'
     );
     try {
-      await window.cloudstream?.recordHistoryEvent?.({
-        title: task.parentTitle || task.title,
-        parentTitle: task.parentTitle,
-        mediaUrl: task.parentMediaUrl || task.mediaUrl || task.link.url,
-        parentMediaUrl: task.parentMediaUrl,
-        posterUrl: task.posterUrl,
-        season: task.seasonNumber,
-        episode: task.episodeNumber,
-        episodeTitle: task.episodeTitle,
-        type:
-          task.mediaType ||
-          (task.seasonNumber !== undefined || task.episodeNumber !== undefined
-            ? 'series'
-            : 'movie'),
-        year: task.year,
-        originalTitle: task.originalTitle,
-        action: 'download_started',
-        status: 'Attempted',
-        source: {
-          providerName: task.providerName,
-          sourceName: task.link.name,
-          directUrl: task.link.url,
-          directHeaders: task.headers,
-          quality: task.quality ? `${task.quality}p` : undefined,
-          resolution: task.resolution,
-          sizeBytes: task.totalBytes,
-        },
-      });
+      await window.cloudstream?.recordHistoryEvent?.(
+        historyEventForTask(task, 'download_started', 'Attempted')
+      );
     } catch {}
     const queue = await window.cloudstream?.getDownloadQueue?.();
     if (queue) setDownloadQueue(queue);
