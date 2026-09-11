@@ -1,4 +1,8 @@
-import { TvType, type SearchResponse } from '../../src/types/api';
+// `.ts` spelled out, like every other import here: Node's type-stripping ESM
+// loader will not resolve an extensionless specifier, and an unloadable module
+// is an untestable one.
+import { TvType, type SearchResponse } from '../../src/types/api.ts';
+import { buildCinemetaUrl } from '../cinemeta.ts';
 import { fetchJson } from '../torrent/http.ts';
 
 /**
@@ -203,10 +207,12 @@ export class OttCatalogService {
   /**
    * One catalogue row as an ordinary search result.
    *
-   * Addressed `cs3meta://` — the same scheme the home screen's catalogue rows
-   * use — which is what makes opening one run the app's normal discovery across
-   * installed providers. A bespoke address would need its own route through
-   * `ContentService` for no new behaviour.
+   * Addressed with `buildCinemetaUrl`, not a hand-spelled `cs3meta://<id>`.
+   * The scheme's grammar carries the type (`cs3meta://cinemeta/movie/tt…`) and
+   * `parseCinemetaUrl` requires it; a bare id parsed as nothing, fell through
+   * every branch of `ContentService.fetchDetail` and opened as "nothing knows
+   * how to open this address" — every row on every OTT page. Minting through
+   * the builder is what keeps the two spellings from drifting again.
    *
    * A row with no IMDb id is dropped rather than carried with a synthetic one.
    * The id is the entire basis on which providers and indexers match a title;
@@ -223,7 +229,7 @@ export class OttCatalogService {
 
     return {
       name: meta.name,
-      url: `cs3meta://${imdbId}`,
+      url: buildCinemetaUrl(type, imdbId),
       /*
        * Attributed to Cinemeta rather than to the addon, and that is not a
        * shortcut. `apiName` is read as "which catalogue is this a row from" by

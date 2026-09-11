@@ -6,7 +6,12 @@ import type {
   TorrentResult,
 } from '../src/types/torrent';
 import { MetadataProvider, parseMetadataUrl, type MetadataDetail } from './metadataProvider';
-import { CinemetaProvider, parseCinemetaUrl } from './cinemeta';
+import {
+  CinemetaProvider,
+  parseBareImdbUrl,
+  parseCinemetaUrl,
+  type CinemetaDetail,
+} from './cinemeta';
 import {
   IndexerRegistry,
   type AggregateSearchResult,
@@ -231,6 +236,33 @@ function describeLinkShape(link: ExtractorLink): string {
 function stripQuery(url: string): string {
   const index = url.indexOf('?');
   return index >= 0 ? url.slice(0, index) : url;
+}
+
+/** Shared by both catalogue addresses so the two cannot answer differently. */
+function catalogueDetail(detail: CinemetaDetail, base: string): MetadataDetail {
+  return {
+    name: detail.name,
+    url: base,
+    apiName: 'Catalogue',
+    type: detail.type,
+    posterUrl: detail.posterUrl,
+    year: detail.year,
+    plot: detail.plot,
+    rating: detail.rating,
+    tags: detail.tags,
+    actors: detail.actors,
+    duration: detail.duration,
+    runtimeMinutes: detail.runtimeMinutes,
+    // The whole point of this path: an IMDb id, for every type.
+    imdbId: detail.imdbId,
+    episodes: detail.episodes,
+  };
+}
+
+function catalogueMiss(imdbId: string): Error {
+  return new Error(
+    `The catalogue has no entry for ${imdbId}. It may have been removed, or Cinemeta may be unreachable from this network — Settings → Connection can test that.`
+  );
 }
 
 export class ContentService {
@@ -560,29 +592,26 @@ export class ContentService {
       // Named, like the provider path: "the catalogue has no entry" and "the
       // catalogue is unreachable" need different reactions from the user, and
       // a null told them neither.
-      if (!detail) {
-        throw new Error(
-          `The catalogue has no entry for ${cinemetaRef.imdbId}. It may have been removed, or Cinemeta may be unreachable from this network — Settings → Connection can test that.`
-        );
-      }
+      if (!detail) throw catalogueMiss(cinemetaRef.imdbId);
+      return catalogueDetail(detail, base);
+    }
 
-      return {
-        name: detail.name,
-        url: base,
-        apiName: 'Catalogue',
-        type: detail.type,
-        posterUrl: detail.posterUrl,
-        year: detail.year,
-        plot: detail.plot,
-        rating: detail.rating,
-        tags: detail.tags,
-        actors: detail.actors,
-        duration: detail.duration,
-        runtimeMinutes: detail.runtimeMinutes,
-        // The whole point of this path: an IMDb id, for every type.
-        imdbId: detail.imdbId,
-        episodes: detail.episodes,
-      };
+    /**
+     * `cs3meta://tt1234567` — a saved OTT catalogue row from before those rows
+     * carried a type. The type has to be discovered because the address never
+     * recorded it; movie is tried first because the catalogue is mostly films,
+     * and the miss costs one 404 against an API that is already the cheapest
+     * thing in this function.
+     */
+    const bareImdbId = parseBareImdbUrl(base);
+    if (bareImdbId) {
+      for (const type of ['movie', 'series'] as const) {
+        // A wrong type answers 404, which `fetchJson` throws; that is this
+        // loop's "try the other one", not a failure worth reporting.
+        const detail = await this.cinemeta.load(type, bareImdbId).catch(() => null);
+        if (detail) return catalogueDetail(detail, base);
+      }
+      throw catalogueMiss(bareImdbId);
     }
 
     if (parseMetadataUrl(base)) {
