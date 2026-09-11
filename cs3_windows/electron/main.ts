@@ -95,6 +95,7 @@ import type { StoredSource } from '../src/types/library';
 import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import type { MpvSnapshot } from '../src/types/mpv';
 import { describeError } from '../src/utils/errors.ts';
+import { SHARE_SCHEME } from '../src/utils/shareLink.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1075,6 +1076,9 @@ function openableFromArgv(argv: string[]): string | null {
     if (argument.startsWith('-')) continue;
     if (/^magnet:\?/i.test(argument)) return argument;
     if (/\.torrent$/i.test(argument)) return argument;
+    // A share link arrives the same way on Windows: as an argv entry, because
+    // the registered protocol handler is this executable.
+    if (new RegExp(`^${SHARE_SCHEME}://`, 'i').test(argument)) return argument;
   }
   return null;
 }
@@ -1082,11 +1086,36 @@ function openableFromArgv(argv: string[]): string | null {
 /** Held until the renderer exists, since a launch beats the window. */
 let pendingOpen: string | null = openableFromArgv(process.argv);
 
+/**
+ * Hands whatever we were launched with to the renderer.
+ *
+ * Two kinds travel this one path because they arrive by the same mechanisms — a
+ * command-line argument on Windows, `open-file`/`open-url` on macOS — and
+ * splitting them into two pending slots would mean a share link and a dropped
+ * torrent could each silently discard the other.
+ *
+ * They are told apart *here* rather than in the renderer, because the channel a
+ * message arrives on is what the renderer keys its behaviour on, and a single
+ * channel carrying two unrelated payload shapes is how one of them ends up
+ * handled by the wrong screen.
+ */
 function deliverPendingOpen(): void {
   if (!pendingOpen || !mainWindow || mainWindow.isDestroyed()) return;
   const target = pendingOpen;
   pendingOpen = null;
-  mainWindow.webContents.send('app:openLocalFile', target);
+  /**
+   * Two literal sends rather than one computed channel name.
+   *
+   * `ipcSurface.test.mts` pins the channel surface by scanning for these
+   * literals on both sides, and a computed name is invisible to it — which is
+   * how a channel ends up sent and never listened for. The duplication is the
+   * price of that guarantee, and it is two lines.
+   */
+  if (new RegExp(`^${SHARE_SCHEME}://`, 'i').test(target)) {
+    mainWindow.webContents.send('app:openShareLink', target);
+  } else {
+    mainWindow.webContents.send('app:openLocalFile', target);
+  }
 }
 
 /*
@@ -1117,12 +1146,41 @@ app.on('open-file', (event, filePath) => {
   deliverPendingOpen();
 });
 
-// And a magnet, which arrives as a protocol rather than a file.
+// And a magnet or a share link, which arrive as a protocol rather than a file.
 app.on('open-url', (event, url) => {
   event.preventDefault();
   pendingOpen = url;
   deliverPendingOpen();
 });
+
+/**
+ * Registering as the handler for `cloudstream://`.
+ *
+ * Done unconditionally rather than only when packaged, because the dev build is
+ * where the flow is actually exercised — but the dev build is launched *through*
+ * Electron, so Windows has to be told which executable and which argument to
+ * pass, or it registers `electron.exe` with no script and the link opens an
+ * empty app.
+ *
+ * Failure here is not fatal and is deliberately quiet: on Linux this depends on
+ * a desktop entry the packager owns, and an app that refused to start because
+ * it could not claim a protocol would be worse than one that cannot be opened
+ * from a chat window.
+ */
+function registerShareProtocol(): void {
+  try {
+    if (process.defaultApp && process.argv.length >= 2) {
+      app.setAsDefaultProtocolClient(SHARE_SCHEME, process.execPath, [
+        path.resolve(process.argv[1]),
+      ]);
+    } else {
+      app.setAsDefaultProtocolClient(SHARE_SCHEME);
+    }
+  } catch {
+    // Sharing still works; only opening a link from outside the app does not.
+  }
+}
+registerShareProtocol();
 
 app.whenReady().then(async () => {
   /**

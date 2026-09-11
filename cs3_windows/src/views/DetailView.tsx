@@ -23,6 +23,7 @@ import { Poster } from '../components/Poster';
 import { CopyErrorButton } from '../components/CopyErrorButton';
 import { ProviderRecoveryPanel } from '../components/ProviderRecoveryPanel';
 import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
+import { ShareButton } from '../components/ShareButton';
 import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
 import type { PageSnapshot } from '../../electron/cs3/pageSnapshot';
 import { detailFromSnapshot, mergeDetail, savedCopyAge } from '../utils/savedPage';
@@ -755,6 +756,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         provider: origin?.provenance?.provider ?? mediaItem.apiName,
         extensionName: origin?.provenance?.extensionName,
         repositoryName: origin?.provenance?.repositoryName,
+        repositoryId: origin?.provenance?.repositoryId,
         // A catalogue result has no extension behind it; naming the catalogue
         // is what stops the origin line reading as "unknown" for half the app.
         metadataSource: origin?.provenance?.extensionName ? undefined : mediaItem.apiName,
@@ -1315,6 +1317,24 @@ export const DetailView: React.FC<DetailViewProps> = ({
       )}
 
       <DetailHero
+        shareControl={
+          <ShareButton
+            className="detail-action"
+            media={{
+              url: mediaItem.url,
+              id: detail.imdbId ?? mediaItem.imdbId,
+              title: detail.name,
+              originalTitle: mediaItem.originalTitle,
+              year: detail.year,
+              type: detail.type === 'Movie' ? 'movie' : detail.type ? 'series' : undefined,
+              poster: detail.posterUrl,
+              plot: detail.plot,
+              // Provenance as a *preference* for the recipient, never a URL.
+              provider: provenance.provider ?? mediaItem.apiName,
+              repository: provenance.repositoryId,
+            }}
+          />
+        }
         title={detail.name}
         originalTitle={mediaItem.originalTitle || (detail as any)?.originalTitle}
         year={detail.year}

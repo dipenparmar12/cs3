@@ -2,6 +2,7 @@ import React, { useCallback, useRef, useState } from 'react';
 import { useFlash } from '../utils/useFlash';
 import { Check, ChevronDown, ClipboardCopy, FileText } from 'lucide-react';
 import { useDismissable } from '../utils/useDismissable';
+import { useIsDeveloper } from '../utils/ExperienceModeContext';
 
 /**
  * Copies a failure in a form someone else can act on — at one of two sizes.
@@ -30,6 +31,15 @@ import { useDismissable } from '../utils/useDismissable';
  * that has the environment and the log. The on-screen context is passed down
  * rather than pasted on top, so the provider and message are not restated above
  * a body that already deduplicates them.
+ *
+ * ## Why the gate is here and not at the call sites
+ *
+ * This is a developer utility: it copies runtime versions, provider names, log
+ * records and addresses, and standard mode exists so a viewer never meets any
+ * of that. There are four call sites today and the fifth would be added without
+ * remembering the gate — the same reason the adult check lives in
+ * `enabledProviderNames` rather than at each screen that lists providers. One
+ * funnel, so the answer cannot differ by where you came from.
  */
 export const CopyErrorButton: React.FC<{
   /** What the user was doing, in their terms. Also selects the log entries. */
@@ -39,6 +49,7 @@ export const CopyErrorButton: React.FC<{
   label?: string;
   compact?: boolean;
 }> = ({ context, recordIds, label = 'Copy error details', compact = false }) => {
+  const isDeveloper = useIsDeveloper();
   const { message: copied, flash: setCopied } = useFlash<'current' | 'full'>(2500);
   const [busy, setBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -69,6 +80,10 @@ export const CopyErrorButton: React.FC<{
     },
     [context, recordIds, setCopied]
   );
+
+  // After the hooks, never before: an early return above them changes the hook
+  // order between modes, which React treats as a different component.
+  if (!isDeveloper) return null;
 
   return (
     <div className="copy-error-group" ref={wrapper}>

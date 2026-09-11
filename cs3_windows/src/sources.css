@@ -5751,6 +5751,38 @@
   max-width: 52ch;
 }
 .playback-error__origin { font-weight: 600; color: rgba(147, 197, 253, 0.9); }
+
+/*
+  The original message, once asked for.
+  A link rather than a button chrome-wise: it reveals text, it does not act on
+  the failure, and it must not compete with the actions below it.
+*/
+.playback-error__detail-toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.playback-error__detail-toggle:hover { color: var(--text); }
+.playback-error__detail {
+  margin: 0;
+  max-width: 52ch;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.28);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.72);
+  /* Same reason as the message above: these arrive as unbroken tokens. */
+  overflow-wrap: anywhere;
+}
 .playback-error__actions {
   display: flex;
   flex-wrap: wrap;
@@ -7111,3 +7143,25 @@
 }
 .adult-setting__session .btn { display: inline-flex; align-items: center; gap: .3rem; }
 .adult-setting__current { font-size: .78rem; margin-top: .5rem; }
+
+
+/*
+  Share, wherever it appears.
+  Sized to sit in a `.detail-actions` row without a class of its own, and to
+  shrink to an icon inside dense rows and the player's control bar.
+*/
+.share-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.42rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.share-button:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.06)); }
+.share-button--compact { padding: 0.35rem; border-radius: 50%; }

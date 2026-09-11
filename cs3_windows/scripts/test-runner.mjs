@@ -36,6 +36,8 @@ const PRESET_ALIASES = {
   ipc: ['electron/ipcSurface.test.mts'],
   'module-reachability': ['electron/moduleReachability.test.mts'],
   'playback-failover': ['electron/playbackFailover.test.mts'],
+  'experience-mode': ['src/utils/experienceMode.test.mts'],
+  'share-link': ['src/utils/shareLink.test.mts'],
   address: ['electron/cs3/extensionAddress.test.mts'],
   backup: ['electron/cs3/backupService.test.mts'],
   recovery: ['electron/cs3/providerRecovery.test.mts'],

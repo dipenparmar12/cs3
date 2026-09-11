@@ -28,6 +28,8 @@ import { ProviderRankingPanel } from '../components/settings/ProviderRankingPane
 import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
 import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
+import { settingsLevelFor } from '../utils/experienceMode';
+import { useExperienceMode, useSetExperienceMode } from '../utils/ExperienceModeContext';
 import {
   SettingsLevelProvider,
   type SettingsLevel,
@@ -81,25 +83,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
    * of how this person reads a screen, not of how the app behaves, and it has
    * no business travelling in a backup to a machine somebody else uses.
    */
-  const [level, setLevel] = useState<SettingsLevel>(() => {
-    try {
-      return localStorage.getItem('cs3.settings.level') === 'everything'
-        ? 'everything'
-        : 'simple';
-    } catch {
-      // Private windows and blocked site data both throw here.
-      return 'simple';
-    }
-  });
-
-  const changeLevel = (next: SettingsLevel) => {
-    setLevel(next);
-    try {
-      localStorage.setItem('cs3.settings.level', next);
-    } catch {
-      // A preference that cannot be stored still applies for this session.
-    }
-  };
+  /**
+   * Derived from the app-wide mode rather than stored again here.
+   *
+   * This screen owned the switch first, under its own key. It is now one
+   * question — "do you want to see how this is built" — asked once and answered
+   * for the player, the source list and every error as well as for these rows.
+   * Two stored values would have to agree about what technical means, and the
+   * day they disagreed this screen and the player would be telling one person
+   * two different things about the same preference.
+   */
+  const mode = useExperienceMode();
+  const setMode = useSetExperienceMode();
+  const level: SettingsLevel = settingsLevelFor(mode);
+  const changeLevel = (next: SettingsLevel) =>
+    setMode(next === 'everything' ? 'developer' : 'standard');
   const [downloadDir, setDownloadDir] = useState('%USERPROFILE%\\Downloads\\CloudStream');
   /**
    * The delete-behaviour preference, resettable here.
@@ -298,7 +296,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             aria-pressed={level === 'simple'}
             onClick={() => changeLevel('simple')}
           >
-            Just the essentials
+            Just watching
           </button>
           <button
             type="button"
@@ -308,12 +306,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             aria-pressed={level === 'everything'}
             onClick={() => changeLevel('everything')}
           >
-            Everything
+            Developer mode
           </button>
+          {/*
+            This switch stopped being about this screen. It now decides what the
+            player, the source list and every error message say as well, so the
+            note has to describe that rather than "rows on this page" — a
+            toggle whose visible effect is wider than its label is how a person
+            ends up changing something they did not mean to.
+          */}
           <span className="settings__level-note">
             {level === 'simple'
-              ? 'Technical options are hidden. Nothing is switched off — they still apply.'
-              : 'Showing every option, including ones that need some knowledge of how the app works.'}
+              ? 'Technical details are hidden across the app. Nothing is switched off — it all still applies.'
+              : 'Showing diagnostics, provider and engine details, logs and debugging tools everywhere.'}
           </span>
         </div>
       </header>

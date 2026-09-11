@@ -54,6 +54,15 @@ export interface DetailHeroProvenance {
   provider?: string;
   extensionName?: string;
   repositoryName?: string;
+  /**
+   * The repository's catalogue id, as distinct from the name shown on screen.
+   *
+   * Carried because a share link may name a repository and must name it by id:
+   * an id is looked up in the shipped catalogue, a name is not resolvable and a
+   * URL would make opening a link equivalent to installing whatever the sender
+   * chose — the rule `ott:installSuggestion` already enforces.
+   */
+  repositoryId?: string;
   metadataSource?: string;
   searchQuery?: string;
   imdbId?: string;
@@ -110,6 +119,15 @@ interface DetailHeroProps {
   onFindMoreSources: () => void;
   onRefreshSources: () => void;
   onSearchTitle?: () => void;
+  /**
+   * The share control, passed in rather than built here.
+   *
+   * `DetailHero` renders a page; it does not know the media's identity in the
+   * shape a link needs (the address, the imdb id, the season the viewer has
+   * open). The owner does, so it hands the finished control down — the same
+   * arrangement `libraryControl` already uses two rows below.
+   */
+  shareControl?: React.ReactNode;
   onDownloadSeason?: () => void;
   /** Rendered inside the secondary row; the library bucket selector. */
   libraryControl?: React.ReactNode;
@@ -138,6 +156,7 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   onFindMoreSources,
   onRefreshSources,
   onSearchTitle,
+  shareControl,
   onDownloadSeason,
   libraryControl,
 }) => {
@@ -330,6 +349,8 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
           </button>
 
           {libraryControl}
+
+          {shareControl}
 
           <button
             type="button"

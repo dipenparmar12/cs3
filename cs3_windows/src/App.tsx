@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { FileDown, WifiOff } from 'lucide-react';
+import { FileDown, WifiOff, Link2,
+} from 'lucide-react';
 import type { PlayedSource } from './types/library';
 import { Sidebar } from './components/Sidebar';
 import type { ActiveTab } from './components/Sidebar';
@@ -41,6 +42,7 @@ import type { SearchSnapshot } from '../electron/searchSession';
 import { describeError } from './utils/errors';
 import { pickResumePoint } from './utils/resumePoint';
 import { historyEventForTask } from './utils/historyEvent';
+import { decodeShareLink } from './utils/shareLink';
 import { loadWatchState } from './components/player/seriesContext';
 
 /** One live playback session: its id, what asked for it, and its latest state. */
@@ -75,6 +77,14 @@ export const App: React.FC = () => {
   const savedScroll = useRef(0);
 
   const [selectedMedia, setSelectedMedia] = useState<SearchResponse | null>(null);
+  /**
+   * Why a shared link did not open, if it did not.
+   *
+   * Its own banner rather than a thrown error: the app is working, one link is
+   * not, and the person holding it can do something about it once told which
+   * kind of wrong it is — resend, or update.
+   */
+  const [shareProblem, setShareProblem] = useState<string | null>(null);
   const [playback, setPlayback] = useState<PlaybackRequest | null>(null);
   const [switchingTo, setSwitchingTo] = useState<Episode | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
@@ -482,6 +492,45 @@ export const App: React.FC = () => {
     setPlayerHidden(true);
     setOpenTorrent(result.infoHash);
   }, []);
+
+  /**
+   * A `cloudstream://` link somebody was sent.
+   *
+   * The whole promise of the feature is that the recipient does nothing: the
+   * page opens, the app resolves fresh sources with *their* providers, and the
+   * sender's expired links are never involved. So this maps the payload onto
+   * the same `SearchResponse` the search results produce and hands it to the
+   * same `handleSelectMedia` a click would — one entry point, so a shared link
+   * and a search result cannot drift into behaving differently.
+   *
+   * The sender's provider becomes `apiName`, which is a *preference*: the
+   * detail page resolves against whatever the recipient has, and a provider
+   * they do not own degrades to the ordinary search rather than an error. That
+   * is the "missing provider" case, and it is handled by not being special.
+   */
+  const handleShareLink = useCallback((link: string) => {
+    const result = decodeShareLink(link);
+    if (!result.ok) {
+      setShareProblem(result.reason);
+      return;
+    }
+    const { payload } = result;
+    setShareProblem(null);
+    setSelectedMedia({
+      name: payload.title,
+      originalTitle: payload.originalTitle,
+      url: payload.url,
+      apiName: payload.provider ?? payload.repository ?? 'Shared link',
+      type: payload.type === 'movie' ? ('Movie' as TvType) : undefined,
+      posterUrl: payload.poster,
+      year: payload.year,
+      imdbId: payload.id,
+    });
+  }, []);
+
+  useEffect(() => {
+    return window.cloudstream?.onOpenShareLink?.(handleShareLink);
+  }, [handleShareLink]);
 
   useEffect(() => {
     return window.cloudstream?.onOpenLocalFile?.((filePath) => {
@@ -1395,6 +1444,18 @@ export const App: React.FC = () => {
               <strong>Drop to open</strong>
               <span>A .torrent file, a video, or a magnet link</span>
             </div>
+          </div>
+        )}
+
+        {shareProblem && (
+          <div className="offline-banner" role="status">
+            <Link2 size={15} aria-hidden />
+            <span>
+              <strong>That shared link could not be opened.</strong> {shareProblem}
+            </span>
+            <button type="button" className="btn btn-ghost" onClick={() => setShareProblem(null)}>
+              Dismiss
+            </button>
           </div>
         )}
 

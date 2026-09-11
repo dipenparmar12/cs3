@@ -1759,6 +1759,8 @@ export interface CloudStreamElectronAPI {
   onShowLicences: (callback: () => void) => () => void;
   /** A file the user picked from File → Open, to be prepared and played. */
   onOpenLocalFile: (callback: (filePath: string) => void) => () => void;
+  /** A `cloudstream://` link the app was opened with, or handed while running. */
+  onOpenShareLink: (callback: (link: string) => void) => () => void;
 }
 
 export type { TorrentFileEntry };
@@ -2206,6 +2208,7 @@ const api: CloudStreamElectronAPI = {
   onToggleInspector: (callback) => subscribe('app:toggleInspector', callback),
   onShowLicences: (callback) => subscribe('app:showLicences', callback),
   onOpenLocalFile: (callback) => subscribe('app:openLocalFile', callback),
+  onOpenShareLink: (callback) => subscribe('app:openShareLink', callback),
 };
 
 contextBridge.exposeInMainWorld('cloudstream', api);
