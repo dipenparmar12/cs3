@@ -29,7 +29,7 @@
     "id": "netmirror",
     "name": "NetMirror (OTT)",
     "internalName": "NetMirror-Extension",
-    "description": "Netflix, Prime Video, Disney+ Hotstar and Disney+ catalogues. One archive registering four providers named after the platforms they mirror.",
+    "description": "Netflix, Prime Video, Hotstar and Disney+ catalogues. One archive registering four providers named after the platforms they mirror.",
     "url": "https://github.com/Sushan64/NetMirror-Extension",
     "rawRepoUrl": "https://raw.githubusercontent.com/Sushan64/NetMirror-Extension/builds/Netflix.json",
     "category": "Movies & Shows",

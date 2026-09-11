@@ -29,11 +29,16 @@ const test = (name: string, fn: () => void) => tests.push([name, fn]);
  * Read out of the published archive rather than assumed: the four `MainAPI`
  * subclasses in `Netmirror.cs3` register exactly these display names.
  */
-test('the four NetMirror provider names each land on their own platform', () => {
+test('the NetMirror provider names land on their own platform', () => {
   assert.equal(ottPlatformForProvider('Netflix')?.id, 'netflix');
   assert.equal(ottPlatformForProvider('Prime Video')?.id, 'primevideo');
-  assert.equal(ottPlatformForProvider('Hotstar')?.id, 'hotstar');
   assert.equal(ottPlatformForProvider('Disney Plus')?.id, 'disney');
+  /**
+   * NetMirror registers a fourth, `Hotstar`, and it deliberately reaches no
+   * platform: nothing serves Hotstar a catalogue, so the page was a brand name
+   * over a search box. The provider stays installed and searchable.
+   */
+  assert.equal(ottPlatformForProvider('Hotstar'), null);
 });
 
 test('punctuation and case are not identity', () => {
@@ -67,19 +72,16 @@ test('a provider named after nothing in the table matches nothing', () => {
 
 // --- the overlap that would otherwise depend on array order ----------------
 
-test('Disney+ Hotstar goes to Hotstar, not Disney+', () => {
+test('no Hotstar name leaks onto a neighbouring platform', () => {
   /**
-   * The one genuine ambiguity in the table. `disneyhotstar` starts with
-   * `disney`, so an unanchored Disney pattern would claim it and which page it
-   * landed on would become a property of declaration order.
+   * This is the assertion that matters now that Hotstar has no row. Both names
+   * sit one loosened pattern away from a *wrong* page: `disneyhotstar` starts
+   * with `disney`, and `jiohotstar` starts with `jio`. Unmatched is the right
+   * answer; either of those pages filling with a Hotstar library is not.
    */
-  assert.equal(ottPlatformForProvider('Disney+ Hotstar')?.id, 'hotstar');
-  assert.equal(ottPlatformForProvider('JioHotstar')?.id, 'hotstar');
-});
-
-test('JioCinema does not swallow JioHotstar', () => {
+  assert.equal(ottPlatformForProvider('Disney+ Hotstar'), null);
+  assert.equal(ottPlatformForProvider('JioHotstar'), null);
   assert.equal(ottPlatformForProvider('JioCinema')?.id, 'jiocinema');
-  assert.equal(ottPlatformForProvider('JioHotstar')?.id, 'hotstar');
 });
 
 test('the CNC Verse provider names, measured, land on the right pages', () => {
@@ -93,13 +95,13 @@ test('the CNC Verse provider names, measured, land on the right pages', () => {
   assert.equal(ottPlatformForProvider('DisneyM')?.id, 'disney');
   assert.equal(ottPlatformForProvider('NetflixM')?.id, 'netflix');
   assert.equal(ottPlatformForProvider('PrimeVideoM')?.id, 'primevideo');
-  assert.equal(ottPlatformForProvider('HotstarM')?.id, 'hotstar');
+  assert.equal(ottPlatformForProvider('HotstarM'), null);
 });
 
 test('the Disney suffix relaxation did not reach Disney+ Hotstar', () => {
   // `disneym` and `disneyhotstar` both start with `disney`; only the first is
   // Disney+. This is the assertion that fails if the pattern loses its anchor.
-  assert.equal(ottPlatformForProvider('Disney+ Hotstar')?.id, 'hotstar');
+  assert.equal(ottPlatformForProvider('Disney+ Hotstar'), null);
   assert.equal(ottPlatformForProvider('Disneyland'), null);
 });
 
@@ -139,14 +141,14 @@ test('installed but switched off is `disabled`, never `missing`', () => {
    * have, and the switch that would actually fix it is never mentioned.
    */
   const views = buildOttPlatformViews({
-    allProviders: ['Hotstar'],
+    allProviders: ['Netflix'],
     enabledProviders: [],
     installedExtensions: ['Netmirror'],
   });
-  const hotstar = views.find((v) => v.id === 'hotstar')!;
-  assert.equal(hotstar.availability, 'disabled');
-  assert.deepEqual(hotstar.disabledProviders, ['Hotstar']);
-  assert.deepEqual(hotstar.providers, []);
+  const netflix = views.find((v) => v.id === 'netflix')!;
+  assert.equal(netflix.availability, 'disabled');
+  assert.deepEqual(netflix.disabledProviders, ['Netflix']);
+  assert.deepEqual(netflix.providers, []);
 });
 
 test('a platform with no provider of its own is carried by an aggregate extension', () => {
@@ -209,18 +211,17 @@ test('every declared provider name matches its own platform', () => {
 
 test('only the platforms with a provider of their own are on by default', () => {
   /**
-   * The four that are on are the four NetMirror and CNC Verse register a
-   * provider *named after*: Netflix, Prime Video, Hotstar and Disney Plus.
-   * Those pages open onto a real catalogue.
+   * The three that are on are the ones with both a provider named after them
+   * and something behind it to browse: Netflix, Prime Video and Disney Plus.
    *
    * Sony LIV, ZEE5 and JioCinema have no such provider anywhere in the
    * reachable ecosystem — they are served only by aggregate scrapers, so their
-   * pages are a search box. Shipping seven entries where three cannot browse
-   * reads as four working and three broken, which is a worse first impression
-   * than four that work.
+   * pages are a search box. Hotstar had the provider and not the catalogue,
+   * which is the same empty page reached from the other side, so it is not a
+   * platform at all now. Shipping entries that cannot browse reads as broken.
    */
   const on = OTT_PLATFORMS.filter((p) => p.defaultEnabled).map((p) => p.id).sort();
-  assert.deepEqual(on, ['disney', 'hotstar', 'netflix', 'primevideo']);
+  assert.deepEqual(on, ['disney', 'netflix', 'primevideo']);
 });
 
 test('a platform that is off by default is still in the table', () => {

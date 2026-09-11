@@ -16,9 +16,10 @@
  * SHA-256 matches its `fileHash`) contains four `MainAPI` subclasses —
  * `NetflixMirrorProvider`, `PrimeVideoMirrorProvider`, `HotStarMirrorProvider`
  * and `DisneyPlusProvider` — registering the display names **Netflix**,
- * **Prime Video**, **Hotstar** and **Disney Plus**. Those four strings are the
- * whole reason this feature can exist at all, and they are what the exact-match
- * lists below are seeded with.
+ * **Prime Video**, **Hotstar** and **Disney Plus**. Those strings are the whole
+ * reason this feature can exist at all, and they are what the exact-match lists
+ * below are seeded with. **Hotstar is the exception**: it has a provider but no
+ * catalogue behind it, so it is not a platform here — see the note above `disney`.
  *
  * ## The two ways a matcher here goes wrong
  *
@@ -78,12 +79,12 @@ export interface OttPlatformDefinition {
   /**
    * Whether this platform appears in the sidebar without being asked for.
    *
-   * The four that are on by default are the four with a provider *named after
-   * them* somewhere in the reachable ecosystem — NetMirror registers exactly
-   * Netflix, Prime Video, Hotstar and Disney Plus, and CNC Verse adds its own.
-   * Sony LIV, ZEE5 and JioCinema have no such provider anywhere: they are
-   * reachable only through aggregate scrapers, so their pages open onto a
-   * search box rather than a catalogue.
+   * The three that are on by default are the ones with both a provider *named
+   * after them* and something to browse — NetMirror registers Netflix, Prime
+   * Video and Disney Plus, and CNC Verse adds its own. Sony LIV, ZEE5 and
+   * JioCinema have no such provider anywhere: they are reachable only through
+   * aggregate scrapers, so their pages open onto a search box rather than a
+   * catalogue.
    *
    * Listing them off by default rather than dropping them is deliberate, and
    * it is the same argument that put them in the table at all: the user knows
@@ -127,19 +128,26 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
     suggestedRepositories: ['netmirror', 'cncverse'],
     defaultEnabled: true,
   },
-  {
-    id: 'hotstar',
-    name: 'Disney+ Hotstar',
-    tagline: 'Hotstar catalogues, including the Disney+ India library.',
-    accent: '#0f79af',
-    providerNames: ['Hotstar', 'HotStarMirror', 'Disney+ Hotstar', 'JioHotstar'],
-    // `hotstar` is distinctive enough to match unanchored, which is what lets
-    // `Disney+ Hotstar` and `JioHotstar` land here rather than under Disney.
-    providerPatterns: [/hotstar/],
-    aggregateExtensions: [],
-    suggestedRepositories: ['netmirror', 'cncverse'],
-    defaultEnabled: true,
-  },
+  /**
+   * Disney+ Hotstar was a platform here and is deliberately not one now.
+   *
+   * Nothing serves it a catalogue. `ottCatalog.ts`'s addon has no Hotstar
+   * service code, and the platform page's own browse comes from an installed
+   * provider's `getMainPage` — so the page opened onto a search box under a
+   * brand name, which is the failure this table exists to avoid in the other
+   * direction: the user reads a heading as a promise about what is behind it.
+   *
+   * Removing the row does not hide the providers. `Hotstar` and `JioHotstar`
+   * stay installed, enabled and searchable exactly as before; they simply no
+   * longer have a platform page of their own. **Do not re-add this row without
+   * a catalogue** — either a service code in `PLATFORM_CATALOGS` or a provider
+   * that actually publishes `getMainPage` for it.
+   *
+   * This is why `disney`'s pattern below stays anchored and terminated. With no
+   * Hotstar row to claim it, `Disney+ Hotstar` normalises to `disneyhotstar`
+   * and now matches nothing — which is correct. An unanchored Disney pattern
+   * would file it under Disney+ and fill that page with the wrong library.
+   */
   {
     id: 'disney',
     name: 'Disney+',
@@ -147,16 +155,17 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
     accent: '#113ccf',
     providerNames: ['Disney Plus', 'Disney+'],
     /**
-     * Anchored and terminated, unlike Hotstar's. `Disney+ Hotstar` normalises to
-     * `disneyhotstar`, which starts with `disney` — an unanchored pattern here
-     * would claim it, and which of the two pages it landed on would then depend
-     * on the order this array happens to be in.
+     * Anchored and terminated. `Disney+ Hotstar` normalises to `disneyhotstar`,
+     * which starts with `disney`; an unanchored pattern here would claim it and
+     * put the Hotstar library under the Disney+ heading. That mattered when
+     * Hotstar had its own row and matters more now that it has none — there is
+     * no second page for it to land on, only the wrong one.
      *
      * The trailing `m?` is not decoration. CNC Verse ships two extensions side
      * by side, and the second suffixes every provider name with `M` for its
-     * mobile endpoints — `DisneyM` beside `Disney` `[measured]`. Netflix, Prime
-     * Video and Hotstar all survive that suffix on their existing patterns;
-     * Disney is the only one anchored tightly enough to be broken by it.
+     * mobile endpoints — `DisneyM` beside `Disney` `[measured]`. Netflix and
+     * Prime Video survive that suffix on their existing patterns; Disney is the
+     * only one anchored tightly enough to be broken by it.
      */
     providerPatterns: [/^disney(plus)?m?$/],
     aggregateExtensions: [],
@@ -193,10 +202,10 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
     accent: '#d61f6b',
     providerNames: ['JioCinema'],
     /**
-     * `jiocinema` only. JioCinema merged into JioHotstar, whose provider name
-     * contains `hotstar` and belongs on the Hotstar page — a `^jio` pattern
-     * here would take it, and the two pages would then disagree about where
-     * the same provider lives.
+     * `jiocinema` only. JioCinema merged into JioHotstar, and a `^jio` pattern
+     * here would take that provider — filing a Hotstar library under the
+     * JioCinema heading. Hotstar has no page of its own any more, so there is
+     * nowhere better for it to go; unmatched is the honest answer.
      */
     providerPatterns: [/^jiocinema/],
     aggregateExtensions: ['MovieBoxProvider', 'MovieBoxProviderIN', 'CNC Verse'],

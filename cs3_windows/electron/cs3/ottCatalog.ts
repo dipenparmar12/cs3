@@ -45,10 +45,12 @@ import { fetchJson } from '../torrent/http.ts';
  * lists rather than one popularity list relabelled five times. (`9 to 5` on
  * both Prime and Disney+ is not a bug; Disney owns the Fox catalogue.)
  *
- * **Hotstar, Sony LIV, ZEE5 and JioCinema are not served by it.** They are left
- * without a fallback rather than given a generic popularity list under their
- * name — a page of titles that are not on ZEE5, labelled ZEE5, is worse than a
- * page that says it has nothing.
+ * **Sony LIV, ZEE5 and JioCinema are not served by it.** They are left without a
+ * fallback rather than given a generic popularity list under their name — a page
+ * of titles that are not on ZEE5, labelled ZEE5, is worse than a page that says
+ * it has nothing. Hotstar was in that group and is no longer a platform at all:
+ * having neither a service code here nor a provider that publishes a catalogue
+ * left it with nothing to show from either direction (`ottPlatforms.ts`).
  */
 
 const ADDON_BASE =
