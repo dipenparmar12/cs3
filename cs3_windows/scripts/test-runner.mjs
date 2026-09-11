@@ -35,6 +35,7 @@ const SLOW_TESTS = new Set([
 const PRESET_ALIASES = {
   ipc: ['electron/ipcSurface.test.mts'],
   'module-reachability': ['electron/moduleReachability.test.mts'],
+  'playback-failover': ['electron/playbackFailover.test.mts'],
   address: ['electron/cs3/extensionAddress.test.mts'],
   backup: ['electron/cs3/backupService.test.mts'],
   recovery: ['electron/cs3/providerRecovery.test.mts'],

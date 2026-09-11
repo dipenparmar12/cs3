@@ -84,6 +84,16 @@ export interface StreamAttempt {
   error: string;
   /** The extension provider behind this source, when it came from one. */
   providerName?: string;
+  /**
+   * Which source this was, so a caller can rule out exactly what was tried.
+   *
+   * `startBestStream` is handed a list and tries only the first `maxAttempts`
+   * of it, so "the candidates" and "the ones attempted" are different sets. A
+   * caller that retires the former walks off the end of the list in one step —
+   * measured: a 70-source title retired 64 untried sources on its second pass
+   * and reported that nothing was left.
+   */
+  infoHash?: string;
 }
 
 export interface AutoStreamResult {
@@ -2123,6 +2133,7 @@ export class ContentService {
         title: source.title,
         indexerName: source.indexerName,
         providerName: source.providerName,
+        infoHash: source.infoHash,
         error,
       });
       if (source.providerName) {
@@ -2204,8 +2215,18 @@ export class ContentService {
     }
 
     const detail = attempts.map((a) => `${a.title} (${a.indexerName}): ${a.error}`).join('; ');
-    throw new Error(
-      `Tried ${attempts.length} source${attempts.length === 1 ? '' : 's'} and none started. ${detail}`
+    /**
+     * The attempts ride on the error, because the caller needs them.
+     *
+     * Everything this walk learned is otherwise only in the message, and a
+     * caller deciding what to try next cannot act on prose. `PlaybackSession`
+     * reads these to rule out exactly the sources that were tried and no more.
+     */
+    throw Object.assign(
+      new Error(
+        `Tried ${attempts.length} source${attempts.length === 1 ? '' : 's'} and none started. ${detail}`
+      ),
+      { attempts: [...attempts] }
     );
   }
 

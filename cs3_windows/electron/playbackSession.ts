@@ -585,10 +585,8 @@ export class PlaybackSessionManager {
    * they are excluded from what comes back rather than risking a loop that
    * retries the same unidentifiable source forever.
    */
-  private retireAndRemain(session: Session, tried: TorrentResult[]): TorrentResult[] {
-    for (const source of tried) {
-      if (source.infoHash) session.unplayable.add(source.infoHash);
-    }
+  private retireAndRemain(session: Session, tried: Iterable<string>): TorrentResult[] {
+    for (const infoHash of tried) session.unplayable.add(infoHash);
     return session.sources.filter(
       (source) => source.infoHash && !session.unplayable.has(source.infoHash)
     );
@@ -631,6 +629,17 @@ export class PlaybackSessionManager {
     session.inFlight?.abort();
     const controller = new AbortController();
     session.inFlight = controller;
+
+    /**
+     * What to rule out when a failure told us nothing about what it tried.
+     *
+     * Only reachable if `startBestStream` throws before recording an attempt —
+     * an abort, or a list with no usable link. Retiring the head of the list
+     * keeps the walk strictly shrinking, which is what stops it recursing for
+     * ever on a failure it cannot attribute.
+     */
+    const firstCandidateHashes = (): string[] =>
+      candidates.slice(0, 1).map((c) => c.infoHash).filter((h): h is string => Boolean(h));
 
     session.started = true;
     session.phase = 'starting';
@@ -747,7 +756,24 @@ export class PlaybackSessionManager {
        */
       const advance = (options.autoAdvances ?? 0) + 1;
       const mayAdvance = !options.userChoice && advance <= MAX_AUTO_ADVANCES;
-      const remaining = mayAdvance ? this.retireAndRemain(session, candidates) : [];
+      /**
+       * What was *attempted*, which is not what was offered.
+       *
+       * `startBestStream` takes the whole list and tries the first four, so
+       * retiring `candidates` would rule out every source it never reached —
+       * and the walk would report an empty list after two passes. The attempts
+       * ride on the error for exactly this.
+       */
+      const attempted = (error as { attempts?: StreamAttempt[] })?.attempts ?? [];
+      const attemptedHashes = attempted
+        .map((attempt) => attempt.infoHash)
+        .filter((hash): hash is string => Boolean(hash));
+      const remaining = mayAdvance
+        ? this.retireAndRemain(
+            session,
+            attemptedHashes.length > 0 ? attemptedHashes : firstCandidateHashes()
+          )
+        : [];
       if (remaining.length > 0) {
         const history = [...session.attempts];
         await this.beginStream(session, remaining, {
