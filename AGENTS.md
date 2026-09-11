@@ -242,6 +242,7 @@ Fallible handlers return an **envelope** `{ ok, error?, …payload }` and never 
 | `logging/logger.ts`, `redact.ts` | NDJSON per-launch transcript, buffered, flushed on a timer. |
 | `util/jsonFileStore.ts` | Debounced persistence (5 copies unified). |
 | `util/disabledSet.ts` | The enable-cascade toggle (3 copies unified). |
+| `util/prune.ts` | Drops empty keys so a merge cannot blank a known value — the mechanical half of the never-blank rule (§9.2). Was byte-identical in `bookmarkStore` and `pageSnapshot`. |
 
 ### Renderer modules worth knowing
 
@@ -251,6 +252,7 @@ Fallible handlers return an **envelope** `{ ok, error?, …payload }` and never 
 | `src/utils/errors.ts` | `describeError` — never returns empty; unwraps `error.cause`. |
 | `src/utils/format.ts` | The byte formatters, kept as parameters (see §12). |
 | `src/utils/sourceIdentity.ts` | `normaliseReleaseName` / `hasRealInfoHash`. |
+| `src/utils/historyEvent.ts` | `historyEventForTask` — the one download-task→history-record mapping. Was spelled out field-by-field in `downloadService`, `App.tsx` and `VideoPlayer`; three copies of a fallback chain drift rather than break. |
 | `src/utils/downloadIdentity.ts` | A download is addressed by its source variant, not its title. |
 | `src/utils/deadRows.ts` | Which results to hide (`no-sources`) vs never hide (`app-error`). |
 | `src/utils/resumePoint.ts` | **Null episode means "Play"**; furthest episode with history wins. |
@@ -620,13 +622,26 @@ Two rules: **`COALESCEABLE` is an opt-out, not an opt-in** — a new `MpvSnapsho
 
 Known, not changed: `WebViewHost`'s `MAX_CONCURRENT` of 3 — three hidden Chromium windows running ad-heavy resolve pages with `backgroundThrottling: false` are a real CPU cost during playback, but they are separate processes and were not the stall.
 
-### 6.11 Probes remembered, verdicts recomputed
+### 6.11 PRD-40.1 Tier 1 is half-built — and it looks finished
+
+`docs/PRD/40.1` is **"Approved — frozen for implementation"** and every box in its §6 Definition of Done is still unchecked. Two of its Tier 1 modules were written, given passing test suites, and **never wired**:
+
+| Module | State | What does not happen |
+|---|---|---|
+| `media/sourceLease.ts` (287 lines, `bun run test lease`) | `MediaProxy.wrapLease` exists and **has no caller**; `new SourceLease` appears nowhere in production; `mediaProxy.ts` imports it as `import type` only | Signed-URL refresh never runs. `this.leases` is always empty, so the 401/403 lease-refresh branch in `MediaProxy` is **unreachable code**. The DoD's "a 2-hour playback of a source with a 15-minute token completes with zero 403 interruptions" is not true |
+| `media/playbackTelemetry.ts` (262 lines, `bun run test telemetry`) | only its `InspectionStrategyType` is imported, as a type, by `mediaInspector` | No session ever emits a telemetry record. `media:getPlaybackDiagnostics` returns `PlaybackEngine`'s **own** ring buffer, which is a different and smaller thing |
+
+**Do not delete these as dead code** — they are approved in-flight work, and §4.1's problem (expired signed URLs) is a real recurring failure here. But do not read their green suites as evidence the feature ships either: that is exactly the trap `moduleReachability.test.mts` now names. Both are allow-listed there with the reason and the condition for removing the entry.
+
+`§4.2` (container-aware inspection) *is* built — `mediaInspector` dispatches on `InspectionStrategyType`.
+
+### 6.12 Probes remembered, verdicts recomputed
 
 `media/inspectionStore.ts` is keyed on the **origin** URL, never the proxied one (a per-session token would always miss on restart). The **measurement** (codecs, bit depth, tracks) is a fact about the file and is cached; the **verdict** depends on this machine's decoders/GPU/mpv/policy and is always recomputed — caching it would be the stale-cache bug's most expensive form (install mpv, everything keeps re-encoding per a week-old record). Query strings are **not** stripped, which would merge distinct signed-URL films' codec lists.
 
 The cache was once keyed on the loopback address (`/stream/1`, a token minted per process), so **the second film was decided from the first film's codecs**. `MediaProxy.getTargetRoute` unwraps to the upstream URL; the store refuses and prunes loopback keys.
 
-### 6.12 Player behaviour
+### 6.13 Player behaviour
 
 - **The mini player never remounts `<video>`.** Minimising is a CSS geometry change (unmounting stops the stream, loses position, renegotiates the swarm). Chrome hidden with CSS, not conditional rendering. Shortcuts disarmed in mini mode. Drag/resize is owned, not `resize:both` (can't hold aspect ratio); the handle is **top-left**, since a corner-parked window's bottom-right handle would be off-screen.
 - **Floating playback is four mechanisms, not a scale**: in-app mini (CSS, always works), native PiP (moves the `<video>` surface; **unavailable for exactly what this app most often plays**, since mpv/VLC render in their own windows), app-window always-on-top, and mpv `ontop`. `isPipSupported` checks readiness *and* that the native engine isn't holding the stream. Audio-only hides the picture via `visibility`, not `display` — layout removal can stop decoding on some builds; it genuinely stops decoding on mpv (`vid=no`) but is a no-op on the element, and says so in its own help text. PiP rejection reasons are surfaced as sentences — a silent no-op button is the worst outcome.
@@ -638,7 +653,7 @@ The cache was once keyed on the loopback address (`/stream/1`, a token minted pe
 - **The preparation effect keys on a serialised `activeSourceKey`, not object identity.** `activeSource?.directHeaders`/`.drm` are new objects on every `playback:update`, causing stall→teardown→re-prepare→stall loops. **Add new source fields to the key, not the dependency array.**
 - **`MpvEngine.serialize` queues `open`/`stop`/`shutdown`.** `mpv:stop` (cleanup) and `mpv:open` (new mount) once fired in the same tick unordered, so the old kill landed on the newly-started process. `shutdownNow` awaits the child's actual `exit`. **`playback:stop` no longer stops mpv at all** — not every session owns a stream, and the detail page's picker starting a scrape used to kill the mini-player's film. Closing the player closes mpv. Idle mpv (`--idle=yes`) left a blank window after `stop()`; it now quits.
 
-### 6.13 Subtitles
+### 6.14 Subtitles
 
 Android always had SubRip + WebVTT + SubStation Alpha through `juniversalchardet`; desktop had neither. `.ass`/`.ssa` went through the SubRip converter (emitting `[Script Info]`/`Dialogue:` as cues), and every download decoded as UTF-8 unconditionally, so Windows-1252/GBK subtitles got correct timing and black-diamond garbage per accent.
 
@@ -646,7 +661,7 @@ Android always had SubRip + WebVTT + SubStation Alpha through `juniversalchardet
 
 **Provider subtitles are a real source** — `loadLinks` returns them and `subtitles:search` merges them **ahead of** OpenSubtitles, critical for extension-sourced content with no IMDb id. Appearance is one record, two renderers (`src/utils/subtitleStyle.ts` → `::cue` vars and mpv properties; `sub-pos` counts down from 100 where the CSS lift counts up).
 
-### 6.14 External players
+### 6.15 External players
 
 | Player | Channel | Capability |
 |---|---|---|
@@ -870,7 +885,16 @@ Its own file, not the datastore (episode lists run to hundreds of rows, and the 
 
 - **Settings is a level, not an Advanced tab.** Advanced-vs-simple isn't a *category* — it cuts across every subject, so an Advanced tab splits one topic across two places. Grouping stays by subject; a **level** filters within it (`SettingRow`/`SettingGroup` take `level`; an all-hidden group hides itself). **`advanced` means one specific thing: understanding the label requires knowing how the app is built** — not "rare", not "dangerous". `settingsLevel.test.mts` enforces it (refuses >50% advanced; catches redundant per-row+per-group marking; caught rows hidden for jargon labels **when renaming the label was the actual fix** — 6 renamed, e.g. "Detected native players" → "Players found on this computer"). **Simple is the default**, and **an unclassified row is basic** — backwards would silently lose every future setting from Simple mode. Stored in `localStorage`, not the datastore (a per-viewer UI preference, not app behaviour). `shouldShow` lives in a plain `.ts` because JSX can't load under Node's type-stripping.
 - **Never name a `.tsx` and `.ts` alike but for casing.** `SettingsLevel.tsx` beside `settingsLevel.ts` are **one name on Windows' case-insensitive filesystem**, and module resolution tries `.ts` first — so the import silently resolved to the pure module. A missing named export is an ESM **link** error, not catchable by `ErrorBoundary`: it failed the whole `App.tsx` import graph and **blanked the entire window**. `tsc -b` and `vite build` both refuse it; the gap was shipping without running either. `componentReachability.test.mts` folds every module path to lowercase and checks uniqueness.
-- **A component built and never mounted** is a third failure direction (after invoked-never-registered and registered-never-invoked), invisible to `tsc` and every test. `src/componentReachability.test.mts` closes it lexically. Orphans are allow-listed **with their superseding component** — an allow-list entry without a reason becomes precedent, and a second test fails on stale entries.
+- **Reachability has four failure directions**, all invisible to `tsc` and to every passing test:
+
+  | # | Shape | Real consequence | Guard |
+  |---|---|---|---|
+  | 1 | channel **invoked, never registered** | first-run installer always failed | `electron/ipcSurface.test.mts` |
+  | 2 | channel **registered, never invoked** | runtime repair path unreachable | same |
+  | 3 | component **built, never mounted** | `ExtensionUpdates` | `src/componentReachability.test.mts` |
+  | 4 | module **built, tested, never constructed** | see below | `electron/moduleReachability.test.mts` |
+
+  **The fourth is the most deceptive, because the test suite is what hides it.** A green suite over an unreachable module answers "is this correct?" when the question was "does this run?". The guard checks two shapes: no production importer at all, and — the subtler one — **every production import being `import type`**, which is erased at build time and therefore carries no behaviour. Orphans are allow-listed **with a reason**; an entry without one becomes precedent, and a second test fails on stale entries. Mutation-verified in both directions.
 - **Escape is consumed in capture phase, only when it actually closed something.** `VideoPlayer` binds `keydown` on `window` as "leave playback"; 5 of 8 hand-rolled dismiss effects listened on `document` in **bubble** phase without stopping the event, so a menu's Escape also reached the player and called `onBack()` — closing a menu ended playback. `useDismissable` uses `pointerdown`, not `click` (click fires after release, so outside-click-close plus the trigger's own toggle would reopen it).
 - **The app is dark-only and must say so.** `.btn-ghost` had no colour and nothing set `color-scheme`, so twenty ghost buttons fell through to Chromium's `buttontext` — near-black on `--bg-card` — along with every native `<select>` popup. `.btn` also had no `:disabled` rule while a dozen bespoke buttons each grew their own.
 - Global `:focus-visible` floor (8 `outline:none` sites had no replacement); `prefers-reduced-motion` honoured everywhere; poster cards keyboard-reachable; window bounds persist and clamp to an existing display; one offline banner beats 30 separate provider errors.
@@ -921,6 +945,7 @@ Its own file, not the datastore (episode lists run to hundreds of rows, and the 
 | `docs/PRD/33` | Desktop as-built — **partially stale**: references `electron/cs3ArchiveLoader.ts`/`jvmProviderBridge.ts`, which don't exist (that role is `cs3/sidecarSupervisor.ts` + the sidecar); stale absolute Windows paths |
 | `docs/PRD/34` · `35` · `36` | Torrent architecture · translation spike results · provider execution roadmap |
 | `docs/PRD/39` | **Proposed, nothing built.** Superseded by 41 |
+| `docs/PRD/40` · `40.1` | Playback engine PRD; **40.1 is approved and frozen, Tier 1 half-built** — see §6.11 before touching leases or telemetry |
 | `docs/PRD/41` | **Proposed, nothing built** — read instead of 39. §2 is a measured Android-ecosystem account worth reading standalone |
 | `docs/PRD/43` | Research 2026-09-03; items 1–4 built. §6's rule: a direct HTTP link is not an indexer result |
 | `docs/PRD/44` | Research + proposal, §6–§8 not built. §5 is an 8-shape failure taxonomy from a 6,180-record log; read §6.1 before any failure-UI design |
