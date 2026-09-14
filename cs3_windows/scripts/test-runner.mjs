@@ -77,6 +77,14 @@ const PRESET_ALIASES = {
   'settings-level': ['src/components/settings/settingsLevel.test.mts'],
   'dead-rows': ['src/utils/deadRows.test.mts'],
   'native-providers': ['electron/cs3/nativeProviders.test.mts'],
+  metadata: [
+    'electron/metadata/merge.test.mts',
+    'electron/metadata/sources.test.mts',
+    'src/utils/metadataDisplay.test.mts',
+  ],
+  'metadata-merge': ['electron/metadata/merge.test.mts'],
+  'metadata-sources': ['electron/metadata/sources.test.mts'],
+  'metadata-display': ['src/utils/metadataDisplay.test.mts'],
   discovery: ['electron/sharedDiscovery.test.mts'],
   'shared-discovery': ['electron/sharedDiscovery.test.mts'],
 };

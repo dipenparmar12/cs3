@@ -101,11 +101,16 @@ cs3/
 | Direct (non-torrent) indexer sources only | `cs3_windows/` | `bun run test direct-sources` (13 cases, pure) |
 | yt-dlp source mapping only | `cs3_windows/` | `bun run test ytdlp` (16 cases, pure) |
 | Repository catalogue only | `cs3_windows/` | `bun run test repositories` (9 cases, pure — fetches nothing) |
+| Extended metadata (all) | `cs3_windows/` | `bun run test metadata` (92 cases, pure — fetches nothing) |
+| Metadata merge only | `cs3_windows/` | `bun run test metadata-merge` (34 cases, pure) |
+| Metadata sources only | `cs3_windows/` | `bun run test metadata-sources` (39 cases, stubbed transport) |
+| Metadata display only | `cs3_windows/` | `bun run test metadata-display` (19 cases, pure) |
 | Repository/corpus liveness | repo root | `node tools/research/survey-repositories.mjs` — counts the live indexes; see PRD-43 |
 | Download identity only | `cs3_windows/` | `bun run test download-identity` (18 cases, pure) |
 | Native engine only | `cs3_windows/` | `bun run test native` (12 cases, spawns a real mpv; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
+| **Metadata coverage** | repo root | `node --experimental-strip-types tools/e2e/metadata-e2e.mjs` — see §5.3. **Nothing in `electron/metadata/` has been run against a live host; this is what settles it.** |
 | Plugin runtime classpath | repo root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars, incl. `library-jvm-4.8.0.jar`) |
 | Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
 | Provider bridge, no JitPack | repo root | `node tools/package/build-bridge.mjs` — same jar, compiled against `sidecar/runtime/` |
@@ -372,6 +377,15 @@ compatibility tiers — and none of those words means anything about a provider 
 the binary. The only action on one is a switch, and the only thing the user needs told is
 why one is unavailable. See "The native provider lane" below.
 
+`metadata:*` is extended title metadata — `metadata:getExtended`,
+`metadata:peekExtended`, `metadata:clearCache`, and the push channel
+`metadata:extendedUpdate`. Separate from `api:loadMedia` because it answers a
+different question at a different cost: `api:loadMedia` is what the app can
+**play** and a Play press waits for it; this is what the title **is**, from four
+third-party catalogues, and nothing waits for it. Push-shaped for the same
+reason `search:*` is — the record is emitted partial and refilled as each source
+lands. See "The cast list was a row of names" below.
+
 `ott:*` is the streaming-service surface — `ott:listPlatforms`, `ott:getCatalog`,
 `ott:getCatalogPage`, `ott:getSearchScope`, `ott:getSuggestions`,
 `ott:installSuggestion`. Separate from `extension:*` because it answers a different
@@ -466,6 +480,14 @@ not a layering mistake.
 | `mediaTranscoder.ts` | Executes a plan as a live fragmented-MP4 stream on loopback, plus embedded-subtitle extraction. |
 | `metadataProvider.ts` | TVmaze + AniList. **Catalogue metadata only, never streams.** Its key output is the IMDb id, which indexers match on far better than free text. |
 | `cinemeta.ts` | Stremio Cinemeta metadata provider, prioritised in search. |
+| `metadata/enrichmentService.ts` | Cast, crew, ratings, debut date and production notes, merged from four keyless catalogues. Push-shaped and cached; never on the playback path. See below. |
+| `metadata/merge.ts` | Merging what several catalogues say about one title. Pure and tested — every wrong answer here is silent and plausible. |
+| `metadata/wikidata.ts` | Cast **with characters** for film, plus crew, release date and box office. The keyless answer to the one thing TMDB is usually reached for. |
+| `metadata/tvmaze.ts` | Cast and crew with real photographs, for television. Two endpoints on a host the app already talks to and had never asked. |
+| `metadata/anilist.ts` | Characters, their voice actors in every language, and staff, for anime. Both name pairs in both scripts. |
+| `metadata/wikipedia.ts` | "Behind the scenes" prose. The article is a Wikidata sitelink, **never a search** — see below. |
+| `metadata/cinemetaExtras.ts` | The half of Cinemeta's reply the app already pays for and drops: director, writer, `released`, country, awards, trailers. |
+| `src/utils/metadataDisplay.ts` | Rendering rules for the above. Pure; owns the partial-date trap. |
 | `pluginManager.ts` | `.cs3` repository discovery, plugin-list parsing (mirrors upstream `RepositoryManager.kt`), download + SHA-256 verification, Android-style install paths, then hands archives to the sidecar. Also owns the enable/disable cascade — see the extensions-screen section. |
 | `cs3/providerLinks.ts` | Reads a provider's reply without guessing: link type, DRM, playlist parts, audio-track headers. Pure and tested — every wrong answer here looks like a bad provider rather than a bad routing decision. |
 | `pluginAnalyzer.ts` | Static compatibility classification of a plugin before it is trusted. |
@@ -2226,6 +2248,163 @@ count is stated with the rows one click away**, because a results page quietly
 shorter than the search found is indistinguishable from a search that found
 less — the same complaint, from the other direction.
 
+### The cast list was a row of names, and that was as far as it could go (2026-09-14)
+
+The detail page showed `detail.actors` as grey chips. That is upstream's shape —
+`LoadResponse.actors: string[]` — and it is not a UI shortcoming: **a `.cs3`
+provider is a site scraper**, so it knows the page it parsed and nothing else. It
+has no opinion about who directed the film, what an actor looks like, which
+character they played, or what IMDb's 900,000 voters thought. Widening
+`LoadResponse` would have added a dozen fields every provider in the corpus
+leaves undefined, and the page would look exactly as it does now.
+
+So extended metadata is a **second record on a second schedule**: the provider
+answers "what can I play", the catalogues answer "what is this", both keyed on
+the same title, merged at the edge. `electron/metadata/` owns the second half and
+`src/components/detail/TitleMetadata.tsx` draws it.
+
+**The key constraint eliminates most of the obvious answers.** The user must not
+have to obtain an API key — `cs3/discovery.ts` settled this for the home screen
+and it binds harder here, because a key embedded in a distributed GPL client is
+both a licence violation and a key that gets revoked, taking the feature from
+every user at once. That rules out TMDB, Trakt, OMDb, Fanart and TheTVDB as
+direct sources, which is most of what a search for "movie metadata API" returns.
+
+Four keyless sources survive, and each answers a different part:
+
+| Source | Answers | Covers |
+|---|---|---|
+| **Wikidata** (SPARQL, CC0) | cast **with characters**, crew, release date, box office, budget, awards, and the Wikipedia sitelink | film and TV |
+| **TVmaze** | cast and crew with real photographs, and the character's own artwork | television only |
+| **AniList** (GraphQL) | characters, their voice actors in every language, staff, studios — both name pairs in both scripts | anime |
+| **Cinemeta** | director, writer, `released`, country, awards, trailers, IMDb rating | film and TV |
+| **Wikipedia** (REST) | "behind the scenes" prose — production, filming, casting, legacy | anything with a sitelink |
+
+Wikidata is the one that made this worth building. Cinemeta's `cast` is
+`string[]` — names and nothing else — so before this the app could say Timothée
+Chalamet is in Dune and could not say he plays Paul Atreides. Wikidata models
+`P161` (cast member) as a *statement* carrying `P453` (character role) as a
+qualifier, so the performer and the part are one fact rather than two lists to be
+zipped together and got wrong. **Cinemeta is also the cheapest of the five**: the
+app already fetches that exact URL on every catalogue detail page and reads nine
+of its fields, so `cinemetaExtras.ts` is a new parse of a reply already paid for.
+
+#### Things that are load-bearing
+
+- **Nothing waits for this.** `metadata:getExtended` answers from cache at once
+  and `metadata:extendedUpdate` pushes a fuller record as each source lands —
+  push-shaped like `search:*` and `playback:*`, for the identical reason. Four
+  third-party hosts, the slowest measured in seconds; a blocking version would
+  make every detail page as slow as Wikidata's worst day.
+- **The enrichment is never on the playback path.** `metadataEnrichment` is
+  constructed beside `contentService` in `main.ts`, not inside it. Folding it
+  into `ContentService.load` would put four third-party APIs in front of a Play
+  press.
+- **The provider's own `actors` stays as the floor.** `TitleMetadata` takes
+  `fallbackActors` and renders the old chip list when nothing richer arrived.
+  Without that, enrichment would *replace* the names on every title the
+  catalogues do not cover rather than adding to them — a large part of this
+  corpus, since providers scrape sites rather than databases.
+- **Nothing renders until there is something to render** — not a skeleton, not an
+  empty heading. A "Cast" heading over a blank space reads as a lookup that
+  failed, and for a title nothing has an entry for that impression would be
+  permanent and wrong.
+- **Ratings are never normalised on ingest** (PRD-41 §11.5). Value plus
+  `scaleMin`/`scaleMax`, as published; `normalisedRating` scales at read time for
+  sorting only. Rotten Tomatoes' 91% rendered as "9.1/10" is a misquote, not a
+  unit conversion — and a zero answers `null`, because AniList sends
+  `averageScore: 0` for an unrated title and scaling it renders a real and
+  terrible score.
+- **The Wikipedia article is a sitelink, never a search.** A search for "Dune
+  production" finds an article, and whether it is about the 2021 film, the 1984
+  one, the novel or the desert is a guess — one that attaches the wrong film's
+  history to a page in well-written, entirely plausible prose. Wikidata's
+  `schema:about` asserts the identity. No sitelink, no prose; that costs coverage
+  on obscure titles and is the right trade. Same argument `cs3/titleEnricher.ts`
+  makes, one step further.
+- **Wikipedia attribution is a required field.** `ProductionNote.attribution`
+  carries the source, the deep link and the licence name, so nothing can
+  construct a note without one. The text is CC BY-SA; an attribution the UI can
+  forget to render is one it will eventually forget to render.
+- **Commons images are requested at a width.** `P18` resolves to
+  `Special:FilePath/<file>`, which serves the *original upload* — 3–8 MB for a
+  professional headshot, up to sixty of them, drawn at 96 pixels. `?width=` is
+  always appended and the raw URL never reaches the renderer. TVmaze's `medium`
+  is taken over `original` for the same reason.
+- **The native name is `P1559`, not a non-English `rdfs:label`.** Selecting a
+  label in another language returns one row *per language Wikidata holds*,
+  multiplying a 40-person cast by 90 and timing the query out.
+- **Spoiler tags never reach the page.** AniList marks them
+  (`isGeneralSpoiler`/`isMediaSpoiler`) and they are the one piece of metadata
+  that can actively ruin the thing the viewer came to watch.
+
+#### The merge, and why it is its own tested module
+
+`metadata/merge.ts` is pure and pinned by 34 cases, for the reason
+`ottPlatforms.ts` and `playedSource.ts` are: every wrong answer is silent and
+plausible. The two failure directions are not symmetric —
+
+| Too coarse | Too fine |
+|---|---|
+| The composer John Williams folds into the bit-part actor John Williams | One person from two sources becomes two rows |
+| Rare, wrong, and invisible | Common, harmless, and looks broken |
+
+— so the key is **name plus role class**, and two cast credits that *both* state
+a character and state different ones are treated as different people. Where only
+one source states a character there is no disagreement, and merging is right:
+that case is the whole point, since Wikidata has the character and TVmaze has the
+photograph. Characters compare by containment in either direction, because
+"Tony Stark" and "Tony Stark / Iron Man" are one role.
+
+**Source order in `assemble` is precedence order and is not arbitrary.** The
+sources carrying characters and photographs go first so their rows shape the
+list; the name-only sources fold onto them. Put Cinemeta first and the merged
+cast is ordered by the one source with no images.
+
+**A credit with no billing order is never given one.** Wikidata answers a SPARQL
+*set*, in planner order; treating a missing `order` as `0` scatters unbilled
+extras through the top of a list TVmaze had ordered correctly. `orderCredits`
+puts the unordered ones behind, stably.
+
+#### `empty` is not `failed`, and two bugs of mine proved why it matters
+
+Same distinction `providerAnalytics` draws. Wikidata genuinely has no entry for
+many 2024 streaming releases; reporting that as an error puts a red state on a
+page that is simply about an obscure title. So `MetadataSourceOutcome` carries
+`ok` / `empty` / `failed` / `skipped`, with the reason kept even though the page
+shows only one muted line.
+
+**That distinction is worthless if a source swallows its errors, and two of them
+did.** `lookupByImdb` caught everything and answered `null`; `fetchWikidata`
+settled both queries and returned an empty result whatever happened. The e2e
+harness caught both on its first run — reporting *Breaking Bad*, one of the
+best-covered series TVmaze holds, as "not a TVmaze title" while the host was
+answering 403, and every Wikidata row as `OK — 0 credits` against the same 403.
+An unreachable host would have reached the viewer as "this title has no cast
+recorded", with the real cause invisible in every diagnostic the app collects.
+Only a 404 is a null now, and a total Wikidata failure is raised. Pinned by
+`metadata-sources`, verified by mutation.
+
+**This is the same defect this repository keeps undoing** — `probeUrl`'s
+`res.resume()`, `BinarySetupModal` rendering a rejection as a friendly notice,
+`ensureProvidersLoaded` returning silently. A catch that reassures is worse than
+no catch.
+
+#### What has *not* been verified, and must not be claimed
+
+**No part of `electron/metadata/` has been run against a live host.** It was
+written in a cloud container whose egress proxy denies every third-party host
+(`connect_rejected`, 403 on CONNECT), so the queries, the properties and the
+response shapes are written from each API's documented contract and are
+*unverified*. That is the opposite of how every other adapter here was built.
+
+The parsers are pure and pinned by 90 cases against hand-built fixtures, which is
+real and is not the same claim. `tools/e2e/metadata-e2e.mjs` is what settles the
+rest, and it has to be run by someone on an ordinary network. Its gate is
+deliberately "did a cast list with characters come back", not "did a request
+succeed" — a mistyped SPARQL property returns a clean, empty 200, which is
+indistinguishable from a title nobody has heard of.
+
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 
 Run it before believing anything about extension health:
@@ -3613,6 +3792,44 @@ Language coverage is deliberate rather than decorative. Hindi releases are where
 cases cluster — dual-audio Matroska with per-language 5.1 AC-3/E-AC-3, 10-bit HEVC encodes,
 the multi-track files the audio-selection logic exists for — so a matrix of English titles
 alone reports a compatibility story that is true for half the catalogue.
+
+### 5.3 The metadata coverage harness — `tools/e2e/metadata-e2e.mjs`
+
+```
+node --experimental-strip-types tools/e2e/metadata-e2e.mjs
+node --experimental-strip-types tools/e2e/metadata-e2e.mjs --only wikidata
+node --experimental-strip-types tools/e2e/metadata-e2e.mjs --title tt1160419
+node --experimental-strip-types tools/e2e/metadata-e2e.mjs --json report.json
+```
+
+`provider-e2e.mjs` asks whether the extension corpus still runs and
+`native-engine-matrix.mjs` asks whether what it returns can be played. This asks
+the third question: **do the keyless catalogues actually answer, and is what
+comes back the shape the parsers expect?**
+
+It imports the shipping adapters rather than reimplementing the requests, for
+`native-engine-matrix.mjs`'s reason — and here that matters more than usual,
+because a wrong SPARQL property fails *silently as an empty result* rather than
+as an error. So the gate is that at least one source returned **cast with
+characters**, not that a request succeeded: a clean, empty 200 is exactly what a
+mistyped property produces, and it is indistinguishable at the transport layer
+from a title nobody has an entry for.
+
+Three fixtures, one per routing path — a film (Wikidata + Cinemeta), a series
+(TVmaze) and an anime (AniList, two scripts and voice actors) — and it prints,
+per source: status, latency, credits, how many carry a character, a photograph
+and a native name, then the merged result and five sample rows. The merged line
+is the one worth reading: it is the only place several real sources meet, so a
+duplicate there is a duplicate on screen.
+
+**It has already paid for itself once.** On its first run it exposed two
+swallowed-error bugs in the adapters it drives — see "`empty` is not `failed`"
+above. Both were invisible to the unit tests, because both produced a perfectly
+well-formed empty result.
+
+Run it before claiming anything about metadata coverage. Under a blocking egress
+proxy it correctly reports every source as `FAIL` with the real reason and exits
+1, which is the honest answer rather than a pass.
 
 ### When we cannot play it, hand it to something that can
 

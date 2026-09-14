@@ -22,6 +22,8 @@ import { Poster } from '../components/Poster';
 import { CopyErrorButton } from '../components/CopyErrorButton';
 import { ProviderRecoveryPanel } from '../components/ProviderRecoveryPanel';
 import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
+import { TitleMetadata } from '../components/detail/TitleMetadata';
+import type { ExtendedMetadata } from '../types/metadata';
 import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
 
 export interface PlaybackRequest {
@@ -227,6 +229,12 @@ export const DetailView: React.FC<DetailViewProps> = ({
   searchQuery,
 }) => {
   const [detail, setDetail] = useState<DetailData | null>(null);
+  /**
+   * Cast, crew, ratings and production notes. Null until something arrives, and
+   * the component draws nothing rather than a skeleton while it is — see
+   * `TitleMetadata` for why an empty heading is the wrong placeholder.
+   */
+  const [extended, setExtended] = useState<ExtendedMetadata | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [disabledProvider, setDisabledProvider] = useState<string | null>(null);
@@ -271,6 +279,17 @@ export const DetailView: React.FC<DetailViewProps> = ({
     widened: boolean;
   } | null>(null);
   const discoveryRef = useRef<string | null>(null);
+  /**
+   * The address currently on screen, readable from a subscription registered
+   * once.
+   *
+   * The enrichment listener must not be re-registered per title — an earlier
+   * version of `preload.ts` accumulated listeners on every remount, which reads
+   * as a handler firing five times rather than as an error — so it is mounted
+   * once with an empty dependency array and reads the current URL through this
+   * ref instead of closing over a stale one.
+   */
+  const detailUrlRef = useRef<string | null>(null);
   const [pendingEpisode, setPendingEpisode] = useState<Episode | null>(null);
   const [startingStream, setStartingStream] = useState(false);
   /** A confirmation that clears itself; `useFlash` explains what it replaced. */
@@ -461,6 +480,78 @@ export const DetailView: React.FC<DetailViewProps> = ({
   useEffect(() => {
     const dispose = window.cloudstream?.onDetailUpdate?.(({ url, detail: fresh }) => {
       setDetail((current) => (current && current.url === url ? (fresh as DetailData) : current));
+    });
+    return () => dispose?.();
+  }, []);
+
+  /**
+   * Cast, crew, ratings and production notes, fetched after the page is drawn.
+   *
+   * Deliberately *not* part of the `loadMedia` effect above. That one is on the
+   * path a Play press waits for; this asks four third-party catalogues, the
+   * slowest of which is measured in seconds, and folding it in would make every
+   * detail page as slow as Wikidata's worst day for information nobody is
+   * blocked on.
+   *
+   * Keyed on `detail.url` rather than `mediaItem.url`: a fallback route may
+   * have answered, and that is the address the enrichment cache is keyed by —
+   * the same correction the refresh effect above makes, for the same reason.
+   */
+  useEffect(() => {
+    const url = detail?.url;
+    detailUrlRef.current = url ?? null;
+    if (!url) {
+      setExtended(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    // Cleared on navigation, or the previous title's cast rail stays on screen
+    // under the new title's name for as long as the fetch takes — which is the
+    // kind of wrongness a viewer reads as the app having mixed up two films.
+    setExtended(null);
+
+    void (async () => {
+      const cached = await window.cloudstream?.peekExtendedMetadata?.(url);
+      if (cancelled) return;
+      // Drawn at once when it is already known, so revisiting a title has no
+      // second paint at all.
+      if (cached?.metadata) setExtended(cached.metadata);
+
+      const answer = await window.cloudstream?.getExtendedMetadata?.({
+        url,
+        ids: { imdb: detail?.imdbId },
+        type: detail?.type,
+        title: detail?.name,
+        year: detail?.year,
+      });
+      if (cancelled || !answer?.metadata) return;
+      setExtended(answer.metadata);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [detail?.url, detail?.imdbId, detail?.type, detail?.name, detail?.year]);
+
+  /**
+   * Fuller records arriving as each catalogue answers.
+   *
+   * The URL guard is what stops a slow source landing on a title the viewer has
+   * already navigated away from — the enrichment runs in the main process and
+   * outlives this component's mount.
+   */
+  useEffect(() => {
+    const dispose = window.cloudstream?.onExtendedMetadata?.((metadata) => {
+      setExtended((current) => {
+        if (metadata.url !== detailUrlRef.current) return current;
+        // A partial snapshot must never replace a complete one: the sources
+        // settle in whatever order the network allows, and a late `partial`
+        // emission would blank fields the final record had already filled.
+        if (current && !current.partial && metadata.partial) return current;
+        return metadata;
+      });
     });
     return () => dispose?.();
   }, []);
@@ -1268,25 +1359,18 @@ export const DetailView: React.FC<DetailViewProps> = ({
       )}
 
       {/*
-        Cast and related titles, from data the provider already sent.
+        Cast, crew, ratings and production notes.
 
-        Both fields cross the bridge on every `load` and were dropped at this
-        last step, so the page showed less than the scrape had already paid for.
-        Rendered only when non-empty: most providers send neither, and an empty
-        "Cast" heading reads as a failed lookup rather than an absent field.
+        `detail.actors` is what the provider itself sent — a flat `string[]`,
+        which is all upstream's `LoadResponse` can carry and all a site scraper
+        could fill in. It is passed as the floor rather than replaced: for a
+        title none of the keyless catalogues has an entry for, the page still
+        shows the names the scrape already paid for, exactly as it did before.
+        Everything above that floor — characters, photographs, the director,
+        the debut date, the production notes — comes from `metadata:*`, after
+        this page has already drawn.
       */}
-      {(detail.actors?.length ?? 0) > 0 && (
-        <section className="detail-facts">
-          <h2 className="detail-facts__heading">Cast</h2>
-          <ul className="detail-facts__people">
-            {detail.actors!.map((actor) => (
-              <li key={actor} className="detail-facts__person">
-                {actor}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <TitleMetadata metadata={extended} fallbackActors={detail.actors} />
 
       {(detail.recommendations?.length ?? 0) > 0 && onSelectMedia && (
         <section className="detail-facts">

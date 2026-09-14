@@ -25,6 +25,8 @@ import type {
 } from '../src/types/torrent';
 import type { OfficialRepository } from './officialRepositories';
 import type { MetadataDetail } from './metadataProvider';
+import type { ExtendedMetadata } from '../src/types/metadata';
+import type { EnrichmentRequest } from './metadata/enrichmentService';
 import type { SourceResponse, StreamAttempt } from './contentService';
 import type {
   ExtensionProvider,
@@ -199,6 +201,31 @@ export interface CloudStreamElectronAPI {
   onDetailUpdate: (
     callback: (payload: { url: string; detail: MetadataDetail }) => void
   ) => () => void;
+  /**
+   * Cast, crew, ratings, the debut date and production notes.
+   *
+   * Separate from {@link loadMedia} because it answers a different question and
+   * costs a different amount: `loadMedia` is what the app can play and a Play
+   * press waits for it, this is what the title *is* and nothing waits for it.
+   * Resolves at once with whatever is cached; the rest arrives through
+   * {@link onExtendedMetadata} as each of the four catalogues answers.
+   */
+  getExtendedMetadata: (
+    request: EnrichmentRequest
+  ) => Promise<Envelope & { metadata: ExtendedMetadata | null }>;
+  /**
+   * What is already cached, contacting nothing.
+   *
+   * A peek, so the caller can decide whether to draw a cast rail on first paint
+   * without that decision starting four requests.
+   */
+  peekExtendedMetadata: (
+    url: string
+  ) => Promise<Envelope & { metadata: ExtendedMetadata | null; stale: boolean }>;
+  /** Fires as each catalogue lands, with a fuller record. Returns a disposer. */
+  onExtendedMetadata: (callback: (metadata: ExtendedMetadata) => void) => () => void;
+  /** Drops every cached record. Returns how many there were. */
+  clearExtendedMetadata: () => Promise<Envelope & { cleared: number }>;
   getSources: (request: {
     mediaUrl: string;
     season?: number;
@@ -1692,6 +1719,10 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('api:recordTitleOutcome', url, kind, reason),
   loadMedia: (url) => ipcRenderer.invoke('api:loadMedia', url),
   onDetailUpdate: (callback) => subscribe('detail:update', callback),
+  getExtendedMetadata: (request) => ipcRenderer.invoke('metadata:getExtended', request),
+  peekExtendedMetadata: (url) => ipcRenderer.invoke('metadata:peekExtended', url),
+  onExtendedMetadata: (callback) => subscribe('metadata:extendedUpdate', callback),
+  clearExtendedMetadata: () => ipcRenderer.invoke('metadata:clearCache'),
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),
 
