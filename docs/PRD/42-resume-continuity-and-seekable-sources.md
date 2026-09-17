@@ -1,7 +1,7 @@
 # PRD-42 — Resume, continuity, and sources that cannot seek
 
-**Status:** proposed. Nothing in §6–§9 is built.
-**Written:** 2026-08-29
+**Status:** active / partially implemented. Core resume continuity (`resumePoint.ts`), series context progression (`seriesContext.ts`), played source memory (`cs3/playedSource.ts`), playback failure recovery (`playbackRecovery.ts`), Range header support (`mediaProxy.ts`), and verified download resume (`download/resumePlan.ts`, `resumeWindow.ts`) are built and verified by test suites.
+**Written:** 2026-08-29 · **Revised:** 2026-09-17
 **Supersedes:** nothing. **Depends on:** PRD-37 (inspect→decide→execute), PRD-38 (audio),
 the `MediaProxy` design in AGENTS.md §5, and `cs3/libraryStore.ts`'s existing progress model.
 
