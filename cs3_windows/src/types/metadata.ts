@@ -166,6 +166,29 @@ export const RatingKind = {
 export type RatingKind = (typeof RatingKind)[keyof typeof RatingKind];
 
 /**
+ * Where the work is in its life, normalised.
+ *
+ * Three sources publish this and all three spell it differently — Cinemeta says
+ * `"Ended"`, TVmaze says `"Running"`/`"Ended"`/`"To Be Determined"`, AniList
+ * says `FINISHED`/`RELEASING`/`NOT_YET_RELEASED`/`CANCELLED`/`HIATUS`. Passing
+ * whichever string arrived straight to the page would make one field read three
+ * ways depending on which catalogue answered, which is exactly the
+ * inconsistency this record exists to remove.
+ *
+ * `unknown` is deliberately absent: a status nobody published is `undefined`,
+ * and the row is not drawn. A chip reading "Unknown" is worse than no chip.
+ */
+export const TitleStatus = {
+  Upcoming: 'upcoming',
+  Ongoing: 'ongoing',
+  Ended: 'ended',
+  Released: 'released',
+  Cancelled: 'cancelled',
+  Hiatus: 'hiatus',
+} as const;
+export type TitleStatus = (typeof TitleStatus)[keyof typeof TitleStatus];
+
+/**
  * One published score, on its own scale.
  *
  * **Never normalised on the way in** (PRD-41 §11.5). IMDb is 0–10 to one
@@ -264,9 +287,47 @@ export interface ExtendedMetadata {
   /** Other names the work is known by — release names match these. */
   alternateTitles?: string[];
 
+  /**
+   * The catalogue's tagline.
+   *
+   * Carried because PRD-45 asks for it and because a provider that scrapes a
+   * site sometimes has one. **Nothing keyless publishes it**: it is absent from
+   * Cinemeta, TVmaze and AniList, and Wikidata's `P6338` is unset on every film
+   * checked. So this is filled from the provider or not at all, and the page
+   * simply omits the line — which is the honest outcome, and better than
+   * synthesising one out of the first sentence of the plot.
+   */
   tagline?: string;
   /** Long-form plot, where a source has one longer than the provider's. */
   plot?: string;
+
+  /**
+   * Cover art, when the *provider* had none.
+   *
+   * Never used in preference to the provider's own poster: a scraper that
+   * returned artwork returned artwork for the release the viewer is about to
+   * watch, and replacing it with a catalogue's canonical poster would silently
+   * change what the page is about for dubbed and regional cuts. This is the
+   * floor under a page that would otherwise draw a grey rectangle.
+   */
+  posterUrl?: string;
+
+  /**
+   * Genres, in a vocabulary a reader recognises.
+   *
+   * Cinemeta's and TVmaze's are already that (`Action`, `Crime`). Wikidata's
+   * are not — `P136` answers "action film" and "drama television series", which
+   * is a taxonomy rather than a label — so those stay in {@link keywords} and
+   * never reach this field. Measured on Dune: Part Two and Breaking Bad.
+   */
+  genres?: string[];
+
+  /** Where the work is in its life. See {@link TitleStatus}. */
+  status?: TitleStatus;
+  /** Series: how many seasons the catalogue lists. */
+  seasonCount?: number;
+  /** Series: how many episodes across every season. */
+  episodeCount?: number;
 
   /**
    * The debut the brief asked for: full ISO date, not just the year.

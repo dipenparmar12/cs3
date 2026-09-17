@@ -87,16 +87,52 @@ export interface SearchResponse {
 export interface SearchSuggestion {
   /** The catalogue's official title, which is what should be searched. */
   title: string;
+  /**
+   * The title in its original language, where it differs.
+   *
+   * Shown on the row, and matched against. Someone who types `shingeki` means
+   * *Attack on Titan* and the English title shares no bigram with what they
+   * typed, so without this the row they want cannot be scored above the rows
+   * they do not.
+   */
+  originalTitle?: string;
+  /**
+   * Other names the catalogues carry — romanisations, regional releases,
+   * franchise spellings. Matched against, never displayed: a row listing six
+   * aliases is a row nobody can read at a glance.
+   */
+  alternateTitles?: string[];
   year?: number;
   type?: TvType;
   posterUrl?: string;
   plot?: string;
   genres: string[];
+  /** Primary language of the work, where a catalogue publishes one. */
+  language?: string;
   /** Catalogue URL, so a suggestion can open the title directly. */
   url: string;
   imdbId?: string;
   /** Catalogues that independently returned this title. */
   sources: string[];
+}
+
+/**
+ * One delivery of autocomplete rows for one query.
+ *
+ * Push-shaped, for the reason `search:*` and `metadata:*` are: the three
+ * catalogues answer at very different speeds — measured, TVmaze and AniList in
+ * 170–270 ms and Cinemeta's two catalogue endpoints in 290–935 ms — so waiting
+ * for all three spends the fastest two on the slowest one. Rows are emitted as
+ * each source lands.
+ *
+ * `query` is echoed because a reply can outlive the keystroke that asked for
+ * it; the renderer drops anything that no longer names what is in the box.
+ */
+export interface SuggestionUpdate {
+  query: string;
+  suggestions: SearchSuggestion[];
+  /** False while a catalogue is still expected. */
+  done: boolean;
 }
 
 /**
