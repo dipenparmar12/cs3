@@ -6003,6 +6003,279 @@
 }
 .detail-facts__rail::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
 
+/* --- Detail page: extended metadata ----------------------------------------
+   Cast with photographs and characters, crew, ratings, and production notes,
+   from the keyless catalogues in `electron/metadata/`. This is what replaced a
+   row of grey name chips.
+
+   The whole block draws only when there is something in it — `TitleMetadata`
+   returns null otherwise — because an empty heading reads as a lookup that
+   failed, and a large part of this app's corpus is titles no catalogue has an
+   entry for. */
+
+/* A rail rather than a wrap, unlike `.detail-facts__people`: a cast list *is*
+   ordered — billing order is meaningful for the first dozen names — and the
+   cards are tall enough that wrapping forty of them would push the episode
+   list off the bottom of the page. */
+.credit-rail {
+  display: flex;
+  gap: 0.85rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.5rem;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+
+.credit-rail::-webkit-scrollbar { height: 7px; }
+.credit-rail::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+.credit-rail::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
+
+.credit-card {
+  flex: 0 0 auto;
+  width: 108px;
+  scroll-snap-align: start;
+  text-decoration: none;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.credit-card--link { cursor: pointer; }
+.credit-card--link:hover .credit-card__image { border-color: var(--accent-primary); }
+.credit-card--link:hover .credit-card__name { color: var(--accent-light); }
+
+/* A fixed 2:3 box so a rail of mixed portrait sources still lines up. Sources
+   here crop very differently — TVmaze publishes headshots, Wikidata resolves to
+   whatever photograph Commons holds, which is routinely a landscape red-carpet
+   shot — and `object-fit: cover` is what keeps one odd image from setting the
+   height of the whole row. */
+.credit-card__portrait {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-card);
+}
+
+.credit-card__image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  transition: var(--transition);
+}
+
+.credit-card__image--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: var(--text-subtle);
+  background: var(--bg-card-hover);
+}
+
+.credit-card__name {
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--text-main);
+  transition: var(--transition);
+}
+
+/* The original-language spelling. Smaller, but not muted to the point of
+   illegibility — for a large part of this catalogue it is the name the viewer
+   actually recognises, and treating it as a footnote to the romanisation gets
+   that backwards. */
+.credit-card__native {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: var(--text-muted);
+}
+
+.credit-card__character {
+  margin: 0.1rem 0 0;
+  font-size: 0.74rem;
+  line-height: 1.3;
+  color: var(--text-muted);
+}
+
+.credit-card__note {
+  margin: 0.1rem 0 0;
+  font-size: 0.68rem;
+  color: var(--text-subtle);
+}
+
+/* --- ratings --------------------------------------------------------------
+   Each chip states its own scale, because the values are not comparable: 91%
+   from Rotten Tomatoes beside 8.8/10 from IMDb is two different measurements,
+   and rendering them identically would imply they are one. */
+.metadata-ratings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+}
+
+.metadata-rating {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  text-decoration: none;
+  color: inherit;
+  transition: var(--transition);
+}
+
+.metadata-rating--link:hover {
+  border-color: var(--accent-primary);
+  background: var(--bg-card-hover);
+}
+
+.metadata-rating__value {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-main);
+  line-height: 1.1;
+}
+
+.metadata-rating__source {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-subtle);
+}
+
+.metadata-rating__votes {
+  font-size: 0.66rem;
+  color: var(--text-subtle);
+}
+
+/* --- facts ----------------------------------------------------------------
+   A two-column definition list that collapses to one at narrow widths. The
+   label column is fixed so the values line up; without that, "Box office" and
+   "Country" push their values to different x positions and the block reads as
+   unaligned rather than as a table. */
+.metadata-facts {
+  margin: 0 0 0.85rem;
+  display: grid;
+  gap: 0.3rem 1rem;
+}
+
+.metadata-facts--crew {
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.metadata-facts__row {
+  display: grid;
+  grid-template-columns: 8.5rem 1fr;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  align-items: baseline;
+}
+
+.metadata-facts__row dt {
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.metadata-facts__row dd {
+  margin: 0;
+  color: var(--text-main);
+}
+
+.metadata-awards { margin-top: 0.6rem; }
+
+/* --- production notes ------------------------------------------------------
+   Wikipedia prose, so the attribution below each block is a licence obligation
+   rather than a nicety — see `ProductionNote`, which makes it a required field
+   so it cannot be dropped in a later edit. */
+.metadata-notes {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.metadata-note {
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+}
+
+.metadata-note__heading {
+  margin: 0 0 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.metadata-note__text {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+
+.metadata-note__attribution {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+  font-size: 0.7rem;
+  color: var(--text-subtle);
+  text-decoration: none;
+}
+
+.metadata-note__attribution:hover {
+  color: var(--accent-light);
+  text-decoration: underline;
+}
+
+.metadata-more { margin-top: 0.75rem; }
+
+/* Stated, never raised. A catalogue being unreachable is not worth an error
+   state on a page the viewer opened to watch something — but it is the first
+   thing anyone needs to know when the cast list is thinner than expected. */
+.metadata-provenance {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 1.25rem 0 0;
+  font-size: 0.72rem;
+  color: var(--text-subtle);
+}
+
+.metadata-provenance__failed { color: var(--status-warning); }
+
+.detail-facts__pending {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-subtle);
+}
+
+@media (max-width: 640px) {
+  .metadata-facts__row { grid-template-columns: 1fr; gap: 0.1rem; }
+  .credit-card { width: 92px; }
+}
+
 /* --- Subtitle appearance ---------------------------------------------------
    Driven entirely by custom properties set on `.player` from stored
    preferences, because `::cue` cannot be reached from an inline style — the

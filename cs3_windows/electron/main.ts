@@ -50,6 +50,10 @@ import type {
 import type { MpvOpenRequest } from '../src/types/mpv';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
 import { OttService } from './cs3/ottService';
+import {
+  MetadataEnrichmentService,
+  type EnrichmentRequest,
+} from './metadata/enrichmentService';
 import { OttCatalogService } from './cs3/ottCatalog';
 import { TorrentImportService, classifyDroppedPath, looksLikeMagnet } from './torrent/torrentImport';
 import { parseReleaseName } from './torrent/releaseParser';
@@ -270,6 +274,20 @@ const extensionUpdater = new ExtensionUpdater(datastore, pluginManager);
 const torrentImports = new TorrentImportService(
   torrentEngine.metadata,
   app.getPath('userData')
+);
+
+/**
+ * Cast, crew, ratings and production notes, from the keyless catalogues.
+ *
+ * Constructed beside `contentService` rather than inside it, and that placement
+ * is the design: enrichment must never be on the path that decides what gets
+ * searched for or played. `ContentService.load` answers the question "what can
+ * I play"; this answers "what is this", on its own schedule, and a page renders
+ * from the first long before the second arrives.
+ */
+const metadataEnrichment = new MetadataEnrichmentService();
+metadataEnrichment.setListener((metadata) =>
+  mainWindow?.webContents.send('metadata:extendedUpdate', metadata)
 );
 
 const ottService = new OttService(pluginManager, datastore);
@@ -1402,6 +1420,9 @@ async function shutdownServices(): Promise<void> {
   // The ledger's write is debounced, and the failures worth keeping cluster at
   // shutdown — a session that ended badly is the one whose last seconds matter.
   issueLog.flush();
+  // Cast lists arrive over seconds and the write is debounced, so a viewer who
+  // opens a title and quits would otherwise re-fetch four hosts next launch.
+  metadataEnrichment.flush();
   mediaTranscoder.shutdown();
   contentService.shutdown();
   // Imported torrents are debounced to disk; without this the last few opens
@@ -2541,6 +2562,49 @@ ipcMain.handle('api:getSources', async (_, request: SourceQuery) => {
       indexerOutcomes: [],
       query: { title: '' },
     };
+  }
+});
+
+// --- extended metadata ---------------------------------------------------
+
+/*
+ * Cast, crew, ratings, the debut date and production notes, from the keyless
+ * catalogues. Deliberately its own namespace rather than part of `api:*`:
+ * `api:loadMedia` answers what the app can *play*, on the path a Play press
+ * waits for, and this answers what the title *is* — four third-party hosts, on
+ * a schedule nothing blocks on.
+ *
+ * Push-shaped for the same reason `search:*` is. `metadata:getExtended`
+ * answers at once with whatever is cached, and `metadata:extendedUpdate`
+ * carries a fuller record as each source lands. A request/response version
+ * would spend the slowest of four hosts' latency showing a spinner over data it
+ * already had.
+ */
+ipcMain.handle('metadata:getExtended', async (_, request: EnrichmentRequest) => {
+  try {
+    return { ok: true, metadata: await metadataEnrichment.enrich(request) };
+  } catch (error) {
+    return { ...fail(error), metadata: null };
+  }
+});
+
+/**
+ * What is already known, without contacting anything.
+ *
+ * A `peek`: the renderer uses it to decide whether to render a cast rail on
+ * first paint, and a read that started a fetch would make that decision have
+ * side effects.
+ */
+ipcMain.handle('metadata:peekExtended', async (_, url: string) => {
+  const hit = metadataEnrichment.peek(url);
+  return { ok: true, metadata: hit?.metadata ?? null, stale: hit?.stale ?? false };
+});
+
+ipcMain.handle('metadata:clearCache', async () => {
+  try {
+    return { ok: true, cleared: metadataEnrichment.clear() };
+  } catch (error) {
+    return { ...fail(error), cleared: 0 };
   }
 });
 
