@@ -199,7 +199,7 @@ Fallible handlers return an **envelope** `{ ok, error?, …payload }` and never 
 | Channel group | Shape & rules |
 |---|---|
 | `playback:*` | **Push.** `playback:start` returns a session id immediately; `playback:update` snapshots follow. Player renders from snapshots before a stream exists. |
-| `search:*` | **Push**, same reason. `search:start` → opening snapshot; `search:update` carries results/progress; `search:cancel` abandons the rest. 15 providers = 15 independent scrapes (Cinevood 20s vs ARD 350ms) — request/response would spend the whole time on a spinner. `api:searchAll` remains for callers needing a full answer. Required splitting `searchAll`'s single batched RPC into one RPC per provider (`searchEach`), capped at 8 in flight. |
+| `search:*` | **Push**, same reason. `search:start` → opening snapshot; `search:update` carries results/progress; `search:cancel` abandons the rest. `api:suggest` is push-shaped too: it answers instantly from cache with a `done` flag and `search:suggestUpdate` carries each catalogue as it lands — measured, the three answer 170–935ms apart, so one reply would spend the fastest two on the slowest. Main keeps **one** `AbortController` for it; a new keystroke aborts the previous fan-out. 15 providers = 15 independent scrapes (Cinevood 20s vs ARD 350ms) — request/response would spend the whole time on a spinner. `api:searchAll` remains for callers needing a full answer. Required splitting `searchAll`'s single batched RPC into one RPC per provider (`searchEach`), capped at 8 in flight. |
 | `pages:*` | **Read-shaped**, deliberately unlike the two above — the answer is already on disk. `getSnapshot/remember/setPinned`. **Capture is not exposed**; it happens in `ContentService.load`. |
 | `media:*` | `inspect` classifies without starting; **`prepare` is the only source of a playable URL**; `switchAudio/closeStream` drive a live session; `setCapabilities/getCodecProbes` carry renderer-measured decoder support; `getPlaybackDiagnostics` returns per-attempt telemetry. **No channel hands back an unclassified URL.** Provider-declared `isDash`/`drm` outrank the probe; DRM skips the probe entirely. |
 | `mpv:*` | `open` (prepared URL only), transport/track controls, `mpv:update` snapshots, `get/setPolicy`. No raw-link channel, same reason as `media:*`. |
@@ -242,7 +242,7 @@ rather than omitting the ones nothing serves.
 | `playbackSession.ts` | Owns one "user pressed play" interaction. Opens the player *before* a stream exists and streams discovery progress into it, so the viewer can start the best source found so far instead of waiting for the slowest indexer. Also owns in-player source switching and refresh. Retains the `SourceQuery`, which is what makes refresh possible without navigating back. |
 | `searchScope.ts` | Which sources a search may ask. **A selection is a strict filter, not a preference** — see below. |
 | `searchSession.ts` | One "the user pressed search" interaction. Push-shaped like `playback:*`: fans out per source, emits a snapshot as each answers, and can be cancelled. |
-| `searchSuggestions.ts` | Title autocomplete merged across Cinemeta + TVmaze + AniList, deduped on normalised title+year, misspelling-tolerant. Their blind spots do not overlap — see the file header for what was measured about each. |
+| `searchSuggestions.ts` | Title autocomplete merged across Cinemeta + TVmaze + AniList, deduped on normalised title+year, misspelling-tolerant. Their blind spots do not overlap — see the file header for what was measured about each. `instant()` is synchronous and answers from an exact or longest-prefix cache hit with no I/O; `suggest()` publishes per source and runs the genre lookup *behind* the answer. |
 | `searchHistory.ts` | Past search *queries* (not results — a cached result set goes stale silently), stored via the datastore so backups carry it. |
 | `sourceCache.ts` | Resolved sources, with expiry tracked **per source**: magnets never expire, provider links carry a deadline read from the URL (`Expires`/`exp`/JWT claim, case-insensitively) or a short TTL. A cache hit can be partially stale — good magnets beside dead links — and `read()` reports that split. |
 | `subtitleService.ts` | Online subtitle search via the keyless OpenSubtitles v3 Stremio addon, keyed by IMDb id. Converts SubRip to WebVTT, which is **not optional**: `<track>` rejects `.srt` silently. |
@@ -313,7 +313,7 @@ rather than omitting the ones nothing serves.
 | `playbackSession.ts` | One "Play" interaction; opens the player before a stream exists and streams discovery into it; owns in-player switching/refresh via a retained `SourceQuery`. |
 | `searchScope.ts` | Which sources a search may ask — a selection is a strict filter, not a preference. |
 | `searchSession.ts` | One "Search" interaction; push-shaped, fans out per source, cancellable. |
-| `searchSuggestions.ts` | Autocomplete: Cinemeta + TVmaze + AniList merged, deduped, misspelling-tolerant. |
+| `searchSuggestions.ts` | Autocomplete: Cinemeta + TVmaze + AniList merged, deduped, misspelling-tolerant. Instant from cache, progressive from the network, superseded runs aborted. |
 | `searchHistory.ts` | Past *queries* only — results go stale silently. |
 | `sourceCache.ts` | Per-source expiry: magnets never expire; provider links take a deadline from the URL (`Expires`/`exp`/JWT) or a short TTL. |
 | `subtitleService.ts` | Keyless OpenSubtitles v3 Stremio addon by IMDb id. SubRip→WebVTT is mandatory (`<track>` rejects `.srt` silently). |
@@ -1995,20 +1995,138 @@ Only a 404 is a null now, and a total Wikidata failure is raised. Pinned by
 `ensureProvidersLoaded` returning silently. A catch that reassures is worse than
 no catch.
 
-#### What has *not* been verified, and must not be claimed
+#### Verified against live hosts, 2026-09-17
 
-**No part of `electron/metadata/` has been run against a live host.** It was
-written in a cloud container whose egress proxy denies every third-party host
-(`connect_rejected`, 403 on CONNECT), so the queries, the properties and the
-response shapes are written from each API's documented contract and are
-*unverified*. That is the opposite of how every other adapter here was built.
+The section that stood here said no part of `electron/metadata/` had ever been
+run against a live host, because it was written in a cloud container whose
+egress proxy denied every third-party host. That is no longer true and the
+claim was the stale half of this file.
 
-The parsers are pure and pinned by 90 cases against hand-built fixtures, which is
-real and is not the same claim. `tools/e2e/metadata-e2e.mjs` is what settles the
-rest, and it has to be run by someone on an ordinary network. Its gate is
-deliberately "did a cast list with characters come back", not "did a request
-succeed" — a mistyped SPARQL property returns a clean, empty 200, which is
-indistinguishable from a title nobody has heard of.
+`node --experimental-strip-types tools/e2e/metadata-e2e.mjs` — **PASS, 3/3
+titles resolved a cast list with characters.** Per-source, measured:
+
+| Title | cinemeta | wikidata | tvmaze | anilist | wikipedia | merged |
+|---|---|---|---|---|---|---|
+| Dune (2021) | 606ms, 7 | 1553ms, 29 (14 characters, 22 photos) | n/a (a film) | — | 997ms, 5 sections | 33 credits |
+| Breaking Bad | 68ms, 4 | 11280ms, 60 | 1240ms, 56 | — | 898ms, 3 sections | 106 credits |
+| One Piece | — | — | — | 1038ms, 253 | — | 252 credits |
+
+Note Wikidata's **11.3 s** on Breaking Bad. That is the number the whole
+push-shaped design exists for, and it is why nothing on the detail page waits
+for this record.
+
+What is still *not* claimed: `tagline` is carried on `ExtendedMetadata` and
+**nothing keyless fills it**. It is absent from Cinemeta, TVmaze and AniList,
+and Wikidata's `P6338` came back unset on every film checked. It is filled from
+the provider or not at all, and the row is simply omitted.
+
+#### Every page gets the same metadata, because the id is resolved
+
+The complaint this answers is "some titles show everything and some show a row
+of names", and the cause was not the catalogues. **Four of the five sources are
+reached through an IMDb id**, and a `cs3ext://` page from a scraper routinely
+has none — the provider parsed a streaming site and the site never printed one.
+Those pages recorded four `skipped` outcomes and rendered nothing at all.
+
+`MetadataEnrichmentService` takes `TitleEnricher` and resolves the id from the
+title before asking anything. Measured live, from the raw release name
+`Dune Part Two 2024 2160p WEB-DL` with **no ids of any kind**: resolved to
+`tt15239678` and assembled genres, runtime 167, `US: PG-13`, Legendary Pictures,
+three countries, poster, backdrop, `2024-03-01`, an IMDb rating, 6 trailers and
+31 credits. Before, that page drew nothing.
+
+Four rules:
+
+- **Awaited, not raced.** Every source below it is addressed *by* the id, so the
+  fan-out cannot start first. `TitleEnricher` caches for a week.
+- **The resolver's conservatism is the safety.** A disagreeing year disqualifies
+  and the similarity bar is high; a wrong match does not degrade a page, it
+  replaces it with a different film's cast and nothing marks it as a guess.
+- **Anime resolves an AniList id the same way** (`searchAniListId`). An IMDb id
+  reaches Cinemeta and Wikidata and neither has characters, voice actors or
+  native names, which is the entire reason AniList is in the set.
+- **The provider's own answer always wins; enrichment is the floor.** Poster,
+  plot, runtime and original title fill gaps and never overwrite — a scraper
+  that returned artwork returned it for the *release* being watched, and a
+  canonical catalogue value would quietly change what the page is about for
+  dubbed cuts and re-edits.
+
+New fields on the record, with where each is measured from: `genres` (Cinemeta,
+TVmaze, AniList — **never Wikidata's `P136`**, which answers "action film" and
+"drama television series" and would put the word "film" on every chip),
+`status`, `seasonCount`/`episodeCount`, `runtimeMinutes`, `posterUrl`,
+`certifications` (`P1657`), `networks` (`P449` + TVmaze). `backdropUrl` had been
+fetched, cached and sent across the IPC boundary since this module was written
+and was **drawn by nothing** — `DetailHero` is the entry point it never had.
+
+**Organisations merge on the name.** Measured, TVmaze and Wikidata both answer
+`AMC` for Breaking Bad, and the first version of this rendered "AMC, AMC" under
+Network. `mergeOrganisations` is the `mergeStrings` rule for `Organisation[]`;
+`studios` had the same latent duplication and goes through it too.
+
+### The search box answers before the network does (2026-09-17)
+
+Reported as: autocomplete is too slow. Measured against the live endpoints
+rather than reasoned about, in milliseconds:
+
+| query | fan-out | the awaited enrich after it |
+|---|---|---|
+| `sp` | 935 | 388 |
+| `spi` | 437 | 187 |
+| `spider` | 290 | 52 |
+| `spidrman` | 696 | 315 |
+
+Plus a 250 ms renderer debounce, so the first row appeared **0.6–1.6 s** after
+the viewer stopped typing. Three faults, and the fan-out was the smallest:
+
+1. **The enrich was awaited.** Genre and plot on rows that were already correct,
+   already ordered and already carried a poster — holding back the whole list.
+2. **The fastest two sources waited for the slowest.** TVmaze answers in ~170 ms
+   and Cinemeta's movie catalogue in up to 935; `Promise.allSettled` paid the
+   935 every time.
+3. **Nothing was reused between keystrokes.** `spider` and `spiderm` share every
+   answer worth showing, and the second started from nothing.
+
+Measured after, typing `spider man` one character at a time: from the fourth
+character on, **every keystroke has rows in 0 ms** (`instant()`, synchronous, no
+I/O), and the network's first rows land at 36–430 ms. Debounce is 110 ms.
+
+Rules:
+
+- **`instant()` is synchronous and must stay so.** An `async` signature invites
+  a caller to await it beside the network call, which is how the latency it
+  removes got there. Exact cache hit, else longest cached *prefix* re-filtered,
+  else nothing — and a prefix answer is **never** `done`.
+- **One `AbortController` in `main.ts`.** A search box has one current query; a
+  new keystroke aborts the previous fan-out. Nine live scrapes against three
+  third-party hosts is what a typed title costs without it.
+- **A single character asks Cinemeta only.** It identifies nothing, so three
+  fan-outs per keystroke buy an unrankable list at triple the cost.
+- **`SOURCE_PRECEDENCE` is identity, not decoration.** Sources now publish as
+  they land, so `found` accumulates in *arrival* order; the merge keeps the
+  first candidate's title and URL, and that URL travels as `ExactMedia.url`.
+  Without a fixed order the same query names the same work differently between
+  runs — measured on *One Piece*, which Cinemeta spells `One Piece` and TVmaze
+  spells `One Piece!`.
+- **A prefix match is not charged for the untyped remainder.** Bigram overlap
+  scores `dune` against `Dune: Part Two` at 0.50 and against `Dune Drifter` at
+  0.67 — purely a length difference — and with the word-count penalty on top,
+  an obscure 2020 film outranked the film the query obviously meant while
+  Cinemeta had ranked the franchise 0, 1, 2 in the reply. Prefix matches floor
+  the similarity and skip the penalty, and `rankBonus` (the row's position in
+  its own catalogue) breaks the tie. Verified: `dune` now surfaces Part Two,
+  Part One and Part Three in that order, and `dune part two`, `breaking bad`,
+  `the office`, `inception`, `naruto` and `avatar` are unchanged.
+- **Matching is against every name a row answers to** — title, native title and
+  synonyms — and against the *collapsed* spelling, so `spiderman` matches
+  `Spider-Man`. Verified live: `spiderman`, `spidrman`, `Spider Man`,
+  `shingeki` (→ Attack on Titan), `brakin bad` and `atack on titn` all resolve.
+
+`electron/searchSuggestions.test.mts` (18 cases) pins it, mutation-verified:
+restoring the awaited enrich, the batched publish, the full single-character
+fan-out, the prefix cache, the source precedence and the prefix scoring each
+fail a test. The two ordering tests use a **gated** stub rather than a timer —
+a timing test for a latency fix passes on the machine that wrote it.
 
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 

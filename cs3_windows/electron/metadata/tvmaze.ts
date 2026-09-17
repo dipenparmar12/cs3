@@ -34,8 +34,12 @@ import {
   CreditRole,
   MetadataSource,
   type CreditPerson,
+  type Organisation,
+  type TitleRating,
+  type TitleStatus,
 } from '../../src/types/metadata.ts';
 import { classifyJob } from './merge.ts';
+import { normaliseStatus } from './cinemetaExtras.ts';
 
 const BASE = 'https://api.tvmaze.com';
 const TIMEOUT_MS = 12_000;
@@ -187,4 +191,136 @@ export async function fetchCredits(
     ...(cast.status === 'fulfilled' ? parseCast(cast.value) : []),
     ...(crew.status === 'fulfilled' ? parseCrew(crew.value) : []),
   ];
+}
+
+/**
+ * The facts on a show's own record, as opposed to the people on it.
+ *
+ * Measured against `/shows/169?embed[]=seasons` (Breaking Bad): `status`,
+ * `runtime` and `averageRuntime` in minutes, `genres`, `language`, `premiered`,
+ * `ended`, `network` (with its country) or `webChannel` for a streaming
+ * original, `image`, `rating.average` on a 0–10 scale, and the season list.
+ *
+ * This is the only keyless source in the set that answers **how many seasons
+ * and episodes** a series has without downloading an episode list: each season
+ * carries an `episodeOrder`, so the totals are a sum over five short objects
+ * rather than over sixty-two long ones.
+ *
+ * `seasons` is embedded rather than fetched separately because it is the same
+ * request either way and TVmaze publishes a rate limit worth respecting.
+ */
+export interface TvMazeShowFacts {
+  status?: TitleStatus;
+  runtimeMinutes?: number;
+  genres: string[];
+  language?: string;
+  premiered?: string;
+  ended?: string;
+  networks: Organisation[];
+  countries: string[];
+  posterUrl?: string;
+  ratings: TitleRating[];
+  seasonCount?: number;
+  episodeCount?: number;
+}
+
+interface TvMazeNetwork {
+  name?: string;
+  officialSite?: string | null;
+  country?: { name?: string; code?: string } | null;
+}
+
+interface TvMazeSeason {
+  episodeOrder?: number | null;
+  premiereDate?: string | null;
+}
+
+export interface TvMazeShow {
+  status?: string;
+  runtime?: number | null;
+  averageRuntime?: number | null;
+  genres?: string[];
+  language?: string | null;
+  premiered?: string | null;
+  ended?: string | null;
+  officialSite?: string | null;
+  network?: TvMazeNetwork | null;
+  webChannel?: TvMazeNetwork | null;
+  image?: TvMazeImage | null;
+  rating?: { average?: number | null } | null;
+  _embedded?: { seasons?: TvMazeSeason[] };
+}
+
+/** A show record to facts. Pure; the fetch is separate so this can be tested. */
+export function parseShowFacts(show: TvMazeShow | null | undefined): TvMazeShowFacts {
+  const empty: TvMazeShowFacts = { genres: [], networks: [], countries: [], ratings: [] };
+  if (!show) return empty;
+
+  const broadcaster = show.network ?? show.webChannel ?? null;
+  const networks: Organisation[] = broadcaster?.name
+    ? [{ name: broadcaster.name, url: broadcaster.officialSite || undefined }]
+    : [];
+
+  /**
+   * A season with no `episodeOrder` is one TVmaze has not finished recording —
+   * routine for a show currently airing. Counting it as zero understates the
+   * total, so the count is only published when *every* season has one; a number
+   * that is quietly wrong is worse here than no number, because nothing on the
+   * page marks it as an estimate.
+   */
+  const seasons = show._embedded?.seasons ?? [];
+  const orders = seasons.map((season) => season.episodeOrder ?? null);
+  const episodeCount = orders.every((order) => typeof order === 'number')
+    ? orders.reduce((total: number, order) => total + (order as number), 0)
+    : undefined;
+
+  const average = show.rating?.average;
+
+  return {
+    status: normaliseStatus(show.status),
+    // `runtime` is the slot length and `averageRuntime` is what episodes
+    // actually run to; the second is the more useful of the two and the first
+    // is the fallback, because a show with one episode has no average.
+    runtimeMinutes: show.averageRuntime ?? show.runtime ?? undefined,
+    genres: show.genres ?? [],
+    language: show.language || undefined,
+    premiered: show.premiered || undefined,
+    ended: show.ended || undefined,
+    networks,
+    countries: broadcaster?.country?.name ? [broadcaster.country.name] : [],
+    posterUrl: thumbnail(show.image),
+    ratings:
+      typeof average === 'number' && Number.isFinite(average)
+        ? [
+            {
+              source: MetadataSource.TvMaze,
+              kind: 'user',
+              value: average,
+              scaleMin: 0,
+              scaleMax: 10,
+            },
+          ]
+        : [],
+    seasonCount: seasons.length || undefined,
+    episodeCount: episodeCount || undefined,
+  };
+}
+
+/**
+ * One show's facts, seasons embedded.
+ *
+ * Raises rather than answering an empty record, for `lookupByImdb`'s reason:
+ * this is called only for a show id TVmaze has already confirmed, so a failure
+ * here is a transport failure and reporting it as "this series has nothing
+ * recorded" would hide the one fact a diagnosis needs.
+ */
+export async function fetchShowFacts(
+  showId: number | string,
+  signal?: AbortSignal
+): Promise<TvMazeShowFacts> {
+  const show = await fetchJson<TvMazeShow>(
+    `${BASE}/shows/${encodeURIComponent(String(showId))}?embed[]=seasons`,
+    { signal, timeoutMs: TIMEOUT_MS, retries: 0 }
+  );
+  return parseShowFacts(show);
 }

@@ -1,6 +1,6 @@
-import { fetchJson } from '../torrent/http';
-import { TvType, type SearchResponse } from '../../src/types/api';
-import { normaliseTitleForMatch, titleSimilarity } from '../torrent/releaseParser';
+import { fetchJson } from '../torrent/http.ts';
+import { TvType, type SearchResponse } from '../../src/types/api.ts';
+import { normaliseTitleForMatch, titleSimilarity } from '../torrent/releaseParser.ts';
 
 /**
  * Turns a provider's release name into the title it is actually about.

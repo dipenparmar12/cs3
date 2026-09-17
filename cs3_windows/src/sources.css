@@ -749,6 +749,39 @@
 
 .detail-hero--v2 { align-items: flex-start; }
 
+/* The backdrop sits behind the masthead and nothing else.
+
+   Two rules make it decoration rather than a problem. It is `position:
+   absolute` inside a `position: relative` header, so it adds no height and
+   cannot push the page around when the image is slow or never arrives. And it
+   is masked to nothing at the bottom, because the text below it has to stay
+   legible against artwork this app has no control over — a light frame behind
+   white type is otherwise unreadable, and the page would look broken on
+   exactly the titles with the best artwork. */
+.detail-hero--backdrop {
+  position: relative;
+  isolation: isolate;
+  padding-top: 1.25rem;
+}
+
+.detail-hero__backdrop {
+  position: absolute;
+  inset: -1.5rem -1.5rem auto;
+  height: 320px;
+  z-index: -1;
+  background-position: center 22%;
+  background-size: cover;
+  background-repeat: no-repeat;
+  opacity: 0.32;
+  border-radius: 14px;
+  /* Faded out downward rather than overlaid with a scrim: a scrim needs a
+     colour that matches the page background, and this app has one theme today
+     and should not grow a second place that assumes it. */
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0) 92%);
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0) 92%);
+  pointer-events: none;
+}
+
 /* The artwork *is* the play control. A button rather than an image with a
    handler, so it is focusable and announces itself. */
 .detail-art {
@@ -2456,6 +2489,25 @@
   color: var(--text-muted);
   flex-shrink: 0;
 }
+.search-suggest__lang {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-subtle);
+  flex-shrink: 0;
+}
+
+/* The native spelling. Legible rather than a footnote: for a large part of this
+   catalogue it is the name the viewer actually recognises. */
+.search-suggest__original {
+  margin-top: 0.05rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .search-suggest__genres { margin-top: 0.1rem; font-size: 0.68rem; color: var(--accent-light); }
 .search-suggest__plot {
   margin: 0.15rem 0 0;
@@ -6161,6 +6213,16 @@
 .metadata-rating__votes {
   font-size: 0.66rem;
   color: var(--text-subtle);
+}
+
+/* Genres the provider did not supply. Chips rather than a fact row: they are
+   a set with no order and no label worth repeating, and the hero above already
+   draws the provider's own tags in exactly this shape. */
+.metadata-genres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.85rem;
 }
 
 /* --- facts ----------------------------------------------------------------

@@ -1,6 +1,6 @@
-import { fetchJson, fetchText } from './torrent/http';
+import { fetchJson, fetchText } from './torrent/http.ts';
 import { anilistQuery } from './anilist.ts';
-import { TvType, type Episode, type LoadResponse, type SearchResponse } from '../src/types/api';
+import { TvType, type Episode, type LoadResponse, type SearchResponse } from '../src/types/api.ts';
 
 /**
  * Catalogue metadata — titles, posters, plots, episode lists, IMDb ids.

@@ -7,10 +7,13 @@ import {
   answeringSources,
   describeCredit,
   failedSources,
+  formatCertifications,
   formatMoney,
   formatRating,
   formatReleaseDate,
   formatRuntimeMinutes,
+  formatSeasonCount,
+  formatStatus,
   formatVotes,
   groupCredits,
   hasAnything,
@@ -52,6 +55,13 @@ interface TitleMetadataProps {
   metadata: ExtendedMetadata | null;
   /** Fallback names from the provider's own `LoadResponse.actors`. */
   fallbackActors?: string[];
+  /**
+   * Genres the hero is already showing, so this section does not repeat them.
+   *
+   * Passed in rather than read from the metadata record: the hero draws the
+   * *provider's* tags, and only the caller knows which those were.
+   */
+  providerTags?: string[];
 }
 
 /** Cast shown before "Show all". Two rows on a typical window. */
@@ -133,7 +143,11 @@ const NoteBlock: React.FC<{ note: ProductionNote }> = ({ note }) => (
   </article>
 );
 
-export const TitleMetadata: React.FC<TitleMetadataProps> = ({ metadata, fallbackActors }) => {
+export const TitleMetadata: React.FC<TitleMetadataProps> = ({
+  metadata,
+  fallbackActors,
+  providerTags,
+}) => {
   const [castExpanded, setCastExpanded] = useState(false);
   const [notesExpanded, setNotesExpanded] = useState(false);
 
@@ -148,17 +162,47 @@ export const TitleMetadata: React.FC<TitleMetadataProps> = ({ metadata, fallback
    * leaking through.
    */
   const crewGroups = useMemo(() => {
-    const order = ['Director', 'Screenplay', 'Writer', 'Producer', 'Composer', 'Director of Photography'];
-    const byJob = new Map<string, CreditPerson[]>();
+    const order = [
+      // "Creator" first for a series, where it is the credit the show is known
+      // by; films have none, so it costs nothing there. Without it the job
+      // sorts unranked behind twelve varieties of producer and is cut by the
+      // slice below — measured on Breaking Bad's TVmaze crew.
+      'Creator',
+      'Director',
+      'Screenplay',
+      'Writer',
+      'Producer',
+      'Executive Producer',
+      'Composer',
+      'Music',
+      'Director of Photography',
+    ];
+    /**
+     * Grouped case-insensitively, because the sources disagree about capitals.
+     *
+     * Measured on Breaking Bad: Wikidata's query binds `Director of
+     * Photography` and TVmaze's `type` is `Director Of Photography`. Keyed on
+     * the raw string those are two jobs, and the crew line drew the same credit
+     * twice under two spellings of one label. The first spelling seen is the
+     * one shown, and a person is listed once per job however many sources
+     * named them in it.
+     */
+    const byJob = new Map<string, { label: string; people: CreditPerson[] }>();
     for (const person of crew) {
       const job = person.job?.trim();
       if (!job) continue;
-      byJob.set(job, [...(byJob.get(job) ?? []), person]);
+      const key = job.toLowerCase();
+      const group = byJob.get(key) ?? { label: job, people: [] };
+      if (!group.people.some((existing) => existing.name === person.name)) {
+        group.people.push(person);
+      }
+      byJob.set(key, group);
     }
-    return [...byJob.entries()]
+    return [...byJob.values()]
+      .map((group) => [group.label, group.people] as const)
       .sort((a, b) => {
-        const ai = order.indexOf(a[0]);
-        const bi = order.indexOf(b[0]);
+        const ai = order.findIndex((job) => job.toLowerCase() === a[0].toLowerCase());
+        const bi = order.findIndex((job) => job.toLowerCase() === b[0].toLowerCase());
         // Unranked jobs keep their own order behind the ranked ones, rather
         // than sorting to the front on `indexOf`'s -1.
         return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
@@ -171,19 +215,40 @@ export const TitleMetadata: React.FC<TitleMetadataProps> = ({ metadata, fallback
     [metadata?.production, metadata?.trivia]
   );
 
+  /**
+   * The About table, in the order a viewer reads it.
+   *
+   * Every row is conditional, and that is the whole rule this block follows:
+   * a label with nothing beside it is worse than an absent label, because it
+   * states that something should be there. Ordered by how often the answer is
+   * the one someone came for — when it came out, how long it is, how much of it
+   * there is — rather than by which catalogue supplies it.
+   */
   const facts = useMemo(() => {
     const rows: Array<{ label: string; value: string }> = [];
     const released = formatReleaseDate(metadata?.releaseDate);
     // "Released" rather than "Year": the point of carrying a full date is that
     // it answers when the film actually came out, which a year does not.
     if (released) rows.push({ label: 'Released', value: released });
+    const status = formatStatus(metadata?.status);
+    if (status) rows.push({ label: 'Status', value: status });
     const runtime = formatRuntimeMinutes(metadata?.runtimeMinutes);
     if (runtime) rows.push({ label: 'Runtime', value: runtime });
+    const episodes = formatSeasonCount(metadata?.seasonCount, metadata?.episodeCount);
+    if (episodes) rows.push({ label: 'Episodes', value: episodes });
+    const certification = formatCertifications(metadata?.certifications);
+    if (certification) rows.push({ label: 'Rated', value: certification });
     if (metadata?.countries?.length) {
       rows.push({ label: 'Country', value: metadata.countries.slice(0, 3).join(', ') });
     }
     if (metadata?.spokenLanguages?.length) {
       rows.push({ label: 'Language', value: metadata.spokenLanguages.slice(0, 3).join(', ') });
+    }
+    // Network and studio are separate rows rather than one "Studio" row: for a
+    // series they answer different questions — who made it and who showed it —
+    // and merging them attributes an AMC broadcast to Sony Pictures Television.
+    if (metadata?.networks?.length) {
+      rows.push({ label: 'Network', value: metadata.networks.slice(0, 3).map((n) => n.name).join(', ') });
     }
     if (metadata?.studios?.length) {
       rows.push({ label: 'Studio', value: metadata.studios.slice(0, 3).map((s) => s.name).join(', ') });
@@ -194,6 +259,19 @@ export const TitleMetadata: React.FC<TitleMetadataProps> = ({ metadata, fallback
     if (revenue) rows.push({ label: 'Box office', value: revenue });
     return rows;
   }, [metadata]);
+
+  /**
+   * Genres the provider did not supply.
+   *
+   * The hero already draws `detail.tags`, so repeating a genre the provider
+   * gave would put the same chip on the page twice. These are the ones only the
+   * catalogues knew — which for a scraped page is usually all of them, and for
+   * a Cinemeta page is usually none.
+   */
+  const extraGenres = useMemo(() => {
+    const known = new Set((providerTags ?? []).map((tag) => tag.trim().toLowerCase()));
+    return (metadata?.genres ?? []).filter((genre) => !known.has(genre.trim().toLowerCase()));
+  }, [metadata?.genres, providerTags]);
 
   /**
    * The provider's own flat name list, when nothing richer arrived.
@@ -230,9 +308,19 @@ export const TitleMetadata: React.FC<TitleMetadataProps> = ({ metadata, fallback
 
   return (
     <>
-      {(metadata.ratings?.length || facts.length > 0) && (
+      {(metadata.ratings?.length || facts.length > 0 || extraGenres.length > 0) && (
         <section className="detail-facts">
           <h2 className="detail-facts__heading">About</h2>
+
+          {extraGenres.length > 0 && (
+            <div className="metadata-genres">
+              {extraGenres.slice(0, 8).map((genre) => (
+                <span key={genre} className="badge badge--muted">
+                  {genre}
+                </span>
+              ))}
+            </div>
+          )}
 
           {metadata.ratings && metadata.ratings.length > 0 && (
             <div className="metadata-ratings">

@@ -3,9 +3,16 @@ import assert from 'node:assert/strict';
 
 import { setHttpFetch } from '../torrent/http.ts';
 import { parseCredits, parseFacts, commonsThumbnail, entityPageUrl, fetchWikidata } from './wikidata.ts';
-import { parseCast, parseCrew, lookupByImdb } from './tvmaze.ts';
+import { parseCast, parseCrew, lookupByImdb, parseShowFacts } from './tvmaze.ts';
 import { parseAniList, aniListDate } from './anilist.ts';
-import { parseCinemetaExtras, asList, splitAwards, parseImdbRating } from './cinemetaExtras.ts';
+import {
+  parseCinemetaExtras,
+  asList,
+  splitAwards,
+  parseImdbRating,
+  parseRuntimeMinutes,
+  normaliseStatus,
+} from './cinemetaExtras.ts';
 import { articleTitleFromUrl, buildNotes, parseSections, truncateAtSentence } from './wikipedia.ts';
 import { CreditRole, MetadataSource } from '../../src/types/metadata.ts';
 
@@ -541,4 +548,154 @@ test('two genuinely different people are not deduplicated by their label', () =>
     },
   });
   assert.equal(credits.length, 2);
+});
+
+// --- the facts each catalogue publishes about the work itself --------------
+//
+// Field names below were read off live responses while this was written —
+// `runtime: "167 min"` and `status: "Ended"` from Cinemeta, `averageRuntime`
+// and `_embedded.seasons[].episodeOrder` from TVmaze — so these pin the
+// parsing of shapes that were measured rather than assumed.
+
+test('a runtime is minutes, and prose that is not a runtime answers nothing', () => {
+  assert.equal(parseRuntimeMinutes('167 min'), 167);
+  assert.equal(parseRuntimeMinutes('49 min'), 49);
+  assert.equal(parseRuntimeMinutes('60'), 60);
+  assert.equal(parseRuntimeMinutes(undefined), undefined);
+  // `NaN` survives every downstream check and renders as an empty row, which is
+  // the failure `parseImdbRating` was already fixed for.
+  assert.equal(parseRuntimeMinutes('N/A'), undefined);
+  assert.equal(parseRuntimeMinutes(''), undefined);
+});
+
+test('three catalogues spell one status three ways and answer as one', () => {
+  assert.equal(normaliseStatus('Ended'), 'ended');
+  assert.equal(normaliseStatus('FINISHED'), 'ended');
+  assert.equal(normaliseStatus('Running'), 'ongoing');
+  assert.equal(normaliseStatus('Continuing'), 'ongoing');
+  assert.equal(normaliseStatus('RELEASING'), 'ongoing');
+  assert.equal(normaliseStatus('CANCELLED'), 'cancelled');
+});
+
+test('a status nobody here has seen is nothing, never a guess', () => {
+  // TVmaze's real answer for a show whose future is undecided. A chip invented
+  // from it would state something no catalogue said.
+  assert.equal(normaliseStatus('To Be Determined'), undefined);
+  assert.equal(normaliseStatus(''), undefined);
+  assert.equal(normaliseStatus(undefined), undefined);
+});
+
+test('season and episode counts come from the episode list, specials excluded', () => {
+  const extras = parseCinemetaExtras({
+    id: 'tt0903747',
+    runtime: '49 min',
+    status: 'Ended',
+    genres: ['Crime', 'Drama'],
+    poster: 'https://example.invalid/bb.jpg',
+    videos: [
+      { season: 1, number: 1 },
+      { season: 1, number: 2 },
+      { season: 2, number: 1 },
+      // The specials shelf. Counting it would report three seasons for a show
+      // that ran two, which reads as a data error rather than as a choice.
+      { season: 0, number: 1 },
+    ],
+  });
+
+  assert.equal(extras.seasonCount, 2);
+  assert.equal(extras.episodeCount, 3);
+  assert.equal(extras.runtimeMinutes, 49);
+  assert.equal(extras.status, 'ended');
+  assert.deepEqual(extras.genres, ['Crime', 'Drama']);
+  assert.equal(extras.posterUrl, 'https://example.invalid/bb.jpg');
+});
+
+test('a film has no season counts rather than zeroes', () => {
+  // `0` is falsy and would render as an absent row either way, but storing it
+  // makes "no episodes recorded" indistinguishable from "this is a film".
+  const extras = parseCinemetaExtras({ id: 'tt15239678', runtime: '167 min' });
+  assert.equal(extras.seasonCount, undefined);
+  assert.equal(extras.episodeCount, undefined);
+  assert.equal(extras.status, undefined);
+});
+
+test('a show record yields its network, status, runtime and counts', () => {
+  const facts = parseShowFacts({
+    status: 'Ended',
+    runtime: 60,
+    averageRuntime: 47,
+    genres: ['Drama', 'Crime'],
+    language: 'English',
+    premiered: '2008-01-20',
+    ended: '2013-09-29',
+    network: { name: 'AMC', country: { name: 'United States', code: 'US' }, officialSite: null },
+    image: { medium: 'https://example.invalid/m.jpg', original: 'https://example.invalid/o.jpg' },
+    rating: { average: 9.2 },
+    _embedded: { seasons: [{ episodeOrder: 7 }, { episodeOrder: 13 }] },
+  });
+
+  // `averageRuntime` is what episodes actually run to; `runtime` is the slot.
+  assert.equal(facts.runtimeMinutes, 47);
+  assert.equal(facts.status, 'ended');
+  assert.deepEqual(facts.networks, [{ name: 'AMC', url: undefined }]);
+  assert.deepEqual(facts.countries, ['United States']);
+  assert.equal(facts.seasonCount, 2);
+  assert.equal(facts.episodeCount, 20);
+  assert.equal(facts.ratings[0]?.value, 9.2);
+  assert.equal(facts.ratings[0]?.scaleMax, 10);
+  // The medium upload, not the original — a cast rail draws these at 96px.
+  assert.equal(facts.posterUrl, 'https://example.invalid/m.jpg');
+});
+
+test('a season TVmaze has not finished recording suppresses the episode count', () => {
+  // Routine for a show currently airing. Treating the unknown season as zero
+  // understates the total, and nothing on the page would mark it an estimate.
+  const facts = parseShowFacts({
+    status: 'Running',
+    _embedded: { seasons: [{ episodeOrder: 10 }, { episodeOrder: null }] },
+  });
+
+  assert.equal(facts.seasonCount, 2, 'the seasons themselves are known');
+  assert.equal(facts.episodeCount, undefined);
+  assert.equal(facts.status, 'ongoing');
+});
+
+test('a streaming original credits its web channel as the network', () => {
+  const facts = parseShowFacts({
+    network: null,
+    webChannel: { name: 'Netflix', country: null, officialSite: 'https://netflix.invalid' },
+  });
+  assert.deepEqual(facts.networks, [{ name: 'Netflix', url: 'https://netflix.invalid' }]);
+  assert.deepEqual(facts.countries, []);
+});
+
+test('an unrated show publishes no rating rather than a zero', () => {
+  const facts = parseShowFacts({ rating: { average: null } });
+  assert.deepEqual(facts.ratings, []);
+});
+
+test('the MPA rating and the broadcaster come back off the facts row', () => {
+  // Measured live: `P1657` answers "PG-13" for Dune: Part Two and `P449`
+  // answers "AMC" for Breaking Bad.
+  const facts = parseFacts({
+    results: {
+      bindings: [
+        {
+          item: { value: 'http://www.wikidata.org/entity/Q1079' },
+          certs: { value: 'PG-13' },
+          broadcasters: { value: 'AMC' },
+          genres: { value: 'drama television series|crime television series' },
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(facts?.certifications, ['PG-13']);
+  assert.deepEqual(facts?.networks, [{ name: 'AMC' }]);
+  // Wikidata's genre vocabulary names the medium in every entry, so it stays in
+  // `keywords` — as a genre row it would put "television series" on every chip.
+  assert.deepEqual(facts?.keywords, [
+    'drama television series',
+    'crime television series',
+  ]);
 });

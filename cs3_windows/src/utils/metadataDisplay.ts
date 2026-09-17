@@ -34,6 +34,7 @@ import {
   type ExtendedMetadata,
   type MetadataSourceOutcome,
   type TitleRating,
+  type TitleStatus,
 } from '../types/metadata.ts';
 
 const MONTHS = [
@@ -253,8 +254,70 @@ export function hasAnything(metadata: ExtendedMetadata | null | undefined): bool
       metadata.releaseDate ||
       metadata.budget ||
       metadata.revenue ||
-      metadata.studios?.length
+      metadata.studios?.length ||
+      metadata.genres?.length ||
+      metadata.networks?.length ||
+      metadata.certifications?.length ||
+      metadata.runtimeMinutes ||
+      metadata.status ||
+      metadata.seasonCount ||
+      metadata.episodeCount ||
+      metadata.countries?.length ||
+      metadata.spokenLanguages?.length
   );
+}
+
+/**
+ * A status to the word a viewer would use.
+ *
+ * `released` is deliberately **not** rendered for a film: every film on the
+ * page is released, so the chip carries no information and costs a row. It is
+ * kept in the record because a catalogue publishing it is a fact, and because
+ * an upcoming title flips to it — the absence on screen is a display decision,
+ * not a gap in the data.
+ */
+export function formatStatus(status: TitleStatus | undefined): string | null {
+  switch (status) {
+    case 'ongoing':
+      return 'Ongoing';
+    case 'ended':
+      return 'Ended';
+    case 'cancelled':
+      return 'Cancelled';
+    case 'hiatus':
+      return 'On hiatus';
+    case 'upcoming':
+      return 'Not yet released';
+    default:
+      return null;
+  }
+}
+
+/** `3 seasons · 62 episodes`, or whichever half is known. */
+export function formatSeasonCount(
+  seasons: number | undefined,
+  episodes: number | undefined
+): string | null {
+  const parts: string[] = [];
+  if (seasons && seasons > 0) parts.push(`${seasons} season${seasons === 1 ? '' : 's'}`);
+  if (episodes && episodes > 0) parts.push(`${episodes} episode${episodes === 1 ? '' : 's'}`);
+  return parts.length ? parts.join(' · ') : null;
+}
+
+/**
+ * `US: PG-13`, and never a bare `PG-13`.
+ *
+ * A certification without its country is unreadable rather than merely terse:
+ * `15` is a BBFC rating in the UK and means nothing in the US, and `R` differs
+ * between the MPA and several national boards. The country is what makes the
+ * symbol resolvable.
+ */
+export function formatCertifications(
+  certifications: ExtendedMetadata['certifications']
+): string | null {
+  const rows = (certifications ?? []).filter((entry) => entry.rating?.trim());
+  if (rows.length === 0) return null;
+  return rows.map((entry) => `${entry.country}: ${entry.rating}`).join(', ');
 }
 
 /**

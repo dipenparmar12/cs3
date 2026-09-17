@@ -74,6 +74,20 @@ interface DetailHeroProps {
   year?: number;
   type: string;
   posterUrl?: string;
+  /**
+   * Wide artwork behind the masthead.
+   *
+   * Cinemeta has published a `background` for every title checked and the
+   * enrichment record has carried it since that module was written — it was
+   * fetched, cached, sent across the IPC boundary and drawn by nothing. This is
+   * the entry point it never had.
+   *
+   * Decorative, so it is a background rather than an `<img>`: it carries no
+   * information the page does not already state in words, and announcing it to
+   * a screen reader would put "backdrop image" between the title and the play
+   * control.
+   */
+  backdropUrl?: string;
   plot?: string;
   rating?: number;
   duration?: string;
@@ -139,6 +153,7 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   year,
   type,
   posterUrl,
+  backdropUrl,
   plot,
   rating,
   duration,
@@ -203,7 +218,23 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   })();
 
   return (
-    <header className="detail-hero detail-hero--v2">
+    <header
+      className={`detail-hero detail-hero--v2${backdropUrl ? ' detail-hero--backdrop' : ''}`}
+    >
+      {backdropUrl && (
+        /*
+          Loaded through an ordinary style rather than a CSS custom property
+          holding a whole `url()`: a scraped artwork URL can contain quotes and
+          parentheses, and interpolating one into a CSS value is the one place
+          in this component where a third-party string becomes syntax.
+          `encodeURI` leaves a working URL alone and neutralises the rest.
+        */
+        <span
+          className="detail-hero__backdrop"
+          aria-hidden="true"
+          style={{ backgroundImage: `url("${encodeURI(backdropUrl)}")` }}
+        />
+      )}
       {/*
         The artwork is the play button.
 

@@ -7,6 +7,7 @@ import {
   contributingSources,
   mergeCredits,
   mergeNotes,
+  mergeOrganisations,
   mergeRatings,
   mergeStrings,
   mergeVideos,
@@ -376,4 +377,35 @@ test('the contributing sources are what actually produced a credit', () => {
     cast({ name: 'B', sources: [MetadataSource.Wikidata, MetadataSource.TvMaze] }),
   ];
   assert.deepEqual(contributingSources(people), [MetadataSource.TvMaze, MetadataSource.Wikidata]);
+});
+
+// --- organisations ---------------------------------------------------------
+
+test('two catalogues naming one network produce one row', () => {
+  // Found by running the assembled record against live hosts: TVmaze answers
+  // `AMC` for Breaking Bad and Wikidata's `P449` answers `AMC`, so a plain
+  // concatenation rendered "AMC, AMC" under Network on the detail page.
+  const merged = mergeOrganisations([
+    [{ name: 'AMC', url: 'https://amc.invalid' }],
+    [{ name: 'AMC' }],
+  ]);
+  assert.deepEqual(merged, [{ name: 'AMC', url: 'https://amc.invalid' }]);
+});
+
+test('the earlier source keeps the row and the later one fills its gaps', () => {
+  const merged = mergeOrganisations([[{ name: 'Netflix' }], [{ name: 'netflix', url: 'https://n.invalid' }]]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].name, 'Netflix', 'the first spelling is the one already on screen');
+  assert.equal(merged[0].url, 'https://n.invalid');
+});
+
+test('two genuinely different companies are both kept', () => {
+  const merged = mergeOrganisations([
+    [{ name: 'Legendary Pictures' }, { name: 'Warner Bros.' }],
+    [{ name: '  ' }, { name: 'Sony Pictures Television' }],
+  ]);
+  assert.deepEqual(
+    merged.map((entry) => entry.name),
+    ['Legendary Pictures', 'Warner Bros.', 'Sony Pictures Television']
+  );
 });

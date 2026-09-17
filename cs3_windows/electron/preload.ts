@@ -7,6 +7,7 @@ import type {
   SearchOptions,
   SearchResponse,
   SearchSuggestion,
+  SuggestionUpdate,
 } from '../src/types/api';
 import type { OttPlatformView } from './cs3/ottPlatforms';
 import type { ProfileState, SourceProfile } from './cs3/sourceProfiles.ts';
@@ -259,10 +260,26 @@ export interface CloudStreamElectronAPI {
   }>;
 
   // Search assistance: what the user probably meant, and what they asked before.
-  /** Title autocomplete merged across catalogues; tolerant of misspellings. */
+  /**
+   * Title autocomplete merged across catalogues; tolerant of misspellings.
+   *
+   * **Answers at once, then improves.** The reply carries whatever is already
+   * cached — this query's rows, or a shorter query's re-filtered — so a
+   * keystroke inside a word draws with no network at all. `done` says whether
+   * anything more is coming; when it is false, {@link onSuggestionUpdate}
+   * carries each catalogue as it lands.
+   */
   suggestTitles: (
     query: string
-  ) => Promise<Envelope & { suggestions: SearchSuggestion[] }>;
+  ) => Promise<Envelope & { suggestions: SearchSuggestion[]; done: boolean }>;
+  /**
+   * Fuller suggestion lists, as each catalogue answers.
+   *
+   * Carries the query it belongs to: the fan-out outlives the keystroke that
+   * started it, so a listener must drop anything that no longer names what is
+   * in the box rather than replacing a newer list with an older one.
+   */
+  onSuggestionUpdate: (callback: (update: SuggestionUpdate) => void) => () => void;
   /**
    * Subtitles for what is playing, from both sources that have them.
    *
@@ -1834,6 +1851,7 @@ const api: CloudStreamElectronAPI = {
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),
 
   suggestTitles: (query) => ipcRenderer.invoke('api:suggest', query),
+  onSuggestionUpdate: (callback) => subscribe('search:suggestUpdate', callback),
   searchSubtitles: (imdbId, season, episode, mediaUrl) =>
     ipcRenderer.invoke('subtitles:search', imdbId, season, episode, mediaUrl),
   searchSubtitlesByTitle: (query, season, episode, mediaUrl) =>

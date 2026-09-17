@@ -152,6 +152,7 @@ SELECT ?person ?personLabel ?native ?image ?character ?characterLabel ?character
     OPTIONAL { ?statement pq:P1545 ?order . }
     BIND("cast" AS ?job)
   }
+  UNION { ?item wdt:P170 ?person . BIND("Creator" AS ?job) }
   UNION { ?item wdt:P57  ?person . BIND("Director" AS ?job) }
   UNION { ?item wdt:P58  ?person . BIND("Screenplay" AS ?job) }
   UNION { ?item wdt:P162 ?person . BIND("Producer" AS ?job) }
@@ -190,6 +191,8 @@ SELECT ?item ?date ?boxOffice ?cost ?duration ?originalTitle ?article
   (GROUP_CONCAT(DISTINCT ?companyLabel; separator="|") AS ?companies)
   (GROUP_CONCAT(DISTINCT ?awardLabel; separator="|") AS ?awards)
   (GROUP_CONCAT(DISTINCT ?genreLabel; separator="|") AS ?genres)
+  (GROUP_CONCAT(DISTINCT ?certLabel; separator="|") AS ?certs)
+  (GROUP_CONCAT(DISTINCT ?broadcasterLabel; separator="|") AS ?broadcasters)
 WHERE {
   ?item wdt:P345 "${imdbId}" .
   OPTIONAL { ?item wdt:P577 ?date . }
@@ -202,6 +205,8 @@ WHERE {
   OPTIONAL { ?item wdt:P272 ?company . }
   OPTIONAL { ?item wdt:P166 ?award . }
   OPTIONAL { ?item wdt:P136 ?genre . }
+  OPTIONAL { ?item wdt:P1657 ?cert . }
+  OPTIONAL { ?item wdt:P449 ?broadcaster . }
   OPTIONAL {
     ?article schema:about ?item ;
              schema:isPartOf <https://en.wikipedia.org/> .
@@ -213,6 +218,8 @@ WHERE {
     ?company rdfs:label ?companyLabel .
     ?award rdfs:label ?awardLabel .
     ?genre rdfs:label ?genreLabel .
+    ?cert rdfs:label ?certLabel .
+    ?broadcaster rdfs:label ?broadcasterLabel .
   }
 }
 GROUP BY ?item ?date ?boxOffice ?cost ?duration ?originalTitle ?article
@@ -240,7 +247,22 @@ export interface WikidataFacts {
   spokenLanguages: string[];
   studios: Organisation[];
   awards: string[];
+  /**
+   * `P136`, verbatim.
+   *
+   * These are **keywords, not genres**, and the distinction is measured rather
+   * than stylistic: Dune: Part Two answers "action film, adventure film,
+   * science fiction film, epic film" and Breaking Bad answers "drama television
+   * series, crime television series". That is a taxonomy — it names the medium
+   * in every entry — where Cinemeta and TVmaze answer "Action" and "Crime".
+   * Rendering Wikidata's form as the genre row would put the word "film" on
+   * every chip of every film in the app.
+   */
   keywords: string[];
+  /** `P1657`, the MPA rating. Film only in practice; `PG-13`, `R`. */
+  certifications: string[];
+  /** `P449`, the original broadcaster. The network row, for television. */
+  networks: Organisation[];
 }
 
 /**
@@ -350,6 +372,8 @@ export function parseFacts(response: SparqlResponse): WikidataFacts | null {
     studios: splitConcat(value(row, 'companies')).map<Organisation>((name) => ({ name })),
     awards: splitConcat(value(row, 'awards')),
     keywords: splitConcat(value(row, 'genres')),
+    certifications: splitConcat(value(row, 'certs')),
+    networks: splitConcat(value(row, 'broadcasters')).map<Organisation>((name) => ({ name })),
   };
 }
 

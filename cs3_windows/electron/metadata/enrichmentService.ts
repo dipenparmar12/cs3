@@ -64,6 +64,7 @@ import {
 import {
   mergeCredits,
   mergeNotes,
+  mergeOrganisations,
   mergeRatings,
   mergeStrings,
   mergeVideos,
@@ -71,8 +72,18 @@ import {
   preferPreciseDate,
 } from './merge.ts';
 import { fetchWikidata, type WikidataResult } from './wikidata.ts';
-import { fetchCredits as fetchTvMazeCredits, lookupByImdb } from './tvmaze.ts';
-import { fetchAniListCredits, type AniListCredits } from './anilist.ts';
+import {
+  fetchCredits as fetchTvMazeCredits,
+  fetchShowFacts,
+  lookupByImdb,
+  type TvMazeShowFacts,
+} from './tvmaze.ts';
+import {
+  fetchAniListCredits,
+  searchAniListId,
+  type AniListCredits,
+} from './anilist.ts';
+import type { TitleEnricher } from '../cs3/titleEnricher.ts';
 import { fetchWikipediaNotes, type WikipediaNotes } from './wikipedia.ts';
 import { parseCinemetaExtras, type CinemetaExtras } from './cinemetaExtras.ts';
 import { fetchJson } from '../torrent/http.ts';
@@ -182,7 +193,26 @@ export class MetadataEnrichmentService {
 
   private listener: EnrichmentListener | null = null;
 
-  constructor(baseDir?: string) {
+  /**
+   * How a title with no IMDb id gets one.
+   *
+   * This is the difference between "some detail pages are complete and some
+   * show a row of names" and every page being the same. Every source here
+   * except AniList is reached *through* an IMDb id, and a `cs3ext://` page
+   * from a scraper routinely has none — the provider parsed a streaming site,
+   * and the site never printed one. Those pages recorded four `skipped`
+   * outcomes and rendered nothing, for no reason other than a missing key.
+   *
+   * `TitleEnricher` already resolves a release name to a catalogue record with
+   * exactly the conservatism this needs (a disagreeing year disqualifies; the
+   * similarity bar is high enough that `Avengers` does not match
+   * `Avengers: Endgame`), and `main.ts` already constructs one. Optional so the
+   * service still stands up in a test without a network.
+   */
+  private readonly resolver: TitleEnricher | null;
+
+  constructor(baseDir?: string, resolver?: TitleEnricher) {
+    this.resolver = resolver ?? null;
     const dir = baseDir ?? app.getPath('userData');
     this.store = new JsonFileStore<CacheRow[]>(
       path.join(dir, FILE_NAME),
@@ -327,14 +357,52 @@ export class MetadataEnrichmentService {
     let wikidata: WikidataResult | null = null;
     let anilist: AniListCredits | null = null;
     let tvmaze: Awaited<ReturnType<typeof fetchTvMazeCredits>> | null = null;
+    let tvmazeFacts: TvMazeShowFacts | null = null;
     let wikipedia: WikipediaNotes | null = null;
+
+    /**
+     * What the catalogues believe this is, when the provider had no id.
+     *
+     * Awaited rather than raced with the rest, because every source below is
+     * addressed *by* the id it produces — starting the fan-out first would mean
+     * starting it with nothing to ask about. The cost is one Cinemeta search on
+     * a page that is currently blank, and `TitleEnricher` caches its answer for
+     * a week, so reopening the title pays nothing.
+     */
+    let resolvedType: 'movie' | 'series' | undefined;
+    if (!ids.imdb && request.title && this.resolver) {
+      const startedAt = Date.now();
+      try {
+        const match = await this.resolver.resolve(request.title, {
+          type: request.type,
+          year: request.year,
+        });
+        if (match) {
+          ids.imdb = match.imdbId;
+          resolvedType = match.type;
+        } else {
+          outcomes.push(
+            outcome(
+              MetadataSource.Provider,
+              'empty',
+              startedAt,
+              'no catalogue entry confidently matches this title'
+            )
+          );
+        }
+      } catch (error) {
+        // Never fatal. The page still gets whatever AniList can answer, and the
+        // skipped outcomes below name the missing id as the cause.
+        outcomes.push(outcome(MetadataSource.Provider, 'failed', startedAt, describe(error)));
+      }
+    }
 
     /** Emits a snapshot of everything known so far, if anyone is listening. */
     const publish = (partial: boolean) => {
       const snapshot = this.assemble(
         request,
         ids,
-        { cinemeta, wikidata, anilist, tvmaze, wikipedia },
+        { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia },
         outcomes,
         partial
       );
@@ -348,7 +416,10 @@ export class MetadataEnrichmentService {
       const startedAt = Date.now();
       tasks.push(
         fetchJson<Parameters<typeof parseCinemetaExtras>[0]>(
-          `${CINEMETA_BASE}/meta/${cinemetaType(request.type)}/${ids.imdb}.json`,
+          // The resolved kind wins where there is one: it came from the
+          // catalogue that holds the record, while `request.type` is a
+          // provider's label and plenty of the corpus calls everything "Movie".
+          `${CINEMETA_BASE}/meta/${resolvedType ?? cinemetaType(request.type)}/${ids.imdb}.json`,
           { signal, timeoutMs: 12_000, retries: 0 }
         )
           .then((body) => {
@@ -395,16 +466,14 @@ export class MetadataEnrichmentService {
           .then(() => void publish(true))
       );
     } else {
-      outcomes.push({
-        source: MetadataSource.Cinemeta,
-        status: 'skipped',
-        reason: 'no IMDb id for this title',
-      });
-      outcomes.push({
-        source: MetadataSource.Wikidata,
-        status: 'skipped',
-        reason: 'no IMDb id for this title',
-      });
+      // Named precisely, because the two causes need different fixes: a title
+      // nobody could resolve is a limit of the catalogues, and a title nobody
+      // *tried* to resolve is a wiring fault in this service.
+      const reason = request.title
+        ? 'no IMDb id, and this title matched no catalogue entry'
+        : 'no IMDb id for this title';
+      outcomes.push({ source: MetadataSource.Cinemeta, status: 'skipped', reason });
+      outcomes.push({ source: MetadataSource.Wikidata, status: 'skipped', reason });
     }
 
     // Television only. Asking TVmaze about a film is a guaranteed 404 and a
@@ -424,9 +493,25 @@ export class MetadataEnrichmentService {
             return;
           }
           ids.tvmaze = showId;
-          tvmaze = await fetchTvMazeCredits(showId, signal);
+          // Settled independently: the show record carries the status, the
+          // network and the season counts, and the cast carries the people. A
+          // failure in either half must not discard the other — the same rule
+          // `fetchCredits` already applies to its own two endpoints.
+          const [credits, facts] = await Promise.allSettled([
+            fetchTvMazeCredits(showId, signal),
+            fetchShowFacts(showId, signal),
+          ]);
+          if (credits.status === 'fulfilled') tvmaze = credits.value;
+          if (facts.status === 'fulfilled') tvmazeFacts = facts.value;
+          if (credits.status === 'rejected' && facts.status === 'rejected') {
+            throw credits.reason;
+          }
           outcomes.push(
-            outcome(MetadataSource.TvMaze, tvmaze.length ? 'ok' : 'empty', startedAt)
+            outcome(
+              MetadataSource.TvMaze,
+              tvmaze?.length || tvmazeFacts ? 'ok' : 'empty',
+              startedAt
+            )
           );
         })()
           .catch((error) => {
@@ -434,6 +519,25 @@ export class MetadataEnrichmentService {
           })
           .then(() => void publish(true))
       );
+    }
+
+    /**
+     * Anime with no AniList id is the other half of the consistency problem.
+     *
+     * An IMDb id reaches Cinemeta and Wikidata, and neither has characters,
+     * voice actors or native names — which is the entire reason this source is
+     * in the set. Almost every anime page in this app arrives from a scraper
+     * with no id at all, so without this the richest source for anime is
+     * consulted only for titles opened from the app's own AniList rows.
+     */
+    if (!ids.anilist && request.title && ANIME_TYPES.has(request.type ?? TvType.Movie)) {
+      try {
+        const found = await searchAniListId(request.title, request.year, signal);
+        if (found) ids.anilist = found;
+      } catch {
+        // The outcome below reports the miss; a failed search is not worth a
+        // second entry saying the same thing.
+      }
     }
 
     if (ids.anilist) {
@@ -455,7 +559,9 @@ export class MetadataEnrichmentService {
       outcomes.push({
         source: MetadataSource.AniList,
         status: 'skipped',
-        reason: 'no AniList id for this title',
+        reason: request.title
+          ? 'no AniList id, and this title matched no AniList entry'
+          : 'no AniList id for this title',
       });
     }
 
@@ -510,12 +616,13 @@ export class MetadataEnrichmentService {
       wikidata: WikidataResult | null;
       anilist: AniListCredits | null;
       tvmaze: Awaited<ReturnType<typeof fetchTvMazeCredits>> | null;
+      tvmazeFacts: TvMazeShowFacts | null;
       wikipedia: WikipediaNotes | null;
     },
     outcomes: MetadataSourceOutcome[],
     partial: boolean
   ): ExtendedMetadata {
-    const { cinemeta, wikidata, anilist, tvmaze, wikipedia } = parts;
+    const { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia } = parts;
 
     const people = orderCredits(
       mergeCredits([
@@ -526,7 +633,11 @@ export class MetadataEnrichmentService {
       ])
     );
 
-    const ratings = mergeRatings([cinemeta?.ratings ?? [], anilist?.ratings ?? []]);
+    const ratings = mergeRatings([
+      cinemeta?.ratings ?? [],
+      tvmazeFacts?.ratings ?? [],
+      anilist?.ratings ?? [],
+    ]);
 
     const facts = wikidata?.facts ?? null;
 
@@ -535,17 +646,56 @@ export class MetadataEnrichmentService {
       ids,
       originalTitle: anilist?.originalTitle ?? facts?.originalTitle,
       alternateTitles: mergeStrings([anilist?.alternateTitles]),
+      // The provider's own synopsis stays on the page; this is the floor under
+      // a scraped page whose only description was a one-line site blurb.
+      plot: anilist?.plot,
+      posterUrl: cinemeta?.posterUrl ?? tvmazeFacts?.posterUrl ?? anilist?.posterUrl,
       releaseDate: preferPreciseDate(
-        preferPreciseDate(cinemeta?.releaseDate, facts?.releaseDate),
+        preferPreciseDate(
+          preferPreciseDate(cinemeta?.releaseDate, facts?.releaseDate),
+          tvmazeFacts?.premiered
+        ),
         anilist?.releaseDate
       ),
-      endDate: anilist?.endDate,
-      runtimeMinutes: facts?.runtimeMinutes,
-      countries: mergeStrings([cinemeta?.countries, facts?.countries]),
-      spokenLanguages: mergeStrings([facts?.spokenLanguages]),
+      endDate: anilist?.endDate ?? tvmazeFacts?.ended,
+      /**
+       * Order is precedence, and it is cheapest-first by coincidence rather
+       * than by design: Cinemeta is a reply the app already pays for, TVmaze's
+       * is the measured average episode length, AniList's is per-episode too,
+       * and Wikidata's `P2047` is last because it is the only one of the four
+       * that is a *statement* about the work rather than a catalogue field —
+       * on a series it answers the length of whichever cut somebody recorded.
+       */
+      runtimeMinutes:
+        cinemeta?.runtimeMinutes ?? tvmazeFacts?.runtimeMinutes ?? facts?.runtimeMinutes,
+      /**
+       * Cinemeta's and TVmaze's vocabulary only. Wikidata's `P136` stays in
+       * `keywords` — measured, it answers "action film" and "drama television
+       * series", which would put the word "film" on every chip of every film.
+       */
+      genres: mergeStrings([cinemeta?.genres, tvmazeFacts?.genres, anilist?.genres]),
+      status: cinemeta?.status ?? tvmazeFacts?.status ?? anilist?.status,
+      seasonCount: cinemeta?.seasonCount ?? tvmazeFacts?.seasonCount,
+      episodeCount: cinemeta?.episodeCount ?? tvmazeFacts?.episodeCount ?? anilist?.episodeCount,
+      countries: mergeStrings([
+        cinemeta?.countries,
+        facts?.countries,
+        tvmazeFacts?.countries,
+        anilist?.countries,
+      ]),
+      spokenLanguages: mergeStrings([facts?.spokenLanguages, tvmazeFacts?.language ? [tvmazeFacts.language] : undefined]),
+      certifications: mergeStrings([facts?.certifications])
+        // `P1657` is the MPA rating specifically, so the country is known
+        // rather than guessed. A rating with no country attached is unreadable:
+        // "15" means one thing in the UK and nothing anywhere else.
+        .map((rating) => ({ country: 'US', rating }))
+        .slice(0, 4),
       ratings: ratings.length ? ratings : undefined,
       people: people.length ? people : undefined,
-      studios: [...(anilist?.studios ?? []), ...(facts?.studios ?? [])].slice(0, 8),
+      studios: mergeOrganisations([anilist?.studios, facts?.studios]).slice(0, 8),
+      // TVmaze first: measured, both it and Wikidata answer "AMC" for Breaking
+      // Bad, and TVmaze is the one that also publishes the official site.
+      networks: mergeOrganisations([tvmazeFacts?.networks, facts?.networks]).slice(0, 4),
       revenue: facts?.revenue,
       budget: facts?.budget,
       // Wikidata publishes these without a currency on the plain `wdt:` value;
@@ -557,7 +707,7 @@ export class MetadataEnrichmentService {
       production: mergeNotes([wikipedia?.production ?? []]),
       trivia: mergeNotes([wikipedia?.trivia ?? [], anilist?.trivia ?? []]),
       videos: mergeVideos([cinemeta?.videos ?? [], anilist?.videos ?? []]),
-      backdropUrl: cinemeta?.backdropUrl,
+      backdropUrl: cinemeta?.backdropUrl ?? anilist?.backdropUrl,
       logoUrl: cinemeta?.logoUrl,
       outcomes: [...outcomes],
       fetchedAt: Date.now(),

@@ -41,6 +41,7 @@ import {
   type CreditPerson,
   type CrewSummary,
   type MetadataSource,
+  type Organisation,
   type ProductionNote,
   type TitleRating,
   type TitleVideo,
@@ -368,6 +369,40 @@ export function mergeStrings(lists: (string[] | undefined)[]): string[] {
     }
   }
   return out;
+}
+
+/**
+ * Distinct organisations, order preserved, compared on the name.
+ *
+ * The same rule as {@link mergeStrings} and it is needed for the same reason —
+ * measured on Breaking Bad, TVmaze answers `AMC` and Wikidata's `P449` answers
+ * `AMC`, so a plain concatenation renders "AMC, AMC" on the page. The first
+ * entry wins where both carry a name, because the earlier source in the list is
+ * the one with the link: TVmaze publishes an official site and Wikidata
+ * publishes a label.
+ */
+export function mergeOrganisations(lists: (Organisation[] | undefined)[]): Organisation[] {
+  const seen = new Map<string, Organisation>();
+  for (const list of lists) {
+    for (const entry of list ?? []) {
+      const name = entry?.name?.trim();
+      if (!name) continue;
+      const key = name.toLowerCase();
+      const existing = seen.get(key);
+      if (!existing) {
+        seen.set(key, { ...entry, name });
+        continue;
+      }
+      // A later source may still contribute the parts the first one lacked —
+      // but only when it actually has them. `??=` with an absent value writes
+      // the key anyway, and this record is serialised to the cache file and
+      // across the IPC boundary, where `imageUrl: undefined` is a field that
+      // exists and is empty rather than a field nobody published.
+      if (!existing.url && entry.url) existing.url = entry.url;
+      if (!existing.imageUrl && entry.imageUrl) existing.imageUrl = entry.imageUrl;
+    }
+  }
+  return [...seen.values()];
 }
 
 /**

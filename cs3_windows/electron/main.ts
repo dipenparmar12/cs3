@@ -285,7 +285,15 @@ const torrentImports = new TorrentImportService(
  * I play"; this answers "what is this", on its own schedule, and a page renders
  * from the first long before the second arrives.
  */
-const metadataEnrichment = new MetadataEnrichmentService();
+/**
+ * Declared here rather than beside `discovery`, because the enrichment service
+ * below takes it: a detail page whose provider published no IMDb id is resolved
+ * through this before any catalogue is asked. It has no dependencies of its own,
+ * so the move costs nothing.
+ */
+const titleEnricher = new TitleEnricher();
+
+const metadataEnrichment = new MetadataEnrichmentService(undefined, titleEnricher);
 metadataEnrichment.setListener((metadata) =>
   mainWindow?.webContents.send('metadata:extendedUpdate', metadata)
 );
@@ -329,7 +337,6 @@ const discovery = new DiscoveryService(
   undefined,
   contentService.getNativeProviders()
 );
-const titleEnricher = new TitleEnricher();
 /**
  * Warms the source cache while a detail page is being read.
  *
@@ -1542,15 +1549,52 @@ ipcMain.handle('search:cancel', async (_, id: string) => {
 });
 
 /**
+ * The fan-out behind the search box, so a superseded one can be dropped.
+ *
+ * One controller, not a map: a search box has exactly one current query, and
+ * every keystroke makes the previous one worthless. Without this, typing
+ * "spider man" leaves nine fan-outs running against three third-party hosts and
+ * the answers for "spid" arrive to be discarded — which is the cost the
+ * renderer's debounce was trying, and failing, to control on its own.
+ */
+let suggestRun: AbortController | null = null;
+
+/**
  * Title autocomplete. Called on every debounced keystroke, so it never rejects
  * and never blocks — an empty list is an acceptable answer for a search box.
+ *
+ * **Answers immediately and finishes later.** The reply carries whatever is
+ * already known (this query's cached rows, or a shorter query's re-filtered),
+ * and `search:suggestUpdate` carries each catalogue as it lands. Measured, the
+ * three catalogues answer 170–935 ms apart, so a reply that waited for all of
+ * them would spend the fastest two on the slowest — see `searchSuggestions.ts`.
  */
-ipcMain.handle('api:suggest', async (_, query: string) => {
-  try {
-    return { ok: true, suggestions: await searchSuggestions.suggest(query) };
-  } catch (error) {
-    return { ...fail(error), suggestions: [] };
+ipcMain.handle('api:suggest', async (event, query: string) => {
+  suggestRun?.abort();
+  const run = new AbortController();
+  suggestRun = run;
+
+  const trimmed = (query ?? '').trim();
+  const instant = searchSuggestions.instant(trimmed);
+
+  if (!instant.done) {
+    // The asking window, not `mainWindow`: an update belongs to whoever typed.
+    const webContents = event.sender;
+    void searchSuggestions
+      .suggest(trimmed, run.signal, (suggestions, done) => {
+        // The query travels with the rows: this outlives the keystroke that
+        // asked for it, and a reply landing on a box that now says something
+        // else must be dropped rather than rendered.
+        if (run.signal.aborted || webContents.isDestroyed()) return;
+        webContents.send('search:suggestUpdate', { query: trimmed, suggestions, done });
+      })
+      .catch(() => {
+        // A catalogue outage is not an error for a search box, and there is no
+        // longer a caller waiting on this promise to reject to.
+      });
   }
+
+  return { ok: true, suggestions: instant.suggestions, done: instant.done };
 });
 
 /**

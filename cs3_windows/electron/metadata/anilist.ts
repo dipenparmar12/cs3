@@ -32,6 +32,7 @@ import { rawFetch } from '../torrent/http.ts';
 import {
   CreditRole,
   MetadataSource,
+  TitleStatus,
   type CreditPerson,
   type Organisation,
   type ProductionNote,
@@ -39,9 +40,21 @@ import {
   type TitleVideo,
 } from '../../src/types/metadata.ts';
 import { classifyJob } from './merge.ts';
+import { normaliseStatus } from './cinemetaExtras.ts';
+import { normaliseTitleForMatch, titleSimilarity } from '../torrent/releaseParser.ts';
 
 const ENDPOINT = 'https://graphql.anilist.co';
 const TIMEOUT_MS = 12_000;
+
+/**
+ * Above this, two titles name the same anime.
+ *
+ * `cs3/titleEnricher.ts` measured 0.86 against the release-name corpus and this
+ * is the same comparison on cleaner input, so the same floor applies — with no
+ * year-relaxed second threshold, because a title that needs a year to be
+ * believable is not one worth replacing a page's credits over.
+ */
+const ANILIST_MATCH_FLOOR = 0.86;
 
 /** Characters requested. AniList pages at 25 and one page is a full cast. */
 const CHARACTER_PAGE = 25;
@@ -55,6 +68,13 @@ query ($id: Int) {
     synonyms
     countryOfOrigin
     source
+    status
+    episodes
+    format
+    genres
+    description(asHtml: false)
+    bannerImage
+    coverImage { extraLarge large }
     averageScore
     meanScore
     popularity
@@ -113,6 +133,13 @@ export interface AniListMediaCredits {
   synonyms?: string[];
   countryOfOrigin?: string;
   source?: string;
+  status?: string;
+  episodes?: number;
+  format?: string;
+  genres?: string[];
+  description?: string;
+  bannerImage?: string;
+  coverImage?: { extraLarge?: string; large?: string };
   averageScore?: number;
   meanScore?: number;
   popularity?: number;
@@ -171,13 +198,64 @@ export interface AniListCredits {
   ratings: TitleRating[];
   studios: Organisation[];
   keywords: string[];
+  genres: string[];
   alternateTitles: string[];
   originalTitle?: string;
   releaseDate?: string;
   endDate?: string;
+  status?: TitleStatus;
+  /** Episodes in the whole run, where AniList knows the total. */
+  episodeCount?: number;
+  countries: string[];
+  posterUrl?: string;
+  backdropUrl?: string;
+  plot?: string;
   videos: TitleVideo[];
   trivia: ProductionNote[];
 }
+
+/** `FINISHED`, `RELEASING`, … to this record's vocabulary. */
+function aniListStatus(raw: string | undefined): TitleStatus | undefined {
+  if (!raw) return undefined;
+  if (raw === 'NOT_YET_RELEASED') return TitleStatus.Upcoming;
+  return normaliseStatus(raw.replace(/_/g, ' '));
+}
+
+/**
+ * AniList's `description` is HTML, and the page renders text.
+ *
+ * Kept as prose rather than dropped: it is frequently the only synopsis a
+ * scraped anime page has, since a provider scraping a streaming site gets the
+ * site's one-line blurb and nothing else.
+ */
+function stripHtml(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const text = value
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&[a-z]+;/gi, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return text || undefined;
+}
+
+/**
+ * A country code to the language spoken in it.
+ *
+ * Only the four AniList actually publishes. A lookup that guessed beyond them
+ * would state a language on the page from nothing more than a flag, which is
+ * the kind of confident wrongness a reader has no way to detect.
+ */
+const ORIGIN_COUNTRIES: Record<string, string> = {
+  JP: 'Japan',
+  KR: 'South Korea',
+  CN: 'China',
+  TW: 'Taiwan',
+};
 
 /**
  * The GraphQL payload to credits. Pure, so it can be tested without a network.
@@ -194,6 +272,8 @@ export function parseAniList(media: AniListMediaCredits | null | undefined): Ani
     ratings: [],
     studios: [],
     keywords: [],
+    genres: [],
+    countries: [],
     alternateTitles: [],
     videos: [],
     trivia: [],
@@ -331,9 +411,18 @@ export function parseAniList(media: AniListMediaCredits | null | undefined): Ani
       media.title?.native,
       ...(media.synonyms ?? []),
     ].filter((title): title is string => Boolean(title)),
+    genres: media.genres ?? [],
     originalTitle: media.title?.native || media.title?.romaji,
     releaseDate: aniListDate(media.startDate),
     endDate: aniListDate(media.endDate),
+    status: aniListStatus(media.status),
+    episodeCount: media.episodes && media.episodes > 0 ? media.episodes : undefined,
+    countries: media.countryOfOrigin && ORIGIN_COUNTRIES[media.countryOfOrigin]
+      ? [ORIGIN_COUNTRIES[media.countryOfOrigin]]
+      : [],
+    posterUrl: media.coverImage?.extraLarge || media.coverImage?.large,
+    backdropUrl: media.bannerImage,
+    plot: stripHtml(media.description),
     videos,
     trivia,
   };
@@ -364,4 +453,96 @@ export async function fetchAniListCredits(
 
   const json = (await response.json()) as { data?: { Media?: AniListMediaCredits } };
   return parseAniList(json.data?.Media);
+}
+
+/**
+ * The AniList id for a title, when nothing carried one.
+ *
+ * An anime detail page that reaches enrichment with no AniList id gets no
+ * characters, no voice actors and no native names — which is the whole of what
+ * this source is here for. Most of this app's anime arrives exactly that way,
+ * from a `.cs3` provider that scraped a streaming site and knows only what the
+ * page printed.
+ *
+ * **Conservative in the same way `cs3/titleEnricher.ts` is, and for the same
+ * reason.** Returning the wrong anime does not degrade the page, it replaces it:
+ * a cast list from a different series under this one's name reads as data
+ * corruption, and nothing on screen would mark it as a guess. So a disagreeing
+ * year disqualifies outright, and a match must either be exact once normalised
+ * or clear a high similarity bar against one of the four names AniList carries.
+ *
+ * `null` is the ordinary answer and costs nothing — the page keeps the credits
+ * the other catalogues found.
+ */
+export async function searchAniListId(
+  title: string,
+  year: number | undefined,
+  signal?: AbortSignal
+): Promise<number | null> {
+  const trimmed = title.trim();
+  if (trimmed.length < 2) return null;
+
+  const response = await rawFetch(ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      query: `query ($search: String) {
+        Page(perPage: 8) {
+          media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
+            id
+            title { romaji english native }
+            synonyms
+            startDate { year }
+          }
+        }
+      }`,
+      variables: { search: trimmed },
+    }),
+    signal: signal ?? AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`AniList HTTP ${response.status}`);
+
+  const json = (await response.json()) as {
+    errors?: unknown[];
+    data?: {
+      Page?: {
+        media?: Array<{
+          id?: number;
+          title?: { romaji?: string; english?: string; native?: string };
+          synonyms?: string[];
+          startDate?: { year?: number };
+        }>;
+      };
+    };
+  };
+  // A GraphQL 200 can be a failure: AniList reports a bad query and a rate
+  // limit as HTTP 200 with `errors` and a null `data`, so `response.ok` says
+  // nothing on its own.
+  if (json.errors?.length) throw new Error('AniList rejected the search');
+
+  const wanted = normaliseTitleForMatch(trimmed);
+  if (!wanted) return null;
+
+  for (const media of json.data?.Page?.media ?? []) {
+    if (!media.id) continue;
+    const candidateYear = media.startDate?.year;
+    // The single strongest signal that two same-named works are different ones.
+    if (year && candidateYear && Math.abs(candidateYear - year) > 1) continue;
+
+    const names = [
+      media.title?.romaji,
+      media.title?.english,
+      media.title?.native,
+      ...(media.synonyms ?? []),
+    ].filter((name): name is string => Boolean(name?.trim()));
+
+    for (const name of names) {
+      const normalised = normaliseTitleForMatch(name);
+      if (!normalised) continue;
+      if (normalised === wanted) return media.id;
+      if (titleSimilarity(trimmed, name) >= ANILIST_MATCH_FLOOR) return media.id;
+    }
+  }
+
+  return null;
 }

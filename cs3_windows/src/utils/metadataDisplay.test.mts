@@ -5,10 +5,13 @@ import {
   answeringSources,
   describeCredit,
   failedSources,
+  formatCertifications,
   formatMoney,
   formatRating,
   formatReleaseDate,
   formatRuntimeMinutes,
+  formatSeasonCount,
+  formatStatus,
   formatVotes,
   groupCredits,
   hasAnything,
@@ -212,4 +215,46 @@ test('failures and answers are read off the outcomes, not guessed', () => {
 
   assert.deepEqual(failedSources(outcomes), ['Wikidata']);
   assert.deepEqual(answeringSources(outcomes), ['IMDb']);
+});
+
+// --- the rows added for complete metadata ----------------------------------
+
+test('a released film shows no status chip, and an ongoing series does', () => {
+  // Every film on the page is released, so the chip carries no information and
+  // costs a row. The value is still stored — the absence is a display decision.
+  assert.equal(formatStatus('released'), null);
+  assert.equal(formatStatus(undefined), null);
+  assert.equal(formatStatus('ongoing'), 'Ongoing');
+  assert.equal(formatStatus('ended'), 'Ended');
+  assert.equal(formatStatus('upcoming'), 'Not yet released');
+  assert.equal(formatStatus('hiatus'), 'On hiatus');
+});
+
+test('one season is not "1 seasons"', () => {
+  assert.equal(formatSeasonCount(1, 1), '1 season · 1 episode');
+  assert.equal(formatSeasonCount(5, 62), '5 seasons · 62 episodes');
+});
+
+test('whichever half is known is stated, and neither is nothing', () => {
+  assert.equal(formatSeasonCount(3, undefined), '3 seasons');
+  assert.equal(formatSeasonCount(undefined, 12), '12 episodes');
+  assert.equal(formatSeasonCount(undefined, undefined), null);
+  assert.equal(formatSeasonCount(0, 0), null);
+});
+
+test('a certification is never shown without its country', () => {
+  // `15` is a BBFC rating in the UK and means nothing in the US; `R` differs
+  // between the MPA and several national boards. The country is what makes the
+  // symbol resolvable at all.
+  assert.equal(formatCertifications([{ country: 'US', rating: 'PG-13' }]), 'US: PG-13');
+  assert.equal(
+    formatCertifications([
+      { country: 'US', rating: 'R' },
+      { country: 'GB', rating: '15' },
+    ]),
+    'US: R, GB: 15'
+  );
+  assert.equal(formatCertifications([]), null);
+  assert.equal(formatCertifications(undefined), null);
+  assert.equal(formatCertifications([{ country: 'US', rating: '  ' }]), null);
 });

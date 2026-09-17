@@ -25,6 +25,7 @@ import { ProviderRecoveryPanel } from '../components/ProviderRecoveryPanel';
 import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
 import { TitleMetadata } from '../components/detail/TitleMetadata';
 import type { ExtendedMetadata } from '../types/metadata';
+import { formatRuntimeMinutes } from '../utils/metadataDisplay';
 import { ShareButton } from '../components/ShareButton';
 import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
 import type { PageSnapshot } from '../../electron/cs3/pageSnapshot';
@@ -1427,13 +1428,28 @@ export const DetailView: React.FC<DetailViewProps> = ({
           />
         }
         title={detail.name}
-        originalTitle={mediaItem.originalTitle || (detail as any)?.originalTitle}
+        /*
+          The provider's own answer always wins, and the catalogue is the floor
+          underneath it.
+
+          That direction is deliberate and it is the opposite of an "enrich
+          everything" rule: a scraper that returned artwork returned artwork for
+          the *release* being watched, and a scraper that returned a synopsis
+          returned the one on the page the viewer is about to play from.
+          Replacing either with a canonical catalogue value would quietly change
+          what the page is about for dubbed cuts, regional releases and
+          re-edits. So enrichment fills gaps and never overwrites.
+        */
+        originalTitle={
+          mediaItem.originalTitle || (detail as any)?.originalTitle || extended?.originalTitle
+        }
         year={detail.year}
         type={detail.type}
-        posterUrl={detail.posterUrl}
-        plot={detail.plot}
+        posterUrl={detail.posterUrl || extended?.posterUrl}
+        backdropUrl={extended?.backdropUrl}
+        plot={detail.plot || extended?.plot}
         rating={detail.rating}
-        duration={detail.duration}
+        duration={detail.duration || formatRuntimeMinutes(extended?.runtimeMinutes) || undefined}
         tags={detail.tags}
         fallbackNote={
           fellBackTo
@@ -1559,7 +1575,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
         the debut date, the production notes — comes from `metadata:*`, after
         this page has already drawn.
       */}
-      <TitleMetadata metadata={extended} fallbackActors={detail.actors} />
+      <TitleMetadata
+        metadata={extended}
+        fallbackActors={detail.actors}
+        providerTags={detail.tags}
+      />
 
       {(detail.recommendations?.length ?? 0) > 0 && onSelectMedia && (
         <section className="detail-facts">

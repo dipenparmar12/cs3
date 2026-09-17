@@ -41,8 +41,27 @@ interface NavbarProps {
   externalQuery?: string;
 }
 
-/** Long enough that typing a word costs one request, short enough to feel live. */
-const SUGGEST_DEBOUNCE_MS = 250;
+/**
+ * Long enough to coalesce a burst of keystrokes, short enough to feel live.
+ *
+ * Was 250 ms, chosen when the main process answered a whole fan-out per call
+ * and every request was worth suppressing. Two things changed underneath it:
+ * the reply is now answered from cache with no I/O, and a superseded fan-out is
+ * aborted rather than run to completion. So the debounce no longer has to pay
+ * for itself in avoided requests, and 250 ms of deliberate stillness at the
+ * front of a 300–900 ms round trip is a third of the delay this work exists to
+ * remove.
+ */
+const SUGGEST_DEBOUNCE_MS = 110;
+
+/**
+ * Below this the box shows history rather than titles.
+ *
+ * One character is enough to ask — the brief asks for rows after the first one
+ * or two — and the main process narrows a single-character query to Cinemeta
+ * alone rather than fanning out three ways for a list nothing can rank.
+ */
+const SUGGEST_MIN_LENGTH = 1;
 
 export const Navbar: React.FC<NavbarProps> = ({
   onSearch,
@@ -91,26 +110,64 @@ export const Navbar: React.FC<NavbarProps> = ({
    * "spider man" would otherwise replace the right list with a stale one.
    */
   const requestId = useRef(0);
+  /**
+   * The query the rows on screen belong to.
+   *
+   * A ref rather than state because the push listener below is mounted once and
+   * must read the *current* query without being torn down and rebuilt on every
+   * keystroke — the same arrangement `DetailView` uses for late metadata.
+   */
+  const activeQuery = useRef('');
+
   useEffect(() => {
     const trimmed = query.trim();
-    if (trimmed.length < 2) {
+    activeQuery.current = trimmed;
+
+    if (trimmed.length < SUGGEST_MIN_LENGTH) {
       setSuggestions([]);
       setSuggestLoading(false);
       return;
     }
 
     const id = ++requestId.current;
-    setSuggestLoading(true);
 
     const timer = window.setTimeout(async () => {
       const response = await window.cloudstream?.suggestTitles(trimmed);
       if (id !== requestId.current) return;
-      setSuggestions(response?.suggestions ?? []);
-      setSuggestLoading(false);
+
+      /**
+       * Rows are only ever *replaced*, never blanked while more are coming.
+       *
+       * The reply is the instant answer — this query's cached rows, or a
+       * shorter query's re-filtered — and for a query nothing has seen before
+       * it is legitimately empty. Clearing the list on that would make the
+       * dropdown flash empty between every word, so the previous rows stay put
+       * until the catalogues answer with better ones.
+       */
+      if (response?.suggestions?.length) setSuggestions(response.suggestions);
+      // Only claim to be finished when the main process says it is. An empty
+      // instant answer with `done: false` is work in progress, not a result.
+      setSuggestLoading(!response?.done);
     }, SUGGEST_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
   }, [query]);
+
+  /**
+   * Catalogues landing behind the instant answer.
+   *
+   * Mounted once. The guard is on the query rather than on a request id because
+   * the fan-out lives in the main process and outlives this effect's closure —
+   * exactly the guard `metadata:extendedUpdate` needs, for the same reason.
+   */
+  useEffect(() => {
+    const dispose = window.cloudstream?.onSuggestionUpdate?.((update) => {
+      if (update.query !== activeQuery.current) return;
+      setSuggestions(update.suggestions);
+      if (update.done) setSuggestLoading(false);
+    });
+    return () => dispose?.();
+  }, []);
 
   // A fresh query means the previous highlight points at a different row.
   useEffect(() => setHighlightedIndex(-1), [query]);
@@ -169,7 +226,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     [runSearch]
   );
 
-  const historyFirst = query.trim().length < 2;
+  const historyFirst = query.trim().length < SUGGEST_MIN_LENGTH;
   const orderedRows: Array<{ kind: 'suggestion' | 'history'; index: number }> = historyFirst
     ? [
         ...history.map((_, index) => ({ kind: 'history' as const, index })),

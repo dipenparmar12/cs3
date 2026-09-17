@@ -166,7 +166,24 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
                 {suggestion.type && (
                   <span className="search-suggest__type">{suggestion.type}</span>
                 )}
+                {/* The language, where a catalogue publishes one. It is what
+                    separates two same-named works faster than a year does for
+                    the dubbed and regional titles this corpus is full of. */}
+                {suggestion.language && (
+                  <span className="search-suggest__lang">{suggestion.language}</span>
+                )}
               </div>
+
+              {/* The native spelling, shown only when it is genuinely a
+                  different name — repeating the row's own title underneath
+                  itself reads as a rendering fault. */}
+              {suggestion.originalTitle &&
+                suggestion.originalTitle.trim().toLowerCase() !==
+                  suggestion.title.trim().toLowerCase() && (
+                  <div className="search-suggest__original" lang="und">
+                    {suggestion.originalTitle}
+                  </div>
+                )}
 
               {suggestion.genres.length > 0 && (
                 <div className="search-suggest__genres">
