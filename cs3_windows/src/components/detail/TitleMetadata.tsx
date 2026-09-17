@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
-import { ExternalLink, Info } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { ExternalLink, Info, Loader2 } from 'lucide-react';
 
 import { Poster } from '../Poster';
 import type { CreditPerson, ExtendedMetadata, ProductionNote } from '../../types/metadata';
+import { metadataSectionState, shouldShowStatus } from './metadataSection';
 import {
   answeringSources,
   describeCredit,
@@ -16,9 +17,7 @@ import {
   formatStatus,
   formatVotes,
   groupCredits,
-  hasAnything,
   sourceLabel,
-  stillLoading,
 } from '../../utils/metadataDisplay';
 
 /**
@@ -31,12 +30,25 @@ import {
  *
  * ## Three rules this component exists to keep
  *
- * **Nothing renders until there is something to render.** Not a skeleton, not a
- * set of empty headings. A "Cast" heading over a blank space reads as a lookup
- * that failed, and for a title none of the four catalogues has ever heard of —
- * which is a large part of this app's corpus, since the providers scrape sites
- * rather than databases — that impression would be permanent and wrong. The
- * page simply looks as it does today.
+ * **Nothing *settled* renders empty, but a lookup in progress says so.** The
+ * original rule here was that nothing at all is drawn until there is something
+ * to draw — no skeleton, no empty headings — because a "Cast" heading over a
+ * blank space reads as a lookup that failed, and for a title none of the
+ * catalogues has heard of that impression would be permanent and wrong.
+ *
+ * That reasoning holds for the *settled* case and was wrong for the wait. Five
+ * third-party hosts are being asked, Wikidata alone was measured at 11.3s on
+ * Breaking Bad, and during all of it the page said nothing whatsoever — so the
+ * viewer could not tell a slow lookup from a title with no entry, which is
+ * exactly the distinction the outcomes exist to preserve. `pending` draws one
+ * quiet line naming what is being fetched; when it clears with nothing found,
+ * the original rule applies again and the component renders `null`.
+ *
+ * **Everything found is shown.** There is no "show all" toggle on the cast or
+ * on the production notes. A collapsed list hides the thing the viewer came to
+ * read behind a button that has to be discovered, and the rail already scrolls
+ * — `Poster` lazy-loads, so a 250-strong anime cast costs its images only as
+ * they are scrolled to.
  *
  * **A source that failed is never an error on the page.** It goes in one muted
  * line at the bottom, beside the sources that did answer. The viewer came here
@@ -62,10 +74,38 @@ interface TitleMetadataProps {
    * *provider's* tags, and only the caller knows which those were.
    */
   providerTags?: string[];
+  /**
+   * The catalogues are being asked and have not finished.
+   *
+   * Owned by the caller rather than derived from `metadata`, because the
+   * longest part of the wait is *before* the first record exists — the id is
+   * resolved from the title first, and until that returns there is no
+   * `ExtendedMetadata` at all and nothing here could read a flag off.
+   */
+  pending?: boolean;
 }
 
-/** Cast shown before "Show all". Two rows on a typical window. */
-const CAST_PREVIEW = 12;
+/**
+ * One line saying a lookup is running, and how far it has got.
+ *
+ * Deliberately a sentence rather than a skeleton. A shimmering placeholder
+ * promises a specific shape of content and this cannot promise any — for a
+ * title the catalogues have never heard of the honest outcome is that nothing
+ * appears, and a skeleton would have spent the whole wait implying otherwise.
+ */
+const MetadataStatus: React.FC<{ answered: string[] }> = ({ answered }) => (
+  <p className="metadata-status" role="status">
+    <Loader2 size={13} className="spin" />
+    <span>
+      Looking up cast, crew, ratings and production notes…
+      {answered.length > 0 && (
+        // Named as they land, so a slow source is visibly one source rather
+        // than the whole lookup being stuck.
+        <span className="metadata-status__done"> {answered.join(', ')} answered.</span>
+      )}
+    </span>
+  </p>
+);
 
 const PersonCard: React.FC<{ person: CreditPerson }> = ({ person }) => {
   const described = describeCredit(person);
@@ -147,10 +187,8 @@ export const TitleMetadata: React.FC<TitleMetadataProps> = ({
   metadata,
   fallbackActors,
   providerTags,
+  pending = false,
 }) => {
-  const [castExpanded, setCastExpanded] = useState(false);
-  const [notesExpanded, setNotesExpanded] = useState(false);
-
   const { cast, crew } = useMemo(() => groupCredits(metadata?.people), [metadata?.people]);
 
   /**
@@ -281,12 +319,21 @@ export const TitleMetadata: React.FC<TitleMetadataProps> = ({
    * enrichment *replacing* something with a blank space on every title the
    * catalogues do not cover.
    */
-  const showFallbackOnly = !hasAnything(metadata) && (fallbackActors?.length ?? 0) > 0;
+  // The four-way decision lives beside this file rather than in it, so it can
+  // be tested — Node's type stripping cannot load JSX. See `metadataSection.ts`
+  // for what each outcome costs when it is the wrong one.
+  const section = metadataSectionState({ metadata, fallbackActors, pending });
+  const looking = shouldShowStatus({ metadata, fallbackActors, pending });
+  const answered = answeringSources(metadata?.outcomes);
 
-  if (showFallbackOnly) {
+  if (section === 'fallback') {
     return (
       <section className="detail-facts">
         <h2 className="detail-facts__heading">Cast</h2>
+        {/* The provider's flat names are on screen, and the catalogues may
+            still add faces and characters to them. Saying so is what stops the
+            richer list appearing a few seconds later as if from nowhere. */}
+        {looking && <MetadataStatus answered={answered} />}
         <ul className="detail-facts__people">
           {fallbackActors!.map((actor) => (
             <li key={actor} className="detail-facts__person">
@@ -298,19 +345,28 @@ export const TitleMetadata: React.FC<TitleMetadataProps> = ({
     );
   }
 
-  // Nothing to say, and deliberately nothing drawn. See the header.
-  if (!hasAnything(metadata) || !metadata) return null;
+  if (section !== 'content' || !metadata) {
+    // Still being asked: one line, so the wait is visible work rather than an
+    // absence. Settled with nothing: the original rule, and nothing is drawn.
+    return looking ? (
+      <section className="detail-facts">
+        <h2 className="detail-facts__heading">About</h2>
+        <MetadataStatus answered={answered} />
+      </section>
+    ) : null;
+  }
 
-  const visibleCast = castExpanded ? cast : cast.slice(0, CAST_PREVIEW);
-  const visibleNotes = notesExpanded ? notes : notes.slice(0, 2);
-  const answered = answeringSources(metadata.outcomes);
   const failed = failedSources(metadata.outcomes);
 
   return (
     <>
-      {(metadata.ratings?.length || facts.length > 0 || extraGenres.length > 0) && (
+      {(metadata.ratings?.length || facts.length > 0 || extraGenres.length > 0 || looking) && (
         <section className="detail-facts">
           <h2 className="detail-facts__heading">About</h2>
+
+          {/* Above the facts rather than below them: rows arrive as sources
+              land, so this explains a table that is about to grow. */}
+          {looking && <MetadataStatus answered={answered} />}
 
           {extraGenres.length > 0 && (
             <div className="metadata-genres">
@@ -396,7 +452,11 @@ export const TitleMetadata: React.FC<TitleMetadataProps> = ({
         <section className="detail-facts">
           <h2 className="detail-facts__heading">
             Cast
-            {stillLoading(metadata) && (
+            {/* The count is stated because the rail scrolls: without it there
+                is no way to tell a list of twelve from the first twelve of a
+                hundred, which is the one thing a scroll bar cannot say. */}
+            <span className="detail-facts__count">{cast.length}</span>
+            {looking && (
               // Said only while a source is genuinely still expected. A spinner
               // that outlives the request is worse than no spinner, so this
               // reads off `partial` rather than off a timer.
@@ -404,7 +464,7 @@ export const TitleMetadata: React.FC<TitleMetadataProps> = ({
             )}
           </h2>
           <div className="credit-rail">
-            {visibleCast.map((person, index) => (
+            {cast.map((person, index) => (
               <PersonCard
                 // Name alone is not unique: one performer can hold two credits
                 // on one title, and React would collapse them into one card.
@@ -413,15 +473,6 @@ export const TitleMetadata: React.FC<TitleMetadataProps> = ({
               />
             ))}
           </div>
-          {cast.length > CAST_PREVIEW && (
-            <button
-              type="button"
-              className="btn btn-sm metadata-more"
-              onClick={() => setCastExpanded((open) => !open)}
-            >
-              {castExpanded ? 'Show fewer' : `Show all ${cast.length}`}
-            </button>
-          )}
         </section>
       )}
 
@@ -429,19 +480,10 @@ export const TitleMetadata: React.FC<TitleMetadataProps> = ({
         <section className="detail-facts">
           <h2 className="detail-facts__heading">Behind the scenes</h2>
           <div className="metadata-notes">
-            {visibleNotes.map((note) => (
+            {notes.map((note) => (
               <NoteBlock key={`${note.heading}:${note.attribution.url}`} note={note} />
             ))}
           </div>
-          {notes.length > 2 && (
-            <button
-              type="button"
-              className="btn btn-sm metadata-more"
-              onClick={() => setNotesExpanded((open) => !open)}
-            >
-              {notesExpanded ? 'Show fewer' : `Show all ${notes.length} sections`}
-            </button>
-          )}
         </section>
       )}
 

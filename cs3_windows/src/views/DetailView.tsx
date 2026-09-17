@@ -203,6 +203,9 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [saved, setSaved] = useState(false);
   const [provenance, setProvenance] = useState<DetailHeroProvenance>({});
 
+  /** The catalogues are being asked and have not finished. See the effect. */
+  const [metadataPending, setMetadataPending] = useState(false);
+
   /** How the background source search for this page is getting on. */
   const [prefetch, setPrefetch] = useState<PrefetchState | null>(null);
 
@@ -599,6 +602,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
     detailUrlRef.current = url ?? null;
     if (!url) {
       setExtended(null);
+      // Cleared here too, or navigating away from a title mid-lookup leaves a
+      // spinner running against a request nobody is waiting on — which is the
+      // one failure worse than showing no spinner at all.
+      setMetadataPending(false);
       return;
     }
 
@@ -608,13 +615,28 @@ export const DetailView: React.FC<DetailViewProps> = ({
     // under the new title's name for as long as the fetch takes — which is the
     // kind of wrongness a viewer reads as the app having mixed up two films.
     setExtended(null);
+    /**
+     * Set before the first request, not after the first reply.
+     *
+     * This is the half `ExtendedMetadata.partial` cannot cover. For a page
+     * whose provider published no IMDb id the lookup begins by resolving one
+     * from the title, and until that returns there is no record at all — so a
+     * flag read off the record would leave the longest part of the wait
+     * looking exactly like a title nothing has an entry for.
+     */
+    setMetadataPending(true);
 
     void (async () => {
       const cached = await window.cloudstream?.peekExtendedMetadata?.(url);
       if (cancelled) return;
       // Drawn at once when it is already known, so revisiting a title has no
       // second paint at all.
-      if (cached?.metadata) setExtended(cached.metadata);
+      if (cached?.metadata) {
+        setExtended(cached.metadata);
+        // A fresh hit is the whole answer; only a stale one has a refresh
+        // behind it worth announcing.
+        if (!cached.stale) setMetadataPending(false);
+      }
 
       const answer = await window.cloudstream?.getExtendedMetadata?.({
         url,
@@ -623,7 +645,12 @@ export const DetailView: React.FC<DetailViewProps> = ({
         title: detail?.name,
         year: detail?.year,
       });
-      if (cancelled || !answer?.metadata) return;
+      if (cancelled) return;
+      // Cleared whatever came back, including nothing. The alternative is a
+      // spinner that outlives its request, which is worse than no spinner —
+      // the same rule `stillLoading` follows for the record's own flag.
+      setMetadataPending(false);
+      if (!answer?.metadata) return;
       setExtended(answer.metadata);
     })();
 
@@ -641,6 +668,12 @@ export const DetailView: React.FC<DetailViewProps> = ({
    */
   useEffect(() => {
     const dispose = window.cloudstream?.onExtendedMetadata?.((metadata) => {
+      // A completed record ends the wait even if the awaited call above has not
+      // returned yet — the push arrives first for a title that was already
+      // being fetched for someone else.
+      if (metadata.url === detailUrlRef.current && !metadata.partial) {
+        setMetadataPending(false);
+      }
       setExtended((current) => {
         if (metadata.url !== detailUrlRef.current) return current;
         // A partial snapshot must never replace a complete one: the sources
@@ -1579,6 +1612,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         metadata={extended}
         fallbackActors={detail.actors}
         providerTags={detail.tags}
+        pending={metadataPending}
       />
 
       {(detail.recommendations?.length ?? 0) > 0 && onSelectMedia && (

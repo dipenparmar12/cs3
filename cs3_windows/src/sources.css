@@ -6215,6 +6215,47 @@
   color: var(--text-subtle);
 }
 
+/* The lookup, while it is running.
+
+   Quiet on purpose. Five third-party hosts are being asked and Wikidata alone
+   was measured at 11.3s, so this is on screen for a while — it has to be
+   legible enough to explain the wait and plain enough not to compete with the
+   page it sits on. No border and no card: it is a sentence, and it is replaced
+   by content rather than filling a space content will later occupy. */
+.metadata-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin: 0 0 0.85rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.metadata-status > svg {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+  color: var(--accent-light);
+}
+
+/* Which catalogues have already answered. Dimmer than the sentence it follows:
+   it is reassurance that progress is being made, not the message itself. */
+.metadata-status__done { color: var(--text-subtle); }
+
+/* How many credits the rail holds. The rail scrolls, and a scroll bar cannot
+   say whether it is showing twelve of twelve or twelve of two hundred. */
+.detail-facts__count {
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+
 /* Genres the provider did not supply. Chips rather than a fact row: they are
    a set with no order and no label worth repeating, and the hero above already
    draws the provider's own tags in exactly this shape. */
@@ -6309,7 +6350,6 @@
   text-decoration: underline;
 }
 
-.metadata-more { margin-top: 0.75rem; }
 
 /* Stated, never raised. A catalogue being unreachable is not worth an error
    state on a page the viewer opened to watch something — but it is the first

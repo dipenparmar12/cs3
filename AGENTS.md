@@ -1910,10 +1910,30 @@ of its fields, so `cinemetaExtras.ts` is a new parse of a reply already paid for
   Without that, enrichment would *replace* the names on every title the
   catalogues do not cover rather than adding to them — a large part of this
   corpus, since providers scrape sites rather than databases.
-- **Nothing renders until there is something to render** — not a skeleton, not an
-  empty heading. A "Cast" heading over a blank space reads as a lookup that
-  failed, and for a title nothing has an entry for that impression would be
-  permanent and wrong.
+- **Nothing *settled* renders empty, but a lookup in progress says so.** The
+  rule was once "nothing renders until there is something to render", and the
+  half of it about the settled case still holds: a "Cast" heading over a blank
+  space reads as a lookup that failed, and for a title nothing has an entry for
+  that impression would be permanent and wrong. The half about the *wait* was
+  wrong. Five hosts are asked and Wikidata alone measured 11.3s, and for all of
+  it the page said nothing — so a slow fetch and a title no catalogue carries
+  produced the same screen, collapsing the exact distinction `empty` vs `failed`
+  exists to keep. `metadataSection.ts` owns the four-way decision (`looking` /
+  `fallback` / `content` / `nothing`); it is a plain `.ts` beside the component
+  because Node's type stripping cannot load JSX, same as `settingsLevel.ts`.
+- **`pending` is the caller's flag and `partial` is the record's, and both are
+  needed.** `partial` only exists once a record does, and for a page whose
+  provider published no IMDb id the lookup *begins* by resolving one from the
+  title — so the longest part of the wait happens while there is nothing to read
+  a flag off. `DetailView` clears `pending` on every exit from that effect,
+  including the no-URL path: a spinner that outlives its request is worse than
+  no spinner.
+- **There is no "show all" on the cast or the notes.** Everything found is
+  drawn. A collapsed list hides what the viewer came to read behind a button
+  they have to find; the rail already scrolls and `Poster` lazy-loads, so a
+  250-strong anime cast costs its images only as they are scrolled to. The
+  heading states the count, because a scroll bar cannot say whether it is
+  showing twelve of twelve or twelve of two hundred.
 - **Ratings are never normalised on ingest** (PRD-41 §11.5). Value plus
   `scaleMin`/`scaleMax`, as published; `normalisedRating` scales at read time for
   sorting only. Rotten Tomatoes' 91% rendered as "9.1/10" is a misquote, not a
