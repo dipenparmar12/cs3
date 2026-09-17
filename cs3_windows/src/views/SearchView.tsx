@@ -578,12 +578,22 @@ const SourceSummary: React.FC<{ snapshot: SearchSnapshot }> = ({ snapshot }) => 
   const [open, setOpen] = useState(false);
   const ordered = [...snapshot.outcomes].sort((a, b) => b.count - a.count);
   const failed = ordered.filter((outcome) => outcome.state === 'failed').length;
+  /**
+   * Counted, but never as failures.
+   *
+   * A catalogue-only provider answering "does not implement that operation" is
+   * working exactly as designed. It used to be tallied beside a timed-out
+   * scraper, so a search that found what it was looking for reported "4 failed"
+   * and read as broken.
+   */
+  const unsupported = ordered.filter((outcome) => outcome.state === 'unsupported').length;
 
   return (
     <details className="search-sources" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>
         {snapshot.outcomes.length} source{snapshot.outcomes.length === 1 ? '' : 's'} asked
         {failed > 0 ? ` · ${failed} failed` : ''}
+        {unsupported > 0 ? ` · ${unsupported} cannot search` : ''}
       </summary>
       {failed > 0 && (
         <div className="search-sources__copy">
@@ -616,9 +626,15 @@ const SourceRow: React.FC<{ outcome: SearchSourceOutcome }> = ({ outcome }) => (
     <span className="search-sources__detail">
       {outcome.state === 'failed'
         ? (outcome.error ?? 'failed')
-        : outcome.state === 'pending'
-          ? 'not asked'
-          : `${outcome.count} result${outcome.count === 1 ? '' : 's'}`}
+        : outcome.state === 'unsupported'
+          ? // Its own sentence, not the provider's exception text. "This
+            // provider does not implement that operation" is a stack-trace
+            // phrase for a browse-only catalogue, which is an ordinary thing
+            // to be.
+            'Browse only — this source has no search'
+          : outcome.state === 'pending'
+            ? 'not asked'
+            : `${outcome.count} result${outcome.count === 1 ? '' : 's'}`}
     </span>
     {outcome.latencyMs !== undefined && (
       <span className="search-sources__latency">{Math.round(outcome.latencyMs / 100) / 10}s</span>

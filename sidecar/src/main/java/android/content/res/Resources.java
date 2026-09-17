@@ -20,8 +20,9 @@ public class Resources {
 
     private static UnsupportedAndroidApiException unsupported(String member) {
         return new UnsupportedAndroidApiException(
-                "Resources." + member + " is not available on desktop. This extension ships an "
-                        + "Android resource table, which has no desktop equivalent.");
+                "Resources." + member,
+                "This extension ships an Android resource table, which has no desktop "
+                        + "equivalent.");
     }
 
     /**

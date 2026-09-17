@@ -1,3 +1,4 @@
+import { describeError } from '../../src/utils/errors.ts';
 /**
  * What a page's subrequests mean to a `WebViewResolver`.
  *
@@ -166,7 +167,7 @@ export function compilePattern(source: string): CompiledPattern {
     return {
       source,
       regex: null,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: describeError(error),
     };
   }
 }

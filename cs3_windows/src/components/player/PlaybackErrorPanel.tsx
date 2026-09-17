@@ -14,6 +14,8 @@ import type { TorrentResult } from '../../types/torrent';
 import { CopyErrorButton } from '../CopyErrorButton';
 import { ExternalPlayerFallback } from './ExternalPlayerFallback';
 import { provenanceChain, sourceAddress, type SourceProvenance } from '../../utils/sourceExport';
+import { plainMessage } from '../../utils/experienceMode';
+import { useIsDeveloper } from '../../utils/ExperienceModeContext';
 
 /**
  * The one surface shown when a stream will not play.
@@ -72,6 +74,20 @@ export const PlaybackErrorPanel: React.FC<{
   onConvertHere,
 }) => {
   const { message: copied, flash: setCopied } = useFlash<string>(2000);
+  const isDeveloper = useIsDeveloper();
+  /**
+   * What the viewer reads, and what they can ask for.
+   *
+   * The internal message is the good one — it names the status code, the stage,
+   * the provider — and that is exactly why it is the wrong sentence to open
+   * with. `plainMessage` keeps it whole in `detail`; nothing is lost, it is
+   * demoted. Developer mode opens with the detail already showing, because
+   * somebody in that mode asked for it and a second click is just friction.
+   */
+  const plain = plainMessage(message);
+  const hasDetail = plain.detail !== '' && plain.detail !== plain.summary;
+  const [showDetail, setShowDetail] = React.useState(false);
+  const detailOpen = isDeveloper || showDetail;
 
   const write = useCallback(async (label: string, text: string) => {
     if (!text.trim()) return;
@@ -122,22 +138,47 @@ export const PlaybackErrorPanel: React.FC<{
         <h3 className="playback-error__headline">
           {dead ? 'That source is gone' : 'This source would not play'}
         </h3>
-        <p className="playback-error__message">{message}</p>
+        <p className="playback-error__message">{plain.summary}</p>
+
+        {/*
+          The original, one click away. Progressive disclosure rather than a
+          mode switch: somebody hitting a failure they want to report should not
+          have to go to Settings and come back to read what it said.
+        */}
+        {hasDetail && !isDeveloper && (
+          <button
+            type="button"
+            className="playback-error__detail-toggle"
+            aria-expanded={showDetail}
+            onClick={() => setShowDetail((open) => !open)}
+          >
+            {showDetail ? 'Hide details' : 'Show details'}
+          </button>
+        )}
+        {hasDetail && detailOpen && <p className="playback-error__detail">{plain.detail}</p>}
 
         {/*
           What the app is doing about it right now. Failover is silent
           otherwise, and a viewer watching a dead frame has no way to tell
-          "trying the next one" from "given up".
+          "trying the next one" from "given up" — so this stays in both modes.
+          The *count* does not: "3 of 12" is a progress bar for our walk, and
+          the only thing it changes for a viewer is how long to keep waiting,
+          which "trying another source" already says.
         */}
-        {attempts && attempts.total > 0 && (
+        {stillTrying && (
           <p className="playback-error__attempts">
-            Tried {attempts.tried} of {attempts.total} source
-            {attempts.total === 1 ? '' : 's'}
-            {stillTrying ? ' — trying the next…' : ''}
+            {isDeveloper
+              ? `Tried ${attempts!.tried} of ${attempts!.total} sources — trying the next…`
+              : 'Trying another source…'}
           </p>
         )}
 
-        {chain && <p className="playback-error__origin">{chain}</p>}
+        {/*
+          Where the source came from is provenance, not an instruction. It tells
+          a maintainer which extension to look at and tells a viewer nothing
+          they can act on — the actions below are what they can act on.
+        */}
+        {chain && isDeveloper && <p className="playback-error__origin">{chain}</p>}
 
         {/*
           Download first, and deliberately so. Decoding and fetching are

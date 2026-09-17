@@ -1,6 +1,7 @@
 import type { SitePlugin } from '../../src/types/plugin';
 import type { DatastoreManager } from '../datastore';
 import type { PluginManager } from '../pluginManager';
+import { describeError } from '../../src/utils/errors.ts';
 
 /**
  * Over-the-air updates for installed extensions.
@@ -26,15 +27,66 @@ export interface AvailableUpdate {
   fileSize?: number;
   /** Author-supplied notes, when the repository carries them. */
   description?: string;
+  fileHash?: string;
+  jarUrl?: string;
+  jarHash?: string;
+  jarFileSize?: number;
+  /**
+   * Why this counts as an update.
+   *
+   * `newer` is a version bump. `republished` is the same version number with
+   * different published bytes, which this ecosystem does constantly: a
+   * maintainer fixes a scraper an hour after a site changes and pushes it
+   * without touching the version field. Comparing version numbers alone
+   * reported "everything is up to date" while every user of that extension sat
+   * on the copy that no longer works — the most common shape of "I pressed
+   * update and nothing happened".
+   */
+  reason: 'newer' | 'republished';
+}
+
+/**
+ * The maintainer's own word on an extension they publish.
+ *
+ * Every repository index carries a per-plugin `status` — `0` down, `1` ok, `2`
+ * slow, `3` beta — which is this ecosystem's entire health mechanism: the
+ * person who wrote the scraper marks it down when the site it scrapes changes,
+ * often hours before anyone else notices. The update check re-fetches every
+ * index anyway, so it has been reading this on every run and discarding it.
+ *
+ * Surfacing it is the difference between a user debugging a provider that its
+ * own author has already declared broken, and being told so. It is deliberately
+ * *not* an enable/disable action: a maintainer's status is information, and
+ * switching off a source someone chose on the strength of a number in a JSON
+ * file is the kind of silently-punitive behaviour the ranking exists to avoid.
+ */
+export interface ExtensionNotice {
+  internalName: string;
+  name: string;
+  /** The raw value, so an unrecognised one can be reported rather than guessed. */
+  status: number;
+  repositoryUrl: string;
+  message: string;
 }
 
 export interface UpdateCheckResult {
   checkedAt: number;
   updates: AvailableUpdate[];
+  /**
+   * Installed extensions their own maintainer has marked as not working.
+   *
+   * Separate from `warnings`, which is about repositories this app could not
+   * reach. This is the opposite: the repository answered, and what it said was
+   * "this one is down".
+   */
+  notices: ExtensionNotice[];
   /** Repositories that could not be reached; their plugins are simply unchanged. */
   warnings: string[];
   repositoriesChecked: number;
 }
+
+/** The maintainer status values upstream defines, and what each one means here. */
+const STATUS_DOWN = 0;
 
 export interface UpdateOutcome {
   internalName: string;
@@ -60,6 +112,40 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** How long after launch the startup/daily check runs, so it never competes with first paint. */
 const STARTUP_DELAY_MS = 30_000;
+
+/**
+ * Whether a repository is now publishing different bytes than are installed.
+ *
+ * Compared per artifact lane, and **only when both sides carry a hash for the
+ * same lane**. A repository that publishes no hashes at all gives nothing to
+ * compare and must not read as "changed" — that would re-download the whole
+ * catalogue on every check, forever. An installed record that predates hash
+ * recording is the same case seen from the other side, and is treated the same
+ * way for the same reason.
+ *
+ * The prefix and case are normalised because `fileHash` is written
+ * `sha256-<hex>` in some indexes and bare in others, and one install path
+ * strips it while another does not.
+ */
+function artifactChanged(installed: SitePlugin | undefined, remote: SitePlugin): boolean {
+  if (!installed) return false;
+  return (
+    hashDiffers(installed.fileHash, remote.fileHash) || hashDiffers(installed.jarHash, remote.jarHash)
+  );
+}
+
+function hashDiffers(a: string | undefined, b: string | undefined): boolean {
+  const left = normaliseHash(a);
+  const right = normaliseHash(b);
+  if (!left || !right) return false;
+  return left !== right;
+}
+
+function normaliseHash(value: string | undefined): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim().replace(/^sha256-/i, '').toLowerCase();
+  return trimmed.length > 0 ? trimmed : null;
+}
 
 export class ExtensionUpdater {
   private datastore: DatastoreManager;
@@ -203,6 +289,13 @@ export class ExtensionUpdater {
     );
 
     const warnings: string[] = [];
+    /*
+     * Keyed by name so an extension published by two repositories, one of which
+     * has marked it down, produces one notice rather than a contradiction.
+     * First writer wins, which is the repository listed first — the same
+     * first-wins rule the provider registry uses for name clashes.
+     */
+    const notices = new Map<string, ExtensionNotice>();
     // internalName -> best candidate seen, so a plugin present in two
     // repositories resolves to the highest version rather than to whichever
     // repository happened to be fetched last.
@@ -219,7 +312,7 @@ export class ExtensionUpdater {
       if (outcome.status === 'rejected') {
         warnings.push(
           `${repoUrl} could not be checked: ${
-            outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)
+            describeError(outcome.reason)
           }`
         );
         return;
@@ -230,12 +323,40 @@ export class ExtensionUpdater {
         const local = installed.get(remote.internalName);
         if (!local) continue;
 
+        if (Number(remote.status) === STATUS_DOWN && !notices.has(remote.internalName)) {
+          notices.set(remote.internalName, {
+            internalName: remote.internalName,
+            name: remote.name ?? remote.internalName,
+            status: STATUS_DOWN,
+            repositoryUrl: repoUrl,
+            message:
+              `${remote.name ?? remote.internalName} is marked as not working by its maintainer. ` +
+              'Results from it are expected to be empty until they publish a fix — which this app ' +
+              'will pick up on its next update check.',
+          });
+        }
+
         const remoteVersion = Number(remote.version ?? 0);
         const localVersion = Number(local.version ?? 0);
-        if (!Number.isFinite(remoteVersion) || remoteVersion <= localVersion) continue;
+        if (!Number.isFinite(remoteVersion)) continue;
 
+        const newer = remoteVersion > localVersion;
+        const republished =
+          !newer && remoteVersion === localVersion && artifactChanged(local.meta, remote);
+        if (!newer && !republished) continue;
+        const reason: AvailableUpdate['reason'] = newer ? 'newer' : 'republished';
+
+        /*
+         * One plugin can be published by two repositories. The highest version
+         * wins; at equal versions a real bump beats a republish, because a
+         * republish is only ever offered against the copy that is installed and
+         * a bump is evidence about the artifact itself.
+         */
         const existing = candidates.get(remote.internalName);
-        if (existing && existing.availableVersion >= remoteVersion) continue;
+        if (existing) {
+          if (existing.availableVersion > remoteVersion) continue;
+          if (existing.availableVersion === remoteVersion && existing.reason === 'newer') continue;
+        }
 
         candidates.set(remote.internalName, {
           internalName: remote.internalName,
@@ -246,6 +367,11 @@ export class ExtensionUpdater {
           downloadUrl: remote.url,
           fileSize: remote.fileSize,
           description: remote.description,
+          fileHash: remote.fileHash,
+          jarUrl: remote.jarUrl,
+          jarHash: remote.jarHash,
+          jarFileSize: remote.jarFileSize,
+          reason,
         });
       }
     });
@@ -254,6 +380,7 @@ export class ExtensionUpdater {
     const result: UpdateCheckResult = {
       checkedAt: Date.now(),
       updates,
+      notices: [...notices.values()].sort((a, b) => a.name.localeCompare(b.name)),
       warnings,
       repositoriesChecked: repoUrls.length,
     };
@@ -267,6 +394,81 @@ export class ExtensionUpdater {
   // --- applying ------------------------------------------------------------
 
   /**
+   * Finds the update to apply, asking the repository when the cache cannot say.
+   *
+   * The cache is a snapshot of the last check, and a user pressing Update does
+   * not know that. Refusing with "check for updates first" is a dead end
+   * produced entirely by our own bookkeeping: the app knows which repository
+   * published this extension and can simply ask. It also covers the case where
+   * the cache is merely *stale* — checked yesterday, the entry dropped by a
+   * successful update since, the extension re-listed at a newer version today.
+   *
+   * The live answer is authoritative when it disagrees with the cache, because
+   * a cached record can name a version the repository has already replaced.
+   */
+  private async resolveUpdate(internalName: string): Promise<AvailableUpdate | null> {
+    const cached = this.getCachedUpdates().find((u) => u.internalName === internalName);
+    if (cached) return cached;
+
+    const installed = this.plugins
+      .getInstalledPluginRecords()
+      .find((record) => record.internalName === internalName);
+    if (!installed) return null;
+
+    /*
+     * The extension's own repository first, then the rest. A plugin present in
+     * two repositories should be re-fetched from the one it was installed from
+     * — that is the publisher the user chose — and the fallback exists because
+     * records written before repository stamping carry no URL at all.
+     */
+    const own = installed.meta?.repositoryUrl;
+    const repositories = [
+      ...(own ? [own] : []),
+      ...this.plugins.getInstalledRepositories().filter((url) => url !== own),
+    ];
+
+    const localVersion = Number(installed.version ?? 0);
+
+    for (const repositoryUrl of repositories) {
+      let plugins: SitePlugin[];
+      try {
+        plugins = (await this.plugins.fetchRepository(repositoryUrl)).plugins;
+      } catch {
+        // An unreachable repository is not an answer; try the next one.
+        continue;
+      }
+
+      const remote = plugins.find((plugin) => plugin.internalName === internalName);
+      if (!remote) continue;
+
+      const remoteVersion = Number(remote.version ?? 0);
+      if (!Number.isFinite(remoteVersion)) continue;
+      const newer = remoteVersion > localVersion;
+      const republished =
+        !newer && remoteVersion === localVersion && artifactChanged(installed.meta, remote);
+      if (!newer && !republished) continue;
+
+      return {
+        internalName,
+        name: remote.name ?? internalName,
+        installedVersion: localVersion,
+        availableVersion: remoteVersion,
+        repositoryUrl,
+        downloadUrl: remote.url,
+        fileSize: remote.fileSize,
+        description: remote.description,
+        fileHash: remote.fileHash,
+        jarUrl: remote.jarUrl,
+        jarHash: remote.jarHash,
+        jarFileSize: remote.jarFileSize,
+        reason: newer ? 'newer' : 'republished',
+      };
+    }
+
+    return null;
+  }
+
+  /**
    * Updates one extension in place.
    *
    * Delegates to the normal install path, which downloads, verifies the
@@ -275,7 +477,7 @@ export class ExtensionUpdater {
    * would replace a working extension with a broken one.
    */
   public async updatePlugin(internalName: string): Promise<UpdateOutcome> {
-    const update = this.getCachedUpdates().find((u) => u.internalName === internalName);
+    const update = await this.resolveUpdate(internalName);
     if (!update) {
       return {
         internalName,
@@ -295,6 +497,10 @@ export class ExtensionUpdater {
       repositoryUrl: update.repositoryUrl,
       fileSize: update.fileSize,
       description: update.description,
+      fileHash: update.fileHash,
+      jarUrl: update.jarUrl,
+      jarHash: update.jarHash,
+      jarFileSize: update.jarFileSize,
     };
 
     // Re-resolve against the live repository so the hash is the one the
@@ -358,15 +564,21 @@ export class ExtensionUpdater {
         this.plugins.archivePathFor(update.repositoryUrl, internalName)
       );
 
-      if (!verified.ok && preserved) {
-        const restored = await this.plugins.rollbackPlugin(update.repositoryUrl, internalName);
+      if (!verified.ok) {
+        let rollbackMsg = '';
+        if (preserved) {
+          const restored = await this.plugins.rollbackPlugin(update.repositoryUrl, internalName);
+          rollbackMsg = restored.ok
+            ? `v${update.installedVersion} has been restored.`
+            : `the previous version could not be restored: ${restored.message}`;
+        } else {
+          rollbackMsg = 'no previous version backup was available to restore.';
+        }
         const result: UpdateOutcome = {
           internalName,
           ok: false,
           fromVersion: update.installedVersion,
-          message: restored.ok
-            ? `${update.name} v${plugin.version} does not load (${verified.message}); v${update.installedVersion} has been restored.`
-            : `${update.name} v${plugin.version} does not load (${verified.message}), and the previous version could not be restored: ${restored.message}`,
+          message: `${update.name} v${plugin.version} does not load (${verified.message}); ${rollbackMsg}`,
         };
         this.emit('extension:updateFinished', result);
         return result;
@@ -396,7 +608,19 @@ export class ExtensionUpdater {
    * about when only one archive was in flight.
    */
   public async updateAll(internalNames?: string[]): Promise<UpdateOutcome[]> {
-    const targets = internalNames ?? this.getCachedUpdates().map((u) => u.internalName);
+    /*
+     * "Update everything" means everything that is out of date now, not
+     * everything the last check happened to find. With no cached result — a
+     * fresh launch, or a check that has never run — this used to iterate an
+     * empty list and report a successful update of nothing, which is
+     * indistinguishable from "you are up to date" and was wrong every time.
+     */
+    let targets = internalNames;
+    if (!targets) {
+      let known = this.getCachedUpdates();
+      if (known.length === 0) known = (await this.checkForUpdates()).updates;
+      targets = known.map((u) => u.internalName);
+    }
     const outcomes: UpdateOutcome[] = [];
 
     for (let i = 0; i < targets.length; i++) {

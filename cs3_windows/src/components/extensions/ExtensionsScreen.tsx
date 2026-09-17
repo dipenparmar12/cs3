@@ -36,6 +36,7 @@ import { RepositoryCatalog } from './RepositoryCatalog';
 import { ExtensionCatalog } from './ExtensionCatalog';
 import type { SitePlugin } from '../../types/plugin';
 import './extensions.css';
+import { describeError } from '../../utils/errors';
 
 /**
  * Two tabs, not three.
@@ -134,7 +135,7 @@ export const ExtensionsScreen: React.FC = () => {
         setPlugins(result.plugins ?? []);
         setWarnings(result.warnings ?? []);
       } catch (error) {
-        setBrowseError(error instanceof Error ? error.message : String(error));
+        setBrowseError(describeError(error));
       } finally {
         setBrowseLoading(false);
       }

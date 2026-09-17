@@ -4,6 +4,7 @@ import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { describeError } from '../src/utils/errors.ts';
 
 /**
  * Hands a stream to a media player that already knows how to play it.
@@ -422,7 +423,7 @@ export class ExternalPlayerService {
         child.unref();
         return { ok: true };
       } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        return { ok: false, error: describeError(error) };
       }
     }
 
@@ -449,7 +450,7 @@ export class ExternalPlayerService {
       child.unref();
       return { ok: true };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: describeError(error) };
     }
   }
 }

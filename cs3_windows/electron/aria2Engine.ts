@@ -5,6 +5,7 @@ import net from 'net';
 import path from 'path';
 import fs from 'fs';
 import { app } from 'electron';
+import { describeError } from '../src/utils/errors.ts';
 
 export interface Aria2Progress {
   gid: string;
@@ -209,7 +210,7 @@ export class Aria2Engine {
       this.lastError = null;
       return true;
     } catch (e) {
-      this.lastError = e instanceof Error ? e.message : String(e);
+      this.lastError = describeError(e);
       return false;
     }
   }

@@ -3,6 +3,7 @@ import path from 'path';
 import http from 'http';
 import https from 'https';
 import type { IncomingMessage } from 'http';
+import { describeError } from '../src/utils/errors.ts';
 
 /**
  * Built-in progressive HTTP(S) downloader.
@@ -124,7 +125,7 @@ export function startHttpDownload(options: HttpDownloadOptions): HttpDownloadHan
         handleResponse(url, redirectCount, resumeFrom, response, seenUrls);
       });
     } catch (error) {
-      failOrRetry(error instanceof Error ? error.message : String(error));
+      failOrRetry(describeError(error));
       return;
     }
 
@@ -245,7 +246,7 @@ export function startHttpDownload(options: HttpDownloadOptions): HttpDownloadHan
     } catch (error) {
       options.onError(
         `Downloaded but could not be moved into place: ${
-          error instanceof Error ? error.message : String(error)
+          describeError(error)
         }`
       );
       return;

@@ -5,6 +5,7 @@ import { JsonFileStore } from '../util/jsonFileStore.ts';
 import { TorrentMetadataCache } from './torrentMetadata.ts';
 import { decodeTorrentFile, parseMagnet, type TorrentFileInfo } from './torrentFile.ts';
 import { readTorrentContents, type TorrentContents } from './torrentContents.ts';
+import { describeError } from '../../src/utils/errors.ts';
 
 /**
  * Opening a `.torrent` or a magnet as *content*, rather than as a download.
@@ -121,7 +122,7 @@ export class TorrentImportService {
       return {
         ok: false,
         error: `That file could not be read: ${
-          error instanceof Error ? error.message : String(error)
+          describeError(error)
         }`,
       };
     }

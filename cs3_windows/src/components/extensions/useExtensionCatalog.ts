@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderTreeRepository, SitePlugin } from '../../types/plugin';
 import type { OfficialRepository } from '../../../electron/officialRepositories';
+import { describeError } from '../../utils/errors';
 
 /**
  * The catalogue entry, re-exported from where it is defined.
@@ -101,7 +102,7 @@ export function useExtensionCatalog() {
       setState((current) => ({
         ...current,
         loading: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       }));
     }
   }, []);
@@ -137,7 +138,7 @@ export function useExtensionCatalog() {
         if (alive.current) {
           setState((current) => ({
             ...current,
-            error: error instanceof Error ? error.message : String(error),
+            error: describeError(error),
           }));
         }
       } finally {

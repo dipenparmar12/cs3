@@ -5,6 +5,7 @@ import path from 'path';
 import { spawnSync } from 'child_process';
 
 import { FastChunkDownloader, type DownloadProgress as FastProgress } from '../fastDownloader';
+import { describeError } from '../../src/utils/errors.ts';
 
 export interface SystemRuntimeStatus {
   ready: boolean;
@@ -137,8 +138,50 @@ export interface SystemRuntimeStatus {
  * near-miss on record here. And the `status` RPC now reports the method names
  * the jar answers, so a sidecar older than its host is named at the handshake
  * instead of surfacing later as one unexplained failure per feature.
+ *
+ * Generation 12 closes the *rest* of that near-miss family, and this time by
+ * enumeration rather than one report at a time. Four more shim methods were
+ * declaring `Object` where Android names a type — `Context.getAssets`,
+ * `Context.getContentResolver`, `Window.setBackgroundDrawable` and
+ * `Fragment.getResources` — which makes each of them a different method to the
+ * JVM than the one an extension calls, so the call site failed with
+ * `NoSuchMethodError` and the shim's own message was unreachable. Two of the
+ * four could already have named an existing shim type; `Fragment.getResources`
+ * is literally the method `Context.getResources` was fixed for, missed on a
+ * second class.
+ *
+ * `android.content.res.AssetManager` and `android.content.ContentResolver` are
+ * new, and exist to *be named*: they concede the type and refuse every
+ * operation, exactly as `PackageManager` does. A provisioned copy has neither
+ * class and the old descriptors, so an upgraded host asking for either gets the
+ * failure this generation removes.
+ *
+ * `ShimSignatureTest` now enumerates the rule the seven near-misses broke, so
+ * the eighth fails a test instead of a user's extension.
+ *
+ * Generation 13 serializes concurrent DEX translations in `DexTranslator` with
+ * `TRANSLATION_LOCK`, catches OOM with explicit GC + backoff retry, performs
+ * post-translation GC when heap exceeds 70%, and scales the JVM max heap up to
+ * 4GB dynamically. This prevents JVM heap exhaustion and OOM crashes during
+ * bulk extension updates.
+ *
+ * Generation 14 is `android.widget.Toast`, counted at 11 `NoClassDefFoundError`
+ * in one user's sessions. The class does nothing on a desktop and costs a whole
+ * extension load anyway, for round 3's reason: `Class.getMethod` resolves every
+ * public method's parameter and return types, so declaring a method that merely
+ * mentions `Toast` fails while the provider is being described — after it has
+ * registered — and the load is abandoned naming a class nobody called.
+ *
+ * It is the first widget shim here that does not throw on use, and the
+ * asymmetry is deliberate: a dialog is load-bearing and pretending it appeared
+ * would let a provider act on a choice nobody made, whereas Android's own
+ * `Toast.show()` returns immediately and tells its caller nothing, so refusing
+ * it would turn a call with no consequences into an aborted scrape. The text
+ * goes to stderr in the `Log` shim's shape instead, where `sidecarStderr`
+ * classifies it and the issue ledger can count it — not displayed, but not
+ * discarded either.
  */
-const RUNTIME_GENERATION = 11;
+const RUNTIME_GENERATION = 14;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {
@@ -767,7 +810,7 @@ export class RuntimeProvisioner {
           throw new Error(finalStatus.reason ?? 'Runtime verification failed.');
         }
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
+        const errorMsg = describeError(err);
         this.notifyProgress({
           step: 'error',
           progress: 0,
@@ -799,7 +842,7 @@ export class RuntimeProvisioner {
         }
         return await this.provisionRuntime();
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
+        const errorMsg = describeError(err);
         this.notifyProgress({
           step: 'error',
           progress: 0,

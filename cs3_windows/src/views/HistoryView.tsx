@@ -48,6 +48,7 @@ import {
   formatEventActionText,
 } from '../utils/historyGrouping';
 import { downloadHistoryCsv, toHistoryCsv } from '../utils/historyExport';
+import { useDismissable } from '../utils/useDismissable';
 
 interface HistoryViewProps {
   onSelectMedia: (item: SearchResponse) => void;
@@ -159,25 +160,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   const { message: exportSuccessMessage, flash: setExportSuccessMessage } = useFlash<string>(3500);
   const exportMenuRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!exportMenuOpen) return;
-    const onOutside = (e: PointerEvent) => {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
-        setExportMenuOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setExportMenuOpen(false);
-      }
-    };
-    document.addEventListener('pointerdown', onOutside, true);
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onOutside, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [exportMenuOpen]);
+  const closeExportMenu = useCallback(() => setExportMenuOpen(false), []);
+  useDismissable(exportMenuOpen, exportMenuRef, closeExportMenu);
 
   const handleExportFilteredCsv = () => {
     setExportMenuOpen(false);

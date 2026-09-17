@@ -1,5 +1,6 @@
 import type { DownloadTask } from '../types/download';
 import type { TorrentResult } from '../types/torrent';
+import { hasRealInfoHash, normaliseReleaseName } from './sourceIdentity.ts';
 
 /**
  * What makes two downloads the same download.
@@ -59,33 +60,11 @@ export interface DownloadVariant {
   audioCodecs?: string[];
 }
 
-/** Punctuation and case differ across refreshes; identity does not. */
-function normalise(value: string | undefined): string {
-  return (value ?? '')
-    .toLowerCase()
-    .replace(/\.(mkv|mp4|avi|m4v|ts)$/i, '')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-}
-
-/**
- * A real infohash addresses content; a synthetic one addresses a URL.
- *
- * Kept identical to `cs3/playedSource.ts`'s test on purpose — the two modules
- * answer the same question about the same objects, and letting them drift would
- * mean a source that can be resumed is not recognised as the download it
- * already has.
- */
-function hasRealInfoHash(variant: DownloadVariant): boolean {
-  if (variant.magnet || variant.torrentUrl) return true;
-  return /^[a-f0-9]{40}$/i.test(variant.infoHash ?? '');
-}
-
 /** The media half of the key: which title, and which episode of it. */
 function mediaKey(variant: DownloadVariant): string {
   const season = variant.season === undefined ? '' : String(variant.season);
   const episode = variant.episode === undefined ? '' : String(variant.episode);
-  return `${normalise(variant.mediaUrl)}|${season}|${episode}`;
+  return `${normaliseReleaseName(variant.mediaUrl)}|${season}|${episode}`;
 }
 
 /**
@@ -100,7 +79,7 @@ export function downloadVariantKey(variant: DownloadVariant): string {
   if (hasRealInfoHash(variant)) {
     const hash = (variant.infoHash ?? '').toLowerCase();
     // A magnet whose infohash was never parsed still addresses content by URI.
-    return `${media}|t:${hash || normalise(variant.magnet ?? variant.torrentUrl)}`;
+    return `${media}|t:${hash || normaliseReleaseName(variant.magnet ?? variant.torrentUrl)}`;
   }
 
   /**
@@ -108,12 +87,12 @@ export function downloadVariantKey(variant: DownloadVariant): string {
    * field guaranteed to differ between the first attempt and the recovery.
    */
   const parts = [
-    normalise(variant.providerName),
-    normalise(variant.releaseTitle),
+    normaliseReleaseName(variant.providerName),
+    normaliseReleaseName(variant.releaseTitle),
     variant.resolution ? String(variant.resolution) : '',
-    normalise(variant.quality),
-    (variant.languages ?? []).map(normalise).filter(Boolean).sort().join('+'),
-    (variant.audioCodecs ?? []).map(normalise).filter(Boolean).sort().join('+'),
+    normaliseReleaseName(variant.quality),
+    (variant.languages ?? []).map(normaliseReleaseName).filter(Boolean).sort().join('+'),
+    (variant.audioCodecs ?? []).map(normaliseReleaseName).filter(Boolean).sort().join('+'),
   ];
 
   /**
@@ -123,7 +102,7 @@ export function downloadVariantKey(variant: DownloadVariant): string {
    * is a different download rather than the same one re-resolved.
    */
   if (parts.every((part) => part === '')) {
-    return `${media}|u:${normalise(variant.directUrl)}`;
+    return `${media}|u:${normaliseReleaseName(variant.directUrl)}`;
   }
   return `${media}|p:${parts.join('|')}`;
 }

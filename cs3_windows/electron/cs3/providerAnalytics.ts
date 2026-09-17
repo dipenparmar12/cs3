@@ -11,7 +11,7 @@ import {
   type StageCounters,
   type StageOutcome,
 } from '../../src/types/analytics';
-import { classifyFailure } from './failureTaxonomy';
+import { classifyFailure, isScoredFailure } from './failureTaxonomy';
 
 /**
  * How every provider has actually behaved, counted.
@@ -251,6 +251,23 @@ export class ProviderAnalytics {
     if (!this.settings.enabled) return;
     if (!input.provider) return;
 
+    /**
+     * A failure that says nothing about the provider is not recorded at all.
+     *
+     * Not "recorded and then discounted": an attempt that was cancelled, or was
+     * made against an extension that is switched off, or asked a catalogue
+     * provider to do something it does not implement, is not a sample. Counting
+     * it in `attempts` alone would still move the success rate, which is the
+     * number the ranking is built on.
+     *
+     * This is the one funnel every observation passes through, which is the
+     * point. The rule used to live in the callers — `loadLinksDetailed` wrote
+     * `if (kind !== 'provider-missing')` out inline, `searchEach` had no guard
+     * at all — so whether the ranking followed its own stated rules depended on
+     * which call site you happened to be looking at.
+     */
+    if (input.outcome === 'failure' && !isScoredFailure(classifyFailure(input.error))) return;
+
     let record = this.records.get(input.provider);
     if (!record) {
       record = emptyRecord(input.provider);
@@ -286,6 +303,7 @@ export class ProviderAnalytics {
     if (input.outcome === 'success') record.lastSuccessAt = now;
     if (input.outcome === 'failure') {
       record.lastFailureAt = now;
+      // Only scored kinds reach here — see the guard at the top.
       const kind = classifyFailure(input.error);
       record.failureKinds[kind] = (record.failureKinds[kind] ?? 0) + 1;
     }

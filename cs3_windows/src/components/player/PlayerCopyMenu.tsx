@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { useFlash } from '../../utils/useFlash';
 import { Check, ClipboardCopy, MoreHorizontal } from 'lucide-react';
 import type { SourceCapabilityModel } from '../../types/media';
@@ -11,6 +11,7 @@ import {
   toSourceText,
   type SourceProvenance,
 } from '../../utils/sourceExport';
+import { useDismissable } from '../../utils/useDismissable';
 
 /**
  * Copy actions for the player, grouped into one menu.
@@ -76,21 +77,8 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
   const { message: copied, flash: setCopied } = useFlash<string>(2200);
   const wrapper = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onOutside = (event: PointerEvent) => {
-      if (wrapper.current && !wrapper.current.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('pointerdown', onOutside, true);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onOutside, true);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  const close = useCallback(() => setOpen(false), []);
+  useDismissable(open, wrapper, close);
 
   const write = useCallback(async (label: string, text: string) => {
     setOpen(false);

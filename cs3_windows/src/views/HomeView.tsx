@@ -7,6 +7,7 @@ import type { DiscoverySection } from '../../electron/cs3/discovery';
 import { TvType } from '../types/api';
 import { PosterCard } from '../components/PosterCard';
 import { CataloguePicker } from '../components/home/CataloguePicker';
+import { describeError } from '../utils/errors';
 
 /**
  * The home screen, built from what is actually popular.
@@ -86,7 +87,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
         setError(response?.error ?? 'Could not load the catalogue.');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeError(err));
     } finally {
       setLoading(false);
     }

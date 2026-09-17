@@ -73,6 +73,16 @@ public final class DexTranslator {
      */
     private static final int CACHE_GENERATION = 2;
 
+    /**
+     * Serializes dex2jar translations across worker threads.
+     *
+     * dex2jar builds extensive in-memory AST and instruction structures. Running
+     * multiple translations concurrently multiplies peak heap consumption and
+     * leads to OutOfMemoryError on bulk updates or cold starts. Serializing
+     * translation bounds peak memory to a single plugin at a time.
+     */
+    private static final Object TRANSLATION_LOCK = new Object();
+
     private final Path cacheRoot;
 
     /**
@@ -159,53 +169,82 @@ public final class DexTranslator {
                     manifest.name, true, null, null);
         }
 
-        // Translate to a temp file and move into place, so an interrupted run can
-        // never leave a partial jar that a later load would treat as cached.
-        //
-        // The temp name carries a nonce as well as the hash. Keying it on the
-        // hash alone made two concurrent translations of the *same* archive
-        // collide — which is not hypothetical: installing a plugin inspects it
-        // and loading it translates it again, and those calls run on separate
-        // workers. One would win the create and the other would fail with
-        // NoSuchFileException or FileAlreadyExistsException, surfacing as a
-        // bogus TRANSLATION_FAILED. The final move stays atomic, so a race now
-        // costs one duplicated translation instead of a spurious failure.
-        Path tmp = cacheRoot.resolve(sha + "." + UUID.randomUUID() + ".jar.tmp");
-        // Superseded jars for this archive are dead weight the moment the
-        // generation moves; removing them here rather than in a startup sweep
-        // keeps the clean-up next to the thing that caused it.
-        discardOtherGenerations(sha);
-        try {
-            BaseDexFileReader reader = MultiDexFileReader.open(packForReader(dexes));
-            Dex2jar.from(reader)
-                    .skipDebug(false)
-                    .topoLogicalSort()
-                    .noCode(false)
-                    .to(tmp);
+        synchronized (TRANSLATION_LOCK) {
+            // Re-check cache under lock in case another worker thread just completed it
+            if (Files.isRegularFile(out)) {
+                return new Outcome(true, out, sha, dexes.size(), countClasses(out),
+                        manifest.pluginClassName, manifest.requiresResources, manifest.version,
+                        manifest.name, true, null, null);
+            }
 
-            // Before the jar becomes a cache entry, not after: the cache is
-            // keyed by the archive's hash and a repaired jar must be what a
-            // later cache hit serves, or the fix would apply only on the very
-            // first load of each plugin.
-            if (nameRepair != null) nameRepair.repair(tmp);
+            // Translate to a temp file and move into place, so an interrupted run can
+            // never leave a partial jar that a later load would treat as cached.
+            Path tmp = cacheRoot.resolve(sha + "." + UUID.randomUUID() + ".jar.tmp");
+            // Superseded jars for this archive are dead weight the moment the
+            // generation moves; removing them here rather than in a startup sweep
+            // keeps the clean-up next to the thing that caused it.
+            discardOtherGenerations(sha);
+            try {
+                BaseDexFileReader reader = MultiDexFileReader.open(packForReader(dexes));
+                Dex2jar.from(reader)
+                        .skipDebug(false)
+                        .topoLogicalSort()
+                        .noCode(false)
+                        .to(tmp);
 
-            Files.move(tmp, out, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (Throwable t) {
-            // dex2jar throws Errors as well as Exceptions on malformed input.
-            try { Files.deleteIfExists(tmp); } catch (IOException ignored) { }
-            return Outcome.failure("TRANSLATION_FAILED",
-                    t.getClass().getSimpleName() + ": " + t.getMessage());
+                // Before the jar becomes a cache entry, not after: the cache is
+                // keyed by the archive's hash and a repaired jar must be what a
+                // later cache hit serves, or the fix would apply only on the very
+                // first load of each plugin.
+                if (nameRepair != null) nameRepair.repair(tmp);
+
+                Files.move(tmp, out, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (Throwable t) {
+                // dex2jar throws Errors as well as Exceptions on malformed input.
+                try { Files.deleteIfExists(tmp); } catch (IOException ignored) { }
+                if (t instanceof OutOfMemoryError) {
+                    System.gc();
+                    // Attempt one retry after GC in case freed memory allows translation to succeed
+                    try {
+                        Thread.sleep(150);
+                        BaseDexFileReader reader = MultiDexFileReader.open(packForReader(dexes));
+                        Dex2jar.from(reader)
+                                .skipDebug(false)
+                                .topoLogicalSort()
+                                .noCode(false)
+                                .to(tmp);
+                        if (nameRepair != null) nameRepair.repair(tmp);
+                        Files.move(tmp, out, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                    } catch (Throwable retryT) {
+                        try { Files.deleteIfExists(tmp); } catch (IOException ignored) { }
+                        System.gc();
+                        return Outcome.failure("TRANSLATION_FAILED",
+                                retryT.getClass().getSimpleName() + ": " + retryT.getMessage());
+                    }
+                } else {
+                    return Outcome.failure("TRANSLATION_FAILED",
+                            t.getClass().getSimpleName() + ": " + t.getMessage());
+                }
+            }
+
+            int classes = countClasses(out);
+            if (classes == 0) {
+                try { Files.deleteIfExists(out); } catch (IOException ignored) { }
+                return Outcome.failure("TRANSLATION_EMPTY", "Translation produced no classes.");
+            }
+
+            // Free AST buffers if heap is under pressure (>70% of max heap)
+            long free = Runtime.getRuntime().freeMemory();
+            long total = Runtime.getRuntime().totalMemory();
+            long max = Runtime.getRuntime().maxMemory();
+            if ((total - free) > (max * 0.70)) {
+                System.gc();
+            }
+
+            return new Outcome(true, out, sha, dexes.size(), classes,
+                    manifest.pluginClassName, manifest.requiresResources, manifest.version,
+                    manifest.name, false, null, null);
         }
-
-        int classes = countClasses(out);
-        if (classes == 0) {
-            try { Files.deleteIfExists(out); } catch (IOException ignored) { }
-            return Outcome.failure("TRANSLATION_EMPTY", "Translation produced no classes.");
-        }
-
-        return new Outcome(true, out, sha, dexes.size(), classes,
-                manifest.pluginClassName, manifest.requiresResources, manifest.version,
-                manifest.name, false, null, null);
     }
 
     /** Drops every cached translation. Used when the translator itself is upgraded. */

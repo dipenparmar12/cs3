@@ -148,8 +148,19 @@ public class Fragment {
         return null;
     }
 
-    public Object getResources() {
-        throw new UnsupportedAndroidApiException("androidx.fragment.app.Fragment.getResources");
+    /**
+     * Returns the shim type, not {@code Object}.
+     *
+     * <p>{@code Context.getResources} was fixed for exactly this reason and the
+     * fix was not carried here, so the same descriptor near-miss survived on a
+     * second class: an extension calling
+     * {@code ()Landroid/content/res/Resources;} on a Fragment got
+     * {@code NoSuchMethodError} instead of this method. The instance still
+     * throws on every accessor except {@code getDisplayMetrics}, which is the
+     * honest answer — see {@link android.content.res.Resources}.
+     */
+    public android.content.res.Resources getResources() {
+        return new android.content.res.Resources();
     }
 
     public String getString(int resId) {

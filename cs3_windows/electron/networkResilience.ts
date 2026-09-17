@@ -1,4 +1,5 @@
 import type { DiagnosticsSink } from './pluginManager';
+import { describeError } from '../src/utils/errors.ts';
 
 /**
  * Everything the app knows about network requests failing, in one place.
@@ -151,7 +152,7 @@ export function classifyNetworkError(error: unknown): NetworkFailure {
     retryable: !aborted && Boolean(code && (RETRYABLE_CODES.has(code) || nodeRetryable.has(code))),
     http2: Boolean(code && HTTP2_CODES.has(code)),
     aborted,
-    message: error instanceof Error ? error.message : String(error),
+    message: describeError(error),
   };
 }
 

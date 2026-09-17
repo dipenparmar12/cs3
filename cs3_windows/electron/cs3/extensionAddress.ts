@@ -66,3 +66,33 @@ export function looksLikeLinksHandle(target: string): boolean {
   const head = target.trimStart()[0];
   return head === '[' || head === '{';
 }
+
+/**
+ * Whether a handle is definitely a page address — the mirror of the above.
+ *
+ * The same confusion runs the other way and was still live. `extensionSources`
+ * calls `loadLinks(target)` first and only falls back to `load()` when that
+ * returns nothing, which is right — many providers' `loadLinks` handle really
+ * is a URL, so the order cannot simply be reversed. But when the target *is* a
+ * page address and the provider's `loadLinks` expects its own JSON, the first
+ * call throws inside the provider:
+ *
+ * ```
+ * BollyFlix    JsonParseException: Unrecognized token 'https'
+ *              at [Source: (String)"https://bollyflix.af/the-martian-2015-…"]
+ * HDO          JsonParseException: Unrecognized token 'https'
+ * CineSimkl    JsonParseException: Unrecognized token 'https'
+ * ```
+ *
+ * Three providers, three separate captured sessions, one shape. The retry then
+ * succeeds and the viewer gets their film — but the doomed first call was
+ * recorded at `error` level as *"could not read the page it was given; the site
+ * has probably changed"* and counted against the provider by the ranking. The
+ * site had not changed and the provider is fine; the call was a guess we made.
+ *
+ * Used to mark that first call speculative, not to skip it.
+ */
+export function looksLikePageAddress(target: string): boolean {
+  const head = target.trimStart();
+  return head.startsWith('http://') || head.startsWith('https://');
+}

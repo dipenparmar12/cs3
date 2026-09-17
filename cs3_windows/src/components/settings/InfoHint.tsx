@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { Info } from 'lucide-react';
+import { useDismissable } from '../../utils/useDismissable';
 
 /**
  * The explanation for one setting, out of the way until asked for.
@@ -21,23 +22,8 @@ export const InfoHint: React.FC<{ children: React.ReactNode; label?: string }> =
   const [open, setOpen] = useState(false);
   const wrapper = useRef<HTMLSpanElement | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    // Pointer-down rather than click: a click that lands on another control
-    // should dismiss this before that control reacts.
-    const onOutside = (event: PointerEvent) => {
-      if (wrapper.current && !wrapper.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener('keydown', onKey);
-    document.addEventListener('pointerdown', onOutside, true);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.removeEventListener('pointerdown', onOutside, true);
-    };
-  }, [open]);
+  const close = useCallback(() => setOpen(false), []);
+  useDismissable(open, wrapper, close);
 
   return (
     <span

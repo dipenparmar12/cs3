@@ -1,5 +1,13 @@
 import { fetchJson, postJson } from '../http.ts';
-import { buildMagnet, parseIntSafe, parseSize, type RawTorrent, type TorrentIndexer } from './base.ts';
+import {
+  buildMagnet,
+  parseIntSafe,
+  parseSize,
+  tryMirrors,
+  withEpisodeTerms,
+  type RawTorrent,
+  type TorrentIndexer,
+} from './base.ts';
 import type { IndexerConfig, IndexerQuery } from '../../../src/types/torrent';
 
 /**
@@ -206,21 +214,14 @@ export class StremioAddonIndexer implements TorrentIndexer {
       ? `series/${imdb}:${query.season}:${query.episode}`
       : `movie/${imdb}`;
 
-    let lastError: unknown = new Error(`No ${this.name} mirror responded`);
+    return tryMirrors(this.mirrors, async (base) => {
+      const response = await fetchJson<StremioResponse>(
+        `${base}/stream/${routePath}.json`,
+        { signal, timeoutMs: 25_000 }
+      );
 
-    for (const base of this.mirrors) {
-      try {
-        const response = await fetchJson<StremioResponse>(
-          `${base}/stream/${routePath}.json`,
-          { signal, timeoutMs: 25_000 }
-        );
-
-        return (response.streams ?? []).flatMap((stream) => stremioStreamToRaw(stream));
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError;
+      return (response.streams ?? []).flatMap((stream) => stremioStreamToRaw(stream));
+    });
   }
 }
 
@@ -311,64 +312,50 @@ export class KnabenIndexer implements TorrentIndexer {
 
   async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
     // Knaben has no structured season/episode filter; fold it into the text.
-    const terms = [query.query];
-    if (query.season !== undefined && query.episode !== undefined) {
-      terms.push(
-        `S${String(query.season).padStart(2, '0')}E${String(query.episode).padStart(2, '0')}`
+    const terms = withEpisodeTerms(query);
+
+    return tryMirrors(KnabenIndexer.MIRRORS, async (base) => {
+      const response = await postJson<KnabenResponse>(
+        base,
+        {
+          search_type: 'score',
+          search_field: 'title',
+          query: terms,
+          order_by: 'seeders',
+          order_direction: 'desc',
+          from: 0,
+          size: Math.min(query.limit ?? 100, 300),
+          hide_unsafe: true,
+          hide_xxx: true,
+        },
+        { signal, timeoutMs: 20_000 }
       );
-    } else if (query.season !== undefined) {
-      terms.push(`S${String(query.season).padStart(2, '0')}`);
-    }
 
-    let lastError: unknown = new Error('No Knaben mirror responded');
+      return (response.hits ?? [])
+        .map((hit): RawTorrent | null => {
+          const title = String(hit.title ?? '').trim();
+          if (!title) return null;
 
-    for (const base of KnabenIndexer.MIRRORS) {
-      try {
-        const response = await postJson<KnabenResponse>(
-          base,
-          {
-            search_type: 'score',
-            search_field: 'title',
-            query: terms.join(' '),
-            order_by: 'seeders',
-            order_direction: 'desc',
-            from: 0,
-            size: Math.min(query.limit ?? 100, 300),
-            hide_unsafe: true,
-            hide_xxx: true,
-          },
-          { signal, timeoutMs: 20_000 }
-        );
+          const infoHash = hit.hash?.toLowerCase();
+          const magnet = hit.magnetUrl;
+          if (!infoHash && !magnet) return null;
 
-        return (response.hits ?? [])
-          .map((hit): RawTorrent | null => {
-            const title = String(hit.title ?? '').trim();
-            if (!title) return null;
+          const published = hit.date ? Date.parse(hit.date) : NaN;
 
-            const infoHash = hit.hash?.toLowerCase();
-            const magnet = hit.magnetUrl;
-            if (!infoHash && !magnet) return null;
-
-            const published = hit.date ? Date.parse(hit.date) : NaN;
-
-            return {
-              title,
-              infoHash: infoHash && /^[a-f0-9]{40}$/.test(infoHash) ? infoHash : undefined,
-              magnet,
-              sizeBytes: parseSize(hit.bytes ?? hit.size),
-              seeders: parseIntSafe(hit.seeders),
-              // Knaben reports total swarm size as `peers`.
-              leechers: Math.max(0, parseIntSafe(hit.peers) - parseIntSafe(hit.seeders)),
-              publishedAt: Number.isNaN(published) ? undefined : published,
-              category: hit.tracker ?? hit.category,
-            };
-          })
-          .filter((r): r is RawTorrent => r !== null);
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError;
+          return {
+            title,
+            infoHash: infoHash && /^[a-f0-9]{40}$/.test(infoHash) ? infoHash : undefined,
+            magnet,
+            sizeBytes: parseSize(hit.bytes ?? hit.size),
+            seeders: parseIntSafe(hit.seeders),
+            // Knaben reports total swarm size as `peers`.
+            leechers: Math.max(0, parseIntSafe(hit.peers) - parseIntSafe(hit.seeders)),
+            publishedAt: Number.isNaN(published) ? undefined : published,
+            category: hit.tracker ?? hit.category,
+          };
+        })
+        .filter((r): r is RawTorrent => r !== null);
+    });
   }
 }
 
@@ -407,44 +394,30 @@ export class SolidTorrentsIndexer implements TorrentIndexer {
   }
 
   async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
-    const terms = [query.query];
-    if (query.season !== undefined && query.episode !== undefined) {
-      terms.push(
-        `S${String(query.season).padStart(2, '0')}E${String(query.episode).padStart(2, '0')}`
-      );
-    } else if (query.season !== undefined) {
-      terms.push(`S${String(query.season).padStart(2, '0')}`);
-    }
+    const terms = withEpisodeTerms(query);
 
-    let lastError: unknown = new Error('No SolidTorrents mirror responded');
+    return tryMirrors(SolidTorrentsIndexer.MIRRORS, async (base) => {
+      const url = `${base}/api/v1/search?q=${encodeURIComponent(terms)}&category=all&sort=seeders`;
+      const response = await fetchJson<SolidTorrentsResponse>(url, { signal, timeoutMs: 20_000 });
+      const items = response.results ?? [];
 
-    for (const base of SolidTorrentsIndexer.MIRRORS) {
-      try {
-        const url = `${base}/api/v1/search?q=${encodeURIComponent(terms.join(' '))}&category=all&sort=seeders`;
-        const response = await fetchJson<SolidTorrentsResponse>(url, { signal, timeoutMs: 20_000 });
-        const items = response.results ?? [];
-
-        return items
-          .filter((item) => item?.title && (item.infoHash || item.magnet))
-          .map<RawTorrent>((item) => {
-            const infoHash = item.infoHash?.toLowerCase();
-            const title = String(item.title).trim();
-            return {
-              title,
-              infoHash: infoHash && /^[a-f0-9]{40}$/.test(infoHash) ? infoHash : undefined,
-              magnet: item.magnet || (infoHash ? buildMagnet(infoHash, title) : undefined),
-              sizeBytes: parseSize(item.size),
-              seeders: parseIntSafe(item.swarm?.seeders),
-              leechers: parseIntSafe(item.swarm?.leechers),
-              publishedAt: item.imported ? item.imported : undefined,
-              category: item.category ?? 'Video',
-            };
-          });
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError;
+      return items
+        .filter((item) => item?.title && (item.infoHash || item.magnet))
+        .map<RawTorrent>((item) => {
+          const infoHash = item.infoHash?.toLowerCase();
+          const title = String(item.title).trim();
+          return {
+            title,
+            infoHash: infoHash && /^[a-f0-9]{40}$/.test(infoHash) ? infoHash : undefined,
+            magnet: item.magnet || (infoHash ? buildMagnet(infoHash, title) : undefined),
+            sizeBytes: parseSize(item.size),
+            seeders: parseIntSafe(item.swarm?.seeders),
+            leechers: parseIntSafe(item.swarm?.leechers),
+            publishedAt: item.imported ? item.imported : undefined,
+            category: item.category ?? 'Video',
+          };
+        });
+    });
   }
 }
 
@@ -486,49 +459,37 @@ export class TorrentsCsvIndexer implements TorrentIndexer {
   }
 
   async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
-    const terms = [query.query];
-    if (query.season !== undefined && query.episode !== undefined) {
-      terms.push(
-        `S${String(query.season).padStart(2, '0')}E${String(query.episode).padStart(2, '0')}`
-      );
-    }
+    const terms = withEpisodeTerms(query);
 
     const size = Math.min(query.limit ?? 50, 100);
-    let lastError: unknown = new Error('Torrents-CSV did not respond');
+    return tryMirrors(TorrentsCsvIndexer.MIRRORS, async (base) => {
+      const response = await fetchJson<TorrentsCsvResponse | TorrentsCsvRow[]>(
+        `${base}/service/search?q=${encodeURIComponent(terms)}&size=${size}`,
+        { signal, timeoutMs: 20_000 }
+      );
 
-    for (const base of TorrentsCsvIndexer.MIRRORS) {
-      try {
-        const response = await fetchJson<TorrentsCsvResponse | TorrentsCsvRow[]>(
-          `${base}/service/search?q=${encodeURIComponent(terms.join(' '))}&size=${size}`,
-          { signal, timeoutMs: 20_000 }
-        );
+      // The service has returned both a bare array and a `{torrents}` wrapper
+      // across versions; accept either rather than break on an upgrade.
+      const rows = Array.isArray(response) ? response : (response.torrents ?? []);
 
-        // The service has returned both a bare array and a `{torrents}` wrapper
-        // across versions; accept either rather than break on an upgrade.
-        const rows = Array.isArray(response) ? response : (response.torrents ?? []);
+      return rows
+        .map((row): RawTorrent | null => {
+          const infoHash = row.infohash?.toLowerCase();
+          const title = String(row.name ?? '').trim();
+          if (!title || !infoHash || !/^[a-f0-9]{40}$/.test(infoHash)) return null;
 
-        return rows
-          .map((row): RawTorrent | null => {
-            const infoHash = row.infohash?.toLowerCase();
-            const title = String(row.name ?? '').trim();
-            if (!title || !infoHash || !/^[a-f0-9]{40}$/.test(infoHash)) return null;
-
-            return {
-              title,
-              infoHash,
-              magnet: buildMagnet(infoHash, title),
-              sizeBytes: parseSize(row.size_bytes),
-              seeders: parseIntSafe(row.seeders),
-              leechers: parseIntSafe(row.leechers),
-              publishedAt: row.created_unix ? row.created_unix * 1000 : undefined,
-            };
-          })
-          .filter((r): r is RawTorrent => r !== null);
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError;
+          return {
+            title,
+            infoHash,
+            magnet: buildMagnet(infoHash, title),
+            sizeBytes: parseSize(row.size_bytes),
+            seeders: parseIntSafe(row.seeders),
+            leechers: parseIntSafe(row.leechers),
+            publishedAt: row.created_unix ? row.created_unix * 1000 : undefined,
+          };
+        })
+        .filter((r): r is RawTorrent => r !== null);
+    });
   }
 }
 
@@ -566,78 +527,64 @@ export class ApiBayIndexer implements TorrentIndexer {
 
   async search(query: IndexerQuery, signal: AbortSignal): Promise<RawTorrent[]> {
     // Fold season/episode into the query text; apibay has no structured filter.
-    const terms = [query.query];
-    if (query.season !== undefined && query.episode !== undefined) {
-      terms.push(
-        `S${String(query.season).padStart(2, '0')}E${String(query.episode).padStart(2, '0')}`
-      );
-    } else if (query.season !== undefined) {
-      terms.push(`S${String(query.season).padStart(2, '0')}`);
-    }
+    const terms = withEpisodeTerms(query);
 
-    let lastError: unknown = new Error('No apibay mirror responded');
+    return tryMirrors(ApiBayIndexer.MIRRORS, async (base) => {
+      let items: ApiBayItem[] = [];
 
-    for (const base of ApiBayIndexer.MIRRORS) {
-      try {
-        let items: ApiBayItem[] = [];
-
-        // If an IMDb id is available, query by IMDb id first
-        if (query.imdbId) {
-          try {
-            const imdbQuery = query.imdbId.startsWith('tt') ? query.imdbId : `tt${query.imdbId}`;
-            const imdbItems = await fetchJson<ApiBayItem[]>(
-              `${base}/q.php?q=${encodeURIComponent(imdbQuery)}`,
-              { signal, timeoutMs: 12_000 }
-            );
-            if (Array.isArray(imdbItems) && imdbItems.length > 0) {
-              items = imdbItems.filter(
-                (item) => item?.info_hash && item.info_hash !== '0000000000000000000000000000000000000000'
-              );
-            }
-          } catch {
-            // Fallback to text query below
-          }
-        }
-
-        // If no items from IMDb lookup or no IMDb id, query by terms
-        if (items.length === 0 && terms.join(' ').trim()) {
-          const textItems = await fetchJson<ApiBayItem[]>(
-            `${base}/q.php?q=${encodeURIComponent(terms.join(' '))}`,
-            { signal, timeoutMs: 20_000 }
+      // If an IMDb id is available, query by IMDb id first
+      if (query.imdbId) {
+        try {
+          const imdbQuery = query.imdbId.startsWith('tt') ? query.imdbId : `tt${query.imdbId}`;
+          const imdbItems = await fetchJson<ApiBayItem[]>(
+            `${base}/q.php?q=${encodeURIComponent(imdbQuery)}`,
+            { signal, timeoutMs: 12_000 }
           );
-          if (Array.isArray(textItems)) {
-            items = textItems;
+          if (Array.isArray(imdbItems) && imdbItems.length > 0) {
+            items = imdbItems.filter(
+              (item) => item?.info_hash && item.info_hash !== '0000000000000000000000000000000000000000'
+            );
           }
+        } catch {
+          // Fallback to text query below
         }
-
-        if (!Array.isArray(items)) return [];
-
-        return items
-          .filter(
-            (item) =>
-              item?.name &&
-              item.info_hash &&
-              // apibay returns a single sentinel row when nothing matched.
-              item.info_hash !== '0000000000000000000000000000000000000000'
-          )
-          .map<RawTorrent>((item) => {
-            const infoHash = (item.info_hash as string).toLowerCase();
-            const name = item.name as string;
-            return {
-              title: name,
-              infoHash,
-              magnet: buildMagnet(infoHash, name),
-              sizeBytes: parseSize(item.size),
-              seeders: parseIntSafe(item.seeders),
-              leechers: parseIntSafe(item.leechers),
-              publishedAt: item.added ? parseIntSafe(item.added) * 1000 : undefined,
-              category: item.category,
-            };
-          });
-      } catch (error) {
-        lastError = error;
       }
-    }
-    throw lastError;
+
+      // If no items from IMDb lookup or no IMDb id, query by terms
+      if (items.length === 0 && terms.trim()) {
+        const textItems = await fetchJson<ApiBayItem[]>(
+          `${base}/q.php?q=${encodeURIComponent(terms)}`,
+          { signal, timeoutMs: 20_000 }
+        );
+        if (Array.isArray(textItems)) {
+          items = textItems;
+        }
+      }
+
+      if (!Array.isArray(items)) return [];
+
+      return items
+        .filter(
+          (item) =>
+            item?.name &&
+            item.info_hash &&
+            // apibay returns a single sentinel row when nothing matched.
+            item.info_hash !== '0000000000000000000000000000000000000000'
+        )
+        .map<RawTorrent>((item) => {
+          const infoHash = (item.info_hash as string).toLowerCase();
+          const name = item.name as string;
+          return {
+            title: name,
+            infoHash,
+            magnet: buildMagnet(infoHash, name),
+            sizeBytes: parseSize(item.size),
+            seeders: parseIntSafe(item.seeders),
+            leechers: parseIntSafe(item.leechers),
+            publishedAt: item.added ? parseIntSafe(item.added) * 1000 : undefined,
+            category: item.category,
+          };
+        });
+    });
   }
 }

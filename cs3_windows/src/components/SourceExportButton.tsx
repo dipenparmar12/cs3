@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { useFlash } from '../utils/useFlash';
 import { Check, ChevronDown, ClipboardCopy } from 'lucide-react';
 import type { TorrentResult } from '../types/torrent';
@@ -8,6 +8,7 @@ import {
   toSourceText,
   type SourceProvenance,
 } from '../utils/sourceExport';
+import { useDismissable } from '../utils/useDismissable';
 
 /**
  * "Copy these sources", wherever a source list is shown.
@@ -33,24 +34,8 @@ export const SourceExportButton: React.FC<{
   const { message: copied, flash: setCopied } = useFlash<string>(2000);
   const wrapper = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onOutside = (event: PointerEvent) => {
-      if (wrapper.current && !wrapper.current.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        setOpen(false);
-      }
-    };
-    document.addEventListener('pointerdown', onOutside, true);
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onOutside, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [open]);
+  const close = useCallback(() => setOpen(false), []);
+  useDismissable(open, wrapper, close);
 
   const write = useCallback(async (label: string, text: string) => {
     setOpen(false);

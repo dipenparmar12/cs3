@@ -216,6 +216,23 @@ export interface IndexerHealth {
   consecutiveFailures: number;
   /** Tripped by the circuit breaker after repeated failures. */
   isCircuitOpen: boolean;
+  /**
+   * How long it stays skipped, in words — when it is skipped.
+   *
+   * The cooldown used to be a flat five minutes for everyone, which made the
+   * duration not worth reporting. It now grows each time an indexer trips, so
+   * "back in five minutes" and "back in two hours" are different answers to the
+   * same question and the panel can say which one applies.
+   */
+  pausedFor?: string;
+  /**
+   * The deadline this indexer currently gets, from its own measured latency.
+   *
+   * Surfaced because a source that has been cut down to the four-second floor
+   * is being treated very differently from one still on the full budget, and
+   * that difference explains results a user would otherwise read as random.
+   */
+  budgetMs?: number;
 }
 
 /** Ranking inputs, user-tunable from Settings. */

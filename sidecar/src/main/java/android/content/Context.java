@@ -165,12 +165,21 @@ public class Context {
         return new android.content.res.Resources();
     }
 
-    public Object getAssets() {
-        throw new UnsupportedAndroidApiException("android.content.Context.getAssets");
+    /**
+     * The declared type, not {@code Object} — see {@link #getPackageManager}.
+     *
+     * <p>These two returned {@code Object} until the types existed to name, so
+     * an extension's {@code ()Landroid/content/res/AssetManager;} call site
+     * resolved against nothing and threw {@code NoSuchMethodError} before the
+     * message below could ever be read. The object handed back still refuses
+     * every operation; what changes is that the call links.
+     */
+    public android.content.res.AssetManager getAssets() {
+        return new android.content.res.AssetManager();
     }
 
-    public Object getContentResolver() {
-        throw new UnsupportedAndroidApiException("android.content.Context.getContentResolver");
+    public ContentResolver getContentResolver() {
+        return new ContentResolver();
     }
 
     /**

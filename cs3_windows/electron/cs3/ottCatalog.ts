@@ -1,4 +1,9 @@
-import { TvType, type SearchResponse } from '../../src/types/api';
+// `.ts` spelled out, like every other import here: Node's type-stripping ESM
+// loader will not resolve an extensionless specifier, and an unloadable module
+// is an untestable one.
+import { TvType, type SearchResponse } from '../../src/types/api.ts';
+import { buildCinemetaUrl } from '../cinemeta.ts';
+import { fetchJson } from '../torrent/http.ts';
 
 /**
  * What is *on* Netflix, when no installed extension can say.
@@ -40,10 +45,12 @@ import { TvType, type SearchResponse } from '../../src/types/api';
  * lists rather than one popularity list relabelled five times. (`9 to 5` on
  * both Prime and Disney+ is not a bug; Disney owns the Fox catalogue.)
  *
- * **Hotstar, Sony LIV, ZEE5 and JioCinema are not served by it.** They are left
- * without a fallback rather than given a generic popularity list under their
- * name — a page of titles that are not on ZEE5, labelled ZEE5, is worse than a
- * page that says it has nothing.
+ * **Sony LIV, ZEE5 and JioCinema are not served by it.** They are left without a
+ * fallback rather than given a generic popularity list under their name — a page
+ * of titles that are not on ZEE5, labelled ZEE5, is worse than a page that says
+ * it has nothing. Hotstar was in that group and is no longer a platform at all:
+ * having neither a service code here nor a provider that publishes a catalogue
+ * left it with nothing to show from either direction (`ottPlatforms.ts`).
  */
 
 const ADDON_BASE =
@@ -153,10 +160,19 @@ export class OttCatalogService {
      * series has to scan past forty films, and the addon gives no ordering that
      * would survive a merge.
      */
-    const [movies, series] = await Promise.all([
-      this.fetchOne(`${ADDON_BASE}/catalog/movie/${code}.json`, 'movie'),
-      this.fetchOne(`${ADDON_BASE}/catalog/series/${code}.json`, 'series'),
-    ]);
+    /*
+     * `allSettled`, so one dead catalogue does not take the other down. They
+     * are independent requests to independent addon routes and either can 404
+     * on its own — under `Promise.all` a films catalogue that had gone away
+     * rejected the pair, and the caller's `.catch` then served stale sections
+     * for a series catalogue that was answering perfectly.
+     */
+    const [movies, series] = (
+      await Promise.allSettled([
+        this.fetchOne(`${ADDON_BASE}/catalog/movie/${code}.json`, 'movie'),
+        this.fetchOne(`${ADDON_BASE}/catalog/series/${code}.json`, 'series'),
+      ])
+    ).map((outcome) => (outcome.status === 'fulfilled' ? outcome.value : []));
 
     const sections: OttCatalogSection[] = [];
     if (movies.length > 0) {
@@ -179,9 +195,12 @@ export class OttCatalogService {
   }
 
   private async fetchOne(url: string, type: 'movie' | 'series'): Promise<SearchResponse[]> {
-    const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!response.ok) return [];
-    const body = (await response.json()) as { metas?: StremioMeta[] };
+    // Through the shared client, not global `fetch`: that is what routes the
+    // request via Electron's `net.fetch` and so honours the DNS-over-HTTPS
+    // setting and the system proxy, as every other catalogue call here does.
+    const body = await fetchJson<{ metas?: StremioMeta[] }>(url, {
+      timeoutMs: FETCH_TIMEOUT_MS,
+    });
     return (body.metas ?? [])
       .map((meta) => this.toResult(meta, type))
       .filter((row): row is SearchResponse => row !== null);
@@ -190,10 +209,12 @@ export class OttCatalogService {
   /**
    * One catalogue row as an ordinary search result.
    *
-   * Addressed `cs3meta://` — the same scheme the home screen's catalogue rows
-   * use — which is what makes opening one run the app's normal discovery across
-   * installed providers. A bespoke address would need its own route through
-   * `ContentService` for no new behaviour.
+   * Addressed with `buildCinemetaUrl`, not a hand-spelled `cs3meta://<id>`.
+   * The scheme's grammar carries the type (`cs3meta://cinemeta/movie/tt…`) and
+   * `parseCinemetaUrl` requires it; a bare id parsed as nothing, fell through
+   * every branch of `ContentService.fetchDetail` and opened as "nothing knows
+   * how to open this address" — every row on every OTT page. Minting through
+   * the builder is what keeps the two spellings from drifting again.
    *
    * A row with no IMDb id is dropped rather than carried with a synthetic one.
    * The id is the entire basis on which providers and indexers match a title;
@@ -210,7 +231,7 @@ export class OttCatalogService {
 
     return {
       name: meta.name,
-      url: `cs3meta://${imdbId}`,
+      url: buildCinemetaUrl(type, imdbId),
       /*
        * Attributed to Cinemeta rather than to the addon, and that is not a
        * shortcut. `apiName` is read as "which catalogue is this a row from" by

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildExtensionUrl,
   looksLikeLinksHandle,
+  looksLikePageAddress,
   parseExtensionUrl,
 } from './extensionAddress.ts';
 
@@ -104,4 +105,65 @@ test('anything that is not a cs3ext address parses as null', () => {
   assert.equal(parseExtensionUrl('magnet:?xt=urn:btih:abc'), null);
   // No slash means no handle, which is not an address this app ever mints.
   assert.equal(parseExtensionUrl('cs3ext://OnlyAProvider'), null);
+});
+
+// --- the mirror image: a page address handed to `loadLinks` -------------------
+
+/**
+ * Real handles from three captured sessions. Each produced
+ * `JsonParseException: Unrecognized token 'https'` inside the provider, logged
+ * at error level as "the site has probably changed" and counted against the
+ * provider by the ranking — for a call the app made on a guess, which the
+ * retry immediately after it got right.
+ */
+test('the page addresses that were mis-handed to loadLinks are recognised', () => {
+  for (const address of [
+    'https://bollyflix.af/the-martian-2015-dual-audio-hindi-english-movie/',
+    'https://www.themoviedb.org/movie/309809',
+    'https://simkl.com/movies/55002/office-space',
+    'http://plain.example/page',
+  ]) {
+    assert.equal(looksLikePageAddress(address), true, address);
+  }
+});
+
+test('a links blob is never mistaken for a page address', () => {
+  assert.equal(looksLikePageAddress(VEGAMOVIES_LINKS), false);
+  assert.equal(looksLikePageAddress('["https://greenmountmotors.com/?id=THdE"]'), false);
+});
+
+/**
+ * The two predicates answer different questions and must never both be true:
+ * one says "this is definitely not a page", the other "this is definitely a
+ * page". A handle both claimed would make the speculative flag meaningless.
+ */
+test('the two predicates never agree', () => {
+  for (const handle of [
+    VEGAMOVIES_LINKS,
+    'https://archive.org/details/night_of_the_living_dead',
+    'tt0111161',
+    '',
+    '   ',
+    '{"a":1}',
+  ]) {
+    assert.equal(
+      looksLikeLinksHandle(handle) && looksLikePageAddress(handle),
+      false,
+      handle
+    );
+  }
+});
+
+/**
+ * Internet Archive is the reason neither predicate may be widened: its `load()`
+ * takes a URL and its `loadLinks` takes a bare id, so "not a URL" cannot mean
+ * "not a page" and a bare id cannot be assumed to be either.
+ */
+test('a bare id is neither, which is the honest answer', () => {
+  assert.equal(looksLikeLinksHandle('night_of_the_living_dead'), false);
+  assert.equal(looksLikePageAddress('night_of_the_living_dead'), false);
+});
+
+test('leading whitespace does not hide a page address', () => {
+  assert.equal(looksLikePageAddress('  https://x.test/'), true);
 });

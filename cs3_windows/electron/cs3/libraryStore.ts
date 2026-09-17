@@ -1,6 +1,6 @@
 import type { DatastoreManager } from '../datastore';
 import type { TvType } from '../../src/types/api';
-import { WatchStatus } from '../../src/types/api';
+import { WatchStatus } from '../../src/types/api.ts';
 import type {
   StoredSource,
   SourceStatus,
@@ -9,9 +9,34 @@ import type {
   PlayedSource,
 } from '../../src/types/library';
 import type { TorrentResult } from '../../src/types/torrent';
-import { deadlineFromUrl } from '../sourceCache';
+import { deadlineFromUrl } from '../sourceCache.ts';
+import { looksLikeLinksHandle, parseExtensionUrl } from './extensionAddress.ts';
 
 export { WatchStatus };
+
+/**
+ * The reopenable address for a row, or nothing.
+ *
+ * `mediaUrl` on a library or progress row is the address the app calls
+ * `load()` on when someone clicks the row later — a **page**, never the opaque
+ * blob `loadLinks` consumes. The two are both strings and both arrive here
+ * under the same field name, so nothing but this stops one being written in
+ * place of the other. Three renderer call sites have made that mistake; the
+ * user-visible shape is "a title I saved and watched now opens blank", which
+ * reads as data rot rather than as the wrong address having been stored.
+ *
+ * Dropping it costs nothing that can be measured. Progress is keyed on
+ * `canonicalKey(title, year)` plus season and episode — never on the URL — so a
+ * row with no address still records and resumes; what it loses is a link that
+ * was going to fail anyway, in exchange for the UI being able to offer "find
+ * this title again" instead of an empty page.
+ */
+function reopenableUrl(mediaUrl: string | undefined): string | undefined {
+  if (!mediaUrl) return undefined;
+  const target = parseExtensionUrl(mediaUrl)?.target;
+  if (target !== undefined && looksLikeLinksHandle(target)) return undefined;
+  return looksLikeLinksHandle(mediaUrl) ? undefined : mediaUrl;
+}
 
 export interface WatchProgress {
   key: string;
@@ -248,6 +273,9 @@ export class LibraryStore {
     const now = Date.now();
     const existing = this.entries.get(key);
 
+    // `urls` is what reopens this row; a links handle would be a dead one.
+    const url = reopenableUrl(input.mediaUrl);
+
     const mergedSources = input.sources && input.sources.length > 0
       ? input.sources
       : existing?.sources;
@@ -262,9 +290,7 @@ export class LibraryStore {
           genres: input.genres ?? existing.genres,
           duration: input.duration ?? existing.duration,
           type: input.type ?? existing.type,
-          urls: existing.urls.includes(input.mediaUrl)
-            ? existing.urls
-            : [...existing.urls, input.mediaUrl],
+          urls: !url || existing.urls.includes(url) ? existing.urls : [...existing.urls, url],
           status: input.status ?? existing.status,
           sources: mergedSources,
           metadata: { ...existing.metadata, ...input.metadata },
@@ -281,7 +307,7 @@ export class LibraryStore {
           plot: input.plot,
           genres: input.genres,
           duration: input.duration,
-          urls: [input.mediaUrl],
+          urls: url ? [url] : [],
           status: input.status ?? WatchStatus.Watching,
           sources: input.sources,
           metadata: input.metadata,
@@ -599,7 +625,8 @@ export class LibraryStore {
       title: input.title,
       episodeTitle: input.episodeTitle,
       posterUrl: input.posterUrl,
-      mediaUrl: input.mediaUrl,
+      // Continue Watching clicks this. A links handle here is the blank-page bug.
+      mediaUrl: reopenableUrl(input.mediaUrl) ?? '',
     };
 
     this.progress.set(id, row);

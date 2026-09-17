@@ -1,9 +1,8 @@
 /**
  * Human-readable numbers: sizes, transfer rates, durations.
  *
- * These were written six times across the renderer, and **the six did not
- * agree**. That is the reason this file exists and the reason it is shaped the
- * way it is.
+ * These were written eight times, and **the eight did not agree**. That is the
+ * reason this file exists and the reason it is shaped the way it is.
  *
  * What the copies disagreed about, measured rather than guessed:
  *
@@ -15,9 +14,16 @@
  * | `HistoryView`           | `Unknown size`  | 1024 | 1           |
  * | `SourcePicker`          | `—`             | 1024 | adaptive    |
  * | `ProvenancePanel`       | `0 B`           | 1024 | 2           |
+ * | `DownloadService`       | `0 MB`          | 1000 | 0           |
+ * | `FastChunkDownloader`   | `0 MB`          | 1024 | 1 (+KB)     |
+ *
+ * The last two lived in `electron/` and were missed by the pass that found the
+ * first six, which only looked at `src/`. They are the sharpest case in the
+ * table: one download reports its size in SI on the companion file written
+ * *beside the film* and in binary on the progress line above it.
  *
  * A single `formatBytes` would have been shorter and would have changed what
- * six screens display — so the differences are **parameters**, not something to
+ * eight surfaces display — so the differences are **parameters**, not something to
  * average away. Every one is preserved exactly, and pinned by `format.test.mts`
  * against the strings the old implementations produced.
  *
@@ -161,4 +167,52 @@ export function formatRuntime(seconds?: number): string | null {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes} min`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/**
+ * Sizes on the download-info companion files.
+ *
+ * SI units, and that is not obviously right: these files sit *beside the
+ * downloaded film*, describing it, and every file manager the reader will open
+ * next reports base 1024. So the companion says `4.30 GB` where Explorer says
+ * `4.00 GB` for the same file.
+ *
+ * Preserved exactly rather than corrected, for the reason the six renderer
+ * formatters were: changing it changes what a shipped surface displays, which
+ * is a UI decision and not a refactor. Flagged here so the decision can be made
+ * deliberately — the same note the module header carries about the other
+ * 1000-vs-1024 divergence.
+ */
+export const formatInfoFileSize = (bytes: number): string =>
+  formatMediaSize(bytes, { empty: '0 MB', base: 1000, mbDigits: 0 });
+
+/**
+ * The three-rung ladder used by the component installer's progress line.
+ *
+ * Distinct from `formatMediaSize`, which is deliberately two-unit because
+ * nothing in a *media* size range is measured in kilobytes. This one reports on
+ * ffmpeg, mpv and yt-dlp downloads, which start in the hundreds of kilobytes,
+ * and a first-run installer reading `0.1 MB` where it could read `98 KB` looks
+ * stalled at exactly the moment a new user is deciding whether the app works.
+ */
+export function formatSetupSize(bytes: number): string {
+  if (bytes <= 0) return '0 MB';
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+  return `${(bytes / 1024).toFixed(0)} KB`;
+}
+
+/**
+ * Time left on a transfer, or nothing at all.
+ *
+ * The empty string for an unknown ETA is load-bearing and every caller relies
+ * on it: they interpolate this into a status line behind a `?` guard, so
+ * returning a placeholder would put "unknown remaining" into the line for the
+ * first seconds of every download, before a rate has been measured.
+ */
+export function formatEta(seconds: number): string {
+  if (!seconds || seconds <= 0 || !Number.isFinite(seconds)) return '';
+  if (seconds < 60) return `${seconds}s remaining`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s remaining`;
 }

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import { PluginRuntimeTier } from '../src/types/plugin';
 import type { PluginCompatibilityReport } from '../src/types/plugin';
+import { describeError } from '../src/utils/errors.ts';
 
 /**
  * Static compatibility analysis for `.cs3` archives.
@@ -102,7 +103,7 @@ export class PluginCompatibilityAnalyzer {
       return this.notAnalyzed(
         pluginName,
         internalName,
-        `Archive could not be read: ${error instanceof Error ? error.message : String(error)}`
+        `Archive could not be read: ${describeError(error)}`
       );
     }
 

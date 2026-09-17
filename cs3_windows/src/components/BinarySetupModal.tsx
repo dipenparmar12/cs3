@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, CheckCircle2, RefreshCw, X, AlertTriangle } from 'lucide-react';
+import { describeError } from '../utils/errors';
 
 /**
  * The offer to install the download and playback components.
@@ -112,7 +113,7 @@ export const BinarySetupModal: React.FC<BinarySetupModalProps> = ({
       setPhase('failed');
       setStatusMessage(
         `Could not reach the installer: ${
-          error instanceof Error ? error.message : String(error)
+          describeError(error)
         }. This is a bug — please report it.`
       );
     } finally {
