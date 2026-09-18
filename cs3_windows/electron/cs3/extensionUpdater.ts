@@ -1,7 +1,18 @@
-import type { SitePlugin } from '../../src/types/plugin';
-import type { DatastoreManager } from '../datastore';
-import type { PluginManager } from '../pluginManager';
+import type { SitePlugin } from '../../src/types/plugin.ts';
+import type { DatastoreManager } from '../datastore.ts';
+import type { PluginManager } from '../pluginManager.ts';
 import { describeError } from '../../src/utils/errors.ts';
+import { scopedLogger } from '../logging/logger.ts';
+
+/**
+ * The update path, in the per-launch transcript.
+ *
+ * There was none. Asked to look at the logs after a bulk update that "always
+ * fails", a user's 22,841 records contained not a single line from this module
+ * — so the one feature that must run unattended in a shipped build was also the
+ * only one with no account of what it did.
+ */
+const logger = scopedLogger('extension');
 
 /**
  * Over-the-air updates for installed extensions.
@@ -246,6 +257,13 @@ export class ExtensionUpdater {
     try {
       const result = await this.checkForUpdates();
       const settings = this.getSettings();
+      logger.info('extension_scheduled_check', {
+        updates: result.updates.length,
+        // Recorded because it decides whether anything happens next, and
+        // "updates were found and nothing installed them" is otherwise
+        // indistinguishable from "the check never ran".
+        autoInstall: settings.autoInstall,
+      });
 
       if (settings.autoInstall && result.updates.length > 0) {
         const outcomes = await this.updateAll(result.updates.map((u) => u.internalName));
@@ -255,8 +273,10 @@ export class ExtensionUpdater {
       }
     } catch (error) {
       // A failed background check is not worth interrupting the user over; the
-      // next tick retries, and a manual check surfaces the error directly.
-      console.warn('Scheduled extension update check failed:', error);
+      // next tick retries, and a manual check surfaces the error directly. It
+      // is worth *recording*, because an automatic update that silently never
+      // runs is the hardest kind of failure to notice.
+      logger.warn('extension_scheduled_check_failed', { reason: describeError(error) });
     } finally {
       // Re-arm regardless of outcome, or one transient network failure would
       // silently end automatic updates for the rest of the session.
@@ -351,11 +371,24 @@ export class ExtensionUpdater {
          * wins; at equal versions a real bump beats a republish, because a
          * republish is only ever offered against the copy that is installed and
          * a bump is evidence about the artifact itself.
+         *
+         * And at equal standing, the repository the extension was **installed
+         * from** wins. That is the publisher the user chose, and `resolveUpdate`
+         * has always preferred it on its own fallback path — this check did not,
+         * so which repository supplied an update depended on the order the
+         * catalogue fetches happened to settle in.
          */
         const existing = candidates.get(remote.internalName);
+        const isOwnRepository = local.meta?.repositoryUrl === repoUrl;
         if (existing) {
           if (existing.availableVersion > remoteVersion) continue;
-          if (existing.availableVersion === remoteVersion && existing.reason === 'newer') continue;
+          if (existing.availableVersion === remoteVersion) {
+            // A real bump beats a republish, whoever published it.
+            if (existing.reason === 'newer' && reason !== 'newer') continue;
+            // Otherwise the two candidates are equally good, and the tie goes
+            // to the repository the extension was installed from.
+            if (existing.reason === reason && !isOwnRepository) continue;
+          }
         }
 
         candidates.set(remote.internalName, {
@@ -387,6 +420,14 @@ export class ExtensionUpdater {
 
     this.datastore.setObject(CACHED_UPDATES_KEY, updates);
     this.saveSettings({ lastCheckedAt: result.checkedAt });
+    logger.info('extension_update_check', {
+      repositories: repoUrls.length,
+      unreachable: warnings.length,
+      updates: updates.length,
+      newer: updates.filter((u) => u.reason === 'newer').length,
+      republished: updates.filter((u) => u.reason === 'republished').length,
+      notices: result.notices.length,
+    });
     this.emit('extension:updateCheckFinished', result);
     return result;
   }
@@ -488,6 +529,41 @@ export class ExtensionUpdater {
 
     this.emit('extension:updateStarted', { internalName, name: update.name });
 
+    /**
+     * Where the archive lives, as distinct from where the new bytes come from.
+     *
+     * These are two different questions and conflating them was a real defect.
+     * `installPathFor` keys the on-disk directory on the *repository URL
+     * string*, and one repository is routinely known by two strings — the
+     * curated list stores a project page (`https://github.com/owner/repo`) and
+     * `fetchRepository` resolves it to a raw document
+     * (`https://raw.githubusercontent.com/owner/repo/builds/repo.json`). An
+     * extension installed under the first and updated under the second was:
+     *
+     *  - **left without a backup**, because `preserveInstalledVersion` looked
+     *    at a path that does not exist and returned false — so a bad update
+     *    could not be rolled back at all; and
+     *  - **installed beside itself**, because `installPlugin` wrote a second
+     *    archive into the other directory instead of replacing the first.
+     *    Measured on a real install: 311 archives on disk for 219 records.
+     *
+     * The record knows where the extension is. The update knows where the new
+     * bytes are. Download from the second, install into the first.
+     */
+    const installedRecord = this.plugins
+      .getInstalledPluginRecords()
+      .find((record) => record.internalName === internalName);
+    const installRepo = installedRecord?.meta?.repositoryUrl ?? update.repositoryUrl;
+
+    logger.info('extension_update_started', {
+      plugin: internalName,
+      fromVersion: update.installedVersion,
+      toVersion: update.availableVersion,
+      reason: update.reason,
+      sourceRepository: update.repositoryUrl,
+      installRepository: installRepo,
+    });
+
     const plugin: SitePlugin = {
       url: update.downloadUrl,
       status: 1,
@@ -543,12 +619,9 @@ export class ExtensionUpdater {
      * between a recoverable mistake and a broken install with nothing to go
      * back to.
      */
-    const preserved = this.plugins.preserveInstalledVersion(
-      update.repositoryUrl,
-      internalName
-    );
+    const preserved = this.plugins.preserveInstalledVersion(installRepo, internalName);
 
-    const outcome = await this.plugins.installPlugin(plugin, update.repositoryUrl);
+    const outcome = await this.plugins.installPlugin(plugin, installRepo);
 
     if (outcome.ok) {
       /**
@@ -561,13 +634,19 @@ export class ExtensionUpdater {
        */
       const verified = await this.plugins.verifyInstalledPlugin(
         internalName,
-        this.plugins.archivePathFor(update.repositoryUrl, internalName)
+        this.plugins.archivePathFor(installRepo, internalName)
       );
 
       if (!verified.ok) {
+        logger.warn('extension_update_rejected', {
+          plugin: internalName,
+          reason: verified.message,
+          tier: verified.tier,
+          hadBackup: preserved,
+        });
         let rollbackMsg = '';
         if (preserved) {
-          const restored = await this.plugins.rollbackPlugin(update.repositoryUrl, internalName);
+          const restored = await this.plugins.rollbackPlugin(installRepo, internalName);
           rollbackMsg = restored.ok
             ? `v${update.installedVersion} has been restored.`
             : `the previous version could not be restored: ${restored.message}`;
@@ -585,6 +664,20 @@ export class ExtensionUpdater {
       }
 
       this.dropCachedUpdate(internalName);
+    }
+
+    if (!outcome.ok) {
+      logger.warn('extension_update_failed', {
+        plugin: internalName,
+        reason: outcome.message,
+        sourceRepository: update.repositoryUrl,
+      });
+    } else {
+      logger.info('extension_update_installed', {
+        plugin: internalName,
+        fromVersion: update.installedVersion,
+        toVersion: plugin.version,
+      });
     }
 
     const result: UpdateOutcome = {
@@ -617,10 +710,26 @@ export class ExtensionUpdater {
      */
     let targets = internalNames;
     if (!targets) {
-      let known = this.getCachedUpdates();
-      if (known.length === 0) known = (await this.checkForUpdates()).updates;
+      /*
+       * A fresh check, always — not "a fresh check when the cache is empty".
+       *
+       * The cache is a snapshot of whenever a check last ran and it is
+       * *persisted*, so it survives restarts and can be arbitrarily old.
+       * Measured on a real install: the stored list held 3 entries while a live
+       * check found 94. Pressing "Update all" updated three extensions,
+       * reported "Updated all 3 extension(s)", and left 91 out of date — which
+       * is indistinguishable from the feature not working, and is exactly the
+       * report this fixes.
+       *
+       * The cost is one catalogue fetch per repository on a button the user
+       * presses deliberately, against an operation that is about to download
+       * archives anyway.
+       */
+      const known = (await this.checkForUpdates()).updates;
       targets = known.map((u) => u.internalName);
     }
+
+    logger.info('extension_update_all_started', { count: targets.length });
     const outcomes: UpdateOutcome[] = [];
 
     for (let i = 0; i < targets.length; i++) {
@@ -633,6 +742,14 @@ export class ExtensionUpdater {
     }
 
     const installed = outcomes.filter((o) => o.ok).length;
+    logger.info('extension_update_all_finished', {
+      count: targets.length,
+      installed,
+      failed: targets.length - installed,
+      // Named, so a repeated failure is diagnosable from the transcript alone
+      // rather than by asking the user to reproduce it.
+      failures: outcomes.filter((o) => !o.ok).map((o) => `${o.internalName}: ${o.message}`),
+    });
     this.saveSettings({
       lastResult: {
         updateCount: targets.length,

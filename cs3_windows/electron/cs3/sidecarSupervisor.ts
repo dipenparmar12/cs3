@@ -8,13 +8,10 @@ import { scopedLogger } from '../logging/logger';
 import { SidecarStderrReader } from './sidecarStderr';
 import { getIssueLog } from './extensionIssues';
 import { describeError } from '../../src/utils/errors.ts';
+import type { RpcResult } from './rpcResult.ts';
 
-export interface RpcResult {
-  ok: boolean;
-  result?: Record<string, unknown>;
-  error?: string;
-  errorKind?: string;
-}
+export type { RpcResult } from './rpcResult.ts';
+export { TRANSPORT_ERROR_KINDS, isTransportFailure } from './rpcResult.ts';
 
 export interface SidecarStatus {
   /** The process is up and answering. */

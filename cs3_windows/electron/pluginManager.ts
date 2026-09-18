@@ -26,8 +26,10 @@ import { fetchBuffer, fetchJson } from './torrent/http';
 import type { DatastoreManager } from './datastore';
 import { DisabledSet } from './util/disabledSet';
 import { SidecarSupervisor } from './cs3/sidecarSupervisor';
+import { isTransportFailure } from './cs3/rpcResult.ts';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from './officialRepositories';
 import { getIssueLog } from './cs3/extensionIssues';
+import { scopedLogger } from './logging/logger';
 import { ProviderRegistryCache, type CachedProvider } from './cs3/providerRegistry';
 import { applySearchOrder } from './cs3/searchOrder.ts';
 import { classifyFailure, FAILURE_KIND_LABELS } from './cs3/failureTaxonomy';
@@ -38,6 +40,16 @@ import type {
   DiagnosisKind,
   SourceDiagnosis,
 } from '../src/types/diagnostics';
+
+/**
+ * The install and update path, in the per-launch transcript.
+ *
+ * Added because there was nothing: asked to look at the logs after a failed
+ * bulk update, a user's 22,841 records contained not one line from the updater
+ * or from `installPlugin`. A feature that has to run unattended in a shipped
+ * build and "work every time" has to say what it did.
+ */
+const logger = scopedLogger('extension');
 
 /**
  * CloudStream extension (`.cs3`) repository and install management.
@@ -1743,6 +1755,32 @@ export class PluginManager {
     if (!started) return null;
 
     const response = await this.sidecar.call('inspect', { pluginId: internalName, path: filePath });
+
+    /**
+     * The runtime never answered, so there is no verdict to record.
+     *
+     * `null` here means exactly what it means two lines above when the process
+     * has not started: nothing was learned. Recording `T4_BLOCKED` instead —
+     * which is what this did — states that the archive *cannot be loaded*, and
+     * two things downstream act on that: `verifyInstalledPlugin` fails, so
+     * `ExtensionUpdater` rolls back an update that had already downloaded,
+     * verified its SHA-256 and written cleanly; and the report is cached, so
+     * the extensions screen shows a working extension as blocked until
+     * something re-inspects it.
+     *
+     * A timeout is the realistic case, not a hypothetical one: a bulk update
+     * unloads, translates and reloads each archive in turn against a JVM
+     * holding a hundred-plus plugins, and the call deadline is 60s.
+     */
+    if (isTransportFailure(response)) {
+      logger.warn('extension_inspect_unreachable', {
+        plugin: internalName,
+        errorKind: response.errorKind,
+        reason: response.error,
+      });
+      return null;
+    }
+
     if (!response.ok) {
       const report: PluginRuntimeReport = {
         tier: 'T4_BLOCKED',

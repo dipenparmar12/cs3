@@ -339,7 +339,8 @@ rather than omitting the ones nothing serves.
 | `cs3/hostDeadline.ts` | How long the host may work on a call the sidecar is waiting on. Pure, tested; **the worker stops before the waiter does**. |
 | `cs3/providerRegistry.ts` | What each archive registered, keyed `size:mtime:generation`; hydrates the provider list without starting the JVM (67s → 8ms). |
 | `cs3/providerRecovery.ts` | `planRecovery` (pure) — ordered steps to make a saved page's provider answer again; never adds an unknown repository. |
-| `cs3/extensionUpdater.ts` | Scheduled OTA extension updates. |
+| `cs3/extensionUpdater.ts` | Scheduled OTA extension updates. "Update all" re-checks rather than reading the persisted snapshot; an update installs into the directory the *record* names and downloads from the repository the *update* names. |
+| `cs3/rpcResult.ts` | `RpcResult` + `isTransportFailure` — "the runtime never answered" vs "the answer was no". Pure, tested. |
 | `cs3/bootstrap.ts` | First-run bundled-repo install + adult opt-in. |
 | `cs3/diagnostics.ts` | Provider failures with reproducible context (the tuple, not a message). |
 | `cs3/extensionIssues.ts` | Durable tally of distinct extension problems across restarts/rotation. |
@@ -2147,6 +2148,84 @@ restoring the awaited enrich, the batched publish, the full single-character
 fan-out, the prefix cache, the source precedence and the prefix scoring each
 fail a test. The two ordering tests use a **gated** stub rather than a timer —
 a timing test for a latency fix passes on the machine that wrote it.
+
+### Extension updates: three reasons "Update all" did nothing (2026-09-17)
+
+Reported as: updating every extension always fails, and many are visibly out of
+date. Diagnosed against a real install — 219 installed extensions, 31
+repositories — and **not from the logs, because the entire update path logged
+nothing**: 22,841 records held not one line from `extensionUpdater.ts`. That is
+the first defect, and it is why the other two survived.
+
+Measured on that install by driving the shipped `ExtensionUpdater` with the
+network live and the install step stubbed:
+
+| pressing "Update all" | before | after |
+|---|---|---|
+| extensions acted on | **3** | **94** |
+| installed over the existing archive | 1 | 94 |
+| would create a duplicate beside it | **2** | **0** |
+| backups actually taken | 1/3 | 94/94 |
+
+1. **`updateAll()` with no targets preferred a persisted snapshot.** It fell
+   back to a live check only when the cache was *empty*. The cache is written by
+   the last check and survives restarts, so it can be arbitrarily old: 3 entries
+   stored against 94 available. The button updated three extensions, reported
+   "Updated all 3 extension(s)", and left 91 — indistinguishable from the
+   feature not working. **"Update everything" means everything out of date now.**
+
+2. **An update installed into the wrong directory.** `installPathFor` keys the
+   on-disk directory on the *repository URL string*, and one repository is
+   routinely known by two — the curated list stores a project page
+   (`https://github.com/owner/repo`) and `fetchRepository` resolves it to a raw
+   document. An extension stamped with the first and updated under the second
+   got **no backup** (`preserveInstalledVersion` looked at a path that does not
+   exist and returned false, so a bad update could not be rolled back at all)
+   and was **installed beside itself** rather than replaced. Physical evidence
+   on that install: 311 archives on disk for 219 records, with duplicate
+   filenames in two repository directories holding different bytes.
+   **Where the archive lives and where the new bytes come from are two
+   questions**: download from the update's repository, install into the
+   record's. `resolveUpdate` had always preferred the extension's own
+   repository; `doCheck` did not, so which repository supplied an update
+   depended on the order the catalogue fetches settled in.
+
+3. **A transport failure was reported as a broken extension.** See below.
+
+`autoInstall` still defaults to **false** — notify only. That is deliberate and
+unchanged: installed extensions execute code the user chose to trust at a
+version, and silently swapping it is their decision. "The app should update
+itself" is one toggle, not a default.
+
+### A timeout is not a verdict (2026-09-17)
+
+`PluginManager.inspect` turned **every** failed RPC into a `T4_BLOCKED` tier,
+which means "this archive cannot be loaded". Two things act on that, and both
+are wrong when the runtime simply never answered:
+
+- `ExtensionUpdater` reads it through `verifyInstalledPlugin` and **rolls the
+  update back** — undoing an archive that had already downloaded, verified its
+  publisher's SHA-256 and been written atomically, then reporting the extension
+  as broken.
+- The tier is cached, so the extensions screen shows a working extension as
+  blocked until something re-inspects it.
+
+Not hypothetical: a bulk update unloads, translates and reloads each archive in
+turn against a JVM holding 219 plugins, and the call deadline is 60s.
+
+`cs3/rpcResult.ts` owns the distinction — `TRANSPORT_ERROR_KINDS` is the closed
+set the *host* sets when no verdict was produced (`SIDECAR_UNAVAILABLE`,
+`SIDECAR_STOPPED`, `SIDECAR_CRASHED`, `TIMEOUT`), and `inspect` answers `null`
+for those, exactly as it already did for a sidecar that had not started. It is
+its own module for `groupingForm`'s reason: `sidecarSupervisor.ts` imports
+`electron` and cannot be loaded under Node's type stripping.
+
+**DROP-34 already said this.** It was being honoured only for
+`ensureStarted()` returning false, and not for a call that failed afterwards.
+
+`bun run test updater` (9 cases) pins all of it, mutation-verified: restoring
+the cache-first behaviour, the update-repository install target, the missing
+own-repository preference, or the flattened transport kinds each fails a test.
 
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 
