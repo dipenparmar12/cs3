@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   Check,
   ChevronDown,
@@ -26,35 +33,6 @@ import {
 
 export type { CheckState, ChosenSource, Facets, FacetSelection, Row };
 
-/**
- * "Search only these sources", as a room rather than a letterbox.
- *
- * The previous version of this was a 330px dropdown holding, in order: a
- * search field, a reset row, three unlabelled rows of chips meaning three
- * different things, a progress line, a 300px window onto a three-level tree of
- * several hundred 28px rows, two buttons and a sentence. Every one of those is
- * necessary. Stacked in a column the width of a button they were unreadable,
- * and the two most important distinctions in the whole control were invisible:
- *
- *  - **A filter is not a selection.** The chips narrow what the list *shows*;
- *    ticking a box narrows what the search *asks*. Rendered as adjacent rows of
- *    similar-looking pills, they read as one mechanism, and a user who filtered
- *    to "Hindi" reasonably believed they had scoped their search to Hindi
- *    providers. They had not. The two now live in different panes, under
- *    different headings, and the rail says so in as many words.
- *  - **Which facet a chip belongs to.** Twelve language chips beside six type
- *    chips beside two kind chips, separated by a hairline, is not a legible
- *    expression of "OR within a facet, AND across facets". Each facet is now a
- *    labelled group with its own count.
- *
- * Everything about *what the scope means* is unchanged and still decided by the
- * caller — this component renders rows and reports clicks. What is new here is
- * the shape of the room, and the keyboard: the tree is a real
- * `tree`/`treeitem` structure with roving focus through
- * `aria-activedescendant`, so several hundred sources are navigable without a
- * mouse and announced correctly, which a div full of buttons never was.
- */
-
 const Box: React.FC<{ state: CheckState }> = ({ state }) => (
   <span className={`scope__box scope__box--${state}`} aria-hidden>
     {state === 'on' && <Check size={12} strokeWidth={3} />}
@@ -63,29 +41,356 @@ const Box: React.FC<{ state: CheckState }> = ({ state }) => (
 );
 
 const ROW_HEIGHT = 34;
-const OVERSCAN = 6;
-/** Used until the scroller has been measured; replaced on the first layout. */
+const OVERSCAN = 8;
 const ASSUMED_VIEWPORT = 460;
+const CHIP_COLLAPSE_THRESHOLD = 12;
+
+interface SourceRowItemProps {
+  row: Row;
+  index: number;
+  isActive: boolean;
+  state: CheckState;
+  health?: ProviderHealth;
+  onToggleRow: (row: Row) => void;
+  onToggleCollapse: (key: string) => void;
+  onIncludeSection?: (row: Row) => void;
+  onExcludeSection?: (row: Row) => void;
+  onSetActive: (index: number) => void;
+}
+
+const SourceRowItem = React.memo<SourceRowItemProps>(
+  ({
+    row,
+    index,
+    isActive,
+    state,
+    health,
+    onToggleRow,
+    onToggleCollapse,
+    onIncludeSection,
+    onExcludeSection,
+    onSetActive,
+  }) => {
+    if (row.kind === 'note') {
+      return (
+        <p key={row.key} className="scope-modal__note" style={{ height: ROW_HEIGHT }}>
+          {row.label}
+        </p>
+      );
+    }
+
+    const rowId = `scope-row-${row.key.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+
+    return (
+      <div
+        id={rowId}
+        role="treeitem"
+        aria-level={row.depth + 1}
+        aria-expanded={row.expanded}
+        aria-checked={state === 'mixed' ? 'mixed' : state === 'on'}
+        aria-disabled={row.members.length === 0 || undefined}
+        className={[
+          'scope-modal__row',
+          `scope-modal__row--${row.kind}`,
+          `scope-modal__row--d${row.depth}`,
+          isActive ? 'scope-modal__row--active' : '',
+          state !== 'off' ? 'scope-modal__row--on' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        style={{ height: ROW_HEIGHT }}
+        title={row.title}
+        onMouseDown={() => onSetActive(index)}
+      >
+        {row.expanded !== undefined ? (
+          <button
+            className="scope-modal__twisty"
+            onClick={() => onToggleCollapse(row.key)}
+            aria-label={`${row.expanded ? 'Collapse' : 'Expand'} ${row.label}`}
+            tabIndex={-1}
+          >
+            {row.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+        ) : (
+          <span className="scope-modal__twisty scope-modal__twisty--empty" />
+        )}
+
+        <button
+          className="scope-modal__pick"
+          onClick={() => onToggleRow(row)}
+          disabled={row.members.length === 0}
+          tabIndex={-1}
+        >
+          <Box state={state} />
+          {row.icon === 'package' && <Package size={14} />}
+          {row.icon === 'radio' && <Radio size={14} />}
+          <span className="scope-modal__name">{row.label}</span>
+          {row.lang && <span className="scope-modal__lang">{row.lang.toUpperCase()}</span>}
+          {row.members.length > 1 && (
+            <span className="scope-modal__count">{row.members.length}</span>
+          )}
+          {health && isWorthShowing(health) ? (
+            <span
+              className={`scope-modal__health scope-modal__health--${health.level}`}
+              title={health.detail}
+            >
+              {health.label}
+            </span>
+          ) : null}
+        </button>
+
+        {(row.kind === 'repo' || row.kind === 'ext') && row.members.length > 0 && (
+          <div className="scope-modal__row-actions">
+            <button
+              type="button"
+              className="scope-modal__row-action-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onIncludeSection?.(row);
+              }}
+              title={`Select all in ${row.label}`}
+              tabIndex={-1}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              className="scope-modal__row-action-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onExcludeSection?.(row);
+              }}
+              title={`Deselect all in ${row.label}`}
+              tabIndex={-1}
+            >
+              None
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+);
+SourceRowItem.displayName = 'SourceRowItem';
+
+interface SourceVirtualTreeProps {
+  rows: Row[];
+  providers: Set<string>;
+  indexers: Set<string>;
+  healthFor?: (provider: string) => ProviderHealth | undefined;
+  clampedActive: number;
+  scrollerRef: React.RefObject<HTMLDivElement | null>;
+  onSetActive: (index: number) => void;
+  onToggleRow: (row: Row) => void;
+  onToggleCollapse: (key: string) => void;
+  onIncludeSection?: (row: Row) => void;
+  onExcludeSection?: (row: Row) => void;
+  onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => void;
+  activeRowDomId?: string;
+}
+
+const SourceVirtualTree: React.FC<SourceVirtualTreeProps> = ({
+  rows,
+  providers,
+  indexers,
+  healthFor,
+  clampedActive,
+  scrollerRef,
+  onSetActive,
+  onToggleRow,
+  onToggleCollapse,
+  onIncludeSection,
+  onExcludeSection,
+  onKeyDown,
+  activeRowDomId,
+}) => {
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewport, setViewport] = useState(ASSUMED_VIEWPORT);
+  const rafId = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    const element = scrollerRef.current;
+    if (!element) return;
+    const measure = () => setViewport(element.clientHeight || ASSUMED_VIEWPORT);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [scrollerRef]);
+
+  const handleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const targetScrollTop = event.currentTarget.scrollTop;
+    if (rafId.current !== null) return;
+    rafId.current = requestAnimationFrame(() => {
+      rafId.current = null;
+      setScrollTop(targetScrollTop);
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (rafId.current !== null) {
+        cancelAnimationFrame(rafId.current);
+        rafId.current = null;
+      }
+    };
+  }, []);
+
+  const firstVisible = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const lastVisible = Math.min(
+    rows.length,
+    Math.ceil((scrollTop + viewport) / ROW_HEIGHT) + OVERSCAN
+  );
+  const windowed = rows.slice(firstVisible, lastVisible);
+
+  return (
+    <div
+      className="scope-modal__tree"
+      ref={scrollerRef}
+      role="tree"
+      aria-label="Sources to search"
+      aria-multiselectable="true"
+      aria-activedescendant={activeRowDomId}
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+      onScroll={handleScroll}
+    >
+      <div style={{ height: rows.length * ROW_HEIGHT, position: 'relative' }}>
+        <div
+          style={{
+            transform: `translateY(${firstVisible * ROW_HEIGHT}px)`,
+            willChange: 'transform',
+          }}
+        >
+          {windowed.map((row, offset) => {
+            const index = firstVisible + offset;
+            const selected = row.isIndexer ? indexers : providers;
+            const state = stateOf(row.members, selected);
+            const health =
+              row.kind === 'leaf' && !row.isIndexer ? healthFor?.(row.members[0]) : undefined;
+
+            return (
+              <SourceRowItem
+                key={row.key}
+                row={row}
+                index={index}
+                isActive={index === clampedActive}
+                state={state}
+                health={health}
+                onToggleRow={onToggleRow}
+                onToggleCollapse={onToggleCollapse}
+                onIncludeSection={onIncludeSection}
+                onExcludeSection={onExcludeSection}
+                onSetActive={onSetActive}
+              />
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+interface ChosenSourcesBarProps {
+  chosen: ChosenSource[];
+  onDeselect: (source: ChosenSource) => void;
+  onClearAll?: () => void;
+}
+
+const ChosenSourcesBar: React.FC<ChosenSourcesBarProps> = ({ chosen, onDeselect, onClearAll }) => {
+  const [expanded, setExpanded] = useState(false);
+
+  if (chosen.length === 0) return null;
+
+  const hasOverflow = chosen.length > CHIP_COLLAPSE_THRESHOLD;
+  const visible = expanded || !hasOverflow ? chosen : chosen.slice(0, CHIP_COLLAPSE_THRESHOLD);
+
+  return (
+    <div className="scope-modal__chosen-wrap">
+      <div className="scope-modal__chosen-header">
+        <span className="scope-modal__chosen-title">
+          Selected sources ({chosen.length})
+        </span>
+        <div className="scope-modal__chosen-actions">
+          {hasOverflow && (
+            <button
+              type="button"
+              className="scope-modal__chosen-toggle"
+              onClick={() => setExpanded((prev) => !prev)}
+            >
+              {expanded ? 'Show less' : `+${chosen.length - CHIP_COLLAPSE_THRESHOLD} more`}
+            </button>
+          )}
+          {onClearAll && (
+            <button
+              type="button"
+              className="scope-modal__chosen-clear"
+              onClick={onClearAll}
+              title="Clear all selected sources"
+            >
+              Clear all
+            </button>
+          )}
+        </div>
+      </div>
+      <div
+        className={`scope-modal__chosen${expanded ? ' scope-modal__chosen--expanded' : ''}`}
+        aria-label="Selected sources"
+      >
+        {visible.map((source) => (
+          <button
+            key={`${source.isIndexer ? 'i' : 'p'}:${source.id}`}
+            className="scope-modal__chosen-chip"
+            onClick={() => onDeselect(source)}
+            title={`Stop searching ${source.label}`}
+          >
+            {source.isIndexer ? <Radio size={11} /> : <Package size={11} />}
+            <span>{source.label}</span>
+            <X size={11} aria-label={`Remove ${source.label}`} />
+          </button>
+        ))}
+        {!expanded && hasOverflow && (
+          <button
+            type="button"
+            className="scope-modal__chosen-more-chip"
+            onClick={() => setExpanded(true)}
+            title={`Show all ${chosen.length} selected sources`}
+          >
+            +{chosen.length - CHIP_COLLAPSE_THRESHOLD} more…
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
 
 export interface SourceScopeDialogProps {
   rows: Row[];
-  /** What exists to filter by, and what is filtered by right now. */
   available: Facets;
   facets: FacetSelection;
   facetsActive: boolean;
   onToggleFacet: (group: keyof FacetSelection, value: string) => void;
   onClearFacets: () => void;
+  onSelectAllFacetGroup?: (group: keyof FacetSelection) => void;
+  onClearFacetGroup?: (group: keyof FacetSelection) => void;
 
   query: string;
   onQueryChange: (value: string) => void;
 
   providers: Set<string>;
   indexers: Set<string>;
-  /** The current scope, resolved to display names, for the chip strip. */
   chosen: ChosenSource[];
   totalChosen: number;
   totalAvailable: number;
-  /** Whether each kind exists at all; a filter for nothing is not offered. */
+
+  isFiltered?: boolean;
+  filteredCount?: number;
+  allFilteredSelected?: boolean;
+  onSelectAllFiltered?: () => void;
+  onUnselectAllFiltered?: () => void;
+  onClearAllChosen?: () => void;
+
   hasExtensions: boolean;
   hasIndexers: boolean;
 
@@ -95,27 +400,15 @@ export interface SourceScopeDialogProps {
 
   onToggleRow: (row: Row) => void;
   onToggleCollapse: (key: string) => void;
+  onIncludeSection?: (row: Row) => void;
+  onExcludeSection?: (row: Row) => void;
+  onExpandAll?: () => void;
+  onCollapseAll?: () => void;
   onDeselect: (source: ChosenSource) => void;
   onSelectAll: () => void;
   onReset: () => void;
   onClose: () => void;
-  /**
-   * The profile bar, passed in already built.
-   *
-   * A node rather than the data and callbacks, because this component is
-   * presentation over a source tree and the profile bar is presentation over a
-   * different store entirely — threading six more props through here to reach
-   * one row would make the dialog the owner of something it has nothing to say
-   * about. `SearchScopePicker` owns all data and state; that is unchanged.
-   */
   profileBar?: React.ReactNode;
-  /**
-   * How well a provider has worked here, looked up per row.
-   *
-   * A function rather than a map so the dialog does not have to know how the
-   * leaderboard is fetched or keyed, and optional so this component still
-   * renders in full when analytics are switched off — which they can be.
-   */
   healthFor?: (provider: string) => ProviderHealth | undefined;
 }
 
@@ -126,6 +419,8 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   facetsActive,
   onToggleFacet,
   onClearFacets,
+  onSelectAllFacetGroup,
+  onClearFacetGroup,
   query,
   onQueryChange,
   providers,
@@ -133,6 +428,12 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   chosen,
   totalChosen,
   totalAvailable,
+  isFiltered = false,
+  filteredCount,
+  allFilteredSelected = false,
+  onSelectAllFiltered,
+  onUnselectAllFiltered,
+  onClearAllChosen,
   hasExtensions,
   hasIndexers,
   progress,
@@ -140,6 +441,10 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   loaded,
   onToggleRow,
   onToggleCollapse,
+  onIncludeSection,
+  onExcludeSection,
+  onExpandAll,
+  onCollapseAll,
   onDeselect,
   onSelectAll,
   onReset,
@@ -150,18 +455,11 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   const dialog = useRef<HTMLDivElement | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
   const searchField = useRef<HTMLInputElement | null>(null);
-  const [scrollTop, setScrollTop] = useState(0);
-  const [viewport, setViewport] = useState(ASSUMED_VIEWPORT);
-  /** The row arrow keys are on. Not a selection — that is the checkbox. */
-  const [activeIndex, setActiveIndex] = useState(0);
 
-  /**
-   * Where the keyboard was before this opened.
-   *
-   * Captured on mount rather than passed in: whatever had focus is by
-   * definition what should get it back, and a dialog that returns focus to
-   * somewhere the user was not is worse than one that drops it entirely.
-   */
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [inputValue, setInputValue] = useState(query);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const returnFocusTo = useRef<HTMLElement | null>(null);
   useEffect(() => {
     returnFocusTo.current = document.activeElement as HTMLElement | null;
@@ -169,35 +467,38 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
     return () => returnFocusTo.current?.focus?.();
   }, []);
 
-  /**
-   * The window of rows to mount is a function of the real height.
-   *
-   * Measured rather than assumed, because the dialog is sized in viewport units
-   * — a constant would either mount rows nobody can see on a laptop or leave a
-   * blank band at the bottom of a large display.
-   */
-  useLayoutEffect(() => {
-    const element = scroller.current;
-    if (!element) return;
-    const measure = () => setViewport(element.clientHeight || ASSUMED_VIEWPORT);
-    measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
+  useEffect(() => {
+    setInputValue(query);
+  }, [query]);
+
+  const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const next = event.target.value;
+    setInputValue(next);
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      onQueryChange(next);
+    }, 150);
+  };
+
+  const handleInputClear = () => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    setInputValue('');
+    onQueryChange('');
+  };
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
   }, []);
 
-  // A new result set is a new list; keeping the old cursor would land it on an
-  // unrelated row, and keeping the old scroll position would open mid-list.
   useEffect(() => {
     setActiveIndex(0);
-    setScrollTop(0);
     if (scroller.current) scroller.current.scrollTop = 0;
   }, [query]);
 
   const clampedActive = Math.min(activeIndex, Math.max(0, rows.length - 1));
 
-  /** Keeps the row the keyboard is on inside the window that is mounted. */
   const revealRow = useCallback((index: number) => {
     const element = scroller.current;
     if (!element) return;
@@ -208,7 +509,6 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
     }
   }, []);
 
-  /** Notes are labels, not stops: arrow keys pass over them. */
   const step = useCallback(
     (from: number, direction: 1 | -1): number => {
       let index = from;
@@ -275,14 +575,6 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
     }
   };
 
-  /**
-   * Tab stays inside, and Escape leaves.
-   *
-   * Both in capture phase on the dialog itself. The player binds Escape on
-   * `window` and reads it as "leave playback", which is how a menu's Escape
-   * came to end a film once before — a dialog that lets the key through is a
-   * dialog that closes something else as well as itself.
-   */
   const onDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -306,13 +598,6 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
     }
   };
 
-  const firstVisible = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
-  const lastVisible = Math.min(
-    rows.length,
-    Math.ceil((scrollTop + viewport) / ROW_HEIGHT) + OVERSCAN
-  );
-  const windowed = rows.slice(firstVisible, lastVisible);
-
   const rowDomId = (row: Row) => `scope-row-${row.key.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
   const activeRow = rows[clampedActive];
 
@@ -323,6 +608,36 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
     if (totalChosen === 1) return 'Searching one source. Catalogue metadata is not consulted.';
     return `Searching ${totalChosen} sources. Catalogue metadata is not consulted.`;
   }, [totalChosen]);
+
+  const selectAllButtonText = useMemo(() => {
+    if (isFiltered) {
+      return allFilteredSelected
+        ? 'Unselect filtered'
+        : filteredCount !== undefined && filteredCount > 0
+          ? `Select filtered (${filteredCount})`
+          : 'Select all filtered';
+    }
+    if (totalChosen === totalAvailable && totalAvailable > 0) {
+      return 'Unselect all';
+    }
+    return 'Select all';
+  }, [isFiltered, allFilteredSelected, filteredCount, totalChosen, totalAvailable]);
+
+  const handleSelectAllAction = () => {
+    if (isFiltered) {
+      if (allFilteredSelected) {
+        onUnselectAllFiltered?.();
+      } else {
+        onSelectAllFiltered?.();
+      }
+      return;
+    }
+    if (totalChosen === totalAvailable && totalAvailable > 0) {
+      onClearAllChosen?.();
+      return;
+    }
+    onSelectAll();
+  };
 
   return (
     <div className="scope-modal" role="presentation" onMouseDown={onClose}>
@@ -356,22 +671,19 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
         </header>
 
         <div className="scope-modal__body">
-          {/*
-            Filters, in their own pane and under their own heading.
-
-            The sentence at the top is load-bearing rather than decorative: the
-            single most common misreading of the old control was that filtering
-            to a language scoped the search to it. Saying which of the two
-            mechanisms this pane is costs one line and removes the entire class
-            of mistake.
-          */}
           <aside className="scope-modal__rail" aria-label="Filters">
             <p className="scope-modal__rail-note">
               Filters change what this list shows. Ticking a source is what narrows the search.
             </p>
 
             {hasExtensions && hasIndexers && (
-              <FacetGroup label="Kind">
+              <FacetGroup
+                label="Kind"
+                onSelectAll={
+                  onSelectAllFacetGroup ? () => onSelectAllFacetGroup('kinds') : undefined
+                }
+                onClear={onClearFacetGroup ? () => onClearFacetGroup('kinds') : undefined}
+              >
                 <FacetChip
                   on={facets.kinds.has('extension')}
                   onClick={() => onToggleFacet('kinds', 'extension')}
@@ -390,7 +702,13 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
             )}
 
             {available.types.length > 0 && (
-              <FacetGroup label="Content type">
+              <FacetGroup
+                label="Content type"
+                onSelectAll={
+                  onSelectAllFacetGroup ? () => onSelectAllFacetGroup('types') : undefined
+                }
+                onClear={onClearFacetGroup ? () => onClearFacetGroup('types') : undefined}
+              >
                 {available.types.map((type) => (
                   <FacetChip
                     key={type}
@@ -404,7 +722,13 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
             )}
 
             {available.languages.length > 1 && (
-              <FacetGroup label="Language">
+              <FacetGroup
+                label="Language"
+                onSelectAll={
+                  onSelectAllFacetGroup ? () => onSelectAllFacetGroup('languages') : undefined
+                }
+                onClear={onClearFacetGroup ? () => onClearFacetGroup('languages') : undefined}
+              >
                 {available.languages.map((lang) => (
                   <FacetChip
                     key={lang}
@@ -431,79 +755,41 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
               <Search size={15} />
               <input
                 ref={searchField}
-                value={query}
-                onChange={(event) => onQueryChange(event.target.value)}
+                value={inputValue}
+                onChange={handleInputChange}
                 placeholder="Find a repository, extension or provider…"
                 aria-label="Filter the source list"
                 type="search"
               />
-              {query && (
-                <button onClick={() => onQueryChange('')} aria-label="Clear the source filter">
+              {inputValue && (
+                <button onClick={handleInputClear} aria-label="Clear the source filter">
                   <X size={14} />
                 </button>
               )}
             </div>
 
-            {/*
-              The default, stated as a choice rather than only as an absence.
-
-              An empty selection and a fully-ticked one search the same sources
-              today, but they age differently: this one follows whatever is
-              installed, while ticking everything pins the set as it is now.
-
-              Hidden when the profile bar is present, which offers the same
-              choice one row above and — unlike this button — does not reach it
-              by erasing the selection. Two controls that look alike and differ
-              only in whether they destroy something is the worst version of
-              this, so only one is on screen.
-            */}
-            {!profileBar && <button
-              className={`scope-modal__all${totalChosen === 0 ? ' scope-modal__all--current' : ''}`}
-              onClick={onReset}
-              aria-pressed={totalChosen === 0}
-            >
-              <Box state={totalChosen === 0 ? 'on' : 'off'} />
-              <Globe size={15} />
-              <span className="scope-modal__all-label">
-                All sources
-                <span className="scope-modal__all-hint">
-                  Follows whatever you have installed
+            {!profileBar && (
+              <button
+                className={`scope-modal__all${totalChosen === 0 ? ' scope-modal__all--current' : ''}`}
+                onClick={onReset}
+                aria-pressed={totalChosen === 0}
+              >
+                <Box state={totalChosen === 0 ? 'on' : 'off'} />
+                <Globe size={15} />
+                <span className="scope-modal__all-label">
+                  All sources
+                  <span className="scope-modal__all-hint">Follows whatever you have installed</span>
                 </span>
-              </span>
-              <span className="scope-modal__count">{totalAvailable}</span>
-            </button>}
-
-            {/*
-              What is actually scoped, spelled out.
-
-              A count in a header answers "how many" and never "which", and
-              scrolling a tree of several hundred rows to find the four ticked
-              boxes is not a reasonable way to answer it. Every chip removes its
-              own source, which is also the only way to undo one selection
-              without hunting for the row it came from.
-            */}
-            {chosen.length > 0 && (
-              <div className="scope-modal__chosen" aria-label="Selected sources">
-                {chosen.map((source) => (
-                  <button
-                    key={`${source.isIndexer ? 'i' : 'p'}:${source.id}`}
-                    className="scope-modal__chosen-chip"
-                    onClick={() => onDeselect(source)}
-                    title={`Stop searching ${source.label}`}
-                  >
-                    {source.isIndexer ? <Radio size={11} /> : <Package size={11} />}
-                    <span>{source.label}</span>
-                    <X size={11} aria-label={`Remove ${source.label}`} />
-                  </button>
-                ))}
-              </div>
+                <span className="scope-modal__count">{totalAvailable}</span>
+              </button>
             )}
 
-            {/*
-              Progress with a number in it. "Loading extensions…" for four
-              minutes is indistinguishable from a hang, and that is how long
-              this takes on a freshly bootstrapped install.
-            */}
+            <ChosenSourcesBar
+              chosen={chosen}
+              onDeselect={onDeselect}
+              onClearAll={onClearAllChosen}
+            />
+
             {progress?.running && (
               <p className="scope-modal__progress">
                 <Loader2 size={13} className="spin" />
@@ -536,126 +822,51 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                       : 'No extension providers are installed. Add a repository in Extensions.'}
               </p>
             ) : (
-              <div
-                className="scope-modal__tree"
-                ref={scroller}
-                role="tree"
-                aria-label="Sources to search"
-                aria-multiselectable="true"
-                aria-activedescendant={activeRow ? rowDomId(activeRow) : undefined}
-                tabIndex={0}
-                onKeyDown={onTreeKeyDown}
-                onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-              >
-                <div style={{ height: rows.length * ROW_HEIGHT, position: 'relative' }}>
-                  <div style={{ transform: `translateY(${firstVisible * ROW_HEIGHT}px)` }}>
-                    {windowed.map((row, offset) => {
-                      const index = firstVisible + offset;
-                      if (row.kind === 'note') {
-                        return (
-                          <p
-                            key={row.key}
-                            className="scope-modal__note"
-                            style={{ height: ROW_HEIGHT }}
-                          >
-                            {row.label}
-                          </p>
-                        );
-                      }
-
-                      const selected = row.isIndexer ? indexers : providers;
-                      const state = stateOf(row.members, selected);
-
-                      return (
-                        <div
-                          key={row.key}
-                          id={rowDomId(row)}
-                          role="treeitem"
-                          aria-level={row.depth + 1}
-                          aria-expanded={row.expanded}
-                          aria-checked={state === 'mixed' ? 'mixed' : state === 'on'}
-                          aria-disabled={row.members.length === 0 || undefined}
-                          className={[
-                            'scope-modal__row',
-                            `scope-modal__row--${row.kind}`,
-                            `scope-modal__row--d${row.depth}`,
-                            index === clampedActive ? 'scope-modal__row--active' : '',
-                            state !== 'off' ? 'scope-modal__row--on' : '',
-                          ]
-                            .filter(Boolean)
-                            .join(' ')}
-                          style={{ height: ROW_HEIGHT }}
-                          title={row.title}
-                          onMouseDown={() => setActiveIndex(index)}
+              <>
+                <div className="scope-modal__tree-bar">
+                  <span>{rows.length} {rows.length === 1 ? 'item' : 'items'}</span>
+                  {(onExpandAll || onCollapseAll) && (
+                    <div className="scope-modal__tree-controls">
+                      {onExpandAll && (
+                        <button
+                          type="button"
+                          className="scope-modal__tree-control-btn"
+                          onClick={onExpandAll}
+                          title="Expand all sections"
                         >
-                          {row.expanded !== undefined ? (
-                            <button
-                              className="scope-modal__twisty"
-                              onClick={() => onToggleCollapse(row.key)}
-                              aria-label={`${row.expanded ? 'Collapse' : 'Expand'} ${row.label}`}
-                              tabIndex={-1}
-                            >
-                              {row.expanded ? (
-                                <ChevronDown size={14} />
-                              ) : (
-                                <ChevronRight size={14} />
-                              )}
-                            </button>
-                          ) : (
-                            <span className="scope-modal__twisty scope-modal__twisty--empty" />
-                          )}
-
-                          <button
-                            className="scope-modal__pick"
-                            onClick={() => onToggleRow(row)}
-                            disabled={row.members.length === 0}
-                            tabIndex={-1}
-                          >
-                            <Box state={state} />
-                            {row.icon === 'package' && <Package size={14} />}
-                            {row.icon === 'radio' && <Radio size={14} />}
-                            <span className="scope-modal__name">{row.label}</span>
-                            {row.lang && (
-                              <span className="scope-modal__lang">{row.lang.toUpperCase()}</span>
-                            )}
-                            {row.members.length > 1 && (
-                              <span className="scope-modal__count">{row.members.length}</span>
-                            )}
-                            {/*
-                              How well this source has actually worked here.
-
-                              The ranking has measured success rate, latency and
-                              whether anything played since it was written, and
-                              exactly one settings panel read it — which is the
-                              wrong screen: the question "is this worth switching
-                              on" is asked here, in front of the switch.
-
-                              Only measured verdicts are drawn. Two hundred
-                              "Not measured" badges on a fresh install would
-                              teach the viewer to ignore the column before it
-                              ever had anything to say.
-                            */}
-                            {(() => {
-                              const health =
-                                row.kind === 'leaf' && !row.isIndexer
-                                  ? healthFor?.(row.members[0])
-                                  : undefined;
-                              return health && isWorthShowing(health) ? (
-                                <span
-                                  className={`scope-modal__health scope-modal__health--${health.level}`}
-                                  title={health.detail}
-                                >
-                                  {health.label}
-                                </span>
-                              ) : null;
-                            })()}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
+                          Expand all
+                        </button>
+                      )}
+                      {onCollapseAll && (
+                        <button
+                          type="button"
+                          className="scope-modal__tree-control-btn"
+                          onClick={onCollapseAll}
+                          title="Collapse all sections"
+                        >
+                          Collapse all
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
+
+                <SourceVirtualTree
+                  rows={rows}
+                  providers={providers}
+                  indexers={indexers}
+                  healthFor={healthFor}
+                  clampedActive={clampedActive}
+                  scrollerRef={scroller}
+                  onSetActive={setActiveIndex}
+                  onToggleRow={onToggleRow}
+                  onToggleCollapse={onToggleCollapse}
+                  onIncludeSection={onIncludeSection}
+                  onExcludeSection={onExcludeSection}
+                  onKeyDown={onTreeKeyDown}
+                  activeRowDomId={activeRow ? rowDomId(activeRow) : undefined}
+                />
+              </>
             )}
           </section>
         </div>
@@ -667,11 +878,17 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
           <div className="scope-modal__actions">
             <button
               className="btn btn-ghost"
-              onClick={onSelectAll}
-              disabled={totalAvailable === 0}
-              title="Tick every source as it is right now, rather than following what is installed"
+              onClick={handleSelectAllAction}
+              disabled={isFiltered ? (filteredCount ?? 0) === 0 : totalAvailable === 0}
+              title={
+                isFiltered
+                  ? allFilteredSelected
+                    ? 'Deselect all sources matching current filter'
+                    : 'Select all sources matching current filter'
+                  : 'Tick every source as it is right now, rather than following what is installed'
+              }
             >
-              Select all
+              {selectAllButtonText}
             </button>
             <button className="btn btn-ghost" onClick={onReset} disabled={totalChosen === 0}>
               Reset
@@ -686,12 +903,40 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   );
 };
 
-const FacetGroup: React.FC<{ label: string; children: React.ReactNode }> = ({
-  label,
-  children,
-}) => (
+const FacetGroup: React.FC<{
+  label: string;
+  onSelectAll?: () => void;
+  onClear?: () => void;
+  children: React.ReactNode;
+}> = ({ label, onSelectAll, onClear, children }) => (
   <div className="scope-modal__facet" role="group" aria-label={label}>
-    <h3>{label}</h3>
+    <div className="scope-modal__facet-head">
+      <h3>{label}</h3>
+      {(onSelectAll || onClear) && (
+        <div className="scope-modal__facet-actions">
+          {onSelectAll && (
+            <button
+              type="button"
+              className="scope-modal__facet-action-btn"
+              onClick={onSelectAll}
+              title={`Select all ${label.toLowerCase()}`}
+            >
+              All
+            </button>
+          )}
+          {onClear && (
+            <button
+              type="button"
+              className="scope-modal__facet-action-btn"
+              onClick={onClear}
+              title={`Clear ${label.toLowerCase()}`}
+            >
+              None
+            </button>
+          )}
+        </div>
+      )}
+    </div>
     <div className="scope-modal__facet-chips">{children}</div>
   </div>
 );
