@@ -2420,9 +2420,46 @@ its own module for `groupingForm`'s reason: `sidecarSupervisor.ts` imports
 **DROP-34 already said this.** It was being honoured only for
 `ensureStarted()` returning false, and not for a call that failed afterwards.
 
-`bun run test updater` (9 cases) pins all of it, mutation-verified: restoring
+`bun run test updater` (13 cases) pins all of it, mutation-verified: restoring
 the cache-first behaviour, the update-repository install target, the missing
 own-repository preference, or the flattened transport kinds each fails a test.
+
+### A mirror cannot make a claim about somebody else's extension (2026-09-19)
+
+Reported as: every update fails, 60 of them, with `SHA-256 mismatch`. The
+verification was right and the update should never have been offered.
+
+Measured from the session log: **61 of 61 failures were same-version
+`republished` candidates, all supplied by one repository (`xr3ed/xr3ed-Repo`),
+and none of the 125 installed extensions came from it.** That index mirrors 195
+entries by pointing `url` straight at **phisher98's** artifacts while publishing
+its own `fileHash` and `fileSize` — measured, its declared sizes run ~2,700
+bytes under the files those URLs serve, so its hash describes a build that is
+not at the address beside it. Checked directly: phisher98's own index matches
+its artifacts byte for byte on every sample.
+
+So `artifactChanged`, read across repositories, cannot tell **"your copy is out
+of date"** from **"two publishers built this differently"** — and it answered
+the first every time. The result was a permanent failure list that no amount of
+retrying could clear, because the hash is wrong at the publisher.
+
+- **A republish is a claim only its own publisher can make.** Same version plus
+  different bytes counts only from `local.meta.repositoryUrl`. A record with no
+  repository stamp takes version bumps only.
+- **A version *bump* stays cross-repository.** That is a claim about the
+  artifact itself, tested by the number rather than against our own bytes; the
+  installed-from repository remains the tie-break, not a veto.
+- **`status: 0` is a quotation, so only the maintainer may be quoted.** Same
+  bug, same screen: `IdlixProvider is marked as not working by its maintainer`
+  was on display while its own publisher had it at `status: 1` and a third
+  repository carried a stale copy. An unreachable own-repository now produces no
+  notice, which is the honest answer.
+- **A hash mismatch names the index that published the hash**, plus declared
+  size against arrived size. Sixty identical rows blaming "the download" is the
+  one explanation that was never true, and the size gap identifies a
+  mirror-metadata mismatch in a line. The declared size is *reported, never
+  checked* — rejecting on it would be a second way to refuse what the hash
+  already covers.
 
 ### 5.1 The end-to-end harness — `tools/e2e/provider-e2e.mjs`
 

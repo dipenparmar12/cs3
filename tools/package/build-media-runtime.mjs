@@ -196,6 +196,7 @@ async function download(mirrors, target) {
         continue;
       }
       const bytes = Buffer.from(await response.arrayBuffer());
+      fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, bytes);
       log(`  ${(bytes.length / 1048576).toFixed(1)} MB`);
       return true;

@@ -100,6 +100,7 @@ public final class Main {
         DexTranslator translator = new DexTranslator(dataDir.resolve("translated"), classpathDir);
         PluginHost host = new PluginHost(translator, classpathDir);
         new Main(host, stdout).run();
+        System.exit(0);
     }
 
     private void run() throws IOException {

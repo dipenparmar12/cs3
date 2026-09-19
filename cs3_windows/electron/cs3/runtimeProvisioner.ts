@@ -450,13 +450,9 @@ export class RuntimeProvisioner {
       ...(app?.isPackaged
         ? [path.join(process.resourcesPath, 'sidecar', 'jre', 'bin', exe)]
         : []),
-      // 3. Prebuilt dist runtime in repo
-      path.join(process.cwd(), '..', 'sidecar', 'dist', 'jre', 'bin', exe),
-      path.join(process.cwd(), 'sidecar', 'dist', 'jre', 'bin', exe),
-      path.join(process.cwd(), 'dist', 'jre', 'bin', exe),
     ];
 
-    // 4. Developer toolchain JDKs
+    // 3. Developer toolchain JDKs (preferred in dev so sidecar/dist/jre is not locked)
     const toolchainRoots = [
       path.join(process.cwd(), '..', 'tools', 'toolchain'),
       path.join(process.cwd(), 'tools', 'toolchain'),
@@ -475,6 +471,13 @@ export class RuntimeProvisioner {
         // Ignore directory read errors
       }
     }
+
+    // 4. Prebuilt dist runtime in repo (fallback if toolchain is missing)
+    candidates.push(
+      path.join(process.cwd(), '..', 'sidecar', 'dist', 'jre', 'bin', exe),
+      path.join(process.cwd(), 'sidecar', 'dist', 'jre', 'bin', exe),
+      path.join(process.cwd(), 'dist', 'jre', 'bin', exe),
+    );
 
     // 5. JAVA_HOME environment variable
     if (process.env.JAVA_HOME) {

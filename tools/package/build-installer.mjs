@@ -245,11 +245,26 @@ if (SKIP_JVM) {
   }
 
   heading('Staging sidecar/dist (sidecar + classpath + jlinked JRE)');
-  // build-runtime clears sidecar/dist before relinking, and its own --verify
-  // smoke test starts a real JVM against the copy it just made. On Windows a
-  // java.exe that has not fully exited still holds jre/bin/java.dll, so the
-  // next run dies with EPERM on unlink - which reads as a permissions problem
-  // and is really the previous build's own verification.
+  // build-runtime clears sidecar/dist before relinking. On Windows a java.exe
+  // from a previous verification or dev session still running against sidecar/dist
+  // holds jre/bin/java.dll locked; terminate it before unlinking.
+  if (isWindows) {
+    try {
+      spawnSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          'Get-Process -Name java -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*sidecar\\dist\\*" } | Stop-Process -Force',
+        ],
+        { timeout: 5000 }
+      );
+    } catch {
+      // Best-effort
+    }
+  }
+
   const staged = path.join(root, 'sidecar', 'dist');
   const stagedComplete =
     fs.existsSync(path.join(staged, 'cs3-sidecar.jar')) &&

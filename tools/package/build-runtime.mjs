@@ -113,9 +113,51 @@ function findJdk() {
   );
 }
 
+function killDistProcesses() {
+  if (process.platform !== 'win32') return;
+  try {
+    spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        'Get-Process -Name java -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*sidecar\\dist\\*" } | Stop-Process -Force',
+      ],
+      { timeout: 5000 }
+    );
+  } catch {
+    // Best-effort
+  }
+}
+
+function cleanDir(dir) {
+  if (!fs.existsSync(dir)) return;
+  let lastError;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (process.platform === 'win32' && (err.code === 'EPERM' || err.code === 'EBUSY')) {
+        killDistProcesses();
+        spawnSync(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Milliseconds 400'],
+          { timeout: 3000 }
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+  if (lastError) throw lastError;
+}
+
 function copyDir(from, to, label) {
   if (!fs.existsSync(from)) die(`${label} is missing at ${from}`);
-  fs.rmSync(to, { recursive: true, force: true });
+  cleanDir(to);
   fs.cpSync(from, to, { recursive: true });
   const count = fs.readdirSync(to).length;
   ok(`${label}: ${count} entr${count === 1 ? 'y' : 'ies'}`);
@@ -144,6 +186,7 @@ function main() {
   step(`JDK ${jdk.major} at ${jdk.home}`);
 
   fs.mkdirSync(DIST, { recursive: true });
+  killDistProcesses();
 
   // --- the sidecar and its classpath ------------------------------------
   step('Collecting the extension runtime');
@@ -174,7 +217,7 @@ function main() {
   const jreDir = path.join(DIST, 'jre');
   // jlink refuses to write into an existing directory, and a stale JRE from a
   // previous run would otherwise be shipped unchanged.
-  fs.rmSync(jreDir, { recursive: true, force: true });
+  cleanDir(jreDir);
 
   const result = spawnSync(
     jdk.jlink,
