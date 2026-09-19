@@ -189,6 +189,30 @@ export class PlaybackEngine {
   public async inspect(
     request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh'>
   ): Promise<SourceCapabilityModel> {
+    /**
+     * A stream this process is already producing is not measured again.
+     *
+     * Measured on a trailer, 2026-09-19: `resolvePromoVideo` muxes YouTube's
+     * 1080p H.264 rung with its AAC rung — a stream copy — and hands back the
+     * session URL. `ffprobe` on that live fragmented-MP4 pipe answers
+     * `Invalid data found when processing input`, which classifies as
+     * unreadable, which routes to `FULL_TRANSCODE`. So every trailer was
+     * re-encoded on top of a copy that was already correct: quality thrown away
+     * for a whole CPU core, and on one of two attempts ffmpeg exited rather
+     * than producing anything at all. **That is the "trailers always play very
+     * low quality" report, and it was never the rung that was picked.**
+     *
+     * Only a session whose caller *declared* its codecs short-circuits. A
+     * generic copy session could be carrying anything — HEVC into fragmented
+     * MP4 is a stream the element will refuse — so silence means "measure it",
+     * exactly as before. Same shape as the provider-declared DRM and transport
+     * rules: the party that knows is asked before the probe, never after.
+     */
+    const declared = this.deps.transcoder.describeSession(request.url);
+    if (declared?.outputs) {
+      return this.alreadyConverted(request.url, declared.outputs);
+    }
+
     const targetRoute = this.deps.proxy.getTargetRoute(request.url);
     const originUrl = targetRoute ? targetRoute.url : request.url;
     const effectiveHeaders = {
@@ -447,6 +471,28 @@ export class PlaybackEngine {
       requiresEmeDecryption: requiresEme,
       explanation: decision.explanation,
       probeLatencyMs: inspection.latencyMs,
+    };
+  }
+
+  /**
+   * The model for a session whose output this process chose.
+   *
+   * `DIRECT`, because a copy of an H.264 video rung and an AAC audio rung into
+   * fragmented MP4 is the one thing every Chromium build decodes. The metadata
+   * is stated rather than measured — that is the whole point — and
+   * `inspectionStatus: 'skipped'` says so, so nothing downstream mistakes this
+   * for a probe that happened to succeed.
+   */
+  private alreadyConverted(
+    url: string,
+    outputs: { video: string; audio: string }
+  ): SourceCapabilityModel {
+    return {
+      ...this.unmeasured(
+        url,
+        'progressive',
+        `Muxed by this app from a ${outputs.video} video track and an ${outputs.audio} audio track, so it is played as it is.`
+      ),
     };
   }
 

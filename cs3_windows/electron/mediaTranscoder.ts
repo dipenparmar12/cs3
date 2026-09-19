@@ -115,6 +115,25 @@ interface Session {
    * byte-for-byte what it was.
    */
   audioUrl?: string;
+  /**
+   * What this session is known to emit, where the caller could say.
+   *
+   * Set only by a caller that *chose* its inputs and therefore knows the answer
+   * without measuring — `resolvePromoVideo` selects an `mp4` video rung and an
+   * `m4a` audio rung, so a stream copy of the pair is H.264 and AAC by
+   * construction. `PlaybackEngine.inspect` reads it and skips probing our own
+   * output; see `declaredOutput` there for what that fixes.
+   *
+   * Absent means "nothing was declared", never "nothing is known" — an
+   * ordinary session leaves it unset and is measured exactly as before.
+   */
+  outputs?: DeclaredOutput;
+}
+
+/** Codecs a session's caller guarantees, for a probe that can then be skipped. */
+export interface DeclaredOutput {
+  video: string;
+  audio: string;
 }
 
 export class MediaTranscoder {
@@ -254,7 +273,7 @@ export class MediaTranscoder {
     url: string,
     plan: TransformationPlan,
     transport: MediaTransport = 'progressive',
-    options: { audioUrl?: string } = {}
+    options: { audioUrl?: string; outputs?: DeclaredOutput } = {}
   ): Promise<string | null> {
     if (!this.isAvailable()) return null;
     await this.ensureServer();
@@ -265,8 +284,40 @@ export class MediaTranscoder {
     }
 
     const token = String(this.nextToken++);
-    this.sessions.set(token, { url, plan, transport, audioUrl: options.audioUrl });
+    this.sessions.set(token, {
+      url,
+      plan,
+      transport,
+      audioUrl: options.audioUrl,
+      outputs: options.outputs,
+    });
     return `http://127.0.0.1:${this.port}/media/${token}`;
+  }
+
+  /**
+   * Whether a URL is one of *our own* live sessions, and what it emits.
+   *
+   * The same argument `MediaProxy.wrap` makes for returning a loopback URL
+   * untouched, one layer up: a stream this process is already producing is not
+   * a third-party address to be classified from scratch.
+   *
+   * It matters because probing one does not merely waste a process — measured
+   * on a real trailer, `ffprobe` on a live fragmented-MP4 pipe answers
+   * `Invalid data found when processing input`, which classifies as
+   * "unreadable" and routes to `FULL_TRANSCODE`. So the 1080p H.264 pair this
+   * session had just copied was re-encoded a second time on the way to the
+   * element, and on one of the two attempts ffmpeg failed outright.
+   */
+  public describeSession(url: string): Session | null {
+    if (!this.port) return null;
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname !== '127.0.0.1' || Number(parsed.port) !== this.port) return null;
+      const token = /^\/media\/([^/]+)$/.exec(parsed.pathname)?.[1];
+      return token ? (this.sessions.get(token) ?? null) : null;
+    } catch {
+      return null;
+    }
   }
 
   /**

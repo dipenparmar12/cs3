@@ -39,7 +39,8 @@ function flagValue(name, fallback) {
 if (has('--help') || has('-h')) {
   console.log(`Build a distributable Windows package.
 
-  --fast                reuse jars/staging that already exist instead of rebuilding
+  --clean               rebuild every stage, even one nothing has invalidated
+  --fast                trust whatever is already staged, without checking it
   --target nsis|portable|both   default: both
   --skip-jvm            do not build the sidecar (the package will run no extensions)
   --skip-media          do not bundle ffmpeg/mpv (they are then fetched on first use)
@@ -50,6 +51,7 @@ if (has('--help') || has('-h')) {
 }
 
 const FAST = has('--fast');
+const CLEAN = has('--clean');
 const SKIP_JVM = has('--skip-jvm');
 const SKIP_MEDIA = has('--skip-media');
 const SKIP_TYPECHECK = has('--skip-typecheck');
@@ -61,8 +63,25 @@ const TARGETS = flagValue('--target', 'both');
 let step = 0;
 const started = Date.now();
 
+/**
+ * How long each stage took, printed at the end.
+ *
+ * "The build takes too long" is not actionable and "the media runtime took
+ * 4m20s of a 6m build" is. It also makes a reused stage visibly free, which is
+ * the evidence that the incremental checks are doing anything at all.
+ */
+const timings = [];
+let stepStartedAt = Date.now();
+
+function closeStep() {
+  if (timings.length > 0) timings[timings.length - 1].ms = Date.now() - stepStartedAt;
+}
+
 function heading(text) {
+  closeStep();
   step += 1;
+  stepStartedAt = Date.now();
+  timings.push({ label: text, ms: 0 });
   console.log(`\n\x1b[1m[${step}] ${text}\x1b[0m`);
 }
 function info(text) {
@@ -157,13 +176,64 @@ function requireBin(name) {
   return resolved;
 }
 
-/** Reuse an artifact only when --fast was asked for; otherwise always rebuild. */
-function reuse(target, label) {
-  if (FAST && fs.existsSync(target)) {
+/**
+ * The newest modification time under a path, or 0 for one that does not exist.
+ *
+ * Directories are walked, because a module's inputs are its whole source tree
+ * and a jar that predates one edited file is stale however new the rest is.
+ * `node_modules`, `target` and `dist` are skipped: they are outputs, and a tree
+ * that includes its own output is newer than itself after every build.
+ */
+const IGNORED_DIRS = new Set(['node_modules', 'target', 'dist', '.git', 'release']);
+function newestMtime(entry) {
+  let stat;
+  try {
+    stat = fs.statSync(entry);
+  } catch {
+    return 0;
+  }
+  if (!stat.isDirectory()) return stat.mtimeMs;
+
+  let newest = stat.mtimeMs;
+  for (const child of fs.readdirSync(entry, { withFileTypes: true })) {
+    if (child.isDirectory() && IGNORED_DIRS.has(child.name)) continue;
+    newest = Math.max(newest, newestMtime(path.join(entry, child.name)));
+  }
+  return newest;
+}
+
+/**
+ * Whether a stage can be skipped, decided from the files rather than a flag.
+ *
+ * Reuse used to be `--fast` and nothing else, so the ordinary `dist:portable`
+ * rebuilt the sidecar, re-resolved the provider classpath, recompiled the
+ * bridge, relinked a JRE and **re-downloaded ~140 MB of ffmpeg and mpv** on
+ * every run, however little had changed. A packaging script that repeats work
+ * nobody invalidated is one people stop running.
+ *
+ * So the default is now incremental and the test is ordinary: every output
+ * exists, and every one of them is newer than every input. `--clean` forces the
+ * work; `--fast` skips the comparison and trusts whatever is on disk, which is
+ * the right answer when the inputs are known-good and the clock is not (a fresh
+ * clone checks out with today's timestamps).
+ */
+function upToDate(label, outputs, inputs = []) {
+  const targets = [outputs].flat();
+  if (CLEAN) return false;
+  if (!targets.every((target) => fs.existsSync(target))) return false;
+  if (FAST) {
     info(`reusing ${label} (--fast)`);
     return true;
   }
-  return false;
+
+  const built = Math.min(...targets.map((target) => newestMtime(target)));
+  const changed = [inputs].flat().filter((input) => newestMtime(input) > built);
+  if (changed.length > 0) {
+    info(`rebuilding ${label} — ${path.relative(root, changed[0])} is newer`);
+    return false;
+  }
+  info(`reusing ${label} (up to date)`);
+  return true;
 }
 
 // ── 1. Preflight ─────────────────────────────────────────────────────────────
@@ -211,16 +281,34 @@ if (SKIP_JVM) {
   info('the package will have no extension capability');
 } else {
   heading('Sidecar (android shim + cs3-sidecar.jar)');
-  if (!reuse(path.join(root, 'sidecar', 'target', 'cs3-sidecar.jar'), 'sidecar jar')) {
+  const sidecarJar = path.join(root, 'sidecar', 'target', 'cs3-sidecar.jar');
+  if (!upToDate('the sidecar jar', sidecarJar, [
+    path.join(root, 'sidecar', 'src'),
+    path.join(root, 'sidecar', 'pom.xml'),
+  ])) {
     run(MVN, ['-q', '-f', path.join(root, 'sidecar', 'pom.xml'), 'package', '-DskipTests']);
   }
 
   heading('Provider runtime classpath (library-jvm and its transitive runtime)');
   const runtimeDir = path.join(root, 'sidecar', 'runtime');
-  const haveLibraryJvm =
-    fs.existsSync(runtimeDir) && fs.readdirSync(runtimeDir).some((f) => f.startsWith('library-jvm'));
-  if (FAST && haveLibraryJvm) {
-    info('reusing sidecar/runtime (--fast)');
+  const libraryJvm =
+    (fs.existsSync(runtimeDir) ? fs.readdirSync(runtimeDir) : []).find((f) =>
+      f.startsWith('library-jvm'),
+    );
+  /*
+   * The classpath is resolved from `runtime-deps/pom.xml` and from nothing else
+   * — upstream declares every third-party version, so the only thing that can
+   * change what lands in `sidecar/runtime/` is that file. Re-resolving it on an
+   * unchanged pom is a jitpack round trip for 56 jars that are already there,
+   * and jitpack is the flakiest dependency in this whole chain.
+   */
+  if (
+    libraryJvm &&
+    upToDate('sidecar/runtime', path.join(runtimeDir, libraryJvm), [
+      path.join(root, 'sidecar', 'runtime-deps', 'pom.xml'),
+    ])
+  ) {
+    /* nothing to do */
   } else {
     run(MVN, ['-q', '-f', path.join(root, 'sidecar', 'runtime-deps', 'pom.xml'), 'package'], {
       hint:
@@ -232,7 +320,14 @@ if (SKIP_JVM) {
 
   heading('Provider bridge (cs3-provider-bridge.jar)');
   const bridgeJar = path.join(runtimeDir, 'cs3-provider-bridge.jar');
-  if (!reuse(bridgeJar, 'bridge jar')) {
+  if (
+    !upToDate('the bridge jar', bridgeJar, [
+      path.join(root, 'sidecar', 'bridge', 'src'),
+      path.join(root, 'sidecar', 'bridge', 'pom.xml'),
+      // The bridge compiles against the shim, so a rebuilt sidecar invalidates it.
+      sidecarJar,
+    ])
+  ) {
     // The pom is the reference; build-bridge.mjs compiles the same jar against
     // sidecar/runtime/ for sessions that cannot reach jitpack. Falling back is
     // a workaround for the network, not for the build.
@@ -266,12 +361,26 @@ if (SKIP_JVM) {
   }
 
   const staged = path.join(root, 'sidecar', 'dist');
-  const stagedComplete =
-    fs.existsSync(path.join(staged, 'cs3-sidecar.jar')) &&
-    fs.existsSync(path.join(staged, 'jre', 'bin', isWindows ? 'java.exe' : 'java')) &&
-    fs.existsSync(path.join(staged, 'runtime'));
-  if (FAST && stagedComplete) {
-    info('reusing sidecar/dist (--fast)');
+  /*
+   * Relinking a JRE takes the better part of a minute and produces the same
+   * ~90 MB tree whenever its inputs have not moved. The inputs are exactly the
+   * two things copied into it plus the module list in `build-runtime.mjs`
+   * itself — that list is curated, and a change to it (`jdk.crypto.ec` and
+   * friends) has to relink or the package ships a JRE missing a module nothing
+   * will notice until TLS fails site by site.
+   */
+  if (
+    upToDate(
+      'sidecar/dist',
+      [
+        path.join(staged, 'cs3-sidecar.jar'),
+        path.join(staged, 'jre', 'bin', isWindows ? 'java.exe' : 'java'),
+        path.join(staged, 'runtime'),
+      ],
+      [sidecarJar, runtimeDir, path.join(root, 'tools', 'package', 'build-runtime.mjs')],
+    )
+  ) {
+    /* nothing to do */
   } else {
     node(path.join(root, 'tools', 'package', 'build-runtime.mjs'), ['--verify'], {
       hint:
@@ -292,11 +401,23 @@ if (SKIP_MEDIA) {
   // fail a release build whose binaries are already staged and correct. Under
   // --fast, having all three on disk is the answer.
   const mediaDir = path.join(app, 'media-runtime');
-  const staged = ['ffmpeg', 'ffprobe', 'mpv'].every((name) =>
-    fs.existsSync(path.join(mediaDir, isWindows ? `${name}.exe` : name)),
-  );
-  if (FAST && staged) {
-    info('reusing cs3_windows/media-runtime (--fast)');
+  /*
+   * ~140 MB over three mirrors, the flakiest dependency here and the slowest
+   * step in the build. It is also the one whose inputs almost never move: the
+   * component table lives in `build-media-runtime.mjs`, so that file is the
+   * input, and the staged binaries are the output. `--clean` re-fetches; the
+   * script's own archive cache means even that rarely touches the network.
+   */
+  if (
+    upToDate(
+      'cs3_windows/media-runtime',
+      ['ffmpeg', 'ffprobe', 'mpv'].map((name) =>
+        path.join(mediaDir, isWindows ? `${name}.exe` : name),
+      ),
+      [path.join(root, 'tools', 'package', 'build-media-runtime.mjs')],
+    )
+  ) {
+    /* nothing to do */
   } else {
     node(
       path.join(root, 'tools', 'package', 'build-media-runtime.mjs'),
@@ -362,6 +483,13 @@ run(requireBin('electron-builder'), ['--win', ...targets, '--publish', 'never'],
 });
 
 // ── Report ───────────────────────────────────────────────────────────────────
+closeStep();
+console.log(`\n\x1b[1mWhere the time went\x1b[0m`);
+for (const entry of timings) {
+  const seconds = entry.ms / 1000;
+  console.log(`    ${seconds < 1 ? '  ~0s' : `${seconds.toFixed(0).padStart(4)}s`}  ${entry.label}`);
+}
+
 const produced = fs.existsSync(releaseDir)
   ? fs
       .readdirSync(releaseDir)

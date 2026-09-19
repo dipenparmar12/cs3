@@ -48,3 +48,8 @@ cs3_windows/release
 # which is the rule shape that once swallowed `src/components/extensions/`.
 /META-INF/
 /com/
+
+# Archives the packager has already downloaded (ffmpeg, mpv). Anchored, because
+# a bare `cache/` matches at any depth — the rule that once swallowed
+# src/components/extensions/ and removed a whole screen from every fresh clone.
+/.cache/

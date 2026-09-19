@@ -155,12 +155,78 @@ function cleanDir(dir) {
   if (lastError) throw lastError;
 }
 
+/**
+ * Mirrors a directory by **difference**, never by delete-then-copy.
+ *
+ * The old version wiped the destination first, and on Windows that is the whole
+ * of the reported "packaging halts in the middle": a jar this app is *running*
+ * cannot be unlinked, so `bun run dist:portable` died with a raw Node stack —
+ *
+ *     Error: EBUSY: resource busy or locked, unlink
+ *     'sidecar\dist\lib\antlr-runtime-3.5.3.jar'
+ *
+ * — for a file whose bytes were already exactly right. Nothing about that
+ * failure needed to happen: 58 identical jars were about to be deleted and
+ * copied back.
+ *
+ * So a file is written only when it differs by size or is older than its
+ * source, and extras are removed afterwards. A locked file that is already
+ * correct is never touched, which means a build no longer requires the app to
+ * be closed — and when a file genuinely must be replaced while something holds
+ * it, `report` says which file and which app rather than printing a stack.
+ */
 function copyDir(from, to, label) {
   if (!fs.existsSync(from)) die(`${label} is missing at ${from}`);
-  cleanDir(to);
-  fs.cpSync(from, to, { recursive: true });
+  fs.mkdirSync(to, { recursive: true });
+
+  let copied = 0;
+  let kept = 0;
+  const wanted = new Set();
+
+  const mirror = (sourceDir, targetDir) => {
+    fs.mkdirSync(targetDir, { recursive: true });
+    for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+      const source = path.join(sourceDir, entry.name);
+      const target = path.join(targetDir, entry.name);
+      wanted.add(path.relative(to, target));
+      if (entry.isDirectory()) {
+        mirror(source, target);
+        continue;
+      }
+      const src = fs.statSync(source);
+      const dst = fs.existsSync(target) ? fs.statSync(target) : null;
+      if (dst && dst.size === src.size && dst.mtimeMs >= src.mtimeMs) {
+        kept += 1;
+        continue;
+      }
+      try {
+        fs.copyFileSync(source, target);
+        copied += 1;
+      } catch (error) {
+        if (error.code === 'EBUSY' || error.code === 'EPERM') {
+          die(
+            `${path.basename(target)} is in use, so ${label} could not be updated.\n` +
+              `  ${target}\n` +
+              '  Close CloudStream (including any running `bun run dev`) and build again.'
+          );
+        }
+        throw error;
+      }
+    }
+  };
+  mirror(from, to);
+
+  for (const existing of fs.readdirSync(to, { recursive: true })) {
+    const full = path.join(to, existing);
+    if (wanted.has(existing) || !fs.existsSync(full) || fs.statSync(full).isDirectory()) continue;
+    fs.rmSync(full, { force: true });
+  }
+
   const count = fs.readdirSync(to).length;
-  ok(`${label}: ${count} entr${count === 1 ? 'y' : 'ies'}`);
+  ok(
+    `${label}: ${count} entr${count === 1 ? 'y' : 'ies'}` +
+      (kept > 0 ? ` (${copied} copied, ${kept} already current)` : '')
+  );
 }
 
 function dirSizeMb(dir) {
@@ -215,36 +281,64 @@ function main() {
   step('Linking a Java runtime');
 
   const jreDir = path.join(DIST, 'jre');
-  // jlink refuses to write into an existing directory, and a stale JRE from a
-  // previous run would otherwise be shipped unchanged.
-  cleanDir(jreDir);
 
-  const result = spawnSync(
-    jdk.jlink,
-    [
-      '--add-modules',
-      MODULES.join(','),
-      '--output',
-      jreDir,
-      '--no-header-files',
-      '--no-man-pages',
-      // Debug info is deliberately kept. Community plugins fail in ways that
-      // are diagnosed from stack traces, and stripping line numbers to save
-      // ~10 MB would trade the only diagnostic that has ever worked here.
-      '--compress',
-      'zip-6',
-    ],
-    { encoding: 'utf8', stdio: 'pipe' }
-  );
+  /**
+   * Relinking is skipped when the linked runtime already matches this request.
+   *
+   * jlink takes the better part of a minute and produces ~90 MB of identical
+   * output whenever neither the JDK nor the module list has moved — and it
+   * cannot write into an existing directory, so the step also had to delete a
+   * tree that a running app may hold open. The stamp records the two things
+   * that decide the output: which JDK linked it, and which modules were asked
+   * for. Both matter — the module list is curated, and a build that quietly
+   * reused a JRE missing `jdk.crypto.ec` would ship TLS that fails site by
+   * site (AGENTS.md §3).
+   */
+  const stampFile = path.join(jreDir, 'cs3-link-stamp.json');
+  const stamp = JSON.stringify({ jdk: jdk.home, major: jdk.major, modules: MODULES });
+  const linkedJava = path.join(jreDir, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+  const alreadyLinked =
+    !process.argv.includes('--relink') &&
+    fs.existsSync(linkedJava) &&
+    fs.existsSync(stampFile) &&
+    fs.readFileSync(stampFile, 'utf8') === stamp;
 
-  if (result.status !== 0) {
-    die(`jlink failed:\n${result.stderr || result.stdout}`);
+  if (alreadyLinked) {
+    ok(`jre: reusing the linked runtime (${MODULES.length} modules, same JDK)`);
+  } else {
+    // jlink refuses to write into an existing directory, and a stale JRE from a
+    // previous run would otherwise be shipped unchanged.
+    cleanDir(jreDir);
+
+    const result = spawnSync(
+      jdk.jlink,
+      [
+        '--add-modules',
+        MODULES.join(','),
+        '--output',
+        jreDir,
+        '--no-header-files',
+        '--no-man-pages',
+        // Debug info is deliberately kept. Community plugins fail in ways that
+        // are diagnosed from stack traces, and stripping line numbers to save
+        // ~10 MB would trade the only diagnostic that has ever worked here.
+        '--compress',
+        'zip-6',
+      ],
+      { encoding: 'utf8', stdio: 'pipe' }
+    );
+
+    if (result.status !== 0) {
+      die(`jlink failed:\n${result.stderr || result.stdout}`);
+    }
+
+    const major = javaMajor(linkedJava);
+    if (major === null || major < 21) {
+      die(`the linked runtime reports Java ${major}, expected 21+`);
+    }
+    fs.writeFileSync(stampFile, stamp);
+    ok(`jre: Java ${major}, ${dirSizeMb(jreDir).toFixed(0)} MB, ${MODULES.length} modules`);
   }
-
-  const jreJava = path.join(jreDir, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
-  const major = javaMajor(jreJava);
-  if (major === null || major < 21) die(`the linked runtime reports Java ${major}, expected 21+`);
-  ok(`jre: Java ${major}, ${dirSizeMb(jreDir).toFixed(0)} MB, ${MODULES.length} modules`);
 
   // --- smoke test ---------------------------------------------------------
   if (verify) {
@@ -255,7 +349,7 @@ function main() {
     ].join(path.delimiter);
 
     const probe = spawnSync(
-      jreJava,
+      linkedJava,
       [
         '-Djava.library.path=',
         '-cp',

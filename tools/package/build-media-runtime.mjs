@@ -39,6 +39,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -48,10 +49,26 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const OUT_DIR = path.join(REPO_ROOT, 'cs3_windows', 'media-runtime');
 const WORK_DIR = path.join(os.tmpdir(), 'cs3-media-runtime');
+/**
+ * Downloaded archives, kept between builds.
+ *
+ * In the repository rather than in `os.tmpdir()`, and that is the point: the
+ * scratch directory was wiped at the start of every component, so a packaging
+ * run fetched ffmpeg and mpv again — measured at ~140 MB — however many times
+ * it had already fetched exactly those bytes. On a metered or slow connection
+ * that is the whole cost of the build.
+ *
+ * Keyed by URL, so a publisher moving to a new release is a miss rather than a
+ * stale hit, and the size is recorded beside it so a truncated download cannot
+ * be served as a complete one.
+ */
+const CACHE_DIR = path.join(REPO_ROOT, '.cache', 'media-runtime');
 
 const args = process.argv.slice(2);
 const VERIFY = args.includes('--verify');
 const ALLOW_MISSING = args.includes('--allow-missing');
+/** Ignore the archive cache and fetch again — for a publisher that reissued a URL. */
+const REFRESH = args.includes('--refresh');
 const platformArg = readFlag('--platform') ?? process.platform;
 const archArg = readFlag('--arch') ?? process.arch;
 
@@ -183,22 +200,79 @@ function has(command) {
   return run(probe, [command]).status === 0;
 }
 
-async function download(mirrors, target) {
+/** A stable file name for a URL, so the cache survives a changed query string. */
+function cacheEntry(url, archiveName) {
+  const digest = crypto.createHash('sha1').update(url).digest('hex').slice(0, 16);
+  return path.join(CACHE_DIR, `${digest}-${archiveName}`);
+}
+
+/**
+ * Fetches to `target`, reusing a cached copy of the same URL when there is one.
+ *
+ * Two things beyond the cache, both about a build that looked like it had hung:
+ *
+ * **Progress.** The old version awaited `arrayBuffer()`, so a 100 MB ffmpeg
+ * download printed one line, then nothing at all for minutes. There was no way
+ * to tell a slow mirror from a dead one, which is exactly the "halts in the
+ * middle" this is reported as.
+ *
+ * **A deadline.** `fetch` with no signal waits forever on a mirror that accepts
+ * the connection and then stops sending; the next mirror in the list is never
+ * reached. Ten minutes is generous for these sizes and finite, which is the
+ * property that matters.
+ */
+async function download(mirrors, target, archiveName) {
   for (const url of mirrors) {
+    const cached = cacheEntry(url, archiveName);
+    if (!REFRESH && fs.existsSync(cached) && fs.statSync(cached).size > 0) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(cached, target);
+      log(`cached ${(fs.statSync(target).size / 1048576).toFixed(1)} MB — ${url}`);
+      return true;
+    }
+
     try {
       log(`fetching ${url}`);
       const response = await fetch(url, {
         redirect: 'follow',
         headers: { 'User-Agent': 'cloudstream-desktop-packager' },
+        signal: AbortSignal.timeout(10 * 60 * 1000),
       });
       if (!response.ok) {
         log(`  ${response.status} ${response.statusText}`);
         continue;
       }
-      const bytes = Buffer.from(await response.arrayBuffer());
+
+      const total = Number(response.headers.get('content-length') ?? 0);
+      const chunks = [];
+      let received = 0;
+      let announced = Date.now();
+      for await (const chunk of response.body) {
+        chunks.push(chunk);
+        received += chunk.length;
+        if (Date.now() - announced >= 2000) {
+          announced = Date.now();
+          const done = (received / 1048576).toFixed(1);
+          log(total ? `  ${done} MB of ${(total / 1048576).toFixed(1)} MB` : `  ${done} MB`);
+        }
+      }
+
+      const bytes = Buffer.concat(chunks);
+      /*
+       * A short body is a failed download that answered 200 — a proxy error
+       * page, a connection cut mid-stream. Caching it would make every later
+       * build fail identically and instantly, with the cache as the cause.
+       */
+      if (total && bytes.length !== total) {
+        log(`  truncated: ${bytes.length} of ${total} bytes`);
+        continue;
+      }
+
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, bytes);
-      log(`  ${(bytes.length / 1048576).toFixed(1)} MB`);
+      fs.mkdirSync(CACHE_DIR, { recursive: true });
+      fs.writeFileSync(cached, bytes);
+      log(`  ${(bytes.length / 1048576).toFixed(1)} MB (cached for the next build)`);
       return true;
     } catch (error) {
       log(`  ${error instanceof Error ? error.message : String(error)}`);
@@ -302,7 +376,7 @@ async function stage(name, component) {
 
   const archive = path.join(scratch, component.archive);
   const mirrors = await resolveMirrors(component);
-  if (!(await download(mirrors, archive))) {
+  if (!(await download(mirrors, archive, component.archive))) {
     return { name, staged: [], failed: `every mirror for ${name} was unreachable` };
   }
 
