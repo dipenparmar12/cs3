@@ -3,6 +3,7 @@ import { ArrowUpDown, Languages, MonitorPlay, Radio, RotateCcw, Search, X } from
 import type { TorrentResult } from '../types/torrent';
 import type {
   SourceFilterState,
+  KindFilterValue,
   ResolutionFilterValue,
   SizeFilterValue,
   LanguageFilterValue,
@@ -58,6 +59,7 @@ export const SourceFilterBar: React.FC<SourceFilterBarProps> = ({
 
   const facets = useMemo(
     () => ({
+      kind: buildFacet(sources, filterState, 'kind'),
       resolution: buildFacet(sources, filterState, 'resolution'),
       size: buildFacet(sources, filterState, 'size'),
       language: buildFacet(sources, filterState, 'language'),
@@ -88,6 +90,17 @@ export const SourceFilterBar: React.FC<SourceFilterBarProps> = ({
           </button>
         )}
       </div>
+
+      {facets.kind.length > 1 && (
+        <FacetMenu
+          label="Stream"
+          icon={<Radio size={12} />}
+          title="Filter by direct streams or torrents"
+          value={filterState.kind ?? 'all'}
+          options={facets.kind}
+          onChange={(value) => setField('kind', value as KindFilterValue)}
+        />
+      )}
 
       {facets.resolution.length > 1 && (
         <FacetMenu

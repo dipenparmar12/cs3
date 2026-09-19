@@ -121,10 +121,6 @@ export class SearchScopeStore {
     return { narrowed: true, allowed, missing };
   }
 
-  public resolveProviders(enabled: string[]): ScopeResolution {
-    return SearchScopeStore.resolve(enabled, this.get().providers);
-  }
-
   /**
    * A scope for one search only, overriding whatever is stored.
    *
@@ -149,7 +145,19 @@ export class SearchScopeStore {
   }
 
   public resolveIndexers(enabled: string[]): ScopeResolution {
-    return SearchScopeStore.resolve(enabled, this.get().indexers);
+    const scope = this.get();
+    if (this.isActive() && scope.indexers.length === 0) {
+      return { narrowed: true, allowed: [], missing: [] };
+    }
+    return SearchScopeStore.resolve(enabled, scope.indexers);
+  }
+
+  public resolveProviders(enabled: string[]): ScopeResolution {
+    const scope = this.get();
+    if (this.isActive() && scope.providers.length === 0) {
+      return { narrowed: true, allowed: [], missing: [] };
+    }
+    return SearchScopeStore.resolve(enabled, scope.providers);
   }
 
   /** Both dimensions at once, in the shape the renderer renders. */

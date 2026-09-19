@@ -1036,21 +1036,33 @@ export class ContentService {
     if (!options.bypassCache) {
       const cached = this.cache.read(this.cacheUrlFor(base, requestedScope), season, episode);
       if (cached.hit && cached.fresh.length > 0) {
-        onProgress?.({
-          results: cached.fresh,
-          settled: 1,
-          totalRelevant: 1,
-          lastIndexerName: 'Cached sources',
-          done: true,
-        });
-        return {
-          sources: cached.fresh,
-          filtered: [],
-          indexerOutcomes: [],
-          query: { title: request.titleOverride ?? '', season, episode },
-          scopeUsed: requestedScope,
-          canWiden: requestedScope === 'origin',
-        };
+        let usable = cached.fresh;
+        if (this.scope.isActive()) {
+          const sc = this.scope.get();
+          if (sc.indexers.length === 0) {
+            usable = usable.filter((s) => Boolean(s.directUrl));
+          }
+          if (sc.providers.length === 0) {
+            usable = usable.filter((s) => !s.directUrl);
+          }
+        }
+        if (usable.length > 0) {
+          onProgress?.({
+            results: usable,
+            settled: 1,
+            totalRelevant: 1,
+            lastIndexerName: 'Cached sources',
+            done: true,
+          });
+          return {
+            sources: usable,
+            filtered: [],
+            indexerOutcomes: [],
+            query: { title: request.titleOverride ?? '', season, episode },
+            scopeUsed: requestedScope,
+            canWiden: requestedScope === 'origin',
+          };
+        }
       }
     }
 
@@ -1365,6 +1377,7 @@ export class ContentService {
       routes,
       hasTitle: Boolean(title),
       providersNarrowedToNothing: providerScope.narrowed && allowedProviders.size === 0,
+      indexersExcluded: indexerScope.narrowed && allowedIndexers.size === 0,
     });
     const { scopeUsed, askIndexers } = plan;
     const needProviderSearch = plan.searchAllProviders;

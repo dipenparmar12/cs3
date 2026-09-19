@@ -102,6 +102,31 @@ test('a user narrowing to nothing is honoured rather than widened around', () =>
   assert.equal(plan.searchAllProviders, false);
 });
 
+test('excluding torrent indexers suppresses indexers even when scope widens to all', () => {
+  const plan = planSourceScope({
+    requested: 'all',
+    routes: ROUTES,
+    hasTitle: true,
+    providersNarrowedToNothing: false,
+    indexersExcluded: true,
+  });
+  assert.equal(plan.scopeUsed, 'all');
+  assert.equal(plan.askIndexers, false);
+  assert.equal(plan.searchAllProviders, true);
+});
+
+test('a home-screen title with torrent indexers excluded searches providers but not indexers', () => {
+  const plan = planSourceScope({
+    routes: [],
+    hasTitle: true,
+    providersNarrowedToNothing: false,
+    indexersExcluded: true,
+  });
+  assert.equal(plan.scopeUsed, 'all');
+  assert.equal(plan.askIndexers, false);
+  assert.equal(plan.searchAllProviders, true);
+});
+
 // --- escalating an empty scoped answer -------------------------------------
 
 const ESCALATE = {

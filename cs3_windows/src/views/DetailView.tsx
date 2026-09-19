@@ -25,9 +25,10 @@ import { ProviderRecoveryPanel } from '../components/ProviderRecoveryPanel';
 import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
 import { TitleMetadata } from '../components/detail/TitleMetadata';
 import { TrailerGallery } from '../components/detail/TrailerGallery';
+import { TrailerPopup } from '../components/detail/TrailerPopup';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { shouldRetryOnOpen } from '../utils/cardState';
-import type { ExtendedMetadata, TitleVideo } from '../types/metadata';
+import type { ExtendedMetadata } from '../types/metadata';
 import { formatRuntimeMinutes } from '../utils/metadataDisplay';
 import { ShareButton } from '../components/ShareButton';
 import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
@@ -43,21 +44,6 @@ export interface PlaybackRequest {
   subtitles: Array<{ name: string; url: string }>;
   /** Series context, so the player can show episodes and offer next/previous. */
   series?: SeriesContext;
-  /**
-   * A trailer or featurette rather than the title itself.
-   *
-   * The only thing the player needs to know about a promo, and it exists for
-   * one control: Download. A trailer's `streamUrl` is a loopback address minted
-   * for this session, so a download built from it would be a task pointing at
-   * an address that dies when the app closes — a button that produces a broken
-   * transfer is worse than no button.
-   *
-   * Everything else that would be wrong for a trailer is already absent rather
-   * than suppressed: no `progress` means nothing reaches the library or
-   * Continue Watching, no `series` means no episode panel, no `sources` means
-   * no source list.
-   */
-  promo?: boolean;
   /** Identity for recording watch progress, and where to resume from. */
   progress?: {
     mediaUrl: string;
@@ -1285,55 +1271,15 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
 
   /**
-   * Plays a trailer, through the app's own player.
+   * Which trailer the popup is showing, or null for closed.
    *
-   * Two steps, both existing machinery. `videos:resolve` runs yt-dlp and hands
-   * back a proxied provider URL; `onPlay` is the same `PlaybackRequest` path a
-   * chosen source takes, so the trailer gets the real player — fullscreen,
-   * seek, speed, volume, the floating modes and the failure overlay — with
-   * nothing added to it.
-   *
-   * What is deliberately *omitted* from the request is what makes it a trailer
-   * rather than a title: no `progress`, so nothing is written to the library or
-   * to Continue Watching; no `series`; no `sources`. `promo` withholds the
-   * download button, which would otherwise offer to download a loopback address
-   * that dies with the session.
+   * Pressing a trailer does **not** go through `onPlay`. It used to, and the
+   * result was a two-minute teaser taking over the app exactly as a film does —
+   * see `TrailerPopup` for why that was correct and still wrong. Resolution,
+   * classification and the queue all live in the popup, which is also what lets
+   * one trailer roll into the next without the detail page holding any of it.
    */
-  const [resolvingVideo, setResolvingVideo] = useState<string | null>(null);
-  const playTrailer = useCallback(
-    async (video: TitleVideo) => {
-      setResolvingVideo(video.id);
-      try {
-        const resolved = await window.cloudstream?.resolvePromoVideo?.(video.url);
-        if (!resolved?.ok || !resolved.streamUrl) {
-          // Named, never silent. The reasons are genuinely different actions:
-          // a missing component is an install, a removed video is nothing.
-          flash(
-            resolved?.needsComponents
-              ? 'Playing trailers needs yt-dlp — you can install it in Settings.'
-              : (resolved?.error ?? 'That trailer could not be opened.')
-          );
-          return;
-        }
-        onPlay({
-          streamUrl: resolved.streamUrl,
-          mimeType: resolved.isM3u8 ? 'application/x-mpegURL' : 'video/mp4',
-          // The video's own title, not the film's: the player's header should
-          // say which trailer is playing.
-          title: resolved.title || video.label,
-          episodeTitle: detail?.name,
-          // Synthetic and prefixed, so `hasRealInfoHash` reports false and the
-          // player does not draw a swarm readout for an HTTP stream.
-          infoHash: `ext-${video.id}`,
-          subtitles: resolved.subtitles ?? [],
-          promo: true,
-        });
-      } finally {
-        setResolvingVideo(null);
-      }
-    },
-    [detail?.name, flash, onPlay]
-  );
+  const [trailerId, setTrailerId] = useState<string | null>(null);
 
   const handlePlaySource = useCallback(
     async (source: TorrentResult) => {
@@ -1748,8 +1694,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
       <TrailerGallery
         videos={extended?.videos}
         pending={metadataPending}
-        onPlay={(video) => void playTrailer(video)}
-        resolvingId={resolvingVideo}
+        onPlay={(video) => setTrailerId(video.id)}
       />
 
       <TitleMetadata
@@ -1824,6 +1769,20 @@ export const DetailView: React.FC<DetailViewProps> = ({
           episodes={detail.episodes ?? []}
           activeSeason={activeSeason}
           onClose={() => setSeasonDownloadOpen(false)}
+        />
+      )}
+
+      {/*
+        Over the page rather than instead of it. The detail page stays mounted
+        and scrolled where it was, which is the whole difference between
+        glancing at a trailer and committing to watch something.
+      */}
+      {trailerId && (
+        <TrailerPopup
+          videos={extended?.videos ?? []}
+          startId={trailerId}
+          titleName={detail.name}
+          onClose={() => setTrailerId(null)}
         />
       )}
 

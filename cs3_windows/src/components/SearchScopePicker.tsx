@@ -621,6 +621,14 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     setFacets((prev) => ({ ...prev, [group]: new Set() }));
   }, []);
 
+  const handleToggleAllTorrents = useCallback(() => {
+    if (chosenIndexers.size > 0) {
+      persist(providers, new Set());
+    } else {
+      persist(providers, new Set(universe.indexers));
+    }
+  }, [providers, chosenIndexers, universe.indexers, persist]);
+
   const totalChosen = providers.size + chosenIndexers.size;
   const totalAvailable = universe.providers.length + universe.indexers.length;
 
@@ -709,6 +717,8 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
           onClearAllChosen={clearAllChosen}
           hasExtensions={universe.providers.length > 0}
           hasIndexers={indexers.length > 0}
+          chosenTorrentCount={chosenIndexers.size}
+          onToggleAllTorrents={handleToggleAllTorrents}
           progress={progress}
           loading={loading}
           loaded={loaded}

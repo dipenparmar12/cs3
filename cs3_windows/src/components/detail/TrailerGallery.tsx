@@ -40,26 +40,25 @@ import {
  * the page; `videoTitles.ts` strips it. What is left — "Official Trailer 3",
  * "First Look" — is the thing being chosen between.
  *
- * **Resolution is visible.** Pressing a trailer spawns yt-dlp and takes one to
- * three seconds. A card that does nothing for three seconds is a broken card,
- * so the pressed one holds a spinner and the rest stay live.
+ * **A card opens the popup, it does not start a wait.** Pressing a trailer
+ * spawns yt-dlp and takes one to three seconds, and a card that does nothing
+ * for three seconds is a broken card. `TrailerPopup` opens immediately and
+ * shows the resolve as its own state, so the wait is inside the window that
+ * caused it rather than on a card the viewer has already looked away from.
  */
 
 interface TrailerGalleryProps {
   videos: TitleVideo[] | undefined;
   /** The metadata lookup is still running; videos arrive with it. */
   pending?: boolean;
-  /** Resolves and plays. Rejects are reported by the caller, not swallowed. */
+  /** Opens the trailer popup on this video. Resolution happens in there. */
   onPlay: (video: TitleVideo) => void;
-  /** The id currently being resolved, so its card can say so. */
-  resolvingId?: string | null;
 }
 
 const VideoCard: React.FC<{
   video: TitleVideo;
-  busy: boolean;
   onPlay: (video: TitleVideo) => void;
-}> = ({ video, busy, onPlay }) => {
+}> = ({ video, onPlay }) => {
   const duration = formatVideoDuration(video.durationSeconds);
   const year = formatVideoDate(video.publishedAt);
 
@@ -77,9 +76,8 @@ const VideoCard: React.FC<{
   return (
     <button
       type="button"
-      className={`video-card${busy ? ' video-card--busy' : ''}`}
+      className="video-card"
       onClick={() => onPlay(video)}
-      disabled={busy}
       // The full publisher title, which the chip deliberately shortens.
       title={video.title}
       aria-label={`Play ${video.label}`}
@@ -97,7 +95,7 @@ const VideoCard: React.FC<{
           }
         />
         <span className="video-card__play" aria-hidden>
-          {busy ? <Loader2 size={18} className="spin" /> : <Play size={18} fill="currentColor" />}
+          <Play size={18} fill="currentColor" />
         </span>
         {duration && <span className="video-card__duration">{duration}</span>}
       </span>
@@ -110,12 +108,7 @@ const VideoCard: React.FC<{
   );
 };
 
-export const TrailerGallery: React.FC<TrailerGalleryProps> = ({
-  videos,
-  pending,
-  onPlay,
-  resolvingId,
-}) => {
+export const TrailerGallery: React.FC<TrailerGalleryProps> = ({ videos, pending, onPlay }) => {
   const grouped = useMemo(() => groupVideos(videos ?? []), [videos]);
   const state = videoSectionState({ videos, pending });
 
@@ -158,12 +151,7 @@ export const TrailerGallery: React.FC<TrailerGalleryProps> = ({
           {group.heading && <h3 className="video-group__heading">{group.heading}</h3>}
           <div className="video-rail">
             {group.videos.map((video) => (
-              <VideoCard
-                key={video.id}
-                video={video}
-                busy={resolvingId === video.id}
-                onPlay={onPlay}
-              />
+              <VideoCard key={video.id} video={video} onPlay={onPlay} />
             ))}
           </div>
         </div>
@@ -183,12 +171,7 @@ export const TrailerGallery: React.FC<TrailerGalleryProps> = ({
           {relatedOpen && (
             <div className="video-rail">
               {grouped.related.map((video) => (
-                <VideoCard
-                  key={video.id}
-                  video={video}
-                  busy={resolvingId === video.id}
-                  onPlay={onPlay}
-                />
+                <VideoCard key={video.id} video={video} onPlay={onPlay} />
               ))}
             </div>
           )}

@@ -1625,15 +1625,7 @@ export const App: React.FC = () => {
                 download button and no way past a source that would not play —
                 the more considered action giving the less capable result.
               */
-              /*
-                A promo has no download.
-
-                `buildDownloadTask` would happily build one from
-                `playback.streamUrl`, which for a trailer is a loopback address
-                minted for this session — a task that looks like it is working
-                and points at nothing once the app closes.
-              */
-              onDownloadCurrent={playback.promo ? undefined : () => {
+              onDownloadCurrent={() => {
                 if (playback.sources) {
                   const current =
                     playback.sources.list.find(

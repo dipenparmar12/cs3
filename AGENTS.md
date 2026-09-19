@@ -404,6 +404,7 @@ rather than omitting the ones nothing serves.
 | `src/utils/deadRows.ts` | Which results to hide (`no-sources`) vs never hide (`app-error`). |
 | `src/utils/cardState.ts` | What a poster says about a title already met. Pure, tested, mutation-verified. **Failure is always marked, success almost never is**; a failure the viewer has since disproved is retired. |
 | `src/utils/videoGallery.ts` | Trailers vs related videos, grouped by season. Pure, tested. |
+| `src/utils/trailerQueue.ts` | What autoplays after a trailer: same rail, no wrap. Pure, tested. |
 | `src/utils/experienceMode.ts` | Standard vs developer, `shouldReveal`, and `plainMessage` — one internal message to one sentence a viewer can act on, with the original kept. |
 | `src/components/useTitleInteractions.ts` | The batched card-state hook; re-asks on `download:progress`, coalesced. |
 | `src/utils/resumePoint.ts` | **Null episode means "Play"**; furthest episode with history wins. |
@@ -1907,11 +1908,24 @@ Rules:
 - **Nothing settled renders empty.** PRD-45 section 10 asks for both "hide the
   section" and "show a no-trailers state"; those cannot both be right, and
   `metadataSection.ts` settled it already.
-- **A trailer is played by the ordinary player**, as a `PlaybackRequest` with no
-  `progress`, no `series` and no `sources` -- so it records nothing to the library
-  and draws no source list, with `VideoPlayer` unchanged. `promo: true` withholds
-  the download button, which would otherwise build a task from a loopback address
-  that dies with the session.
+- **A trailer plays in its own popup, never in the player** (`TrailerPopup`,
+  2026-09-19). It used to go through `onPlay` as a `PlaybackRequest` with no
+  `progress`, no `series` and no `sources` and `promo: true` withholding the
+  download button -- correct, and still wrong: a two-minute teaser took over the
+  app exactly as the film does, and leaving it meant leaving the page being read.
+  The popup is a dialog over the detail page with the browser's own controls, so
+  it sets none of the player's expectations (pick a source, download, resume,
+  next episode). `promo` is gone from `PlaybackRequest`; nothing set it.
+- **The popup still calls `media:prepare`, and still refuses `NATIVE_MPV`.**
+  INV-RACE-1 is not waived for a short video: `videos:resolve` answers with a
+  proxied provider address and the classification decides the transport, never
+  the URL string. A prepared session is closed on every step, or six trailers
+  hold six ffmpeg processes.
+- **Autoplay is an offer with a five-second countdown, and it never leaves the
+  rail.** `src/utils/trailerQueue.ts` (pure, tested): a trailer follows a
+  trailer and a related video follows a related video -- rolling on from the last
+  trailer into an eleven-minute cast interview is the exact failure `groupVideos`
+  splits the two rails to prevent. Nothing wraps, so autoplay ends by itself.
 
 **And a trailer is never a source.** `resolvePromoVideo` goes nowhere near
 `getSources`, the cache, the ranker or the download identity. The standing rule

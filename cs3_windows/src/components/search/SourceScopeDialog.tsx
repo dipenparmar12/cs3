@@ -393,6 +393,8 @@ export interface SourceScopeDialogProps {
 
   hasExtensions: boolean;
   hasIndexers: boolean;
+  chosenTorrentCount?: number;
+  onToggleAllTorrents?: () => void;
 
   progress: ProviderLoadProgress | null;
   loading: boolean;
@@ -436,6 +438,8 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   onClearAllChosen,
   hasExtensions,
   hasIndexers,
+  chosenTorrentCount = 0,
+  onToggleAllTorrents,
   progress,
   loading,
   loaded,
@@ -825,8 +829,22 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
               <>
                 <div className="scope-modal__tree-bar">
                   <span>{rows.length} {rows.length === 1 ? 'item' : 'items'}</span>
-                  {(onExpandAll || onCollapseAll) && (
+                  {(onExpandAll || onCollapseAll || (hasIndexers && onToggleAllTorrents)) && (
                     <div className="scope-modal__tree-controls">
+                      {hasIndexers && onToggleAllTorrents && (
+                        <button
+                          type="button"
+                          className="scope-modal__tree-control-btn"
+                          onClick={onToggleAllTorrents}
+                          title={
+                            chosenTorrentCount > 0
+                              ? 'Unselect all torrent sources'
+                              : 'Select all torrent sources'
+                          }
+                        >
+                          {chosenTorrentCount > 0 ? 'Exclude torrents' : 'Include torrents'}
+                        </button>
+                      )}
                       {onExpandAll && (
                         <button
                           type="button"

@@ -1,6 +1,7 @@
-import type { TorrentResult } from '../types/torrent';
-import { Resolution } from '../types/torrent';
+import type { TorrentResult } from '../types/torrent.ts';
+import { Resolution } from '../types/torrent.ts';
 
+export type KindFilterValue = 'all' | 'direct' | 'torrent';
 export type ResolutionFilterValue = 'all' | '4k' | '1440p' | '1080p' | '720p' | '480p';
 export type SizeFilterValue = 'all' | 'under1gb' | '1to3gb' | '3to8gb' | 'over8gb';
 export type LanguageFilterValue = 'all' | 'en' | 'dual_multi' | 'de' | 'fr' | 'es' | 'ja' | 'hi' | 'other';
@@ -8,6 +9,7 @@ export type SortOption = 'score' | 'seeders' | 'size_desc' | 'size_asc' | 'res_d
 
 export interface SourceFilterState {
   searchQuery: string;
+  kind?: KindFilterValue;
   resolution: ResolutionFilterValue;
   size: SizeFilterValue;
   language: LanguageFilterValue;
@@ -26,6 +28,7 @@ export interface SourceFilterState {
 
 export const DEFAULT_FILTER_STATE: SourceFilterState = {
   searchQuery: '',
+  kind: 'all',
   resolution: 'all',
   size: 'all',
   language: 'all',
@@ -163,11 +166,13 @@ export function sourceNameOf(source: TorrentResult): string {
 }
 
 /** The dimensions that offer a list of choices, as opposed to free text. */
-export type FacetDimension = 'resolution' | 'size' | 'language' | 'source';
+export type FacetDimension = 'kind' | 'resolution' | 'size' | 'language' | 'source';
 
 /** Does one source match one value of one dimension? */
 function matchesDimension(source: TorrentResult, dimension: FacetDimension, value: string): boolean {
   switch (dimension) {
+    case 'kind':
+      return value === 'direct' ? Boolean(source.directUrl) : !source.directUrl;
     case 'resolution':
       return detectResolutionCategory(source) === value;
     case 'size':
@@ -192,10 +197,10 @@ function passes(
   except?: FacetDimension
 ): boolean {
   if (state.searchQuery && !matchesSearchText(source, state.searchQuery)) return false;
-  for (const dimension of ['resolution', 'size', 'language', 'source'] as const) {
+  for (const dimension of ['kind', 'resolution', 'size', 'language', 'source'] as const) {
     if (dimension === except) continue;
     const value = state[dimension];
-    if (value !== 'all' && !matchesDimension(source, dimension, value)) return false;
+    if (value && value !== 'all' && !matchesDimension(source, dimension, value)) return false;
   }
   return true;
 }
@@ -217,6 +222,10 @@ export interface FacetCount {
 }
 
 const FIXED_OPTIONS: Record<Exclude<FacetDimension, 'source'>, Array<[string, string]>> = {
+  kind: [
+    ['direct', 'Direct streams'],
+    ['torrent', 'Torrents'],
+  ],
   resolution: [
     ['4k', '4K (2160p)'],
     ['1440p', '1440p'],
@@ -279,6 +288,7 @@ export function buildFacet(
 export function isFilterActive(state: SourceFilterState): boolean {
   return (
     Boolean(state.searchQuery.trim()) ||
+    (Boolean(state.kind) && state.kind !== 'all') ||
     state.resolution !== 'all' ||
     state.size !== 'all' ||
     state.language !== 'all' ||

@@ -55,6 +55,7 @@ const PRESET_ALIASES = {
   links: ['electron/cs3/providerLinks.test.mts'],
   webview: ['electron/cs3/webViewMatch.test.mts'],
   'source-scope': ['electron/cs3/sourceScope.test.mts'],
+  'source-filter': ['src/utils/sourceFilter.test.mts'],
   'torrent-metadata': ['electron/torrent/torrentMetadata.test.mts'],
   'torrent-contents': ['electron/torrent/torrentContents.test.mts'],
   swarm: ['electron/torrent/swarmHealth.test.mts'],

@@ -57,6 +57,11 @@ export interface ScopeInputs {
    * that set is empty after resolution. Nothing can answer, so nothing is asked.
    */
   providersNarrowedToNothing: boolean;
+  /**
+   * True when the user's active search scope has explicitly excluded all torrent
+   * indexers (e.g. indexers narrowed to empty, or torrent sources disabled).
+   */
+  indexersExcluded?: boolean;
 }
 
 /**
@@ -85,7 +90,7 @@ export function planSourceScope(inputs: ScopeInputs): ScopePlan {
      * most of the latency: an indexer that answers in 20 seconds delays a
      * result the provider already returned in one.
      */
-    askIndexers: scopeUsed === 'all',
+    askIndexers: scopeUsed === 'all' && !inputs.indexersExcluded,
     /**
      * At `all` scope every enabled provider is searched, **even when routes are
      * already known**.
