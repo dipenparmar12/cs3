@@ -275,6 +275,99 @@ test('the same version with different bytes is offered, and only with both hashe
   );
 });
 
+test('a mirror cannot claim your copy was republished', async () => {
+  /**
+   * The 2026-09-19 report: 60 extensions failing every update with a SHA-256
+   * mismatch, permanently. Reproduced from the shape the log recorded — 61 of
+   * 61 failures were same-version "republished" candidates supplied by
+   * `xr3ed/xr3ed-Repo`, a mirror that points `url` at **phisher98's** artifacts
+   * while publishing its own hashes and sizes. Its hash therefore describes a
+   * build that is not at the address beside it, and no download can ever
+   * satisfy it.
+   */
+  const MIRROR = 'https://raw.githubusercontent.com/mirror/repo/builds/plugins.json';
+  const { plugins } = fakePlugins({
+    repositories: [RAW, MIRROR],
+    catalogue: {
+      // The publisher agrees with what is installed: nothing to do.
+      [RAW]: [remote({ version: 6, fileHash: 'aaaa' })],
+      // The mirror serves the publisher's file under a hash of its own.
+      [MIRROR]: [remote({ version: 6, fileHash: 'cccc', url: `${RAW}/ShowBox.cs3` })],
+    },
+    installed: [local({ version: 6 })],
+  });
+
+  const result = await new ExtensionUpdater(fakeDatastore(), plugins).checkForUpdates();
+
+  assert.deepEqual(
+    result.updates,
+    [],
+    'a differing hash at the same version from another repository is two builds, not an update'
+  );
+});
+
+test('only the maintainer can mark their own extension as not working', async () => {
+  /**
+   * From the same screen as the mismatch above: `IdlixProvider is marked as not
+   * working by its maintainer` was displayed while its own publisher had it at
+   * `status: 1`. A third repository in the user's list carried a stale copy of
+   * the entry, and any repository could raise the notice — so the app quoted a
+   * maintainer who had said no such thing.
+   */
+  const MIRROR = 'https://raw.githubusercontent.com/mirror/repo/builds/plugins.json';
+  const { plugins } = fakePlugins({
+    repositories: [RAW, MIRROR],
+    catalogue: {
+      [RAW]: [remote({ version: 6, status: 1 })],
+      [MIRROR]: [remote({ version: 6, status: 0, url: `${MIRROR}/ShowBox.cs3` })],
+    },
+    installed: [local({ version: 6 })],
+  });
+
+  const result = await new ExtensionUpdater(fakeDatastore(), plugins).checkForUpdates();
+  assert.deepEqual(result.notices, []);
+});
+
+test('the publisher can still say it republished', async () => {
+  // The other direction, and the reason this is a repository test rather than a
+  // blanket refusal: a real republish from the extension's own repository is
+  // exactly what `artifactChanged` exists to catch.
+  const MIRROR = 'https://raw.githubusercontent.com/mirror/repo/builds/plugins.json';
+  const { plugins } = fakePlugins({
+    repositories: [RAW, MIRROR],
+    catalogue: {
+      [RAW]: [remote({ version: 6, fileHash: 'dddd' })],
+      [MIRROR]: [remote({ version: 6, fileHash: 'cccc', url: `${MIRROR}/ShowBox.cs3` })],
+    },
+    installed: [local({ version: 6 })],
+  });
+
+  const result = await new ExtensionUpdater(fakeDatastore(), plugins).checkForUpdates();
+
+  assert.equal(result.updates.length, 1);
+  assert.equal(result.updates[0].reason, 'republished');
+  assert.equal(result.updates[0].repositoryUrl, RAW);
+});
+
+test('updating one extension applies the same rule', async () => {
+  // `resolveUpdate` is the other entry point — pressing Update on one row with
+  // no cached check — and it carried its own copy of the comparison.
+  const MIRROR = 'https://raw.githubusercontent.com/mirror/repo/builds/plugins.json';
+  const { plugins, calls } = fakePlugins({
+    repositories: [RAW, MIRROR],
+    catalogue: {
+      [RAW]: [remote({ version: 6, fileHash: 'aaaa' })],
+      [MIRROR]: [remote({ version: 6, fileHash: 'cccc', url: `${RAW}/ShowBox.cs3` })],
+    },
+    installed: [local({ version: 6 })],
+  });
+
+  const outcome = await new ExtensionUpdater(fakeDatastore(), plugins).updatePlugin('ShowBox');
+
+  assert.equal(outcome.ok, false);
+  assert.deepEqual(calls.installed, [], 'nothing is downloaded for an update that cannot exist');
+});
+
 // --- 5: a transport failure is not a verdict --------------------------------
 
 test('the runtime failing to answer is never the extension failing to load', () => {

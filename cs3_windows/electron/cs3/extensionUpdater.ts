@@ -343,7 +343,27 @@ export class ExtensionUpdater {
         const local = installed.get(remote.internalName);
         if (!local) continue;
 
-        if (Number(remote.status) === STATUS_DOWN && !notices.has(remote.internalName)) {
+        const isOwnRepository = local.meta?.repositoryUrl === repoUrl;
+
+        /**
+         * "Marked as not working **by its maintainer**" is a quotation, so it
+         * may only be quoted from the maintainer.
+         *
+         * Same defect as the republish below and found on the same screen:
+         * `IdlixProvider is marked as not working by its maintainer` was on
+         * display while its own publisher had it at `status: 1`, because a
+         * third repository in the user's list carries a stale copy of the entry
+         * and any repository could raise the notice. A mirror's `status` field
+         * is a copy of somebody else's claim, at whatever age the copy is.
+         *
+         * An unreachable own-repository therefore produces no notice, which is
+         * right: nothing that can be attributed means nothing that can be said.
+         */
+        if (
+          isOwnRepository &&
+          Number(remote.status) === STATUS_DOWN &&
+          !notices.has(remote.internalName)
+        ) {
           notices.set(remote.internalName, {
             internalName: remote.internalName,
             name: remote.name ?? remote.internalName,
@@ -361,8 +381,35 @@ export class ExtensionUpdater {
         if (!Number.isFinite(remoteVersion)) continue;
 
         const newer = remoteVersion > localVersion;
+        /**
+         * A republish is a claim only its own publisher can make.
+         *
+         * Measured on a real install, 2026-09-19: **61 of 61 failed updates**
+         * were same-version "republished" candidates, every one supplied by a
+         * repository the extension was *not* installed from, and every one
+         * aborted at the SHA-256 check. `xr3ed/xr3ed-Repo` mirrors 195
+         * extensions by pointing `url` straight at **phisher98's** artifacts
+         * while publishing its own `fileHash` and `fileSize` — measured, its
+         * declared sizes run ~2,700 bytes under the files those URLs actually
+         * serve. So its hash describes a build that is not at the address
+         * beside it.
+         *
+         * Read across repositories, `artifactChanged` cannot tell "your copy is
+         * out of date" from "two publishers built this differently", and it
+         * answered the first for every one of those 61. The result was a
+         * permanent failure list: the check offers the same updates, the
+         * install rejects the same hashes, and nothing about it can ever
+         * improve, because the hash is wrong at the publisher.
+         *
+         * A version *bump* stays cross-repository (see the tie-break below) —
+         * that is a claim about the artifact itself and the test for it is the
+         * number, not a comparison against our own bytes.
+         */
         const republished =
-          !newer && remoteVersion === localVersion && artifactChanged(local.meta, remote);
+          !newer &&
+          isOwnRepository &&
+          remoteVersion === localVersion &&
+          artifactChanged(local.meta, remote);
         if (!newer && !republished) continue;
         const reason: AvailableUpdate['reason'] = newer ? 'newer' : 'republished';
 
@@ -379,7 +426,6 @@ export class ExtensionUpdater {
          * catalogue fetches happened to settle in.
          */
         const existing = candidates.get(remote.internalName);
-        const isOwnRepository = local.meta?.repositoryUrl === repoUrl;
         if (existing) {
           if (existing.availableVersion > remoteVersion) continue;
           if (existing.availableVersion === remoteVersion) {
@@ -485,8 +531,19 @@ export class ExtensionUpdater {
       const remoteVersion = Number(remote.version ?? 0);
       if (!Number.isFinite(remoteVersion)) continue;
       const newer = remoteVersion > localVersion;
+      /**
+       * The same rule `doCheck` states at length: a republish is evidence only
+       * from the publisher the extension was installed from. A record carrying
+       * no repository stamp has no such publisher, so it takes version bumps
+       * only — missing a genuine republish until the version moves is a far
+       * smaller loss than an update that can never succeed.
+       */
       const republished =
-        !newer && remoteVersion === localVersion && artifactChanged(installed.meta, remote);
+        !newer &&
+        Boolean(own) &&
+        repositoryUrl === own &&
+        remoteVersion === localVersion &&
+        artifactChanged(installed.meta, remote);
       if (!newer && !republished) continue;
 
       return {

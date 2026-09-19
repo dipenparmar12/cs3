@@ -115,18 +115,36 @@ export interface RepositoryFetchResult {
  * property of the lane — so refusing the jar for that would mean declining the
  * safer bytecode on a technicality neither artifact satisfies.
  *
- * `jarFileSize` is deliberately unused. It is published, and checking it would
- * add a second way to reject a download that the hash already covers exactly.
+ * The declared size is carried but **never checked**. Rejecting on it would be
+ * a second way to refuse a download that the hash already covers exactly; it is
+ * here because it is the fastest way to tell a corrupted transfer from an index
+ * whose metadata describes a different build, and a mismatch has to say which.
  */
 export function chooseArtifact(plugin: SitePlugin): {
   url: string;
   hash?: string;
   lane: 'cs3' | 'jar';
+  declaredSize?: number;
 } {
   if (plugin.jarUrl) {
-    return { url: plugin.jarUrl, hash: plugin.jarHash, lane: 'jar' };
+    return {
+      url: plugin.jarUrl,
+      hash: plugin.jarHash,
+      lane: 'jar',
+      declaredSize: plugin.jarFileSize,
+    };
   }
-  return { url: plugin.url, hash: plugin.fileHash, lane: 'cs3' };
+  return { url: plugin.url, hash: plugin.fileHash, lane: 'cs3', declaredSize: plugin.fileSize };
+}
+
+/** A URL's host, for a message; never a decision. */
+function hostOf(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
 }
 
 /** What the sidecar reports back about a translated archive. */
@@ -1500,6 +1518,27 @@ export class PluginManager {
       if (artifact.hash) {
         const expected = artifact.hash.replace(/^sha256-/i, '').toLowerCase();
         if (expected !== digest) {
+          /**
+           * Who published the hash, and how far off it was.
+           *
+           * The message used to be one sentence about "the download", which is
+           * the one explanation that is almost never right: measured on a real
+           * install, 61 consecutive mismatches were a *mirror index* pointing
+           * `url` at another repository's artifacts while publishing its own
+           * stale hashes and sizes. Sixty identical rows blaming the transfer
+           * gave the reader nothing to act on; naming the index — and the size
+           * it claimed against the size that arrived — identifies that in one
+           * line, and a genuinely corrupted download looks different because
+           * the sizes agree.
+           */
+          const publisher = hostOf(plugin.repositoryUrl) ?? 'the repository';
+          const sizes =
+            artifact.declaredSize && artifact.declaredSize !== buffer.length
+              ? ` It also declared ${artifact.declaredSize} bytes and ${buffer.length} arrived, so the index describes a different build.`
+              : '';
+          const message =
+            `SHA-256 mismatch — ${hostOf(artifact.url) ?? 'the download'} did not match the hash ` +
+            `${publisher} published for it.${sizes} Install aborted.`;
           this.notifyInstallProgress({
             internalName: plugin.internalName,
             name: plugin.name,
@@ -1507,10 +1546,7 @@ export class PluginManager {
             percent: 0,
             message: `SHA-256 mismatch`,
           });
-          return {
-            ok: false,
-            message: `SHA-256 mismatch — the download does not match the hash the repository published. Install aborted.`,
-          };
+          return { ok: false, message };
         }
       }
 
