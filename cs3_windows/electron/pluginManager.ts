@@ -2917,6 +2917,9 @@ export class PluginManager {
       await this.waitForSearchesToFinish(signal);
       if (signal?.aborted) return;
       await this.activate(record.internalName);
+      // Yield to the event loop between provider archives so background class
+      // loading does not starve the main thread or cause UI stutter.
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
 

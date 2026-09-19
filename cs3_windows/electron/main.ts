@@ -158,7 +158,7 @@ logger.info('app', 'session_started', {
  * delay, and the same failure if it is too short — speculative work in front of
  * what the user is actually looking at.
  */
-const PROVIDER_WARMUP_DELAY_MS = 4_000;
+const PROVIDER_WARMUP_DELAY_MS = 8_000;
 
 /**
  * When the torrent client is brought up, if nothing has asked for it first.
@@ -168,7 +168,7 @@ const PROVIDER_WARMUP_DELAY_MS = 4_000;
  * of UDP to a dozen hosts that gains nothing from sharing a moment with 56 jars
  * of JVM class loading.
  */
-const TORRENT_WARMUP_DELAY_MS = 8_000;
+const TORRENT_WARMUP_DELAY_MS = 16_000;
 
 const diagnostics = new DiagnosticsLog();
 
@@ -1247,11 +1247,7 @@ app.whenReady().then(async () => {
   setHttpFetch((input, init) => resilientFetch.fetch(input, init));
   network.apply();
 
-  try {
-    await downloadService.start();
-  } catch (e) {
-    console.warn('DownloadService lazy-start warning:', e);
-  }
+  createWindow();
 
   downloadService.setProgressCallback((tasks: DownloadTask[]) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1259,7 +1255,9 @@ app.whenReady().then(async () => {
     }
   });
 
-  createWindow();
+  void downloadService.start().catch((e) => {
+    console.warn('DownloadService lazy-start warning:', e);
+  });
 
   // Extension updates flow from the original Android maintainers straight to the
   // user's install, so a provider fix never waits on an app release.

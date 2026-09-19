@@ -249,6 +249,9 @@ export class RuntimeProvisioner {
   private listeners: Set<(progress: RuntimeProgress) => void> = new Set();
   private inFlightProvision: Promise<boolean> | null = null;
   private inFlightRepair: Promise<boolean> | null = null;
+  private readonly javaVersionCache = new Map<string, { version: number; mtime: number }>();
+  private readonly fingerprintCache = new Map<string, { hash: string; checkedAt: number }>();
+  private cachedStatus: { status: SystemRuntimeStatus; timestamp: number } | null = null;
   private lastProgress: RuntimeProgress = {
     step: 'idle',
     progress: 0,
@@ -296,7 +299,11 @@ export class RuntimeProvisioner {
   /**
    * Evaluates whether all required runtime components exist and are ready for execution.
    */
-  public getStatus(): SystemRuntimeStatus {
+  public getStatus(forceFresh = false): SystemRuntimeStatus {
+    if (!forceFresh && this.cachedStatus && Date.now() - this.cachedStatus.timestamp < 2500) {
+      return this.cachedStatus.status;
+    }
+
     const javaInfo = this.findJavaBinary();
     const sidecarInfo = this.findSidecarJar();
     const bridgeInfo = this.findRuntimeDir();
@@ -319,7 +326,7 @@ export class RuntimeProvisioner {
     const stamp = this.readStamp();
     const staleReason = this.describeStaleness(stamp);
 
-    return {
+    const status: SystemRuntimeStatus = {
       ready,
       javaReady,
       sidecarReady,
@@ -337,6 +344,9 @@ export class RuntimeProvisioner {
       staleReason,
       generation: stamp?.generation,
     };
+
+    this.cachedStatus = { status, timestamp: Date.now() };
+    return status;
   }
 
   // --- staleness -----------------------------------------------------------
@@ -391,6 +401,10 @@ export class RuntimeProvisioner {
    * only way these directories ever change.
    */
   private fingerprintDir(dir: string): string | null {
+    const cached = this.fingerprintCache.get(dir);
+    if (cached && Date.now() - cached.checkedAt < 15_000) {
+      return cached.hash;
+    }
     try {
       const parts: string[] = [];
       const walk = (d: string, prefix: string): void => {
@@ -409,7 +423,9 @@ export class RuntimeProvisioner {
       };
       walk(dir, '');
       if (parts.length === 0) return null;
-      return crypto.createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 32);
+      const hash = crypto.createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 32);
+      this.fingerprintCache.set(dir, { hash, checkedAt: Date.now() });
+      return hash;
     } catch {
       return null;
     }
@@ -682,6 +698,11 @@ export class RuntimeProvisioner {
 
   private probeJavaVersion(exePath: string): number | null {
     try {
+      const st = fs.statSync(exePath);
+      const cached = this.javaVersionCache.get(exePath);
+      if (cached && cached.mtime === st.mtimeMs) {
+        return cached.version;
+      }
       const probe = spawnSync(exePath, ['-version'], {
         encoding: 'utf8',
         timeout: 6000,
@@ -691,7 +712,9 @@ export class RuntimeProvisioner {
       const match = output.match(/version "(\d+)(?:\.(\d+))?/);
       if (!match) return null;
       const major = parseInt(match[1], 10);
-      return major === 1 ? parseInt(match[2] ?? '0', 10) : major;
+      const version = major === 1 ? parseInt(match[2] ?? '0', 10) : major;
+      this.javaVersionCache.set(exePath, { version, mtime: st.mtimeMs });
+      return version;
     } catch {
       return null;
     }
@@ -793,7 +816,9 @@ export class RuntimeProvisioner {
           message: 'Verifying runtime integrity and provider support...',
         });
 
-        const finalStatus = this.getStatus();
+        this.cachedStatus = null;
+        this.fingerprintCache.clear();
+        const finalStatus = this.getStatus(true);
         if (finalStatus.ready) {
           this.writeStamp({
             generation: RUNTIME_GENERATION,
@@ -843,6 +868,8 @@ export class RuntimeProvisioner {
           fs.rmSync(this.baseDir, { recursive: true, force: true });
           fs.mkdirSync(this.baseDir, { recursive: true });
         }
+        this.cachedStatus = null;
+        this.fingerprintCache.clear();
         return await this.provisionRuntime();
       } catch (err) {
         const errorMsg = describeError(err);
