@@ -421,7 +421,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
             key: `${extKey}/note`,
             kind: 'note',
             depth: 2,
-            label: ext.unavailableReason ?? 'No providers registered.',
+            label: ext.unavailableReason ?? 'This add-on offers nothing to search.',
             members: [],
             isIndexer: false,
           });

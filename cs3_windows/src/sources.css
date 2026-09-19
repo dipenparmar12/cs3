@@ -7172,6 +7172,25 @@
 }
 .search-alert__action:hover { background: rgba(255, 255, 255, 0.08); }
 
+/*
+ * The original failure text, once it has been asked for.
+ *
+ * `flex-basis: 100%` puts it on its own line rather than squeezing the summary
+ * beside it: these are stack traces and provider exception messages, and a
+ * banner that reflows its own sentence to make room for one reads as broken.
+ * The banner is a flex row, so wrapping has to be enabled for that to land.
+ */
+.search-alert { flex-wrap: wrap; }
+.search-alert__detail {
+  flex-basis: 100%;
+  margin-top: 0.15rem;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  opacity: 0.85;
+  word-break: break-word;
+}
+
 .fix-modal__backdrop {
   position: fixed;
   inset: 0;

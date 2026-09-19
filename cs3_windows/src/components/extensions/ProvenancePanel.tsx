@@ -2,6 +2,7 @@ import React from 'react';
 import { ChevronRight, Users, Tag, AlertTriangle, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { Badge, ExternalLink } from './primitives';
 import { tagLabel, isAdultTag, languageLabel } from './useExtensionFilters';
+import { useReveal } from '../../utils/ExperienceModeContext';
 
 function formatCompactBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B';
@@ -87,6 +88,20 @@ export const ProvenancePanel: React.FC<{ details: Provenance }> = ({ details }) 
     suppressedReason,
   } = details;
 
+  /**
+   * Three of these fields answer a question only somebody working on the app
+   * asks, and the panel is otherwise exactly what an ordinary viewer wants:
+   * who maintains this, what it carries, where to report it.
+   *
+   * The internal id is the key this app files the extension under, the digest
+   * is what its publisher's bytes are checked against, and the source URL is
+   * the raw document the catalogue was parsed out of — none of which mean
+   * anything without knowing how installation works here. The project page
+   * stays in both modes: it is where the maintainer named above is found, and
+   * that is the one action a viewer looking at a broken provider can take.
+   */
+  const technical = useReveal('technical');
+
   return (
     <div className="ext-provenance">
       {chain.length > 0 && (
@@ -117,7 +132,7 @@ export const ProvenancePanel: React.FC<{ details: Provenance }> = ({ details }) 
       )}
 
       <div className="ext-provenance__grid">
-        {internalName && <Field label="Internal ID">{internalName}</Field>}
+        {technical && internalName && <Field label="Internal ID">{internalName}</Field>}
         {version !== undefined && <Field label="Version">v{version}</Field>}
         {language && <Field label="Language">{languageLabel(language)}</Field>}
         {category && <Field label="Category">{category}</Field>}
@@ -174,14 +189,14 @@ export const ProvenancePanel: React.FC<{ details: Provenance }> = ({ details }) 
         <div style={{ color: 'var(--text-muted)', lineHeight: 1.45 }}>{description}</div>
       )}
 
-      {(url || homepageUrl) && (
+      {(homepageUrl || (technical && url)) && (
         <div className="ext-provenance__grid">
           {homepageUrl && (
             <Field label="Project page">
               <ExternalLink url={homepageUrl} />
             </Field>
           )}
-          {url && url !== homepageUrl && (
+          {technical && url && url !== homepageUrl && (
             <Field label="Source URL">
               <ExternalLink url={url} />
             </Field>
@@ -189,7 +204,7 @@ export const ProvenancePanel: React.FC<{ details: Provenance }> = ({ details }) 
         </div>
       )}
 
-      {fileHash && (
+      {technical && fileHash && (
         <Field label="SHA-256">
           <code style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{fileHash}</code>
         </Field>

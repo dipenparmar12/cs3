@@ -240,7 +240,7 @@ const ExtensionRow: React.FC<{
         <button
           type="button"
           className="ext-icon-button ext-icon-button--danger"
-          title="Uninstall this extension and delete its archive"
+          title="Uninstall this add-on and delete the files it downloaded"
           disabled={busy === `uninstall:${extension.internalName}`}
           onClick={() => onUninstall(extension.internalName)}
         >
@@ -248,7 +248,7 @@ const ExtensionRow: React.FC<{
         </button>
         <Toggle
           on={extension.enabled !== false}
-          label="Keep the archive, but stop asking its providers"
+          label="Keep it installed, but stop using the sources it adds"
           suppressedReason={suppressed}
           disabled={busy === `ext:${extension.internalName}`}
           onChange={(next) => onExtensionToggle(extension.internalName, next)}

@@ -18,6 +18,7 @@ import type {
   ProviderScore,
   RankingCriterionInfo,
 } from '../../types/analytics';
+import { useReveal } from '../../utils/ExperienceModeContext';
 
 /**
  * What every provider has actually done, and the score built from it.
@@ -44,6 +45,22 @@ const BAND_LABELS: Record<string, { label: string; tone: string }> = {
 export const ProviderRankingPanel: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [scores, setScores] = useState<ProviderScore[]>([]);
+  /**
+   * Three things on this panel are the ranking's *workings* rather than its
+   * answer: the weighted criteria and their sliders, the per-criterion
+   * breakdown under each provider, and the repository the provider came from.
+   * None reads without knowing that this app scores scrapers on measured
+   * outcomes.
+   *
+   * What stays in both modes is everything a viewer can act on — what is
+   * collected, the button that erases it, the recommendations, and pin/never-use
+   * per source. Hiding the privacy half behind a developer switch would put a
+   * data control behind a jargon filter, which is the one thing this level must
+   * never do. The 0–100 score stays too: a rating beside a name needs no
+   * knowledge of how it was computed, and without it the rows have no order
+   * anybody can see.
+   */
+  const technical = useReveal('technical');
   const [criteria, setCriteria] = useState<RankingCriterionInfo[]>([]);
   const [settings, setSettings] = useState<AnalyticsSettings | null>(null);
   const [recommendations, setRecommendations] = useState<ProviderRecommendation[]>([]);
@@ -216,6 +233,7 @@ export const ProviderRankingPanel: React.FC = () => {
       )}
 
       {/* --- the criteria and their weights ------------------------------- */}
+      {technical && (
       <section className="setting-group">
         <h3>
           <button className="ranking__disclose" onClick={() => setShowWeights((open) => !open)}>
@@ -274,6 +292,7 @@ export const ProviderRankingPanel: React.FC = () => {
           </>
         )}
       </section>
+      )}
 
       {/* --- the leaderboard ---------------------------------------------- */}
       <section className="setting-group">
@@ -309,24 +328,26 @@ export const ProviderRankingPanel: React.FC = () => {
 
                   {open && (
                     <div className="ranking__detail">
-                      {(score.repositoryName || score.extensionName) && (
+                      {technical && (score.repositoryName || score.extensionName) && (
                         <p className="ranking__origin">
                           {[score.repositoryName, score.extensionName].filter(Boolean).join(' ▸ ')}
                         </p>
                       )}
-                      <dl>
-                        {score.criteria.map((criterion) => (
-                          <React.Fragment key={criterion.id}>
-                            <dt>{criterion.label}</dt>
-                            <dd>
-                              {criterion.score === null
-                                ? '—'
-                                : `${Math.round(criterion.score * 100)}%`}
-                              <em>{criterion.detail}</em>
-                            </dd>
-                          </React.Fragment>
-                        ))}
-                      </dl>
+                      {technical && (
+                        <dl>
+                          {score.criteria.map((criterion) => (
+                            <React.Fragment key={criterion.id}>
+                              <dt>{criterion.label}</dt>
+                              <dd>
+                                {criterion.score === null
+                                  ? '—'
+                                  : `${Math.round(criterion.score * 100)}%`}
+                                <em>{criterion.detail}</em>
+                              </dd>
+                            </React.Fragment>
+                          ))}
+                        </dl>
+                      )}
                       <div className="ranking__row-actions">
                         <button
                           onClick={() =>

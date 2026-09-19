@@ -12,6 +12,8 @@ import { FacetMenu, type FacetOption } from '../components/FacetMenu';
 import { CopyErrorButton } from '../components/CopyErrorButton';
 import { FixProvidersModal } from '../components/FixProvidersModal';
 import { useTitleEnrichment } from '../components/useTitleEnrichment';
+import { useReveal } from '../utils/ExperienceModeContext';
+import { plainMessage } from '../utils/experienceMode';
 
 interface SearchViewProps {
   query: string;
@@ -94,6 +96,17 @@ const SourceProgress: React.FC<{ snapshot: SearchSnapshot; onCancel?: () => void
   snapshot,
   onCancel,
 }) => {
+  /**
+   * The bar, the count and the failure tally are for everyone — they are what
+   * says the app is working rather than stuck, and a search that quietly asked
+   * fewer sources than it claims is the worst failure this app has.
+   *
+   * What is held back is the attribution: which source answered last, and the
+   * exception text behind each failure. Both name third-party code by its own
+   * internal vocabulary, and neither is something a viewer waiting on a list of
+   * films can act on.
+   */
+  const technical = useReveal('technical');
   const percent = snapshot.total === 0 ? 0 : Math.round((snapshot.settled / snapshot.total) * 100);
   const failed = snapshot.outcomes.filter((outcome) => outcome.state === 'failed');
 
@@ -108,15 +121,17 @@ const SourceProgress: React.FC<{ snapshot: SearchSnapshot; onCancel?: () => void
         <span>
           {snapshot.settled} of {snapshot.total} source{snapshot.total === 1 ? '' : 's'}
         </span>
-        {snapshot.lastSource && !snapshot.done && (
+        {technical && snapshot.lastSource && !snapshot.done && (
           <span className="search-progress__last">· {snapshot.lastSource} answered</span>
         )}
         {failed.length > 0 && (
           <span
             className="search-progress__failed"
-            title={failed
-              .map((outcome) => `${outcome.name}: ${outcome.error ?? 'failed'}`)
-              .join('\n')}
+            title={
+              technical
+                ? failed.map((outcome) => `${outcome.name}: ${outcome.error ?? 'failed'}`).join('\n')
+                : `${failed.length} of the places searched could not be reached. The rest still answered.`
+            }
           >
             <AlertTriangle size={11} /> {failed.length} failed
           </span>
@@ -129,6 +144,43 @@ const SourceProgress: React.FC<{ snapshot: SearchSnapshot; onCancel?: () => void
           </button>
         )}
       </div>
+    </div>
+  );
+};
+
+/**
+ * A search that did not run, said once and kept in full.
+ *
+ * The banner used to read `Search failed: ` followed by whatever threw, which
+ * on the common causes is a sentence about our own machinery — a DNS failure,
+ * an aborted fan-out, a sidecar that had not started. `plainMessage` turns that
+ * into something a viewer can act on and keeps the original in `detail`, so
+ * nothing is lost: developer mode opens with it showing, and standard mode has
+ * it one click away for a bug report.
+ */
+const SearchFailure: React.FC<{ message: string }> = ({ message }) => {
+  const technical = useReveal('technical');
+  const plain = plainMessage(message);
+  const hasDetail = plain.detail !== '' && plain.detail !== plain.summary;
+  const [showDetail, setShowDetail] = useState(false);
+  const detailOpen = technical || showDetail;
+
+  return (
+    <div className="search-alert" role="alert">
+      <AlertTriangle size={14} />
+      <span>{plain.summary}</span>
+      {hasDetail && !detailOpen && (
+        <button
+          type="button"
+          className="search-alert__action"
+          onClick={() => setShowDetail(true)}
+        >
+          Show details
+        </button>
+      )}
+      {hasDetail && detailOpen && (
+        <code className="search-alert__detail">{plain.detail}</code>
+      )}
     </div>
   );
 };
@@ -313,11 +365,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
         <SourceProgress snapshot={search} onCancel={onCancel} />
       )}
 
-      {error && (
-        <div className="search-alert" role="alert">
-          Search failed: {error}
-        </div>
-      )}
+      {error && <SearchFailure message={error} />}
 
       {search?.scope.missingProviders.length || search?.scope.missingIndexers.length ? (
         <div className="search-alert search-alert--warn" role="status">
