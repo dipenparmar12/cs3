@@ -86,6 +86,9 @@ import {
 import type { TitleEnricher } from '../cs3/titleEnricher.ts';
 import { fetchWikipediaNotes, type WikipediaNotes } from './wikipedia.ts';
 import { parseCinemetaExtras, type CinemetaExtras } from './cinemetaExtras.ts';
+import { describeYouTubeVideos, type YouTubeVideoFacts } from './youtube.ts';
+import { classifyVideoTitle, looksOfficial, orderVideos } from './videoTitles.ts';
+import type { TitleVideo } from '../../src/types/metadata.ts';
 import { fetchJson } from '../torrent/http.ts';
 
 const FILE_NAME = 'cs3-metadata-cache.json';
@@ -171,6 +174,52 @@ function outcome(
   reason?: string
 ): MetadataSourceOutcome {
   return { source, status, reason, ms: Date.now() - startedAt };
+}
+
+/**
+ * The collected videos, with what YouTube said about each folded in.
+ *
+ * Three things happen here and each is load-bearing:
+ *
+ * **A removed video loses its card.** oEmbed answers 401/404 for a trailer that
+ * has been taken down or made private, and that is the only liveness check
+ * available before the gallery is drawn. A card that cannot play is worse than
+ * one fewer card.
+ *
+ * **A real title re-classifies the video.** The kind, the label, the season and
+ * the ordinal all come out of the title, so they have to be recomputed once the
+ * real one arrives — the record built from the catalogue's placeholder says
+ * "Trailer" for everything, which is exactly the state this pass exists to fix.
+ *
+ * **A video with no facts keeps its card.** A request that failed to complete
+ * is not YouTube saying anything; the video keeps its fallback label and plays
+ * perfectly.
+ */
+function describeVideos(
+  videos: TitleVideo[],
+  described: { facts: Map<string, YouTubeVideoFacts>; removed: Set<string> } | null
+): TitleVideo[] {
+  if (!described) return orderVideos(videos);
+
+  const out: TitleVideo[] = [];
+  for (const video of videos) {
+    const id = video.id.replace(/^youtube:/, '');
+    if (described.removed.has(id)) continue;
+    const facts = described.facts.get(id);
+    if (!facts) {
+      out.push(video);
+      continue;
+    }
+    out.push({
+      ...video,
+      title: facts.title,
+      publisher: facts.publisher,
+      official: looksOfficial(facts.publisher),
+      thumbnailUrl: facts.thumbnailUrl ?? video.thumbnailUrl,
+      ...classifyVideoTitle(facts.title),
+    });
+  }
+  return orderVideos(out);
 }
 
 /** A thrown value to one line a person can read. */
@@ -359,6 +408,8 @@ export class MetadataEnrichmentService {
     let tvmaze: Awaited<ReturnType<typeof fetchTvMazeCredits>> | null = null;
     let tvmazeFacts: TvMazeShowFacts | null = null;
     let wikipedia: WikipediaNotes | null = null;
+    /** What YouTube said each collected trailer is. Filled in phase two. */
+    let videoFacts: Awaited<ReturnType<typeof describeYouTubeVideos>> | null = null;
 
     /**
      * What the catalogues believe this is, when the provider had no id.
@@ -402,7 +453,7 @@ export class MetadataEnrichmentService {
       const snapshot = this.assemble(
         request,
         ids,
-        { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia },
+        { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia, videoFacts },
         outcomes,
         partial
       );
@@ -567,7 +618,55 @@ export class MetadataEnrichmentService {
 
     await Promise.all(tasks);
 
-    // Phase two. The article URL is a sitelink from Wikidata, never a search.
+    /**
+     * Phase two, first half: what each trailer actually is.
+     *
+     * This cannot run with the fan-out because the ids come *out* of it —
+     * Cinemeta and AniList are what publish them. And it is worth a second
+     * round trip because the catalogues publish an id and nothing else:
+     * measured, `trailers[].type` is the literal string "Trailer" on every
+     * entry including the teasers, so without this a gallery is five identical
+     * cards. YouTube's keyless oEmbed endpoint answers in ~190 ms and the
+     * requests are issued together, so the whole pass cost 201 ms for twelve
+     * videos.
+     *
+     * Never fatal, and never blocking anything: a failure here leaves the
+     * videos with their fallback titles rather than removing them, because a
+     * trailer with a generic label is still a trailer that plays.
+     */
+    // Cast for the same reason `articleUrl` below does: these are assigned
+    // inside callbacks, which TypeScript's control-flow analysis narrows to
+    // `never` at this point.
+    const collected = mergeVideos([
+      (cinemeta as CinemetaExtras | null)?.videos ?? [],
+      (anilist as AniListCredits | null)?.videos ?? [],
+    ]);
+    if (collected.length > 0) {
+      const startedAt = Date.now();
+      try {
+        const ids = collected
+          .filter((video) => video.host === 'youtube')
+          .map((video) => video.id.replace(/^youtube:/, ''));
+        const described = await describeYouTubeVideos(ids, signal);
+        videoFacts = described;
+        outcomes.push(
+          outcome(
+            MetadataSource.YouTube,
+            described.facts.size > 0 ? 'ok' : 'empty',
+            startedAt,
+            described.facts.size === 0 ? 'no video details came back' : undefined
+          )
+        );
+      } catch (error) {
+        outcomes.push(outcome(MetadataSource.YouTube, 'failed', startedAt, describe(error)));
+      }
+      // Published before Wikipedia rather than after it: the gallery is the
+      // fastest half of phase two and has no reason to wait for prose.
+      publish(true);
+    }
+
+    // Phase two, second half. The article URL is a sitelink from Wikidata,
+    // never a search.
     const articleUrl = (wikidata as WikidataResult | null)?.facts?.wikipediaUrl;
     if (articleUrl) {
       const startedAt = Date.now();
@@ -618,11 +717,12 @@ export class MetadataEnrichmentService {
       tvmaze: Awaited<ReturnType<typeof fetchTvMazeCredits>> | null;
       tvmazeFacts: TvMazeShowFacts | null;
       wikipedia: WikipediaNotes | null;
+      videoFacts: Awaited<ReturnType<typeof describeYouTubeVideos>> | null;
     },
     outcomes: MetadataSourceOutcome[],
     partial: boolean
   ): ExtendedMetadata {
-    const { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia } = parts;
+    const { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia, videoFacts } = parts;
 
     const people = orderCredits(
       mergeCredits([
@@ -706,7 +806,10 @@ export class MetadataEnrichmentService {
       keywords: mergeStrings([anilist?.keywords, facts?.keywords]),
       production: mergeNotes([wikipedia?.production ?? []]),
       trivia: mergeNotes([wikipedia?.trivia ?? [], anilist?.trivia ?? []]),
-      videos: mergeVideos([cinemeta?.videos ?? [], anilist?.videos ?? []]),
+      videos: describeVideos(
+        mergeVideos([cinemeta?.videos ?? [], anilist?.videos ?? []]),
+        videoFacts
+      ),
       backdropUrl: cinemeta?.backdropUrl ?? anilist?.backdropUrl,
       logoUrl: cinemeta?.logoUrl,
       outcomes: [...outcomes],

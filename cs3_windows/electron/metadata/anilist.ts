@@ -29,6 +29,7 @@
  */
 
 import { rawFetch } from '../torrent/http.ts';
+import { youTubeVideo } from './videoTitles.ts';
 import {
   CreditRole,
   MetadataSource,
@@ -37,6 +38,7 @@ import {
   type Organisation,
   type ProductionNote,
   type TitleRating,
+  TitleVideoKind,
   type TitleVideo,
 } from '../../src/types/metadata.ts';
 import { classifyJob } from './merge.ts';
@@ -359,19 +361,25 @@ export function parseAniList(media: AniListMediaCredits | null | undefined): Ani
   const videos: TitleVideo[] = [];
   if (media.trailer?.id && media.trailer.site) {
     const site = media.trailer.site.toLowerCase();
-    const url =
-      site === 'youtube'
-        ? `https://www.youtube.com/watch?v=${media.trailer.id}`
-        : site === 'dailymotion'
-          ? `https://www.dailymotion.com/video/${media.trailer.id}`
-          : '';
-    if (url) {
+    if (site === 'youtube') {
+      // Through the shared builder so an AniList trailer dedupes against the
+      // same video arriving from Cinemeta — they are one card, not two.
+      videos.push(
+        youTubeVideo(media.trailer.id, {
+          source: MetadataSource.AniList,
+          fallbackTitle: 'Trailer',
+        })
+      );
+    } else if (site === 'dailymotion') {
       videos.push({
+        id: `dailymotion:${media.trailer.id}`,
         title: 'Trailer',
-        url,
-        kind: 'trailer',
-        host: site === 'youtube' ? 'youtube' : 'web',
+        label: 'Trailer',
+        url: `https://www.dailymotion.com/video/${media.trailer.id}`,
+        kind: TitleVideoKind.Trailer,
+        host: 'web',
         thumbnailUrl: media.trailer.thumbnail,
+        sources: [MetadataSource.AniList],
       });
     }
   }

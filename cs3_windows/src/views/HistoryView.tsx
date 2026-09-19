@@ -537,7 +537,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                   className="btn btn-secondary btn-sm"
                   onClick={() => setExportMenuOpen((v) => !v)}
                   disabled={exporting}
-                  title="Export media history with technical provider & source details as CSV"
+                  title="Export your watch history as a spreadsheet"
                   style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
                 >
                   <FileSpreadsheet size={14} />

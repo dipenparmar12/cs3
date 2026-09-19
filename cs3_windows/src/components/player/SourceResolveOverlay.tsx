@@ -1,6 +1,8 @@
 import React from 'react';
 import { Loader2, Play, AlertTriangle, RefreshCw, ListVideo, Globe } from 'lucide-react';
 import type { TorrentResult } from '../../types/torrent';
+import { useIsDeveloper } from '../../utils/ExperienceModeContext';
+import { plainMessage } from '../../utils/experienceMode';
 
 /**
  * What the viewer sees between pressing play and the picture appearing.
@@ -50,6 +52,35 @@ interface SourceResolveOverlayProps {
   onBack: () => void;
 }
 
+/**
+ * What the wait is called.
+ *
+ * The stages this app goes through are real and each one is a different thing
+ * to be waiting on — a scope being resolved, fifteen scrapers answering, a
+ * swarm producing leading bytes. Naming them is the right thing to do for
+ * whoever is debugging a source and the wrong thing to put in front of someone
+ * who pressed play: "Connecting to the swarm" asks them to know what a swarm
+ * is in order to understand that the film is starting.
+ *
+ * So each stage has both spellings, and neither is a lie — the standard one is
+ * the same fact at a coarser grain.
+ */
+function stageLabel(
+  phase: 'searching' | 'starting',
+  sourceCount: number,
+  isDeveloper: boolean
+): string {
+  if (phase === 'starting') {
+    return isDeveloper ? 'Connecting to the swarm…' : 'Starting playback…';
+  }
+  if (sourceCount > 0) {
+    return isDeveloper
+      ? `${sourceCount} source${sourceCount === 1 ? '' : 's'} found`
+      : `Found ${sourceCount} source${sourceCount === 1 ? '' : 's'} — picking the best…`;
+  }
+  return isDeveloper ? 'Searching for sources…' : 'Finding the best source…';
+}
+
 export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
   phase,
   sources,
@@ -69,13 +100,26 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
   widened,
   onBack,
 }) => {
+  const isDeveloper = useIsDeveloper();
+
   if (phase === 'error') {
+    const plain = plainMessage(error);
     return (
       <div className="player__overlay">
         <AlertTriangle size={36} />
-        <p>{error ?? 'Could not start playback.'}</p>
+        {/* The original is never discarded — developer mode shows it, and
+            `CopyErrorButton` still reports it verbatim. What changes is which
+            of the two a viewer is handed first. */}
+        <p>{error ? (isDeveloper ? plain.detail : plain.summary) : 'Could not start playback.'}</p>
 
-        {attempts.length > 0 && (
+        {/*
+          The failover list is the most useful thing on this screen for whoever
+          is diagnosing a provider, and the least useful for whoever wanted to
+          watch something: four rows of release name, scraper name and HTTP
+          status, describing sources they never chose. The actions below are
+          what they need, and those are unchanged.
+        */}
+        {attempts.length > 0 && isDeveloper && (
           <ul className="player__attempts">
             {attempts.slice(0, 4).map((attempt, i) => (
               <li key={`${attempt.title}-${i}`}>
@@ -83,6 +127,11 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
               </li>
             ))}
           </ul>
+        )}
+        {attempts.length > 0 && !isDeveloper && (
+          <span className="muted">
+            {attempts.length} source{attempts.length === 1 ? '' : 's'} tried so far.
+          </span>
         )}
 
         <div className="player__overlay-actions">
@@ -111,29 +160,39 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
     <div className="player__overlay">
       <Loader2 className="spin" size={36} />
 
-      <p>
-        {phase === 'starting'
-          ? 'Connecting to the swarm…'
-          : sources.length > 0
-            ? `${sources.length} source${sources.length === 1 ? '' : 's'} found`
-            : 'Searching for sources…'}
-      </p>
+      <p>{stageLabel(phase, sources.length, isDeveloper)}</p>
 
       <span className="muted">
         {episodeTitle ? `${title} — ${episodeTitle}` : title}
       </span>
 
+      {/*
+        Said in both modes, because it is the reason the wait just tripled and
+        an unexplained change of length is the shape of a hang. Only the word
+        "indexer" goes.
+      */}
       {widened && phase === 'searching' && (
         <span className="muted">
-          <Globe size={13} /> No sources from where this title was found — asking
-          every provider and indexer.
+          <Globe size={13} />{' '}
+          {isDeveloper
+            ? 'No sources from where this title was found — asking every provider and indexer.'
+            : 'Nothing where this title was found — looking everywhere else.'}
         </span>
       )}
 
       {phase === 'searching' && totalIndexers > 0 && (
         <span className="muted">
-          Searched {searched} of {totalIndexers} indexers
-          {lastIndexerName && !searchDone ? ` · last: ${lastIndexerName}` : ''}
+          {isDeveloper ? (
+            <>
+              Searched {searched} of {totalIndexers} indexers
+              {lastIndexerName && !searchDone ? ` · last: ${lastIndexerName}` : ''}
+            </>
+          ) : (
+            // The count stays: a climbing number is what tells the viewer the
+            // app is working rather than stuck, which is this overlay's whole
+            // reason for existing. Which scraper answered last is not.
+            <>Checked {searched} of {totalIndexers} places</>
+          )}
         </span>
       )}
 

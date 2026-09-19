@@ -8,7 +8,8 @@ import type { TorrentResult } from '../../types/torrent';
 import { SourceFilterBar } from '../SourceFilterBar';
 import { SourceExportButton } from '../SourceExportButton';
 import { useSourceProvenance } from '../useSourceProvenance';
-import { provenanceChain, sourceAddress, sourceHost } from '../../utils/sourceExport';
+import { providerLabel, provenanceChain, sourceAddress, sourceHost } from '../../utils/sourceExport';
+import { useIsDeveloper } from '../../utils/ExperienceModeContext';
 import {
   DEFAULT_FILTER_STATE,
   filterAndSortSources,
@@ -68,15 +69,23 @@ interface SourcePanelProps {
   onDownload?: (source: TorrentResult) => void;
 }
 
-/** The tags that decide whether a release is the one you want, in one line. */
-function describe(source: TorrentResult): string {
+/**
+ * The tags that decide whether a release is the one you want, in one line.
+ *
+ * `technical` adds the two that only mean something to a reader who knows what
+ * this machine can decode — the video codec and the audio codec. Resolution,
+ * HDR, language and dual-audio stay in both modes: those are what the film will
+ * look and sound like, which is the question anyone choosing a source is
+ * actually asking.
+ */
+function describe(source: TorrentResult, technical: boolean): string {
   const p = source.parsed;
   const parts: string[] = [];
   if (p.resolution) parts.push(`${p.resolution}p`);
   if (p.source && p.source !== 'Unknown') parts.push(p.source);
-  if (p.videoCodec && p.videoCodec !== 'Unknown') parts.push(p.videoCodec);
+  if (technical && p.videoCodec && p.videoCodec !== 'Unknown') parts.push(p.videoCodec);
   if (p.hdr.length > 0) parts.push(p.hdr.join('/'));
-  if (p.audioCodecs.length > 0) parts.push(p.audioCodecs.join('/'));
+  if (technical && p.audioCodecs.length > 0) parts.push(p.audioCodecs.join('/'));
   if (p.isDualAudio) parts.push('Dual audio');
   else if (p.isMultiAudio) parts.push('Multi audio');
   if (p.languages.length > 0) parts.push(p.languages.join(', ').toUpperCase());
@@ -103,6 +112,7 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
   onCancelSearch,
   onDownload,
 }) => {
+  const isDeveloper = useIsDeveloper();
   const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);
   const [showFilterBar, setShowFilterBar] = useState(true);
   const { message: copiedLink, flash: setCopiedLink } = useFlash<string>(1800);
@@ -263,7 +273,9 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
               <button className="player-panel__search-action" onClick={onWiden}>
                 <Globe size={13} />
                 Search all sources
-                <span className="muted">every provider and torrent indexer</span>
+                <span className="muted">
+                  {isDeveloper ? 'every provider and torrent indexer' : 'look everywhere else'}
+                </span>
               </button>
             )}
           </>
@@ -316,7 +328,9 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
             displayedSources.findIndex((candidate) => candidate.infoHash === activeInfoHash) ===
               rowIndex;
           const isSwitching = switchingTo === source.infoHash;
-          const chain = provenanceChain(source, provenanceFor(source));
+          const chain = isDeveloper
+            ? provenanceChain(source, provenanceFor(source))
+            : providerLabel(source, provenanceFor(source));
           const host = sourceHost(source);
           const address = sourceAddress(source);
 
@@ -352,7 +366,7 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
                 disabled={isSwitching}
               >
                 <strong>{source.title}</strong>
-                <span>{describe(source)}</span>
+                <span>{describe(source, isDeveloper)}</span>
                 <div className="player-panel__source-facts">
                   <span title="Seeders">
                     <Users size={12} /> {source.seeders}

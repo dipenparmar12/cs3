@@ -61,6 +61,7 @@ import { buildDownloadTask } from '../src/utils/downloadIdentity';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
 import { BootstrapService } from './cs3/bootstrap';
 import { TitleOutcomeStore, type TitleOutcomeKind } from './cs3/titleOutcomes';
+import { TitleInteractionStore } from './cs3/titleInteractions';
 import { DiagnosticsLog } from './cs3/diagnostics';
 import { ProviderAnalytics } from './cs3/providerAnalytics';
 import { ProviderRanking } from './cs3/providerRanking';
@@ -99,6 +100,7 @@ import type { StoredSource } from '../src/types/library';
 import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import type { MpvSnapshot } from '../src/types/mpv';
 import { describeError } from '../src/utils/errors.ts';
+import type { TitleInteractionQuery } from '../src/types/interactions';
 import { SHARE_SCHEME } from '../src/utils/shareLink.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -346,6 +348,24 @@ const discovery = new DiscoveryService(
 const sourcePrefetcher = new SourcePrefetcher(contentService, datastore);
 const bootstrap = new BootstrapService(datastore, pluginManager);
 const titleOutcomes = new TitleOutcomeStore(datastore);
+
+/**
+ * What every media card in the app knows about a title already.
+ *
+ * A join over the stores above rather than a store of its own — see the file
+ * header for why the one fact it does own (that a details page was opened)
+ * could not be derived from `PageSnapshotStore`. Dependencies are thunks where
+ * they change under it: the download queue is mutated by the service on every
+ * progress tick, and readiness is `ContentService`'s to answer because it owns
+ * the cache key rules.
+ */
+const titleInteractions = new TitleInteractionStore({
+  datastore,
+  library: libraryStore,
+  outcomes: titleOutcomes,
+  sourceReadiness: (url) => contentService.peekSourceReadiness(url),
+  downloadTasks: () => downloadService.getTasks(),
+});
 const externalPlayers = new ExternalPlayerService();
 externalPlayers.setSnapshotListener((snapshot) =>
   mainWindow?.webContents.send('external:update', snapshot)
@@ -412,6 +432,14 @@ const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
 const subtitles = new SubtitleService();
 const mediaTranscoder = new MediaTranscoder(binaryDownloader);
+/**
+ * Lets `resolvePromoVideo` mux a video and an audio address into one stream.
+ *
+ * Injected rather than owned: both are built here, and each would otherwise
+ * need the other first. See `pickPromoStream` for the measurement that made a
+ * two-input path necessary at all.
+ */
+contentService.setTranscoder(mediaTranscoder);
 mediaTranscoder.setDiagnostics(diagnostics);
 
 /**
@@ -1497,6 +1525,45 @@ app.on('before-quit', async (event) => {
 function fail(error: unknown): { ok: false; error: string } {
   return { ok: false, error: describeError(error) };
 }
+
+/**
+ * Card states for one screen's worth of rows.
+ *
+ * Batched rather than per card, for `api:getProviderProvenanceMap`'s reason: a
+ * catalogue page is forty posters, and forty round trips to read five in-memory
+ * maps is the cost of drawing one screen.
+ */
+ipcMain.handle('interactions:summarise', async (_, queries: TitleInteractionQuery[]) => {
+  try {
+    return { ok: true, interactions: titleInteractions.summarise(queries ?? []) };
+  } catch (error) {
+    return { ...fail(error), interactions: {} };
+  }
+});
+
+/**
+ * Records that a details page was opened.
+ *
+ * Takes the title and year rather than the address: the record is about the
+ * work, so the same film opened from a search result and from a home rail is
+ * one visit and dims both cards.
+ */
+ipcMain.handle('interactions:visit', async (_, title: string, year?: number) => {
+  try {
+    return { ok: true, visit: titleInteractions.recordVisit(title, year) };
+  } catch (error) {
+    return { ...fail(error), visit: null };
+  }
+});
+
+/** Forgets which titles have been opened. The only control over this ledger. */
+ipcMain.handle('interactions:clearVisits', async () => {
+  try {
+    return { ok: true, cleared: titleInteractions.clearVisits() };
+  } catch (error) {
+    return { ...fail(error), cleared: 0 };
+  }
+});
 
 // --- content -------------------------------------------------------------
 
@@ -2642,6 +2709,25 @@ ipcMain.handle('metadata:getExtended', async (_, request: EnrichmentRequest) => 
 ipcMain.handle('metadata:peekExtended', async (_, url: string) => {
   const hit = metadataEnrichment.peek(url);
   return { ok: true, metadata: hit?.metadata ?? null, stale: hit?.stale ?? false };
+});
+
+/**
+ * A trailer, turned into something the ordinary player can open.
+ *
+ * Its own channel rather than part of `metadata:*` because it answers a
+ * different question at a different cost: `metadata:getExtended` is a record
+ * nothing waits for, and this is a press of a play button that spawns a
+ * process. Separate from `media:prepare` in the other direction — this returns
+ * a *provider-level* address, proxied for its headers and not yet inspected,
+ * and the renderer hands it to `media:prepare` like any other stream so that
+ * channel stays the only source of a playable URL.
+ */
+ipcMain.handle('videos:resolve', async (_, pageUrl: string) => {
+  try {
+    return await contentService.resolvePromoVideo(pageUrl);
+  } catch (error) {
+    return { ...fail(error) };
+  }
 });
 
 ipcMain.handle('metadata:clearCache', async () => {

@@ -58,6 +58,7 @@ import {
   type SubtitleStyle,
 } from '../utils/subtitleStyle';
 import { describeError } from '../utils/errors';
+import { useIsDeveloper } from '../utils/ExperienceModeContext';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -302,6 +303,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   hidden = false, mini = false, onMinimize, onExpand, showAspectRatioControl,
   showPlaybackSpeedControl, showSubtitlesControl: showSubtitlesControlProp, onSearchTitle,
 }) => {
+  /**
+   * Whether the viewer has asked to see how the app is built.
+   *
+   * Everything this gates below is *true* and was written for whoever is
+   * debugging a source — the transcode plan, the swarm's peer count, the codec
+   * the demuxer refused. Over a film that is playing, all of it reads as the
+   * app narrating its own internals, which is what makes a player feel
+   * unfinished rather than powerful. None of it is deleted; it is one toggle
+   * away in Settings.
+   */
+  const isDeveloper = useIsDeveloper();
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const seekBarRef = useRef<HTMLDivElement | null>(null);
@@ -2338,8 +2351,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * see it working, and a caption explaining a remux over a playing film is
    * noise.
    */
+  /**
+   * `capability.explanation` names the demuxer, the codec and what was copied
+   * versus re-encoded — the one sentence that makes a compatibility decision
+   * reviewable, and meaningless to somebody who pressed play on a film. It is
+   * developer-only rather than reworded: there is no shorter true version of
+   * "matroska,webm cannot be demuxed by the browser; EAC3 audio has no decoder
+   * here", and a vaguer one would be a caption over a working picture.
+   */
   const showStrategyNote =
-    Boolean(prepared?.sessionId) && !error && currentTime === 0 && !isResolving;
+    isDeveloper && Boolean(prepared?.sessionId) && !error && currentTime === 0 && !isResolving;
 
   // A switch that has landed clears the row spinner; comparing against the
   // session's active hash avoids leaving it spinning when the start failed.
@@ -2991,8 +3012,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <div className="player__audio-notice">
             <AlertTriangle size={14} />
             <span>
-              This stream needs conversion to play here, and the media components are
-              missing. Install them in Settings to enable Matroska, HEVC and Dolby audio.
+              {isDeveloper
+                ? 'This stream needs conversion to play here, and the media components are missing. Install them in Settings to enable Matroska, HEVC and Dolby audio.'
+                : 'This file needs extra components to play here. You can install them in Settings.'}
             </span>
           </div>
         )}
@@ -3147,8 +3169,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {isBuffering && !error && !switchingTo && !switchError && !isResolving && !isInspecting && (
         <div className="player__overlay">
           <Loader2 className="spin" size={36} />
-          <p>Buffering from peers…</p>
-          {stats && (
+          {/* A swarm is a torrent's story. Said of an HTTP stream it is simply
+              untrue, and said to a viewer it is a word they did not ask to
+              learn — so the peer count and the swarm go together, behind the
+              mode, and standard mode gets the one fact that is always true. */}
+          <p>{isDeveloper ? 'Buffering from peers…' : 'Buffering…'}</p>
+          {stats && isDeveloper && (
             <span className="muted">
               {formatTransferRate(stats.downloadSpeed)} · {stats.peers} peer
               {stats.peers === 1 ? '' : 's'} · {(stats.progress * 100).toFixed(1)}%
@@ -3156,10 +3182,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           )}
           {stats?.isStalled && (
             <>
+              {/* Stalled is not a diagnostic, it is the reason the viewer is
+                  still looking at a spinner — so it is said in both modes, and
+                  only the swarm arithmetic behind it is held back. */}
               <span className="muted">
-                Nothing has arrived for {Math.round(stats.stalledMs / 1000)}s
-                {stats.peers === 0 ? ' and no peers have connected' : ''}. This swarm
-                is probably dead.
+                {isDeveloper ? (
+                  <>
+                    Nothing has arrived for {Math.round(stats.stalledMs / 1000)}s
+                    {stats.peers === 0 ? ' and no peers have connected' : ''}. This swarm
+                    is probably dead.
+                  </>
+                ) : (
+                  <>Nothing is arriving from this source. Another one should work.</>
+                )}
               </span>
               <div className="player__overlay-actions">
                 {/* A dead swarm is the case where downloading is *also* the
@@ -3171,7 +3206,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </div>
             </>
           )}
-          {stats && !stats.isStalled && stats.peers === 0 && (
+          {stats && !stats.isStalled && stats.peers === 0 && isDeveloper && (
             <span className="muted">
               No peers yet. If this persists the swarm may be dead — try a source with more seeders.
             </span>
@@ -3428,7 +3463,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
         {stats && (
           <div className="player__stats">
-            <span title="Peers"><Users size={14} /> {stats.peers}</span>
+            {isDeveloper && (
+              <span title="Peers"><Users size={14} /> {stats.peers}</span>
+            )}
+            {/* The rate stays in both modes: it is how fast the film is
+                arriving, which is a fact about their evening rather than about
+                our swarm. */}
             <span title="Download speed"><Gauge size={14} /> {formatTransferRate(stats.downloadSpeed)}</span>
           </div>
         )}

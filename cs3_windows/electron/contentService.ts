@@ -20,6 +20,8 @@ import {
 import { TorrentEngine, type StreamHandle } from './torrent/torrentEngine';
 import { directSourceIdentity, infoHashFromMagnet } from './torrent/indexers/base';
 import { YtDlpEngine } from './ytdlpEngine';
+import { pickPromoStream } from './ytdlpSources';
+import type { PromoResolution } from '../src/types/metadata';
 import { looksLikeWebPage, mapYtDlpInfo } from './ytdlpSources.ts';
 import { parseReleaseName } from './torrent/releaseParser';
 import type { DatastoreManager } from './datastore';
@@ -32,6 +34,7 @@ import {
 } from './pluginManager';
 import { SourceCache } from './sourceCache';
 import { MediaProxy } from './mediaProxy';
+import type { MediaTranscoder } from './mediaTranscoder';
 import { DetailCache } from './detailCache';
 import { mergeSearchResults } from './searchMerge';
 import { rawFetch } from './torrent/http';
@@ -410,8 +413,152 @@ export class ContentService {
     this.snapshots = store;
   }
 
+  /**
+   * The transcoder, for the one case that needs two inputs muxed.
+   *
+   * Injected after construction rather than owned, for `ProviderRanking`'s
+   * reason: `main.ts` builds both and each would otherwise need the other
+   * first. Optional throughout — without it `resolvePromoVideo` falls back to a
+   * single progressive stream, which is lower quality and less reliable but
+   * needs nothing installed.
+   */
+  public setTranscoder(transcoder: MediaTranscoder): void {
+    this.transcoder = transcoder;
+  }
+
+  private transcoder: MediaTranscoder | null = null;
+
   public getProxy(): MediaProxy {
     return this.proxy;
+  }
+
+  /**
+   * A trailer page, turned into something this app's own player can open.
+   *
+   * ## Why this is not a source
+   *
+   * It goes nowhere near `getSources`, the source cache, the ranker or the
+   * download identity, and that separation is the point. AGENTS.md's standing
+   * rule is that **a trailer standing in for a feature is a synthetic source**
+   * — the reason `ytsearch1:<query> official trailer` was removed from the
+   * yt-dlp lane and the reason Internet Archive sinks trailers below features.
+   * That rule is about a trailer being offered when somebody asked for the
+   * film. Here somebody asked for the trailer, by pressing it, in a section
+   * labelled Trailers. Nothing this returns can reach a source list.
+   *
+   * ## What comes back, and why it is already proxied
+   *
+   * A loopback URL, because the extractor negotiates headers the `<video>`
+   * element cannot send — the same argument `startStream` makes for provider
+   * links. `MediaProxy.wrap` applies them, and the renderer then hands the
+   * result to `media:prepare` exactly like any other stream: that stays the
+   * only source of a playable URL, and a loopback address is returned from
+   * `wrap` untouched, so there is no second hop.
+   *
+   * `duration` and `upload_date` are taken from the same reply because they are
+   * already in it. Nothing keyless publishes a trailer's length at a sane cost
+   * (see `metadata/youtube.ts`), so this is where a card eventually gets one.
+   */
+  public async resolvePromoVideo(
+    pageUrl: string,
+    signal?: AbortSignal
+  ): Promise<PromoResolution> {
+    if (!pageUrl) return { ok: false, error: 'No video address was given.' };
+
+    if (!this.ytdlp.isAvailable()) {
+      // Named as a missing component rather than a failure, so the UI can offer
+      // the install instead of reporting that the trailer is broken.
+      return {
+        ok: false,
+        needsComponents: true,
+        error: 'Playing trailers needs yt-dlp. Settings → Components can install it.',
+      };
+    }
+
+    const resolution = await this.ytdlp.resolve(pageUrl, { signal, timeoutMs: 25_000 });
+    if (!resolution.ok) return { ok: false, error: resolution.error };
+
+    const stream = pickPromoStream(resolution.info, Boolean(this.transcoder?.isAvailable()));
+    if (!stream) {
+      return { ok: false, error: 'That video has no stream this app can play.' };
+    }
+
+    /**
+     * Both halves go through the proxy first, and ffmpeg is handed the loopback
+     * addresses.
+     *
+     * That keeps the two concerns apart: the proxy knows how to attach the
+     * headers the extractor negotiated, and the transcoder knows how to mux.
+     * Threading headers into ffmpeg's argument list instead would have put a
+     * second, differently-spelled copy of the header logic in the one place
+     * that is hardest to test.
+     */
+    const videoUrl = await this.proxy.wrap(stream.url, stream.headers, {
+      // YouTube's DASH rungs refuse an absent or open-ended `Range`; see
+      // `Route.boundedRanges` for the measurement. Only the paired form needs
+      // it — a single progressive file is an ordinary origin.
+      boundedRanges: Boolean(stream.audioUrl),
+    });
+
+    let streamUrl = videoUrl;
+    if (stream.audioUrl && this.transcoder) {
+      const audioUrl = await this.proxy.wrap(
+        stream.audioUrl,
+        stream.audioHeaders ?? stream.headers,
+        { boundedRanges: true }
+      );
+      const merged = await this.transcoder.createSession(
+        videoUrl,
+        // Copy, copy. Both streams are already H.264 and AAC — the only work
+        // here is putting them in one container, which costs no encoding.
+        {
+          videoAction: 'copy',
+          audioAction: 'copy',
+          selectedAudioIndex: 0,
+          containerAction: 'mp4_fragmented',
+          subtitleAction: 'ignore',
+        },
+        'progressive',
+        { audioUrl }
+      );
+      // A null session means ffmpeg is unavailable after all; the progressive
+      // fallback below is worse but real, and refusing outright would be worse
+      // than both.
+      if (merged) streamUrl = merged;
+    }
+
+    /**
+     * Author-supplied subtitles only, and only WebVTT.
+     *
+     * `<track>` rejects anything else silently — the same trap
+     * `subtitleService` documents for SubRip — and the proxy is what makes them
+     * readable cross-origin at all.
+     */
+    const subtitles: Array<{ name: string; url: string }> = [];
+    for (const [language, tracks] of Object.entries(resolution.info.subtitles ?? {})) {
+      const vtt = tracks?.find((track) => track.ext === 'vtt' && track.url);
+      if (!vtt?.url) continue;
+      subtitles.push({
+        name: vtt.name || language,
+        url: await this.proxy.wrap(vtt.url, stream.headers),
+      });
+      if (subtitles.length >= 8) break;
+    }
+
+    const uploaded = resolution.info.upload_date;
+    return {
+      ok: true,
+      streamUrl,
+      title: resolution.info.title?.trim() || 'Trailer',
+      durationSeconds: resolution.info.duration,
+      // yt-dlp spells it `YYYYMMDD`; everything downstream reads ISO.
+      publishedAt: /^[0-9]{8}$/.test(uploaded ?? '')
+        ? `${uploaded!.slice(0, 4)}-${uploaded!.slice(4, 6)}-${uploaded!.slice(6, 8)}`
+        : undefined,
+      subtitles,
+      isM3u8: stream.isM3u8,
+      isDash: stream.isDash,
+    };
   }
 
   /** Owns a socket, so it is wired into app shutdown like the other services. */
@@ -691,6 +838,41 @@ export class ContentService {
         request.episode ?? fromUrl.episode
       ).fresh.length > 0
     );
+  }
+
+  /**
+   * What the cache holds for this address, for a card that wants to say so.
+   *
+   * Distinct from {@link hasFreshSources}, which answers a yes/no for the
+   * prefetcher. A card has to tell two situations apart that both look like
+   * "there is an entry": links that still work, and an entry whose links have
+   * all expired. The second is a title that will play after a pause, and
+   * badging it "ready" is how a viewer learns the app's readiness claim means
+   * nothing.
+   *
+   * A `peek` for the same reason: this is asked once per row on a scrolled
+   * grid, and a read that promoted entries would make drawing the screen change
+   * what the cache evicts.
+   */
+  public peekSourceReadiness(
+    mediaUrl: string
+  ): { ready: number; expired: boolean } | undefined {
+    if (!mediaUrl || mediaUrl.startsWith('magnet:')) return undefined;
+    const fromUrl = parseEpisodeParams(mediaUrl);
+    const base = stripQuery(mediaUrl);
+    // Both scopes, because a widened run is stored beside the scoped one and a
+    // title whose sources were found by widening is just as ready.
+    for (const scope of ['origin', 'all'] as const) {
+      const hit = this.cache.peek(
+        this.cacheUrlFor(base, scope),
+        fromUrl.season,
+        fromUrl.episode
+      );
+      if (!hit.hit) continue;
+      if (hit.fresh.length > 0) return { ready: hit.fresh.length, expired: false };
+      if (hit.expired.length > 0) return { ready: 0, expired: true };
+    }
+    return undefined;
   }
 
   /** Identity of a discovery run, so two callers asking the same thing share one. */

@@ -13,6 +13,10 @@ import { SourceScopeDialog } from './search/SourceScopeDialog';
 import { SourceProfileBar, type ProfileSummary } from './search/SourceProfileBar';
 import { healthIndex, type ProviderHealth } from './search/providerHealth';
 import {
+  areAllFilteredSelected,
+  excludeSection,
+  getFilteredMembers,
+  includeSection,
   stateOf,
   type ChosenSource,
   type Facets,
@@ -424,11 +428,15 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
           continue;
         }
 
-        // One archive, one provider, same name: two rows for one thing. This is
-        // the "duplicate" in the source list, and it is a rendering artefact
-        // rather than a registration bug — collapse it into a single row.
+        const matching =
+          searching && !extMatches
+            ? active.filter((provider) => provider.name.toLowerCase().includes(needle))
+            : active;
+        if (searching && !extMatches && matching.length === 0) continue;
+
         if (active.length === 1 && normalise(active[0].name) === normalise(ext.name)) {
           if (searching && !extMatches && !active[0].name.toLowerCase().includes(needle)) continue;
+          repoMembers.push(active[0].name);
           children.push({
             key: extKey,
             kind: 'leaf',
@@ -441,18 +449,15 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
           continue;
         }
 
-        const matching =
-          searching && !extMatches
-            ? active.filter((provider) => provider.name.toLowerCase().includes(needle))
-            : active;
-        if (searching && !extMatches && matching.length === 0) continue;
+        const extMatchingMembers = matching.map((provider) => provider.name);
+        repoMembers.push(...extMatchingMembers);
 
         children.push({
           key: extKey,
           kind: 'ext',
           depth: 1,
           label: ext.name,
-          members: active.map((provider) => provider.name),
+          members: extMatchingMembers,
           expanded: isOpen(extKey),
           isIndexer: false,
         });
@@ -499,12 +504,13 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
 
     if (matchingIndexers.length > 0) {
       const groupKey = 'group:indexers';
+      const indexerMembers = matchingIndexers.map((indexer) => indexer.id);
       out.push({
         key: groupKey,
         kind: 'repo',
         depth: 0,
         label: 'Torrent sources',
-        members: indexers.map((indexer) => indexer.id),
+        members: indexerMembers,
         expanded: isOpen(groupKey),
         title: 'Torrent indexers answer when finding something to play, not while searching titles — unless you scope the search to them',
         isIndexer: true,
@@ -548,6 +554,72 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       return next;
     });
   };
+
+  const filteredMembers = useMemo(() => getFilteredMembers(rows), [rows]);
+  const isFiltered = facetsActive || deferredQuery.trim().length > 0;
+  const filteredCount = filteredMembers.providers.length + filteredMembers.indexers.length;
+  const allFilteredSelected = useMemo(
+    () => areAllFilteredSelected(filteredMembers, providers, chosenIndexers),
+    [filteredMembers, providers, chosenIndexers]
+  );
+
+  const selectAllFiltered = useCallback(() => {
+    const nextProviders = new Set(providers);
+    const nextIndexers = new Set(chosenIndexers);
+    for (const p of filteredMembers.providers) nextProviders.add(p);
+    for (const i of filteredMembers.indexers) nextIndexers.add(i);
+    persist(nextProviders, nextIndexers);
+  }, [providers, chosenIndexers, filteredMembers, persist]);
+
+  const unselectAllFiltered = useCallback(() => {
+    const nextProviders = new Set(providers);
+    const nextIndexers = new Set(chosenIndexers);
+    for (const p of filteredMembers.providers) nextProviders.delete(p);
+    for (const i of filteredMembers.indexers) nextIndexers.delete(i);
+    persist(nextProviders, nextIndexers);
+  }, [providers, chosenIndexers, filteredMembers, persist]);
+
+  const clearAllChosen = useCallback(() => {
+    persist(new Set(), new Set());
+  }, [persist]);
+
+  const handleIncludeSection = useCallback((row: Row) => {
+    const next = includeSection(row, providers, chosenIndexers);
+    persist(next.providers, next.indexers);
+  }, [providers, chosenIndexers, persist]);
+
+  const handleExcludeSection = useCallback((row: Row) => {
+    const next = excludeSection(row, providers, chosenIndexers);
+    persist(next.providers, next.indexers);
+  }, [providers, chosenIndexers, persist]);
+
+  const handleExpandAll = useCallback(() => {
+    setCollapsed(new Set());
+  }, []);
+
+  const handleCollapseAll = useCallback(() => {
+    const allKeys = new Set<string>();
+    for (const row of rows) {
+      if (row.kind === 'repo' || row.kind === 'ext') {
+        allKeys.add(row.key);
+      }
+    }
+    setCollapsed(allKeys);
+  }, [rows]);
+
+  const handleSelectAllFacetGroup = useCallback((group: keyof FacetSelection) => {
+    if (group === 'types') {
+      setFacets((prev) => ({ ...prev, types: new Set(available.types) }));
+    } else if (group === 'languages') {
+      setFacets((prev) => ({ ...prev, languages: new Set(available.languages) }));
+    } else if (group === 'kinds') {
+      setFacets((prev) => ({ ...prev, kinds: new Set(['extension', 'indexer']) }));
+    }
+  }, [available]);
+
+  const handleClearFacetGroup = useCallback((group: keyof FacetSelection) => {
+    setFacets((prev) => ({ ...prev, [group]: new Set() }));
+  }, []);
 
   const totalChosen = providers.size + chosenIndexers.size;
   const totalAvailable = universe.providers.length + universe.indexers.length;
@@ -620,6 +692,8 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
           facetsActive={facetsActive}
           onToggleFacet={toggleFacet}
           onClearFacets={() => setFacets(EMPTY_SELECTION)}
+          onSelectAllFacetGroup={handleSelectAllFacetGroup}
+          onClearFacetGroup={handleClearFacetGroup}
           query={query}
           onQueryChange={setQuery}
           providers={providers}
@@ -627,6 +701,12 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
           chosen={chosen}
           totalChosen={totalChosen}
           totalAvailable={totalAvailable}
+          isFiltered={isFiltered}
+          filteredCount={filteredCount}
+          allFilteredSelected={allFilteredSelected}
+          onSelectAllFiltered={selectAllFiltered}
+          onUnselectAllFiltered={unselectAllFiltered}
+          onClearAllChosen={clearAllChosen}
           hasExtensions={universe.providers.length > 0}
           hasIndexers={indexers.length > 0}
           progress={progress}
@@ -634,6 +714,10 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
           loaded={loaded}
           onToggleRow={toggleRow}
           onToggleCollapse={toggleCollapse}
+          onIncludeSection={handleIncludeSection}
+          onExcludeSection={handleExcludeSection}
+          onExpandAll={handleExpandAll}
+          onCollapseAll={handleCollapseAll}
           onDeselect={deselect}
           onSelectAll={() => persist(new Set(universe.providers), new Set(universe.indexers))}
           /* Reset is now "switch to All sources", which keeps the selection

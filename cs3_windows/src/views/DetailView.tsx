@@ -24,7 +24,10 @@ import { CopyErrorButton } from '../components/CopyErrorButton';
 import { ProviderRecoveryPanel } from '../components/ProviderRecoveryPanel';
 import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
 import { TitleMetadata } from '../components/detail/TitleMetadata';
-import type { ExtendedMetadata } from '../types/metadata';
+import { TrailerGallery } from '../components/detail/TrailerGallery';
+import { useTitleInteractions } from '../components/useTitleInteractions';
+import { shouldRetryOnOpen } from '../utils/cardState';
+import type { ExtendedMetadata, TitleVideo } from '../types/metadata';
 import { formatRuntimeMinutes } from '../utils/metadataDisplay';
 import { ShareButton } from '../components/ShareButton';
 import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
@@ -40,6 +43,21 @@ export interface PlaybackRequest {
   subtitles: Array<{ name: string; url: string }>;
   /** Series context, so the player can show episodes and offer next/previous. */
   series?: SeriesContext;
+  /**
+   * A trailer or featurette rather than the title itself.
+   *
+   * The only thing the player needs to know about a promo, and it exists for
+   * one control: Download. A trailer's `streamUrl` is a loopback address minted
+   * for this session, so a download built from it would be a task pointing at
+   * an address that dies when the app closes — a button that produces a broken
+   * transfer is worse than no button.
+   *
+   * Everything else that would be wrong for a trailer is already absent rather
+   * than suppressed: no `progress` means nothing reaches the library or
+   * Continue Watching, no `series` means no episode panel, no `sources` means
+   * no source list.
+   */
+  promo?: boolean;
   /** Identity for recording watch progress, and where to resume from. */
   progress?: {
     mediaUrl: string;
@@ -205,6 +223,23 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
   /** The catalogues are being asked and have not finished. See the effect. */
   const [metadataPending, setMetadataPending] = useState(false);
+
+  /**
+   * Card states for the "More like this" rail, and for this title itself.
+   *
+   * The page's own row is included so {@link shouldRetryOnOpen} has something
+   * to read: the retry decision is about *this* title, and the rail happens to
+   * be the other thing on screen that needs the same lookup.
+   */
+  const { interactionFor } = useTitleInteractions(
+    useMemo(
+      () => [
+        { url: mediaItem.url, name: mediaItem.name, year: mediaItem.year },
+        ...(detail?.recommendations ?? []),
+      ],
+      [mediaItem.url, mediaItem.name, mediaItem.year, detail?.recommendations]
+    )
+  );
 
   /** How the background source search for this page is getting on. */
   const [prefetch, setPrefetch] = useState<PrefetchState | null>(null);
@@ -400,6 +435,17 @@ export const DetailView: React.FC<DetailViewProps> = ({
           setServedFromSnapshot(null);
           setDisabledProvider(null);
           window.cloudstream?.recordTitleOutcome?.(mediaItem.url, 'played');
+
+          /*
+           * The page opened — which is what "visited" means on a card.
+           *
+           * Recorded here rather than when the view mounts, deliberately: a
+           * mount happens for a row whose every route then fails, and marking
+           * that as visited would dim a card the viewer never got to see
+           * anything on. Keyed on the title and year, so the same film dims
+           * wherever it appears rather than only on the row that was clicked.
+           */
+          void window.cloudstream?.recordTitleVisit?.(data.name, data.year);
 
           // Record detail opened event in history (Unchecked until user plays/downloads)
           window.cloudstream?.recordHistoryEvent?.({
@@ -783,13 +829,19 @@ export const DetailView: React.FC<DetailViewProps> = ({
   }, []);
 
   const openSources = useCallback(
-    async (episode: Episode | null, options: { refresh?: boolean } = {}) => {
+    async (
+      episode: Episode | null,
+      options: { refresh?: boolean; quiet?: boolean } = {}
+    ) => {
       if (!window.cloudstream || !detail) return;
 
       stopDiscovery();
 
       setPendingEpisode(episode);
-      setPickerOpen(true);
+      // `quiet` is the automatic retry below: it wants the search, not the
+      // dialog. A picker that opens by itself when a page loads is the app
+      // taking over the screen to do something nobody asked for.
+      if (!options.quiet) setPickerOpen(true);
       setPickerError(undefined);
       setPickerData(null);
       setDiscovery(null);
@@ -1208,6 +1260,81 @@ export const DetailView: React.FC<DetailViewProps> = ({
    */
   const playNow = playEpisodeDirectly;
 
+  /**
+   * A title that failed last time gets one fresh look, quietly (PRD-46 §9).
+   *
+   * The badge on the card says "no playable source found", and the worst thing
+   * the app can do next is open the page and repeat last week's verdict from a
+   * cache. Discovery does not cache an *empty* answer, so the common case
+   * already re-asks — what this covers is the entry full of expired links,
+   * which would otherwise be served, fail one at a time, and look like the
+   * badge being right.
+   *
+   * Once per page, and never for a title that worked: re-running a full fan-out
+   * across third-party sites every time somebody opens something they like is
+   * the version of this that gets an IP blocked.
+   */
+  const retriedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!detail?.url) return;
+    if (retriedFor.current === detail.url) return;
+    if (!shouldRetryOnOpen(interactionFor(mediaItem))) return;
+    retriedFor.current = detail.url;
+    void openSources(null, { refresh: true, quiet: true });
+  }, [detail?.url, interactionFor, mediaItem, openSources]);
+
+
+  /**
+   * Plays a trailer, through the app's own player.
+   *
+   * Two steps, both existing machinery. `videos:resolve` runs yt-dlp and hands
+   * back a proxied provider URL; `onPlay` is the same `PlaybackRequest` path a
+   * chosen source takes, so the trailer gets the real player — fullscreen,
+   * seek, speed, volume, the floating modes and the failure overlay — with
+   * nothing added to it.
+   *
+   * What is deliberately *omitted* from the request is what makes it a trailer
+   * rather than a title: no `progress`, so nothing is written to the library or
+   * to Continue Watching; no `series`; no `sources`. `promo` withholds the
+   * download button, which would otherwise offer to download a loopback address
+   * that dies with the session.
+   */
+  const [resolvingVideo, setResolvingVideo] = useState<string | null>(null);
+  const playTrailer = useCallback(
+    async (video: TitleVideo) => {
+      setResolvingVideo(video.id);
+      try {
+        const resolved = await window.cloudstream?.resolvePromoVideo?.(video.url);
+        if (!resolved?.ok || !resolved.streamUrl) {
+          // Named, never silent. The reasons are genuinely different actions:
+          // a missing component is an install, a removed video is nothing.
+          flash(
+            resolved?.needsComponents
+              ? 'Playing trailers needs yt-dlp — you can install it in Settings.'
+              : (resolved?.error ?? 'That trailer could not be opened.')
+          );
+          return;
+        }
+        onPlay({
+          streamUrl: resolved.streamUrl,
+          mimeType: resolved.isM3u8 ? 'application/x-mpegURL' : 'video/mp4',
+          // The video's own title, not the film's: the player's header should
+          // say which trailer is playing.
+          title: resolved.title || video.label,
+          episodeTitle: detail?.name,
+          // Synthetic and prefixed, so `hasRealInfoHash` reports false and the
+          // player does not draw a swarm readout for an HTTP stream.
+          infoHash: `ext-${video.id}`,
+          subtitles: resolved.subtitles ?? [],
+          promo: true,
+        });
+      } finally {
+        setResolvingVideo(null);
+      }
+    },
+    [detail?.name, flash, onPlay]
+  );
+
   const handlePlaySource = useCallback(
     async (source: TorrentResult) => {
       if (!window.cloudstream || !detail) return;
@@ -1608,6 +1735,23 @@ export const DetailView: React.FC<DetailViewProps> = ({
         the debut date, the production notes — comes from `metadata:*`, after
         this page has already drawn.
       */}
+      {/*
+        Trailers, between the primary action and the reading.
+
+        PRD-45 asks for this "below the metadata and above the source discovery
+        area". This app has no inline source area — the picker is a dialog — so
+        the equivalent position is after the hero and the episode list, which
+        are what somebody came to press, and before the cast and the production
+        notes, which are what they came to read. That is also where every
+        streaming service puts it.
+      */}
+      <TrailerGallery
+        videos={extended?.videos}
+        pending={metadataPending}
+        onPlay={(video) => void playTrailer(video)}
+        resolvingId={resolvingVideo}
+      />
+
       <TitleMetadata
         metadata={extended}
         fallbackActors={detail.actors}
@@ -1628,6 +1772,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
                 // reliably have — a recommendation is a pointer, not a result
                 // the user searched for.
                 showBucketButton={false}
+                interaction={interactionFor(item)}
               />
             ))}
           </div>

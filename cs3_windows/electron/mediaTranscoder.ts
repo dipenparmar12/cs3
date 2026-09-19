@@ -102,6 +102,19 @@ interface Session {
   url: string;
   transport: MediaTransport;
   plan: TransformationPlan;
+  /**
+   * A second input carrying the audio, muxed with `url`'s video.
+   *
+   * Only ever set for a source whose video and audio arrive as *separate*
+   * addresses — which in practice means YouTube, whose progressive rung is now
+   * refused for most videos while its DASH rungs answer normally. See
+   * `ContentService.resolvePromoVideo`.
+   *
+   * Optional and unset by every other caller, so nothing about an ordinary
+   * playback session changes: with no `audioUrl` the argument list below is
+   * byte-for-byte what it was.
+   */
+  audioUrl?: string;
 }
 
 export class MediaTranscoder {
@@ -240,7 +253,8 @@ export class MediaTranscoder {
   public async createSession(
     url: string,
     plan: TransformationPlan,
-    transport: MediaTransport = 'progressive'
+    transport: MediaTransport = 'progressive',
+    options: { audioUrl?: string } = {}
   ): Promise<string | null> {
     if (!this.isAvailable()) return null;
     await this.ensureServer();
@@ -251,7 +265,7 @@ export class MediaTranscoder {
     }
 
     const token = String(this.nextToken++);
-    this.sessions.set(token, { url, plan, transport });
+    this.sessions.set(token, { url, plan, transport, audioUrl: options.audioUrl });
     return `http://127.0.0.1:${this.port}/media/${token}`;
   }
 
@@ -439,10 +453,22 @@ export class MediaTranscoder {
       // Before -i: seeks by keyframe without decoding everything up to it.
       ...(seekSeconds > 0 ? ['-ss', String(seekSeconds)] : []),
       '-i', session.url,
+      /**
+       * A second input, for a source whose audio has its own address.
+       *
+       * The same `-ss` applies to it: it is placed before `-i` once and ffmpeg
+       * carries it to every input that follows, so both streams start at the
+       * seek point and stay in sync.
+       */
+      ...(session.audioUrl ? ['-i', session.audioUrl] : []),
       '-map', '0:v:0',
-      ...(plan.selectedAudioIndex >= 0
-        ? ['-map', `0:a:${plan.selectedAudioIndex}?`]
-        : ['-an']),
+      ...(session.audioUrl
+        ? // The whole point of the second input: take its audio, not the first
+          // input's, which has none.
+          ['-map', '1:a:0']
+        : plan.selectedAudioIndex >= 0
+          ? ['-map', `0:a:${plan.selectedAudioIndex}?`]
+          : ['-an']),
       ...videoArgs,
       ...audioArgs,
       // Timestamps from a scraped stream are routinely broken; without this an

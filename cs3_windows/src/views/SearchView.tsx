@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTitleInteractions } from '../components/useTitleInteractions';
 import { EmptyState } from '../components/EmptyState';
 import type { SearchResponse } from '../types/api';
 import { TYPE_TABS, matchesTab, tabsFor } from '../utils/contentTypes';
@@ -501,6 +502,14 @@ const Grid: React.FC<{
 }> = ({ items, onSelectMedia, onPlayDirectly }) => {
   const outcomes = useTitleOutcomes();
   /**
+   * Card states for every row on screen.
+   *
+   * `outcomes` above is still read, because `partitionDeadRows` needs the raw
+   * verdict to decide what to *hide* — a different question from what to badge,
+   * and one that has to be answered before this list exists.
+   */
+  const { interactionFor } = useTitleInteractions(items);
+  /**
    * Per mount, not persisted.
    *
    * "Show me the dead ones too" is a decision about this search, not a
@@ -528,7 +537,7 @@ const Grid: React.FC<{
             item={item}
             onSelectMedia={onSelectMedia}
             onPlayDirectly={onPlayDirectly}
-            outcome={outcomes[item.url]}
+            interaction={interactionFor(item)}
           />
         ))}
       </div>

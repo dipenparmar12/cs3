@@ -1,4 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
+import { useIsDeveloper } from '../../utils/ExperienceModeContext';
 import { Poster } from '../Poster';
 import {
   Bookmark as BookmarkIcon,
@@ -175,6 +176,7 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   onDownloadSeason,
   libraryControl,
 }) => {
+  const isDeveloper = useIsDeveloper();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuWrapper = useRef<HTMLDivElement | null>(null);
 
@@ -421,14 +423,22 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
                   <SearchCheck size={14} />
                   <span>
                     <strong>Find more sources</strong>
-                    <em>Ask every enabled provider again, ignoring the cache.</em>
+                    <em>
+                      {isDeveloper
+                        ? 'Ask every enabled provider again, ignoring the cache.'
+                        : 'Look for this everywhere, not just where it was found.'}
+                    </em>
                   </span>
                 </button>
                 <button role="menuitem" onClick={run(onRefreshSources)}>
                   <RefreshCw size={14} />
                   <span>
                     <strong>Refresh sources</strong>
-                    <em>Replace expired links, keeping the ones that still work.</em>
+                    <em>
+                      {isDeveloper
+                        ? 'Replace expired links, keeping the ones that still work.'
+                        : 'Check the sources still work, and replace the ones that do not.'}
+                    </em>
                   </span>
                 </button>
                 {onSearchTitle && (

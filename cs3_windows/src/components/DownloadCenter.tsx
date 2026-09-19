@@ -1,4 +1,6 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { useIsDeveloper } from '../utils/ExperienceModeContext';
+import { plainMessage } from '../utils/experienceMode';
 import { EmptyState } from './EmptyState';
 import { useFlash } from '../utils/useFlash';
 import type { DownloadTask } from '../types/download';
@@ -85,6 +87,7 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
   onOpenTitle,
   isEpisode = false,
 }) => {
+  const isDeveloper = useIsDeveloper();
   const { message: copiedMeta, flash: setCopiedMeta } = useFlash<boolean>(2500);
 
   const percent =
@@ -215,7 +218,8 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
               they are about to pause.
             */}
             <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
-              {variantLabel(variantFromTask(task)) || `Provider: ${task.providerName || 'aria2c'}`}
+              {variantLabel(variantFromTask(task)) ||
+                `Provider: ${task.providerName || 'Direct download'}`}
               {task.totalBytes > 0 ? ` • ${formatDownloadSize(task.totalBytes)}` : ''}
             </span>
           </div>
@@ -290,7 +294,7 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
               margin: 0,
             }}
           >
-            {task.errorMessage}
+            {isDeveloper ? task.errorMessage : plainMessage(task.errorMessage).summary}
           </p>
         )}
       </div>
@@ -366,6 +370,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   onOpenTitle,
   onPlayFile,
 }) => {
+  const isDeveloper = useIsDeveloper();
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [activeFilter, setActiveFilter] = useState<DownloadFilterTab>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -632,7 +637,9 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
             Download Manager
           </h2>
           <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-            High-speed multi-threaded downloads via aria2c daemon engine
+            {isDeveloper
+              ? 'High-speed multi-threaded downloads via aria2c daemon engine'
+              : 'Films and episodes you have saved to watch offline'}
           </p>
         </div>
 

@@ -338,14 +338,38 @@ export function mergeNotes(lists: ProductionNote[][]): ProductionNote[] {
 
 /** Videos from several sources, deduplicated on URL. */
 export function mergeVideos(lists: TitleVideo[][]): TitleVideo[] {
-  const byUrl = new Map<string, TitleVideo>();
+  /**
+   * Keyed on the id, not the URL.
+   *
+   * The same video reaches this from several directions with different
+   * spellings of its address — Cinemeta publishes it under both `trailers` and
+   * `trailerStreams`, AniList gives a bare id, and a provider may hand back a
+   * `youtu.be` short link. Those are one trailer, and a URL key would draw it
+   * three times.
+   */
+  const byId = new Map<string, TitleVideo>();
   for (const list of lists) {
     for (const video of list) {
-      if (!video.url) continue;
-      if (!byUrl.has(video.url)) byUrl.set(video.url, video);
+      if (!video?.id || !video.url) continue;
+      const existing = byId.get(video.id);
+      if (!existing) {
+        byId.set(video.id, video);
+        continue;
+      }
+      // Two catalogues offering one video: keep the richer record and record
+      // both as sources, so provenance survives the collapse.
+      byId.set(video.id, {
+        ...existing,
+        title: existing.title || video.title,
+        thumbnailUrl: existing.thumbnailUrl ?? video.thumbnailUrl,
+        publisher: existing.publisher ?? video.publisher,
+        durationSeconds: existing.durationSeconds ?? video.durationSeconds,
+        publishedAt: existing.publishedAt ?? video.publishedAt,
+        sources: [...new Set([...(existing.sources ?? []), ...(video.sources ?? [])])],
+      });
     }
   }
-  return [...byUrl.values()];
+  return [...byId.values()];
 }
 
 /**

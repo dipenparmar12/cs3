@@ -45,7 +45,12 @@ import type {
 } from '../src/types/torrent';
 import type { OfficialRepository } from './officialRepositories';
 import type { MetadataDetail } from './metadataProvider';
-import type { ExtendedMetadata } from '../src/types/metadata';
+import type { ExtendedMetadata, PromoResolution } from '../src/types/metadata';
+import type {
+  TitleInteraction,
+  TitleInteractionQuery,
+  VisitRecord,
+} from '../src/types/interactions';
 import type { EnrichmentRequest } from './metadata/enrichmentService';
 import type { SourceResponse, StreamAttempt } from './contentService';
 import type {
@@ -245,8 +250,35 @@ export interface CloudStreamElectronAPI {
   ) => Promise<Envelope & { metadata: ExtendedMetadata | null; stale: boolean }>;
   /** Fires as each catalogue lands, with a fuller record. Returns a disposer. */
   onExtendedMetadata: (callback: (metadata: ExtendedMetadata) => void) => () => void;
+  /**
+   * What the app already knows about each of these titles, for their cards.
+   *
+   * Batched deliberately: a catalogue page is forty posters and this reads five
+   * in-memory maps, so forty round trips would be the cost of drawing one
+   * screen. Keyed on the `url` each row asked with, because that is what the
+   * caller holds per card.
+   */
+  summariseInteractions: (
+    queries: TitleInteractionQuery[]
+  ) => Promise<Envelope & { interactions: Record<string, TitleInteraction> }>;
+  /** Records that a details page was opened. Keyed on the work, not the address. */
+  recordTitleVisit: (
+    title: string,
+    year?: number
+  ) => Promise<Envelope & { visit: VisitRecord | null }>;
+  /** Forgets which titles have been opened. Returns how many there were. */
+  clearTitleVisits: () => Promise<Envelope & { cleared: number }>;
   /** Drops every cached record. Returns how many there were. */
   clearExtendedMetadata: () => Promise<Envelope & { cleared: number }>;
+  /**
+   * Turns a trailer's page address into a stream the player can open.
+   *
+   * Spawns yt-dlp, so it is a press rather than a page load — 1–3 seconds, and
+   * the card shows it. The reply is a *proxied provider URL*, not a playable
+   * one: the caller passes it to {@link preparePlaybackStream} exactly like
+   * every other source.
+   */
+  resolvePromoVideo: (pageUrl: string) => Promise<PromoResolution>;
   getSources: (request: {
     mediaUrl: string;
     season?: number;
@@ -1846,7 +1878,11 @@ const api: CloudStreamElectronAPI = {
   getExtendedMetadata: (request) => ipcRenderer.invoke('metadata:getExtended', request),
   peekExtendedMetadata: (url) => ipcRenderer.invoke('metadata:peekExtended', url),
   onExtendedMetadata: (callback) => subscribe('metadata:extendedUpdate', callback),
+  summariseInteractions: (queries) => ipcRenderer.invoke('interactions:summarise', queries),
+  recordTitleVisit: (title, year) => ipcRenderer.invoke('interactions:visit', title, year),
+  clearTitleVisits: () => ipcRenderer.invoke('interactions:clearVisits'),
   clearExtendedMetadata: () => ipcRenderer.invoke('metadata:clearCache'),
+  resolvePromoVideo: (pageUrl) => ipcRenderer.invoke('videos:resolve', pageUrl),
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),
 

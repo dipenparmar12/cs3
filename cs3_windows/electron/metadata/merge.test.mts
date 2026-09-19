@@ -347,9 +347,36 @@ test('the same passage from two sources appears once', () => {
   assert.equal(merged.length, 1);
 });
 
-test('videos deduplicate on URL', () => {
-  const video = { title: 'Trailer', url: 'https://y/1', kind: 'trailer' as const, host: 'youtube' as const };
-  assert.equal(mergeVideos([[video], [{ ...video, title: 'Official Trailer' }]]).length, 1);
+test('videos deduplicate on id, not on the address', () => {
+  const video = {
+    id: 'youtube:abc12345678',
+    title: 'Trailer',
+    label: 'Trailer',
+    url: 'https://www.youtube.com/watch?v=abc12345678',
+    kind: 'trailer' as const,
+    host: 'youtube' as const,
+  };
+  // The same video, addressed the short way by another catalogue. A URL key
+  // would draw this trailer twice.
+  const shortLink = { ...video, url: 'https://youtu.be/abc12345678', title: 'Official Trailer' };
+  assert.equal(mergeVideos([[video], [shortLink]]).length, 1);
+});
+
+test('a video offered by two catalogues records both, and keeps the richer fields', () => {
+  const base = {
+    id: 'youtube:abc12345678',
+    title: 'Trailer',
+    label: 'Trailer',
+    url: 'https://www.youtube.com/watch?v=abc12345678',
+    kind: 'trailer' as const,
+    host: 'youtube' as const,
+  };
+  const [merged] = mergeVideos([
+    [{ ...base, sources: ['cinemeta' as const] }],
+    [{ ...base, publisher: 'Warner Bros.', sources: ['anilist' as const] }],
+  ]);
+  assert.deepEqual(merged.sources, ['cinemeta', 'anilist']);
+  assert.equal(merged.publisher, 'Warner Bros.', 'provenance must survive the collapse');
 });
 
 test('strings deduplicate case-insensitively and keep their order', () => {

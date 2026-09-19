@@ -1,4 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTitleInteractions } from '../components/useTitleInteractions';
+import { badgeLabel, badgeTooltip, cardStateFor, primaryBadge } from '../utils/cardState';
+import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { EmptyState } from '../components/EmptyState';
 import { PlayedSourcePanel } from '../components/library/PlayedSourcePanel';
 import type { PlayedSource } from '../types/library';
@@ -84,9 +87,30 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onPlaySavedSource,
   onBrowse,
 }) => {
+  const isDeveloper = useIsDeveloper();
+  const [entries, setEntries] = useState<LibraryEntry[]>([]);
+
+  /**
+   * Card states for the whole shelf.
+   *
+   * Queried by each entry's first known provider URL — the aggregator answers
+   * the title-keyed halves regardless, and the address-keyed ones for the row
+   * that actually has one.
+   */
+  const { interactionFor } = useTitleInteractions(
+    useMemo(
+      () =>
+        entries.map((entry) => ({
+          url: entry.urls?.[0] ?? entry.key,
+          name: entry.title,
+          year: entry.year,
+        })),
+      [entries]
+    )
+  );
   const [mode, setMode] = useState<LibraryMode>('watching');
   const [activeStatus, setActiveStatus] = useState<WatchStatus>('Watching');
-  const [entries, setEntries] = useState<LibraryEntry[]>([]);
+
   const [progressByKey, setProgressByKey] = useState<Map<string, WatchProgress>>(new Map());
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
@@ -277,8 +301,29 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 ? (progress.positionSeconds / progress.durationSeconds) * 100
                 : 0;
 
+            /*
+             * The same card language as every other grid in the app.
+             *
+             * This screen draws its own markup rather than `PosterCard` — the
+             * rows carry a bucket selector, a rating and a stored-source
+             * button that a search result does not — so the states are applied
+             * by hand here. They come from the same record and the same rule,
+             * which is what stops a title looking different on two screens.
+             *
+             * Addressed by the first provider URL the entry has seen, because
+             * that is what `outcome` and source readiness are keyed on; the
+             * watch and download halves are keyed on the title and answer for
+             * any of them.
+             */
+            const interaction = interactionFor({ url: entry.urls?.[0] });
+            const cardState = cardStateFor(interaction);
+            const stateBadge = primaryBadge(cardState);
+
             return (
-              <div key={entry.key} className="poster-card">
+              <div
+                key={entry.key}
+                className={`poster-card${cardState.visited ? ' poster-card--visited' : ''}`}
+              >
                 <div className="poster-container" onClick={(e) => openEntry(entry, e)}>
                   {entry.posterUrl ? (
                     <img src={entry.posterUrl} alt={entry.title} loading="lazy" />
@@ -286,6 +331,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     <div className="poster-image--empty">{entry.title.slice(0, 1)}</div>
                   )}
                   {entry.type && <span className="poster-badge">{entry.type}</span>}
+                  {stateBadge && (
+                    <span
+                      className={`poster-state poster-state--${stateBadge}`}
+                      title={badgeTooltip(stateBadge, interaction)}
+                    >
+                      <span className="poster-state__label">{badgeLabel(stateBadge)}</span>
+                    </span>
+                  )}
                   <div className="poster-overlay">
                     <button className="play-button-overlay">
                       <Play size={20} fill="#fff" />
@@ -538,8 +591,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.74rem', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
                       <span>Provider: <strong style={{ color: 'var(--text-primary)' }}>{src.providerName || src.indexerName || 'Direct'}</strong></span>
-                      {src.videoCodec && <span>Codec: <strong style={{ color: 'var(--text-primary)' }}>{src.videoCodec}</strong></span>}
-                      {src.seeders !== undefined && <span>Seeders: <strong style={{ color: '#34d399' }}>{src.seeders}</strong></span>}
+                      {/* Codec and seeder count describe the file and the swarm
+                          behind it; provider, quality and status describe what
+                          the viewer would actually be watching. */}
+                      {isDeveloper && src.videoCodec && <span>Codec: <strong style={{ color: 'var(--text-primary)' }}>{src.videoCodec}</strong></span>}
+                      {isDeveloper && src.seeders !== undefined && <span>Seeders: <strong style={{ color: '#34d399' }}>{src.seeders}</strong></span>}
                       <span>Status: <strong style={{ color: src.status === 'Available' ? '#34d399' : '#fb7185' }}>{src.status || 'Available'}</strong></span>
                     </div>
                   </div>

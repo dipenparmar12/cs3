@@ -120,6 +120,30 @@ interface Route {
    * seeking rests on that first answer.
    */
   rangeSupport?: 'yes' | 'no';
+  /**
+   * This origin serves **only bounded byte ranges**, and refuses anything else.
+   *
+   * Measured on YouTube's DASH rungs, 2026-09-18, on a URL that had just been
+   * resolved and was six hours from expiry:
+   *
+   * | Request | Reply |
+   * |---|---|
+   * | no `Range` header | **403** |
+   * | `Range: bytes=0-` | **403** |
+   * | `Range: bytes=0-4095` | 206, `Content-Range: bytes 0-4095/61710344` |
+   *
+   * That is DASH working as intended — a DASH client asks for numbered segment
+   * windows and never for a whole file — and it defeats every ordinary consumer
+   * here: ffmpeg opens an input with no `Range` at all, and a media element
+   * asking to stream from a position sends the open-ended form. Both get a 403
+   * and report the source as forbidden, which reads as a dead link.
+   *
+   * So a route marked this way is served by {@link serveWindowed}, which asks
+   * upstream in bounded windows and stitches them into the single continuous
+   * response the client expects. Nothing else changes, and no other route takes
+   * that path.
+   */
+  boundedRanges?: boolean;
 }
 
 interface LocalRoute {
@@ -450,7 +474,22 @@ export class MediaProxy {
    * ALWAYS proxy direct HTTP/HTTPS URLs so all media requests pass through loopback proxy with
    * standard Chrome User-Agent, origin referer, CORS headers, and range request handling.
    */
-  public async wrap(url: string, headers?: Record<string, string>): Promise<string> {
+  public async wrap(
+    url: string,
+    headers?: Record<string, string>,
+    options: {
+      /**
+       * This origin answers only bounded byte ranges. See `Route.boundedRanges`
+       * for the measurement — YouTube's DASH rungs 403 both an absent `Range`
+       * and the open-ended `bytes=N-` form.
+       *
+       * Opt-in rather than detected, because detecting it costs a request that
+       * is *expected to fail* on every ordinary source, and a 403 on a provider
+       * link already means something else entirely.
+       */
+      boundedRanges?: boolean;
+    } = {}
+  ): Promise<string> {
     if (!/^https?:\/\//i.test(url)) return url;
     /**
      * A loopback URL is already ours and is returned untouched.
@@ -468,7 +507,7 @@ export class MediaProxy {
     const cleaned = this.clean(headers);
 
     await this.ensureServer();
-    return this.routeFor(url, cleaned);
+    return this.routeFor(url, cleaned, false, options.boundedRanges);
   }
 
   /**
@@ -738,14 +777,26 @@ export class MediaProxy {
     }
   }
 
-  private routeFor(url: string, headers: Record<string, string>, fromPlaylist = false): string {
+  private routeFor(
+    url: string,
+    headers: Record<string, string>,
+    fromPlaylist = false,
+    boundedRanges = false
+  ): string {
     this.evictExpiredRoutes();
     const key = `${url} ${JSON.stringify(headers)}`;
     let token = this.tokensByKey.get(key);
     if (!token) {
       token = this.mintToken();
       this.tokensByKey.set(key, token);
-      this.routes.set(token, { url, headers, key, createdAt: Date.now(), fromPlaylist });
+      this.routes.set(token, {
+        url,
+        headers,
+        key,
+        createdAt: Date.now(),
+        fromPlaylist,
+        boundedRanges,
+      });
     } else {
       // Re-minting is a playlist saying it still points here, which is a reason
       // to keep the route but not evidence anything has fetched it.
@@ -930,6 +981,15 @@ export class MediaProxy {
     res.on('close', () => {
       if (!res.writableEnded) abort.abort();
     });
+
+    /**
+     * An origin that refuses everything but a bounded window is served by
+     * stitching windows, so nothing downstream learns it is unusual.
+     */
+    if (route.boundedRanges && req.method !== 'HEAD') {
+      await this.serveWindowed(route, req, res, requestHeaders, abort);
+      return;
+    }
 
     try {
       let upstream = await this.fetchImpl(route.url, {
@@ -1353,6 +1413,166 @@ export class MediaProxy {
    * that disappears mid-write never drains and the await would otherwise hang
    * for the lifetime of the app.
    */
+  /**
+   * Serves an origin that answers only bounded byte ranges.
+   *
+   * The client asks once — ffmpeg with no `Range` at all, a media element with
+   * `bytes=N-` — and gets one continuous response. Upstream is asked in
+   * {@link WINDOW_BYTES} windows and the pieces are written out back to back.
+   *
+   * Three things about it are load-bearing:
+   *
+   * **The total length comes from the first window's `Content-Range`.** That
+   * header is the only place the full size appears, since every reply is a 206
+   * for a slice. Without it the response has no `Content-Length` and a media
+   * element cannot build a seek bar.
+   *
+   * **The status mirrors what was asked, not what upstream said.** Upstream
+   * answers 206 to every window because every window is a range; answering the
+   * client 206 when it asked for the whole file would tell a player it received
+   * a partial response and leave it waiting for the rest.
+   *
+   * **A window that does not answer ends the response rather than retrying
+   * forever.** The bytes already written are a valid prefix of a media file; a
+   * loop that kept asking would hold the socket open on a link that has expired
+   * — which for a signed URL is a matter of hours, not of a bad moment.
+   */
+  private async serveWindowed(
+    route: Route,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    baseHeaders: Record<string, string>,
+    abort: AbortController
+  ): Promise<void> {
+    /**
+     * How much is asked for at once.
+     *
+     * Large enough that a two-minute 1080p trailer is a handful of requests
+     * rather than hundreds, and small enough that abandoning playback does not
+     * leave a large transfer running — the cost `probeUrl` taught this
+     * repository to care about.
+     */
+    const WINDOW_BYTES = 1024 * 1024;
+
+    /**
+     * The first window is small, and that is not a warm-up.
+     *
+     * A window is a *bounded* range, so its end has to be a byte that exists —
+     * and until the first reply arrives the total length is unknown. Measured
+     * on YouTube: asking `bytes=0-4194303` of a 2,742,140-byte audio rung
+     * answers **403**, not a clamped 206, so a full-size opening window fails
+     * on every file smaller than the window. The video rung beside it is 61 MB
+     * and succeeded, which is exactly the kind of difference that looks like
+     * "audio is broken" rather than "the first range was too long".
+     *
+     * 64 KB is comfortably smaller than any media file worth streaming, and the
+     * reply carries `Content-Range: … /<total>` — so one small request buys the
+     * length, and its bytes are part of the answer rather than thrown away.
+     */
+    const FIRST_WINDOW_BYTES = 64 * 1024;
+
+    const requested = String(req.headers.range ?? '');
+    const bounds = requested.match(/bytes=(\d+)-(\d*)/i);
+    const start = bounds ? Number.parseInt(bounds[1], 10) : 0;
+    const explicitEnd = bounds?.[2] ? Number.parseInt(bounds[2], 10) : undefined;
+
+    let offset = start;
+    let total: number | undefined;
+    let wroteHead = false;
+
+    try {
+      for (;;) {
+        if (abort.signal.aborted || res.writableEnded) return;
+        if (total !== undefined && offset >= total) break;
+        if (explicitEnd !== undefined && offset > explicitEnd) break;
+
+        /**
+         * A refused window is halved and asked again before giving up.
+         *
+         * Two different causes produce the same 403 and this covers both. A
+         * window can simply be too long for the file — measured, a 2 MB request
+         * against a 2.7 MB rung was refused while 512 KB of it was served — and
+         * an origin can refuse a window for a moment under load. Halving costs
+         * one extra request in the rare case and nothing in the ordinary one,
+         * and it stops at 64 KB because below that the failure is about the URL
+         * rather than the size.
+         */
+        let upstream: Response | null = null;
+        let window = total === undefined ? FIRST_WINDOW_BYTES : WINDOW_BYTES;
+        let last = offset;
+        for (;;) {
+          last = Math.min(
+            offset + window - 1,
+            explicitEnd ?? Number.MAX_SAFE_INTEGER,
+            total !== undefined ? total - 1 : Number.MAX_SAFE_INTEGER
+          );
+          const attempt = await this.fetchImpl(route.url, {
+            method: 'GET',
+            headers: { ...baseHeaders, Range: `bytes=${offset}-${last}` },
+            redirect: 'follow',
+            signal: abort.signal,
+          });
+          if (attempt.status === 206 || attempt.status === 200) {
+            upstream = attempt;
+            break;
+          }
+          await attempt.body?.cancel().catch(() => undefined);
+          if (window <= FIRST_WINDOW_BYTES) {
+            if (!wroteHead) {
+              res.writeHead(attempt.status, { 'Access-Control-Allow-Origin': '*' });
+            }
+            res.end();
+            return;
+          }
+          window = Math.max(FIRST_WINDOW_BYTES, Math.floor(window / 2));
+        }
+
+        if (total === undefined) {
+          const range = upstream.headers.get('content-range');
+          const parsed = range?.match(/\/(\d+)\s*$/);
+          total = parsed ? Number.parseInt(parsed[1], 10) : undefined;
+        }
+
+        if (!wroteHead) {
+          const end = explicitEnd ?? (total !== undefined ? total - 1 : undefined);
+          const headers: Record<string, string> = {
+            'Content-Type': upstream.headers.get('content-type') ?? 'video/mp4',
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'no-store',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+          };
+          if (total !== undefined && end !== undefined) {
+            headers['Content-Length'] = String(end - start + 1);
+            // A client that asked for a range gets a range; one that asked for
+            // the file gets the file, whatever shape upstream answered in.
+            if (bounds) headers['Content-Range'] = `bytes ${start}-${end}/${total}`;
+          }
+          res.writeHead(bounds ? 206 : 200, headers);
+          wroteHead = true;
+        }
+
+        let written = 0;
+        await this.pump(
+          upstream,
+          res,
+          () => abort.signal.aborted,
+          (count) => {
+            written += count;
+          }
+        );
+        if (written === 0) break;
+        offset += written;
+      }
+    } catch (error) {
+      this.recordFailure(route.url, error, 'windowed range fetch failed');
+      if (!wroteHead) res.writeHead(502, { 'Access-Control-Allow-Origin': '*' });
+    } finally {
+      if (!res.writableEnded) res.end();
+    }
+  }
+
   private async pump(
     response: Response,
     res: http.ServerResponse,

@@ -1,4 +1,7 @@
 import type { DatastoreManager } from '../datastore';
+import type { TitleOutcomeKind } from '../../src/types/interactions.ts';
+
+export type { TitleOutcomeKind };
 
 /**
  * What happened last time someone tried to play a title.
@@ -25,14 +28,6 @@ const KEY = 'cs3_title_outcomes';
 
 /** Enough to cover a few weeks of browsing without unbounded growth. */
 const MAX_ENTRIES = 400;
-
-export type TitleOutcomeKind =
-  /** Played, or at least produced a link that started. */
-  | 'played'
-  /** The source has nothing behind this title. Its problem, and stable. */
-  | 'no-sources'
-  /** Our runtime or transport failed. Ours, and likely to change on a fix. */
-  | 'app-error';
 
 export interface TitleOutcome {
   url: string;

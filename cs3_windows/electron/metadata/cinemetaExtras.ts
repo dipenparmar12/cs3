@@ -39,6 +39,8 @@ import {
   type TitleVideo,
 } from '../../src/types/metadata.ts';
 import { classifyJob } from './merge.ts';
+import { youTubeIdFrom } from './youtube.ts';
+import { youTubeVideo } from './videoTitles.ts';
 
 /** Cinemeta returns full billed casts; past this it is a scroll, not a list. */
 const MAX_CAST = 40;
@@ -240,25 +242,33 @@ export function parseCinemetaExtras(meta: CinemetaExtraFields | null | undefined
   addCrew(asList(meta.director), 'Director');
   addCrew(asList(meta.writer), 'Writer');
 
+  /**
+   * The trailer ids, from the two fields that both carry them.
+   *
+   * Measured: `trailers[]` and `trailerStreams[]` hold the *same* ids on every
+   * title checked, so this is one list read twice rather than two sources —
+   * hence the id-keyed dedupe rather than a URL one. `trailerStreams[].title`
+   * is the film's name repeated and `trailers[].type` is the literal string
+   * "Trailer" on every entry including the teasers, so neither is used as a
+   * description; the real titles come from `metadata/youtube.ts` afterwards.
+   */
   const videos: TitleVideo[] = [];
-  for (const stream of meta.trailerStreams ?? []) {
-    if (!stream.ytId) continue;
-    videos.push({
-      title: stream.title || 'Trailer',
-      url: `https://www.youtube.com/watch?v=${stream.ytId}`,
-      kind: 'trailer',
-      host: 'youtube',
-    });
-  }
-  for (const trailer of meta.trailers ?? []) {
-    if (!trailer.source) continue;
-    videos.push({
-      title: 'Trailer',
-      url: `https://www.youtube.com/watch?v=${trailer.source}`,
-      kind: trailer.type?.toLowerCase() === 'teaser' ? 'teaser' : 'trailer',
-      host: 'youtube',
-    });
-  }
+  const seenVideos = new Set<string>();
+  const addVideo = (raw: string | undefined) => {
+    const id = raw ? youTubeIdFrom(raw) : null;
+    if (!id || seenVideos.has(id)) return;
+    seenVideos.add(id);
+    videos.push(
+      youTubeVideo(id, {
+        source: MetadataSource.Cinemeta,
+        // Deliberately not `stream.title`: it is the film's name, and using it
+        // would classify every video as a trailer named after the film.
+        fallbackTitle: 'Trailer',
+      })
+    );
+  };
+  for (const stream of meta.trailerStreams ?? []) addVideo(stream.ytId);
+  for (const trailer of meta.trailers ?? []) addVideo(trailer.source);
 
   const rating = parseImdbRating(meta.imdbRating, imdbId);
 

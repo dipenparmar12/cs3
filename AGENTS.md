@@ -210,6 +210,8 @@ Fallible handlers return an **envelope** `{ ok, error?, …payload }` and never 
 | adult gate | `get/setAdultMode`, `unlock/lockAdultForSession`. `mode` is the setting; `allowed` is whether adult providers are offered *now* (they differ under `ask`). **The unlock is in-memory only and never persisted**; `unlockAdultForSession` refuses unless mode is already `ask`, so a renderer cannot use it to change the setting. |
 | `download:*` | **`request`** = a button press (reads task state, resumes/recovers/refuses, reports which) vs **`enqueue`** = "create this task". `preview` answers where a file would land, read-only — the renderer cannot compute the path (folder layout, variant segment and collision suffix come from the whole queue). `get/setConfirmPreference` (`ask`\|`immediate`, default `immediate`). |
 | `issues:*` | `list/annotate/report/clear` — the extension issue ledger; a third surface beside `log:*` and `diagnostics:*` (§5.5). |
+| `interactions:*` | **Batched read.** `summarise(queries)` answers one screen's worth of card states in a single call — a join over the library, the outcome ledger, the download queue and the source cache, not a sixth store. `visit(title, year)` records that a details page opened; `clearVisits` is the only control over that ledger. Keyed on the *title* for everything about the work and on the *address* for everything about one source of it — see `cs3/titleInteractions.ts`. |
+| `videos:*` | `resolve(pageUrl)` turns a trailer's page into a stream. Returns a **provider-level, proxied** address, never a playable one: the renderer hands it to `media:prepare` like any other source, so that channel stays the only source of a playable URL. Separate from `metadata:*` because it spawns a process on a button press, where a metadata record is something nothing waits for. |
 | `external:*` | Drives a handed-off player, pushes `external:update` with a `capability` flag. |
 | window pins | `window:set/getAlwaysOnTop` for the app window; `mpv:setOnTop`/`setVideoEnabled` for mpv's own. |
 
@@ -347,6 +349,9 @@ rather than omitting the ones nothing serves.
 | `cs3/failureTaxonomy.ts` | `classifyFailure` — one closed cause set shared by ranking/diagnostics/ledger; also `groupingForm` and `UNSCORED_FAILURE_KINDS`. |
 | `cs3/sidecarStderr.ts` | JVM stderr line → level/tag/cause. |
 | `cs3/titleOutcomes.ts` | Last behaviour per title, so dead rows aren't reclicked. |
+| `cs3/titleInteractions.ts` | Every card's state, assembled. Owns **one** fact (a details page was opened) and joins the rest live. Batched, because a catalogue page is forty posters. |
+| `metadata/videoTitles.ts` | What a promotional video *is*, read out of its own title — kind, label, season, ordinal, official. Pure, tested against real oEmbed titles. |
+| `metadata/youtube.ts` | Keyless oEmbed: a video id → its real title, channel and thumbnail. 12 ids in **201 ms**, measured. A 401/404 means the video is gone and its card is dropped. |
 | `cs3/titleEnricher.ts` | Messy release titles → canonical works; conservative (a disagreeing year disqualifies). |
 | `cs3/discovery.ts` | Home catalogues: stale-while-revalidate Cinemeta (`top/year/imdbRating`, 19 genres) + AniList. Finds nothing playable. |
 | `cs3/ottPlatforms.ts` | OTT platform table + name-matching rule. Pure, tested. |
@@ -397,6 +402,10 @@ rather than omitting the ones nothing serves.
 | `src/utils/historyEvent.ts` | `historyEventForTask` — the one download-task→history-record mapping. Was spelled out field-by-field in `downloadService`, `App.tsx` and `VideoPlayer`; three copies of a fallback chain drift rather than break. |
 | `src/utils/downloadIdentity.ts` | A download is addressed by its source variant, not its title. |
 | `src/utils/deadRows.ts` | Which results to hide (`no-sources`) vs never hide (`app-error`). |
+| `src/utils/cardState.ts` | What a poster says about a title already met. Pure, tested, mutation-verified. **Failure is always marked, success almost never is**; a failure the viewer has since disproved is retired. |
+| `src/utils/videoGallery.ts` | Trailers vs related videos, grouped by season. Pure, tested. |
+| `src/utils/experienceMode.ts` | Standard vs developer, `shouldReveal`, and `plainMessage` — one internal message to one sentence a viewer can act on, with the original kept. |
+| `src/components/useTitleInteractions.ts` | The batched card-state hook; re-asks on `download:progress`, coalesced. |
 | `src/utils/resumePoint.ts` | **Null episode means "Play"**; furthest episode with history wins. |
 | `src/utils/useDismissable.ts` | Dismiss-on-outside-click, capture phase (8 copies unified). |
 | `src/utils/useFlash.ts` | Toast timers (20+ hand-rolled copies unified). |
@@ -1853,6 +1862,180 @@ needed, to try one anyway or to recognise the title is the problem. And **the
 count is stated with the rows one click away**, because a results page quietly
 shorter than the search found is indistinguishable from a search that found
 less — the same complaint, from the other direction.
+
+### Trailers: the catalogues publish an id and nothing else (2026-09-18)
+
+PRD-45. `ExtendedMetadata.videos` had been assembled by `enrichmentService`,
+carried across the IPC boundary and cached **since extended metadata was built,
+and rendered by nothing**. That is the fourth direction this repository's
+recurring failure has arrived from: a channel invoked and never registered, a
+channel registered and never invoked, a component built and never mounted, and
+now a *field* populated and never read. No test catches the fourth, because the
+data flowed correctly the whole way and simply stopped.
+
+**What the keyless sources actually publish, measured against the live hosts:**
+
+| Source | Videos per title | Type published |
+|---|---|---|
+| Cinemeta `trailers[]` | 2-5 (Spider-Verse 5, Dune: Part Two 3, Breaking Bad 2) | the literal string `"Trailer"`, on **every** entry including the teasers |
+| Cinemeta `trailerStreams[]` | the same ids again | a `title` that is the *film's* name repeated |
+| AniList `trailer` | 1 | the site, not the type |
+
+So the type, the ordinal and the season are not fields anybody gives us.
+**YouTube's keyless oEmbed endpoint closes that**: 12 ids issued in parallel
+answered in **201 ms total**, carrying the real title and channel --
+`"Dune: Part Two | Official Trailer 3"`, `"Stranger Things Season 1 Trailer 1 |
+Rotten Tomatoes TV"`. `metadata/videoTitles.ts` reads them.
+
+Rules:
+
+- **The describing segment decides the kind, not the whole title.** Measured on
+  `Spider-Man: Across the Spider-Verse - Trailer #3 - Only In Cinemas June 2`:
+  testing the whole string classified a numbered trailer as a promo, because
+  "In Cinemas" matches a rule listed above `trailer`.
+- **An unrecognised video is a trailer, never `other`.** These arrive from a
+  *trailer* field; filing one under Related Videos hides the thing the viewer
+  asked for.
+- **Wikidata's `P1651` is not a trailer -- do not use it.** Measured: it resolves
+  to the **YouTube Movies rental listing** (`Dune` by *YouTube Movies*). A
+  paywalled full film labelled "Trailer" is the wrong-answer-that-looks-plausible
+  failure, caught only because it was checked.
+- **Duration and publish date are not fetched.** They sit at roughly byte
+  **748,000 of a 1.28 MB** watch page -- a megabyte per card to print "2:31". The
+  fields exist and are filled opportunistically from yt-dlp's reply when a video
+  is played, because that call happens anyway.
+- **Nothing settled renders empty.** PRD-45 section 10 asks for both "hide the
+  section" and "show a no-trailers state"; those cannot both be right, and
+  `metadataSection.ts` settled it already.
+- **A trailer is played by the ordinary player**, as a `PlaybackRequest` with no
+  `progress`, no `series` and no `sources` -- so it records nothing to the library
+  and draws no source list, with `VideoPlayer` unchanged. `promo: true` withholds
+  the download button, which would otherwise build a task from a loopback address
+  that dies with the session.
+
+**And a trailer is never a source.** `resolvePromoVideo` goes nowhere near
+`getSources`, the cache, the ranker or the download identity. The standing rule
+that a trailer standing in for a feature is a synthetic source is about a trailer
+offered when somebody asked for the *film*; here they pressed it, in a section
+labelled Trailers.
+
+### YouTube serves only bounded byte ranges, and that broke everything (2026-09-18)
+
+The measurement that shaped the playback half. None of it was guessable.
+
+**YouTube publishes exactly one muxed format -- id 18, 360p -- and it is mostly
+refused.** Across eight trailer ids from Cinemeta, format 18 answered `HTTP 403`
+on **five of eight**, and `yt-dlp` itself gets the same 403 when asked to
+download them, so it is the URL being rejected rather than how we fetch it. No
+extraction client changes it: `tv`, `ios`, `android_vr`, `web_safari`, `mweb` and
+`tv_simply` were each measured at **0 of 5**.
+
+**The DASH rungs are fine** -- video 137 (1080p avc1) and audio 140 (m4a)
+answered `HTTP 206` on every one. So the stream is a *pair*, and something has to
+mux it.
+
+**But a DASH URL refuses anything that is not a bounded window:**
+
+| Request | Reply |
+|---|---|
+| no `Range` header | **403** |
+| `Range: bytes=0-` | **403** |
+| `Range: bytes=0-4095` | 206, `Content-Range: bytes 0-4095/61710344` |
+
+That defeats every ordinary consumer here: ffmpeg opens an input with no `Range`
+at all, and a media element streaming from a position sends the open-ended form.
+Both get a 403 and report the source as forbidden, which reads as a dead link.
+
+`MediaProxy.wrap(url, headers, { boundedRanges: true })` is the answer:
+`serveWindowed` asks upstream in windows and stitches them into the single
+continuous response the client expects. Four things about it are load-bearing:
+
+- **The first window is 64 KB, and that is not a warm-up.** A window's end has to
+  be a byte that exists, and the total is unknown until the first reply.
+  Measured: `bytes=0-4194303` of a 2,742,140-byte audio rung answers **403**, not
+  a clamped 206 -- so a full-size opening window fails on every file smaller than
+  the window, while the 61 MB video rung beside it succeeds. That difference
+  looks exactly like "audio is broken".
+- **The total comes from the first window's `Content-Range`.** It is the only
+  place the full size appears, and without it a media element cannot draw a seek
+  bar.
+- **The status mirrors what was asked**, not what upstream said: upstream answers
+  206 to every window, and echoing that to a client which asked for the whole
+  file would leave it waiting for a remainder that never comes.
+- **A refused window is halved and retried** down to 64 KB, covering both a
+  window too long for the file and a momentary refusal.
+
+**Verified end to end** with the real `MediaProxy` and the real ffmpeg: plain GET
+-> `200`, `Content-Length: 48696621`; mid-file range -> `206 bytes
+1000000-1004095/48696621`; and the two-input copy produced a fragmented MP4 that
+ffprobe reads as `h264 1920x1080` + `aac 2ch`. Both decode natively in Chromium,
+so the element plays it with no further work.
+
+**One trap when measuring this yourself:** sustained re-reads of one googlevideo
+URL start answering 403 after about a megabyte. Two 512 KB windows succeeded and
+every window after them failed, on a URL six hours from expiry that a dozen
+earlier probes had hammered. Fresh URLs served 16 MB windows without complaint.
+Budget fresh ids per experiment, or the rate limit will read as a design fault.
+
+`MediaTranscoder`'s `Session` gained an optional `audioUrl`, unset by every other
+caller: with it absent the argument list is byte-for-byte what it was.
+
+### Cards remember what already happened to them (2026-09-18)
+
+PRD-46. Every surface draws the same `PosterCard`, and each one used to decide
+for itself what to put on it -- search passed an outcome, Continue Watching
+passed a percentage, everything else passed nothing. The same film was a
+different card depending on which screen you found it on, and a viewer cannot
+learn a language that changes between rooms.
+
+`cs3/titleInteractions.ts` is **a join, not a sixth store**. Watch progress is in
+`libraryStore`, what happened last time is in `titleOutcomes`, transfers are in
+`downloadService`, resolvable links are in `sourceCache`. It owns exactly one
+fact nobody else has -- that a details page was opened -- and reads the rest live.
+
+- **Visits could not be derived from `PageSnapshotStore`.** That keeps a *copy of
+  the page*, so it is capped; a title would stop being marked visited because a
+  few hundred others were opened after it, in an order nobody could explain.
+- **Two keys, and both are needed.** `canonicalKey(title, year)` for everything
+  about the work -- watched, downloaded, how far through. The *address* for
+  everything about one source of it. Folding the second onto the first would mark
+  every copy of a film failed because one scraper's page was dead.
+- **Failure is always marked, success almost never is.** A tick on everything
+  that ever worked is decoration on every card in the library.
+- **A failure the viewer has disproved is retired** (`cardState.ts`): watch
+  progress newer than the failure, or a completed download, clears the badge.
+  PRD-46 section 9 -- the indicator is the latest state, not a permanent verdict.
+- **`visited` is a dimming, never a badge**, so it can be true at the same time
+  as any other state without competing for the one corner. The poster and the
+  title fade; the badge does not, because the reason to notice a visited card is
+  usually the badge on it.
+
+### Standard mode, and where the app was narrating itself (2026-09-18)
+
+PRD-47. `src/utils/experienceMode.ts` and its context already existed; what was
+missing was the sweep. Now behind developer mode: the transformation plan drawn
+over a playing film (`capability.explanation`), the swarm and peer readouts, the
+failover attempt list, source ranking scores with their reasons, the codec
+columns in a source row and in the library's stored sources, the full
+`repository > extension > provider` chain (standard mode shows the provider
+alone, via `providerLabel`), and the provider inspector including its F12
+shortcut.
+
+Rules:
+
+- **Loading stages are reworded, not removed.** "Connecting to the swarm" becomes
+  "Starting playback"; "Searched 7 of 19 indexers" becomes "Checked 7 of 19
+  places". The climbing count stays in both, because it is what says the app is
+  working rather than stuck.
+- **Errors keep their original text**, demoted rather than discarded:
+  `plainMessage` gives a viewer a sentence, and developer mode shows the original.
+- **The Developer mode row in Settings is deliberately `basic` level.** Every
+  other row on that tab is held back in standard mode; if this one were too, the
+  only way to turn it on would be a two-word toolbar toggle with no statement of
+  what it does.
+- **The F12 shortcut is gated with the button it duplicates**, and reads the mode
+  through a ref -- the listener is installed once, so closing over the mount-time
+  value would leave the shortcut dead until the next reload.
 
 ### The cast list was a row of names, and that was as far as it could go (2026-09-14)
 

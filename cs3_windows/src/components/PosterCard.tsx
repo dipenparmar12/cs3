@@ -1,7 +1,18 @@
 import React, { useRef, useState } from 'react';
 import { Poster } from './Poster';
-import { Play, Target } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  Download,
+  DownloadCloud,
+  Play,
+  RotateCcw,
+  Target,
+  Zap,
+} from 'lucide-react';
 import type { SearchResponse } from '../types/api';
+import type { TitleInteraction } from '../types/interactions';
+import { CardBadge, badgeLabel, badgeTooltip, cardStateFor, primaryBadge } from '../utils/cardState';
 import { ContentHoverCard } from './ContentHoverCard';
 import { LibraryBucketSelector } from './LibraryBucketSelector';
 
@@ -13,15 +24,39 @@ interface PosterCardProps {
   watchedText?: string | null;
   showBucketButton?: boolean;
   /**
-   * What happened last time this title was opened.
+   * Everything the app already knows about this title.
    *
-   * `no-sources` is a property of the source and worth showing on the row —
-   * it stops someone clicking the same dead entry twice. `app-error` is ours,
-   * and says so, because marking a title unavailable for our own bug is how one
-   * broken translation pass came to look like a hundred broken providers.
+   * One record rather than a flag per state, because the states are not
+   * independent — a downloaded film that is half-watched and failed from a
+   * different provider last week is three true things competing for one corner,
+   * and that precedence is a decision, made once, in `cardState.ts`.
+   *
+   * Optional throughout: a surface that has not been wired to
+   * `useTitleInteractions` draws exactly the card it drew before, which is what
+   * makes this safe to adopt one screen at a time.
+   */
+  interaction?: TitleInteraction;
+  /**
+   * The old single-outcome prop, still honoured.
+   *
+   * Search passed this before the interaction record existed. Kept so the two
+   * cannot disagree during the changeover — `interaction` wins where both are
+   * present, since it is the one assembled from every store rather than from
+   * one.
    */
   outcome?: { kind: 'played' | 'no-sources' | 'app-error'; reason?: string };
 }
+
+/** The glyph for each state. Small, monochrome, and never a colour on its own. */
+const BADGE_ICONS: Record<CardBadge, React.ReactNode> = {
+  [CardBadge.Downloading]: <DownloadCloud size={11} aria-hidden />,
+  [CardBadge.Downloaded]: <Download size={11} aria-hidden />,
+  [CardBadge.Failed]: <AlertTriangle size={11} aria-hidden />,
+  [CardBadge.NoSources]: <AlertTriangle size={11} aria-hidden />,
+  [CardBadge.Continue]: <RotateCcw size={11} aria-hidden />,
+  [CardBadge.Ready]: <Zap size={11} aria-hidden />,
+  [CardBadge.Watched]: <Check size={11} aria-hidden />,
+};
 
 /** Feature flag to control hover preview popups on cards. Set to true to enable. */
 const ENABLE_HOVER_CARD_PREVIEW = false;
@@ -33,6 +68,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
   progressPercent,
   watchedText,
   showBucketButton = true,
+  interaction,
   outcome,
 }) => {
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -80,10 +116,31 @@ export const PosterCard: React.FC<PosterCardProps> = ({
 
   const titleText = item?.name || 'Untitled';
 
+  /**
+   * The old `outcome` prop folded in, so one code path draws both.
+   *
+   * During the changeover some screens pass `interaction` and some still pass
+   * `outcome`; running two rendering paths would be how the same title comes to
+   * look different on two screens, which is the whole thing this record exists
+   * to stop.
+   */
+  const state = cardStateFor(
+    interaction ??
+      (outcome
+        ? { url: item?.url ?? '', key: '', outcome: { ...outcome, at: Date.now() } }
+        : null)
+  );
+  const badge = primaryBadge(state);
+  // The bar is the caller's where one was given — Continue Watching rows know
+  // their own position — and the record's otherwise.
+  const bar = progressPercent ?? state.progressPercent;
+
   return (
     <div
       ref={cardRef}
-      className={`poster-card${ENABLE_HOVER_CARD_PREVIEW && hoverCardOpen ? ' poster-card--active-hover' : ''}`}
+      className={`poster-card${
+        state.visited ? ' poster-card--visited' : ''
+      }${ENABLE_HOVER_CARD_PREVIEW && hoverCardOpen ? ' poster-card--active-hover' : ''}`}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
@@ -113,16 +170,22 @@ export const PosterCard: React.FC<PosterCardProps> = ({
           <span className="poster-badge">{item?.type || 'Movie'}</span>
         )}
 
-        {/* Only failures are marked. A tick on everything that ever worked
-            would be decoration on every card the viewer has ever opened. */}
-        {outcome && outcome.kind !== 'played' && (
+        {/*
+          One badge, in one corner.
+
+          States coexist — downloaded and half-watched and failed elsewhere last
+          week are all true at once — and a card with three markers on it is a
+          debug overlay rather than a poster. `primaryBadge` ranks them by what
+          the viewer would do about each, and the tooltip carries the detail so
+          nothing is lost to the shortening.
+        */}
+        {badge && (
           <span
-            className={`poster-outcome poster-outcome--${
-              outcome.kind === 'app-error' ? 'app' : 'empty'
-            }`}
-            title={outcome.reason ?? undefined}
+            className={`poster-state poster-state--${badge}`}
+            title={badgeTooltip(badge, interaction)}
           >
-            {outcome.kind === 'app-error' ? 'app error last time' : 'no sources last time'}
+            {BADGE_ICONS[badge]}
+            <span className="poster-state__label">{badgeLabel(badge)}</span>
           </span>
         )}
 
@@ -141,9 +204,9 @@ export const PosterCard: React.FC<PosterCardProps> = ({
           </button>
         </div>
 
-        {progressPercent != null && progressPercent > 0 && (
+        {bar != null && bar > 0 && (
           <div className="poster-progress">
-            <div style={{ width: `${Math.min(100, progressPercent)}%` }} />
+            <div style={{ width: `${Math.min(100, bar)}%` }} />
           </div>
         )}
       </div>

@@ -451,7 +451,12 @@ test('Cinemeta cast and crew come back with billing order and jobs', () => {
     imdbRating: '8.0',
     released: '2021-10-22T00:00:00.000Z',
     country: 'United States',
-    trailerStreams: [{ title: 'Trailer', ytId: 'abc' }],
+    // A real id: YouTube's are always 11 characters, and `youTubeIdFrom`
+    // requires that so `youtube:<id>` is a dependable dedupe key.
+    trailerStreams: [{ title: 'Trailer', ytId: 'w0HgHet0sxg' }],
+    // The same video again, which is what Cinemeta actually publishes —
+    // measured, `trailers[]` and `trailerStreams[]` carry identical ids.
+    trailers: [{ source: 'w0HgHet0sxg', type: 'Trailer' }],
   });
 
   assert.deepEqual(extras.people.filter((p) => p.role === CreditRole.Cast).map((p) => p.order), [0, 1]);
@@ -459,8 +464,26 @@ test('Cinemeta cast and crew come back with billing order and jobs', () => {
   assert.equal(extras.people.find((p) => p.job === 'Writer')?.name, 'Jon Spaihts');
   // The debut date, which is what `releaseInfo`'s bare year cannot answer.
   assert.equal(extras.releaseDate, '2021-10-22');
-  assert.equal(extras.videos[0].url, 'https://www.youtube.com/watch?v=abc');
+  assert.equal(extras.videos.length, 1, 'the two trailer fields are one video');
+  assert.equal(extras.videos[0].id, 'youtube:w0HgHet0sxg');
+  assert.equal(extras.videos[0].url, 'https://www.youtube.com/watch?v=w0HgHet0sxg');
+  assert.equal(
+    extras.videos[0].thumbnailUrl,
+    'https://i.ytimg.com/vi/w0HgHet0sxg/hqdefault.jpg',
+    'derived from the id, so a gallery costs no requests to draw its artwork'
+  );
   assert.equal(extras.ratings[0].url, 'https://www.imdb.com/title/tt1160419/');
+});
+
+test('a value that is not a YouTube id does not become a card', () => {
+  // Cinemeta is a third-party document. A malformed id would otherwise produce
+  // a thumbnail that 404s and a card that cannot play, which reads as the
+  // trailer being broken rather than as the entry being wrong.
+  const extras = parseCinemetaExtras({
+    trailerStreams: [{ title: 'Trailer', ytId: 'abc' }],
+    trailers: [{ source: '', type: 'Trailer' }],
+  });
+  assert.deepEqual(extras.videos, []);
 });
 
 test('Cinemeta credits carry no character and no photo, deliberately', () => {

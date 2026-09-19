@@ -56,6 +56,17 @@ export interface YtDlpInfo {
   extractor?: string;
   extractor_key?: string;
   duration?: number;
+  /** `YYYYMMDD`, yt-dlp's own spelling. */
+  upload_date?: string;
+  /**
+   * Author-supplied subtitles, by language. **Not** `automatic_captions`.
+   *
+   * Machine transcription is a different claim about quality, and offering it
+   * as a subtitle track means a viewer reads a guess at the dialogue believing
+   * it is the dialogue. Where a publisher uploaded real subtitles they are
+   * worth having, and where they did not the honest answer is none.
+   */
+  subtitles?: Record<string, Array<{ url?: string; ext?: string; name?: string }>>;
   formats?: YtDlpFormat[];
   http_headers?: Record<string, string>;
   url?: string;
@@ -172,6 +183,164 @@ export function mapYtDlpInfo(info: YtDlpInfo, pageUrl: string): TorrentResult[] 
 
 function byQualityDescending(a: YtDlpFormat, b: YtDlpFormat): number {
   return (b.height ?? 0) - (a.height ?? 0) || (b.tbr ?? 0) - (a.tbr ?? 0);
+}
+
+/**
+ * The stream to play a trailer from.
+ *
+ * Deliberately not {@link mapYtDlpInfo}. That produces a *source list* for the
+ * picker — eight rows, one per rung of a quality ladder, ranked and deduped,
+ * because choosing between releases of a film is a real decision. Nobody makes
+ * that decision about a two-minute trailer, so this answers with one stream and
+ * the whole picker is skipped.
+ *
+ * Three rules, each of which changes what the viewer gets:
+ *
+ * **A pre-muxed progressive format wins over anything else.** It carries both
+ * tracks in one file, so the compatibility engine has nothing to do: no remux,
+ * no ffmpeg process, no routing to mpv and its separate window for a promo
+ * clip. On YouTube that is format 22 (720p H.264 + AAC) or 18 (360p), and both
+ * decode natively in Chromium.
+ *
+ * **Height is capped.** Above 1080 a trailer is a DASH ladder with separate
+ * video and audio, which is exactly the shape that would drag in the
+ * transcoder. The cap keeps this on the cheap path; nobody is studying grain
+ * structure in a teaser.
+ *
+ * **A manifest is the fallback, never the preference.** Some extractors publish
+ * only HLS. It plays — `media:prepare` classifies it and hls.js handles it —
+ * but it costs a manifest fetch and a ladder, so it is taken only when there is
+ * no muxed file at all.
+ */
+export const MAX_PROMO_HEIGHT = 1080;
+
+export interface PromoStream {
+  url: string;
+  headers?: Record<string, string>;
+  /**
+   * A second address carrying the audio.
+   *
+   * Set only when the video half has none of its own, which on YouTube is
+   * every rung above 360p. The caller muxes the two; see
+   * `ContentService.resolvePromoVideo`.
+   */
+  audioUrl?: string;
+  audioHeaders?: Record<string, string>;
+  isM3u8?: boolean;
+  isDash?: boolean;
+  /** Height, where the extractor reported one. For the caller's diagnostics. */
+  height?: number;
+}
+
+/**
+ * The best trailer stream, given whether the app can mux two inputs.
+ *
+ * ## Measured 2026-09-18, and this is the whole reason the function is shaped
+ * this way
+ *
+ * YouTube publishes exactly **one** muxed format — id 18, 360p H.264 + AAC —
+ * and every rung above it is video-only DASH. Worse, that one muxed rung is
+ * increasingly *refused*: across eight trailer ids taken from Cinemeta, format
+ * 18 answered `HTTP 403` on **five of eight**, and yt-dlp itself gets the same
+ * 403 when asked to download them, so it is the URL being rejected rather than
+ * anything about how we fetch it. No extraction client changes that — `tv`,
+ * `ios`, `android_vr`, `web_safari`, `mweb` and `tv_simply` were all measured
+ * at 0 of 5.
+ *
+ * The separate rungs are fine. On the same eight, video 137 (1080p, avc1) and
+ * audio 140 (m4a) both answered `HTTP 206` **every time**.
+ *
+ * So: when the app can mux — ffmpeg is in the box, so this is the default —
+ * take the pair and get reliable 1080p. When it cannot, take format 18 and get
+ * unreliable 360p, which is still better than refusing to play anything.
+ */
+export function pickPromoStream(info: YtDlpInfo, canMux: boolean): PromoStream | null {
+  const formats: YtDlpFormat[] = info.formats?.length
+    ? info.formats
+    : info.url
+      ? [{
+          url: info.url,
+          protocol: info.protocol,
+          ext: info.ext,
+          height: info.height,
+          vcodec: info.vcodec,
+          acodec: info.acodec,
+          http_headers: info.http_headers,
+        }]
+      : [];
+
+  const within = (format: YtDlpFormat) => (format.height ?? 0) <= MAX_PROMO_HEIGHT;
+
+  if (canMux) {
+    /**
+     * A video-only rung and an audio-only rung, both progressive.
+     *
+     * `mp4`/`m4a` rather than whatever is highest: those are H.264 and AAC, so
+     * the mux is a stream copy and the browser decodes the result natively. The
+     * `webm` rungs beside them are VP9 and Opus, which would play too but give
+     * ffmpeg a reason to re-encode on a machine without a VP9 decoder — paying
+     * a whole CPU core for a trailer.
+     */
+    const video = formats
+      .filter(
+        (format) =>
+          format.url &&
+          !NONE(format.vcodec) &&
+          NONE(format.acodec) &&
+          !isManifest(format.protocol) &&
+          format.ext === 'mp4' &&
+          within(format)
+      )
+      .sort(byQualityDescending)[0];
+    const audio = formats
+      .filter(
+        (format) =>
+          format.url &&
+          NONE(format.vcodec) &&
+          !NONE(format.acodec) &&
+          !isManifest(format.protocol) &&
+          format.ext === 'm4a'
+      )
+      .sort((a, b) => (b.tbr ?? 0) - (a.tbr ?? 0))[0];
+
+    if (video?.url && audio?.url) {
+      return {
+        url: video.url,
+        headers: video.http_headers ?? info.http_headers,
+        audioUrl: audio.url,
+        audioHeaders: audio.http_headers ?? info.http_headers,
+        height: video.height,
+      };
+    }
+    // No usable pair — fall through to the single-stream rules below rather
+    // than refusing: an extractor that publishes only muxed formats is the
+    // ordinary case for every site that is not YouTube.
+  }
+
+  const playable = formats.filter(isPlayable);
+  if (playable.length === 0) return null;
+
+  // Muxed and progressive: both tracks, one file, nothing for the engine to do.
+  const progressive = playable
+    .filter((format) => !isManifest(format.protocol) && within(format))
+    .sort(byQualityDescending);
+
+  // Nothing under the cap is still better than nothing at all — a 4K-only
+  // upload should play rather than be refused over a preference.
+  const chosen =
+    progressive[0] ??
+    playable.filter((format) => !isManifest(format.protocol)).sort(byQualityDescending)[0] ??
+    playable.filter((format) => within(format)).sort(byQualityDescending)[0] ??
+    [...playable].sort(byQualityDescending)[0];
+
+  if (!chosen?.url) return null;
+  return {
+    url: chosen.url,
+    headers: chosen.http_headers ?? info.http_headers,
+    isM3u8: isHls(chosen.protocol) || undefined,
+    isDash: isDash(chosen.protocol) || undefined,
+    height: chosen.height,
+  };
 }
 
 /**

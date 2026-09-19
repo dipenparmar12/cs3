@@ -1,23 +1,24 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
+  AlertTriangle,
+  Archive,
   Cpu,
   Download,
   Globe,
   HardDrive,
+  Home,
   Layers,
+  List,
+  Play,
   RefreshCw,
+  Scale,
   Search,
   ShieldAlert,
   Sliders,
-  Zap,
-  Wrench,
-  AlertTriangle,
-  Play,
+  Sparkles,
   Trash2,
-  Home,
-  Scale,
-  List,
-  Archive,
+  Wrench,
+  Zap,
 } from 'lucide-react';
 import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
@@ -36,6 +37,7 @@ import {
 } from '../components/settings/SettingsLevelContext';
 import { useFlash } from '../utils/useFlash';
 import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
+import { CardStatusLegend } from '../components/settings/CardStatusLegend';
 import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPanel';
 import { AboutPanel } from '../components/settings/AboutPanel';
 import { BackupPanel } from '../components/settings/BackupPanel';
@@ -417,6 +419,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           {/* The home screen: where its catalogue comes from, and what shows on
               it. Grouped with Search under General because both are about what
               the app puts in front of you before you have asked for anything. */}
+          {/*
+            What the marks on a poster mean.
+
+            In General rather than Advanced, and at `basic` level, because it is
+            the opposite of a developer tool: it exists for the person who
+            noticed a badge and wondered. It also carries the only control over
+            the visit ledger, which is the one thing this app stores that is a
+            list of what somebody has looked at.
+          */}
+          <SettingGroup title="Marks on posters" icon={<Sparkles size={15} />}>
+            <CardStatusLegend />
+          </SettingGroup>
+
           <SettingGroup title="Home screen" icon={<Home size={15} />}>
             <HomeSettings />
           </SettingGroup>
@@ -538,7 +553,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           <SettingGroup title="Download engines" icon={<Zap size={15} />}>
             <SettingRow
               label="aria2c and yt-dlp"
-          level="advanced"
+              level="advanced"
               note="Managed in Components & Binaries"
               hint={
                 <>
@@ -597,6 +612,46 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
       {shows('advanced') && (
         <>
           {sectionTitle('advanced', 'Advanced')}
+
+          {/*
+            The one group on this tab that is deliberately *basic*.
+
+            Everything else here is held back in standard mode, and if this row
+            were too then the only way to turn developer mode on would be the
+            toolbar toggle at the top of the screen — a two-word control with no
+            statement of what it does. A switch whose own explanation is hidden
+            until you have already flipped it is not a switch anybody can make
+            an informed decision about.
+
+            It is the same stored value as that toggle, deliberately: one
+            question — "do you want to see how this is built" — asked once and
+            answered for the player, the source list, the card badges and every
+            error as well as for these rows. Two records of one decision are how
+            two screens come to tell one person different things.
+          */}
+          <SettingGroup title="Developer mode" icon={<Wrench size={15} />}>
+            <SettingRow
+              label="Show how the app works"
+              note={mode === 'developer' ? 'On' : 'Off'}
+              hint={
+                'Off, the app shows what you are watching and hides how it got there. On, it ' +
+                'adds the provider and repository behind every source, the playback engine and ' +
+                'codec decisions, swarm and peer counts, source rankings with their reasons, ' +
+                'the extension runtime logs and the provider inspector — and every error keeps ' +
+                'its original text instead of a plain summary. Nothing is switched off either ' +
+                'way; this only decides how much of it you are shown.'
+              }
+            >
+              <label className="settings__switch">
+                <input
+                  type="checkbox"
+                  checked={mode === 'developer'}
+                  onChange={(event) => setMode(event.target.checked ? 'developer' : 'standard')}
+                />
+                <span>{mode === 'developer' ? 'On' : 'Off'}</span>
+              </label>
+            </SettingRow>
+          </SettingGroup>
           {/*
             The tally first, then the transcript.
             One says how many distinct things are wrong; the other says what

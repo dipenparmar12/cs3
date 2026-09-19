@@ -71,6 +71,14 @@ export const MetadataSource = {
   AniList: 'anilist',
   Wikidata: 'wikidata',
   Wikipedia: 'wikipedia',
+  /**
+   * YouTube's keyless oEmbed endpoint — what a trailer actually is.
+   *
+   * Not a catalogue of works, and it is never asked about a *title*: it is
+   * asked what a video id it was handed is called and who published it. The
+   * catalogues supply the ids; this supplies everything else about them.
+   */
+  YouTube: 'youtube',
   /** The extension or native provider that served the detail page itself. */
   Provider: 'provider',
 } as const;
@@ -239,14 +247,140 @@ export interface Organisation {
   url?: string;
 }
 
+/**
+ * What a promotional video *is*, in the vocabulary a viewer uses.
+ *
+ * Derived from the video's own title — see `electron/metadata/videoTitles.ts`
+ * — because the keyless catalogues do not publish a type. Measured: Cinemeta's
+ * `trailers[].type` is the literal string `"Trailer"` on every title checked,
+ * including the teasers and the featurettes.
+ *
+ * The split that matters to the page is **trailer versus everything else**:
+ * `trailer`, `teaser` and `promo` are what somebody means by "show me the
+ * trailer", and the rest — a clip, a featurette, a making-of, an interview —
+ * are worth having and are not what they asked for. `src/utils/videoGallery.ts`
+ * is where that line is drawn.
+ */
+export const TitleVideoKind = {
+  Trailer: 'trailer',
+  Teaser: 'teaser',
+  /** A TV spot, an announcement, a "first look" — promotional, not a trailer. */
+  Promo: 'promo',
+  Clip: 'clip',
+  Featurette: 'featurette',
+  BehindTheScenes: 'behind-the-scenes',
+  Interview: 'interview',
+  /** Recognised as a video and not as anything more specific. */
+  Other: 'other',
+} as const;
+export type TitleVideoKind = (typeof TitleVideoKind)[keyof typeof TitleVideoKind];
+
 /** A trailer or featurette, addressed so the UI can decide how to open it. */
 export interface TitleVideo {
+  /**
+   * Stable identity — `youtube:<id>`.
+   *
+   * The dedupe key and the React key. Not the URL: Cinemeta publishes the same
+   * video twice, once under `trailers` and once under `trailerStreams`, and a
+   * provider may hand back a `youtu.be` short link for something a catalogue
+   * gave as a `watch?v=`. Those are one video and must collapse to one card.
+   */
+  id: string;
+  /** The video's own title, as its publisher wrote it. */
   title: string;
   url: string;
-  kind: 'trailer' | 'teaser' | 'clip' | 'featurette';
+  kind: TitleVideoKind;
+  /**
+   * What the card's type chip says — "Official Trailer 3", "Behind the scenes".
+   *
+   * Separate from `kind` because `kind` is a closed set for grouping and this
+   * is what a person reads. Measured on real titles: "Official Trailer 2",
+   * "Official Final Trailer", "Trailer #3", "First Look" are four labels and
+   * two kinds.
+   */
+  label: string;
   /** `youtube` where the URL is a YouTube watch page, else `web`. */
   host: 'youtube' | 'web';
   thumbnailUrl?: string;
+  /**
+   * Which season this promotes, where the title says so.
+   *
+   * "Stranger Things Season 1 Trailer 1" is a season trailer and belongs under
+   * its own heading; the series trailer beside it does not. Absent means "the
+   * work as a whole", which is the right answer for every film.
+   */
+  season?: number;
+  /** "Trailer 2" → 2. Orders the gallery within one kind and season. */
+  ordinal?: number;
+  /** The channel that published it. */
+  publisher?: string;
+  /**
+   * Published by the studio, network or distributor rather than by a fan or an
+   * aggregator channel.
+   *
+   * Measured: Cinemeta hands back Warner Bros. and Netflix uploads beside
+   * "Rotten Tomatoes TV" and a personal account. Both are real trailers; the
+   * official one is the better first card, and saying which is which is more
+   * honest than silently dropping the other.
+   */
+  official?: boolean;
+  /**
+   * Length, where anything knows it.
+   *
+   * **Nothing keyless publishes this cheaply.** oEmbed does not carry it, and
+   * the YouTube watch page holds it at roughly byte 750,000 of a 1.3 MB
+   * document — a megabyte per card to print "2:31". So it is filled
+   * opportunistically from yt-dlp when a video is actually played, and the row
+   * is simply omitted until then.
+   */
+  durationSeconds?: number;
+  /** ISO date, on the same terms as `durationSeconds`. */
+  publishedAt?: string;
+  /** Which catalogues offered this video. */
+  sources?: MetadataSource[];
+}
+
+/**
+ * A trailer page, resolved to something this app's own player can open.
+ *
+ * ## Why a trailer is played by the ordinary player
+ *
+ * PRD-45 asks for fullscreen, seek, volume, playback speed, subtitles and a
+ * mini/picture-in-picture mode, and to "reuse the application's media player
+ * where possible". `VideoPlayer` already is all of that, and it takes a plain
+ * `PlaybackRequest` — a stream URL, a title, a subtitle list. Every richer prop
+ * it has (watch progress, the series context, the source session) is optional,
+ * so a trailer handed over with none of them draws a clean player, records no
+ * watch progress and offers no source list, without a line of it changing.
+ *
+ * Building a second player would have meant a second copy of the compatibility
+ * engine's routing, the failure overlay, the keyboard map and the floating
+ * modes — and the repository's own history says the second copy is the one
+ * that goes wrong.
+ *
+ * ## `streamUrl` is already proxied
+ *
+ * The extractor negotiates headers a `<video>` element cannot send. The URL
+ * here is `http://127.0.0.1:…` with those applied, and the renderer still hands
+ * it to `media:prepare` — which returns a loopback address untouched, so the
+ * invariant that nothing plays an unclassified URL is kept rather than
+ * side-stepped.
+ */
+export interface PromoResolution {
+  ok: boolean;
+  error?: string;
+  /** yt-dlp is not installed. The UI offers the install rather than an error. */
+  needsComponents?: boolean;
+  streamUrl?: string;
+  /** The video's own title, which is what the player's header should say. */
+  title?: string;
+  /** Free from the same reply, and the only cheap source of it. */
+  durationSeconds?: number;
+  publishedAt?: string;
+  /** Author-supplied WebVTT only; never machine captions. */
+  subtitles?: Array<{ name: string; url: string }>;
+  isM3u8?: boolean;
+  isDash?: boolean;
 }
 
 /**

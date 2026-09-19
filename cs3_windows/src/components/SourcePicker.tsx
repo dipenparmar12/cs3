@@ -12,7 +12,10 @@ import { SourceFilterBar } from './SourceFilterBar';
 import { CopyErrorButton } from './CopyErrorButton';
 import { SourceExportButton } from './SourceExportButton';
 import { useSourceProvenance } from './useSourceProvenance';
+import { useIsDeveloper } from '../utils/ExperienceModeContext';
+import { plainMessage } from '../utils/experienceMode';
 import {
+  providerLabel,
   provenanceChain,
   sourceAddress,
   sourceHost,
@@ -132,6 +135,7 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
   const [expandedHash, setExpandedHash] = useState<string | null>(null);
   const { message: copiedLink, flash: setCopiedLink } = useFlash<string>(1800);
   const { message: copiedDetails, flash: setCopiedDetails } = useFlash<string>(1800);
+  const isDeveloper = useIsDeveloper();
   const { provenanceFor } = useSourceProvenance(data?.sources ?? []);
 
   /** The provider's address, not the loopback one the player would be using. */
@@ -257,7 +261,7 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
         {searching && !isLoading && (data?.sources.length ?? 0) === 0 && (
           <div className="source-picker__state">
             <Loader2 className="spin" size={28} />
-            <p>Searching every enabled provider…</p>
+            <p>{isDeveloper ? 'Searching every enabled provider…' : 'Finding sources…'}</p>
             <span className="muted">Results appear here as each one answers.</span>
           </div>
         )}
@@ -265,8 +269,10 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
         {!isLoading && error && (
           <div className="source-picker__state source-picker__state--error">
             <AlertTriangle size={28} />
-            <p>Source search failed</p>
-            <span className="muted">{error}</span>
+            <p>{isDeveloper ? 'Source search failed' : 'Could not find any sources'}</p>
+            <span className="muted">
+              {isDeveloper ? error : plainMessage(error).summary}
+            </span>
             <button className="btn btn-primary" onClick={onRetry}>Try again</button>
           </div>
         )}
@@ -437,7 +443,10 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                         {source.parsed.source !== 'Unknown' && (
                           <span className="badge">{source.parsed.source}</span>
                         )}
-                        {source.parsed.videoCodec !== 'Unknown' && (
+                        {/* Resolution and language describe the film; the codec
+                            describes the file, and knowing whether it matters
+                            means knowing what this machine can decode. */}
+                        {isDeveloper && source.parsed.videoCodec !== 'Unknown' && (
                           <span className="badge badge--muted">{source.parsed.videoCodec}</span>
                         )}
                         {source.parsed.hdr.map((h) => (
@@ -467,12 +476,20 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                           the extractor an extension picked, not the extension —
                           so without this a failing source cannot be traced to
                           anything the user is able to turn off. */}
-                      {provenanceChain(source, provenanceFor(source)) && (
+                      {/* Standard mode gets the provider alone — where the film
+                          is coming from. The repository and extension above it
+                          answer a maintenance question, and the full chain is
+                          still one toggle away and still in the copied report. */}
+                      {(isDeveloper
+                        ? provenanceChain(source, provenanceFor(source))
+                        : providerLabel(source, provenanceFor(source))) && (
                         <p
                           className="source-row__origin"
                           title={provenanceChain(source, provenanceFor(source))}
                         >
-                          {provenanceChain(source, provenanceFor(source))}
+                          {isDeveloper
+                            ? provenanceChain(source, provenanceFor(source))
+                            : providerLabel(source, provenanceFor(source))}
                         </p>
                       )}
                     </div>
@@ -508,17 +525,23 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                           ? <Check size={15} />
                           : <ClipboardCopy size={15} />}
                       </button>
-                      <button
-                        className="icon-button"
-                        onClick={() => setExpandedHash(isExpanded ? null : source.infoHash)}
-                        aria-label="Why this ranking?"
-                        title="Why this ranking?"
-                      >
-                        <Info size={15} />
-                      </button>
+                      {/* "Score 47" over a list of the rules that produced it is
+                          the ranking's own working shown to somebody who asked
+                          for a film. It is exactly what a maintainer needs and
+                          nothing a viewer can act on. */}
+                      {isDeveloper && (
+                        <button
+                          className="icon-button"
+                          onClick={() => setExpandedHash(isExpanded ? null : source.infoHash)}
+                          aria-label="Why this ranking?"
+                          title="Why this ranking?"
+                        >
+                          <Info size={15} />
+                        </button>
+                      )}
                     </div>
 
-                    {isExpanded && (
+                    {isExpanded && isDeveloper && (
                       <div className="source-row__why">
                         <strong>Score {source.score}</strong>
                         <ul>

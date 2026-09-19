@@ -11,6 +11,7 @@ import { OttPlatformView, type OttPlatformSummary } from './views/OttPlatformVie
 import { TorrentView, type TorrentPlayRequest } from './views/TorrentView';
 import { DownloadCenter } from './components/DownloadCenter';
 import { ProviderInspector } from './components/ProviderInspector';
+import { useIsDeveloper } from './utils/ExperienceModeContext';
 import { ExtensionsScreen } from './components/extensions/ExtensionsScreen';
 import { BinarySetupModal } from './components/BinarySetupModal';
 import {
@@ -167,6 +168,18 @@ export const App: React.FC = () => {
   }, [refreshMissingComponents]);
 
   // `startSession` is handed down into the detail view and must not close over
+  /**
+   * Whether the viewer has asked to see how the app is built.
+   *
+   * Mirrored into a ref as well as read directly, because the keyboard listener
+   * below is installed once and would otherwise close over the value the mode
+   * had at mount — so turning developer mode on would leave F12 dead until the
+   * next reload, which reads as the setting not working.
+   */
+  const isDeveloper = useIsDeveloper();
+  const isDeveloperRef = useRef(isDeveloper);
+  isDeveloperRef.current = isDeveloper;
+
   // `session`, or it would go stale between episode switches.
   const sessionRef = useRef<ActiveSession | null>(null);
   /** Mirrors `playback` so the refresh handler below is stable across renders. */
@@ -344,14 +357,19 @@ export const App: React.FC = () => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'F12') {
         e.preventDefault();
+        // Gated with the toolbar button rather than left open as a hidden
+        // shortcut: a panel of provider diagnostics that a stray keypress can
+        // summon is exactly the surprise standard mode exists to prevent.
+        if (!isDeveloperRef.current) return;
         setIsInspectorOpen((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
 
-    const disposeInspector = window.cloudstream?.onToggleInspector?.(() =>
-      setIsInspectorOpen((prev) => !prev)
-    );
+    const disposeInspector = window.cloudstream?.onToggleInspector?.(() => {
+      if (!isDeveloperRef.current) return;
+      setIsInspectorOpen((prev) => !prev);
+    });
 
     // Help → Licences. A menu item that does nothing is worse than no menu item.
     const disposeLicences = window.cloudstream?.onShowLicences?.(() => {
@@ -1607,7 +1625,15 @@ export const App: React.FC = () => {
                 download button and no way past a source that would not play —
                 the more considered action giving the less capable result.
               */
-              onDownloadCurrent={() => {
+              /*
+                A promo has no download.
+
+                `buildDownloadTask` would happily build one from
+                `playback.streamUrl`, which for a trailer is a loopback address
+                minted for this session — a task that looks like it is working
+                and points at nothing once the app closes.
+              */
+              onDownloadCurrent={playback.promo ? undefined : () => {
                 if (playback.sources) {
                   const current =
                     playback.sources.list.find(
@@ -1880,9 +1906,9 @@ export const App: React.FC = () => {
         </main>
       </div>
 
-      {/* Provider Inspector Panel Drawer */}
+      {/* Provider Inspector Panel Drawer — developer mode only. */}
       <ProviderInspector
-        isOpen={isInspectorOpen}
+        isOpen={isInspectorOpen && isDeveloper}
         onClose={() => setIsInspectorOpen(false)}
         providers={providersList}
       />

@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTitleInteractions } from '../components/useTitleInteractions';
 import { Loader2, PlugZap, Search, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import type { ProviderCatalog, ProviderCatalogSection, SearchResponse } from '../types/api';
 import { PosterCard } from '../components/PosterCard';
@@ -266,6 +267,23 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
       ? `Searching ${platform.providers.join(', ')} only`
       : 'Nothing installed can be searched for this service yet';
 
+  /**
+   * Card states for both rails at once.
+   *
+   * A platform page draws the provider's own rows and the listings rows, and
+   * the same film routinely appears in both — one call for the union keeps
+   * them in the same state rather than resolving the two independently.
+   */
+  const { interactionFor } = useTitleInteractions(
+    useMemo(
+      () => [
+        ...sections.flatMap((section) => section.items),
+        ...metaSections.flatMap((section) => section.items),
+      ],
+      [sections, metaSections]
+    )
+  );
+
   return (
     <div className="ott-view">
       <header
@@ -462,6 +480,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
                     item={item}
                     onSelectMedia={onSelectMedia}
                     onPlayDirectly={onPlayDirectly}
+                    interaction={interactionFor(item)}
                   />
                 ))}
               </div>
@@ -491,6 +510,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
                 item={item}
                 onSelectMedia={onSelectMedia}
                 onPlayDirectly={onPlayDirectly}
+                interaction={interactionFor(item)}
               />
             ))}
             {/*

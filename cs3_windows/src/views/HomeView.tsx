@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTitleInteractions } from '../components/useTitleInteractions';
 import type { SearchResponse } from '../types/api';
 import { matchesTab, tabsFor } from '../utils/contentTypes';
 import { Play, History, Loader2, RefreshCw, Sparkles, X, Trash2 } from 'lucide-react';
@@ -153,6 +154,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
     () => sections.flatMap((section) => section.items),
     [sections]
   );
+
+  /** Card states for every row on the home screen, in one call. */
+  const { interactionFor } = useTitleInteractions(allItems);
   const typeTabs = useMemo(() => tabsFor(allItems), [allItems]);
   const activeTab = typeTabs.some((tab) => tab.id === typeTab) ? typeTab : 'all';
 
@@ -417,6 +421,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 item={item}
                 onSelectMedia={open}
                 onPlayDirectly={item.url.startsWith('search://') ? undefined : onPlayDirectly}
+                interaction={interactionFor(item)}
               />
             ))}
           </div>

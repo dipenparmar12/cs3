@@ -159,6 +159,26 @@ export function provenanceChain(
     .join(' ▸ ');
 }
 
+/**
+ * Just the provider, for a viewer who did not ask about repositories.
+ *
+ * {@link provenanceChain} answers "whose code produced this, and which
+ * repository published it" — the question a failing source raises and the only
+ * one whose answer a user can act on by turning something off. That is three
+ * names deep and it is a maintenance question, so standard mode shows this
+ * instead: the one name that says where the film is coming from.
+ *
+ * Falls back through the same chain as `provenanceChain`'s last element, so a
+ * row never loses its attribution entirely — an unlabelled source in a list of
+ * thirty is indistinguishable from a broken row.
+ */
+export function providerLabel(
+  source: TorrentResult,
+  provenance?: SourceProvenance
+): string {
+  return provenance?.provider ?? source.providerName ?? source.indexerName ?? '';
+}
+
 /** The host a direct link points at — the one part of a URL worth showing inline. */
 export function sourceHost(source: TorrentResult): string | null {
   const address = source.directUrl;
