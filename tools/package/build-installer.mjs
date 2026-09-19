@@ -41,6 +41,7 @@ if (has('--help') || has('-h')) {
 
   --clean               rebuild every stage, even one nothing has invalidated
   --fast                trust whatever is already staged, without checking it
+  --quick               store the payload instead of compressing it (test builds)
   --target nsis|portable|both   default: both
   --skip-jvm            do not build the sidecar (the package will run no extensions)
   --skip-media          do not bundle ffmpeg/mpv (they are then fetched on first use)
@@ -52,6 +53,7 @@ if (has('--help') || has('-h')) {
 
 const FAST = has('--fast');
 const CLEAN = has('--clean');
+const QUICK = has('--quick');
 const SKIP_JVM = has('--skip-jvm');
 const SKIP_MEDIA = has('--skip-media');
 const SKIP_TYPECHECK = has('--skip-typecheck');
@@ -217,16 +219,24 @@ function newestMtime(entry) {
  * the right answer when the inputs are known-good and the clock is not (a fresh
  * clone checks out with today's timestamps).
  */
-function upToDate(label, outputs, inputs = []) {
+function upToDate(label, outputs, inputs = [], stamp = null) {
   const targets = [outputs].flat();
   if (CLEAN) return false;
   if (!targets.every((target) => fs.existsSync(target))) return false;
+  if (stamp && !fs.existsSync(stamp)) return false;
   if (FAST) {
     info(`reusing ${label} (--fast)`);
     return true;
   }
 
-  const built = Math.min(...targets.map((target) => newestMtime(target)));
+  /*
+   * With a stamp, that file *is* when the stage finished — which is the only
+   * honest reading once a stage copies nothing it does not have to. Without
+   * one, the oldest output is the conservative answer.
+   */
+  const built = stamp
+    ? newestMtime(stamp)
+    : Math.min(...targets.map((target) => newestMtime(target)));
   const changed = [inputs].flat().filter((input) => newestMtime(input) > built);
   if (changed.length > 0) {
     info(`rebuilding ${label} — ${path.relative(root, changed[0])} is newer`);
@@ -378,6 +388,12 @@ if (SKIP_JVM) {
         path.join(staged, 'runtime'),
       ],
       [sidecarJar, runtimeDir, path.join(root, 'tools', 'package', 'build-runtime.mjs')],
+      // Written last by build-runtime.mjs. The staged files themselves cannot
+      // answer this: `copyDir` deliberately leaves a jar whose bytes are
+      // already right untouched, so the oldest of them is older than the
+      // inputs after every successful run, and the stage would restage — while
+      // copying nothing — forever.
+      path.join(staged, '.staged'),
     )
   ) {
     /* nothing to do */
@@ -478,9 +494,23 @@ if (fs.existsSync(releaseDir)) {
   }
 }
 const targets = TARGETS === 'both' ? ['nsis', 'portable'] : [TARGETS];
-run(requireBin('electron-builder'), ['--win', ...targets, '--publish', 'never'], {
-  cwd: app,
-});
+/**
+ * `compression: maximum` is right for something people download and wrong for
+ * something you are about to run once.
+ *
+ * Measured, portable, this tree: packaging is **304s of a 425s build** — every
+ * other stage put together is under two minutes — and almost all of it is
+ * squeezing a payload dominated by a jlinked JRE, ffmpeg and mpv. `--quick`
+ * stores it instead. The artifact is larger and installs identically; what it
+ * must never be is the thing shipped, so it is a flag rather than a default and
+ * the report names it.
+ */
+if (QUICK) info('compression: store (--quick) — larger artifact, for testing rather than release');
+run(
+  requireBin('electron-builder'),
+  ['--win', ...targets, '--publish', 'never', ...(QUICK ? ['-c.compression=store'] : [])],
+  { cwd: app },
+);
 
 // ── Report ───────────────────────────────────────────────────────────────────
 closeStep();
@@ -502,6 +532,9 @@ for (const file of produced) console.log(`    ${file.name}  (${file.mb} MB)`);
 if (!produced.length) console.log('    (no installer found — check the electron-builder output above)');
 if (SKIP_JVM) {
   console.log('\n\x1b[33mNote:\x1b[0m built with --skip-jvm — extensions will not work in this package.');
+}
+if (QUICK) {
+  console.log('[33mNote:[0m built with --quick — the payload is stored, not compressed.');
 }
 if (SKIP_MEDIA) {
   console.log('\x1b[33mNote:\x1b[0m built with --skip-media — ffmpeg and mpv are not bundled.');

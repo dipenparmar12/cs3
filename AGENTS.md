@@ -139,11 +139,15 @@ Variants: `dist:installer`, `dist:portable`, `dist:win:fast`. `--skip-jvm`/`--sk
 
 - **Downloaded archives are cached in `/.cache/media-runtime/`, keyed by URL** and gitignored (anchored). `--refresh` re-fetches — needed for gyan.dev's `ffmpeg-release-essentials.zip`, whose URL is stable while its contents are not. Downloads report progress every 2s and carry a 10-minute deadline, because `await response.arrayBuffer()` printed one line and then nothing for minutes, which is indistinguishable from a hang; a body shorter than its `Content-Length` is rejected rather than cached, or one failed download would poison every later build.
 - **`build-runtime.mjs` mirrors by difference and never wipes.** Deleting first is what made a *running app* fail the build: `EBUSY … unlink sidecar/dist/lib/antlr-runtime-3.5.3.jar`, for a jar whose bytes were already correct, with 58 identical jars about to be deleted and copied back. A file is written only when size or mtime differ, so building no longer requires closing the app; a file that genuinely must be replaced while held reports which file and says to close CloudStream.
+- **A stalled mirror costs 20s, not 10 minutes.** The cache is checked across *every* mirror before any of them is fetched — measured, gyan.dev accepted the connection and sent nothing while the GitHub mirror behind it was already cached, and asking them in order turned that stage into **608 seconds**. Then two deadlines rather than one: 20s to start answering, and a watchdog that fires only after 45s with no bytes, so a slow-but-live download is never cut off.
+- **`--quick` stores the payload instead of compressing it.** Packaging is 336s of a 367s steady-state build — `compression: maximum` squeezing a payload dominated by a JRE, ffmpeg and mpv. `--quick` takes that to 51s at 898 MB instead of 240 MB: right for a build you are about to run once, never for a release, and the report says which one you made.
 - **The jlinked JRE carries `cs3-link-stamp.json`** (JDK home, major, module list) and is relinked only when that changes, or on `--relink`. The module list is part of the stamp deliberately: silently reusing a JRE linked without `jdk.crypto.ec` ships TLS that fails site by site.
 
 **Skipping a step fails silently** — `build-runtime.mjs` verifies what Maven produced rather than running Maven, so a package built without the sidecar step installs fine with **zero extension capability** and nothing says so. Verify `release/win-unpacked/resources/`: `media/` has ffmpeg/ffprobe/mpv, `sidecar/` has `cs3-sidecar.jar` + jlinked JRE + 58 runtime jars.
 
 Measured 2026-08-29, `dist:win:fast`, 158s: setup 271.9 MB, portable 271.7 MB.
+
+Measured 2026-09-19, `dist:portable`, **steady state 367s** — Maven ~0s ×3 (reused), sidecar/dist 2s, media runtime 8s (from the archive cache), `tsc -b` 19s, vite 3s, **electron-builder 336s**, portable 239.9 MB. The same run before this pass rebuilt everything and re-downloaded 119 MB. Packaging is now the whole build; `--quick` is the lever on it.
 
 | Trap | Rule |
 |---|---|

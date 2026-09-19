@@ -378,6 +378,18 @@ function main() {
     fs.rmSync(path.join(DIST, '.smoke'), { recursive: true, force: true });
   }
 
+  /**
+   * A stamp written last, so "is the staging current?" has one answer.
+   *
+   * The caller cannot read it off the staged files themselves: `copyDir` now
+   * skips a jar whose bytes are already right, which leaves that file with its
+   * *old* timestamp — so comparing the oldest staged file against the newest
+   * input declares the stage out of date after every run, and it restages
+   * (copying nothing) forever. The stamp is the one thing that moves exactly
+   * when the stage completes.
+   */
+  fs.writeFileSync(path.join(DIST, '.staged'), new Date().toISOString());
+
   step(`Ready: ${DIST} (${dirSizeMb(DIST).toFixed(0)} MB)`);
   dim('electron-builder copies this to resources/sidecar/ via extraResources.');
 }

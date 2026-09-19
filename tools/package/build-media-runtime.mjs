@@ -222,22 +222,57 @@ function cacheEntry(url, archiveName) {
  * property that matters.
  */
 async function download(mirrors, target, archiveName) {
-  for (const url of mirrors) {
-    const cached = cacheEntry(url, archiveName);
-    if (!REFRESH && fs.existsSync(cached) && fs.statSync(cached).size > 0) {
+  /**
+   * Every mirror is checked against the cache **before** any of them is
+   * fetched.
+   *
+   * Measured, and this is the whole of a 608-second staging step: gyan.dev is
+   * first in the list, it accepted the connection and then sent nothing, and
+   * the GitHub mirror behind it was already in the cache. Asking the mirrors in
+   * order meant waiting out a dead host to reach a file that was on the disk
+   * the entire time. A cache hit is not a mirror preference — it is the answer.
+   */
+  if (!REFRESH) {
+    for (const url of mirrors) {
+      const cached = cacheEntry(url, archiveName);
+      if (!fs.existsSync(cached) || fs.statSync(cached).size === 0) continue;
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.copyFileSync(cached, target);
       log(`cached ${(fs.statSync(target).size / 1048576).toFixed(1)} MB — ${url}`);
       return true;
     }
+  }
 
+  for (const url of mirrors) {
+    const cached = cacheEntry(url, archiveName);
     try {
       log(`fetching ${url}`);
+      /**
+       * Two deadlines, because one cannot express this.
+       *
+       * A whole-request timeout long enough for 90 MB on a slow line (ten
+       * minutes) is also ten minutes of waiting on a host that will never
+       * answer — which is exactly what happened above. So: a short deadline to
+       * *start* answering, and after that a watchdog that only fires when the
+       * transfer has actually stalled. A download that is progressing is never
+       * interrupted, and a dead mirror costs 20 seconds instead of ten minutes.
+       */
+      const controller = new AbortController();
+      const headers = setTimeout(() => controller.abort(new Error('no response in 20s')), 20_000);
+      let watchdog = null;
+      const resetWatchdog = () => {
+        clearTimeout(watchdog);
+        watchdog = setTimeout(
+          () => controller.abort(new Error('the transfer stalled for 45s')),
+          45_000
+        );
+      };
+
       const response = await fetch(url, {
         redirect: 'follow',
         headers: { 'User-Agent': 'cloudstream-desktop-packager' },
-        signal: AbortSignal.timeout(10 * 60 * 1000),
-      });
+        signal: controller.signal,
+      }).finally(() => clearTimeout(headers));
       if (!response.ok) {
         log(`  ${response.status} ${response.statusText}`);
         continue;
@@ -247,7 +282,9 @@ async function download(mirrors, target, archiveName) {
       const chunks = [];
       let received = 0;
       let announced = Date.now();
+      resetWatchdog();
       for await (const chunk of response.body) {
+        resetWatchdog();
         chunks.push(chunk);
         received += chunk.length;
         if (Date.now() - announced >= 2000) {
@@ -257,6 +294,7 @@ async function download(mirrors, target, archiveName) {
         }
       }
 
+      clearTimeout(watchdog);
       const bytes = Buffer.concat(chunks);
       /*
        * A short body is a failed download that answered 200 — a proxy error
