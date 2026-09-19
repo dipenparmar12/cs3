@@ -387,6 +387,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<TorrentStreamStats | null>(null);
   const [swarm, setSwarm] = useState<SwarmReport | null>(null);
+  const [hasStartedPlayback, setHasStartedPlayback] = useState(false);
+  const [isWaitingForBuffer, setIsWaitingForBuffer] = useState(false);
+  const [isMpvBuffering, setIsMpvBuffering] = useState(false);
   const [activeSubtitle, setActiveSubtitle] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
@@ -402,6 +405,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       null
     );
   }, [sourceSession]);
+
+  const effectiveInfoHash = useMemo(() => {
+    if (sourceSession) {
+      return activeSource?.infoHash ?? sourceSession.activeInfoHash ?? undefined;
+    }
+    return infoHash;
+  }, [sourceSession, activeSource?.infoHash, infoHash]);
 
   /**
    * A serialised identity for the active source, and the reason it exists.
@@ -667,6 +677,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!externalSnapshot || externalControl?.capability !== 'full') return;
     if (externalSnapshot.positionSeconds >= 0) setCurrentTime(externalSnapshot.positionSeconds);
     if (externalSnapshot.durationSeconds > 0) setDuration(externalSnapshot.durationSeconds);
+    if (externalSnapshot.positionSeconds > 0 || externalSnapshot.state === 'playing') {
+      setHasStartedPlayback(true);
+    }
     const playing = !externalSnapshot.paused && (externalSnapshot.state === 'playing' || externalSnapshot.state === 'loading');
     setIsPlaying(playing);
     /**
@@ -738,6 +751,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // A new stream is a new question about which source works.
   useEffect(() => {
     recordedSourceFor.current = null;
+    setHasStartedPlayback(false);
+    setIsWaitingForBuffer(false);
+    setIsMpvBuffering(false);
+    setStats(null);
+    setSwarm(null);
   }, [streamUrl]);
 
   // Ensure native mpv engine and any lingering external windows are stopped when player unmounts
@@ -941,10 +959,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const dispose = window.cloudstream?.onMpvUpdate((snapshot: MpvSnapshot) => {
       if (snapshot.state === 'playing') {
         setIsPlaying(true);
+        setHasStartedPlayback(true);
+        setIsMpvBuffering(false);
       } else if (snapshot.state === 'paused') {
         setIsPlaying(false);
+        setIsMpvBuffering(false);
+      } else if (snapshot.state === 'buffering') {
+        setIsMpvBuffering(true);
       } else if (snapshot.state === 'ended') {
         setIsPlaying(false);
+        setIsMpvBuffering(false);
+      }
+      if (snapshot.positionSeconds > 0) {
+        setHasStartedPlayback(true);
       }
       if (snapshot.positionSeconds >= 0) {
         setCurrentTime(snapshot.positionSeconds);
@@ -1003,7 +1030,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     void window.cloudstream?.getMpvSnapshot().then((res) => {
       if (res?.ok && res.snapshot?.sessionId) {
         const s = res.snapshot;
-        setIsPlaying(!s.paused && (s.state === 'playing' || s.state === 'loading'));
+        const playing = !s.paused && (s.state === 'playing' || s.state === 'loading');
+        setIsPlaying(playing);
+        if (s.state === 'playing' || s.positionSeconds > 0) {
+          setHasStartedPlayback(true);
+        }
+        if (s.state === 'buffering') {
+          setIsMpvBuffering(true);
+        }
         if (s.positionSeconds >= 0) setCurrentTime(s.positionSeconds);
         if (s.durationSeconds > 0) setDuration(s.durationSeconds);
         if (s.bufferedSeconds >= 0) setBuffered(s.bufferedSeconds);
@@ -1356,6 +1390,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           video.volume = clampVolume(audioSettings.current.volume);
           video.muted = audioSettings.current.muted;
           setIsPlaying(true);
+          setHasStartedPlayback(true);
+          setIsWaitingForBuffer(false);
 
           // Record successful playback event in history
           window.cloudstream?.recordHistoryEvent?.({
@@ -1625,11 +1661,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // --- torrent stats -------------------------------------------------------
 
   useEffect(() => {
-    if (!infoHash || !window.cloudstream) return;
+    if (!effectiveInfoHash || !window.cloudstream) {
+      setStats(null);
+      setSwarm(null);
+      return;
+    }
 
     let active = true;
+    setStats(null);
+    setSwarm(null);
     const poll = async () => {
-      const next = await window.cloudstream?.getStreamStats(infoHash);
+      const next = await window.cloudstream?.getStreamStats(effectiveInfoHash);
       if (active && next) setStats(next);
     };
 
@@ -1641,7 +1683,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
      * Asking every second would spend work to redraw the same sentence.
      */
     const pollSwarm = async () => {
-      const report = await window.cloudstream?.getSwarmReport(infoHash);
+      const report = await window.cloudstream?.getSwarmReport(effectiveInfoHash);
       if (active) setSwarm(report ?? null);
     };
 
@@ -1653,8 +1695,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       active = false;
       window.clearInterval(timer);
       window.clearInterval(swarmTimer);
+      setStats(null);
+      setSwarm(null);
     };
-  }, [infoHash]);
+  }, [effectiveInfoHash]);
 
   /**
    * The one limitation worth putting in front of someone who is waiting.
@@ -1708,6 +1752,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (video.buffered.length > 0) {
         setBuffered(offsetRef.current + video.buffered.end(video.buffered.length - 1));
       }
+      if (video.currentTime > 0) {
+        setHasStartedPlayback(true);
+      }
+      setIsWaitingForBuffer(false);
     };
     const onMeta = () => {
       // ffmpeg reports the remaining duration from the seek point, not the
@@ -1716,7 +1764,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setDuration(probed && probed > 0 ? probed : video.duration);
     };
     const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
+    const onPause = () => {
+      setIsPlaying(false);
+      setIsWaitingForBuffer(false);
+    };
     /**
      * Names the codec rather than guessing at it.
      *
@@ -1750,7 +1801,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
      */
     const onPlaying = () => {
       setIsPlaying(true);
+      setHasStartedPlayback(true);
+      setIsWaitingForBuffer(false);
       setError(null);
+    };
+
+    const onWaiting = () => {
+      if (!video.paused) {
+        setIsWaitingForBuffer(true);
+      }
+    };
+
+    const onCanPlay = () => {
+      setIsWaitingForBuffer(false);
+    };
+
+    const onSeeked = () => {
+      setIsWaitingForBuffer(false);
     };
 
     video.addEventListener('timeupdate', onTime);
@@ -1759,6 +1826,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video.addEventListener('play', onPlay);
     video.addEventListener('playing', onPlaying);
     video.addEventListener('pause', onPause);
+    video.addEventListener('waiting', onWaiting);
+    video.addEventListener('canplay', onCanPlay);
+    video.addEventListener('seeked', onSeeked);
     video.addEventListener('error', onError);
 
     return () => {
@@ -1768,6 +1838,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.removeEventListener('play', onPlay);
       video.removeEventListener('playing', onPlaying);
       video.removeEventListener('pause', onPause);
+      video.removeEventListener('waiting', onWaiting);
+      video.removeEventListener('canplay', onCanPlay);
+      video.removeEventListener('seeked', onSeeked);
       video.removeEventListener('error', onError);
     };
   }, []);
@@ -2323,9 +2396,52 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [timeFromPointer, seekTo]
   );
 
-  // Playback cannot start until enough leading data exists; showing the real
-  // reason beats an indefinite spinner over a black frame.
-  const isBuffering = Boolean(stats && !stats.isPlayable && !stats.error);
+  /**
+   * True only when playback is legitimately waiting for data to arrive:
+   * 1. Initial startup: before playback has begun, when a torrent stream is
+   *    gathering enough leading pieces from peers to start.
+   * 2. Mid-stream stall: playback has started, is not paused by the user,
+   *    but the engine (HTML5 video or MPV) has stalled waiting for buffer.
+   *
+   * NEVER true when the player is actively delivering playback (isPlaying is true
+   * and not stalled), or when the user has intentionally paused the video.
+   */
+  const isBuffering = useMemo(() => {
+    // If actively playing and not stalled, we are delivering frames — NEVER show buffer overlay
+    if (isPlaying && !isWaitingForBuffer && !isMpvBuffering) {
+      return false;
+    }
+
+    // If an error occurred or no streamUrl, no buffering overlay
+    if (error || !streamUrl) {
+      return false;
+    }
+
+    // Mid-stream stall while playing
+    if (hasStartedPlayback) {
+      if (isNativeEngine) {
+        return isMpvBuffering;
+      }
+      return isWaitingForBuffer;
+    }
+
+    // Initial startup buffering: only before playback has started delivering
+    if (!hasStartedPlayback && currentTime === 0 && !isPlaying) {
+      return Boolean(stats && !stats.isPlayable && !stats.error);
+    }
+
+    return false;
+  }, [
+    isPlaying,
+    isWaitingForBuffer,
+    isMpvBuffering,
+    error,
+    streamUrl,
+    hasStartedPlayback,
+    isNativeEngine,
+    currentTime,
+    stats,
+  ]);
 
   /**
    * True while the session is still producing a stream.
