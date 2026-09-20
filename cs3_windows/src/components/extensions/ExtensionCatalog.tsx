@@ -15,6 +15,7 @@ import { CompatibilityReport } from './CompatibilityReport';
 import { matchesQuery, matchesTags, tagLabel, type FilterState } from './useExtensionFilters';
 import type { PluginCompatibilityReport, SitePlugin } from '../../types/plugin';
 import type { InstallProgress } from './useExtensionCatalog';
+import { useReveal } from '../../utils/ExperienceModeContext';
 
 interface ExtensionCatalogProps {
   repository: { name: string; url: string } | null;
@@ -64,6 +65,7 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
   onInstall,
   onUninstall,
 }) => {
+  const technical = useReveal('technical');
   const [reports, setReports] = useState<Record<string, PluginCompatibilityReport | 'loading'>>({});
 
   /**
@@ -216,15 +218,21 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
                     <button
                       type="button"
                       className="ext-btn"
-                      title="Check what this archive needs before installing it"
+                      title={
+                        technical
+                          ? 'Check what this archive needs before installing it'
+                          : 'Check whether this add-on works on this computer'
+                      }
                       onClick={() => void analyse(plugin)}
                     >
-                      <ShieldQuestion size={13} /> Check compatibility
+                      <ShieldQuestion size={13} />{' '}
+                      {technical ? 'Check compatibility' : 'Will it work?'}
                     </button>
                   ) : null}
                   {report === 'loading' ? (
                     <span className="ext-row__subtitle">
-                      <Loader2 size={12} className="spin" /> analysing…
+                      <Loader2 size={12} className="spin" />{' '}
+                      {technical ? 'analysing…' : 'checking…'}
                     </span>
                   ) : null}
                 </div>
@@ -239,7 +247,11 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
       ) : null}
 
       {!loading && plugins.length === 0 && !error ? (
-        <p className="ext-empty">This repository published no plugin list.</p>
+        <p className="ext-empty">
+          {technical
+            ? 'This repository published no plugin list.'
+            : 'This collection is empty — it offers nothing to install.'}
+        </p>
       ) : null}
     </div>
   );

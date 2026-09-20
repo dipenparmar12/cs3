@@ -7,6 +7,7 @@ import type {
   IndexerConfig, IndexerHealth, SourcePreferences,
 } from '../types/torrent';
 import { IndexerKind, Resolution } from '../types/torrent';
+import { useReveal } from '../utils/ExperienceModeContext';
 
 /**
  * Settings → Sources.
@@ -32,6 +33,7 @@ interface TestState {
 }
 
 export const SourceSettings: React.FC = () => {
+  const technical = useReveal('technical');
   const [configs, setConfigs] = useState<IndexerConfig[]>([]);
   const [health, setHealth] = useState<IndexerHealth[]>([]);
   const [prefs, setPrefs] = useState<SourcePreferences | null>(null);
@@ -145,13 +147,30 @@ export const SourceSettings: React.FC = () => {
       <h3 className="settings-section__title">
         <Radio size={17} /> Sources
       </h3>
+      {/*
+        Both sentences say the same thing; only one of them requires knowing
+        what an indexer is or why a domain would rotate. The named sites and the
+        Jackett/Prowlarr route stay in the technical version because that is who
+        they are for — someone who already runs one is not helped by being told
+        that some places are blocked.
+      */}
       <p className="settings-section__hint">
-        Indexers are searched in parallel and their results are merged and deduplicated.
-        The ones enabled by default answer on stable hosts and work on most networks;
-        per-site indexers (1337x, BitSearch, TheRARBG, YTS, EZTV, Nyaa) rotate domains and
-        are blocked by many ISPs, so they ship disabled — enable them if your connection is
-        unfiltered. For full control, run <strong>Jackett</strong> or{' '}
-        <strong>Prowlarr</strong> locally and add it below.
+        {technical ? (
+          <>
+            Indexers are searched in parallel and their results are merged and deduplicated.
+            The ones enabled by default answer on stable hosts and work on most networks;
+            per-site indexers (1337x, BitSearch, TheRARBG, YTS, EZTV, Nyaa) rotate domains and
+            are blocked by many ISPs, so they ship disabled — enable them if your connection is
+            unfiltered. For full control, run <strong>Jackett</strong> or{' '}
+            <strong>Prowlarr</strong> locally and add it below.
+          </>
+        ) : (
+          <>
+            These are the places searched when an add-on has nothing. The ones switched on
+            work on most connections; the rest are blocked by many internet providers, so
+            they start off — turn them on if searches keep coming back empty.
+          </>
+        )}
       </p>
 
       <ul className="indexer-list">

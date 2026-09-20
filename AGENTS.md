@@ -2061,6 +2061,49 @@ Rules:
   through a ref -- the listener is installed once, so closing over the mount-time
   value would leave the shortcut dead until the next reload.
 
+### The second pass: the screens PRD-47 did not reach (2026-09-19)
+
+The sweep above covered the player, the source lists and the library and stopped
+at the two screens with the densest jargon in the product. The extensions screen
+was **entirely unswept** -- it is the app's own build vocabulary rendered as a
+UI, and it is also the screen a new user is sent to first.
+
+Now behind the same one switch, with nothing removed:
+
+| Surface | Standard mode | Developer mode |
+|---|---|---|
+| `CompatibilityReport` | one verdict -- "Should work", and why | the score, confidence, tier, format, Android API references, network stack, HTML parser, native libs, analyser details |
+| `ProvenancePanel` | maintainers, content, version, size, project page | those plus internal id, SHA-256 and the raw catalogue URL |
+| `ExtensionCatalog` | "Will it work?" | "Check compatibility" |
+| `SearchView` progress | the bar, the count, "N failed" | plus which source answered last and each failure's exception text |
+| `SearchView` failure | `plainMessage`, original one click away | the original, already open |
+| `ProviderRankingPanel` | score, band, sample count, pin/never-use, **every privacy control** | plus the weighted criteria, their sliders, the per-criterion breakdown and the source's repository |
+| `SourceSettings` | "the places searched when an add-on has nothing" | the indexer paragraph, the named sites, Jackett/Prowlarr |
+
+Rules, beyond the four above:
+
+- **`compatibilityVerdict.ts` reads the score; it never re-derives one.** Pure and
+  tested, for `providerHealth.ts`'s reason -- a second opinion computed at the UI
+  is how a panel and its own summary come to disagree in front of one person. The
+  80/50 boundaries are `CompatibilityReport`'s existing badge thresholds, kept
+  rather than re-chosen for the same reason.
+- **`Unsupported` is an absence of evidence, not the bottom of the scale.** Its
+  score is 0 by default rather than by measurement, and the cross-platform jar
+  lane spent a release being reported as exactly that -- `Unsupported`, 0% --
+  for the one lane that needs no translation at all. It answers `unknown`.
+- **Nothing tells a viewer an extension *will* work.** The analyser reads the
+  archive and never runs it, so a perfect score and a dead site are identical
+  from where it stands. Every band hedges; a test enforces it.
+- **A privacy control is never held back.** `ProviderRankingPanel` carries what is
+  collected and the button that erases it, and those stay in both modes. Gating
+  the whole panel was the obvious move and it would have put a data control
+  behind a jargon filter, which is the one thing this level must not do. The
+  same argument keeps pin/never-use visible: they are choices, not workings.
+- **Jargon with no technical counterpart is reworded once, not branched.** "Delete
+  its archive", "No providers registered", "declares upstream's NSFW content
+  type" have no audience that needs the original, so they are simply fixed. A
+  mode branch is for content a developer genuinely wants back.
+
 ### The cast list was a row of names, and that was as far as it could go (2026-09-14)
 
 The detail page showed `detail.actors` as grey chips. That is upstream's shape —

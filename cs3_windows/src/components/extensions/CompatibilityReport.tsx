@@ -2,6 +2,8 @@ import React from 'react';
 import { ShieldCheck, X } from 'lucide-react';
 import type { PluginCompatibilityReport } from '../../types/plugin';
 import { Badge } from './primitives';
+import { useReveal } from '../../utils/ExperienceModeContext';
+import { toneFor, verdictFor } from './compatibilityVerdict';
 
 /**
  * Static compatibility classification for one archive, before it is trusted.
@@ -27,6 +29,13 @@ export const CompatibilityReport: React.FC<{
   report: PluginCompatibilityReport;
   onClose: () => void;
 }> = ({ report, onClose }) => {
+  /**
+   * Everything below the verdict is the analyser's working, and the working is
+   * written in this app's own vocabulary. `compatibilityVerdict.ts` carries the
+   * argument for showing the conclusion on its own; this is where it is made.
+   */
+  const technical = useReveal('technical');
+  const verdict = verdictFor(report);
   const tone =
     report.compatibilityScore >= 80
       ? 'success'
@@ -40,9 +49,14 @@ export const CompatibilityReport: React.FC<{
         <ShieldCheck size={16} style={{ color: 'var(--accent-light)', flex: 'none' }} />
         <div className="ext-row__grow">
           <div className="ext-row__title">
-            <span>Compatibility analysis: {report.pluginName}</span>
-            <Badge tone={tone}>{report.compatibilityScore}%</Badge>
-            <Badge>{report.confidence} confidence</Badge>
+            <span>
+              {technical ? 'Compatibility analysis: ' : 'Will it work here? '}
+              {report.pluginName}
+            </span>
+            <Badge tone={technical ? tone : toneFor(verdict.level)}>
+              {technical ? `${report.compatibilityScore}%` : verdict.label}
+            </Badge>
+            {technical && <Badge>{report.confidence} confidence</Badge>}
             {/*
               The one badge here that is an observation rather than a
               prediction: a cross-platform jar has no DEX, so nothing about it
@@ -50,10 +64,14 @@ export const CompatibilityReport: React.FC<{
               apply. Worth saying on the row, because it is also the lever —
               an author who sees this is being shown what opting in buys.
             */}
-            {report.format === 'CSJ' && <Badge tone="success">Cross-platform jar</Badge>}
+            {technical && report.format === 'CSJ' && (
+              <Badge tone="success">Cross-platform jar</Badge>
+            )}
           </div>
           <div className="ext-row__subtitle">
-            Predicted from the archive's bytecode — not a record of it running.
+            {technical
+              ? "Predicted from the archive's bytecode — not a record of it running."
+              : verdict.detail}
           </div>
         </div>
         <button type="button" className="ext-btn" onClick={onClose} title="Close">
@@ -61,6 +79,15 @@ export const CompatibilityReport: React.FC<{
         </button>
       </div>
 
+      {/*
+        The working. Every row of it is a fact about how the archive is built —
+        a tier name, a count of Android API references, the HTTP client it links
+        against — and none of it is readable without knowing that this app
+        translates Android bytecode to run it. Held back rather than removed:
+        this grid is the first thing to ask for when a high-scoring extension
+        finds nothing, and `details` below it is where the analyser says why.
+      */}
+      {technical && (
       <div className="ext-provenance__grid" style={{ marginTop: '0.7rem' }}>
         <div className="ext-provenance__field">
           <span className="ext-provenance__key">Recommended tier</span>
@@ -87,8 +114,9 @@ export const CompatibilityReport: React.FC<{
           <span className="ext-provenance__value">{report.hasNativeLibs ? 'Present' : 'None'}</span>
         </div>
       </div>
+      )}
 
-      {Array.isArray(report.details) && report.details.length > 0 && (
+      {technical && Array.isArray(report.details) && report.details.length > 0 && (
         <ul
           style={{
             margin: '0.7rem 0 0',

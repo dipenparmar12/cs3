@@ -49,8 +49,8 @@ import { describeError } from '../../utils/errors';
 type Tab = 'sources' | 'repositories';
 
 const TABS: Array<{ id: Tab; label: string; hint: string }> = [
-  { id: 'sources', label: 'Installed', hint: 'What you have, and what will be asked' },
-  { id: 'repositories', label: 'Browse', hint: 'Repositories, extensions and providers' },
+  { id: 'sources', label: 'Installed', hint: 'What you have, and what will be searched' },
+  { id: 'repositories', label: 'Browse', hint: 'Collections of add-ons you can install' },
 ];
 
 export const ExtensionsScreen: React.FC = () => {
@@ -348,8 +348,8 @@ export const ExtensionsScreen: React.FC = () => {
               forget.
             */}
             <em>
-              Off by default. A provider counts as adult when it declares upstream's NSFW
-              content type, which catches one bundled inside an otherwise ordinary repository.
+              Off by default. A source counts as adult when it says so about itself, which
+              catches one bundled inside an otherwise ordinary add-on.
             </em>
           </span>
         </label>
