@@ -202,4 +202,61 @@ VLC is launched `--extraintf http` on an OS-assigned loopback port behind a per-
 
 The URL handed over is **proxied** (headers pre-applied — each player has an incompatible or absent way to set `Referer`). Nothing is downloaded on the user's behalf; if no player is found, official download pages open. Suppressed when the source is dead — a 404 plays no better in VLC.
 
+### 6.16 The codec tables failed open, and Dolby Vision was invisible (2026-09-20)
+
+Found by auditing two real source exports (273 rows, 2 titles) against the shipped
+classifier rather than from a bug report. Five defects, all silent, all in the direction
+that hands an undecodable stream to the `<video>` element — where the failure arrives as a
+bare `error` event and the ladder attributes it to the *source*.
+
+1. **`canPlayVideo` and `isPlayableAudioCodec` ended in `!UNSUPPORTED.has(name)`** — so a
+   codec neither list had heard of was reported **playable**. The doctrine written directly
+   above those sets says the opposite, and `canPlayContainer` had failed closed all along.
+   Both now consult allowlists (`PLAYABLE_VIDEO` = h264/vp8/vp9/av1, `PLAYABLE_AUDIO` =
+   aac/mp3/opus/vorbis/flac). **An *absent* codec still answers `true`** — "no information"
+   and "declared something we cannot read" are different questions, and only the second is
+   a reason to be pessimistic. A measured renderer capability still overrides in both
+   directions; the allowlist is a fallback, never a veto.
+2. **A manifest whose `CODECS` this build could not parse kept the `h264`/`aac` defaults.**
+   `normalizeCodecFromRfc6381` returned `undefined` for anything unrecognised and both
+   parsers treated that as "no CODECS attribute". So a playlist plainly announcing Dolby
+   Vision or DTS was recorded as the two codecs the browser is guaranteed to accept. It
+   reports `UNKNOWN_CODEC` now, which fails closed by construction.
+3. **`mp4a` is a namespace, not a synonym for AAC.** The object type indication names the
+   codec: `mp4a.a5` is AC-3, `mp4a.a6` is E-AC-3, `mp4a.69`/`.6b` are MP3. Collapsing the
+   prefix reported the *modal provider audio* as playable — the silent-dialogue failure.
+4. **Dolby Vision appeared nowhere in the pipeline.** ffprobe reports DV as plain `hevc`
+   and puts the configuration record in `side_data_list`, so DV and ordinary HEVC were
+   identical by name. Read from side data first, `codec_tag_string` (`dvh1`/`dvhe`/`dav1`)
+   as fallback — both, because a remuxed MKV keeps the RPU and loses the tag while a
+   partial-range fMP4 does the reverse. `dolbyVision` is its own field, not a flavour of
+   `isHdr`: HDR10 decodes correctly and merely wants tone-mapping on a re-encode, while
+   **DV profile 5 decoded by anything that ignores the RPU comes out green and magenta**
+   with nothing reporting a fault. It also forces `isHdr` — profile 5 signals its transfer
+   inside the RPU, so `color_transfer` is routinely `unknown`, which left `isHdr` false and
+   `withFfmpegExtras` tone-maps only when `isHdr` is true. A DV release re-encoded on a
+   machine without mpv therefore skipped the tone-map and came out grey: the exact failure
+   §6.3's chain exists to prevent, reached through the one path that never checked.
+5. **`isHdr` in the manifest parsers was `bitDepth > 8`.** 10-bit SDR is ordinary — most
+   HEVC WEB-DL is exactly that — so every 10-bit playlist was HDR, and the re-encode path
+   tone-mapped a picture that did not need it. Flattening a correct picture is the same
+   size of error as omitting the chain on a real HDR one.
+
+Also: the DASH rescue branch tested `avc1|hvc1|vp09|av01`, so a DV or VVC manifest laid out
+that way reported `video: null` — worse than unplayable, *absent*.
+
+**Rules:**
+- **A codec name neither list recognises is undecodable.** Being wrong costs CPU; being
+  wrong the other way costs the viewer the film. An absent codec is not a named unknown.
+- **Never widen a codec prefix to a family.** `mp4a`, `dts*` and `dv*` each cover codecs
+  with opposite playability.
+- **DV is read from side data or the codec tag, never from the codec name.**
+- **Bit depth is not a transfer function**, in either direction.
+
+Verified: `bun run test container` (13 cases), **mutation-verified in all five directions** —
+restoring any one fix fails at least one test. `isDolbyVisionTag` and the fail-closed
+fallbacks were also exercised against a real `ffprobe` 7.1 with a `dvh1`-tagged fixture.
+Full matrix (both files' formats plus MPEG-2/Xvid/VC-1/ProRes/TrueHD/8K/Hi10P) resolves to
+a working strategy in every row, with and without mpv — nothing falls through.
+
 ---

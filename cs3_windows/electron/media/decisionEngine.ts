@@ -54,6 +54,51 @@ const UNSUPPORTED_VIDEO = new Set([
 ]);
 
 /**
+ * The codecs Chromium actually ships a decoder for.
+ *
+ * The denylists above answer "is this one of the codecs we know to be a
+ * problem?", and for years the fallback answered the *unknown* case with
+ * `true` — the opposite of the doctrine written over them. A codec neither
+ * list has heard of was reported as directly playable, handed to the element,
+ * and failed there; and because the element's failure arrives as a bare
+ * `error` event, the ladder attributed it to the source rather than to the
+ * decision. Every new or exotic codec string therefore failed in the one
+ * direction this file says costs the viewer the film.
+ *
+ * These are the allowlists, and they are what the fallback consults now. A
+ * name in neither list is treated as undecodable, which routes it to mpv or
+ * to ffmpeg — both of which carry their own decoders and will very likely
+ * play it. The cost of being wrong here is CPU; the cost of being wrong the
+ * other way is a black screen.
+ */
+const PLAYABLE_VIDEO = new Set(['h264', 'avc1', 'vp8', 'vp9', 'av1']);
+
+const PLAYABLE_AUDIO = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac']);
+
+/**
+ * Dolby Vision, which is HEVC (or AV1) the browser must not be handed.
+ *
+ * DV profile 5 carries its picture in a non-standard colour space and its
+ * dynamic metadata in an RPU the base decoder ignores, so decoding it as
+ * ordinary HEVC does not fail — it produces a green and magenta picture at
+ * full frame rate. That is the worst shape a defect can have here: no error,
+ * no log line, and a viewer who reports "the colours are broken" about a file
+ * that every other player opens correctly.
+ *
+ * Profiles 7 and 8 have a base layer that is HDR10 or SDR compatible, so they
+ * survive being decoded plainly. They are still routed away from the element,
+ * because the RPU is where the grade lives and dropping it is a visible loss
+ * on exactly the 4K releases that ship it. mpv renders all of them properly
+ * through libplacebo (`--vo=gpu-next`, which `mpvEngine` already prefers).
+ */
+const DOLBY_VISION_CODEC_TAGS = new Set(['dvh1', 'dvhe', 'dav1', 'dva1', 'dvav']);
+
+export function isDolbyVisionTag(tag: string | undefined): boolean {
+  if (!tag) return false;
+  return DOLBY_VISION_CODEC_TAGS.has(tag.toLowerCase().trim().slice(0, 4));
+}
+
+/**
  * Containers Chromium can demux, and the trap inside that sentence.
  *
  * ffprobe reports Matroska as `matroska,webm` for *every* Matroska file, because
@@ -192,7 +237,8 @@ export function isTextSubtitle(codec: string): boolean {
 export function isPlayableAudioCodec(codec: string): boolean {
   const c = codec.toLowerCase();
   if (c.startsWith('adpcm_') || c.startsWith('pcm_')) return false;
-  return !UNSUPPORTED_AUDIO.has(c);
+  if (UNSUPPORTED_AUDIO.has(c)) return false;
+  return PLAYABLE_AUDIO.has(c);
 }
 
 /**
@@ -209,8 +255,17 @@ export function isPlayableAudioCodec(codec: string): boolean {
 export function canPlayVideo(
   codec: string | undefined,
   pixelFormat: string | undefined,
-  capabilities: RendererCapabilities | null
+  capabilities: RendererCapabilities | null,
+  /**
+   * Set when the stream carries a Dolby Vision RPU. It is deliberately not
+   * folded into `codec`: ffprobe reports DV as plain `hevc` and puts the
+   * configuration record in side data, so the codec name alone can never
+   * answer this and a caller that forgets to pass it gets the old behaviour
+   * rather than a silently wrong one.
+   */
+  dolbyVision = false
 ): boolean {
+  if (dolbyVision) return false;
   if (!codec) return true;
   const name = codec.toLowerCase();
 
@@ -225,7 +280,8 @@ export function canPlayVideo(
 
   const measured = capabilities?.video?.[name];
   if (typeof measured === 'boolean') return measured;
-  return !UNSUPPORTED_VIDEO.has(name);
+  if (UNSUPPORTED_VIDEO.has(name)) return false;
+  return PLAYABLE_VIDEO.has(name);
 }
 
 /**
@@ -559,7 +615,12 @@ function decideBrowserStrategy(
     ? 'extract_webvtt'
     : 'ignore';
 
-  const videoPlayable = canPlayVideo(video?.codec, video?.pixelFormat, capabilities);
+  const videoPlayable = canPlayVideo(
+    video?.codec,
+    video?.pixelFormat,
+    capabilities,
+    video?.dolbyVision
+  );
   const audioPlayable = !track || (track.playable && track.channels <= MAX_DIRECT_CHANNELS);
   const containerPlayable = canPlayContainer(
     metadata.formatName,

@@ -42,6 +42,20 @@ export interface VideoStreamMetadata {
   colorTransfer?: string;
   /** PQ or HLG transfer. Tone-mapping is out of scope; this is for reporting. */
   isHdr: boolean;
+  /**
+   * The stream carries a Dolby Vision RPU.
+   *
+   * Read from ffprobe's side data or the `dvh1`/`dvhe` codec tag, never from
+   * the codec name — ffprobe reports DV as plain `hevc`, so a DV release and
+   * an ordinary HEVC one are identical by name. It is its own field rather
+   * than a flavour of {@link isHdr} because the two need opposite handling:
+   * HDR10 decodes correctly and merely needs tone-mapping on a re-encode,
+   * while DV profile 5 decoded by anything that ignores the RPU comes out
+   * green and magenta with nothing reporting a fault.
+   */
+  dolbyVision?: boolean;
+  /** 5, 7, 8… when the DV configuration record was readable. Reporting only. */
+  dolbyVisionProfile?: number;
   isInterlaced: boolean;
 }
 
