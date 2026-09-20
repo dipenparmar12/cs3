@@ -7,12 +7,25 @@ import type {
   VideoStreamMetadata,
 } from '../../src/types/media.ts';
 import type { InspectionStrategyType } from './playbackTelemetry.ts';
-import { isPlayableAudioCodec, requiresEmeDecryption } from './decisionEngine.ts';
+import { isDolbyVisionTag, isPlayableAudioCodec, requiresEmeDecryption } from './decisionEngine.ts';
 import { runTool } from './runTool.ts';
 import { scopedLogger } from '../logging/logger.ts';
 import { describeError } from '../../src/utils/errors.ts';
 
 const log = scopedLogger('ffprobe');
+
+/**
+ * What a manifest's codec field is set to when it declared one this build
+ * cannot read.
+ *
+ * It is a name on purpose rather than `undefined`. `canPlayVideo` treats an
+ * absent codec as "no information, do not block" — right for a manifest that
+ * never said anything — whereas this is the opposite situation: the stream
+ * announced what it is and we did not recognise it, which is exactly when a
+ * conservative answer is wanted. Being a name no allowlist contains, it fails
+ * closed and routes to a decoder that can probably handle it.
+ */
+const UNKNOWN_CODEC = 'unknown';
 
 /**
  * PRD-37 / PRD-40 / PRD-40.1: Container-Aware Pre-Playback Media Inspection Layer.
@@ -277,6 +290,21 @@ interface FfprobeStream {
   field_order?: string;
   color_space?: string;
   color_transfer?: string;
+  codec_tag_string?: string;
+  /**
+   * Where ffprobe puts the Dolby Vision configuration record. There is no
+   * codec name for DV — the stream reports `hevc` — so this is the only place
+   * the RPU announces itself. Requires `-show_streams`, which this call
+   * already passes.
+   */
+  side_data_list?: Array<{
+    side_data_type?: string;
+    dv_profile?: number;
+    dv_level?: number;
+    rpu_present_flag?: number;
+    bl_present_flag?: number;
+    dv_bl_signal_compatibility_id?: number;
+  }>;
   disposition?: { default?: number; forced?: number };
   tags?: { language?: string; title?: string };
 }
@@ -312,38 +340,123 @@ function numberOrUndefined(value: string | number | undefined): number | undefin
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function normalizeCodecFromRfc6381(codecString: string): { videoCodec?: string; audioCodec?: string; bitDepth?: number } {
-  const codecs = codecString.split(',').map((s) => s.trim().toLowerCase());
+/**
+ * An RFC 6381 codec string, read as far as it can be trusted.
+ *
+ * Two things about the return shape are load-bearing, and both exist because
+ * the first version of this function could only say "h264" or nothing at all.
+ *
+ * `videoUnknown`/`audioUnknown` are set when a codec *was* declared and this
+ * table does not recognise it. The callers used to treat that identically to
+ * "no CODECS attribute", which meant falling back to the `h264`/`aac`
+ * defaults — so a manifest that plainly announced Dolby Vision or DTS was
+ * recorded as the two codecs the browser is guaranteed to accept, reported as
+ * directly playable, and failed in the element. Saying "something, and not
+ * one of ours" is what lets the decision engine be conservative instead.
+ *
+ * `mp4a` is not a synonym for AAC. It is an MPEG-4 audio *namespace* whose
+ * object type indication picks the actual codec: `mp4a.40.x` is AAC, but
+ * `mp4a.a5` is AC-3, `mp4a.a6` is E-AC-3 and `mp4a.69`/`mp4a.6b` are MP3.
+ * Collapsing the whole prefix to AAC reported AC-3 and E-AC-3 — the modal
+ * provider audio — as playable, which is the silent-dialogue failure.
+ */
+function normalizeCodecFromRfc6381(codecString: string): {
+  videoCodec?: string;
+  audioCodec?: string;
+  bitDepth?: number;
+  dolbyVision?: boolean;
+  videoUnknown?: boolean;
+  audioUnknown?: boolean;
+} {
+  const codecs = codecString.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   let videoCodec: string | undefined;
   let audioCodec: string | undefined;
   let bitDepth = 8;
+  let dolbyVision = false;
+  let videoUnknown = false;
+  let audioUnknown = false;
 
+  /**
+   * Which family a token belongs to, so an unrecognised one can be filed as
+   * unknown *video* or unknown *audio* rather than ignored. Everything in
+   * MP4RA's video space is a four-character code; guessing from the string is
+   * not possible, so anything unmatched is reported against both and the
+   * caller keeps whichever side it had no other answer for.
+   */
   for (const c of codecs) {
     if (c.startsWith('avc1') || c.startsWith('avc3')) {
       videoCodec = 'h264';
+    } else if (c.startsWith('dvh1') || c.startsWith('dvhe')) {
+      // Dolby Vision over HEVC. The base layer is HEVC; the RPU is what the
+      // element would drop, so the codec is recorded honestly and the DV flag
+      // carries the reason it must not go there.
+      videoCodec = 'hevc';
+      dolbyVision = true;
+      bitDepth = 10;
+    } else if (c.startsWith('dav1') || c.startsWith('dva1') || c.startsWith('dvav')) {
+      videoCodec = c.startsWith('dav1') ? 'av1' : 'h264';
+      dolbyVision = true;
+      bitDepth = 10;
     } else if (c.startsWith('hvc1') || c.startsWith('hev1')) {
       videoCodec = 'hevc';
       if (c.includes('.2.') || c.includes('.l120.')) bitDepth = 10;
+    } else if (c.startsWith('vvc1') || c.startsWith('vvi1')) {
+      videoCodec = 'vvc';
     } else if (c.startsWith('vp09') || c.startsWith('vp9')) {
       videoCodec = 'vp9';
       if (c.startsWith('vp09.02') || c.startsWith('vp09.03')) bitDepth = 10;
+    } else if (c.startsWith('vp08') || c.startsWith('vp8')) {
+      videoCodec = 'vp8';
     } else if (c.startsWith('av01')) {
       videoCodec = 'av1';
       if (c.includes('.10m.')) bitDepth = 10;
     } else if (c.startsWith('mp4a')) {
-      audioCodec = 'aac';
+      // The object type indication, not the prefix, names the codec.
+      const oti = c.split('.')[1] ?? '';
+      if (oti === 'a5') audioCodec = 'ac3';
+      else if (oti === 'a6') audioCodec = 'eac3';
+      else if (oti === 'a9') audioCodec = 'dts';
+      else if (oti === '69' || oti === '6b') audioCodec = 'mp3';
+      else audioCodec = 'aac';
     } else if (c.startsWith('ec-3') || c.startsWith('eac3')) {
       audioCodec = 'eac3';
     } else if (c.startsWith('ac-3') || c.startsWith('ac3')) {
       audioCodec = 'ac3';
+    } else if (c.startsWith('ac-4')) {
+      audioCodec = 'ac4';
+    } else if (c.startsWith('dtsc') || c.startsWith('dtse') || c.startsWith('dts-')) {
+      audioCodec = 'dts';
+    } else if (c.startsWith('dtsh') || c.startsWith('dtsl') || c.startsWith('dtsx')) {
+      audioCodec = 'dtshd';
+    } else if (c.startsWith('mhm1') || c.startsWith('mha1')) {
+      audioCodec = 'mpegh';
     } else if (c.startsWith('opus')) {
       audioCodec = 'opus';
-    } else if (c.startsWith('flac')) {
+    } else if (c.startsWith('flac') || c.startsWith('fLaC')) {
       audioCodec = 'flac';
+    } else if (c.startsWith('alac')) {
+      audioCodec = 'alac';
+    } else if (c.startsWith('vorbis')) {
+      audioCodec = 'vorbis';
+    } else if (c.startsWith('mp3')) {
+      audioCodec = 'mp3';
+    } else if (c.startsWith('stpp') || c.startsWith('wvtt')) {
+      // Timed text. Not a video or audio answer, and not an unknown one either.
+      continue;
+    } else {
+      videoUnknown = true;
+      audioUnknown = true;
     }
   }
 
-  return { videoCodec, audioCodec, bitDepth };
+  return {
+    videoCodec,
+    audioCodec,
+    bitDepth,
+    dolbyVision: dolbyVision || undefined,
+    videoUnknown: videoUnknown && !videoCodec ? true : undefined,
+    audioUnknown: audioUnknown && !audioCodec ? true : undefined,
+  };
 }
 
 /**
@@ -355,9 +468,18 @@ export function parseHlsManifest(manifestText: string): MediaMetadata | null {
 
   let bestWidth = 0;
   let bestHeight = 0;
+  /**
+   * The defaults stand only for a manifest that declared no `CODECS` at all.
+   *
+   * Where one *was* declared and this build could not read it, the codec is
+   * set to `UNKNOWN_CODEC` instead — see `normalizeCodecFromRfc6381`. Keeping
+   * the optimistic default in that case is what reported a Dolby Vision or
+   * DTS playlist as H.264/AAC and sent it to hls.js to fail.
+   */
   let detectedVideoCodec = 'h264';
   let detectedAudioCodec = 'aac';
   let detectedBitDepth = 8;
+  let dolbyVision = false;
   let frameRate = 0;
   let hasVideo = false;
 
@@ -383,7 +505,10 @@ export function parseHlsManifest(manifestText: string): MediaMetadata | null {
       if (codecsMatch) {
         const normalized = normalizeCodecFromRfc6381(codecsMatch[1]);
         if (normalized.videoCodec) detectedVideoCodec = normalized.videoCodec;
+        else if (normalized.videoUnknown) detectedVideoCodec = UNKNOWN_CODEC;
         if (normalized.audioCodec) detectedAudioCodec = normalized.audioCodec;
+        else if (normalized.audioUnknown) detectedAudioCodec = UNKNOWN_CODEC;
+        if (normalized.dolbyVision) dolbyVision = true;
         if (normalized.bitDepth) detectedBitDepth = normalized.bitDepth;
       }
     }
@@ -447,7 +572,19 @@ export function parseHlsManifest(manifestText: string): MediaMetadata | null {
           width: bestWidth || 1920,
           height: bestHeight || 1080,
           frameRate: frameRate || 23.976,
-          isHdr: detectedBitDepth > 8,
+          /**
+           * A manifest states a transfer function or it does not; ten bits is
+           * not one. This read `bitDepth > 8`, and 10-bit SDR is ordinary —
+           * most HEVC WEB-DL is exactly that — so every 10-bit playlist was
+           * recorded as HDR. On the re-encode path that turns the tone-map on
+           * for a stream that does not need it, which flattens a correct
+           * picture in the same way omitting it ruins a real HDR one.
+           *
+           * Dolby Vision is the one case a codec string does assert, so it is
+           * the only thing that can set this here.
+           */
+          isHdr: dolbyVision,
+          ...(dolbyVision ? { dolbyVision: true } : {}),
           isInterlaced: false,
         }
       : null,
@@ -469,6 +606,7 @@ export function parseDashManifest(manifestText: string): MediaMetadata | null {
   let detectedVideoCodec = 'h264';
   let detectedAudioCodec = 'aac';
   let detectedBitDepth = 8;
+  let dolbyVision = false;
   let hasVideo = false;
 
   const audioTracks: AudioStreamMetadata[] = [];
@@ -502,6 +640,8 @@ export function parseDashManifest(manifestText: string): MediaMetadata | null {
         if (cMatch) {
           const normalized = normalizeCodecFromRfc6381(cMatch[1]);
           if (normalized.videoCodec) detectedVideoCodec = normalized.videoCodec;
+          else if (normalized.videoUnknown) detectedVideoCodec = UNKNOWN_CODEC;
+          if (normalized.dolbyVision) dolbyVision = true;
           if (normalized.bitDepth) detectedBitDepth = normalized.bitDepth;
         }
       }
@@ -509,6 +649,8 @@ export function parseDashManifest(manifestText: string): MediaMetadata | null {
       if (codecAttr) {
         const normalized = normalizeCodecFromRfc6381(codecAttr[1]);
         if (normalized.videoCodec) detectedVideoCodec = normalized.videoCodec;
+        else if (normalized.videoUnknown) detectedVideoCodec = UNKNOWN_CODEC;
+        if (normalized.dolbyVision) dolbyVision = true;
         if (normalized.bitDepth) detectedBitDepth = normalized.bitDepth;
       }
     } else if (isAudio) {
@@ -518,6 +660,7 @@ export function parseDashManifest(manifestText: string): MediaMetadata | null {
       if (codecsMatch) {
         const normalized = normalizeCodecFromRfc6381(codecsMatch[1]);
         if (normalized.audioCodec) codec = normalized.audioCodec;
+        else if (normalized.audioUnknown) codec = UNKNOWN_CODEC;
       }
       audioTracks.push({
         index: audioTracks.length,
@@ -532,12 +675,27 @@ export function parseDashManifest(manifestText: string): MediaMetadata | null {
     }
   }
 
-  if (!hasVideo && (manifestText.includes('mimeType="video/') || /codecs="(?:avc1|hvc1|vp09|av01)/i.test(manifestText))) {
+  /**
+   * The rescue for a manifest whose AdaptationSets this parser could not
+   * walk. The codec alternation is part of the *test*, so it decided which
+   * manifests have video at all — and it listed four prefixes, which meant a
+   * Dolby Vision or VVC manifest laid out this way was recorded as having no
+   * video stream rather than an undecodable one.
+   */
+  if (
+    !hasVideo &&
+    (manifestText.includes('mimeType="video/') ||
+      /codecs="(?:avc1|avc3|hvc1|hev1|dvh1|dvhe|dav1|dva1|dvav|vvc1|vvi1|vp0?[89]|av01)/i.test(
+        manifestText
+      ))
+  ) {
     hasVideo = true;
     const codecMatch = /codecs="([^"]+)"/i.exec(manifestText);
     if (codecMatch) {
       const normalized = normalizeCodecFromRfc6381(codecMatch[1]);
       if (normalized.videoCodec) detectedVideoCodec = normalized.videoCodec;
+      else if (normalized.videoUnknown) detectedVideoCodec = UNKNOWN_CODEC;
+      if (normalized.dolbyVision) dolbyVision = true;
       if (normalized.bitDepth) detectedBitDepth = normalized.bitDepth;
     }
   }
@@ -568,7 +726,9 @@ export function parseDashManifest(manifestText: string): MediaMetadata | null {
           width: bestWidth || 1920,
           height: bestHeight || 1080,
           frameRate: 23.976,
-          isHdr: detectedBitDepth > 8,
+          /** Same rule as the HLS path: ten bits is not a transfer function. */
+          isHdr: dolbyVision,
+          ...(dolbyVision ? { dolbyVision: true } : {}),
           isInterlaced: false,
         }
       : null,
@@ -603,6 +763,20 @@ export function parseProbeOutput(raw: string): MediaMetadata | null {
       if (stream.codec_name === 'mjpeg' || stream.codec_name === 'png') continue;
       const pixelFormat = stream.pix_fmt;
       const transfer = stream.color_transfer;
+      /**
+       * Dolby Vision, from side data first and the codec tag as the fallback.
+       *
+       * Both are checked because they fail in different places: a remuxed MKV
+       * routinely keeps the RPU while losing the `dvh1` tag, and a fragmented
+       * MP4 read from a partial range can carry the tag before ffprobe has
+       * seen enough frames to emit the configuration record.
+       */
+      const dvSideData = stream.side_data_list?.find(
+        (entry) =>
+          entry.dv_profile != null ||
+          /dovi|dolby vision/i.test(entry.side_data_type ?? '')
+      );
+      const dolbyVision = Boolean(dvSideData) || isDolbyVisionTag(stream.codec_tag_string);
       video = {
         index: stream.index ?? 0,
         codec: (stream.codec_name ?? '').toLowerCase(),
@@ -617,7 +791,22 @@ export function parseProbeOutput(raw: string): MediaMetadata | null {
         bitrate: numberOrUndefined(stream.bit_rate),
         colorSpace: stream.color_space,
         colorTransfer: transfer,
-        isHdr: transfer === 'smpte2084' || transfer === 'arib-std-b67',
+        /**
+         * Dolby Vision counts as HDR even when the transfer says otherwise.
+         *
+         * Profile 5 signals its transfer inside the RPU rather than in the
+         * container, so `color_transfer` comes back `unknown` on a great many
+         * real files — which left `isHdr` false, and `withFfmpegExtras` only
+         * tone-maps when `isHdr` is true. A DV release re-encoded on a machine
+         * without mpv therefore skipped the tone-map and came out grey, which
+         * is the failure the tone-map chain was built to prevent, reached
+         * through the one path that never checked for it.
+         */
+        isHdr: transfer === 'smpte2084' || transfer === 'arib-std-b67' || dolbyVision,
+        ...(dolbyVision ? { dolbyVision: true } : {}),
+        ...(dvSideData?.dv_profile != null
+          ? { dolbyVisionProfile: dvSideData.dv_profile }
+          : {}),
         isInterlaced: Boolean(stream.field_order && stream.field_order !== 'progressive'),
       };
       continue;

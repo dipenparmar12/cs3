@@ -10,6 +10,7 @@ import {
   parseDashManifest,
   isMetadataIncomplete,
 } from './mediaInspector.ts';
+import { canPlayVideo, isPlayableAudioCodec } from './decisionEngine.ts';
 
 const tests: Array<[string, () => void | Promise<void>]> = [];
 const test = (name: string, fn: () => void | Promise<void>) => tests.push([name, fn]);
@@ -148,6 +149,137 @@ test('isMetadataIncomplete correctly flags incomplete metadata', () => {
 });
 
 // --- execution -------------------------------------------------------------
+
+
+/**
+ * Format coverage, from two real source exports (2026-09-20).
+ *
+ * Every row these pin failed silently: the manifest declared a codec, the
+ * parser did not recognise it, and the optimistic `h264`/`aac` defaults
+ * survived — so a Dolby Vision or DTS stream was reported as directly
+ * playable, handed to hls.js, and failed in the element, where the failover
+ * ladder attributes it to the source rather than to the decision.
+ */
+test('an unrecognised CODECS attribute is never reported as H.264/AAC', () => {
+  const meta = parseHlsManifest(`#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=1920x1080,CODECS="zzzz.1,wxyz.2"
+v.m3u8`);
+  assert.ok(meta?.video);
+  assert.notEqual(meta.video.codec, 'h264');
+  assert.equal(meta.video.codec, 'unknown');
+  assert.equal(meta.audio[0].codec, 'unknown');
+  assert.equal(meta.audio[0].playable, false);
+});
+
+test('a manifest that declares no CODECS at all keeps the optimistic default', () => {
+  // The distinction the fix turns on: silence is not an unreadable
+  // declaration, and only the second is a reason to be pessimistic.
+  const meta = parseHlsManifest(`#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=1920x1080
+v.m3u8`);
+  assert.equal(meta?.video?.codec, 'h264');
+  assert.equal(meta?.audio[0].codec, 'aac');
+});
+
+test('Dolby Vision is detected from the codec string and refused the element', () => {
+  const meta = parseHlsManifest(`#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=28000000,RESOLUTION=3840x2160,CODECS="dvh1.05.06,ec-3"
+v.m3u8`);
+  assert.ok(meta?.video);
+  assert.equal(meta.video.codec, 'hevc');
+  assert.equal(meta.video.dolbyVision, true);
+  // DV signals its transfer inside the RPU, so this must not depend on the
+  // container claiming PQ — the re-encode path tone-maps off this flag.
+  assert.equal(meta.video.isHdr, true);
+  assert.equal(
+    canPlayVideo(meta.video.codec, meta.video.pixelFormat, null, meta.video.dolbyVision),
+    false
+  );
+  assert.equal(meta.audio[0].codec, 'eac3');
+  assert.equal(meta.audio[0].playable, false);
+});
+
+test('mp4a is a namespace, not a synonym for AAC', () => {
+  // mp4a.a5 is AC-3 and mp4a.a6 is E-AC-3. Collapsing the prefix to AAC
+  // reported the modal provider audio as playable, which is silent dialogue.
+  const ac3 = parseHlsManifest(`#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.a5"
+v.m3u8`);
+  assert.equal(ac3?.audio[0].codec, 'ac3');
+  assert.equal(ac3?.audio[0].playable, false);
+
+  const eac3 = parseHlsManifest(`#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.a6"
+v.m3u8`);
+  assert.equal(eac3?.audio[0].codec, 'eac3');
+  assert.equal(eac3?.audio[0].playable, false);
+
+  // The ordinary case still answers AAC, or this fix breaks everything else.
+  const aac = parseHlsManifest(`#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2"
+v.m3u8`);
+  assert.equal(aac?.audio[0].codec, 'aac');
+  assert.equal(aac?.audio[0].playable, true);
+});
+
+test('DTS and AC-4 in a manifest are recognised rather than defaulted', () => {
+  const cases: Array<[string, string]> = [
+    ['dtsc', 'dts'],
+    ['dtsh', 'dtshd'],
+    ['ac-4', 'ac4'],
+  ];
+  for (const [token, expected] of cases) {
+    const meta = parseHlsManifest(`#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS="avc1.640028,${token}"
+v.m3u8`);
+    assert.equal(meta?.audio[0].codec, expected, token);
+    assert.equal(meta?.audio[0].playable, false, token);
+  }
+});
+
+test('ten bits is not a transfer function', () => {
+  // This read `bitDepth > 8`, so every 10-bit SDR playlist — which is most
+  // HEVC WEB-DL — was recorded as HDR and tone-mapped on re-encode, which
+  // flattens a correct picture exactly as omitting it ruins a real HDR one.
+  const meta = parseHlsManifest(`#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=1920x1080,CODECS="hvc1.2.4.L120.90,mp4a.40.2"
+v.m3u8`);
+  assert.equal(meta?.video?.bitDepth, 10);
+  assert.equal(meta?.video?.isHdr, false);
+});
+
+test('a DASH manifest carrying Dolby Vision still reports a video stream', () => {
+  // The rescue branch tested four codec prefixes, so a DV manifest laid out
+  // this way reported `video: null` — worse than unplayable, it is absent.
+  const meta = parseDashManifest(`<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period><AdaptationSet>
+<Representation id="1" codecs="dvh1.05.06" width="3840" height="2160"/>
+</AdaptationSet></Period></MPD>`);
+  assert.ok(meta?.video, 'DV DASH manifest must still report a video stream');
+  assert.equal(meta.video.dolbyVision, true);
+  assert.equal(meta.video.codec, 'hevc');
+});
+
+test('a named codec neither list has heard of fails closed', () => {
+  // The fallback was `!UNSUPPORTED.has(name)`, so anything new was reported
+  // playable and failed in the element. An absent codec is still "no
+  // information, do not block" — those are different questions.
+  assert.equal(canPlayVideo('ffv1', 'yuv420p', null), false);
+  assert.equal(canPlayVideo('h264', 'yuv420p', null), true);
+  assert.equal(canPlayVideo(undefined, undefined, null), true);
+  assert.equal(isPlayableAudioCodec('ac4'), false);
+  assert.equal(isPlayableAudioCodec('mpegh'), false);
+  assert.equal(isPlayableAudioCodec('aac'), true);
+  assert.equal(isPlayableAudioCodec('flac'), true);
+});
+
+test('a measured renderer capability still overrides the table in both directions', () => {
+  // The allowlist is a fallback, never a veto: App.tsx measures canPlayType
+  // at startup and that answer has to keep winning.
+  const caps = { video: { hevc: true, h264: false }, audio: {} } as never;
+  assert.equal(canPlayVideo('hevc', 'yuv420p', caps), true);
+  assert.equal(canPlayVideo('h264', 'yuv420p', caps), false);
+});
 
 let passed = 0;
 let failed = 0;
