@@ -19,7 +19,26 @@
  * Pure and separately testable: every failure here is silent and is attributed
  * to whoever uploaded the subtitle.
  */
-import chardet from 'chardet';
+import { createRequire } from 'node:module';
+import type chardetModule from 'chardet';
+
+/**
+ * The charset detector, resolved the first time a subtitle proves not to be
+ * UTF-8 — which is the uncommon case, and never at launch.
+ *
+ * A synchronous `require` rather than `await import` because
+ * {@link decodeSubtitleBytes} is synchronous and has half a dozen callers; the
+ * detector is 16ms to load and turning the whole subtitle path async to save
+ * that would be a far larger change than the saving is worth. `createRequire`
+ * is what makes a synchronous resolve available from an ESM build, and the
+ * bundler leaves `chardet` external so there is a real module to resolve.
+ */
+let chardet: typeof chardetModule | null = null;
+
+function detector(): typeof chardetModule {
+  chardet ??= createRequire(import.meta.url)('chardet') as typeof chardetModule;
+  return chardet;
+}
 
 /** Cue text that survives conversion. Everything else is styling we drop. */
 const ASS_OVERRIDE_TAGS = /\{[^}]*\}/g;
@@ -52,7 +71,7 @@ export function decodeSubtitle(bytes: Uint8Array): string {
     // Provably not UTF-8, so a guess is now the best available answer.
   }
 
-  const detected = chardet.detect(Buffer.from(bytes));
+  const detected = detector().detect(Buffer.from(bytes));
   /**
    * A detection of UTF-8 is rejected out of hand, because we just disproved it.
    *

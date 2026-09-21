@@ -59,6 +59,8 @@ import type {
   ProviderLoadProgress,
   RepositoryFetchResult,
 } from './pluginManager';
+import type { StartupProfile } from './startupProfile.ts';
+import type { StartupTaskReport } from './util/startupQueue.ts';
 import type { ProbeConfig } from './media/mediaInspector';
 import type { SearchScope } from './searchScope';
 import type { SearchSnapshot } from './searchSession';
@@ -1686,6 +1688,19 @@ export interface CloudStreamElectronAPI {
   relaunchApp: () => Promise<void>;
 
   /**
+   * What this launch cost, stage by stage, plus the background queue's state.
+   *
+   * Shown in Developer mode. `stalls` is the half worth reading when the
+   * complaint is "Not Responding" rather than "slow": it lists the intervals
+   * where the main thread stopped answering, which a list of stage durations
+   * cannot distinguish from an app that was merely busy.
+   */
+  getStartupProfile: () => Promise<
+    | { ok: true; profile: StartupProfile; tasks: StartupTaskReport[] }
+    | { ok: false; error: string }
+  >;
+
+  /**
    * A whole-installation backup, and the way back from one.
    *
    * Distinct from `exportDatastoreBackup`, which writes the *Android* format so
@@ -2278,6 +2293,7 @@ const api: CloudStreamElectronAPI = {
   selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
   reloadApp: () => ipcRenderer.invoke('app:reload'),
   relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
+  getStartupProfile: () => ipcRenderer.invoke('app:getStartupProfile'),
   exportUserData: (only) => ipcRenderer.invoke('backup:export', only),
   inspectBackup: () => ipcRenderer.invoke('backup:inspect'),
   restoreUserData: (filePath, options) =>

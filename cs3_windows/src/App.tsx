@@ -1,18 +1,15 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { FileDown, WifiOff, Link2,
 } from 'lucide-react';
 import type { PlayedSource } from './types/library';
 import { Sidebar } from './components/Sidebar';
 import type { ActiveTab } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
-import { VideoPlayer } from './components/VideoPlayer';
 import { MiniPlayerBar } from './components/player/MiniPlayerBar';
-import { OttPlatformView, type OttPlatformSummary } from './views/OttPlatformView';
-import { TorrentView, type TorrentPlayRequest } from './views/TorrentView';
-import { DownloadCenter } from './components/DownloadCenter';
+import type { OttPlatformSummary } from './views/OttPlatformView';
+import type { TorrentPlayRequest } from './views/TorrentView';
 import { ProviderInspector } from './components/ProviderInspector';
 import { useIsDeveloper } from './utils/ExperienceModeContext';
-import { ExtensionsScreen } from './components/extensions/ExtensionsScreen';
 import { BinarySetupModal } from './components/BinarySetupModal';
 import {
   DownloadConfirmDialog,
@@ -20,17 +17,11 @@ import {
   type DownloadPreview,
 } from './components/DownloadConfirmDialog';
 import { HomeView } from './views/HomeView';
-import { SearchView, EMPTY_SEARCH_UI, type SearchUiState } from './views/SearchView';
-import {
-  DetailView,
-  type PlaybackRequest,
-  type PlaybackSessionRequest,
-} from './views/DetailView';
-import { LibraryView } from './views/LibraryView';
-import { HistoryView } from './views/HistoryView';
-import { SettingsView } from './views/SettingsView';
+import { EMPTY_SEARCH_UI, type SearchUiState } from './views/searchUiState';
+import type { PlaybackRequest, PlaybackSessionRequest } from './views/DetailView';
 
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ViewSkeleton } from './components/ViewSkeleton';
 import { FirstRunBanner } from './components/FirstRunBanner';
 
 import { TvType, type Episode, type SearchOptions, type SearchResponse } from './types/api';
@@ -45,6 +36,56 @@ import { pickResumePoint } from './utils/resumePoint';
 import { historyEventForTask } from './utils/historyEvent';
 import { decodeShareLink } from './utils/shareLink';
 import { loadWatchState } from './components/player/seriesContext';
+
+/**
+ * Every screen except Home, loaded when it is opened.
+ *
+ * The renderer was a single 2.1 MB chunk, and the window is shown on
+ * `ready-to-show` — so the first frame waited on the parse and evaluation of
+ * the whole app: two media libraries, the 4,152 line player with `hls.js`
+ * behind it, `shaka-player`, the extensions manager, the settings screen. None
+ * of that is on screen when the app opens.
+ *
+ * Home stays static. It is what the window shows, so lazy-loading it would add
+ * a round trip to the one route that cannot afford one.
+ *
+ * Named exports, so each needs the `default` shape `lazy` takes. The type-only
+ * imports above stay static and cost nothing — types are erased, and a
+ * `import type` does not pull the module in.
+ */
+const VideoPlayer = lazy(() =>
+  import('./components/VideoPlayer').then((m) => ({ default: m.VideoPlayer }))
+);
+const DetailView = lazy(() =>
+  import('./views/DetailView').then((m) => ({ default: m.DetailView }))
+);
+const SearchView = lazy(() =>
+  import('./views/SearchView').then((m) => ({ default: m.SearchView }))
+);
+const LibraryView = lazy(() =>
+  import('./views/LibraryView').then((m) => ({ default: m.LibraryView }))
+);
+const HistoryView = lazy(() =>
+  import('./views/HistoryView').then((m) => ({ default: m.HistoryView }))
+);
+const SettingsView = lazy(() =>
+  import('./views/SettingsView').then((m) => ({ default: m.SettingsView }))
+);
+const ExtensionsScreen = lazy(() =>
+  import('./components/extensions/ExtensionsScreen').then((m) => ({
+    default: m.ExtensionsScreen,
+  }))
+);
+const TorrentView = lazy(() =>
+  import('./views/TorrentView').then((m) => ({ default: m.TorrentView }))
+);
+const OttPlatformView = lazy(() =>
+  import('./views/OttPlatformView').then((m) => ({ default: m.OttPlatformView }))
+);
+const DownloadCenter = lazy(() =>
+  import('./components/DownloadCenter').then((m) => ({ default: m.DownloadCenter }))
+);
+
 
 /** One live playback session: its id, what asked for it, and its latest state. */
 interface ActiveSession {
@@ -1491,7 +1532,14 @@ export const App: React.FC = () => {
             bundled repositories install behind it. */}
         <FirstRunBanner />
 
+        {/*
+          One boundary for every route, placed inside `main` rather than around
+          it. The sidebar, the navbar and the banners are outside it and stay
+          live while a chunk loads — navigation that blanks itself on the way to
+          the next screen is the failure this split would otherwise introduce.
+        */}
         <main className="view-viewport" ref={viewportRef}>
+          <Suspense fallback={<ViewSkeleton />}>
           {/* Active Fullscreen Video Player Overlay.
               A session takes precedence: it renders the player from the first
               click, before a stream exists, and fills it in as one resolves. */}
@@ -1895,6 +1943,7 @@ export const App: React.FC = () => {
               )}
             </>
           )}
+          </Suspense>
         </main>
       </div>
 

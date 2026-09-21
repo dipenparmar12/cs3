@@ -14,6 +14,7 @@ import { FixProvidersModal } from '../components/FixProvidersModal';
 import { useTitleEnrichment } from '../components/useTitleEnrichment';
 import { useReveal } from '../utils/ExperienceModeContext';
 import { plainMessage } from '../utils/experienceMode';
+import { type SearchUiState } from './searchUiState';
 
 interface SearchViewProps {
   query: string;
@@ -55,17 +56,6 @@ interface SearchViewProps {
   onRetry?: () => void;
 }
 
-export interface SearchUiState {
-  sourceFilter: string;
-  typeTab: string;
-  openGroups: Record<string, boolean>;
-}
-
-export const EMPTY_SEARCH_UI: SearchUiState = {
-  sourceFilter: 'all',
-  typeTab: 'all',
-  openGroups: {},
-};
 
 /**
  * Which sources a row came from, counting each row once per source.

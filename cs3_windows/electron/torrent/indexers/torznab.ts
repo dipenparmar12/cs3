@@ -1,6 +1,5 @@
-import { XMLParser } from 'fast-xml-parser';
 import { fetchText } from '../http';
-import { parseIntSafe, parseSize, type RawTorrent, type TorrentIndexer } from './base';
+import { parseIntSafe, parseSize, lazyXmlParser, type RawTorrent, type TorrentIndexer } from './base';
 import type { IndexerConfig, IndexerQuery } from '../../../src/types/torrent';
 
 /**
@@ -16,7 +15,7 @@ import type { IndexerConfig, IndexerQuery } from '../../../src/types/torrent';
  * returning RSS with `<torznab:attr name="..." value="..."/>` children.
  */
 
-const xml = new XMLParser({
+const xmlParser = lazyXmlParser({
   ignoreAttributes: false,
   attributeNamePrefix: '@_',
   parseTagValue: false,
@@ -114,7 +113,7 @@ export class TorznabIndexer implements TorrentIndexer {
           const description = body.match(/description="([^"]*)"/)?.[1];
           throw new Error(`Torznab error ${code ?? '?'}: ${description ?? 'unknown'}`);
         }
-        return this.parseResponse(body);
+        return await this.parseResponse(body);
       } catch (error) {
         lastError = error;
       }
@@ -122,8 +121,8 @@ export class TorznabIndexer implements TorrentIndexer {
     throw lastError;
   }
 
-  private parseResponse(body: string): RawTorrent[] {
-    const doc = xml.parse(body);
+  private async parseResponse(body: string): Promise<RawTorrent[]> {
+    const doc = (await xmlParser()).parse(body);
     const items: TorznabItem[] = doc?.rss?.channel?.item ?? [];
 
     return items

@@ -37,6 +37,7 @@ import {
 } from '../components/settings/SettingsLevelContext';
 import { useFlash } from '../utils/useFlash';
 import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
+import { StartupProfilePanel } from '../components/settings/StartupProfilePanel';
 import { CardStatusLegend } from '../components/settings/CardStatusLegend';
 import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPanel';
 import { AboutPanel } from '../components/settings/AboutPanel';
@@ -667,6 +668,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           */}
           {level === 'everything' && (
             <>
+              <StartupProfilePanel />
               <ExtensionIssuesPanel />
               <DiagnosticsPanel />
             </>

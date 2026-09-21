@@ -117,6 +117,27 @@ export class DiagnosticsLog {
   constructor(directory?: string) {
     const base = directory ?? (app ? app.getPath('userData') : process.cwd());
     this.store = new JsonFileStore(path.join(base, FILE_NAME), 1_000, () => this.records);
+  }
+
+  /**
+   * Reads the log the first time anything asks for it.
+   *
+   * Measured on the development install: **5.53 MB, 33ms to read and parse**,
+   * and it happened in this class's constructor — which runs at module scope in
+   * `main.ts`, so before `app.whenReady()` and therefore before the window. For
+   * a file that is debugging exhaust: nothing needs it until a failure is
+   * recorded or somebody opens the diagnostics panel, and on most launches
+   * neither happens.
+   *
+   * Every public entry point calls this, including the ones that only write:
+   * hydrating *after* a record had been appended would replace the live array
+   * with the file's contents and lose it.
+   */
+  private restored = false;
+
+  private ensureRestored(): void {
+    if (this.restored) return;
+    this.restored = true;
     this.restore();
   }
 
@@ -126,9 +147,12 @@ export class DiagnosticsLog {
     const parsed = this.store.load();
     if (Array.isArray(parsed)) {
       const cutoff = Date.now() - RETENTION_MS;
-      this.records = parsed
-        .filter((record) => typeof record?.at === 'number' && record.at >= cutoff)
-        .slice(0, MAX_RECORDS);
+      // Appended behind anything already recorded, so a failure captured before
+      // the first read keeps its place at the head of the list.
+      this.records = [
+        ...this.records,
+        ...parsed.filter((record) => typeof record?.at === 'number' && record.at >= cutoff),
+      ].slice(0, MAX_RECORDS);
     }
   }
 
@@ -137,6 +161,7 @@ export class DiagnosticsLog {
   }
 
   public record(entry: Omit<DiagnosticRecord, 'id' | 'at'> & { at?: number }): void {
+    this.ensureRestored();
     if (!entry.message) return;
 
     const record: DiagnosticRecord = {
@@ -182,6 +207,7 @@ export class DiagnosticsLog {
    * scrolls past the one failure is not a debugging tool.
    */
   public list(limit = 200, levels?: Array<DiagnosticRecord['level']>): DiagnosticRecord[] {
+    this.ensureRestored();
     const wanted = levels?.length ? new Set(levels) : null;
     const rows = wanted ? this.records.filter((record) => wanted.has(record.level)) : this.records;
     return rows.slice(0, limit);
@@ -189,6 +215,7 @@ export class DiagnosticsLog {
 
   /** Everything retained, for export. */
   public all(): DiagnosticRecord[] {
+    this.ensureRestored();
     return [...this.records];
   }
 
@@ -205,6 +232,7 @@ export class DiagnosticsLog {
   }
 
   public clear(): void {
+    this.ensureRestored();
     this.records = [];
     this.scheduleWrite();
   }
@@ -232,6 +260,7 @@ export class DiagnosticsLog {
     windowMs = 15 * 60 * 1000,
     limit = 60
   ): { records: DiagnosticRecord[]; matched: boolean } {
+    this.ensureRestored();
     const since = Date.now() - windowMs;
     const wanted = {
       source: context.source?.toLowerCase(),
@@ -279,6 +308,7 @@ export class DiagnosticsLog {
     environment: Record<string, string>,
     options: { context?: ReportContext; mode?: 'current' | 'full'; contextMatched?: boolean } = {}
   ): string {
+    this.ensureRestored();
     const mode = options.mode ?? 'full';
     const lines: string[] = [
       mode === 'current'

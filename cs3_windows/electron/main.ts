@@ -1,3 +1,41 @@
+/**
+ * First, and deliberately before `electron` itself.
+ *
+ * The recorder's clock starts when this line runs, and everything after it —
+ * the electron binding, 136 of our own modules, every service constructed at
+ * module scope — is inside what it measures. An import above it is work it
+ * cannot see, which is precisely the work that used to be invisible.
+ */
+import { startup } from './startupProfile.ts';
+import { StartupQueue } from './util/startupQueue.ts';
+
+/**
+ * Both of these run *after* every import above has been evaluated — ESM hoists
+ * import declarations above any statement, whatever their order in the file.
+ * That is not a limitation here, it is the measurement: `modules_loaded` is the
+ * cost of the electron binding plus our own 136 modules, and the recorder's
+ * clock started when `startupProfile.ts` itself was evaluated, which being the
+ * first import declaration makes it the earliest point in this process we can
+ * name.
+ *
+ * The stall monitor cannot observe that window either, and for the same reason
+ * nothing else can: a timer does not fire while the loop is blocked. What it
+ * does catch is the block *ending*, reported as one long stall on its first
+ * tick, which is the honest shape of it.
+ */
+startup.mark('modules_loaded');
+startup.watch();
+
+/**
+ * Everything below, until `services_constructed`, is one measured span.
+ *
+ * The service graph is module-scope `const`s — there is no callback to wrap, so
+ * `span` is the only way to give a stall in here a name. Without it the first
+ * measured launch reported 443ms of blocked main thread as `uninstrumented`,
+ * which is a true statement and a useless one.
+ */
+const endServiceGraph = startup.span('constructServices');
+
 import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, shell } from 'electron';
 import { BackupService, type RestoreOptions } from './cs3/backupService.ts';
 import fs from 'fs';
@@ -647,7 +685,11 @@ function refreshFfmpegOptionSupport(): void {
     );
   }
 }
-refreshFfmpegOptionSupport();
+// Not called here. It spawns two child processes, and at module scope that is
+// before `app.whenReady()` — competing for disk with the very module loading
+// that delays the window. The background queue runs it once the window is up;
+// `resolveFfprobe` answers from a path check, so nothing that needs the result
+// earlier is blocked on this.
 
 /**
  * The last line of defence for the main process.
@@ -952,6 +994,48 @@ function saveWindowBounds(): void {
   }
 }
 
+/**
+ * One line per launch, so startup is measurable without anyone opening a panel.
+ *
+ * Written from a user's captured log, which is the only place a slow machine's
+ * numbers ever come from — and that is why it is a single record with fixed
+ * field names rather than the whole profile: it has to survive being grepped.
+ *
+ * Fired by whichever of `ready-to-show` and `did-finish-load` happens *second*,
+ * and guarded so it happens once. Those two arrive in either order — measured,
+ * `did-finish-load` came first — and logging from a fixed one of them reported
+ * `firstPaintMs: -1` for a paint that had simply not happened yet.
+ *
+ * `blockedMs` is the figure to read first. It is the part a viewer experiences
+ * as the window greying out, and the only one here that tells an app which was
+ * busy apart from one which had stopped answering.
+ */
+let startupReported = false;
+
+function reportStartupOnce(): void {
+  if (startupReported) return;
+  if (startup.snapshot().marks.first_paint === undefined) return;
+  if (startup.snapshot().marks.interactive === undefined) return;
+  startupReported = true;
+  startup.finish();
+
+  const profile = startup.snapshot();
+  const worst = [...profile.stalls].sort((a, b) => b.durationMs - a.durationMs)[0];
+  logger.info('app', 'startup_complete', {
+    beforeMainMs: Math.round(profile.beforeMainMs ?? -1),
+    modulesMs: Math.round(profile.marks.modules_loaded ?? -1),
+    readyMs: Math.round(profile.marks.app_ready ?? -1),
+    firstPaintMs: Math.round(profile.marks.first_paint ?? -1),
+    interactiveMs: Math.round(profile.marks.interactive ?? -1),
+    blockedMs: Math.round(profile.stalledMs),
+    stalls: profile.stalls.length,
+    // Named, because "something blocked for half a second" is not actionable
+    // and "constructServices blocked for half a second" is.
+    worstStall: worst ? (worst.during ?? 'uninstrumented') : null,
+    worstStallMs: worst ? Math.round(worst.durationMs) : 0,
+  });
+}
+
 function createWindow() {
   const bounds = loadWindowBounds();
 
@@ -1056,7 +1140,21 @@ function createWindow() {
     }
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  /**
+   * The window appears when the renderer has something to paint.
+   *
+   * `ready-to-show` rather than `show: true`, because a window shown before its
+   * first paint is a white rectangle — and with `backgroundColor` set the wait
+   * costs nothing visible. What made this slow was never the event: it was how
+   * much the renderer had to evaluate before it fired. The renderer now splits
+   * its routes, so this arrives with the home screen rather than with every
+   * screen in the app.
+   */
+  mainWindow.once('ready-to-show', () => {
+    startup.mark('first_paint');
+    mainWindow?.show();
+    reportStartupOnce();
+  });
 
   /*
    * A launch argument is delivered once the *renderer* exists, not when the
@@ -1065,7 +1163,19 @@ function createWindow() {
    * double-clicking a `.torrent` would open the app to the home screen and
    * silently forget what was asked for.
    */
-  mainWindow.webContents.once('did-finish-load', () => deliverPendingOpen());
+  mainWindow.webContents.once('did-finish-load', () => {
+    /**
+     * Startup ends when the app is usable, not when it has finished loading.
+     *
+     * The background queue keeps working for another half-minute after this;
+     * folding that in would make the headline number *grow* every time work was
+     * moved off the critical path, which is exactly backwards. The queue
+     * reports its own progress separately.
+     */
+    startup.mark('interactive');
+    reportStartupOnce();
+    deliverPendingOpen();
+  });
 
   // External links open in the system browser, never in-app (SEC-7 / DSK-36).
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -1235,7 +1345,35 @@ function registerShareProtocol(): void {
 }
 registerShareProtocol();
 
+/**
+ * The work that happens after the window is on screen.
+ *
+ * Constructed here rather than inside `whenReady` so a service can register a
+ * task from its own module-scope wiring; nothing runs until `start()`.
+ */
+const background = new StartupQueue((task) => {
+  if (task.state === 'failed') {
+    // A background service that never came up is a feature that is missing,
+    // not a launch that failed. Recorded so the next session can see it; the
+    // app is already running without it.
+    logger.warn('app', 'startup_task_failed', {
+      task: task.id,
+      attempts: task.attempts,
+      error: task.error,
+    });
+  } else {
+    logger.debug('app', 'startup_task_done', {
+      task: task.id,
+      durationMs: task.durationMs ?? undefined,
+    });
+  }
+});
+
+endServiceGraph();
+startup.mark('services_constructed');
+
 app.whenReady().then(async () => {
+  startup.mark('app_ready');
   /**
    * Main-process scraping moves onto Chromium's network stack.
    *
@@ -1247,7 +1385,7 @@ app.whenReady().then(async () => {
   setHttpFetch((input, init) => resilientFetch.fetch(input, init));
   network.apply();
 
-  createWindow();
+  startup.stage('createWindow', () => createWindow());
 
   downloadService.setProgressCallback((tasks: DownloadTask[]) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1354,39 +1492,52 @@ app.whenReady().then(async () => {
    * JVM plus 56 jars of class loading underneath it competes with exactly the
    * thing the user is looking at.
    */
-  setTimeout(() => {
-    void pluginManager.warmProviders().catch((error) => {
-      // A warm-up that fails costs latency on the next search and nothing else,
-      // so it is recorded rather than surfaced.
-      logger.warn('extension', 'provider_warmup_failed', {
-        error: describeError(error),
-      });
-    });
-  }, PROVIDER_WARMUP_DELAY_MS).unref?.();
-
   /**
-   * The torrent client comes up before anyone presses Play.
+   * Everything expensive that is not needed for the first frame.
    *
-   * Same argument as the provider warm-up above, applied to the other half of
-   * the app, and the measurement behind it is in `torrentEngine.warmUp`: a cold
-   * client pays a TCP bind, a uTP bind, a DHT bind, a DNS lookup and round trip
-   * to every bootstrap host, and an HTTP server bind before the first byte of
-   * any film is requested — all of it on the critical path of a spinner. Done
-   * here it happens while the home screen is being read.
+   * Both of these used to be a bare `setTimeout` with a hand-picked delay, and
+   * the delays were the only thing keeping them apart. A queue makes the order
+   * explicit instead, runs one task at a time with the loop given a turn in
+   * between, and keeps a failure from costing anything but that one feature —
+   * see `util/startupQueue.ts` for why the default lane is serial.
    *
-   * Deliberately later than the provider warm-up. The DHT bootstrap is a burst
-   * of UDP to a dozen hosts, and putting it in the same window as 56 jars of
-   * JVM class loading makes both slower for no reason.
+   * The priorities are the order a viewer notices them in. Providers first,
+   * because a search is what people do after the home screen; the torrent
+   * client after, because a Play press is later still and its own
+   * `ensureStarted` covers the case where it has not got there yet.
    */
-  setTimeout(() => {
-    void torrentEngine.warmUp().catch((error) => {
-      // `startStream` still calls `ensureStarted` itself, so a failed warm-up
-      // costs latency on the first play and nothing else.
-      logger.warn('torrent', 'engine_warmup_failed', {
-        error: describeError(error),
-      });
-    });
-  }, TORRENT_WARMUP_DELAY_MS).unref?.();
+  background.add({
+    id: 'ffmpeg-options',
+    label: 'Checking which options this ffmpeg build understands',
+    priority: 80,
+    // Its own lane: two short-lived child processes that share nothing with the
+    // JVM warm-up or the DHT bootstrap, and holding the serial lane for them
+    // would delay both for no reason.
+    lane: 'media',
+    run: () => refreshFfmpegOptionSupport(),
+  });
+
+  background.add({
+    id: 'providers',
+    label: 'Loading installed extensions',
+    priority: 70,
+    delayMs: PROVIDER_WARMUP_DELAY_MS,
+    run: () => pluginManager.warmProviders(),
+  });
+
+  background.add({
+    id: 'torrent-engine',
+    label: 'Starting the torrent client',
+    priority: 40,
+    delayMs: TORRENT_WARMUP_DELAY_MS,
+    // `startStream` calls `ensureStarted` itself, so a failed warm-up costs
+    // latency on the first play and nothing else — but a transient bind failure
+    // is worth one more try before the first Play pays for it.
+    retries: 1,
+    run: () => torrentEngine.warmUp(),
+  });
+
+  background.start();
 
   /**
    * A stale title refreshed behind the viewer's back reaches them here.
@@ -1443,8 +1594,18 @@ const SHUTDOWN_DEADLINE_MS = 5_000;
  * earlier flushes land.
  */
 async function shutdownServices(): Promise<void> {
+  // Nothing else may schedule work once we are going away.
+  background.stop();
   downloadService.stop();
   extensionUpdater.stop();
+  /**
+   * The datastore's writes are coalesced on a 250ms timer now, so the last
+   * change of a session — a window position, a finished episode, a setting just
+   * changed — is routinely still in memory when quit arrives. Flushed first,
+   * before the teardowns that can hang, so it is durable even when the deadline
+   * below fires.
+   */
+  datastore.flushSync();
   diagnostics.flush();
   providerAnalytics.flush();
   // The pages opened in the last few seconds of a session are the ones most
@@ -5687,4 +5848,25 @@ ipcMain.handle('app:reload', async () => {
 ipcMain.handle('app:relaunch', async () => {
   app.relaunch();
   app.exit(0);
+});
+
+/**
+ * What this launch cost, and what blocked the main thread while it happened.
+ *
+ * Developer mode only on the renderer side, and that is a presentation choice
+ * rather than a guard: the numbers name internal stages and mean nothing to a
+ * viewer. The channel itself is unconditional, because a reporter being asked
+ * to turn developer mode on before they can answer "why is it slow" is the
+ * diagnostic being unavailable exactly when it is wanted.
+ *
+ * The background queue travels with it. A startup that looks fine and a feature
+ * that never arrived are the same report, and splitting them across two
+ * channels would mean the panel could show one without the other.
+ */
+ipcMain.handle('app:getStartupProfile', async () => {
+  try {
+    return { ok: true, profile: startup.snapshot(), tasks: background.report() };
+  } catch (error) {
+    return fail(error);
+  }
 });

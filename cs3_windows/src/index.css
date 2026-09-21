@@ -467,3 +467,127 @@ select option:checked {
   font-weight: 700;
   box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
 }
+
+/*
+ * The placeholder a route shows while its chunk arrives.
+ *
+ * Delayed rather than immediate: a chunk read from local disk usually resolves
+ * in a few milliseconds, and a skeleton that appears and vanishes inside one
+ * frame reads as a flicker — worse than showing nothing. The fade starts at
+ * 150ms, so the common case draws nothing at all and only a genuinely slow load
+ * is announced. `prefers-reduced-motion` is honoured by the global rule in this
+ * file, which switches every animation off.
+ */
+.view-skeleton {
+  padding: 1.5rem;
+  opacity: 0;
+  animation: view-skeleton-in 220ms ease-out 150ms forwards;
+}
+
+@keyframes view-skeleton-in {
+  to { opacity: 1; }
+}
+
+.view-skeleton__bar {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  height: 1.25rem;
+}
+
+.view-skeleton__bar--title {
+  width: 11rem;
+  margin-bottom: 1.5rem;
+}
+
+.view-skeleton__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 1rem;
+}
+
+.view-skeleton__card {
+  aspect-ratio: 2 / 3;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 10px;
+}
+
+/*
+ * The startup profile, in Developer mode.
+ *
+ * Two lists of the same shape — duration, name, detail — because the reader is
+ * scanning for the largest number and a column that moves between sections
+ * defeats that. The duration column is fixed width and tabular so the digits
+ * line up; proportional figures in a list of timings are surprisingly hard to
+ * compare at a glance.
+ */
+.startup-profile__marks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+  margin: 0.75rem 0 1.25rem;
+}
+
+.startup-profile__marks dt {
+  font-size: 0.75rem;
+  opacity: 0.65;
+  margin-bottom: 0.2rem;
+}
+
+.startup-profile__marks dd {
+  margin: 0;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.startup-profile__mark--bad dd {
+  color: #ff9a8b;
+}
+
+.startup-profile__heading {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.6;
+  margin: 1.25rem 0 0.5rem;
+}
+
+.startup-profile__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.startup-profile__list li {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr) minmax(0, auto);
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.35rem 0.5rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+  font-size: 0.82rem;
+}
+
+.startup-profile__list strong {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.startup-profile__list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.startup-profile__list em {
+  font-style: normal;
+  opacity: 0.55;
+  font-size: 0.75rem;
+}
+
+.startup-profile__row--bad {
+  background: rgba(255, 120, 100, 0.08);
+}

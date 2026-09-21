@@ -77,6 +77,15 @@ function componentFiles(dir: string, base = dir): string[] {
  * index files, the `.ts` specifiers `electron/media` uses — to answer a
  * question a basename already answers, and the failure mode of the loose match
  * is a false *pass*, never a false failure.
+ *
+ * **Both spellings count, and the second one is why this comment grew.** When
+ * the renderer's routes were split with `React.lazy`, seven screens that are
+ * mounted on every session — the player, search, library, history, settings,
+ * downloads, extensions — were reported as built and mounted nowhere, because
+ * a `lazy(() => import('./views/SearchView'))` names its module without the
+ * word `from`. That is the guard failing in its *safe* direction, and it is
+ * still a failure: an orphan report nobody believes is an orphan report nobody
+ * reads, and the allow-list is the wrong home for a component that is mounted.
  */
 function importedBasenames(roots: string[]): Set<string> {
   const names = new Set<string>();
@@ -90,7 +99,11 @@ function importedBasenames(roots: string[]): Set<string> {
       }
       if (!/\.(ts|tsx|mts)$/.test(entry.name)) continue;
       const source = fs.readFileSync(full, 'utf8');
-      for (const match of source.matchAll(/from\s+'([^']+)'/g)) {
+      const specifiers = [
+        ...source.matchAll(/from\s+'([^']+)'/g),
+        ...source.matchAll(/\bimport\(\s*'([^']+)'\s*\)/g),
+      ];
+      for (const match of specifiers) {
         const specifier = match[1];
         if (!specifier.startsWith('.')) continue;
         const basename = specifier.split('/').pop() ?? '';

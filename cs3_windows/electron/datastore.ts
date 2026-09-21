@@ -24,11 +24,23 @@ export interface ImportBackupResult {
   report: string[];
 }
 
+/**
+ * How long a change waits for the next one before the file is written.
+ *
+ * Long enough to collapse a burst — a search caching thirty results, a download
+ * ticking progress — and short enough that a user who changes a setting and
+ * pulls the plug loses nothing they would notice.
+ */
+const SAVE_DEBOUNCE_MS = 250;
+
 export class DatastoreManager {
   private dataDir: string;
   private dbFile: string;
   private backupSnapshotFile: string;
   private data: DatastoreBackup;
+  private dirty = false;
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private writing: Promise<void> = Promise.resolve();
 
   // Non-transferable Android key grammar patterns (tokens, ephemeral state, device IDs)
   private nonTransferableKeyPatterns: RegExp[] = [
@@ -66,12 +78,105 @@ export class DatastoreManager {
     };
   }
 
+  /**
+   * Marks the store dirty. The bytes reach disk shortly afterwards.
+   *
+   * This used to be `writeFileSync(JSON.stringify(everything))`, called from
+   * **every setter**. Measured on the development install — 7.10 MB across 52
+   * keys, of which `source_cache_v1` alone is 3.18 MB and
+   * `media_history_events_v1` 2.15 MB — that is ~29ms of serialisation plus the
+   * write, on the main thread, for a single `setBool`. A search that caches its
+   * results, a download that ticks progress, or a window drag that settles all
+   * paid it, and several in a row is a visible freeze.
+   *
+   * Two changes, and the second is the one that matters:
+   *
+   * **Coalesced.** A burst of setters costs one write of the final state rather
+   * than one write each. Same argument as `util/jsonFileStore.ts`, which five
+   * other stores in this codebase already went through — this was simply the
+   * largest store and the one that never did.
+   *
+   * **Asynchronous, and atomic.** Written to a sibling temp file and renamed,
+   * because a 7 MB write interrupted by a crash or a power loss previously left
+   * a truncated file, and a truncated datastore is every preference, the whole
+   * library and the watch history. `rename` within a directory is atomic on
+   * both NTFS and POSIX, so a reader sees the old file or the new one.
+   *
+   * Durability points call {@link flush} explicitly: a backup, an import, and
+   * `before-quit`. Everything else is a cache or a preference, for which losing
+   * the last {@link SAVE_DEBOUNCE_MS} on a hard kill is the right trade.
+   */
   public save(): void {
+    this.dirty = true;
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      void this.writeNow();
+    }, SAVE_DEBOUNCE_MS);
+    // A pending write must never be the reason the process stays alive; quit
+    // flushes explicitly instead.
+    this.saveTimer.unref?.();
+  }
+
+  /**
+   * Writes any pending change and waits for it.
+   *
+   * Awaits an in-flight write before starting its own, or two overlapping
+   * renames onto one path race and the loser's bytes are the ones that survive.
+   */
+  public async flush(): Promise<void> {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    await this.writing;
+    if (this.dirty) await this.writeNow();
+  }
+
+  /**
+   * The last-resort write, for paths that cannot await.
+   *
+   * Only `before-quit`'s final teardown and the snapshot/import routines reach
+   * this. It is the old behaviour, deliberately — at that point the process is
+   * going away and a blocked main thread costs nothing.
+   */
+  public flushSync(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (!this.dirty) return;
     try {
-      fs.writeFileSync(this.dbFile, JSON.stringify(this.data, null, 2), 'utf-8');
+      const temp = `${this.dbFile}.tmp`;
+      fs.writeFileSync(temp, JSON.stringify(this.data, null, 2), 'utf-8');
+      fs.renameSync(temp, this.dbFile);
+      this.dirty = false;
     } catch (e) {
       console.error('Failed to save datastore:', e);
     }
+  }
+
+  private async writeNow(): Promise<void> {
+    await this.writing;
+    if (!this.dirty) return;
+    // Snapshotted before the await, so a setter running while the write is in
+    // flight marks the store dirty again rather than having its value silently
+    // folded into a write that had already serialised.
+    const payload = JSON.stringify(this.data, null, 2);
+    this.dirty = false;
+    const temp = `${this.dbFile}.tmp`;
+    this.writing = (async () => {
+      try {
+        await fs.promises.writeFile(temp, payload, 'utf-8');
+        await fs.promises.rename(temp, this.dbFile);
+      } catch (e) {
+        // Put the flag back: the state in memory is still unwritten, and the
+        // next setter should try again rather than assume this succeeded.
+        this.dirty = true;
+        console.error('Failed to save datastore:', e);
+      }
+    })();
+    await this.writing;
   }
 
   public createSnapshot(): void {
@@ -87,7 +192,11 @@ export class DatastoreManager {
       if (fs.existsSync(this.backupSnapshotFile)) {
         const raw = fs.readFileSync(this.backupSnapshotFile, 'utf-8');
         this.data = JSON.parse(raw);
+        // Durable immediately: this is the recovery path from a failed import,
+        // and leaving the rescued state only in memory means a crash in the
+        // next 250ms loses the thing that was just rescued.
         this.save();
+        this.flushSync();
         return true;
       }
     } catch (e) {
@@ -204,6 +313,7 @@ export class DatastoreManager {
       mergeBucket(backupData.settings, this.data.settings, 'settings');
 
       this.save();
+      this.flushSync();
       report.push(`Successfully imported ${importedKeysCount} keys into local Datastore.`);
 
       return {
@@ -288,6 +398,7 @@ export class DatastoreManager {
     merge(this.data.datastore, rest as DatastoreBucket);
     merge(this.data.settings, settings);
     this.save();
+    this.flushSync();
     return restored;
   }
 }

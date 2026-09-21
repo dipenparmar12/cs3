@@ -195,8 +195,28 @@ export class PageSnapshotStore {
       WRITE_DEBOUNCE_MS,
       () => [...this.snapshots.values()]
     );
+  }
+
+  /**
+   * Reads the saved pages the first time one is wanted.
+   *
+   * 1.10 MB on the development install, read and parsed in this constructor —
+   * which runs at module scope in `main.ts`, in front of the window. Nothing
+   * needs a saved page until a detail page is opened or the library is drawn,
+   * and both are several seconds after the first frame.
+   *
+   * A snapshot captured before the first read wins over the file's copy of the
+   * same address: it is the newer of the two, and the whole point of this store
+   * is that the newest successful load is what gets replayed.
+   */
+  private hydrated = false;
+
+  private hydrate(): void {
+    if (this.hydrated) return;
+    this.hydrated = true;
     for (const entry of this.file.load() ?? []) {
       if (!entry || typeof entry.url !== 'string' || !entry.url || !entry.title) continue;
+      if (this.snapshots.has(entry.url)) continue;
       this.snapshots.set(entry.url, entry);
       this.index(entry);
     }
@@ -218,6 +238,7 @@ export class PageSnapshotStore {
    * survives eviction.
    */
   public capture(input: PageSnapshotInput): PageSnapshot | null {
+    this.hydrate();
     const url = input.url?.trim();
     if (!url || !input.title?.trim()) return null;
 
@@ -242,6 +263,7 @@ export class PageSnapshotStore {
    * the links-handle fix, is not a page address at all.
    */
   public find(query: { url?: string; title?: string; year?: number }): PageSnapshot | null {
+    this.hydrate();
     const direct = query.url ? this.snapshots.get(query.url.trim()) : undefined;
     if (direct) return this.touch(direct);
 
@@ -294,6 +316,7 @@ export class PageSnapshotStore {
     query: { url?: string; title?: string; year?: number },
     pinned: boolean
   ): boolean {
+    this.hydrate();
     const entry = this.find(query);
     if (!entry) return false;
     entry.pinned = pinned;
@@ -302,6 +325,7 @@ export class PageSnapshotStore {
   }
 
   public forget(url: string): boolean {
+    this.hydrate();
     const entry = this.snapshots.get(url);
     if (!entry) return false;
     this.snapshots.delete(url);
@@ -311,6 +335,7 @@ export class PageSnapshotStore {
   }
 
   public clearAll(): number {
+    this.hydrate();
     const count = this.snapshots.size;
     this.snapshots.clear();
     this.byKey.clear();
@@ -319,15 +344,18 @@ export class PageSnapshotStore {
   }
 
   public list(): PageSnapshot[] {
+    this.hydrate();
     return [...this.snapshots.values()];
   }
 
   public size(): number {
+    this.hydrate();
     return this.snapshots.size;
   }
 
   /** Replaces the whole set; used by a backup restore. */
   public replaceAll(entries: PageSnapshot[]): number {
+    this.hydrate();
     this.snapshots.clear();
     this.byKey.clear();
     let restored = 0;

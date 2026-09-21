@@ -1,7 +1,9 @@
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import WebTorrent, { type NodeServer, type Torrent, type TorrentFile } from 'webtorrent';
+import type WebTorrent from 'webtorrent';
+import type { NodeServer, Torrent, TorrentFile } from 'webtorrent';
+
 import type { TorrentFileEntry, TorrentStreamStats } from '../../src/types/torrent';
 import { parseReleaseName } from './releaseParser';
 import { DEFAULT_TRACKERS, mergeTrackers, trackersFromMagnet } from './indexers/base';
@@ -19,6 +21,52 @@ import type { SwarmReport } from '../../src/types/torrent';
 import { TorrentMetadataCache, metadataCacheUrls } from './torrentMetadata';
 import { DhtNodeCache, DEFAULT_DHT_PORT, DHT_BOOTSTRAP_NODES } from './dhtNodeCache';
 import { describeError } from '../../src/utils/errors.ts';
+
+/**
+ * `webtorrent` is loaded when a torrent is wanted, not when the app starts.
+ *
+ * Measured on this machine: **604ms warm and 2762ms cold** just to evaluate the
+ * module and its native dependencies (`node-datachannel`, `utp-native`,
+ * `bittorrent-dht`). A static import put every millisecond of that in front of
+ * `app.whenReady()`, so the main process was not pumping messages for the whole
+ * of it and the window did not exist yet — which is exactly the interval
+ * Windows reports as "Not Responding".
+ *
+ * Nothing about the engine's behaviour changes. `ensureStarted` already gates
+ * every path that touches a client, and the module is resolved at the same
+ * point the client was previously constructed; the warm-up scheduled at launch
+ * still pays this cost early, just off the critical path.
+ *
+ * The constructor is cached because {@link utpSupported} reads a static off it
+ * from a synchronous call site. That is safe for the same reason the cache is
+ * correct: nothing can reach it before a client has been built.
+ */
+type WebTorrentCtor = typeof import('webtorrent').default;
+let webTorrentCtor: WebTorrentCtor | null = null;
+let webTorrentLoad: Promise<WebTorrentCtor> | null = null;
+
+async function loadWebTorrent(): Promise<WebTorrentCtor> {
+  if (webTorrentCtor) return webTorrentCtor;
+  // Deduped: `ensureStarted` can be entered twice before the first resolves,
+  // and two evaluations of a module with native bindings is the expensive half
+  // of this paid twice.
+  webTorrentLoad ??= import('webtorrent').then((module) => {
+    webTorrentCtor = module.default;
+    return webTorrentCtor;
+  });
+  return webTorrentLoad;
+}
+
+/**
+ * Whether this build has uTP, without forcing the module to load to find out.
+ *
+ * Reached only from swarm reporting, which runs against a live client — so the
+ * constructor is always present. `false` on the impossible path is the honest
+ * answer: no client means no uTP socket either.
+ */
+function utpSupported(): boolean {
+  return webTorrentCtor ? webTorrentCtor.UTP_SUPPORT !== false : false;
+}
 
 /**
  * Streaming torrent engine.
@@ -408,8 +456,9 @@ export class TorrentEngine {
     }
   }
 
-  private listenOn(torrentPort: number, dhtPort: number): Promise<WebTorrent> {
-    const client = new WebTorrent({
+  private async listenOn(torrentPort: number, dhtPort: number): Promise<WebTorrent> {
+    const WebTorrentClass = await loadWebTorrent();
+    const client = new WebTorrentClass({
       // Per torrent, not global. WebTorrent's default of 55 is conservative for
       // a desktop client: aggregate speed on BitTorrent is the sum of many slow
       // peers, and the per-peer request pipeline starts at two outstanding
@@ -1293,7 +1342,7 @@ export class TorrentEngine {
       census,
       ageMs: watch ? Date.now() - watch.startedAt : 0,
       mode,
-      utpAvailable: WebTorrent.UTP_SUPPORT !== false && this.client.utp !== false,
+      utpAvailable: utpSupported() && this.client.utp !== false,
       listenPort: this.client.torrentPort,
       maxConns: this.client.maxConns,
     });
@@ -1305,7 +1354,7 @@ export class TorrentEngine {
       summary: summariseSwarm(findings, census),
       mode,
       listenPort: this.client.torrentPort,
-      utpAvailable: WebTorrent.UTP_SUPPORT !== false && this.client.utp !== false,
+      utpAvailable: utpSupported() && this.client.utp !== false,
       downloadSpeed: torrent.downloadSpeed,
       uploadSpeed: torrent.uploadSpeed,
     };

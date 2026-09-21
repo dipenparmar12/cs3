@@ -106,6 +106,33 @@ export default defineConfig({
     ]),
     renderer(),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        /**
+         * Three libraries that are large, stable, and wanted at different times.
+         *
+         * Without this they land in whichever route chunk happens to import
+         * them first, and the route splitting in `App.tsx` then drags them in
+         * behind an unrelated screen. Named explicitly so each is fetched when
+         * the feature that needs it opens:
+         *
+         *  - `react` is on the first paint, so it is its own chunk purely to
+         *    stay cached across builds of the app's own code.
+         *  - `shaka-player` and `hls.js` belong to playback. They are only
+         *    reached from the player and the trailer popup, both of which are
+         *    lazy — so keeping them apart keeps the home screen free of them.
+         */
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return undefined;
+          if (/[\\/]node_modules[\\/]shaka-player[\\/]/.test(id)) return 'shaka';
+          if (/[\\/]node_modules[\\/]hls\.js[\\/]/.test(id)) return 'hls';
+          if (/[\\/]node_modules[\\/]react(-dom)?[\\/]/.test(id)) return 'react';
+          return undefined;
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     watch: {

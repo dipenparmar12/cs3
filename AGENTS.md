@@ -73,6 +73,8 @@ cs3/
 | Download resume decision only | `cs3_windows/` | `bun run test resume` (17 cases, pure) |
 | Download resume probe only | `cs3_windows/` | `bun run test resume-window` (10 cases, real sockets) |
 | Component reachability only | `cs3_windows/` | `bun run test reachability` (2 cases, lexical) |
+| Startup profiler only | `cs3_windows/` | `bun run test startup-profile` (7 cases, blocks the loop for real) |
+| Startup queue only | `cs3_windows/` | `bun run test startup-queue` (9 cases, real timers) |
 | Settings level only | `cs3_windows/` | `bun run test settings-level` (6 cases, pure + lexical) |
 | Dead result rows only | `cs3_windows/` | `bun run test dead-rows` (8 cases, pure) |
 | Media proxy only | `cs3_windows/` | `bun run test proxy` (11 cases, stubbed origin) |
@@ -224,6 +226,7 @@ Fallible handlers return an **envelope** `{ ok, error?, …payload }` and never 
 | `videos:*` | `resolve(pageUrl)` turns a trailer's page into a stream. Returns a **provider-level, proxied** address, never a playable one: the renderer hands it to `media:prepare` like any other source, so that channel stays the only source of a playable URL. Separate from `metadata:*` because it spawns a process on a button press, where a metadata record is something nothing waits for. |
 | `external:*` | Drives a handed-off player, pushes `external:update` with a `capability` flag. |
 | window pins | `window:set/getAlwaysOnTop` for the app window; `mpv:setOnTop`/`setVideoEnabled` for mpv's own. |
+| `app:getStartupProfile` | **Read-shaped.** Returns this launch's stages, marks, stalls and the background queue's state. Developer mode on the renderer side, but the *channel* is unconditional — a reporter being told to turn developer mode on before they can answer "why is it slow" is the diagnostic being unavailable exactly when it is wanted. |
 
 **`ipcRenderer.invoke` on an unregistered channel rejects — there is no `{ok:false}` envelope.** Seven channels were once strings that had stopped matching (invisible to `tsc`): `binary:setupBinaries` invoked-never-registered made the first-run installer *always* fail, and `BinarySetupModal` caught the rejection and rendered a *reassuring* notice. **A catch that reassures is worse than no catch.** `electron/ipcSurface.test.mts` (`bun run test ipc`, runs first) pins every diff lexically, mutation-verified in all three directions. Exceptions go in commented allow-lists — "I'll wire it later" is not a valid entry.
 
@@ -399,6 +402,8 @@ rather than omitting the ones nothing serves.
 | `logging/logger.ts`, `redact.ts` | NDJSON per-launch transcript, buffered, flushed on a timer. |
 | `util/jsonFileStore.ts` | Debounced persistence (5 copies unified). |
 | `util/disabledSet.ts` | The enable-cascade toggle (3 copies unified). |
+| `startupProfile.ts` | What this launch cost, and where the main thread stopped answering. Stages, marks and **stalls** — the last is the only one that tells "busy" from "frozen". Imports nothing, and is the first import in `main.ts`. |
+| `util/startupQueue.ts` | The prioritised background queue every post-window service registers with. Serial by default (provider registration), named lanes opt into concurrency, a failed task never blocks the ones behind it. |
 | `util/prune.ts` | Drops empty keys so a merge cannot blank a known value — the mechanical half of the never-blank rule (§9.2). Was byte-identical in `bookmarkStore` and `pageSnapshot`. |
 
 ### Renderer modules worth knowing
@@ -428,6 +433,9 @@ rather than omitting the ones nothing serves.
 | `src/components/player/playbackRecovery.ts` | What a transport failure costs next. Pure, tested. |
 | `src/components/player/useFloatingPlayer.ts` | PiP, window pin, background policy, Media Session record. |
 | `src/components/settings/settingsLevel.ts` | Simple vs Everything semantics. |
+| `src/components/settings/StartupProfilePanel.tsx` | The startup profile, Developer mode. Stalls first, then slowest stages, then the background queue. |
+| `src/components/ViewSkeleton.tsx` | What a lazily-loaded route shows while its chunk arrives. Fades in at 150ms, so the common case draws nothing. |
+| `src/views/searchUiState.ts` | `SearchUiState` + `EMPTY_SEARCH_UI`. Its own module because `App` holds the value, and a value import of `SearchView` would have pinned that screen into the first paint. |
 | `src/components/Poster.tsx`, `EmptyState.tsx` | Shared primitives with per-call-site fallbacks. |
 
 ---
@@ -1546,6 +1554,99 @@ If you add a code path that calls a provider, call `ensureProviderActive` first.
 provider is addressable and has no code running behind it; the RPC will answer
 `PROVIDER_NOT_LOADED`, which `explainMissingProvider` will then explain as though the
 extension were disabled.
+
+### The window took three seconds, and none of it was the app's own code (2026-09-21)
+
+Reported as: slow to start, and Windows marks it **Not Responding** for a few
+seconds during launch. Measured rather than reasoned about, and every obvious
+explanation was wrong — the provider warm-up, the torrent client and the
+bootstrap were already deferred (see the section above), and none of them was
+on the path.
+
+The cost was **before `app.whenReady()` ever resolved.** Every `import` in
+`main.ts` is evaluated first, with no message pump running, and four
+third-party packages sat in that graph for features nobody had asked for yet:
+
+| Evaluated before the window existed | warm | cold |
+|---|---|---|
+| `webtorrent` (+ `node-datachannel`, `utp-native`, `bittorrent-dht`) | 604ms | **2762ms** |
+| `cheerio` (+ parse5, css-select, htmlparser2) | 242ms | **1740ms** |
+| `fast-xml-parser` | 43ms | 710ms |
+| `chardet` | 16ms | 16ms |
+| 17.4MB of synchronous JSON read + parse across 9 stores | 87ms | far worse |
+| `refreshFfmpegOptionSupport()` — two child processes, from a top-level call | — | **4654ms** |
+
+That is the "Not Responding" window, exactly: Windows reports a process
+unresponsive when it stops pumping messages, and none of the above can be
+interrupted by anything.
+
+**Measured end to end, spawn to a visible top-level window**, same machine,
+same seeded 7.10MB profile, `MainWindowHandle` polled from PowerShell:
+
+```
+before   3128 3013 4563 2937 3013 3982 2919   median 3013ms
+after    2713 1662 1546 2425 1754 1706 1692 1546 1803   median 1706ms
+```
+
+Five changes, and the first three are the whole of it:
+
+- **Every heavy package is behind the feature that needs it.** `webtorrent`
+  resolves in `listenOn`, where the client was already being constructed;
+  `cheerio` in the three scrapers, all already behind an awaited fetch;
+  `fast-xml-parser` through `lazyXmlParser` in `indexers/base.ts`, because the
+  two call sites need different options and only the loading is shared. Each
+  loader is deduped — a search fans out across adapters at once, and three
+  concurrent evaluations of the parse5 graph is the expensive half paid three
+  times. `chardet` is a lazy `createRequire`, not an `await import`: its caller
+  is synchronous with half a dozen callers of its own, and 16ms does not buy
+  turning the subtitle path async.
+- **`DatastoreManager` stopped writing 7.1MB synchronously on every setter.**
+  Measured on the development install: 52 keys, of which `source_cache_v1` is
+  3.18MB and `media_history_events_v1` 2.15MB, and `save()` was
+  `writeFileSync(JSON.stringify(everything, null, 2))` called from `setString`,
+  `setBool` and `setInt` — ~29ms of serialisation plus the write, for one
+  `setBool`. Now coalesced on 250ms and written temp-file-plus-rename, which
+  also fixes something that was already true: a 7MB write interrupted by a
+  crash left a truncated file, and a truncated datastore is every preference,
+  the whole library and the watch history. This was the store that never went
+  through `util/jsonFileStore.ts` when five others did.
+- **The debugging-exhaust stores hydrate on first use.** `DiagnosticsLog`
+  (5.53MB) and `PageSnapshotStore` (1.10MB) both read and parsed in their
+  constructors, which run at module scope. Every entry point calls the
+  hydrator, **including the write-only ones** — hydrating after a record had
+  been appended would replace the live array with the file's copy and lose it.
+- **The ad-hoc warm-up timers became a queue.** `util/startupQueue.ts`: tasks
+  declare a priority, run one at a time with the loop given a turn between
+  each, and a failure is retried on a backoff and then recorded without
+  stopping anything behind it. The delays were previously the *only* thing
+  keeping a JVM class-load pass, a DHT bootstrap and two ffmpeg probes off each
+  other, and a delay is a guess about how long the task before it takes.
+  **Serial is the default and that is not conservatism** — provider loading
+  cannot be parallelised (§5), so a queue that ran everything concurrently
+  would reintroduce the 176-mis-attributed-providers defect by default.
+- **The renderer stopped shipping as one chunk.** 2.11MB of JS had to be parsed
+  and evaluated before the first paint, and the window waits on `ready-to-show`
+  — so the two media libraries, the 4,152-line player, `shaka-player`,
+  `hls.js`, the extensions manager and the settings screen were all in front of
+  a home screen that uses none of them. `React.lazy` per route, one `Suspense`
+  inside `<main>` so the sidebar stays live, and `manualChunks` for the three
+  big libraries: **first-paint JS 2061kB → 311kB.**
+
+Two things found by writing the tests, both of which had shipped broken:
+
+- **Stall attribution never worked for a synchronous stage.** A stage opens,
+  blocks and closes inside one turn of the loop, so by the time the monitor's
+  timer can run there is nothing open to blame and every stall reported `null`.
+  `enteredSinceTick` is what names it. A list of freezes with no owner is what
+  the app already had.
+- **A named lane was held behind the serial one, in both directions.** The
+  first `drain()` asked whether *anything* was busy before starting a serial
+  task and broke out of the loop after starting one. Every lane is simply asked
+  whether it is free now, including the default one.
+
+Rules that came out of it, in §12. The one worth repeating here: **`bun run
+test reachability` does not catch a heavy module-scope import.** Nothing did.
+Walk the static graph from `main.ts` and look at what is in it.
 
 ### Counting the log, from inside the app (2026-08-26)
 
@@ -4609,6 +4710,9 @@ screen groups by subject and filters by *level*. All teardown happens on `before
 - **`util/disabledSet.ts` writes fields longhand** — `erasableSyntaxOnly` forbids constructor parameter properties.
 - **The sidecar's stdout carries RPC frames and nothing else.** A stray `println` desyncs the channel; plugin logs, JVM warnings and stack traces are forced to stderr. Keep it that way.
 - **Never bundle main-process runtime deps.** `vite.config.ts` externalises `dependencies` + node builtins (bare and `node:` spellings). WebTorrent's native `.node` binaries (`node-datachannel`, `utp-native`) must also be `asarUnpack`-ed.
+- **Nothing heavy runs at module scope.** Every `import` in `main.ts` is evaluated before `app.whenReady()` resolves, with no message pump running — which is exactly the interval Windows reports as "Not Responding". Measured before this was fixed: `webtorrent` 604ms warm / **2762ms cold**, `cheerio` 242/1740, `fast-xml-parser` 43/710, plus two `ffmpeg` child processes spawned from a top-level call (**4.65s** on a cold run). A third-party package reached only from a feature is a `await import()` behind that feature; a service is a `background.add(...)` task. `bun run test reachability` does not catch this — check the graph.
+- **A store that is read at construction is read before the window exists.** `DiagnosticsLog` (5.53MB), `PageSnapshotStore` (1.10MB) and the datastore (7.10MB) were 17.4MB of synchronous read-and-parse in front of the first frame. Hydrate on first use instead, and have *every* entry point call the hydrator including the write-only ones — hydrating after a record was appended replaces the live state with the file's and loses it.
+- **The datastore is debounced, coalesced and written atomically.** `save()` marks dirty; the bytes land 250ms later via temp-file-plus-rename. It used to `writeFileSync(JSON.stringify(everything, null, 2))` on **every setter** — 7.1MB, ~29ms of main thread, for one `setBool`. Durability points call `flush()`/`flushSync()`: backup, import, rollback and `before-quit`.
 - **A catch that reassures is worse than no catch.**
 - **Prefer an honest empty answer with a reason over a synthesised one.**
 

@@ -1,4 +1,3 @@
-import { XMLParser } from 'fast-xml-parser';
 import { fetchJson, fetchText } from '../http';
 import {
   buildMagnet,
@@ -6,6 +5,7 @@ import {
   parseIntSafe,
   parseSize,
   tryMirrors,
+  lazyXmlParser,
   withEpisodeTerms,
   type RawTorrent,
   type TorrentIndexer,
@@ -24,7 +24,7 @@ import type { IndexerQuery } from '../../../src/types/torrent';
  */
 
 
-const xml = new XMLParser({
+const xmlParser = lazyXmlParser({
   ignoreAttributes: false,
   attributeNamePrefix: '@_',
   parseTagValue: false,
@@ -214,7 +214,7 @@ export class EztvIndexer implements TorrentIndexer {
         try {
           const rssUrl = `${base}/ezrss.xml?search=${encodeURIComponent(terms)}`;
           const body = await fetchText(rssUrl, { signal, timeoutMs: 15_000 });
-          const doc = xml.parse(body);
+          const doc = (await xmlParser()).parse(body);
           const items = asArray<Record<string, unknown>>(doc?.rss?.channel?.item);
 
           return items
@@ -359,7 +359,7 @@ export class NyaaIndexer implements TorrentIndexer {
       // c=1_2 restricts to "Anime - English-translated".
       const url = `${base}/?page=rss&q=${search}&c=1_2&f=0`;
       const body = await fetchText(url, { signal, timeoutMs: 20_000 });
-      const doc = xml.parse(body);
+      const doc = (await xmlParser()).parse(body);
       const items = asArray<Record<string, unknown>>(doc?.rss?.channel?.item);
 
       return items
@@ -480,7 +480,7 @@ export class LimeTorrentsIndexer implements TorrentIndexer {
     return tryMirrors(LimeTorrentsIndexer.MIRRORS, async (base) => {
       const url = `${base}/search/rss/${encodeURIComponent(terms)}/`;
       const body = await fetchText(url, { signal, timeoutMs: 20_000 });
-      const doc = xml.parse(body);
+      const doc = (await xmlParser()).parse(body);
       const items = asArray<Record<string, unknown>>(doc?.rss?.channel?.item);
 
       return items
@@ -560,7 +560,7 @@ export class TokyoToshoIndexer implements TorrentIndexer {
         signal,
         timeoutMs: 20_000,
       });
-      const doc = xml.parse(body);
+      const doc = (await xmlParser()).parse(body);
       const items = asArray<Record<string, unknown>>(doc?.rss?.channel?.item);
 
       return items
@@ -640,7 +640,7 @@ export class AniDexIndexer implements TorrentIndexer {
 
     return tryMirrors(AniDexIndexer.MIRRORS, async (base) => {
       const body = await fetchText(`${base}/rss/?q=${search}`, { signal, timeoutMs: 20_000 });
-      const doc = xml.parse(body);
+      const doc = (await xmlParser()).parse(body);
       const items = asArray<Record<string, unknown>>(doc?.rss?.channel?.item);
 
       return items

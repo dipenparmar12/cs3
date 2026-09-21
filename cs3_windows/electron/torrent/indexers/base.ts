@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+// Type-only: erased at build, so it does not pull the parser into the graph.
+import type { XMLParser } from 'fast-xml-parser';
 
 import type { IndexerConfig, IndexerQuery, TorrentResult } from '../../../src/types/torrent';
 import { parseReleaseName } from '../releaseParser.ts';
@@ -387,4 +389,33 @@ export async function tryMirrors<T>(
     }
   }
   throw lastError;
+}
+
+/**
+ * An RSS parser built the first time an indexer needs one.
+ *
+ * `fast-xml-parser` costs **43ms warm and 710ms cold** to evaluate, and a
+ * module-scope `new XMLParser(...)` in `builtins.ts` and `torznab.ts` put both
+ * of those in front of `app.whenReady()` — for a parser that only ever runs
+ * once somebody searches. Two call sites with two different configurations, so
+ * the option object stays with the adapter that owns it and only the loading is
+ * shared.
+ *
+ * The parser instance is cached per call site, not per process: it is stateless
+ * and cheap to construct, and a shared one would have to reconcile the two
+ * configurations — `torznab` needs `isArray`, `builtins` must not have it.
+ */
+export function lazyXmlParser(
+  options: ConstructorParameters<typeof XMLParser>[0]
+): () => Promise<XMLParser> {
+  let parser: XMLParser | null = null;
+  let loading: Promise<XMLParser> | null = null;
+  return () => {
+    if (parser) return Promise.resolve(parser);
+    loading ??= import('fast-xml-parser').then((module) => {
+      parser = new module.XMLParser(options);
+      return parser;
+    });
+    return loading;
+  };
 }
