@@ -14,7 +14,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { looksLikeWebPage, mapYtDlpInfo, MAX_ROWS, type YtDlpInfo } from './ytdlpSources.ts';
+import { looksLikeWebPage, mapYtDlpInfo, MAX_ROWS, pickPromoStream, type YtDlpInfo } from './ytdlpSources.ts';
 
 const tests: Array<[string, () => void]> = [];
 const test = (name: string, fn: () => void) => tests.push([name, fn]);
@@ -189,6 +189,48 @@ test('a search term is not a page address', () => {
   assert.equal(looksLikeWebPage('http://localhost'), false);
   assert.equal(looksLikeWebPage('https://'), false);
   assert.equal(looksLikeWebPage(''), false);
+});
+
+// --- pickPromoStream -------------------------------------------------------
+
+test('pickPromoStream prioritises H.264 over AV1 for seamless hardware decoding', () => {
+  const formats = [
+    { url: 'https://cdn/1080p_av1.mp4', ext: 'mp4', height: 1080, vcodec: 'av01.0.08M.08', acodec: 'none', tbr: 2500 },
+    { url: 'https://cdn/1080p_h264.mp4', ext: 'mp4', height: 1080, vcodec: 'avc1.640028', acodec: 'none', tbr: 2000 },
+    { url: 'https://cdn/audio.m4a', ext: 'm4a', height: 0, vcodec: 'none', acodec: 'mp4a.40.2', tbr: 128 },
+  ];
+  const picked = pickPromoStream(info(formats), true);
+  assert.ok(picked);
+  assert.equal(picked.url, 'https://cdn/1080p_h264.mp4');
+  assert.equal(picked.audioUrl, 'https://cdn/audio.m4a');
+  assert.equal(picked.vcodec, 'h264');
+  assert.equal(picked.acodec, 'aac');
+  assert.equal(picked.height, 1080);
+});
+
+test('pickPromoStream respects MAX_PROMO_HEIGHT cap', () => {
+  const formats = [
+    { url: 'https://cdn/4k.mp4', ext: 'mp4', height: 2160, vcodec: 'avc1', acodec: 'none', tbr: 12000 },
+    { url: 'https://cdn/1080p.mp4', ext: 'mp4', height: 1080, vcodec: 'avc1', acodec: 'none', tbr: 3000 },
+    { url: 'https://cdn/audio.m4a', ext: 'm4a', height: 0, vcodec: 'none', acodec: 'mp4a', tbr: 128 },
+  ];
+  const picked = pickPromoStream(info(formats), true);
+  assert.ok(picked);
+  assert.equal(picked.height, 1080);
+  assert.equal(picked.url, 'https://cdn/1080p.mp4');
+});
+
+test('pickPromoStream falls back to single progressive stream when canMux is false', () => {
+  const formats = [
+    { url: 'https://cdn/1080p_video.mp4', ext: 'mp4', height: 1080, vcodec: 'avc1', acodec: 'none', tbr: 3000 },
+    { url: 'https://cdn/audio.m4a', ext: 'm4a', height: 0, vcodec: 'none', acodec: 'mp4a', tbr: 128 },
+    { url: 'https://cdn/360p_muxed.mp4', ext: 'mp4', height: 360, vcodec: 'avc1', acodec: 'mp4a', tbr: 400 },
+  ];
+  const picked = pickPromoStream(info(formats), false);
+  assert.ok(picked);
+  assert.equal(picked.url, 'https://cdn/360p_muxed.mp4');
+  assert.equal(picked.audioUrl, undefined);
+  assert.equal(picked.height, 360);
 });
 
 // --- runner ----------------------------------------------------------------

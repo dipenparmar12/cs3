@@ -5,8 +5,15 @@ import {
   ChevronLeft,
   ChevronRight,
   Loader2,
+  Maximize2,
+  Minimize2,
+  Pause,
   Play,
   RotateCcw,
+  RotateCw,
+  Subtitles,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 
@@ -19,56 +26,29 @@ import {
   type TrailerQueue,
 } from '../../utils/trailerQueue';
 import { describeError } from '../../utils/errors';
+import { formatTimecode } from '../../utils/format';
 
 /**
- * Trailers, in a window of their own.
+ * Points a conversion URL at a timestamp, replacing any it already carries.
  *
- * ## Why this is not the player
- *
- * A trailer used to open `VideoPlayer` — the full-bleed surface, the source
- * panel, the failover ladder, the floating modes, the episode list — as a
- * `PlaybackRequest` carrying `promo: true`. Everything that would have been
- * wrong for a promo was absent rather than suppressed, so it was *correct*, and
- * it was still the wrong answer: a two-minute teaser took over the app exactly
- * as the film does, spending the one signal that says "this is the thing you
- * chose to watch" on something nobody chose to watch. Getting back to the page
- * being read meant leaving playback.
- *
- * So this is a dialog, it is deliberately small, and it carries the browser's
- * own controls rather than a copy of the player's. That last part is the
- * separation and not a shortcut: a control bar that looks like the player's
- * invites every expectation the player sets — pick a source, download this,
- * resume where I left off, play the next episode — and not one of them is true
- * here.
- *
- * ## What it keeps, because these rules are not negotiable
- *
- * **`media:prepare` is still the only source of a playable URL** (INV-RACE-1).
- * `videos:resolve` answers with a provider-level, proxied address; it is
- * classified here exactly as a chosen source is, nothing is assigned to the
- * element before that answer arrives, and nothing is decided from the URL
- * string. A `NATIVE_MPV` verdict is reported rather than assigned — Chromium
- * would take the URL, fail, and report as broken a stream mpv opens without
- * comment — though `bestPromoStream` prefers a pre-muxed H.264/AAC rung
- * precisely so that verdict is not reached for a trailer.
- *
- * **A prepared session is closed when it is left.** A promo whose two halves
- * were muxed holds an ffmpeg process, and stepping through six trailers without
- * closing them holds six.
- *
- * ## Autoplay
- *
- * On `ended` the next entry is *offered*, with a five-second countdown. The
- * countdown is what makes it an offer: a trailer ending is the moment somebody
- * decides whether they are still watching, and a popup that answers for them is
- * one they have to go and interrupt. Which entry is next — and the two places
- * the queue refuses to go — is `trailerQueue.ts`, where it is tested.
+ * A live fragmented MP4 has no index, so seeking is a re-request with `?t=`.
  */
+function atTime(url: string, seconds: number): string {
+  const [base] = url.split('?');
+  return seconds > 0 ? `${base}?t=${Math.floor(seconds)}` : base;
+}
 
 /** Where the current entry has got to. One entry, one state. */
 type Stage =
   | { phase: 'resolving' }
-  | { phase: 'ready'; url: string; isHls: boolean }
+  | {
+      phase: 'ready';
+      url: string;
+      isHls: boolean;
+      duration?: number;
+      subtitles?: Array<{ name: string; url: string }>;
+      sessionId?: string;
+    }
   | { phase: 'error'; message: string; needsComponents?: boolean };
 
 const AUTOPLAY_SECONDS = 5;
@@ -82,11 +62,6 @@ export const TrailerPopup: React.FC<{
   titleName?: string;
   onClose: () => void;
 }> = ({ videos, startId, titleName, onClose }) => {
-  /**
-   * Built once, from the list as it stood when the card was pressed. Extended
-   * metadata arrives in pieces, so rebuilding it on every update would let a
-   * late source reorder the rail underneath somebody halfway through it.
-   */
   const [queue, setQueue] = useState<TrailerQueue>(() => buildTrailerQueue(videos, startId));
   const video = currentOf(queue);
   const next = useMemo(() => upNext(queue), [queue]);
@@ -98,37 +73,96 @@ export const TrailerPopup: React.FC<{
   /** Counts down after `ended`; null whenever nothing is queued up. */
   const [countdown, setCountdown] = useState<number | null>(null);
 
+  // Playback & UI state
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [playbackOffset, setPlaybackOffset] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
+  const [isScrubbing, setIsScrubbing] = useState(false);
+
+  const stageRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const scrubberRef = useRef<HTMLDivElement>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [elementDuration, setElementDuration] = useState(0);
+
+  const duration =
+    (stage.phase === 'ready' && stage.duration) ||
+    video?.durationSeconds ||
+    elementDuration ||
+    0;
 
   const go = useCallback((delta: number) => {
+    if (activeSessionIdRef.current) {
+      void window.cloudstream?.closePlaybackStream(activeSessionIdRef.current);
+      activeSessionIdRef.current = null;
+    }
     setQueue((held) => step(held, delta) ?? held);
     setCountdown(null);
     setAttempt(0);
+    setPlaybackOffset(0);
+    setCurrentTime(0);
+    setIsPlaying(false);
   }, []);
 
-  // Escape closes, consumed in the capture phase so it stops here — see
-  // `useDismissable` for how a bubbling Escape came to end playback.
+  // Escape closes or exits fullscreen
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.stopPropagation();
-      onClose();
+      const target = event.target as HTMLElement | null;
+      const isInput = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA';
+      if (isInput) return;
+
+      if (event.key === 'Escape') {
+        if (document.fullscreenElement) {
+          void document.exitFullscreen?.().catch(() => undefined);
+          return;
+        }
+        event.stopPropagation();
+        onClose();
+      }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
-  // The viewer's stored level, read and never written: a trailer is not where
-  // somebody decides how loud films are, and a film at 30% followed by a teaser
-  // at 100% is the whole reason this is read at all.
+  // Read viewer's stored volume preferences
   useEffect(() => {
     void (async () => {
       const response = await window.cloudstream?.getPlayerPreferences?.();
       const element = videoRef.current;
       if (!response?.ok || !element) return;
-      element.volume = Math.min(1, Math.max(0, response.preferences.volume));
+      const vol = Math.min(1, Math.max(0, response.preferences.volume));
+      element.volume = vol;
       element.muted = response.preferences.muted;
+      setVolume(vol);
+      setMuted(response.preferences.muted);
     })();
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (activeSessionIdRef.current) {
+        void window.cloudstream?.closePlaybackStream(activeSessionIdRef.current);
+        activeSessionIdRef.current = null;
+      }
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    };
+  }, []);
+
+  // Fullscreen state listener
+  useEffect(() => {
+    const onFsChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
   /** Resolve, then classify. Nothing is attached until both have answered. */
@@ -138,6 +172,9 @@ export const TrailerPopup: React.FC<{
     let opened = '';
     setStage({ phase: 'resolving' });
     setCountdown(null);
+    setPlaybackOffset(0);
+    setCurrentTime(0);
+    setIsPlaying(false);
 
     void (async () => {
       const api = window.cloudstream;
@@ -147,8 +184,6 @@ export const TrailerPopup: React.FC<{
         if (!resolved?.ok || !resolved.streamUrl) {
           setStage({
             phase: 'error',
-            // Named, never silent. A missing component is an install and a
-            // removed video is nothing: two actions, two sentences.
             message: resolved?.needsComponents
               ? 'Playing trailers needs yt-dlp, which Settings → Components can install.'
               : (resolved?.error ?? 'That trailer could not be opened.'),
@@ -163,7 +198,8 @@ export const TrailerPopup: React.FC<{
           isDash: resolved.isDash,
         });
         if (cancelled) {
-          if (prepared?.sessionId) void api?.closePlaybackStream(prepared.sessionId);
+          const sid = prepared?.sessionId || resolved.sessionId;
+          if (sid) void api?.closePlaybackStream(sid);
           return;
         }
         if (!prepared?.ok || !prepared.playbackUrl) {
@@ -175,12 +211,11 @@ export const TrailerPopup: React.FC<{
           return;
         }
 
-        opened = prepared.sessionId ?? '';
+        opened = prepared.sessionId || resolved.sessionId || '';
+        activeSessionIdRef.current = opened || null;
+
         const strategy = prepared.capability.requiredStrategy;
         if (strategy === 'NATIVE_MPV') {
-          // Assigning it anyway is the bug this branch exists to avoid: the
-          // element fails on a stream the native engine plays perfectly, and
-          // the trailer is reported broken.
           setStage({
             phase: 'error',
             message: 'This video needs the native player, which trailers do not use.',
@@ -191,9 +226,10 @@ export const TrailerPopup: React.FC<{
         setStage({
           phase: 'ready',
           url: prepared.playbackUrl,
-          // From the classification, never from the address: providers serve
-          // playlists from `.php` URLs and from URLs with no extension at all.
           isHls: strategy === 'HLS_NATIVE' || prepared.capability.transport === 'hls',
+          duration: resolved.durationSeconds || video.durationSeconds,
+          subtitles: resolved.subtitles,
+          sessionId: opened,
         });
       } catch (error) {
         if (!cancelled) setStage({ phase: 'error', message: describeError(error) });
@@ -202,11 +238,16 @@ export const TrailerPopup: React.FC<{
 
     return () => {
       cancelled = true;
-      if (opened) void window.cloudstream?.closePlaybackStream(opened);
+      if (opened) {
+        void window.cloudstream?.closePlaybackStream(opened);
+        if (activeSessionIdRef.current === opened) {
+          activeSessionIdRef.current = null;
+        }
+      }
     };
   }, [video, attempt]);
 
-  /** Attach. Only ever reached with a classified URL in hand (INV-RACE-1). */
+  /** Attach video source. */
   useEffect(() => {
     const element = videoRef.current;
     if (!element || stage.phase !== 'ready') return;
@@ -220,7 +261,7 @@ export const TrailerPopup: React.FC<{
       element.src = stage.url;
     }
     void element.play().catch(() => {
-      /* Autoplay can be refused; the controls are right there. */
+      /* Autoplay can be refused by browser policy. */
     });
 
     return () => {
@@ -232,12 +273,21 @@ export const TrailerPopup: React.FC<{
     };
   }, [stage]);
 
-  /**
-   * The countdown, armed by `ended` and disarmed by anything the viewer does.
-   *
-   * `go` clears it, so pressing Next, Previous or Cancel during the count
-   * cannot also fire the advance a second later.
-   */
+  // Synchronize text tracks mode with subtitlesEnabled
+  useEffect(() => {
+    const element = videoRef.current;
+    if (!element || !element.textTracks) return;
+    for (let i = 0; i < element.textTracks.length; i++) {
+      element.textTracks[i].mode = subtitlesEnabled ? 'showing' : 'hidden';
+    }
+  }, [subtitlesEnabled, stage]);
+
+  const handleEnded = useCallback(() => {
+    setIsPlaying(false);
+    if (autoplay && next) setCountdown(AUTOPLAY_SECONDS);
+  }, [autoplay, next]);
+
+  // Autoplay countdown timer
   useEffect(() => {
     if (countdown === null) return;
     if (countdown <= 0) {
@@ -251,15 +301,192 @@ export const TrailerPopup: React.FC<{
     return () => clearTimeout(timer);
   }, [countdown, go]);
 
-  const handleEnded = useCallback(() => {
-    if (autoplay && next) setCountdown(AUTOPLAY_SECONDS);
-  }, [autoplay, next]);
+  // Time update from video element
+  const handleTimeUpdate = useCallback(() => {
+    const element = videoRef.current;
+    if (!element) return;
+    const now =
+      stage.phase === 'ready' && stage.url.includes('/media/')
+        ? playbackOffset + element.currentTime
+        : element.currentTime;
+    setCurrentTime(now);
+
+    // If near duration on fragmented live pipe, advance cleanly
+    if (duration > 0 && now >= duration - 0.5 && !element.paused) {
+      handleEnded();
+    }
+  }, [playbackOffset, stage, duration, handleEnded]);
+
+  const togglePlay = useCallback(() => {
+    const element = videoRef.current;
+    if (!element) return;
+    if (element.paused) {
+      void element.play().catch(() => undefined);
+    } else {
+      element.pause();
+    }
+  }, []);
+
+  const seekTo = useCallback(
+    (targetSeconds: number) => {
+      const element = videoRef.current;
+      if (!element || stage.phase !== 'ready') return;
+      const target = Math.max(0, Math.min(targetSeconds, duration > 0 ? duration : targetSeconds));
+
+      if (stage.isHls) {
+        element.currentTime = target;
+        setCurrentTime(target);
+        return;
+      }
+
+      if (stage.url.includes('/media/')) {
+        setPlaybackOffset(target);
+        setCurrentTime(target);
+        const wasPlaying = !element.paused;
+        element.src = atTime(stage.url, target);
+        element.load();
+        if (wasPlaying) void element.play().catch(() => undefined);
+        return;
+      }
+
+      element.currentTime = target;
+      setCurrentTime(target);
+    },
+    [stage, duration]
+  );
+
+  const seekBy = useCallback(
+    (delta: number) => {
+      seekTo(currentTime + delta);
+    },
+    [currentTime, seekTo]
+  );
+
+  const handleVolumeChange = useCallback((newVol: number) => {
+    const element = videoRef.current;
+    if (!element) return;
+    const clamped = Math.max(0, Math.min(1, newVol));
+    element.volume = clamped;
+    element.muted = clamped === 0;
+    setVolume(clamped);
+    setMuted(clamped === 0);
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const element = videoRef.current;
+    if (!element) return;
+    const nextMuted = !element.muted;
+    element.muted = nextMuted;
+    setMuted(nextMuted);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    const stageEl = stageRef.current;
+    if (!stageEl) return;
+    if (!document.fullscreenElement) {
+      void stageEl.requestFullscreen?.().catch(() => undefined);
+    } else {
+      void document.exitFullscreen?.().catch(() => undefined);
+    }
+  }, []);
+
+  // Keyboard navigation
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isInput = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA';
+      if (isInput) return;
+
+      if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+        return;
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        seekBy(-5);
+        return;
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        seekBy(5);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        handleVolumeChange(volume + 0.1);
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        handleVolumeChange(volume - 0.1);
+        return;
+      }
+      if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        toggleMute();
+        return;
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        toggleFullscreen();
+        return;
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [togglePlay, seekBy, handleVolumeChange, volume, toggleMute, toggleFullscreen]);
+
+  // Controls auto-hide
+  const handleMouseMove = useCallback(() => {
+    setShowControls(true);
+    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    if (isPlaying) {
+      controlsTimeoutRef.current = setTimeout(() => {
+        setShowControls(false);
+      }, 2500);
+    }
+  }, [isPlaying]);
+
+  // Scrubber dragging
+  const handleScrubberMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      if (!scrubberRef.current || duration <= 0) return;
+      setIsScrubbing(true);
+
+      const applySeek = (clientX: number) => {
+        if (!scrubberRef.current || duration <= 0) return;
+        const rect = scrubberRef.current.getBoundingClientRect();
+        const fraction = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        seekTo(fraction * duration);
+      };
+
+      applySeek(e.clientX);
+
+      const onMouseMove = (moveEvent: MouseEvent) => {
+        applySeek(moveEvent.clientX);
+      };
+
+      const onMouseUp = () => {
+        setIsScrubbing(false);
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+      };
+
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    },
+    [duration, seekTo]
+  );
 
   if (!video) return null;
 
   const position =
     queue.videos.length > 1 ? `${queue.index + 1} of ${queue.videos.length}` : null;
   const context = [titleName, position].filter(Boolean).join(' · ');
+  const progressPercent = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+  const showOverlayControls = showControls || !isPlaying || isScrubbing;
 
   return (
     <div className="modal-backdrop trailer-popup__backdrop" role="presentation" onClick={onClose}>
@@ -272,8 +499,6 @@ export const TrailerPopup: React.FC<{
       >
         <header className="trailer-popup__head">
           <div className="trailer-popup__titles">
-            {/* The label is what the video is; the publisher's full title,
-                which usually repeats the film's name, is the tooltip. */}
             <strong className="trailer-popup__label" title={video.title}>
               {video.label}
             </strong>
@@ -290,15 +515,26 @@ export const TrailerPopup: React.FC<{
           </button>
         </header>
 
-        <div className="trailer-popup__stage">
-          {/* One element for the whole queue: remounting per entry throws away
-              the volume and the mute the viewer has just set. */}
+        <div
+          ref={stageRef}
+          className="trailer-popup__stage"
+          onMouseMove={handleMouseMove}
+          onMouseLeave={() => isPlaying && setShowControls(false)}
+        >
           <video
             ref={videoRef}
             className="trailer-popup__video"
-            controls
             playsInline
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onTimeUpdate={handleTimeUpdate}
+            onDurationChange={(e) => {
+              const d = e.currentTarget.duration;
+              if (Number.isFinite(d) && d > 0) setElementDuration(d);
+            }}
             onEnded={handleEnded}
+            onClick={togglePlay}
+            onDoubleClick={toggleFullscreen}
             onError={() =>
               setStage((held) =>
                 held.phase === 'ready'
@@ -306,7 +542,149 @@ export const TrailerPopup: React.FC<{
                   : held
               )
             }
-          />
+          >
+            {stage.phase === 'ready' &&
+              stage.subtitles?.map((sub, i) => (
+                <track
+                  key={sub.url}
+                  kind="subtitles"
+                  label={sub.name}
+                  src={sub.url}
+                  default={i === 0 && /en|eng|english/i.test(sub.name)}
+                />
+              ))}
+          </video>
+
+          {/* Center Play button when paused */}
+          {stage.phase === 'ready' && !isPlaying && countdown === null && (
+            <button
+              type="button"
+              className="trailer-popup__center-play"
+              onClick={togglePlay}
+              aria-label="Play"
+            >
+              <Play size={28} fill="currentColor" />
+            </button>
+          )}
+
+          {/* Custom Player Controls */}
+          {stage.phase === 'ready' && (
+            <div
+              className={`trailer-popup__controls ${
+                showOverlayControls ? '' : 'trailer-popup__controls--hidden'
+              }`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Scrubber bar */}
+              <div
+                ref={scrubberRef}
+                className="trailer-popup__scrubber"
+                onMouseDown={handleScrubberMouseDown}
+                role="slider"
+                aria-label="Seek timeline"
+                aria-valuemin={0}
+                aria-valuemax={duration}
+                aria-valuenow={currentTime}
+              >
+                <div className="trailer-popup__scrubber-track">
+                  <div
+                    className="trailer-popup__scrubber-fill"
+                    style={{ width: `${progressPercent}%` }}
+                  />
+                  <div
+                    className="trailer-popup__scrubber-handle"
+                    style={{ left: `${progressPercent}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Controls bar */}
+              <div className="trailer-popup__bar">
+                <div className="trailer-popup__bar-group">
+                  <button
+                    type="button"
+                    className="trailer-popup__btn"
+                    onClick={togglePlay}
+                    title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+                    aria-label={isPlaying ? 'Pause' : 'Play'}
+                  >
+                    {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="trailer-popup__btn"
+                    onClick={() => seekBy(-10)}
+                    title="Skip back 10s (Left Arrow)"
+                    aria-label="Skip back 10 seconds"
+                  >
+                    <RotateCcw size={15} />
+                  </button>
+
+                  <button
+                    type="button"
+                    className="trailer-popup__btn"
+                    onClick={() => seekBy(10)}
+                    title="Skip forward 10s (Right Arrow)"
+                    aria-label="Skip forward 10 seconds"
+                  >
+                    <RotateCw size={15} />
+                  </button>
+
+                  <button
+                    type="button"
+                    className="trailer-popup__btn"
+                    onClick={toggleMute}
+                    title={muted ? 'Unmute (M)' : 'Mute (M)'}
+                    aria-label={muted ? 'Unmute' : 'Mute'}
+                  >
+                    {muted || volume === 0 ? <VolumeX size={17} /> : <Volume2 size={17} />}
+                  </button>
+
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={muted ? 0 : volume}
+                    onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                    className="trailer-popup__volume-slider"
+                    aria-label="Volume"
+                  />
+
+                  <span className="trailer-popup__time">
+                    {formatTimecode(currentTime)} / {formatTimecode(duration)}
+                  </span>
+                </div>
+
+                <div className="trailer-popup__bar-group">
+                  {Boolean(stage.subtitles && stage.subtitles.length > 0) && (
+                    <button
+                      type="button"
+                      className={`trailer-popup__btn ${
+                        subtitlesEnabled ? 'trailer-popup__btn--active' : ''
+                      }`}
+                      onClick={() => setSubtitlesEnabled((prev) => !prev)}
+                      title="Subtitles"
+                      aria-label="Toggle subtitles"
+                    >
+                      <Subtitles size={16} />
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    className="trailer-popup__btn"
+                    onClick={toggleFullscreen}
+                    title={isFullscreen ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
+                    aria-label={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+                  >
+                    {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {stage.phase === 'resolving' && (
             <div className="trailer-popup__overlay" role="status">
@@ -372,8 +750,6 @@ export const TrailerPopup: React.FC<{
             </button>
           </div>
 
-          {/* Stated rather than implied: a video starting on its own with
-              nothing having said it would is the surprise this label removes. */}
           <label className="trailer-popup__autoplay">
             <input
               type="checkbox"

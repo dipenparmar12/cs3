@@ -372,6 +372,8 @@ export interface PromoResolution {
   /** yt-dlp is not installed. The UI offers the install rather than an error. */
   needsComponents?: boolean;
   streamUrl?: string;
+  /** Transcoder session token, for closing the conversion process when left. */
+  sessionId?: string;
   /** The video's own title, which is what the player's header should say. */
   title?: string;
   /** Free from the same reply, and the only cheap source of it. */

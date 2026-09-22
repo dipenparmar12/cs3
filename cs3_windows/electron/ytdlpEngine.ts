@@ -54,8 +54,31 @@ export class YtDlpEngine {
     this.binaryPath = path.join(appDir, 'bin', binaryName);
   }
 
+  public getBinaryPath(): string | null {
+    const binaryName = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
+    const appDir = app ? app.getPath('userData') : process.cwd();
+    const candidates = [
+      path.join(appDir, 'bin', binaryName),
+      path.join(process.cwd(), 'media-runtime', binaryName),
+      path.join(process.cwd(), 'bin', binaryName),
+    ];
+    if (app?.isPackaged) {
+      candidates.splice(1, 0, path.join(process.resourcesPath, 'media', binaryName));
+    }
+    for (const cand of candidates) {
+      if (fs.existsSync(cand)) return cand;
+    }
+    const pathDirs = (process.env.PATH || '').split(path.delimiter);
+    for (const dir of pathDirs) {
+      if (!dir) continue;
+      const cand = path.join(dir, binaryName);
+      if (fs.existsSync(cand)) return cand;
+    }
+    return null;
+  }
+
   public isAvailable(): boolean {
-    return fs.existsSync(this.binaryPath);
+    return Boolean(this.getBinaryPath());
   }
 
   /**
@@ -71,13 +94,12 @@ export class YtDlpEngine {
    * and audio streams requires ffmpeg, which this app does not ship.
    */
   public download(options: YtDlpDownloadOptions): YtDlpDownloadHandle {
-    const binary = this.isAvailable() ? this.binaryPath : 'yt-dlp';
+    const binary = this.getBinaryPath() || this.binaryPath;
     fs.mkdirSync(path.dirname(options.targetPath), { recursive: true });
 
     const args = [
       '--newline',
       '--no-warnings',
-      '--no-call-home',
       '--no-playlist',
       // Resume a partially fetched file rather than starting over.
       '--continue',
@@ -196,14 +218,14 @@ export class YtDlpEngine {
       };
     }
 
+    const binary = this.getBinaryPath() || this.binaryPath;
     return new Promise<YtDlpResolution>((resolve) => {
       execFile(
-        this.binaryPath,
+        binary,
         [
           '--dump-single-json',
           '--no-playlist',
           '--no-warnings',
-          '--no-call-home',
           '--no-progress',
           pageUrl,
         ],

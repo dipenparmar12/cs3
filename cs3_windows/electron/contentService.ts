@@ -493,20 +493,23 @@ export class ContentService {
      * second, differently-spelled copy of the header logic in the one place
      * that is hardest to test.
      */
+    const isYt = /googlevideo\.com|youtube\.com|youtu\.be/i.test(stream.url);
     const videoUrl = await this.proxy.wrap(stream.url, stream.headers, {
       // YouTube's DASH rungs refuse an absent or open-ended `Range`; see
-      // `Route.boundedRanges` for the measurement. Only the paired form needs
-      // it — a single progressive file is an ordinary origin.
-      boundedRanges: Boolean(stream.audioUrl),
+      // `Route.boundedRanges` for the measurement.
+      boundedRanges: Boolean(stream.audioUrl) || isYt,
     });
 
     let streamUrl = videoUrl;
+    let sessionId: string | undefined;
     if (stream.audioUrl && this.transcoder) {
       const audioUrl = await this.proxy.wrap(
         stream.audioUrl,
         stream.audioHeaders ?? stream.headers,
         { boundedRanges: true }
       );
+      const videoCodec = stream.vcodec || 'h264';
+      const audioCodec = stream.acodec || 'aac';
       const merged = await this.transcoder.createSession(
         videoUrl,
         // Copy, copy. Both streams are already H.264 and AAC — the only work
@@ -519,12 +522,18 @@ export class ContentService {
           subtitleAction: 'ignore',
         },
         'progressive',
-        { audioUrl }
+        {
+          audioUrl,
+          outputs: { video: videoCodec, audio: audioCodec },
+        }
       );
       // A null session means ffmpeg is unavailable after all; the progressive
       // fallback below is worse but real, and refusing outright would be worse
       // than both.
-      if (merged) streamUrl = merged;
+      if (merged) {
+        streamUrl = merged;
+        sessionId = merged.match(/\/media\/([^/?#]+)/)?.[1];
+      }
     }
 
     /**
@@ -549,6 +558,7 @@ export class ContentService {
     return {
       ok: true,
       streamUrl,
+      sessionId,
       title: resolution.info.title?.trim() || 'Trailer',
       durationSeconds: resolution.info.duration,
       // yt-dlp spells it `YYYYMMDD`; everything downstream reads ISO.

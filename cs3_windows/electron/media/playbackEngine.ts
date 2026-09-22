@@ -638,10 +638,12 @@ export class PlaybackEngine {
       strategy === 'NATIVE_MPV'
     ) {
       this.record(request, capability, strategy, startedAt);
+      const sessionMatch = capability.resolvedUrl.match(/\/media\/([^/?#]+)/);
+      const sessionId = sessionMatch ? sessionMatch[1] : '';
       return {
         ok: true,
         playbackUrl: capability.resolvedUrl,
-        sessionId: '',
+        sessionId,
         capability,
         subtitles: [],
       };

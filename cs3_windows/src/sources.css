@@ -8049,8 +8049,151 @@
   width: 100%;
   aspect-ratio: 16 / 9;
   background: #000;
+  overflow: hidden;
+  user-select: none;
 }
-.trailer-popup__video { width: 100%; height: 100%; display: block; background: #000; }
+.trailer-popup__stage:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+.trailer-popup__video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #000;
+  cursor: pointer;
+}
+
+.trailer-popup__center-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+  z-index: 5;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+}
+.trailer-popup__center-play:hover {
+  transform: translate(-50%, -50%) scale(1.1);
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.trailer-popup__controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 0.5rem 0.85rem 0.6rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.88) 0%, rgba(0, 0, 0, 0.45) 60%, transparent 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  transition: opacity 0.22s ease;
+  z-index: 10;
+}
+.trailer-popup__controls--hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.trailer-popup__scrubber {
+  height: 14px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  position: relative;
+  touch-action: none;
+}
+.trailer-popup__scrubber-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 2px;
+  position: relative;
+  transition: height 0.15s ease;
+}
+.trailer-popup__scrubber:hover .trailer-popup__scrubber-track {
+  height: 6px;
+}
+.trailer-popup__scrubber-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--accent, #3b82f6);
+  border-radius: 2px;
+}
+.trailer-popup__scrubber-handle {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.trailer-popup__scrubber:hover .trailer-popup__scrubber-handle {
+  opacity: 1;
+}
+
+.trailer-popup__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.trailer-popup__bar-group {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.trailer-popup__btn {
+  background: none;
+  border: none;
+  color: #e5e7eb;
+  padding: 0.3rem;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.trailer-popup__btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+.trailer-popup__btn--active {
+  color: var(--accent, #3b82f6);
+}
+.trailer-popup__time {
+  font-size: 0.74rem;
+  color: #e5e7eb;
+  font-variant-numeric: tabular-nums;
+  margin-left: 0.35rem;
+  white-space: nowrap;
+}
+.trailer-popup__volume-slider {
+  width: 60px;
+  height: 4px;
+  accent-color: var(--accent, #3b82f6);
+  cursor: pointer;
+}
 
 /*
  * Every state that is not "playing" draws here, over the element rather than

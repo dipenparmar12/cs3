@@ -230,6 +230,13 @@ export interface PromoStream {
   isDash?: boolean;
   /** Height, where the extractor reported one. For the caller's diagnostics. */
   height?: number;
+  vcodec?: string;
+  acodec?: string;
+}
+
+function isH264(format: YtDlpFormat): boolean {
+  const v = (format.vcodec ?? '').toLowerCase();
+  return v.startsWith('avc') || v.startsWith('h264');
 }
 
 /**
@@ -276,22 +283,25 @@ export function pickPromoStream(info: YtDlpInfo, canMux: boolean): PromoStream |
      * A video-only rung and an audio-only rung, both progressive.
      *
      * `mp4`/`m4a` rather than whatever is highest: those are H.264 and AAC, so
-     * the mux is a stream copy and the browser decodes the result natively. The
-     * `webm` rungs beside them are VP9 and Opus, which would play too but give
+     * the mux is a stream copy and the browser decodes the result natively.
+     * H.264 (avc1) is preferred over AV1 (av01) for universal hardware decode.
+     * The `webm` rungs beside them are VP9 and Opus, which would play too but give
      * ffmpeg a reason to re-encode on a machine without a VP9 decoder — paying
      * a whole CPU core for a trailer.
      */
-    const video = formats
-      .filter(
-        (format) =>
-          format.url &&
-          !NONE(format.vcodec) &&
-          NONE(format.acodec) &&
-          !isManifest(format.protocol) &&
-          format.ext === 'mp4' &&
-          within(format)
-      )
-      .sort(byQualityDescending)[0];
+    const videoCandidates = formats.filter(
+      (format) =>
+        format.url &&
+        !NONE(format.vcodec) &&
+        NONE(format.acodec) &&
+        !isManifest(format.protocol) &&
+        format.ext === 'mp4' &&
+        within(format)
+    );
+    const video =
+      videoCandidates.filter(isH264).sort(byQualityDescending)[0] ??
+      videoCandidates.sort(byQualityDescending)[0];
+
     const audio = formats
       .filter(
         (format) =>
@@ -310,6 +320,8 @@ export function pickPromoStream(info: YtDlpInfo, canMux: boolean): PromoStream |
         audioUrl: audio.url,
         audioHeaders: audio.http_headers ?? info.http_headers,
         height: video.height,
+        vcodec: isH264(video) ? 'h264' : (video.vcodec ?? 'h264'),
+        acodec: 'aac',
       };
     }
     // No usable pair — fall through to the single-stream rules below rather
