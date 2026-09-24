@@ -95,6 +95,14 @@ public final class Main {
         System.setOut(new PrintStream(new java.io.FileOutputStream(java.io.FileDescriptor.err),
                 true, StandardCharsets.UTF_8));
 
+        // A `jar:` URL opened with caching on parks its JarFile in a JVM-wide
+        // cache that no class loader owns, so closing the plugin's loader does
+        // not release it — and on Windows an open JarFile is a lock on the
+        // archive that refuses the rename every extension update needs. Plugins
+        // reach this through `getResource(...).openStream()`. Uncached, the file
+        // is held exactly as long as the stream reading it.
+        java.net.URLConnection.setDefaultUseCaches("jar", false);
+
         // The classpath is handed to the translator as well as the host: it is
         // what tells the Kotlin name repair which mangled names actually exist.
         DexTranslator translator = new DexTranslator(dataDir.resolve("translated"), classpathDir);

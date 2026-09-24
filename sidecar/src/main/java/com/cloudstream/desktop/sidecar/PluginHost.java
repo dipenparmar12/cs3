@@ -48,6 +48,16 @@ public final class PluginHost {
     private final Path runtimeClasspathDir;
     private final Map<String, PluginClassLoader> loaders = new LinkedHashMap<>();
     private final Map<String, Object> instances = new LinkedHashMap<>();
+    /**
+     * The archive path each loaded plugin was stamped with.
+     *
+     * {@code BasePlugin.registerMainAPI} and {@code registerExtractorAPI} copy
+     * the plugin's {@code filename} onto every provider as {@code sourcePlugin},
+     * and that stamp is how upstream's {@code unloadPlugin} finds what to remove
+     * from the global lists. Kept per id because the host may move an extension
+     * to a new path on update, and the old stamp is the one to withdraw.
+     */
+    private final Map<String, String> filenames = new LinkedHashMap<>();
 
     /**
      * Held across {@code snapshot -> load() -> diff}, which cannot be concurrent.
@@ -424,6 +434,13 @@ public final class PluginHost {
             throw new IllegalStateException(t.failureKind() + ": " + t.failureDetail());
         }
 
+        // A second load of an id that is still loaded replaces it. Overwriting
+        // the map entry used to leave the first loader open for the life of the
+        // process, and on Windows an open loader is an open handle on the
+        // archive: every later update of that extension failed its rename with
+        // EPERM until the app was restarted.
+        unload(pluginId);
+
         // Step 3 — Android marks the archive read-only before loading.
         try {
             cs3.toFile().setReadOnly();
@@ -451,59 +468,92 @@ public final class PluginHost {
 
         PluginClassLoader loader = new PluginClassLoader(
                 pluginId, classpath.toArray(new URL[0]), shared());
+        String filename = cs3.toAbsolutePath().toString();
+        boolean kept = false;
+        try {
+            // Step 5 — read manifest.json *through* the loader, not from the zip.
+            //
+            // DEX lane only. A cross-platform jar has no manifest.json at all
+            // [measured], so its entry class came from the @CloudstreamPlugin
+            // annotation during `prepare` and its name and version come from the
+            // repository entry the host already holds. Demanding a manifest here
+            // would refuse every archive on that lane for a file upstream's build
+            // never puts in it.
+            String entry = t.entryClass();
+            String name = t.name();
+            Integer version = t.version();
 
-        // Step 5 — read manifest.json *through* the loader, not from the zip.
-        //
-        // DEX lane only. A cross-platform jar has no manifest.json at all
-        // [measured], so its entry class came from the @CloudstreamPlugin
-        // annotation during `prepare` and its name and version come from the
-        // repository entry the host already holds. Demanding a manifest here
-        // would refuse every archive on that lane for a file upstream's build
-        // never puts in it.
-        String entry = t.entryClass();
-        String name = t.name();
-        Integer version = t.version();
-
-        if (t.lane() == PluginArchive.Lane.DEX) {
-            String manifestJson;
-            try (InputStream in = loader.getResourceAsStream("manifest.json")) {
-                if (in == null) throw new IllegalStateException("No manifest.json visible to the class loader.");
-                manifestJson = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            if (t.lane() == PluginArchive.Lane.DEX) {
+                String manifestJson;
+                try (InputStream in = loader.getResourceAsStream("manifest.json")) {
+                    if (in == null) throw new IllegalStateException("No manifest.json visible to the class loader.");
+                    manifestJson = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+                }
+                entry = Json.string(manifestJson, "pluginClassName");
+                name = Json.string(manifestJson, "name");
+                version = Json.integer(manifestJson, "version");
+                if (entry == null) throw new IllegalStateException("manifest.json has no pluginClassName.");
             }
-            entry = Json.string(manifestJson, "pluginClassName");
-            name = Json.string(manifestJson, "name");
-            version = Json.integer(manifestJson, "version");
-            if (entry == null) throw new IllegalStateException("manifest.json has no pluginClassName.");
+
+            // Steps 6 and 7 — load the entry class and construct it reflectively.
+            Class<?> pluginClass = loader.loadClass(entry);
+            Constructor<?> ctor = pluginClass.getDeclaredConstructor();
+            ctor.setAccessible(true);
+            Object instance = ctor.newInstance();
+
+            // BasePlugin.filename is what registerMainAPI stamps onto each provider.
+            trySetField(instance, "filename", filename);
+
+            // Step 9 — load(context) when the plugin extends the Android-shaped
+            // Plugin, else the cross-platform load().
+            //
+            // Serialized: the mark taken by snapshotProviders is an index into a
+            // list every plugin appends to. See registrationLock.
+            List<Map<String, Object>> providers;
+            synchronized (registrationLock) {
+                Object before = snapshotProviders(loader);
+                invokeLoad(instance, loader, pluginId);
+                providers = diffProviders(loader, before, pluginId);
+
+                loaders.put(pluginId, loader);
+                instances.put(pluginId, instance);
+                filenames.put(pluginId, filename);
+                kept = true;
+            }
+
+            LinkageAnalyzer.Report report =
+                    new LinkageAnalyzer(shared()).analyze(t.codeJar(), entry);
+
+            return new Loaded(pluginId, entry, name, version, providers, report);
+        } finally {
+            /*
+             * A load that fails after the loader exists must close it.
+             *
+             * It used to be dropped instead — never put in `loaders`, so
+             * `unload` could not find it — and it kept both the translated jar
+             * and the `.cs3` open for the life of the sidecar. The extension
+             * that fails at `load()` on every launch (Ultima, which needs the
+             * Android app's own `CloudStreamApp`) could therefore never be
+             * updated: each rename of its archive failed with EPERM, measured
+             * twice in one session. Whatever it registered before throwing is
+             * withdrawn first, or those providers would outlive the classes
+             * behind them.
+             */
+            if (!kept) {
+                synchronized (registrationLock) {
+                    withdrawRegistrations(filename);
+                }
+                closeQuietly(loader);
+            }
         }
+    }
 
-        // Steps 6 and 7 — load the entry class and construct it reflectively.
-        Class<?> pluginClass = loader.loadClass(entry);
-        Constructor<?> ctor = pluginClass.getDeclaredConstructor();
-        ctor.setAccessible(true);
-        Object instance = ctor.newInstance();
-
-        // BasePlugin.filename is what registerMainAPI stamps onto each provider.
-        trySetField(instance, "filename", cs3.toAbsolutePath().toString());
-
-        // Step 9 — load(context) when the plugin extends the Android-shaped
-        // Plugin, else the cross-platform load().
-        //
-        // Serialized: the mark taken by snapshotProviders is an index into a
-        // list every plugin appends to. See registrationLock.
-        List<Map<String, Object>> providers;
-        synchronized (registrationLock) {
-            Object before = snapshotProviders(loader);
-            invokeLoad(instance, loader, pluginId);
-            providers = diffProviders(loader, before, pluginId);
-
-            loaders.put(pluginId, loader);
-            instances.put(pluginId, instance);
+    private static void closeQuietly(PluginClassLoader loader) {
+        try {
+            loader.close();
+        } catch (IOException ignored) {
+            // Closing frees the jar handles; a failure leaks them and nothing worse.
         }
-
-        LinkageAnalyzer.Report report =
-                new LinkageAnalyzer(shared()).analyze(t.codeJar(), entry);
-
-        return new Loaded(pluginId, entry, name, version, providers, report);
     }
 
     // --- calling providers ---------------------------------------------------
@@ -674,29 +724,97 @@ public final class PluginHost {
         // and the provider registry, and an unload interleaved with a load
         // withdraws entries the load is in the middle of adding.
         synchronized (registrationLock) {
-        // Withdraw its providers first: leaving them addressable after the
-        // loader closes turns the next search into a NoClassDefFoundError.
-        List<String> registered = providerNamesByPlugin.remove(pluginId);
-        if (registered != null) registered.forEach(providersByName::remove);
+            // Withdraw its providers first: leaving them addressable after the
+            // loader closes turns the next search into a NoClassDefFoundError.
+            List<String> registered = providerNamesByPlugin.remove(pluginId);
+            if (registered != null) registered.forEach(providersByName::remove);
 
-        Object instance = instances.remove(pluginId);
-        if (instance != null) {
+            Object instance = instances.remove(pluginId);
+            if (instance != null) {
+                try {
+                    Method m = instance.getClass().getMethod("beforeUnload");
+                    m.invoke(instance);
+                } catch (ReflectiveOperationException | LinkageError | RuntimeException ignored) {
+                    // A plugin that does not override beforeUnload is the normal
+                    // case. LinkageError too: `getMethod` resolves every public
+                    // method's types, so a plugin that loaded at T3_DEGRADED can
+                    // throw NoClassDefFoundError here — and letting it escape
+                    // skipped the close below, leaking the archive's handle.
+                }
+            }
+
+            String filename = filenames.remove(pluginId);
+            if (filename != null) withdrawRegistrations(filename);
+
+            PluginClassLoader loader = loaders.remove(pluginId);
+            if (loader == null) return false;
+            closeQuietly(loader);
+            return true;
+        }
+    }
+
+    /**
+     * Removes what one archive registered from the ecosystem's global lists.
+     *
+     * <p>Upstream's {@code unloadPlugin} does exactly this, keyed on the same
+     * {@code sourcePlugin} stamp: {@code APIHolder.apis}, {@code allProviders}
+     * and {@code extractorApis}. This used to drop only the sidecar's own maps,
+     * so after an update the previous version's extractors stayed in
+     * {@code extractorApis} — ahead of the new ones, because the list is
+     * appended to — and {@code loadExtractor} kept choosing an object whose
+     * class loader had just been closed.
+     *
+     * <p>The getter is taken from the API class rather than from each object's
+     * own class: {@code getMethod} on a provider resolves every one of its public
+     * method signatures, and one missing type there would leave that provider
+     * behind.
+     */
+    private void withdrawRegistrations(String filename) {
+        ClassLoader api = shared();
+        try {
+            Class<?> holder = Class.forName("com.lagradost.cloudstream3.APIHolder", true, api);
+            Class<?> mainApi = Class.forName("com.lagradost.cloudstream3.MainAPI", true, api);
+            Method source = mainApi.getMethod("getSourcePlugin");
+            Object inst = holder.getField("INSTANCE").get(null);
+
+            Method removeMapping = holder.getMethod("removePluginMapping", mainApi);
+            for (Object provider : registeredBy(holder.getMethod("getApis").invoke(inst), source, filename)) {
+                removeMapping.invoke(inst, provider);
+            }
+            List<Object> providers =
+                    registeredBy(holder.getMethod("getAllProviders").invoke(inst), source, filename);
+            if (!providers.isEmpty()) {
+                ((List<?>) holder.getMethod("getAllProviders").invoke(inst)).removeAll(providers);
+            }
+        } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
+            System.err.println("[cs3-sidecar] could not withdraw the providers of " + filename
+                    + ": " + Main.describe(e));
+        }
+
+        try {
+            Class<?> extractorApi = Class.forName("com.lagradost.cloudstream3.utils.ExtractorApi", true, api);
+            Class<?> extractors = Class.forName("com.lagradost.cloudstream3.utils.ExtractorApiKt", true, api);
+            Object list = extractors.getMethod("getExtractorApis").invoke(null);
+            List<Object> stale = registeredBy(list, extractorApi.getMethod("getSourcePlugin"), filename);
+            if (!stale.isEmpty()) ((List<?>) list).removeAll(stale);
+        } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
+            System.err.println("[cs3-sidecar] could not withdraw the extractors of " + filename
+                    + ": " + Main.describe(e));
+        }
+    }
+
+    private static List<Object> registeredBy(Object list, Method source, String filename) {
+        List<Object> out = new ArrayList<>();
+        if (!(list instanceof List<?> registered)) return out;
+        // A copy, so a plugin registering from another thread cannot fail the walk.
+        for (Object entry : new ArrayList<>(registered)) {
             try {
-                Method m = instance.getClass().getMethod("beforeUnload");
-                m.invoke(instance);
-            } catch (ReflectiveOperationException ignored) {
-                // A plugin that does not override beforeUnload is the normal case.
+                if (filename.equals(source.invoke(entry))) out.add(entry);
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // One unreadable entry must not keep the rest in place.
             }
         }
-        PluginClassLoader loader = loaders.remove(pluginId);
-        if (loader == null) return false;
-        try {
-            loader.close();
-        } catch (IOException ignored) {
-            // Closing frees the jar handle; failure leaks a handle, nothing worse.
-        }
-        return true;
-        }
+        return out;
     }
 
     // --- reflective glue -----------------------------------------------------
