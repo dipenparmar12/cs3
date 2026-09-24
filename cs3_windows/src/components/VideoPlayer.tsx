@@ -188,6 +188,12 @@ interface VideoPlayerProps {
     retryingElsewhere?: boolean;
     /** Sources this session has ruled out so far. */
     tried?: number;
+    /**
+     * Starts the whole attempt again: a new search, a new walk, a new widening.
+     * Standard mode's "Try again" — `onRefresh` only refreshes the list, which
+     * leaves a viewer who cannot pick a source where they were.
+     */
+    onRestart?: () => void;
     /** Stops waiting for the remaining providers, keeping what has arrived. */
     onCancelSearch?: () => void;
     onDownloadSource?: (source: TorrentResult) => void;
@@ -3237,6 +3243,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           widened={sourceSession.widened}
           retryingElsewhere={sourceSession.retryingElsewhere}
           tried={sourceSession.tried}
+          onRestart={sourceSession.onRestart}
           onBack={onBack}
         />
       )}

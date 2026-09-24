@@ -56,6 +56,8 @@ interface SourceResolveOverlayProps {
   retryingElsewhere?: boolean;
   /** Sources ruled out so far, for "trying link 3 of 12". */
   tried?: number;
+  /** Starts the whole attempt again. Standard mode's "Try again". */
+  onRestart?: () => void;
   onBack: () => void;
 }
 
@@ -113,6 +115,7 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
   widened,
   retryingElsewhere,
   tried = 0,
+  onRestart,
   onBack,
 }) => {
   const isDeveloper = useIsDeveloper();
@@ -137,7 +140,7 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
               : 'No links were found for it. Try again in a little while.'}
           </span>
           <div className="player__overlay-actions">
-            <button className="btn btn-primary" onClick={onRetry}>
+            <button className="btn btn-primary" onClick={onRestart ?? onRetry}>
               <RefreshCw size={16} /> Try again
             </button>
             {sources.length > 0 && (

@@ -1659,6 +1659,7 @@ export const App: React.FC = () => {
                 widened: session.snapshot.widened,
                 retryingElsewhere: session.snapshot.retryingElsewhere,
                 tried: session.snapshot.tried,
+                onRestart: () => void startSession(session.context),
                 onCancelSearch: handleCancelSourceSearch,
                 onSourceUnplayable: handleSourceUnplayable,
                 onDownloadSource: session.context.onDownloadSource,
