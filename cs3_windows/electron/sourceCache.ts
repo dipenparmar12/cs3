@@ -174,6 +174,21 @@ export function deadlineFromUrl(url: string): number | null {
 
 export class SourceCache {
   private datastore: DatastoreManager;
+  /**
+   * The cache as parsed from one particular stored string.
+   *
+   * Every read used to `JSON.parse` the whole cache — 1.94MB on a real install,
+   * 6.07ms a parse — and card states ask once per poster, twice (origin and all
+   * scopes). A home screen of 738 titles was therefore **~9 seconds of main
+   * thread**, during which Windows marks the window Not Responding; a search
+   * re-asked on every provider that answered. The datastore hands back the same
+   * string until something writes, so comparing it is a pointer check and the
+   * parse happens once per write rather than once per card.
+   *
+   * Read-only, and only for {@link peek}. Paths that modify an entry still
+   * parse their own copy, so nothing they change can leak into this one.
+   */
+  private parsed: { raw: string; byKey: Map<string, CacheEntry> } | null = null;
 
   constructor(datastore: DatastoreManager) {
     this.datastore = datastore;
@@ -186,6 +201,23 @@ export class SourceCache {
   private load(): CacheEntry[] {
     const stored = this.datastore.getObject<CacheEntry[]>(KEY, []);
     return Array.isArray(stored) ? stored : [];
+  }
+
+  private snapshot(): Map<string, CacheEntry> {
+    const raw = this.datastore.getString(KEY, '');
+    if (this.parsed?.raw === raw) return this.parsed.byKey;
+    let entries: unknown = [];
+    try {
+      entries = raw ? JSON.parse(raw) : [];
+    } catch {
+      entries = [];
+    }
+    const byKey = new Map<string, CacheEntry>();
+    for (const entry of Array.isArray(entries) ? (entries as CacheEntry[]) : []) {
+      if (entry?.key) byKey.set(entry.key, entry);
+    }
+    this.parsed = { raw, byKey };
+    return byKey;
   }
 
   private save(entries: CacheEntry[]): void {
@@ -241,8 +273,7 @@ export class SourceCache {
    * actually opened.
    */
   public peek(mediaUrl: string, season?: number, episode?: number): CacheReadResult {
-    const key = SourceCache.keyFor(mediaUrl, season, episode);
-    const entry = this.load().find((e) => e.key === key);
+    const entry = this.snapshot().get(SourceCache.keyFor(mediaUrl, season, episode));
     if (!entry) return { fresh: [], expired: [], hit: false };
 
     const now = Date.now();

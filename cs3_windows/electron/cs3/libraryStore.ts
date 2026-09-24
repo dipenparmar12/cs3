@@ -472,16 +472,44 @@ export class LibraryStore {
    * working stream for, and where did it come from?".
    */
   public listPlayedSources(limit = 200): PlayedSource[] {
-    return [...this.loadPlayedSources().values()]
+    return [...this.playedSnapshot().all]
       .sort((a, b) => b.playedAt - a.playedAt)
       .slice(0, limit);
   }
 
   /** Every remembered source for one title, across its episodes. */
   public getPlayedSourcesForKey(key: string): PlayedSource[] {
-    return [...this.loadPlayedSources().values()]
-      .filter((record) => record.key === key)
-      .sort((a, b) => (a.season ?? 0) - (b.season ?? 0) || (a.episode ?? 0) - (b.episode ?? 0));
+    return [...(this.playedSnapshot().byKey.get(key) ?? [])].sort(
+      (a, b) => (a.season ?? 0) - (b.season ?? 0) || (a.episode ?? 0) - (b.episode ?? 0)
+    );
+  }
+
+  /**
+   * The stored records, parsed once per stored value and indexed by title.
+   *
+   * Card states ask this once per poster, and each ask parsed the whole list —
+   * 113KB on a real install, ~0.4s across one home screen. Read-only: the
+   * methods that change a record parse their own copy through
+   * {@link loadPlayedSources}, so nothing they touch leaks into this one.
+   */
+  private playedCache: {
+    raw: string;
+    all: PlayedSource[];
+    byKey: Map<string, PlayedSource[]>;
+  } | null = null;
+
+  private playedSnapshot(): { all: PlayedSource[]; byKey: Map<string, PlayedSource[]> } {
+    const raw = this.datastore.getString(PLAYED_SOURCE_KEY, '');
+    if (this.playedCache?.raw === raw) return this.playedCache;
+    const all = [...this.loadPlayedSources().values()];
+    const byKey = new Map<string, PlayedSource[]>();
+    for (const record of all) {
+      const bucket = byKey.get(record.key);
+      if (bucket) bucket.push(record);
+      else byKey.set(record.key, [record]);
+    }
+    this.playedCache = { raw, all, byKey };
+    return this.playedCache;
   }
 
   /**

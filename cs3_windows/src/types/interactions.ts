@@ -38,6 +38,8 @@
  * plausible, and attributed to the content rather than to us.
  */
 
+import type { WatchStatus } from './api';
+
 /**
  * What happened last time someone tried to play a title at one address.
  *
@@ -128,6 +130,14 @@ export interface TitleInteraction {
   sources?: SourceReadiness;
   /** The provider that last produced a stream that actually played. */
   lastProvider?: string;
+  /**
+   * The library bucket this work is in, if any.
+   *
+   * Carried here so a card's bookmark button needs no call of its own: it used
+   * to ask `library:getEntryForUrl` from every card, which on a home screen of
+   * 834 posters was 834 round trips to read one in-memory map.
+   */
+  library?: { key: string; status: WatchStatus };
 }
 
 /** What a caller knows about a card before anything is looked up. */

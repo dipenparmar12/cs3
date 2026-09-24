@@ -21,17 +21,25 @@ import type { TorrentResult } from '../src/types/torrent.ts';
 const tests: Array<[string, () => void]> = [];
 const test = (name: string, fn: () => void) => tests.push([name, fn]);
 
-/** The narrow slice of DatastoreManager the cache actually uses. */
+/**
+ * The narrow slice of DatastoreManager the cache actually uses.
+ *
+ * String-backed, as the real one is: `setObject` stores JSON text and
+ * `getString` returns that same string until the next write, which is what the
+ * cache's parse memo relies on.
+ */
 function stubDatastore() {
-  const store = new Map<string, unknown>();
+  const store = new Map<string, string>();
   return {
+    getString(key: string, fallback = ''): string {
+      return store.get(key) ?? fallback;
+    },
     getObject<T>(key: string, fallback: T | null = null): T | null {
       const raw = store.get(key);
-      // Round-tripped through JSON, like the real datastore does on disk.
-      return raw === undefined ? fallback : (JSON.parse(JSON.stringify(raw)) as T);
+      return raw === undefined ? fallback : (JSON.parse(raw) as T);
     },
     setObject<T>(key: string, value: T): void {
-      store.set(key, JSON.parse(JSON.stringify(value)));
+      store.set(key, JSON.stringify(value));
     },
   };
 }
@@ -180,6 +188,33 @@ test('peek does not promote an entry the way read does', () => {
   // mark a title as recently used when nobody opened it.
   assert.equal(cache.peek(MEDIA).hit, true);
   assert.equal(cache.stats().entries, 1);
+});
+
+test('a screen of cards parses the cache once, and still sees the next write', () => {
+  /*
+   * The home-screen freeze: card states peek once per poster, twice each, and
+   * every peek parsed the whole cache. 738 titles against a 1.94MB cache was
+   * ~9s of main thread, measured on a real install.
+   */
+  const cache = makeCache();
+  cache.write(MEDIA, [magnet('aaa')]);
+
+  const parse = JSON.parse;
+  let parses = 0;
+  JSON.parse = ((text: string, reviver?: Parameters<typeof JSON.parse>[1]) => {
+    parses += 1;
+    return parse(text, reviver);
+  }) as typeof JSON.parse;
+  try {
+    for (let i = 0; i < 500; i++) cache.peek(`cs3meta://tt${i}`);
+    assert.equal(cache.peek(MEDIA).hit, true);
+  } finally {
+    JSON.parse = parse;
+  }
+  assert.ok(parses <= 1, `500 peeks parsed the cache ${parses} times`);
+
+  cache.write('cs3meta://tt7', [magnet('bbb')]);
+  assert.equal(cache.peek('cs3meta://tt7').hit, true, 'a write must not be hidden by the memo');
 });
 
 // --- runner ----------------------------------------------------------------

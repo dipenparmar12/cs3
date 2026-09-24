@@ -25,14 +25,18 @@ import type { DatastoreManager } from '../datastore.ts';
 const tests: Array<[string, () => void]> = [];
 const test = (name: string, fn: () => void) => tests.push([name, fn]);
 
-/** Enough of the datastore to hold objects in memory. */
+/**
+ * Enough of the datastore to hold objects in memory — as JSON text, the way the
+ * real one does, so a read never shares objects with the last write.
+ */
 function fakeDatastore(): DatastoreManager {
-  const values = new Map<string, unknown>();
+  const values = new Map<string, string>();
   return {
+    getString: (key: string, fallback = '') => values.get(key) ?? fallback,
     getObject: <T,>(key: string, fallback: T): T =>
-      values.has(key) ? (values.get(key) as T) : fallback,
+      values.has(key) ? (JSON.parse(values.get(key) as string) as T) : fallback,
     setObject: (key: string, value: unknown) => {
-      values.set(key, value);
+      values.set(key, JSON.stringify(value));
     },
   } as unknown as DatastoreManager;
 }

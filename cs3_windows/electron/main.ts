@@ -72,10 +72,18 @@ import { SubtitleService } from './subtitleService';
 import { MediaTranscoder, VIDEO_CODEC_PROBES } from './mediaTranscoder';
 import { PlaybackEngine } from './media/playbackEngine';
 import { InspectionStore } from './media/inspectionStore';
-import { runTool } from './media/runTool';
+import {
+  answered,
+  fingerprintOf,
+  runToolOffThread,
+  sameBinary,
+  type ToolCapabilities,
+} from './media/toolCapabilities';
 import {
   detectExtensionPicky,
   detectToneMapSupport,
+  setFfmpegExtensionPicky,
+  setFfmpegToneMapSupport,
   setProbeConfig,
   getProbeConfig,
   type ProbeConfig,
@@ -664,12 +672,39 @@ const playbackEngine = new PlaybackEngine({
  * the ones this was meant to rescue. So it is detected once, and again whenever
  * ffmpeg is installed or replaced.
  */
-function refreshFfmpegOptionSupport(): void {
+async function refreshFfmpegOptionSupport(): Promise<void> {
+  /*
+   * Remembered per binary, and asked off the main thread when it has to be
+   * asked. Spawning an 87MB ffmpeg from here blocked the loop ~590ms per binary
+   * on a cold cache — the 1.1–1.8s freeze every cold launch log recorded as its
+   * worst stall. See `media/toolCapabilities.ts`.
+   */
+  const file = path.join(app.getPath('userData'), 'cs3-ffmpeg-capabilities.json');
+  let known: ToolCapabilities = {};
+  try {
+    known = (JSON.parse(fs.readFileSync(file, 'utf8')) as ToolCapabilities) ?? {};
+  } catch {
+    known = {};
+  }
+  const next: ToolCapabilities = {};
+
   const ffprobe = mediaTranscoder.resolveFfprobe();
-  if (ffprobe) {
-    void detectExtensionPicky(ffprobe, (command, args, timeoutMs) =>
-      runTool(command, args, timeoutMs)
-    );
+  const probeId = ffprobe ? fingerprintOf(ffprobe) : null;
+  if (ffprobe && probeId) {
+    if (known.ffprobe && sameBinary(known.ffprobe, probeId)) {
+      setFfmpegExtensionPicky(known.ffprobe.extensionPicky);
+      next.ffprobe = known.ffprobe;
+    } else {
+      let complete = true;
+      const extensionPicky = await detectExtensionPicky(ffprobe, async (command, args, timeoutMs) => {
+        const result = await runToolOffThread(command, args, timeoutMs);
+        complete = answered(result);
+        return result;
+      });
+      // A timeout is not an answer, and remembering it as "unsupported" would
+      // hold until the binary changed.
+      if (complete) next.ffprobe = { ...probeId, extensionPicky };
+    }
   }
 
   /**
@@ -679,17 +714,32 @@ function refreshFfmpegOptionSupport(): void {
    * only ever emitted where it will run.
    */
   const ffmpeg = mediaTranscoder.resolveFfmpeg();
-  if (ffmpeg) {
-    void detectToneMapSupport(ffmpeg, (command, args, timeoutMs) =>
-      runTool(command, args, timeoutMs)
-    );
+  const mpegId = ffmpeg ? fingerprintOf(ffmpeg) : null;
+  if (ffmpeg && mpegId) {
+    if (known.ffmpeg && sameBinary(known.ffmpeg, mpegId)) {
+      setFfmpegToneMapSupport(known.ffmpeg.toneMap);
+      next.ffmpeg = known.ffmpeg;
+    } else {
+      let complete = true;
+      const toneMap = await detectToneMapSupport(ffmpeg, async (command, args, timeoutMs) => {
+        const result = await runToolOffThread(command, args, timeoutMs);
+        complete = answered(result);
+        return result;
+      });
+      if (complete) next.ffmpeg = { ...mpegId, toneMap };
+    }
+  }
+
+  try {
+    fs.writeFileSync(file, JSON.stringify(next), 'utf8');
+  } catch {
+    // Asked again next launch; nothing is lost but the saving.
   }
 }
-// Not called here. It spawns two child processes, and at module scope that is
-// before `app.whenReady()` — competing for disk with the very module loading
-// that delays the window. The background queue runs it once the window is up;
-// `resolveFfprobe` answers from a path check, so nothing that needs the result
-// earlier is blocked on this.
+// Not called here. At module scope it would run before `app.whenReady()`,
+// competing for disk with the very module loading that delays the window. The
+// background queue runs it once the window is up; `resolveFfprobe` answers from
+// a path check, so nothing that needs the result earlier is blocked on this.
 
 /**
  * The last line of defence for the main process.
@@ -4279,7 +4329,7 @@ ipcMain.handle('binary:setupFfmpeg', async () => {
       }
     });
     // A different binary may have arrived with a different option set.
-    if (ok) refreshFfmpegOptionSupport();
+    if (ok) void refreshFfmpegOptionSupport();
     return {
       ok,
       message: ok
