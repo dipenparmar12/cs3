@@ -49,7 +49,10 @@ export class DatastoreManager {
     /device_id/i,
     /auth_bearer/i,
     /ephemeral_/i,
-    /cache_path/i
+    /cache_path/i,
+    // Paths on this machine awaiting deletion; on another machine they name
+    // nothing, or something that is not ours to delete.
+    /displaced_archives/i
   ];
 
   constructor() {

@@ -553,3 +553,23 @@
 .ext-builtin__addrow button:disabled { opacity: 0.5; cursor: default; }
 .ext-builtin__hint { margin: 0.45rem 0 0; font-size: 0.74rem; opacity: 0.6; }
 .ext-builtin__ok { margin: 0.35rem 0 0; font-size: 0.78rem; color: var(--success, #4ade80); }
+
+/* How extension updates happen — the one control that makes them hands-free. */
+.ext-update-policy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 1.1rem;
+  margin-top: 0.45rem;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+.ext-update-policy label { display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+.ext-update-policy select {
+  background: var(--bg-input);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0.15rem 0.35rem;
+  font-size: 0.74rem;
+}

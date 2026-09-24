@@ -115,11 +115,38 @@ export interface UpdateSettings {
   autoInstall: boolean;
   lastCheckedAt: number;
   lastResult?: { updateCount: number; installed: number; failed: number };
+  /**
+   * Which of the two choices a person actually made.
+   *
+   * `saveSettings` persisted the whole merged object on every bookkeeping
+   * write, so a stored `autoInstall: false` could equally be a decision or a
+   * default written back as a side effect of recording `lastCheckedAt`. Only a
+   * choice made in Settings is honoured over the default; the rest follow it,
+   * which is what lets the default change reach installs that never chose.
+   */
+  chosen?: { policy?: boolean; autoInstall?: boolean };
 }
 
 const SETTINGS_KEY = 'extension_update_settings';
 const CACHED_UPDATES_KEY = 'extension_available_updates';
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Android's defaults, verified against the upstream source rather than
+ * remembered: `settings_updates.xml` declares "Automatic plugin updates"
+ * (`auto_update_plugins`) with `defaultValue="true"`, and `MainActivity` calls
+ * `updateAllOnlinePluginsAndLoadThem` on every launch when it is on.
+ *
+ * This used to be notify-only, on the argument that installed code should not
+ * change without the user saying so. That argument is the Android app's to
+ * make and it made the other one: a scraper breaks when its site changes, the
+ * maintainer publishes a fix within hours, and an extension that waits for
+ * someone to open the extensions screen and press Update is an extension that
+ * does not work in the meantime. A bad update is still undone — every install
+ * is loaded before it is accepted and rolled back if it will not load.
+ */
+const DEFAULT_POLICY: UpdatePolicy = 'startup';
+const DEFAULT_AUTO_INSTALL = true;
 
 /** How long after launch the startup/daily check runs, so it never competes with first paint. */
 const STARTUP_DELAY_MS = 30_000;
@@ -164,6 +191,8 @@ export class ExtensionUpdater {
   private timer: NodeJS.Timeout | null = null;
   private inFlight: Promise<UpdateCheckResult> | null = null;
   private notify: ((event: string, payload: unknown) => void) | null = null;
+  /** Whether this launch has had its `startup` check yet. */
+  private launchCheckDone = false;
 
   constructor(datastore: DatastoreManager, plugins: PluginManager) {
     this.datastore = datastore;
@@ -187,28 +216,52 @@ export class ExtensionUpdater {
 
   public getSettings(): UpdateSettings {
     const stored = this.datastore.getObject<Partial<UpdateSettings>>(SETTINGS_KEY, {});
+    const chosen = stored?.chosen ?? {};
     const validPolicies: UpdatePolicy[] = ['manual', 'daily', 'startup'];
     const policy: UpdatePolicy =
-      stored?.policy && validPolicies.includes(stored.policy as UpdatePolicy)
+      chosen.policy && stored?.policy && validPolicies.includes(stored.policy as UpdatePolicy)
         ? (stored.policy as UpdatePolicy)
-        : 'daily';
+        : DEFAULT_POLICY;
     return {
       policy,
-      // Defaults to notify-only. Installed extensions execute code the user
-      // chose to trust at a specific version; silently swapping that for a new
-      // version without asking is a decision the user should make, not a
-      // default. Turning it on is one click.
-      autoInstall: stored?.autoInstall ?? false,
+      autoInstall:
+        chosen.autoInstall && typeof stored?.autoInstall === 'boolean'
+          ? stored.autoInstall
+          : DEFAULT_AUTO_INSTALL,
       lastCheckedAt: stored?.lastCheckedAt ?? 0,
       lastResult: stored?.lastResult,
+      chosen,
     };
   }
 
+  /**
+   * A change made in Settings: recorded as a choice, and re-armed at once.
+   *
+   * Re-arming belongs here and nowhere else. Every check used to record its
+   * own timestamp through this method, and under the `startup` policy that
+   * re-armed a thirty-second timer — so the app re-fetched every repository
+   * every thirty seconds for as long as it stayed open.
+   */
   public saveSettings(patch: Partial<UpdateSettings>): UpdateSettings {
-    const next = { ...this.getSettings(), ...patch };
+    const current = this.getSettings();
+    const next: UpdateSettings = {
+      ...current,
+      ...patch,
+      chosen: {
+        ...current.chosen,
+        ...('policy' in patch ? { policy: true } : {}),
+        ...('autoInstall' in patch ? { autoInstall: true } : {}),
+      },
+    };
     this.datastore.setObject(SETTINGS_KEY, next);
     this.schedule();
     return next;
+  }
+
+  /** Bookkeeping — when a check ran, what an update pass did. Never re-arms. */
+  private record(patch: Pick<Partial<UpdateSettings>, 'lastCheckedAt' | 'lastResult'>): void {
+    const stored = this.datastore.getObject<Partial<UpdateSettings>>(SETTINGS_KEY, {});
+    this.datastore.setObject(SETTINGS_KEY, { ...stored, ...patch });
   }
 
   public getCachedUpdates(): AvailableUpdate[] {
@@ -233,17 +286,17 @@ export class ExtensionUpdater {
     const settings = this.getSettings();
     if (settings.policy === 'manual') return;
 
-    if (settings.policy === 'startup') {
-      this.timer = setTimeout(() => this.runScheduledCheck(), STARTUP_DELAY_MS);
-      this.timer.unref?.();
-      return;
-    }
-
     // Daily: catch up immediately if a day has already elapsed while the app was
     // closed, otherwise wait out the remainder. A desktop app is not running at
     // a fixed hour, so "daily" has to mean "at most 24h since the last check".
+    //
+    // `startup` is Android's behaviour — every launch — and then daily, because
+    // a desktop app is left open for days where a phone app is relaunched.
     const elapsed = Date.now() - settings.lastCheckedAt;
-    const delay = elapsed >= DAY_MS ? STARTUP_DELAY_MS : Math.max(STARTUP_DELAY_MS, DAY_MS - elapsed);
+    const delay =
+      (settings.policy === 'startup' && !this.launchCheckDone) || elapsed >= DAY_MS
+        ? STARTUP_DELAY_MS
+        : Math.max(STARTUP_DELAY_MS, DAY_MS - elapsed);
     this.timer = setTimeout(() => this.runScheduledCheck(), delay);
     this.timer.unref?.();
   }
@@ -254,6 +307,7 @@ export class ExtensionUpdater {
   }
 
   private async runScheduledCheck(): Promise<void> {
+    this.launchCheckDone = true;
     try {
       const result = await this.checkForUpdates();
       const settings = this.getSettings();
@@ -465,7 +519,7 @@ export class ExtensionUpdater {
     };
 
     this.datastore.setObject(CACHED_UPDATES_KEY, updates);
-    this.saveSettings({ lastCheckedAt: result.checkedAt });
+    this.record({ lastCheckedAt: result.checkedAt });
     logger.info('extension_update_check', {
       repositories: repoUrls.length,
       unreachable: warnings.length,
@@ -742,9 +796,13 @@ export class ExtensionUpdater {
       ok: outcome.ok,
       fromVersion: update.installedVersion,
       toVersion: outcome.ok ? plugin.version : undefined,
-      message: outcome.ok
-        ? `${update.name} updated from v${update.installedVersion} to v${plugin.version}.`
-        : outcome.message,
+      message: !outcome.ok
+        ? outcome.message
+        : plugin.version === update.installedVersion
+          ? // A republish keeps its number, and "updated from v10 to v10" read
+            // as an updater that had done nothing.
+            `${update.name} v${plugin.version} updated to its maintainer's latest build.`
+          : `${update.name} updated from v${update.installedVersion} to v${plugin.version}.`,
     };
     this.emit('extension:updateFinished', result);
     return result;
@@ -807,7 +865,7 @@ export class ExtensionUpdater {
       // rather than by asking the user to reproduce it.
       failures: outcomes.filter((o) => !o.ok).map((o) => `${o.internalName}: ${o.message}`),
     });
-    this.saveSettings({
+    this.record({
       lastResult: {
         updateCount: targets.length,
         installed,

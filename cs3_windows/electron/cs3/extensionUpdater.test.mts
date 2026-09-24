@@ -386,3 +386,74 @@ test('a verdict from the runtime is still a verdict', () => {
   assert.equal(isTransportFailure({ ok: false, errorKind: undefined }), false);
   assert.equal(isTransportFailure({ ok: true }), false);
 });
+
+// --- 6: Android's defaults, and a scheduler that stops -----------------------
+
+test('updates install automatically on every launch unless someone chose otherwise', () => {
+  const datastore = fakeDatastore();
+  // What every existing install holds: the old defaults, written back as a
+  // side effect of recording `lastCheckedAt`, never chosen by anyone.
+  datastore.setObject('extension_update_settings', {
+    policy: 'daily',
+    autoInstall: false,
+    lastCheckedAt: 1,
+  });
+  const { plugins } = fakePlugins({ repositories: [], catalogue: {}, installed: [] });
+
+  const settings = new ExtensionUpdater(datastore, plugins).getSettings();
+  assert.equal(settings.autoInstall, true, "Android's auto_update_plugins defaults to true");
+  assert.equal(settings.policy, 'startup', 'and runs on every launch');
+});
+
+test('a choice made in Settings is honoured over the default', () => {
+  const datastore = fakeDatastore();
+  const { plugins } = fakePlugins({ repositories: [], catalogue: {}, installed: [] });
+  const updater = new ExtensionUpdater(datastore, plugins);
+  updater.schedule = () => {};
+
+  updater.saveSettings({ autoInstall: false, policy: 'manual' });
+  // A later bookkeeping write must not turn the choice back into a default.
+  updater.saveSettings({ lastCheckedAt: 5 });
+
+  const settings = updater.getSettings();
+  assert.equal(settings.autoInstall, false);
+  assert.equal(settings.policy, 'manual');
+});
+
+test('a check records its time without re-arming the timer', async () => {
+  /*
+   * `doCheck` recorded `lastCheckedAt` through `saveSettings`, which re-armed
+   * the schedule — and under `startup` that meant a thirty-second timer, so the
+   * app re-fetched every repository every thirty seconds while it was open.
+   */
+  const { plugins } = fakePlugins({
+    repositories: [RAW],
+    catalogue: { [RAW]: [remote()] },
+    installed: [local()],
+  });
+  const updater = new ExtensionUpdater(fakeDatastore(), plugins);
+  let armed = 0;
+  updater.schedule = () => {
+    armed += 1;
+  };
+
+  await updater.checkForUpdates();
+  await updater.updateAll();
+
+  assert.equal(armed, 0, 'bookkeeping re-armed the scheduler');
+  assert.ok(updater.getSettings().lastCheckedAt > 0, 'but the check time was still recorded');
+});
+
+test('a republish says what happened rather than "from v6 to v6"', async () => {
+  const { plugins } = fakePlugins({
+    repositories: [RAW],
+    catalogue: { [RAW]: [remote({ version: 6, fileHash: 'dddd' })] },
+    installed: [local({ version: 6 })],
+  });
+
+  const outcome = await new ExtensionUpdater(fakeDatastore(), plugins).updatePlugin('ShowBox');
+
+  assert.equal(outcome.ok, true);
+  assert.doesNotMatch(outcome.message, /from v6 to v6/);
+  assert.match(outcome.message, /latest build/);
+});

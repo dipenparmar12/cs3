@@ -34,6 +34,7 @@ import { ProviderRegistryCache, type CachedProvider } from './cs3/providerRegist
 import { applySearchOrder } from './cs3/searchOrder.ts';
 import { classifyFailure, FAILURE_KIND_LABELS } from './cs3/failureTaxonomy';
 import { mapProviderLink } from './cs3/providerLinks';
+import { placeArchive, samePath, sweepDisplaced } from './cs3/archivePlacement';
 import type { FailureKind } from '../src/types/analytics';
 import type {
   DiagnosisFact,
@@ -50,6 +51,9 @@ import type {
  * build and "work every time" has to say what it did.
  */
 const logger = scopedLogger('extension');
+
+/** Archives replaced while Windows still held them, deleted once released. */
+const DISPLACED_ARCHIVES_KEY = 'extension_displaced_archives';
 
 /**
  * CloudStream extension (`.cs3`) repository and install management.
@@ -975,9 +979,16 @@ export class PluginManager {
    * the question this answers is narrow: the extension worked five minutes ago
    * and does not now, so put back the one that worked.
    */
-  /** The installed archive for a plugin. Public so the updater can verify it. */
+  /**
+   * The installed archive for a plugin. Public so the updater can verify it.
+   *
+   * The record's path first: an update that found the old archive locked is
+   * placed beside it (see `archivePlacement.ts`), and verifying the canonical
+   * path after that would judge the *previous* version.
+   */
   public archivePathFor(repoUrl: string, internalName: string): string {
-    return this.installPathFor(repoUrl, internalName);
+    const recorded = this.installedPlugins.get(internalName)?.filePath;
+    return recorded && fs.existsSync(recorded) ? recorded : this.installPathFor(repoUrl, internalName);
   }
 
   private backupPathFor(repoUrl: string, internalName: string): string {
@@ -991,7 +1002,7 @@ export class PluginManager {
    * previous version, and that is not a failure.
    */
   public preserveInstalledVersion(repoUrl: string, internalName: string): boolean {
-    const current = this.installPathFor(repoUrl, internalName);
+    const current = this.archivePathFor(repoUrl, internalName);
     if (!fs.existsSync(current)) return false;
     const backup = this.backupPathFor(repoUrl, internalName);
     try {
@@ -1041,23 +1052,23 @@ export class PluginManager {
       };
     }
 
-    try {
-      await this.sidecar.call('unload', { pluginId: internalName });
-    } catch {
-      // Safe if sidecar is not running
-    }
-    this.forgetLoadedExtension(internalName);
+    await this.releaseArchive(internalName);
 
+    // Through a temp file and the same placement an install uses, so a rollback
+    // onto an archive Windows still holds lands beside it instead of failing.
+    const current = this.installedPlugins.get(internalName)?.filePath;
+    const tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
+    let restoredPath: string;
     try {
-      if (fs.existsSync(target)) {
-        try {
-          fs.chmodSync(target, 0o666);
-        } catch {
-          // Ignore if chmod fails
-        }
-      }
-      fs.copyFileSync(backup, target);
+      fs.copyFileSync(backup, tempPath);
+      const digest = crypto.createHash('sha256').update(fs.readFileSync(tempPath)).digest('hex');
+      restoredPath = await this.putInPlace(internalName, tempPath, target, digest, current);
     } catch (error) {
+      try {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      } catch {
+        // A stale .tmp is harmless because it is never loaded.
+      }
       return {
         ok: false,
         message: `The previous version could not be restored: ${
@@ -1066,9 +1077,9 @@ export class PluginManager {
       };
     }
 
-    const prev = this.previousPluginRecords.get(internalName);
+    const prev = this.previousPluginRecords.get(internalName) ?? this.installedPlugins.get(internalName);
     if (prev) {
-      this.installedPlugins.set(internalName, prev);
+      this.installedPlugins.set(internalName, { ...prev, filePath: restoredPath });
       this.persist();
     }
 
@@ -1076,7 +1087,7 @@ export class PluginManager {
      * The restored archive is loaded before this reports success, so "rolled
      * back" means "and it works" rather than "and the file is in place".
      */
-    const verification = await this.verifyInstalledPlugin(internalName, target);
+    const verification = await this.verifyInstalledPlugin(internalName, restoredPath);
     if (!verification.ok) {
       return {
         ok: false,
@@ -1470,7 +1481,9 @@ export class PluginManager {
 
     const repoUrl = repositoryUrl ?? plugin.repositoryUrl ?? 'unknown-repository';
     const target = this.installPathFor(repoUrl, plugin.internalName);
-    const tempPath = `${target}.tmp`;
+    // Unique, because a temp file left by a failed attempt can itself be held
+    // by an antivirus scan, and a fixed name would then fail every retry.
+    const tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
 
     try {
       fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -1552,57 +1565,19 @@ export class PluginManager {
 
       fs.writeFileSync(tempPath, buffer);
 
-      if (fs.existsSync(target)) {
-        // Drop from running sidecar first so its classloader closes open file
-        // handles to target. On Windows, open handles cause renameSync to fail with EPERM.
-        try {
-          await this.sidecar.call('unload', { pluginId: plugin.internalName });
-        } catch {
-          // Safe if sidecar is not running or plugin not yet loaded
-        }
-        /*
-         * Paired with the `unload` above rather than placed after the rename:
-         * a rename that fails still leaves the old copy dropped from the JVM,
-         * and a live claim surviving that would be a provider this process
-         * thinks is loaded and nothing can call. Before `inspect` runs further
-         * down, too — that records a fresh runtime report and clearing it
-         * afterwards would throw the new one away.
-         */
-        this.forgetLoadedExtension(plugin.internalName);
-
-        try {
-          fs.chmodSync(target, 0o666);
-        } catch {
-          // If the mode cannot be changed the rename below reports the real
-          // problem; nothing is lost by trying.
-        }
+      const previousPath = this.installedPlugins.get(plugin.internalName)?.filePath;
+      if (fs.existsSync(target) || (previousPath && fs.existsSync(previousPath))) {
+        await this.releaseArchive(plugin.internalName);
       }
+      const installedPath = await this.putInPlace(
+        plugin.internalName,
+        tempPath,
+        target,
+        digest,
+        previousPath
+      );
 
-      // On Windows, handle release may take a moment or AV might briefly check the file
-      let renameErr: unknown = null;
-      for (let attempt = 0; attempt < 5; attempt++) {
-        try {
-          if (fs.existsSync(target)) {
-            try {
-              fs.chmodSync(target, 0o666);
-            } catch {}
-          }
-          fs.renameSync(tempPath, target);
-          renameErr = null;
-          break;
-        } catch (err: unknown) {
-          renameErr = err;
-          const code = (err as { code?: string })?.code;
-          if (attempt < 4 && (code === 'EPERM' || code === 'EBUSY')) {
-            await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
-            continue;
-          }
-          throw err;
-        }
-      }
-      if (renameErr) throw renameErr;
-
-      const report = this.analyzer.analyzePlugin(plugin.name, plugin.internalName, target);
+      const report = this.analyzer.analyzePlugin(plugin.name, plugin.internalName, installedPath);
 
       this.installedPlugins.set(plugin.internalName, {
         internalName: plugin.internalName,
@@ -1610,7 +1585,7 @@ export class PluginManager {
         // lane rather than silently swapping to the `.cs3` on the next version.
         url: artifact.url,
         isOnline: true,
-        filePath: target,
+        filePath: installedPath,
         version: plugin.version ?? 1,
         tier: report.recommendedTier,
         isEnabled: true,
@@ -1623,7 +1598,7 @@ export class PluginManager {
       // Translate and classify now rather than on first use: DROP-2 requires
       // translation to happen once at install time, and a plugin's tier has to
       // be known before the user is told whether it works.
-      const runtime = await this.inspect(plugin.internalName, target);
+      const runtime = await this.inspect(plugin.internalName, installedPath);
 
       // Into the running JVM now, so the extension answers without a restart.
       await this.reloadInstalledExtension(plugin.internalName);
@@ -1671,7 +1646,10 @@ export class PluginManager {
     try {
       if (record.filePath && fs.existsSync(record.filePath)) fs.unlinkSync(record.filePath);
     } catch {
-      // Removing the record matters more than removing the file.
+      // Removing the record matters more than removing the file. A loaded
+      // archive is held until the `unload` below lands, so it is left for the
+      // sweep rather than on disk for good.
+      if (record.filePath) this.rememberDisplaced(record.filePath);
     }
     this.installedPlugins.delete(internalName);
     this.persist();
@@ -1729,6 +1707,90 @@ export class PluginManager {
     this.providerNameClashes.delete(internalName);
     for (const [name, provider] of [...this.providers.entries()]) {
       if (provider.pluginInternalName === internalName) this.providers.delete(name);
+    }
+  }
+
+  /**
+   * Gets the JVM to let go of an extension's archive before it is replaced.
+   *
+   * A load already running for it is waited out first. Unloading underneath
+   * it lets the load finish afterwards, mark the extension live and register
+   * the old providers — and the reload after the update then sees it live and
+   * never loads the new bytes.
+   */
+  private async releaseArchive(internalName: string): Promise<void> {
+    await this.activating.get(internalName)?.catch(() => false);
+    try {
+      await this.sidecar.call('unload', { pluginId: internalName });
+    } catch {
+      // Safe if the sidecar is not running or the plugin was never loaded.
+    }
+    /*
+     * Paired with the `unload` rather than placed after the rename: a rename
+     * that fails still leaves the old copy dropped from the JVM, and a live
+     * claim surviving that would be a provider this process thinks is loaded
+     * and nothing can call. Before `inspect` runs, too — that records a fresh
+     * runtime report and clearing it afterwards would throw the new one away.
+     */
+    this.forgetLoadedExtension(internalName);
+  }
+
+  /**
+   * Moves a verified archive into place, and returns where it went.
+   *
+   * Usually the canonical Android path. When Windows still holds the old
+   * archive it is the path beside it, and the install record has to name
+   * whichever one this returns — see `archivePlacement.ts`.
+   */
+  private async putInPlace(
+    internalName: string,
+    tempPath: string,
+    target: string,
+    digest: string,
+    previousPath?: string
+  ): Promise<string> {
+    const placed = await placeArchive({ tempPath, target, digest });
+    if (placed.lockedTarget) {
+      this.rememberDisplaced(target);
+      logger.warn('extension_archive_locked', {
+        plugin: internalName,
+        locked: target,
+        installedAt: placed.path,
+      });
+    }
+    // A record that named some other file — an earlier side-by-side install,
+    // or a directory spelled from an older form of the repository URL — names a
+    // copy nothing will load again.
+    if (previousPath && !samePath(previousPath, placed.path) && !samePath(previousPath, target)) {
+      this.rememberDisplaced(previousPath);
+    }
+    this.sweepDisplacedArchives();
+    return placed.path;
+  }
+
+  private rememberDisplaced(file: string): void {
+    const pending = this.datastore.getObject<string[]>(DISPLACED_ARCHIVES_KEY, []) ?? [];
+    if (pending.some((entry) => samePath(entry, file))) return;
+    this.datastore.setObject(DISPLACED_ARCHIVES_KEY, [...pending, file]);
+  }
+
+  /**
+   * Deletes archives displaced while something held them.
+   *
+   * Cheap, and safe at any time: a file still held stays on the list for next
+   * time, and a file an install record names is never deleted.
+   */
+  public sweepDisplacedArchives(): void {
+    const pending = this.datastore.getObject<string[]>(DISPLACED_ARCHIVES_KEY, []) ?? [];
+    if (pending.length === 0) return;
+    const recorded = [...this.installedPlugins.values()]
+      .map((record) => record.filePath)
+      .filter((file): file is string => Boolean(file));
+    const remaining = sweepDisplaced(pending, (file) =>
+      recorded.some((current) => samePath(current, file))
+    );
+    if (remaining.length !== pending.length) {
+      this.datastore.setObject(DISPLACED_ARCHIVES_KEY, remaining);
     }
   }
 
@@ -2908,6 +2970,8 @@ export class PluginManager {
    * sidecar's worker pool has made things worse, not better.
    */
   public async warmProviders(signal?: AbortSignal): Promise<void> {
+    // A new process holds none of the archives the last one displaced.
+    this.sweepDisplacedArchives();
     await this.ensureProvidersLoaded();
     for (const record of [...this.installedPlugins.values()]) {
       if (signal?.aborted) return;

@@ -206,6 +206,26 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
     }
   }, [api, failedOutcomes, onUpdated]);
 
+  /*
+   * The only way to change how updates happen.
+   *
+   * `saveUpdateSettings` was exposed from the start and called by nothing, so
+   * "turning auto-install on is one click" was true of the API and of no
+   * screen. Automatic is now the default, as it is on Android; this is where
+   * someone who wants to approve each update says so.
+   */
+  const changeSettings = useCallback(
+    async (patch: Partial<UpdateSettings>) => {
+      if (!api) return;
+      try {
+        setSettings(await api.saveUpdateSettings(patch));
+      } catch (err) {
+        setMessage({ text: `Could not save: ${describeError(err)}`, isError: true });
+      }
+    },
+    [api]
+  );
+
   const safeUpdates = Array.isArray(updates) ? updates : [];
   const lastCheckedStr = settings?.lastCheckedAt
     ? ` (Last checked: ${new Date(settings.lastCheckedAt).toLocaleTimeString()})`
@@ -318,6 +338,32 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
           )}
         </div>
       </div>
+
+      {settings && (
+        <div className="ext-update-policy">
+          <label>
+            <input
+              type="checkbox"
+              checked={settings.autoInstall}
+              onChange={(event) => void changeSettings({ autoInstall: event.target.checked })}
+            />
+            Install updates automatically
+          </label>
+          <label>
+            Check
+            <select
+              value={settings.policy}
+              onChange={(event) =>
+                void changeSettings({ policy: event.target.value as UpdateSettings['policy'] })
+              }
+            >
+              <option value="startup">every time the app opens</option>
+              <option value="daily">once a day</option>
+              <option value="manual">only when I press Check</option>
+            </select>
+          </label>
+        </div>
+      )}
 
       {message && (
         <div style={{
