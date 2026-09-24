@@ -338,6 +338,44 @@ export const App: React.FC = () => {
   const [isBinaryModalOpen, setIsBinaryModalOpen] = useState(false);
   const [hasBinaries, setHasBinaries] = useState(true);
 
+  /**
+   * One offer, on the first launch that needs it, to fetch what the installer
+   * could not ship.
+   *
+   * The package carries the JVM, ffmpeg and mpv; the download tools arrive on
+   * first use. A new user was told so by a number on a sidebar badge and had
+   * to find the installer themselves. This opens it — once, ever: someone who
+   * closes it has answered, and the badge and Settings are still there.
+   *
+   * The runtime is not counted: it provisions itself on first start, and
+   * prompting for it would be a dialog about nothing.
+   */
+  useEffect(() => {
+    let offered = false;
+    try {
+      offered = localStorage.getItem('cs3.setupOffered') === '1';
+    } catch {
+      // Storage refused: offering once per launch is the worse outcome to
+      // avoid, so treat it as offered.
+      offered = true;
+    }
+    if (offered) return;
+    let cancelled = false;
+    void window.cloudstream?.getComponentStatus?.().then((status) => {
+      if (cancelled || !status?.ok) return;
+      if (status.suites.downloads && status.suites.media) return;
+      try {
+        localStorage.setItem('cs3.setupOffered', '1');
+      } catch {
+        // Not remembered; the flag above keeps it to this launch.
+      }
+      setIsBinaryModalOpen(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     let disposeProgress: (() => void) | undefined;
 

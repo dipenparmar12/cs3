@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, CheckCircle2, RefreshCw, X, AlertTriangle } from 'lucide-react';
 import { describeError } from '../utils/errors';
+import { useIsDeveloper } from '../utils/ExperienceModeContext';
 
 /**
  * The offer to install the download and playback components.
@@ -37,6 +38,7 @@ export const BinarySetupModal: React.FC<BinarySetupModalProps> = ({
   onClose,
   onSuccess,
 }) => {
+  const isDeveloper = useIsDeveloper();
   const [phase, setPhase] = useState<Phase>('idle');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [progressPercent, setProgressPercent] = useState(0);
@@ -151,12 +153,19 @@ export const BinarySetupModal: React.FC<BinarySetupModalProps> = ({
           </button>
         </header>
 
-        <p className="binary-setup__blurb">
-          Three components make downloads faster and let unusual files play without being
-          re-encoded: <strong>aria2</strong> for multi-connection transfers, <strong>yt-dlp</strong> as
-          a fallback extractor, and <strong>FFmpeg</strong> for inspecting and converting media. They
-          are downloaded from their publishers and kept inside this app.
-        </p>
+        {isDeveloper ? (
+          <p className="binary-setup__blurb">
+            Three components make downloads faster and let unusual files play without being
+            re-encoded: <strong>aria2</strong> for multi-connection transfers, <strong>yt-dlp</strong> as
+            a fallback extractor, and <strong>FFmpeg</strong> for inspecting and converting media. They
+            are downloaded from their publishers and kept inside this app.
+          </p>
+        ) : (
+          <p className="binary-setup__blurb">
+            A few free tools let CloudStream download films and play every kind of file. Setting
+            them up takes about a minute and only happens once — they are kept inside the app.
+          </p>
+        )}
 
         {statusMessage && (
           <div
@@ -198,7 +207,13 @@ export const BinarySetupModal: React.FC<BinarySetupModalProps> = ({
           >
             <Download size={16} />
             <span>
-              {installing ? 'Installing…' : phase === 'failed' ? 'Try again' : 'Install components'}
+              {installing
+                ? 'Setting up…'
+                : phase === 'failed'
+                  ? 'Try again'
+                  : isDeveloper
+                    ? 'Install components'
+                    : 'Set everything up'}
             </span>
           </button>
         </footer>

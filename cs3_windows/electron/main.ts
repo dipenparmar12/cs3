@@ -1521,7 +1521,7 @@ app.whenReady().then(async () => {
       mainWindow.webContents.send('extension:bootstrapProgress', progress);
     }
   });
-  bootstrap.start();
+  bootstrap.start(app.getLocale());
 
   /**
    * The cold JVM load, moved off the path where anyone is waiting for it.

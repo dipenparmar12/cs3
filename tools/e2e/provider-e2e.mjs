@@ -81,6 +81,17 @@ const REPOSITORIES = [
    * flag mean nothing.
    */
   { name: 'CSX', url: 'https://raw.githubusercontent.com/SaurabhKaperwan/CSX/builds/CS.json' },
+  /**
+   * Upstream's own repository. Measured 2026-09-24, `--plugins 5`: 5 loaded,
+   * 4 answering, 2 links resolved, 1 stream with bytes (YouTube). Deliberately
+   * *not* bundled on that result: its providers are Dailymotion, Internet
+   * Archive, Invidious, Twitch and YouTube, and bundling them would put
+   * channels and trailers into every film search a new viewer runs.
+   */
+  {
+    name: 'official',
+    url: 'https://raw.githubusercontent.com/recloudstream/extensions/master/repo.json',
+  },
 ];
 
 /**

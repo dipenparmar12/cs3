@@ -1,6 +1,6 @@
 import type { DatastoreManager } from '../datastore';
 import type { PluginManager } from '../pluginManager';
-import type { SitePlugin } from '../../src/types/plugin';
+import { pickStarterPlugins, preferredLanguages, repositorySpeaks } from './starterPlugins';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from '../officialRepositories';
 import { describeError } from '../../src/utils/errors.ts';
 
@@ -34,16 +34,12 @@ const KEY_ADULT_ENABLED = 'cs3_adult_content_enabled';
 const KEY_ADULT_MODE = 'cs3_adult_content_mode';
 
 /**
- * Bumped when the bundled set changes, so an existing install picks up newly
- * verified repositories without re-adding ones the user has since removed —
- * only repositories not seen by a previous run are considered.
- */
-/**
  * Bumped when the bundled set changes, so an existing install gets the addition.
  *
  * Safe to bump because `run()` filters targets on
  * `!already.has(repo.rawRepoUrl)`: a repository the user already has is skipped
- * entirely, so a re-run installs only what is new and re-downloads nothing.
+ * entirely, so a re-run installs only what is new and re-downloads nothing — and
+ * one the user has since removed is not re-added unless it is new to the set.
  *
  * Version 2 adds **CloudStream X (CSX)**. It was catalogued and unbundled; the
  * flag was set after `tools/e2e/provider-e2e.mjs --repo CSX` drove it end to end
@@ -60,17 +56,14 @@ const BOOTSTRAP_VERSION = 2;
  * Not all of them. phisher98 alone publishes 80, and installing ~170 archives
  * means ~170 DEX translations before the first search — minutes of CPU on a
  * cold start, for providers the user may never ask about. The rest of every
- * repository stays one click away in the extensions screen.
+ * repository stays one click away in the extensions screen. Sixteen rather
+ * than the twelve it was, because the slots now go only to providers in the
+ * viewer's languages instead of to whatever each index listed first.
  */
-const PLUGINS_PER_REPOSITORY = 12;
+const PLUGINS_PER_REPOSITORY = 16;
 
 /** Installs run in series per repository; this is how many repositories overlap. */
 const REPOSITORY_CONCURRENCY = 2;
-
-/** `NSFW` is upstream's own `TvType`, declared by the plugin in its manifest. */
-function isAdultPlugin(plugin: SitePlugin): boolean {
-  return (plugin.tvTypes ?? []).some((type) => String(type).toUpperCase() === 'NSFW');
-}
 
 export interface BootstrapProgress {
   phase: 'idle' | 'running' | 'done';
@@ -94,6 +87,7 @@ export class BootstrapService {
   private notifier: ((progress: BootstrapProgress) => void) | null = null;
   private progress: BootstrapProgress = { phase: 'idle', installed: 0, failed: 0, total: 0 };
   private running: Promise<void> | null = null;
+  private locale: string | undefined;
 
   constructor(datastore: DatastoreManager, plugins: PluginManager) {
     this.datastore = datastore;
@@ -191,9 +185,13 @@ export class BootstrapService {
 
   /**
    * Installs the bundled set, once. Returns immediately; watch the notifier.
+   *
+   * `locale` is the system's (`app.getLocale()`, which only answers once the
+   * app is ready), and decides which languages the starting extensions are in.
    */
-  public start(): void {
+  public start(locale?: string): void {
     if (this.running) return;
+    this.locale = locale;
 
     const completed = this.datastore.getInt(KEY_BOOTSTRAP_DONE, 0);
     if (completed >= BOOTSTRAP_VERSION) {
@@ -236,11 +234,19 @@ export class BootstrapService {
 
   private async run(): Promise<void> {
     const already = new Set(this.plugins.getInstalledRepositories());
+    const languages = preferredLanguages(this.locale);
     const targets = OFFICIAL_REPOSITORIES.filter(
       // `bundled` is the verified set. `adult` is excluded unconditionally —
       // not because of the flag below, but because bootstrapping content the
       // user has not asked for is the one thing that must never happen here.
-      (repo) => repo.bundled && !repo.adult && !already.has(repo.rawRepoUrl)
+      // A repository in a language the viewer does not use is left to the
+      // catalogue too: German Providers is all German, and an English install
+      // started with it registered and empty.
+      (repo) =>
+        repo.bundled &&
+        !repo.adult &&
+        !already.has(repo.rawRepoUrl) &&
+        repositorySpeaks(repo.language, languages)
     );
 
     this.progress = { phase: 'running', installed: 0, failed: 0, total: 0 };
@@ -266,23 +272,21 @@ export class BootstrapService {
     for (const repo of targets) {
       try {
         const fetched = await this.plugins.fetchRepository(repo.rawRepoUrl);
-        const usable = fetched.plugins
-          .filter((plugin) => plugin?.url && plugin?.internalName)
-          // A repository marking its own plugin as down is the best signal
-          // available that installing it would waste the user's first minute.
-          .filter((plugin) => plugin.status === undefined || plugin.status !== 0)
-          /**
-           * Adult plugins are not downloaded at all while adult content is off.
-           *
-           * `PluginManager` already refuses to *offer* an NSFW provider, so this
-           * is not the safety mechanism — that one is central and cannot be
-           * bypassed. This is about not fetching, translating and storing
-           * archives the user has given no indication of wanting. Measured
-           * against the catalogue, four repositories publish NSFW-tagged
-           * plugins, and one of them is in the bundled set.
-           */
-          .filter((plugin) => allowAdult || !isAdultPlugin(plugin))
-          .slice(0, PLUGINS_PER_REPOSITORY);
+        /**
+         * The viewer's languages, working ones first, nothing marked down —
+         * see `starterPlugins.ts`.
+         *
+         * Adult plugins are not downloaded at all while adult content is off.
+         * `PluginManager` already refuses to *offer* an NSFW provider, so that
+         * is not the safety mechanism — that one is central and cannot be
+         * bypassed. This is about not fetching, translating and storing
+         * archives the user has given no indication of wanting.
+         */
+        const usable = pickStarterPlugins(fetched.plugins, {
+          languages,
+          allowAdult,
+          limit: PLUGINS_PER_REPOSITORY,
+        });
         plans.push({ repo, repositoryUrl: fetched.repositoryUrl, plugins: usable });
         this.progress.total += usable.length;
       } catch (error) {
