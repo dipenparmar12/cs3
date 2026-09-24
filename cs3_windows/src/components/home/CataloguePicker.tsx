@@ -50,10 +50,7 @@ interface ProviderSummary {
 export const CataloguePicker: React.FC<{
   /** Re-runs discovery once the catalogue has actually changed. */
   onChanged: () => void;
-  /** Whether anime rows are mixed in, which is a per-view toggle not a service. */
-  includeAnime: boolean;
-  onIncludeAnimeChange: (next: boolean) => void;
-}> = ({ onChanged, includeAnime, onIncludeAnimeChange }) => {
+}> = ({ onChanged }) => {
   const [open, setOpen] = useState(false);
   const [providers, setProviders] = useState<ProviderSummary[] | null>(null);
   const [selected, setSelected] = useState<string>('');
@@ -206,22 +203,12 @@ export const CataloguePicker: React.FC<{
             </ul>
           )}
 
-          <div className="cat-picker__foot">
-            <label className="cat-picker__toggle">
-              <input
-                type="checkbox"
-                checked={includeAnime}
-                onChange={(event) => onIncludeAnimeChange(event.target.checked)}
-              />
-              {/*
-                Anime is a separate source (AniList) rather than a genre of the
-                chosen catalogue, which is why it is a checkbox here and not one
-                of the entries above. Picking "Animation" on an IMDb-derived
-                catalogue returns Western film, not anime.
-              */}
-              <span>Include anime rows</span>
-            </label>
-          </div>
+          {/*
+            Anime used to be a checkbox here. It is a row now, switched on and
+            off with the rest under "Rows" — it comes from AniList rather than
+            from the catalogue chosen above, because "Animation" on an
+            IMDb-derived catalogue returns Western film, not anime.
+          */}
 
           {error && (
             <p className="cat-picker__error" role="status">

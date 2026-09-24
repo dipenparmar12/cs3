@@ -187,6 +187,116 @@ test('a source the viewer picked is the only one tried', async () => {
   );
 });
 
+// --- standard mode: keep trying, then look everywhere -----------------------
+
+/**
+ * The stub again, able to answer a widened search.
+ *
+ * The origin search never settles: the test plants the list it would have
+ * produced, and a settled answer would race in and replace it. The widened
+ * search answers with `wider` and records that it was asked.
+ */
+function wideningContent(playable: Set<string>, wider: TorrentResult[]) {
+  const { content, offered } = stubContent(playable);
+  const scopes: string[] = [];
+  Object.assign(content, {
+    getSources: (
+      request: { scope?: string },
+      onProgress?: (progress: { results: TorrentResult[]; settled: number; totalRelevant: number }) => void
+    ) => {
+      if (request.scope !== 'all') return new Promise(() => {});
+      scopes.push('all');
+      onProgress?.({ results: wider, settled: 1, totalRelevant: 1 });
+      return Promise.resolve({ sources: wider, canWiden: false });
+    },
+  });
+  return { content, offered, scopes };
+}
+
+function persistentSessionWith(manager: PlaybackSessionManager, sources: TorrentResult[]): string {
+  const snapshot = manager.start(
+    { mediaUrl: 'cs3ext://HDO/abc', season: 1, episode: 1 } as never,
+    'The Little Prince',
+    undefined,
+    { persistent: true }
+  );
+  const session = (
+    manager as unknown as {
+      sessions: Map<string, { sources: TorrentResult[]; activeInfoHash?: string; canWiden: boolean }>;
+    }
+  ).sessions.get(snapshot.sessionId)!;
+  session.sources = sources;
+  session.activeInfoHash = sources[0]?.infoHash;
+  // What a finished search at the originating provider reports.
+  session.canWiden = true;
+  return snapshot.sessionId;
+}
+
+test('standard mode walks the whole list rather than stopping after two passes', async () => {
+  const sources = Array.from({ length: 70 }, (_, i) => source(i));
+  const { content } = wideningContent(new Set(['hash60']), []);
+  const manager = new PlaybackSessionManager(content);
+  const id = persistentSessionWith(manager, sources);
+
+  const after = await manager.skipCurrentSource(id, 'the swarm looks dead');
+
+  assert.equal(after?.phase, 'playing', 'the sixty-first source works and must be reached');
+  assert.equal(after?.activeInfoHash, 'hash60');
+});
+
+test('when every source here fails, standard mode looks everywhere and keeps going', async () => {
+  const here = Array.from({ length: 5 }, (_, i) => source(i));
+  // The wider search repeats the dead ones and finds three more; one plays.
+  const wider = [...here, source(20), source(21), source(22)];
+  const { content, scopes } = wideningContent(new Set(['hash21']), wider);
+  const manager = new PlaybackSessionManager(content);
+  const id = persistentSessionWith(manager, here);
+
+  const after = await manager.skipCurrentSource(id, 'the swarm looks dead');
+
+  assert.deepEqual(scopes, ['all'], 'the wider search is asked for, once');
+  assert.equal(after?.phase, 'playing');
+  assert.equal(after?.activeInfoHash, 'hash21');
+  assert.equal(after?.retryingElsewhere, false, 'the notice clears once something plays');
+});
+
+test('looking everywhere happens once, and running out after it is still reported', async () => {
+  const here = Array.from({ length: 3 }, (_, i) => source(i));
+  const { content, scopes } = wideningContent(new Set(), [...here, source(9)]);
+  const manager = new PlaybackSessionManager(content);
+  const id = persistentSessionWith(manager, here);
+
+  const after = await manager.skipCurrentSource(id, 'the swarm looks dead');
+
+  assert.deepEqual(scopes, ['all']);
+  assert.equal(after?.phase, 'error');
+});
+
+test('developer mode stops where the title came from, for someone to look at', async () => {
+  const here = Array.from({ length: 3 }, (_, i) => source(i));
+  const { content, scopes } = wideningContent(new Set(['hash9']), [...here, source(9)]);
+  const manager = new PlaybackSessionManager(content);
+  const id = sessionWith(manager, here);
+
+  const after = await manager.skipCurrentSource(id, 'the swarm looks dead');
+
+  assert.equal(after?.phase, 'error');
+  assert.deepEqual(scopes, [], 'nothing wider is asked without standard mode');
+});
+
+test('a source the viewer picked stays the only one tried, even in standard mode', async () => {
+  const here = Array.from({ length: 3 }, (_, i) => source(i));
+  const { content, offered, scopes } = wideningContent(new Set(['hash9']), [...here, source(9)]);
+  const manager = new PlaybackSessionManager(content);
+  const id = persistentSessionWith(manager, here);
+
+  const after = await manager.selectSource(id, 'hash1');
+
+  assert.equal(after?.phase, 'error');
+  assert.deepEqual(offered, [['hash1']]);
+  assert.deepEqual(scopes, []);
+});
+
 // --- runner ----------------------------------------------------------------
 
 let failed = 0;

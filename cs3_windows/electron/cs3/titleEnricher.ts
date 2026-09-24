@@ -201,6 +201,12 @@ export class TitleEnricher {
       }),
     ]);
 
+    // Neither catalogue answered: that is no answer, not "no match", and it
+    // must not be remembered as one for the week the cache holds it.
+    if (movies.status === 'rejected' && series.status === 'rejected') {
+      throw movies.reason;
+    }
+
     const candidates: Array<{ meta: CatalogMeta; type: 'movie' | 'series' }> = [];
     if (movies.status === 'fulfilled') {
       for (const meta of movies.value.metas ?? []) candidates.push({ meta, type: 'movie' });

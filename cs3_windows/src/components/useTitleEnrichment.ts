@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SearchResponse } from '../types/api';
+import { tidyReleaseName } from '../utils/releaseName';
 
 /**
  * Replaces provider release names with the titles they are about.
@@ -27,11 +28,17 @@ import type { SearchResponse } from '../types/api';
  * release turns up in the next one.
  */
 
-/** Resolved titles live for the session; a film's canonical name does not move. */
-const cache = new Map<string, SearchResponse>();
+/**
+ * Resolved titles live for the session; a film's canonical name does not move.
+ *
+ * `null` records a name the catalogues could not place, so it is not asked
+ * again on every provider that answers — a search snapshot is replaced once
+ * per provider, and each replacement used to re-send every unmatched row.
+ */
+const cache = new Map<string, SearchResponse | null>();
 
 /** How many rows are enriched. Beyond this the user is scrolling, not reading. */
-const ENRICH_LIMIT = 60;
+const ENRICH_LIMIT = 100;
 
 export function useTitleEnrichment(results: SearchResponse[], enabled = true): SearchResponse[] {
   const [, bump] = useState(0);
@@ -63,7 +70,17 @@ export function useTitleEnrichment(results: SearchResponse[], enabled = true): S
         if (cancelled || !response?.ok) return;
         for (let index = 0; index < unknown.length; index++) {
           const enriched = response.results[index];
-          if (enriched) cache.set(unknown[index].name, enriched);
+          const asked = unknown[index];
+          // The main process hands an unmatched row back untouched, so a row
+          // that came back with nothing different is one nobody could place.
+          const matched =
+            enriched &&
+            (enriched.name !== asked.name ||
+              enriched.year !== asked.year ||
+              enriched.posterUrl !== asked.posterUrl)
+              ? enriched
+              : null;
+          cache.set(asked.name, matched);
         }
         // One re-render for the batch rather than one per row.
         bump((value) => value + 1);
@@ -83,7 +100,23 @@ export function useTitleEnrichment(results: SearchResponse[], enabled = true): S
 
   return results.map((item) => {
     const enriched = cache.get(item.name);
-    if (!enriched) return item;
+    if (!enriched) {
+      /*
+       * Not placed (or not yet): the file name, tidied, rather than shown
+       * raw. Catalogue rows are already titles. The original stays on the row
+       * as `originalTitle`, where the detail page and the developer views
+       * still read it.
+       */
+      if (item.apiName === 'Catalogue') return item;
+      const tidied = tidyReleaseName(item.name);
+      if (!tidied.changed) return item;
+      return {
+        ...item,
+        name: tidied.title,
+        year: item.year ?? tidied.year,
+        originalTitle: item.originalTitle ?? item.name,
+      };
+    }
     return {
       ...item,
       // The address is never touched: the provider's own handle is the only
@@ -91,6 +124,7 @@ export function useTitleEnrichment(results: SearchResponse[], enabled = true): S
       name: enriched.name,
       year: enriched.year ?? item.year,
       posterUrl: enriched.posterUrl ?? item.posterUrl,
+      originalTitle: item.originalTitle ?? (enriched.name !== item.name ? item.name : undefined),
     };
   });
 }

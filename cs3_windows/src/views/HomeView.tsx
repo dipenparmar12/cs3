@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import type { SearchResponse } from '../types/api';
 import { matchesTab, tabsFor } from '../utils/contentTypes';
@@ -8,7 +8,28 @@ import type { DiscoverySection } from '../../electron/cs3/discovery';
 import { TvType } from '../types/api';
 import { PosterCard } from '../components/PosterCard';
 import { CataloguePicker } from '../components/home/CataloguePicker';
+import { CategoryGrid } from '../components/home/CategoryGrid';
+import { HomeRow } from '../components/home/HomeRow';
+import { RowPicker } from '../components/home/RowPicker';
 import { describeError } from '../utils/errors';
+import { RAIL_LIMIT, readHiddenRows, writeHiddenRows } from '../utils/homeRows';
+import type { HomeCategoryState } from './homeCategoryState';
+
+/** Anime is a row like any other now; this id is also how the old switch is read. */
+const ANIME_ROW = 'trending-anime';
+
+function storage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** The app's scroll container, which is not the window. */
+function viewportOf(node: HTMLElement | null): HTMLElement | null {
+  return node?.closest<HTMLElement>('.view-viewport') ?? null;
+}
 
 /**
  * The home screen, built from what is actually popular.
@@ -39,12 +60,20 @@ interface HomeViewProps {
    * through search rather than straight into a detail page.
    */
   onSearch?: (query: string) => void;
+  /**
+   * The row opened with "Show all", held by the caller so a title opened from
+   * it comes back to the same grid. See `homeCategoryState.ts`.
+   */
+  category: HomeCategoryState | null;
+  onCategoryChange: (next: HomeCategoryState | null) => void;
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({
   onSelectMedia,
   onPlayDirectly,
   onSearch,
+  category,
+  onCategoryChange,
 }) => {
   const [sections, setSections] = useState<DiscoverySection[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,26 +82,16 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const [continueWatching, setContinueWatching] = useState<WatchProgress[]>([]);
   const [typeTab, setTypeTab] = useState<string>('all');
   const [confirmClear, setConfirmClear] = useState(false);
+  const topRef = useRef<HTMLDivElement>(null);
   /**
-   * Whether anime rows are mixed in.
+   * The rows switched off in the row picker.
    *
-   * `discover:sections` has taken `includeAnime` since it was written and
-   * nothing ever passed it — the option existed with no caller, which is the
-   * same shape as the three unreachable features `componentReachability` and
-   * `ipcSurface` now guard against, arriving through a parameter instead.
-   *
-   * Held in `localStorage` rather than the datastore: it describes how one
-   * person likes their front page, not how the app behaves, so it has no
-   * business travelling in a backup to somebody else's machine. Same argument
-   * as the settings level.
+   * Replaces the single "include anime" switch, which is read once so that
+   * choice carries over. Held in `localStorage`: it describes how one person
+   * likes their front page, not how the app behaves — see `homeRows.ts`.
    */
-  const [includeAnime, setIncludeAnime] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('home_include_anime') !== 'false';
-    } catch {
-      return true;
-    }
-  });
+  const [hidden, setHidden] = useState<string[]>(() => readHiddenRows(storage()));
+  const includeAnime = !hidden.includes(ANIME_ROW);
 
   const loadSections = useCallback(async () => {
     if (!window.cloudstream?.getDiscoverySections) {
@@ -80,7 +99,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
       return;
     }
     try {
-      const response = await window.cloudstream.getDiscoverySections({ includeAnime });
+      const response = await window.cloudstream.getDiscoverySections({ includeAnime, hidden });
       if (response?.ok) {
         setSections(response.sections ?? []);
         setError(null);
@@ -92,7 +111,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [includeAnime]);
+  }, [includeAnime, hidden]);
 
   useEffect(() => {
     void loadSections();
@@ -155,8 +174,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
     [sections]
   );
 
-  /** Card states for every row on the home screen, in one call. */
-  const { interactionFor } = useTitleInteractions(allItems);
   const typeTabs = useMemo(() => tabsFor(allItems), [allItems]);
   const activeTab = typeTabs.some((tab) => tab.id === typeTab) ? typeTab : 'all';
 
@@ -171,8 +188,70 @@ export const HomeView: React.FC<HomeViewProps> = ({
     [sections, activeTab]
   );
 
-  const hero = sections[0]?.items[0];
+  /**
+   * Card states for what the rails draw, in one call — not for every item the
+   * catalogues returned, most of which sits behind "Show all".
+   */
+  const railItems = useMemo(
+    () => visibleSections.flatMap((section) => section.items.slice(0, RAIL_LIMIT)),
+    [visibleSections]
+  );
+  const { interactionFor } = useTitleInteractions(railItems);
+
+  const changeHidden = useCallback((next: string[]) => {
+    setHidden(next);
+    writeHiddenRows(storage(), next);
+  }, []);
+
+  const showAll = useCallback(
+    (section: DiscoverySection) => {
+      onCategoryChange({
+        id: section.id,
+        title: section.title,
+        subtitle: section.subtitle,
+        items: section.items,
+        skip: section.items.length,
+        page: 1,
+        done: !section.pageable,
+        returnScroll: viewportOf(topRef.current)?.scrollTop ?? 0,
+      });
+      requestAnimationFrame(() => {
+        const viewport = viewportOf(topRef.current);
+        if (viewport) viewport.scrollTop = 0;
+      });
+    },
+    [onCategoryChange]
+  );
+
+  const closeCategory = useCallback(() => {
+    const target = category?.returnScroll ?? 0;
+    onCategoryChange(null);
+    // After two frames, for `handleBackToResults`' reason: the rows are not
+    // laid out yet at the moment the grid goes, and an early scroll clamps.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const viewport = viewportOf(topRef.current);
+        if (viewport) viewport.scrollTop = target;
+      })
+    );
+  }, [category?.returnScroll, onCategoryChange]);
+
+  const hero = visibleSections[0]?.items[0];
   const hasAnything = sections.length > 0 || continueWatching.length > 0;
+
+  if (category) {
+    return (
+      <div className="home" ref={topRef}>
+        <CategoryGrid
+          category={category}
+          onChange={onCategoryChange}
+          onBack={closeCategory}
+          onOpen={open}
+          onPlayDirectly={onPlayDirectly}
+        />
+      </div>
+    );
+  }
 
   if (loading && !hasAnything) {
     return (
@@ -185,7 +264,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   }
 
   return (
-    <div className="home">
+    <div className="home" ref={topRef}>
       {/*
         The hero is the top of the first section rather than a separate fetch.
 
@@ -206,7 +285,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
         >
           <div className="home-hero__body">
             <span className="home-hero__eyebrow">
-              <Sparkles size={13} /> {sections[0].title}
+              <Sparkles size={13} /> {visibleSections[0].title}
             </span>
             <h2>{hero.name}</h2>
             {hero.year && <p className="home-hero__meta">{hero.year}</p>}
@@ -243,19 +322,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
           </div>
         )}
 
-        <CataloguePicker
-          includeAnime={includeAnime}
-          onIncludeAnimeChange={(next) => {
-            setIncludeAnime(next);
-            try {
-              localStorage.setItem('home_include_anime', String(next));
-            } catch {
-              // A browser refusing storage is not a reason to ignore the click;
-              // the change still applies to this session.
-            }
-          }}
-          onChanged={() => void loadSections()}
-        />
+        <CataloguePicker onChanged={() => void loadSections()} />
+        <RowPicker hidden={hidden} onChange={changeHidden} />
 
         <button
           className="home-refresh"
@@ -401,32 +469,42 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </section>
       )}
 
+      {/*
+        A rail per row rather than a grid. A grid of six rows each thirty items
+        long is a wall; a rail keeps every row's first few items visible so the
+        page can be scanned vertically before anything is scrolled sideways,
+        and "Show all" opens the whole row.
+      */}
       {visibleSections.map((section) => (
-        <section className="home-row" key={section.id}>
-          <header>
-            <h3>{section.title}</h3>
-            {section.subtitle && <span className="home-row__subtitle">{section.subtitle}</span>}
-            {section.refreshing && <Loader2 size={12} className="spin" />}
-          </header>
-          {/*
-            A rail rather than a grid. A grid of six rows each thirty items long
-            is a wall; a rail keeps every section's first few items visible so
-            the page can be scanned vertically before anything is scrolled
-            horizontally.
-          */}
-          <div className="home-rail">
-            {section.items.map((item, index) => (
-              <PosterCard
-                key={`${item.url}-${index}`}
-                item={item}
-                onSelectMedia={open}
-                onPlayDirectly={item.url.startsWith('search://') ? undefined : onPlayDirectly}
-                interaction={interactionFor(item)}
-              />
-            ))}
-          </div>
-        </section>
+        <HomeRow
+          key={section.id}
+          title={section.title}
+          subtitle={section.subtitle}
+          refreshing={section.refreshing}
+          items={section.items}
+          hasMore={section.pageable}
+          onShowAll={() => {
+            // The whole row, not the part the type filter left showing.
+            const full = sections.find((entry) => entry.id === section.id) ?? section;
+            showAll(full);
+          }}
+          renderCard={(item, index) => (
+            <PosterCard
+              key={`${item.url}-${index}`}
+              item={item}
+              onSelectMedia={open}
+              onPlayDirectly={item.url.startsWith('search://') ? undefined : onPlayDirectly}
+              interaction={interactionFor(item)}
+            />
+          )}
+        />
       ))}
+
+      {sections.length === 0 && hidden.length > 0 && !loading && !error && (
+        <p className="home-error">
+          Every row is switched off. Choose some under <strong>Rows</strong> above.
+        </p>
+      )}
     </div>
   );
 };

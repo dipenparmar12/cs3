@@ -340,6 +340,9 @@ const torrentImports = new TorrentImportService(
  * so the move costs nothing.
  */
 const titleEnricher = new TitleEnricher();
+// A widened source search asks every other site for the work, not for one
+// provider's file name — see `ContentService.searchTitleFor`.
+contentService.setTitleResolver((raw, hint) => titleEnricher.resolve(raw, hint));
 
 const metadataEnrichment = new MetadataEnrichmentService(undefined, titleEnricher);
 metadataEnrichment.setListener((metadata) =>
@@ -3019,9 +3022,20 @@ ipcMain.handle('torrent:autoPlay', async (_, request: SourceQuery) => {
  */
 ipcMain.handle(
   'playback:start',
-  async (_, request: SourceQuery, title: string, episodeTitle?: string) => {
+  async (
+    _,
+    request: SourceQuery,
+    title: string,
+    episodeTitle?: string,
+    options?: { persistent?: boolean }
+  ) => {
     try {
-      return { ok: true, snapshot: playbackSessions.start(request, title, episodeTitle) };
+      return {
+        ok: true,
+        snapshot: playbackSessions.start(request, title, episodeTitle, {
+          persistent: Boolean(options?.persistent),
+        }),
+      };
     } catch (error) {
       return { ...fail(error), snapshot: null };
     }

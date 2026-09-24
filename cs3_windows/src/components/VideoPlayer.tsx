@@ -181,6 +181,13 @@ interface VideoPlayerProps {
      * taking three times as long, and an unexplained long wait reads as a hang.
      */
     widened?: boolean;
+    /**
+     * True while the session, having found nothing that plays where the title
+     * came from, is looking everywhere else by itself. Standard mode only.
+     */
+    retryingElsewhere?: boolean;
+    /** Sources this session has ruled out so far. */
+    tried?: number;
     /** Stops waiting for the remaining providers, keeping what has arrived. */
     onCancelSearch?: () => void;
     onDownloadSource?: (source: TorrentResult) => void;
@@ -385,6 +392,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isHoveringControls, setIsHoveringControls] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** A forced second attempt at this source is running; see `forceTranscodeRef`. */
+  const [converting, setConverting] = useState(false);
   const [stats, setStats] = useState<TorrentStreamStats | null>(null);
   const [swarm, setSwarm] = useState<SwarmReport | null>(null);
   const [hasStartedPlayback, setHasStartedPlayback] = useState(false);
@@ -2592,29 +2601,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         const previous = prepared?.sessionId;
         const at = (isConverted ? playbackOffset : 0) + (videoRef.current?.currentTime ?? 0);
 
-        const response = await window.cloudstream?.preparePlaybackStream({
-          url: streamUrl,
-          headers: sourceConfig.headers,
-          isM3u8: mimeType === 'application/x-mpegURL',
-          isDash: sourceConfig.isDash,
-          drm: sourceConfig.drm,
-          provider: providerProvenance?.provider,
-          // The cached verdict is the one that was wrong; measure again and then
-          // override it anyway.
-          refresh: true,
-          force: true,
-        });
-        if (!response?.ok || !response.playbackUrl) {
-          // Conversion is unavailable; the source has had its chance.
-          skipRef.current?.(
-            response?.error ?? 'This file could not be converted for playback.'
-          );
-          return;
+        // Still trying, not failed — standard mode says so rather than showing
+        // an error panel for the length of a second attempt.
+        setConverting(true);
+        try {
+          const response = await window.cloudstream?.preparePlaybackStream({
+            url: streamUrl,
+            headers: sourceConfig.headers,
+            isM3u8: mimeType === 'application/x-mpegURL',
+            isDash: sourceConfig.isDash,
+            drm: sourceConfig.drm,
+            provider: providerProvenance?.provider,
+            // The cached verdict is the one that was wrong; measure again and then
+            // override it anyway.
+            refresh: true,
+            force: true,
+          });
+          if (!response?.ok || !response.playbackUrl) {
+            // Conversion is unavailable; the source has had its chance.
+            skipRef.current?.(
+              response?.error ?? 'This file could not be converted for playback.'
+            );
+            return;
+          }
+          if (previous) void window.cloudstream?.closePlaybackStream(previous);
+          setError(null);
+          setPlaybackOffset(at);
+          setPrepared({ ...response, playbackUrl: atTime(response.playbackUrl, at) });
+        } finally {
+          setConverting(false);
         }
-        if (previous) void window.cloudstream?.closePlaybackStream(previous);
-        setError(null);
-        setPlaybackOffset(at);
-        setPrepared({ ...response, playbackUrl: atTime(response.playbackUrl, at) });
       })();
     };
   }, [
@@ -3219,6 +3235,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onWiden={sourceSession.onWiden}
           canWiden={sourceSession.canWiden}
           widened={sourceSession.widened}
+          retryingElsewhere={sourceSession.retryingElsewhere}
+          tried={sourceSession.tried}
           onBack={onBack}
         />
       )}
@@ -3234,10 +3252,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {isInspecting && (
         <div className="player__overlay">
           <Loader2 className="spin" size={36} />
-          <p>Inspecting media…</p>
-          <span className="muted">
-            Checking the container and codecs so this plays first time.
-          </span>
+          {isDeveloper ? (
+            <>
+              <p>Inspecting media…</p>
+              <span className="muted">
+                Checking the container and codecs so this plays first time.
+              </span>
+            </>
+          ) : (
+            <p>Getting it ready…</p>
+          )}
         </div>
       )}
 
@@ -3264,12 +3288,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           activeSource={activeSource}
           provenance={resolvedProvenance ?? providerProvenance ?? undefined}
           attempts={
-            sourceSession && sourceSession.attempts.length > 0
-              ? { tried: sourceSession.attempts.length, total: sourceSession.sources.length }
+            sourceSession && (sourceSession.tried ?? sourceSession.attempts.length) > 0
+              ? {
+                  tried: sourceSession.tried ?? sourceSession.attempts.length,
+                  total: sourceSession.sources.length,
+                }
               : undefined
           }
           isNativeEngine={isNativeEngine}
           dead={probeFailure?.dead}
+          retrying={converting}
           onDownload={() => void handleDownloadCurrentMedia()}
           onChooseAnother={() => {
             // The in-player list, not `onBack` — leaving the player to change

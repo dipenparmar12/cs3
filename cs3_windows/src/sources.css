@@ -8257,3 +8257,122 @@
 @media (max-width: 720px) {
   .trailer-popup__backdrop { padding: 0.75rem; }
 }
+
+/* --- Home: rows, "Show all" and the row picker ---------------------------- */
+
+.home-row__more {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  margin-left: auto;
+  align-self: center;
+  padding: 0.2rem 0.5rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--accent-light, #60a5fa);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.home-row__more:hover { background: rgba(96, 165, 250, 0.1); }
+.home-row__more:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
+
+/* The last tile of a rail, the size of a poster so it reads as "more of these". */
+.home-rail__all {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 229px;
+  border: 1px dashed rgba(148, 163, 184, 0.3);
+  border-radius: var(--radius-md, 8px);
+  background: rgba(148, 163, 184, 0.04);
+  color: var(--text-subtle, #94a3b8);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.home-rail__all:hover { color: #fff; border-color: rgba(96, 165, 250, 0.5); background: rgba(96, 165, 250, 0.08); }
+.home-rail__all:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
+
+/* A row not yet near the viewport holds its height, so the page is its full
+   length from the start and nothing jumps when the posters arrive. */
+.home-rail--pending { min-height: 312px; }
+
+.category-page { display: flex; flex-direction: column; gap: 1.1rem; }
+.category-page__head { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.category-page__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.38rem 0.75rem;
+  border-radius: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: transparent;
+  color: var(--text-subtle, #94a3b8);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.category-page__back:hover { color: #fff; border-color: rgba(148, 163, 184, 0.4); }
+.category-page__title { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.category-page__title h2 { font-size: 1.35rem; font-weight: 800; color: #fff; margin: 0; }
+.category-page__title p { margin: 0; font-size: 0.78rem; color: var(--text-subtle, #94a3b8); }
+.category-page__count { margin-left: auto; font-size: 0.78rem; color: var(--text-subtle, #94a3b8); }
+.category-page__end {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  min-height: 4rem;
+  font-size: 0.82rem;
+  color: var(--text-subtle, #94a3b8);
+}
+
+.row-picker { position: relative; }
+.row-picker__menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 30;
+  width: min(380px, calc(100vw - 2rem));
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: var(--surface, #141922);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5);
+  padding: 0.7rem;
+}
+.row-picker__groups { display: flex; flex-direction: column; gap: 0.6rem; }
+.row-picker__group { border: none; margin: 0; padding: 0; }
+.row-picker__group legend {
+  padding: 0 0.25rem 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-subtle, #94a3b8);
+}
+.row-picker__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.38rem 0.45rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.row-picker__row:hover { background: rgba(148, 163, 184, 0.1); }
+.row-picker__row input { margin-top: 0.2rem; accent-color: var(--accent, #60a5fa); }
+.row-picker__text { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.row-picker__text strong { font-size: 0.84rem; font-weight: 500; }
+.row-picker__text em { font-style: normal; font-size: 0.72rem; line-height: 1.4; color: var(--text-subtle, #94a3b8); }
+.row-picker__foot {
+  margin-top: 0.6rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}

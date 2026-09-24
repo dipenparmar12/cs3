@@ -7,6 +7,7 @@ import {
   Download,
   Link2,
   List,
+  Loader2,
   RotateCcw,
 } from 'lucide-react';
 import type { SourceCapabilityModel } from '../../types/media';
@@ -54,6 +55,8 @@ export const PlaybackErrorPanel: React.FC<{
   isNativeEngine?: boolean;
   /** The source is gone, not merely undecodable — no player and no downloader can help. */
   dead?: boolean;
+  /** A second way of playing this same source is being tried right now. */
+  retrying?: boolean;
   onDownload?: () => void;
   onChooseAnother: () => void;
   /** Forces the ffmpeg ladder in this window. Only meaningful off the native engine. */
@@ -69,6 +72,7 @@ export const PlaybackErrorPanel: React.FC<{
   attempts,
   isNativeEngine,
   dead,
+  retrying,
   onDownload,
   onChooseAnother,
   onConvertHere,
@@ -86,8 +90,6 @@ export const PlaybackErrorPanel: React.FC<{
    */
   const plain = plainMessage(message);
   const hasDetail = plain.detail !== '' && plain.detail !== plain.summary;
-  const [showDetail, setShowDetail] = React.useState(false);
-  const detailOpen = isDeveloper || showDetail;
 
   const write = useCallback(async (label: string, text: string) => {
     if (!text.trim()) return;
@@ -130,6 +132,49 @@ export const PlaybackErrorPanel: React.FC<{
       .filter(Boolean)
       .join('\n');
 
+  /*
+   * Standard mode: the viewer's version of this screen. While failover is still
+   * walking the list there is nothing to decide, so nothing to press; once it
+   * has stopped, one sentence and the two things likely to get them the film.
+   * The copy buttons, the converter, the external players and the detail are
+   * a developer's, and developer mode keeps every one of them below.
+   */
+  if (!isDeveloper) {
+    if (retrying || stillTrying) {
+      return (
+        <div className="player__overlay player__overlay--simple">
+          <Loader2 className="spin" size={32} />
+          <p>
+            {retrying
+              ? 'Trying another way to play this…'
+              : 'That link did not work — trying another one…'}
+          </p>
+        </div>
+      );
+    }
+    return (
+      <div className="player__overlay player__overlay--error">
+        <div className="playback-error">
+          <AlertTriangle size={32} className="playback-error__icon" />
+          <h3 className="playback-error__headline">
+            {dead ? 'That link is gone' : 'This link would not play'}
+          </h3>
+          <p className="playback-error__message">{plain.summary}</p>
+          <div className="playback-error__actions">
+            <button type="button" className="btn btn-primary" onClick={onChooseAnother}>
+              <List size={16} /> Try another link
+            </button>
+            {onDownload && !dead && (
+              <button type="button" className="btn" onClick={onDownload}>
+                <Download size={16} /> Download instead
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="player__overlay player__overlay--error">
       <div className="playback-error">
@@ -140,45 +185,22 @@ export const PlaybackErrorPanel: React.FC<{
         </h3>
         <p className="playback-error__message">{plain.summary}</p>
 
-        {/*
-          The original, one click away. Progressive disclosure rather than a
-          mode switch: somebody hitting a failure they want to report should not
-          have to go to Settings and come back to read what it said.
-        */}
-        {hasDetail && !isDeveloper && (
-          <button
-            type="button"
-            className="playback-error__detail-toggle"
-            aria-expanded={showDetail}
-            onClick={() => setShowDetail((open) => !open)}
-          >
-            {showDetail ? 'Hide details' : 'Show details'}
-          </button>
-        )}
-        {hasDetail && detailOpen && <p className="playback-error__detail">{plain.detail}</p>}
+        {/* The original, already open: someone in this mode asked for it. */}
+        {hasDetail && <p className="playback-error__detail">{plain.detail}</p>}
 
         {/*
           What the app is doing about it right now. Failover is silent
-          otherwise, and a viewer watching a dead frame has no way to tell
-          "trying the next one" from "given up" — so this stays in both modes.
-          The *count* does not: "3 of 12" is a progress bar for our walk, and
-          the only thing it changes for a viewer is how long to keep waiting,
-          which "trying another source" already says.
+          otherwise, and a dead frame cannot tell "trying the next one" from
+          "given up".
         */}
         {stillTrying && (
           <p className="playback-error__attempts">
-            {isDeveloper
-              ? `Tried ${attempts!.tried} of ${attempts!.total} sources — trying the next…`
-              : 'Trying another source…'}
+            Tried {attempts!.tried} of {attempts!.total} sources — trying the next…
           </p>
         )}
 
-        {/*
-          Where the source came from is provenance, not an instruction. It tells
-          a maintainer which extension to look at and tells a viewer nothing
-          they can act on — the actions below are what they can act on.
-        */}
-        {chain && isDeveloper && <p className="playback-error__origin">{chain}</p>}
+        {/* Which extension to look at, for whoever maintains it. */}
+        {chain && <p className="playback-error__origin">{chain}</p>}
 
         {/*
           Download first, and deliberately so. Decoding and fetching are

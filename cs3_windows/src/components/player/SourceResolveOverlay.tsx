@@ -49,6 +49,13 @@ interface SourceResolveOverlayProps {
    * it was a wait at all, when it was a dead end with a button under it.
    */
   widened?: boolean;
+  /**
+   * The sources where this title was found have all failed, and the app is
+   * looking everywhere else by itself. Standard mode's automatic failover.
+   */
+  retryingElsewhere?: boolean;
+  /** Sources ruled out so far, for "trying link 3 of 12". */
+  tried?: number;
   onBack: () => void;
 }
 
@@ -68,17 +75,23 @@ interface SourceResolveOverlayProps {
 function stageLabel(
   phase: 'searching' | 'starting',
   sourceCount: number,
-  isDeveloper: boolean
+  isDeveloper: boolean,
+  tried = 0
 ): string {
   if (phase === 'starting') {
-    return isDeveloper ? 'Connecting to the swarm…' : 'Starting playback…';
+    if (isDeveloper) return 'Connecting to the swarm…';
+    // The link being tried, as the Android player counts them. Once one has
+    // failed this is what says the app is moving on rather than stuck.
+    return tried > 0 && sourceCount > 0
+      ? `Trying link ${Math.min(tried + 1, sourceCount)} of ${sourceCount}…`
+      : 'Starting…';
   }
   if (sourceCount > 0) {
     return isDeveloper
       ? `${sourceCount} source${sourceCount === 1 ? '' : 's'} found`
-      : `Found ${sourceCount} source${sourceCount === 1 ? '' : 's'} — picking the best…`;
+      : `${sourceCount} link${sourceCount === 1 ? '' : 's'} found`;
   }
-  return isDeveloper ? 'Searching for sources…' : 'Finding the best source…';
+  return isDeveloper ? 'Searching for sources…' : 'Finding links…';
 }
 
 export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
@@ -98,28 +111,93 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
   onWiden,
   canWiden,
   widened,
+  retryingElsewhere,
+  tried = 0,
   onBack,
 }) => {
   const isDeveloper = useIsDeveloper();
 
+  /*
+   * Standard mode: what a streaming service shows. The title, how many links
+   * there are and which one is being tried, a way to skip the rest of the
+   * search, and — only when everything has been tried, here and everywhere
+   * else — one plain sentence and what to do next. Everything else on this
+   * overlay is a developer's.
+   */
+  if (!isDeveloper) {
+    const heading = episodeTitle ? `${title} — ${episodeTitle}` : title;
+    if (phase === 'error') {
+      return (
+        <div className="player__overlay player__overlay--simple">
+          <AlertTriangle size={32} />
+          <p>This title would not play right now.</p>
+          <span className="muted">
+            {sources.length > 0
+              ? `None of the ${sources.length} link${sources.length === 1 ? '' : 's'} found would start. They often come back — try again in a little while, or pick one yourself.`
+              : 'No links were found for it. Try again in a little while.'}
+          </span>
+          <div className="player__overlay-actions">
+            <button className="btn btn-primary" onClick={onRetry}>
+              <RefreshCw size={16} /> Try again
+            </button>
+            {sources.length > 0 && (
+              <button className="btn" onClick={onOpenSources}>
+                <ListVideo size={16} /> Choose a link
+              </button>
+            )}
+            <button className="btn" onClick={onBack}>Back</button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="player__overlay player__overlay--simple">
+        <Loader2 className="spin" size={36} />
+        <p>{stageLabel(phase, sources.length, false, tried)}</p>
+        <span className="muted">{heading}</span>
+        {retryingElsewhere ? (
+          <span className="muted">
+            <Globe size={13} /> Those links did not play — looking in more places…
+          </span>
+        ) : widened && phase === 'searching' ? (
+          <span className="muted">
+            <Globe size={13} /> Nothing where this title was found — looking everywhere else.
+          </span>
+        ) : null}
+        {phase === 'searching' && totalIndexers > 0 && !searchDone && (
+          // The climbing count is what says the app is working rather than stuck.
+          <span className="muted">Checked {searched} of {totalIndexers} places</span>
+        )}
+        <div className="player__overlay-actions">
+          {phase === 'searching' && sources.length > 0 && (
+            // Android's "skip loading": stop waiting for the slowest sites and
+            // start with the best of what has arrived.
+            <button className="btn btn-primary" onClick={onPlayNow}>
+              <Play size={16} /> Skip and play
+            </button>
+          )}
+          <button className="btn" onClick={onBack}>Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  // Developer mode from here on: the stages by name, the failover list, and
+  // every action, because the stop is the information.
   if (phase === 'error') {
-    const plain = plainMessage(error);
     return (
       <div className="player__overlay">
         <AlertTriangle size={36} />
-        {/* The original is never discarded — developer mode shows it, and
-            `CopyErrorButton` still reports it verbatim. What changes is which
-            of the two a viewer is handed first. */}
-        <p>{error ? (isDeveloper ? plain.detail : plain.summary) : 'Could not start playback.'}</p>
+        {/* The original, verbatim — `plainMessage` keeps it as `detail`. */}
+        <p>{error ? plainMessage(error).detail : 'Could not start playback.'}</p>
 
         {/*
           The failover list is the most useful thing on this screen for whoever
-          is diagnosing a provider, and the least useful for whoever wanted to
-          watch something: four rows of release name, scraper name and HTTP
-          status, describing sources they never chose. The actions below are
-          what they need, and those are unchanged.
+          is diagnosing a provider: release name, scraper name and HTTP status
+          for each source that was tried.
         */}
-        {attempts.length > 0 && isDeveloper && (
+        {attempts.length > 0 && (
           <ul className="player__attempts">
             {attempts.slice(0, 4).map((attempt, i) => (
               <li key={`${attempt.title}-${i}`}>
@@ -127,11 +205,6 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
               </li>
             ))}
           </ul>
-        )}
-        {attempts.length > 0 && !isDeveloper && (
-          <span className="muted">
-            {attempts.length} source{attempts.length === 1 ? '' : 's'} tried so far.
-          </span>
         )}
 
         <div className="player__overlay-actions">
@@ -160,39 +233,27 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
     <div className="player__overlay">
       <Loader2 className="spin" size={36} />
 
-      <p>{stageLabel(phase, sources.length, isDeveloper)}</p>
+      <p>{stageLabel(phase, sources.length, true)}</p>
 
       <span className="muted">
         {episodeTitle ? `${title} — ${episodeTitle}` : title}
       </span>
 
       {/*
-        Said in both modes, because it is the reason the wait just tripled and
-        an unexplained change of length is the shape of a hang. Only the word
-        "indexer" goes.
+        The reason the wait just tripled: an unexplained change of length is the
+        shape of a hang.
       */}
       {widened && phase === 'searching' && (
         <span className="muted">
-          <Globe size={13} />{' '}
-          {isDeveloper
-            ? 'No sources from where this title was found — asking every provider and indexer.'
-            : 'Nothing where this title was found — looking everywhere else.'}
+          <Globe size={13} /> No sources from where this title was found — asking every
+          provider and indexer.
         </span>
       )}
 
       {phase === 'searching' && totalIndexers > 0 && (
         <span className="muted">
-          {isDeveloper ? (
-            <>
-              Searched {searched} of {totalIndexers} indexers
-              {lastIndexerName && !searchDone ? ` · last: ${lastIndexerName}` : ''}
-            </>
-          ) : (
-            // The count stays: a climbing number is what tells the viewer the
-            // app is working rather than stuck, which is this overlay's whole
-            // reason for existing. Which scraper answered last is not.
-            <>Checked {searched} of {totalIndexers} places</>
-          )}
+          Searched {searched} of {totalIndexers} indexers
+          {lastIndexerName && !searchDone ? ` · last: ${lastIndexerName}` : ''}
         </span>
       )}
 

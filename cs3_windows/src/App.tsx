@@ -18,6 +18,7 @@ import {
 } from './components/DownloadConfirmDialog';
 import { HomeView } from './views/HomeView';
 import { EMPTY_SEARCH_UI, type SearchUiState } from './views/searchUiState';
+import type { HomeCategoryState } from './views/homeCategoryState';
 import type { PlaybackRequest, PlaybackSessionRequest } from './views/DetailView';
 
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -114,6 +115,8 @@ export const App: React.FC = () => {
    * same scroll container.
    */
   const [searchUi, setSearchUi] = useState<SearchUiState>(EMPTY_SEARCH_UI);
+  // The home row opened with "Show all" — held here for `searchUi`'s reason.
+  const [homeCategory, setHomeCategory] = useState<HomeCategoryState | null>(null);
   /** The main scroller, so returning from a title lands where you left. */
   const viewportRef = useRef<HTMLElement | null>(null);
   const savedScroll = useRef(0);
@@ -927,14 +930,18 @@ export const App: React.FC = () => {
     const response = await window.cloudstream.startPlayback(
       context.request,
       context.title,
-      context.episodeTitle
+      context.episodeTitle,
+      // Standard mode keeps trying on its own, as the Android player does —
+      // every source, then everywhere. Developer mode stops to show what
+      // failed. See `persistent` in `playbackSession.ts`.
+      { persistent: !isDeveloper }
     );
     if (!response.ok || !response.snapshot) {
       setSwitchError(response.error ?? 'Could not start playback.');
       return;
     }
     setSession({ id: response.snapshot.sessionId, context, snapshot: response.snapshot });
-  }, []);
+  }, [isDeveloper]);
 
   /**
    * Switches episode from inside the player.
@@ -1465,6 +1472,9 @@ export const App: React.FC = () => {
         setActiveTab={(tab) => {
           setActiveTab(tab);
           setSelectedMedia(null);
+          // Home in the sidebar means the home rows, including from inside a
+          // "Show all" grid.
+          if (tab === 'home') setHomeCategory(null);
         }}
         downloadCount={downloadQueue.filter((t) => t.state === 'Downloading' || t.state === 'Queued').length}
         missingComponentCount={missingComponents}
@@ -1609,6 +1619,8 @@ export const App: React.FC = () => {
                 onWiden: handleWidenSources,
                 canWiden: session.snapshot.canWiden,
                 widened: session.snapshot.widened,
+                retryingElsewhere: session.snapshot.retryingElsewhere,
+                tried: session.snapshot.tried,
                 onCancelSearch: handleCancelSourceSearch,
                 onSourceUnplayable: handleSourceUnplayable,
                 onDownloadSource: session.context.onDownloadSource,
@@ -1784,6 +1796,8 @@ export const App: React.FC = () => {
                     // Trending anime carries no IMDb id, so those cards open
                     // through a search rather than straight into a detail page.
                     onSearch={handleSearchFromDetail}
+                    category={homeCategory}
+                    onCategoryChange={setHomeCategory}
                   />
                 </ErrorBoundary>
               )}

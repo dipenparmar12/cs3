@@ -384,7 +384,12 @@ export interface CloudStreamElectronAPI {
   startPlayback: (
     request: { mediaUrl: string; season?: number; episode?: number; titleOverride?: string },
     title: string,
-    episodeTitle?: string
+    episodeTitle?: string,
+    /**
+     * `persistent`: keep trying on its own — every source in turn, then every
+     * provider and indexer — instead of stopping to ask. Standard mode.
+     */
+    options?: { persistent?: boolean }
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
   /** Starts the best source found so far instead of waiting for every indexer. */
   /** Abandons a source that started but will not play, and tries the next. */
@@ -1927,8 +1932,8 @@ const api: CloudStreamElectronAPI = {
   startBestStream: (sources, season, episode) =>
     ipcRenderer.invoke('torrent:startBestStream', sources, season, episode),
   autoPlay: (request) => ipcRenderer.invoke('torrent:autoPlay', request),
-  startPlayback: (request, title, episodeTitle) =>
-    ipcRenderer.invoke('playback:start', request, title, episodeTitle),
+  startPlayback: (request, title, episodeTitle, options) =>
+    ipcRenderer.invoke('playback:start', request, title, episodeTitle, options),
   playbackPlayNow: (sessionId) => ipcRenderer.invoke('playback:playNow', sessionId),
   skipPlaybackSource: (sessionId, reason) =>
     ipcRenderer.invoke('playback:skipSource', sessionId, reason),

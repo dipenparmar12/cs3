@@ -43,6 +43,16 @@ export type PlaybackPhase = 'searching' | 'starting' | 'playing' | 'error';
  */
 const MAX_AUTO_ADVANCES = 2;
 
+/**
+ * How long a widened search is given, after its first new source lands, before
+ * the walk starts on what has arrived.
+ *
+ * Starting on the very first answer plays whichever provider happened to be
+ * quickest rather than whichever ranked best; waiting for every provider is
+ * the half-minute wait this exists to avoid. A moment lets the fast few land.
+ */
+const WIDEN_SETTLE_MS = 1_500;
+
 export interface PlaybackSnapshot {
   sessionId: string;
   phase: PlaybackPhase;
@@ -90,6 +100,13 @@ export interface PlaybackSnapshot {
    * stuck, and this is exactly the moment it does.
    */
   widened: boolean;
+  /**
+   * True while a persistent session, having found nothing that plays where the
+   * title came from, is looking everywhere else on its own.
+   */
+  retryingElsewhere: boolean;
+  /** How many sources this session has ruled out, for "trying 3 of 12". */
+  tried: number;
   title: string;
   episodeTitle?: string;
 }
@@ -131,6 +148,19 @@ interface Session {
   bufferHealth?: BufferHealthMetrics;
   canWiden: boolean;
   widened: boolean;
+  /**
+   * Keep trying without being asked: every source in turn, then everywhere.
+   *
+   * The Android player moves on to the next link by itself and a viewer there
+   * never presses "find more sources"; here a start that ran out used to stop
+   * after two passes, and a list that ran out stopped at a button. Standard
+   * mode asks for this. Developer mode does not, because there the stop is the
+   * information: which sources failed, and why, before anything else is tried.
+   */
+  persistent: boolean;
+  /** Set once this session has widened on its own. It happens at most once. */
+  autoWidened: boolean;
+  retryingElsewhere: boolean;
   /**
    * Bumped on every start attempt. A start that loses the race — because the
    * viewer picked a different source while the previous one was still
@@ -176,6 +206,8 @@ export class PlaybackSessionManager {
       bufferHealth: session.bufferHealth,
       canWiden: session.canWiden,
       widened: session.widened,
+      retryingElsewhere: session.retryingElsewhere,
+      tried: session.unplayable.size,
       title: session.title,
       episodeTitle: session.episodeTitle,
     };
@@ -195,7 +227,12 @@ export class PlaybackSessionManager {
    * The caller is expected to show the player immediately on this return and
    * render progress from the emitted snapshots.
    */
-  public start(request: SourceQuery, title: string, episodeTitle?: string): PlaybackSnapshot {
+  public start(
+    request: SourceQuery,
+    title: string,
+    episodeTitle?: string,
+    options: { persistent?: boolean } = {}
+  ): PlaybackSnapshot {
     const session: Session = {
       id: randomUUID(),
       request,
@@ -213,6 +250,9 @@ export class PlaybackSessionManager {
       // search has finished and come up short.
       canWiden: false,
       widened: false,
+      persistent: Boolean(options.persistent),
+      autoWidened: false,
+      retryingElsewhere: false,
       unplayable: new Set<string>(),
       generation: 0,
       started: false,
@@ -261,6 +301,9 @@ export class PlaybackSessionManager {
       // search has finished and come up short.
       canWiden: false,
       widened: false,
+      persistent: false,
+      autoWidened: false,
+      retryingElsewhere: false,
       unplayable: new Set<string>(),
       generation: 0,
       // Nothing will auto-start, and nothing should: the viewer opened this to
@@ -286,7 +329,13 @@ export class PlaybackSessionManager {
    */
   private async discover(
     session: Session,
-    options: { autoStartWhenDone: boolean; bypassCache?: boolean; widen?: boolean }
+    options: {
+      autoStartWhenDone: boolean;
+      bypassCache?: boolean;
+      widen?: boolean;
+      /** Called after each partial answer, for a caller that starts before the end. */
+      onProgress?: () => void;
+    }
   ): Promise<void> {
     // A refresh started while one is already running supersedes it, rather than
     // both writing into the same session's source list.
@@ -322,6 +371,7 @@ export class PlaybackSessionManager {
           // reporting indexers of its own.
           if (progress.widened) session.widened = true;
           this.emit(session);
+          options.onProgress?.();
         },
         { bypassCache: options.bypassCache, signal: controller.signal }
       );
@@ -495,6 +545,7 @@ export class PlaybackSessionManager {
     );
 
     if (remaining.length === 0) {
+      if (await this.widenAndContinue(session)) return this.snapshot(session);
       session.phase = 'error';
       session.error =
         `None of the ${session.sources.length} source(s) could be played. ` +
@@ -592,6 +643,73 @@ export class PlaybackSessionManager {
     );
   }
 
+  /**
+   * Asks every provider and indexer, once the sources where the title was
+   * found have all failed — and keeps going with whatever that finds.
+   *
+   * This is the "Find more sources" button, pressed for the viewer. The
+   * narrow default stays right while it is paying for itself (fewer sites
+   * contacted, a faster answer); once every source it produced has failed it
+   * is saving nothing, and a viewer who is not a developer should not have to
+   * know the button exists. The empty case already widened on its own
+   * (`shouldEscalateScope`); this is the other case, sources that exist and
+   * do not play.
+   *
+   * The walk starts as the new sources arrive, after a moment's settle, rather
+   * than when the slowest of two hundred sites has answered; later arrivals
+   * join the list the walk continues through.
+   *
+   * Answers whether it took over. False means there was nothing wider to ask,
+   * or asking found nothing new, and the caller reports the failure.
+   */
+  private async widenAndContinue(session: Session): Promise<boolean> {
+    if (!session.persistent || session.autoWidened || session.disposed) return false;
+    if (session.request.scope === 'all' || !session.canWiden) return false;
+
+    session.autoWidened = true;
+    session.retryingElsewhere = true;
+    session.request = { ...session.request, scope: 'all' };
+    session.phase = 'searching';
+    session.error = undefined;
+    const generation = session.generation;
+    this.emit(session);
+
+    const untried = () =>
+      session.sources.filter((source) => source.infoHash && !session.unplayable.has(source.infoHash));
+
+    let arrived: () => void = () => {};
+    const firstNew = new Promise<void>((resolve) => {
+      arrived = resolve;
+    });
+    const search = this.discover(session, {
+      autoStartWhenDone: false,
+      widen: true,
+      onProgress: () => {
+        if (untried().length > 0) arrived();
+      },
+    });
+    await Promise.race([
+      search,
+      firstNew.then(() => new Promise<void>((resolve) => setTimeout(resolve, WIDEN_SETTLE_MS))),
+    ]);
+    // The viewer chose a source, or closed the player, while this looked.
+    if (session.disposed || generation !== session.generation) return true;
+
+    let candidates = untried();
+    if (candidates.length === 0) {
+      await search;
+      if (session.disposed || generation !== session.generation) return true;
+      candidates = untried();
+    }
+    if (candidates.length === 0) {
+      session.retryingElsewhere = false;
+      return false;
+    }
+
+    await this.beginStream(session, candidates, { failover: true });
+    return true;
+  }
+
   private async beginStream(
     session: Session,
     candidates: TorrentResult[],
@@ -679,6 +797,7 @@ export class PlaybackSessionManager {
       session.activeInfoHash = result.handle.infoHash;
       session.attempts = result.attempts;
       session.phase = 'playing';
+      session.retryingElsewhere = false;
       this.emit(session);
 
       /**
@@ -755,7 +874,10 @@ export class PlaybackSessionManager {
        * across passes so the player can still say how far down it has got.
        */
       const advance = (options.autoAdvances ?? 0) + 1;
-      const mayAdvance = !options.userChoice && advance <= MAX_AUTO_ADVANCES;
+      // A persistent session walks the whole list: it ends because the list
+      // strictly shrinks, and the viewer can stop it by closing the player.
+      const mayAdvance =
+        !options.userChoice && (session.persistent || advance <= MAX_AUTO_ADVANCES);
       /**
        * What was *attempted*, which is not what was offered.
        *
@@ -784,6 +906,9 @@ export class PlaybackSessionManager {
         session.attempts = [...history, ...session.attempts];
         return;
       }
+
+      if (!options.userChoice && (await this.widenAndContinue(session))) return;
+      if (session.disposed || generation !== session.generation) return;
 
       session.phase = 'error';
       /**

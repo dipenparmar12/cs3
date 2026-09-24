@@ -53,6 +53,14 @@ import { classifyFailure } from './cs3/failureTaxonomy.ts';
 import { planSourceScope, shouldEscalateScope } from './cs3/sourceScope';
 import { describeError } from '../src/utils/errors.ts';
 import type { PageSnapshotStore } from './cs3/pageSnapshot.ts';
+import { tidyReleaseName } from '../src/utils/releaseName.ts';
+
+/** The catalogue's answer to "what is this title", as `TitleEnricher` gives it. */
+export interface CanonicalTitle {
+  title: string;
+  year?: number;
+  imdbId?: string;
+}
 
 /**
  * Orchestrates the content pipeline: catalogue metadata in, playable stream out.
@@ -338,6 +346,60 @@ export class ContentService {
   /** Wired by `main.ts`; playback outcomes are counted from here onwards. */
   public setAnalytics(sink: AnalyticsSink): void {
     this.analytics = sink;
+  }
+
+  /**
+   * Turns a provider's name for a title into the catalogue's, with its IMDb id.
+   *
+   * Wired by `main.ts` to `TitleEnricher.resolve`, which is conservative: a
+   * disagreeing year or a weak match answers null. See {@link searchTitleFor}.
+   */
+  private titleResolver:
+    | ((raw: string, hint: { type?: TvType; year?: number }) => Promise<CanonicalTitle | null>)
+    | null = null;
+
+  public setTitleResolver(
+    resolver: (raw: string, hint: { type?: TvType; year?: number }) => Promise<CanonicalTitle | null>
+  ): void {
+    this.titleResolver = resolver;
+  }
+
+  /**
+   * What every *other* site is asked for, when a search reaches beyond the
+   * provider a title came from.
+   *
+   * A provider names its row after the file — `Avengers End Game 720p Hindi
+   * Dubbed` — and a widened search asked thirty other providers and every
+   * torrent indexer for exactly that string, which most of them answer with
+   * nothing. So the work is looked up first: the catalogue's title, year and
+   * IMDb id, which is also what the torrent indexers match on best. Where the
+   * catalogue cannot place it, the name is tidied instead (`releaseName.ts`),
+   * which at least stops asking for "720p Hindi Dubbed".
+   *
+   * Only for a title nothing has identified yet: a catalogue row already
+   * carries its IMDb id, and a lookup would spend a request to learn it again.
+   */
+  private async searchTitleFor(
+    title: string,
+    detail: MetadataDetail | null
+  ): Promise<{ title: string; year?: number; imdbId?: string }> {
+    if (detail?.imdbId) return { title, year: detail.year, imdbId: detail.imdbId };
+    if (this.titleResolver) {
+      try {
+        const canonical = await this.titleResolver(title, { type: detail?.type, year: detail?.year });
+        if (canonical?.title) {
+          return {
+            title: canonical.title,
+            year: detail?.year ?? canonical.year,
+            imdbId: canonical.imdbId,
+          };
+        }
+      } catch {
+        // A lookup that failed is no answer; the tidied name below still helps.
+      }
+    }
+    const tidied = tidyReleaseName(title);
+    return { title: tidied.title, year: detail?.year ?? tidied.year };
   }
 
   constructor(datastore: DatastoreManager, plugins: PluginManager, engine: TorrentEngine) {
@@ -1330,14 +1392,21 @@ export class ContentService {
 
     const isAnime = detail?.type === TvType.Anime || detail?.type === TvType.AnimeMovie;
 
+    // Asking beyond the originating provider means asking for the work, not for
+    // this provider's file name. See `searchTitleFor`.
+    const wanted =
+      requestedScope === 'all'
+        ? await this.searchTitleFor(title, detail)
+        : { title, year: detail?.year, imdbId: detail?.imdbId };
+
     const indexerQuery: IndexerQuery = {
       // Including the year for movies sharply reduces wrong-title matches.
-      query: detail?.year && episode === undefined ? `${title} ${detail.year}` : title,
+      query: wanted.year && episode === undefined ? `${wanted.title} ${wanted.year}` : wanted.title,
       type: detail?.type,
       season,
       episode,
-      year: detail?.year,
-      imdbId: detail?.imdbId,
+      year: wanted.year,
+      imdbId: wanted.imdbId,
       limit: 100,
     };
 
@@ -1428,9 +1497,9 @@ export class ContentService {
       this.registry.search(
         indexerQuery,
         {
-          expectedTitle: title,
+          expectedTitle: wanted.title,
           // Anime releases rarely carry a year; enforcing one loses good sources.
-          expectedYear: isAnime ? undefined : detail?.year,
+          expectedYear: isAnime ? undefined : wanted.year,
           season,
           episode,
           runtimeMinutes: detail?.runtimeMinutes,
@@ -1463,7 +1532,7 @@ export class ContentService {
       ...(needProviderSearch && providerList.length > 0
         ? [
             this.plugins.searchEach(
-              title,
+              wanted.title,
               targetProviders,
               async (providerOutcome) => {
                 if (options.signal?.aborted) return;
@@ -1521,7 +1590,7 @@ export class ContentService {
         seeders: r.result.seeders,
       })),
       indexerOutcomes: outcome.indexerOutcomes,
-      query: { title, season, episode, imdbId: detail?.imdbId },
+      query: { title: wanted.title, season, episode, imdbId: wanted.imdbId },
       scopeUsed,
       canWiden: plan.canWiden,
     };
