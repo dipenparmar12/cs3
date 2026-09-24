@@ -1081,6 +1081,7 @@ export class PluginManager {
     if (prev) {
       this.installedPlugins.set(internalName, { ...prev, filePath: restoredPath });
       this.persist();
+      this.sweepDisplacedArchives();
     }
 
     /**
@@ -1594,6 +1595,8 @@ export class PluginManager {
         meta: { ...plugin, repositoryUrl: repoUrl },
       });
       this.persist();
+      // Only now that the record names the new archive can the old one go.
+      this.sweepDisplacedArchives();
 
       // Translate and classify now rather than on first use: DROP-2 requires
       // translation to happen once at install time, and a plugin's tier has to
@@ -1760,11 +1763,12 @@ export class PluginManager {
     }
     // A record that named some other file — an earlier side-by-side install,
     // or a directory spelled from an older form of the repository URL — names a
-    // copy nothing will load again.
+    // copy nothing will load again. Remembered, not deleted: the caller sweeps
+    // once the record names the new file, or a failure between here and there
+    // would leave the record pointing at an archive that is gone.
     if (previousPath && !samePath(previousPath, placed.path) && !samePath(previousPath, target)) {
       this.rememberDisplaced(previousPath);
     }
-    this.sweepDisplacedArchives();
     return placed.path;
   }
 

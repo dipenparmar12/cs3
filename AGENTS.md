@@ -55,7 +55,7 @@ cs3/
 | Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
 | Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
-| Sidecar tests | `sidecar/` | `mvn test` (42 tests) |
+| Sidecar tests | `sidecar/` | `mvn test` (50 tests) |
 | Main-process tests (all) | `cs3_windows/` | `bun run test` (~580 cases across 42 suites, Node type-stripping; or `bun run test:electron`) |
 | Fast unit tests (skips slow) | `cs3_windows/` | `bun run test --fast` (40 unit suites in ~5s) |
 | Extension issues only | `cs3_windows/` | `bun run test issues` (21 cases, pure) |
@@ -107,7 +107,7 @@ cs3/
 | Fast tests | `cs3_windows/` | `bun run test --fast` (56 suites, ~10s; skips real ffmpeg/mpv) |
 | One suite | `cs3_windows/` | `bun run test <name>` — see alias list in `scripts/test-runner.mjs` |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `lib/` + android shim → `runtime/` |
-| Sidecar tests | `sidecar/` | `mvn test` (47 tests) |
+| Sidecar tests | `sidecar/` | `mvn test` (50 tests) |
 | Plugin runtime classpath | root | `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` (56 jars incl. `library-jvm-4.8.0.jar`) |
 | Provider bridge (Kotlin) | root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
 | Bridge without JitPack | root | `node tools/package/build-bridge.mjs` |
@@ -210,7 +210,8 @@ Fallible handlers return an **envelope** `{ ok, error?, …payload }` and never 
 
 | Channel group | Shape & rules |
 |---|---|
-| `playback:*` | **Push.** `playback:start` returns a session id immediately; `playback:update` snapshots follow. Player renders from snapshots before a stream exists. |
+| `playback:*` | **Push.** `playback:start` returns a session id immediately; `playback:update` snapshots follow. Player renders from snapshots before a stream exists. `playback:start`'s `{ persistent }` (standard mode) walks every source and, once they all fail, widens to every provider and indexer **once** by itself — the "Find more sources" press made for the viewer; snapshots carry `retryingElsewhere` and `tried`. A source the viewer picked is still the only one tried. |
+| `discover:*` | `sections({ hidden })` fetches only the rows switched on; `rows()` lists every row, shown or not, **without fetching** (for the row picker); `more(section, { skip, page })` pages one row for "Show all" — offset for Stremio/TMDB/AniList, page number for built-in providers; empty means the end. |
 | `search:*` | **Push**, same reason. `search:start` → opening snapshot; `search:update` carries results/progress; `search:cancel` abandons the rest. `api:suggest` is push-shaped too: it answers instantly from cache with a `done` flag and `search:suggestUpdate` carries each catalogue as it lands — measured, the three answer 170–935ms apart, so one reply would spend the fastest two on the slowest. Main keeps **one** `AbortController` for it; a new keystroke aborts the previous fan-out. 15 providers = 15 independent scrapes (Cinevood 20s vs ARD 350ms) — request/response would spend the whole time on a spinner. `api:searchAll` remains for callers needing a full answer. Required splitting `searchAll`'s single batched RPC into one RPC per provider (`searchEach`), capped at 8 in flight. |
 | `pages:*` | **Read-shaped**, deliberately unlike the two above — the answer is already on disk. `getSnapshot/remember/setPinned`. **Capture is not exposed**; it happens in `ContentService.load`. |
 | `media:*` | `inspect` classifies without starting; **`prepare` is the only source of a playable URL**; `switchAudio/closeStream` drive a live session; `setCapabilities/getCodecProbes` carry renderer-measured decoder support; `getPlaybackDiagnostics` returns per-attempt telemetry. **No channel hands back an unclassified URL.** Provider-declared `isDash`/`drm` outrank the probe; DRM skips the probe entirely. |
@@ -341,6 +342,7 @@ rather than omitting the ones nothing serves.
 | `media/mpvEngine.ts` | Native engine: spawns mpv, JSON-RPC over pipe/socket, snapshots. |
 | `media/mpvEmitPolicy.ts` | Which mpv snapshots go now and which may wait a tick. Pure, tested. |
 | `media/inspectionStore.ts` | Persists probe findings keyed on **origin** URL; verdict always recomputed. |
+| `media/toolCapabilities.ts` | What this ffmpeg build supports, remembered per binary (path/size/mtime) and asked from a worker thread — see §12 on `spawn`. |
 | `metadataProvider.ts` | TVmaze + AniList — catalogue metadata only, never streams. Key output: IMDb id. |
 | `cinemeta.ts` | Stremio Cinemeta metadata, prioritised in search. |
 | `anilist.ts` | The one AniList GraphQL client (3 hand-rolled POSTs were merged). |
@@ -354,7 +356,9 @@ rather than omitting the ones nothing serves.
 | `cs3/hostDeadline.ts` | How long the host may work on a call the sidecar is waiting on. Pure, tested; **the worker stops before the waiter does**. |
 | `cs3/providerRegistry.ts` | What each archive registered, keyed `size:mtime:generation`; hydrates the provider list without starting the JVM (67s → 8ms). |
 | `cs3/providerRecovery.ts` | `planRecovery` (pure) — ordered steps to make a saved page's provider answer again; never adds an unknown repository. |
-| `cs3/extensionUpdater.ts` | Scheduled OTA extension updates. "Update all" re-checks rather than reading the persisted snapshot; an update installs into the directory the *record* names and downloads from the repository the *update* names. |
+| `cs3/extensionUpdater.ts` | Scheduled OTA extension updates. "Update all" re-checks rather than reading the persisted snapshot; an update installs into the directory the *record* names and downloads from the repository the *update* names. Auto-installs on every launch by default (Android parity); only a choice made in Settings overrides that. |
+| `cs3/archivePlacement.ts` | Replacing an archive Windows still holds: retry the rename, then place beside it and sweep the held copy later. Pure, tested with an injected filesystem. |
+| `cs3/starterPlugins.ts` | Which extensions a new install starts with: the viewer's languages, working before beta before slow. Pure, tested. |
 | `cs3/rpcResult.ts` | `RpcResult` + `isTransportFailure` — "the runtime never answered" vs "the answer was no". Pure, tested. |
 | `cs3/bootstrap.ts` | First-run bundled-repo install + adult opt-in. |
 | `cs3/diagnostics.ts` | Provider failures with reproducible context (the tuple, not a message). |
@@ -436,6 +440,10 @@ rather than omitting the ones nothing serves.
 | `src/components/settings/StartupProfilePanel.tsx` | The startup profile, Developer mode. Stalls first, then slowest stages, then the background queue. |
 | `src/components/ViewSkeleton.tsx` | What a lazily-loaded route shows while its chunk arrives. Fades in at 150ms, so the common case draws nothing. |
 | `src/views/searchUiState.ts` | `SearchUiState` + `EMPTY_SEARCH_UI`. Its own module because `App` holds the value, and a value import of `SearchView` would have pinned that screen into the first paint. |
+| `src/views/homeCategoryState.ts` | The row opened with "Show all", held by `App` for `searchUiState`'s reason: a title opened from the grid comes back to the same place. |
+| `src/components/home/HomeRow.tsx`, `CategoryGrid.tsx`, `RowPicker.tsx` | A rail capped at `RAIL_LIMIT` (20) that draws only near the viewport; the infinite "Show all" grid; the per-row visibility picker (a hidden row is not fetched). |
+| `src/utils/homeRows.ts` | Hidden-row persistence (reads the old anime switch once) and page merging. Pure, tested. |
+| `src/utils/releaseName.ts` | A file name tidied into a title — strict: cuts only at tokens no real title contains. Shown for rows the catalogues cannot place, and asked of other providers when a search widens. Pure, tested. |
 | `src/components/Poster.tsx`, `EmptyState.tsx` | Shared primitives with per-call-site fallbacks. |
 
 ---
@@ -481,6 +489,10 @@ registered) · `cs3/webViewHost.ts` (Cloudflare challenges) · `cs3/extensionIss
 - **The adult gate is `PluginManager.enabledProviderNames`** — the single funnel search, scope, discovery, playback and downloads all pass through.
 - **Built-in providers use `cs3native://`, never `cs3ext://`** (wrong-attribution failures).
 - **The WebView host must finish before the sidecar stops waiting** (`cs3/hostDeadline.ts`) — the reverse channel carries one deadline and both ends used to spend it.
+- **A failed `load()` closes its class loader, and `unload` withdraws what the plugin registered.** A leaked loader holds a Windows handle on the `.cs3`, and every later update of that extension fails its rename with `EPERM` (measured: Ultima, which fails at `load()` on every launch, could never be updated). `unload` removes the plugin's entries from `APIHolder.apis`/`allProviders` and `extractorApis` by `sourcePlugin`, as upstream's `unloadPlugin` does. `PluginUnloadTest` pins both and fails on the old code.
+- **Replacing an archive goes through `cs3/archivePlacement.ts`.** Retry the rename for ~1.5s, then place the update beside the held file (`Name.hash.<sha12>.cs3`) and point the record at it; the held copy goes on `extension_displaced_archives` and is swept once released. Read an extension's archive from `record.filePath` (`archivePathFor`), never from the canonical path.
+- **Extension updates install automatically on every launch by default** — Android parity; see "Updates install automatically" in §5 detail.
+- **New installs start with the viewer's languages** (`cs3/starterPlugins.ts`): own locale + English, working before beta before slow, nothing marked down, 16 per bundled repository; a bundled repository in another language is skipped.
 - The upstream jar lane exists but only **1.9%** of the corpus publishes one — don't plan work assuming it.
 
 ---
@@ -2543,10 +2555,23 @@ network live and the install step stubbed:
 
 3. **A transport failure was reported as a broken extension.** See below.
 
-`autoInstall` still defaults to **false** — notify only. That is deliberate and
-unchanged: installed extensions execute code the user chose to trust at a
-version, and silently swapping it is their decision. "The app should update
-itself" is one toggle, not a default.
+**Updates install automatically, on every launch, by default (2026-09-24).** This
+section used to say `autoInstall` defaulted to false, on the argument that
+swapping trusted code is the user's decision. Android made the other decision,
+verified in the upstream source: `settings_updates.xml` declares
+`auto_update_plugins` with `defaultValue="true"`, and `MainActivity` runs
+`updateAllOnlinePluginsAndLoadThem` on every start. Defaults are now
+`policy: 'startup'` (every launch, then daily while open) and `autoInstall:
+true`; every install is still loaded before it is accepted and rolled back if it
+will not load. `UpdateSettings.chosen` records which values a person actually
+set — `saveSettings` had persisted the defaults as a side effect, so a stored
+`false` was not evidence of a choice. The control is in `ExtensionUpdates`;
+`saveUpdateSettings` had been exposed and called by nothing.
+
+**Bookkeeping never re-arms the timer.** `doCheck` recorded `lastCheckedAt`
+through `saveSettings`, which re-armed the schedule — under `startup` that was a
+30-second timer, so every repository was re-fetched every 30s. `record()` writes
+without scheduling; only a change made in Settings re-arms.
 
 ### A timeout is not a verdict (2026-09-17)
 
@@ -4713,6 +4738,8 @@ screen groups by subject and filters by *level*. All teardown happens on `before
 - **Nothing heavy runs at module scope.** Every `import` in `main.ts` is evaluated before `app.whenReady()` resolves, with no message pump running — which is exactly the interval Windows reports as "Not Responding". Measured before this was fixed: `webtorrent` 604ms warm / **2762ms cold**, `cheerio` 242/1740, `fast-xml-parser` 43/710, plus two `ffmpeg` child processes spawned from a top-level call (**4.65s** on a cold run). A third-party package reached only from a feature is a `await import()` behind that feature; a service is a `background.add(...)` task. `bun run test reachability` does not catch this — check the graph.
 - **A store that is read at construction is read before the window exists.** `DiagnosticsLog` (5.53MB), `PageSnapshotStore` (1.10MB) and the datastore (7.10MB) were 17.4MB of synchronous read-and-parse in front of the first frame. Hydrate on first use instead, and have *every* entry point call the hydrator including the write-only ones — hydrating after a record was appended replaces the live state with the file's and loses it.
 - **The datastore is debounced, coalesced and written atomically.** `save()` marks dirty; the bytes land 250ms later via temp-file-plus-rename. It used to `writeFileSync(JSON.stringify(everything, null, 2))` on **every setter** — 7.1MB, ~29ms of main thread, for one `setBool`. Durability points call `flush()`/`flushSync()`: backup, import, rollback and `before-quit`.
+- **Nothing asked once per card may parse a datastore value.** `datastore.getObject` is a `JSON.parse` every call. Card states (`interactions:summarise`) peeked the source cache twice per poster, re-parsing its 1.94MB each time: measured on a real install, **738 home cards took 14,681ms of main thread** — the "whole window freezes on Home and Search" report. Read-only per-row queries use a parse memoised on the stored string (`SourceCache.snapshot`, `LibraryStore.playedSnapshot`): **9.1ms** for the same screen. Paths that mutate still parse their own copy.
+- **`spawn` is synchronous where it counts on Windows.** libuv calls `CreateProcessW` on the calling thread, and a cold 87MB ffmpeg costs **~590ms** there (5ms warm). Never spawn a large binary from the main thread on a path nobody asked for; short queries go through `media/toolCapabilities.ts`'s `runToolOffThread`, and answers that only change with the binary are remembered against its path, size and mtime.
 - **A catch that reassures is worse than no catch.**
 - **Prefer an honest empty answer with a reason over a synthesised one.**
 

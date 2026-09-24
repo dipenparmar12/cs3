@@ -46,6 +46,22 @@ viewer picked and stops (`userChoice: true`). Someone who chose a release for it
 audio has not asked for a different one. A fix for the first rule that breaks this one passes
 every case in `playbackFailover.test.mts` except the last.
 
+**Standard mode is `persistent` (2026-09-24).** The Android player moves to the next link by
+itself and a viewer there never presses "Find more sources". A session started with
+`{ persistent: true }` (the renderer passes `!isDeveloper`):
+
+- walks **the whole list** — `MAX_AUTO_ADVANCES` applies to developer mode only, where the stop
+  is the information; termination is still structural;
+- when every source it has failed — from a start (`beginStream`) or from the renderer's decode
+  failure (`skipCurrentSource`) — **widens to every provider and indexer once**
+  (`widenAndContinue`), starting on the first untried source to arrive after a 1.5s settle
+  rather than waiting for the slowest site, later arrivals joining the walk;
+- reports `retryingElsewhere` and `tried` for the plain overlay. The empty case already widened
+  itself (below); this is the other case — sources that exist and do not play.
+
+Pinned by five cases in `playbackFailover.test.mts`; the three behaviour cases fail on the old
+code.
+
 ### 7.1 Startup: the client was cold, it was never the swarm
 
 Compared against a hosted service (~1s vs tens of seconds) with identical peers. The gap is one-time costs a service pays once and a desktop app paid every launch: socket binds, DHT bootstrap (DNS + round trip to `k-rpc`'s 3 hardcoded hosts), converging on an infohash from 3 contacts, reachability from an ephemeral node id/port, and the info dictionary (BEP-9, 5–30s).
@@ -121,6 +137,19 @@ Android returns one search row per provider, binding Play to that provider alone
 `cs3/sourceScope.ts`: default scope **`origin`** = only the providers whose results produced this row, no indexers; explicit **`all`** = everything. `origin` widens to `all` automatically when nothing claimed the title (home-screen items).
 
 **Auto-widen when origin finds nothing** (`shouldEscalateScope`): a reported case found 137 sources (81/98 live) behind a dead-end "Find more sources" button the app could have pressed itself. It goes through `getSources` so it joins the shared in-flight map (a manual press during auto-widen doesn't double the fan-out); two independent recursion guards; **a failed escalation leaves the narrow answer standing**, never surfacing a worse error; the fan-out's `load(base)` may fail when the title is already known (escalation is enrichment, not discovery, once titled); the prefetcher passes `autoWiden:false` (opening a detail page isn't a play commitment) and it is part of `sourceKey`, else Play would join a settled-for-narrow prefetch. `SearchProgress.widened` explains the up-to-3× longer wait live.
+
+**A widened search asks for the work, not the file name (2026-09-24).** A provider row is named
+after its file — `Avengers End Game 720p Hindi Dubbed` — and the fan-out asked thirty other
+providers and every indexer for exactly that. `ContentService.searchTitleFor` resolves it first
+through `TitleEnricher` (catalogue title, year and **IMDb id**, which indexers match on best),
+and falls back to `tidyReleaseName` (`src/utils/releaseName.ts`, strict: cuts only at tokens no
+title contains). Skipped when the detail already carries an IMDb id. `TitleEnricher` no longer
+caches "no match" for a week when neither catalogue answered.
+
+**Search results show titles, not file names.** Rows the catalogues cannot place are shown
+through the same `tidyReleaseName`, with the original kept as `originalTitle`; enrichment covers
+the first 100 rows (was 60) and remembers rows it could not place, which were re-sent on every
+provider's snapshot.
 
 ### 8.3 The fan-out order is measured
 

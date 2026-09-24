@@ -86,6 +86,19 @@ Its own file, not the datastore (episode lists run to hundreds of rows, and the 
 - `src/components/EmptyState.tsx` gives every empty route an *action* (search-empty offers "Search all sources", clearing the stored scope).
 - `useFlash` replaced 20+ hand-rolled toast timers that **crossed** (a second flash's timer cleared by the first) and leaked past unmount. Durations stay per-call-site (1500–5000ms, deliberate).
 
+### 10.x The home screen: rows, "Show all", the row picker (2026-09-24)
+
+- **Home froze the whole window for seconds, and the cause was the main process, not rendering.** Card states peeked the 1.94MB source cache twice per poster, each a full `JSON.parse`; 738 home cards measured **14,681ms → 9.1ms** after memoising the parse (§12). Each poster also asked `library:getEntryForUrl` on mount — 834 round trips; the bucket now rides on the batched `TitleInteraction.library` and the button asks only when its menu opens.
+- **A rail draws at most `RAIL_LIMIT` (20) posters and only when within ~700px of the viewport** (`HomeRow`); it used to draw every item every catalogue returned (834 on one install). The rest is behind **"Show all"**, which opens `CategoryGrid`: the whole row, paging via `discover:more` as the sentinel nears (re-observed after each page, or a short page stalls it one page in). A page that adds nothing new after de-duplication is the end of the row — catalogues shift between requests, so overlap is normal.
+- **The grid's state lives in `App` (`homeCategoryState.ts`)**, so a title opened from it returns to the same grid and scroll; Back from the grid restores the rows' scroll after two frames. A page landing after Back must not reopen the grid (unmount guard).
+- **Rows are switched on and off per row** (`RowPicker`), grouped by source; a hidden row is **not fetched**. `discover:rows` lists every row without fetching so a hidden one can be switched back on. Stored in `localStorage` (`home_hidden_rows`); the old `home_include_anime` switch is read once and becomes the `trending-anime` row.
+
+### 10.y Standard mode: the player's centre and the first run (2026-09-24)
+
+- **Standard mode shows what a streaming service shows**: the title, "N links found", "Trying link 3 of 12…", and "Skip and play" (Android's skip-loading). No release names, host names, error codes or "Search all sources" — failover and widening happen by themselves (`persistent` sessions, see §7–8). Only when everything, everywhere has failed: one sentence, **Try again / Choose a link / Back**. Developer mode keeps every detail and action.
+- **`PlaybackErrorPanel` while a retry is running is not an error.** The forced second attempt at a source (`forceTranscodeRef`) sets `converting`; standard mode shows "Trying another way to play this…" instead of the panel, and "That link did not work — trying another one…" while failover walks.
+- **One setup offer, on the first launch that needs it.** `BinarySetupModal` opens once (`localStorage: cs3.setupOffered`) when the download or media components are missing; the runtime is not counted — it provisions itself. Plain copy in standard mode, component names in developer mode.
+
 ---
 
 ---
