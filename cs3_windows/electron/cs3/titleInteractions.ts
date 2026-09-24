@@ -251,6 +251,7 @@ export class TitleInteractionStore {
       const visit = visits.get(key);
       const outcome = outcomes[query.url];
       const played = this.deps.library.getPlayedSourcesForKey(key)[0];
+      const entry = this.deps.library.getEntry(key);
 
       out[query.url] = {
         url: query.url,
@@ -265,6 +266,7 @@ export class TitleInteractionStore {
         download: summariseDownloads(downloadsByKey.get(key) ?? []),
         sources: query.url ? this.deps.sourceReadiness(query.url) : undefined,
         lastProvider: played?.source?.providerName ?? undefined,
+        library: entry ? { key: entry.key, status: entry.status } : undefined,
       };
     }
     return out;

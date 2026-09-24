@@ -97,11 +97,48 @@ export interface DiscoverySection {
   fetchedAt: number;
   /** True when the items are being refreshed behind the scenes. */
   refreshing?: boolean;
+  /** Whether "Show all" can page past what is here. */
+  pageable: boolean;
+}
+
+/**
+ * One row the home screen can show, whether or not it is shown.
+ *
+ * The row picker lists these, so someone can switch a row on that is currently
+ * off — which is why this is answered without fetching anything.
+ */
+export interface DiscoveryRow {
+  id: DiscoverySectionId;
+  title: string;
+  subtitle?: string;
+  /** What the picker files it under: the catalogue, anime, "for you", or a built-in provider. */
+  group: string;
+}
+
+/** Where "Show all" has got to in one row. */
+export interface DiscoveryCursor {
+  /** Items the provider has returned so far, before any de-duplication. */
+  skip: number;
+  /** The 1-based page to fetch next, for providers that page by number. */
+  page: number;
+}
+
+export interface DiscoveryOptions {
+  genres?: string[];
+  includeAnime?: boolean;
+  /** Rows switched off in the picker. They are not fetched at all. */
+  hidden?: readonly string[];
 }
 
 interface CachedSection {
   items: SearchResponse[];
   fetchedAt: number;
+}
+
+interface PlannedRow extends DiscoveryRow {
+  key: string;
+  pageable: boolean;
+  load: () => Promise<SearchResponse[]>;
 }
 
 export class DiscoveryService {
@@ -224,29 +261,25 @@ export class DiscoveryService {
   // --- the home screen -----------------------------------------------------
 
   /**
-   * Every section, in the order they should appear.
+   * Every row the home screen could show, in the order they appear.
+   *
+   * Built from what the active provider actually publishes. This used to be a
+   * fixed list of six with Cinemeta's URLs baked into each one. Deriving it
+   * from `capabilities()` is what makes the provider replaceable in a way that
+   * means something: selecting AniList produces an anime home screen rather
+   * than five empty headings and one row, and a community catalogue addon that
+   * publishes only popular films produces exactly that one row.
    *
    * `genres` personalises the tail: they come from what the user has actually
-   * watched, so the sections below the fold are theirs rather than everyone's.
+   * watched, so the rows below the fold are theirs rather than everyone's.
    * Nothing about that leaves the machine — the genre is used to pick a public
    * catalogue URL, and the catalogue is not told who asked.
    */
-  /**
-   * The rows, built from what the active provider actually publishes.
-   *
-   * This used to be a fixed list of six with Cinemeta's URLs baked into each
-   * one. Deriving it from `capabilities()` is what makes the provider
-   * replaceable in a way that means something: selecting AniList produces an
-   * anime home screen rather than five empty headings and one row, and a
-   * community catalogue addon that publishes only popular films produces
-   * exactly that one row.
-   */
-  public async sections(options: { genres?: string[]; includeAnime?: boolean } = {}): Promise<
-    DiscoverySection[]
-  > {
+  private plan(options: DiscoveryOptions): { rows: PlannedRow[]; fellBack: boolean } {
     const { provider, fellBack } = this.providers.active();
     const capabilities = provider.capabilities();
     const available = new Set(capabilities.catalogs);
+    const group = provider.name;
 
     /**
      * Keyed by provider as well as catalogue.
@@ -257,14 +290,7 @@ export class DiscoveryService {
      * plausible catalogues of films.
      */
     const key = (suffix: string) => `${provider.id}:${suffix}`;
-
-    const requested: Array<{
-      id: DiscoverySectionId;
-      title: string;
-      subtitle?: string;
-      key: string;
-      load: () => Promise<SearchResponse[]>;
-    }> = [];
+    const rows: PlannedRow[] = [];
 
     const add = (
       kind: HomeCatalogKind,
@@ -273,11 +299,13 @@ export class DiscoveryService {
       subtitle?: string
     ) => {
       if (!available.has(kind)) return;
-      requested.push({
+      rows.push({
         id,
         title,
         subtitle,
+        group,
         key: key(kind),
+        pageable: capabilities.paging,
         load: () => provider.fetch({ kind }),
       });
     };
@@ -300,11 +328,13 @@ export class DiscoveryService {
     if (options.includeAnime !== false) {
       const anime = available.has('anime') ? provider : this.providers.get('anilist');
       if (anime) {
-        requested.push({
+        rows.push({
           id: 'trending-anime',
           title: 'Trending anime',
           subtitle: 'This season, from AniList',
+          group: 'Anime',
           key: `${anime.id}:anime`,
+          pageable: anime.capabilities().paging,
           load: () => anime.fetch({ kind: 'anime' }),
         });
       }
@@ -315,11 +345,13 @@ export class DiscoveryService {
       const known = new Set(capabilities.genres.map((genre) => genre.toLowerCase()));
       for (const genre of (options.genres ?? []).slice(0, 3)) {
         if (!known.has(genre.toLowerCase())) continue;
-        requested.push({
+        rows.push({
           id: `genre:${genre}`,
           title: `Popular in ${genre}`,
           subtitle: 'Because of what you have been watching',
+          group: 'For you',
           key: key(`popular-movies:${genre}`),
+          pageable: capabilities.paging,
           load: () => provider.fetch({ kind: 'popular-movies', genre }),
         });
       }
@@ -338,26 +370,53 @@ export class DiscoveryService {
      * to that provider's own `loadLinks` — which is the opposite of the caveat
      * `ottCatalog` carries, and the reason the subtitle names the source.
      */
-    for (const provider of this.natives?.enabledProviders() ?? []) {
-      if (!provider.capabilities().catalog || !provider.catalog) continue;
-      for (const section of provider.sections?.() ?? []) {
-        const fetch = provider.catalog.bind(provider);
-        requested.push({
-          id: `native:${provider.id}:${section.id}`,
+    for (const native of this.natives?.enabledProviders() ?? []) {
+      if (!native.capabilities().catalog || !native.catalog) continue;
+      for (const section of native.sections?.() ?? []) {
+        const fetch = native.catalog.bind(native);
+        rows.push({
+          id: `native:${native.id}:${section.id}`,
           title: section.title,
-          subtitle: section.subtitle ? `${section.subtitle} · ${provider.name}` : provider.name,
+          subtitle: section.subtitle ? `${section.subtitle} · ${native.name}` : native.name,
+          group: native.name,
           // Namespaced by provider *and* section, for the same reason the
           // metadata rows are keyed by provider: two catalogues answering the
           // same cache key serve each other's films.
-          key: `native:${provider.id}:${section.id}`,
+          key: `native:${native.id}:${section.id}`,
+          pageable: true,
           load: () =>
             fetch({ sectionId: section.id, page: 1 }, AbortSignal.timeout(NATIVE_TIMEOUT_MS)),
         });
       }
     }
 
+    return { rows, fellBack };
+  }
+
+  /**
+   * Every row, shown or not, without fetching any of them.
+   *
+   * For the row picker: a row switched off is still listed, or there would be
+   * no way to switch it back on.
+   */
+  public rows(options: Pick<DiscoveryOptions, 'genres'> = {}): DiscoveryRow[] {
+    return this.plan({ ...options, includeAnime: true }).rows.map(({ id, title, subtitle, group }) => ({
+      id,
+      title,
+      subtitle,
+      group,
+    }));
+  }
+
+  public async sections(options: DiscoveryOptions = {}): Promise<DiscoverySection[]> {
+    const { rows, fellBack } = this.plan(options);
+    // A hidden row is not fetched at all. Twenty-eight rows were being asked
+    // of their hosts on every refresh whether anyone wanted them or not.
+    const hidden = new Set(options.hidden ?? []);
+    const wanted = rows.filter((row) => !hidden.has(row.id));
+
     const resolved = await Promise.all(
-      requested.map(async (entry) => {
+      wanted.map(async (entry) => {
         const section = await this.section(entry.key, entry.load);
         return {
           id: entry.id,
@@ -366,6 +425,7 @@ export class DiscoveryService {
           items: section.items,
           fetchedAt: section.fetchedAt,
           refreshing: this.inFlight.has(entry.key),
+          pageable: entry.pageable,
         } satisfies DiscoverySection;
       })
     );
@@ -379,9 +439,36 @@ export class DiscoveryService {
     return resolved.filter((section) => section.items.length > 0);
   }
 
-  /** More of one section, for paging a row. */
-  public async more(section: DiscoverySectionId, skip: number): Promise<SearchResponse[]> {
+  /**
+   * The next page of one row, for "Show all".
+   *
+   * Two cursors travel because providers page two ways: the Stremio protocol,
+   * TMDB and AniList by an item offset, the built-in providers by a page
+   * number. An empty answer is the end of the row.
+   *
+   * This existed with the offset half only and no caller — the home screen
+   * showed each row's first page and had no way to ask for a second.
+   */
+  public async more(section: DiscoverySectionId, cursor: DiscoveryCursor): Promise<SearchResponse[]> {
+    if (section.startsWith('native:')) {
+      const rest = section.slice('native:'.length);
+      const split = rest.indexOf(':');
+      if (split <= 0) return [];
+      const providerId = rest.slice(0, split);
+      const sectionId = rest.slice(split + 1);
+      const native = this.natives?.enabledProviders().find((entry) => entry.id === providerId);
+      if (!native?.catalog) return [];
+      return native.catalog({ sectionId, page: cursor.page }, AbortSignal.timeout(NATIVE_TIMEOUT_MS));
+    }
+
+    const skip = cursor.skip;
     const { provider } = this.providers.active();
+    if (section === 'trending-anime') {
+      const anime = provider.capabilities().catalogs.includes('anime')
+        ? provider
+        : this.providers.get('anilist');
+      return anime?.capabilities().paging ? anime.fetch({ kind: 'anime', skip }) : [];
+    }
     if (!provider.capabilities().paging) return [];
 
     if (section === 'trending' || section === 'popular-movies') {
@@ -391,10 +478,6 @@ export class DiscoveryService {
     if (section === 'new-movies') return provider.fetch({ kind: 'new-movies', skip });
     if (section === 'new-series') return provider.fetch({ kind: 'new-series', skip });
     if (section === 'featured') return provider.fetch({ kind: 'top-rated', skip });
-    if (section === 'trending-anime') {
-      const anime = this.providers.get('anilist');
-      return anime ? anime.fetch({ kind: 'anime', skip }) : [];
-    }
     if (section.startsWith('genre:')) {
       return provider.fetch({
         kind: 'popular-movies',

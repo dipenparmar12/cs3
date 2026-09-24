@@ -68,7 +68,7 @@ import type { DnsPreset, NetworkSettings } from './networkSettings';
 import type { SystemRuntimeStatus, RuntimeProgress } from './cs3/runtimeProvisioner';
 import type { Bookmark } from './cs3/bookmarkStore';
 import type { PageSnapshot, PageSnapshotInput } from './cs3/pageSnapshot.ts';
-import type { DiscoverySection } from './cs3/discovery';
+import type { DiscoveryCursor, DiscoveryRow, DiscoverySection } from './cs3/discovery';
 import type { PrefetchState } from './cs3/sourcePrefetcher';
 import type { EnrichedMetadata } from './cs3/titleEnricher';
 import type {
@@ -1096,13 +1096,22 @@ export interface CloudStreamElectronAPI {
    * page draws at once and quietly improves. Sections with nothing in them are
    * omitted rather than rendered empty.
    */
-  getDiscoverySections: (options?: { includeAnime?: boolean }) => Promise<
+  getDiscoverySections: (options?: { includeAnime?: boolean; hidden?: string[] }) => Promise<
     Envelope & { sections: DiscoverySection[]; personalGenres: string[] }
   >;
-  /** Pages one row further. */
+  /**
+   * Every row the home screen could show, shown or not, for the row picker.
+   * Nothing is fetched to answer it.
+   */
+  getDiscoveryRows: () => Promise<Envelope & { rows: DiscoveryRow[] }>;
+  /**
+   * The next page of one row, for "Show all". `skip` is how many items the
+   * row has returned so far; `page` is the 1-based page to fetch. Empty means
+   * the row has nothing more.
+   */
   getMoreDiscovery: (
     section: string,
-    skip: number
+    cursor: DiscoveryCursor
   ) => Promise<Envelope & { items: SearchResponse[] }>;
   refreshDiscovery: () => Promise<Envelope>;
   /**
@@ -2130,7 +2139,8 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('sources:setPrefetchSetting', enabled),
 
   getDiscoverySections: (options) => ipcRenderer.invoke('discover:sections', options),
-  getMoreDiscovery: (section, skip) => ipcRenderer.invoke('discover:more', section, skip),
+  getDiscoveryRows: () => ipcRenderer.invoke('discover:rows'),
+  getMoreDiscovery: (section, cursor) => ipcRenderer.invoke('discover:more', section, cursor),
   refreshDiscovery: () => ipcRenderer.invoke('discover:refresh'),
   onDiscoveryInvalidated: (callback) => subscribe('discover:invalidated', callback),
   enrichResults: (results, limit) => ipcRenderer.invoke('discover:enrich', results, limit),

@@ -2316,26 +2316,49 @@ ipcMain.handle('sources:setPrefetchSetting', async (_, enabled: boolean) => ({
  * user is sent anywhere: the catalogue is asked "what is popular in Horror",
  * not "what should this person watch".
  */
-ipcMain.handle('discover:sections', async (_, options?: { includeAnime?: boolean }) => {
+ipcMain.handle(
+  'discover:sections',
+  async (_, options?: { includeAnime?: boolean; hidden?: string[] }) => {
+    try {
+      const genres = topGenresFromHistory();
+      const sections = await discovery.sections({
+        genres,
+        includeAnime: options?.includeAnime,
+        hidden: Array.isArray(options?.hidden) ? options.hidden.map(String) : [],
+      });
+      return { ok: true, sections, personalGenres: genres };
+    } catch (error) {
+      return { ...fail(error), sections: [], personalGenres: [] };
+    }
+  }
+);
+
+/**
+ * Every row the home screen could show, including the ones switched off, so
+ * the row picker can offer them. Answered without fetching anything.
+ */
+ipcMain.handle('discover:rows', async () => {
   try {
-    const genres = topGenresFromHistory();
-    const sections = await discovery.sections({
-      genres,
-      includeAnime: options?.includeAnime,
-    });
-    return { ok: true, sections, personalGenres: genres };
+    return { ok: true, rows: discovery.rows({ genres: topGenresFromHistory() }) };
   } catch (error) {
-    return { ...fail(error), sections: [], personalGenres: [] };
+    return { ...fail(error), rows: [] };
   }
 });
 
-ipcMain.handle('discover:more', async (_, section: string, skip: number) => {
-  try {
-    return { ok: true, items: await discovery.more(section as never, skip) };
-  } catch (error) {
-    return { ...fail(error), items: [] };
+ipcMain.handle(
+  'discover:more',
+  async (_, section: string, cursor?: { skip?: number; page?: number }) => {
+    try {
+      const items = await discovery.more(section as never, {
+        skip: Math.max(0, Number(cursor?.skip) || 0),
+        page: Math.max(1, Number(cursor?.page) || 1),
+      });
+      return { ok: true, items };
+    } catch (error) {
+      return { ...fail(error), items: [] };
+    }
   }
-});
+);
 
 /** Forces the next fetch to hit the network. The "refresh" button. */
 ipcMain.handle('discover:refresh', async () => {

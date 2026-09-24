@@ -11,6 +11,19 @@ interface LibraryBucketSelectorProps {
   onStatusChanged?: (newStatus: WatchStatus | null) => void;
   buttonClassName?: string;
   showLabel?: boolean;
+  /**
+   * The bucket, when the caller already knows it — `null` for "not in the
+   * library", `undefined` for "ask".
+   */
+  known?: { key: string; status: WatchStatus } | null;
+  /**
+   * Ask only when the menu opens.
+   *
+   * For the button on every poster: asking on mount was one IPC round trip
+   * per card, 834 of them on a real home screen, all to colour a button the
+   * batched card states can colour on their own.
+   */
+  deferFetch?: boolean;
 }
 
 const BUCKETS: Array<{ status: WatchStatus; label: string }> = [
@@ -28,13 +41,26 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
   onStatusChanged,
   buttonClassName,
   showLabel = true,
+  known,
+  deferFetch = false,
 }) => {
   const [open, setOpen] = useState(false);
-  const [currentStatus, setCurrentStatus] = useState<WatchStatus | null>(null);
-  const [entryKey, setEntryKey] = useState<string | null>(null);
+  const [currentStatus, setCurrentStatus] = useState<WatchStatus | null>(known?.status ?? null);
+  const [entryKey, setEntryKey] = useState<string | null>(known?.key ?? null);
   const [loading, setLoading] = useState(false);
 
+  // What the caller knows wins whenever it changes; asking is the fallback.
+  const knownStatus = known === undefined ? undefined : (known?.status ?? null);
+  const knownKey = known === undefined ? undefined : (known?.key ?? null);
   useEffect(() => {
+    if (knownStatus === undefined) return;
+    setCurrentStatus(knownStatus);
+    setEntryKey(knownKey ?? null);
+  }, [knownStatus, knownKey]);
+
+  const shouldFetch = known === undefined && (!deferFetch || open);
+  useEffect(() => {
+    if (!shouldFetch) return;
     let active = true;
     const fetchStatus = async () => {
       if (!window.cloudstream || !item || !item.url) return;
@@ -51,7 +77,7 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
     return () => {
       active = false;
     };
-  }, [item?.url]);
+  }, [item?.url, shouldFetch]);
 
   useEffect(() => {
     if (!open) return;

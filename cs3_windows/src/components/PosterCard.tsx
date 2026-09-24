@@ -228,7 +228,13 @@ export const PosterCard: React.FC<PosterCardProps> = ({
 
         {showBucketButton && item?.url && (
           <div style={{ marginTop: '0.4rem' }}>
-            <LibraryBucketSelector item={item} size="sm" showLabel={false} />
+            <LibraryBucketSelector
+              item={item}
+              size="sm"
+              showLabel={false}
+              known={interaction ? (interaction.library ?? null) : undefined}
+              deferFetch
+            />
           </div>
         )}
       </div>
