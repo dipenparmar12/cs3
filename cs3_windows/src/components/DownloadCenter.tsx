@@ -27,7 +27,7 @@ import {
   AlertCircle,
   ArrowUpDown,
 } from 'lucide-react';
-import { formatDownloadSize, formatTransferRate } from '../utils/format';
+import { formatDownloadSize, formatEtaDuration, formatTransferRate } from '../utils/format';
 import { variantFromTask, variantLabel } from '../utils/downloadIdentity';
 
 interface DownloadCenterProps {
@@ -116,7 +116,7 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
       `State:          ${task.state}`,
       `Progress:       ${formatDownloadSize(task.bytesDownloaded)} / ${formatDownloadSize(task.totalBytes)} (${percent}%)`,
       `Speed:          ${formatTransferRate(task.downloadSpeed)}`,
-      `ETA:            ${task.etaSeconds > 0 ? `${task.etaSeconds}s` : 'N/A'}`,
+      `ETA:            ${task.etaSeconds > 0 ? formatEtaDuration(task.etaSeconds) : 'N/A'}`,
       `Retry Count:    ${task.retryCount || 0}/4`,
       task.errorMessage ? `Last Status:    ${task.errorMessage}` : null,
       `Source Link:    ${task.link.url}`,
@@ -282,7 +282,7 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
           <span>
             {formatDownloadSize(task.bytesDownloaded)} / {formatDownloadSize(task.totalBytes)} ({percent}%)
           </span>
-          <span>{task.etaSeconds > 0 ? `ETA: ${task.etaSeconds}s` : ''}</span>
+          <span>{task.etaSeconds > 0 ? `ETA: ${formatEtaDuration(task.etaSeconds)}` : ''}</span>
         </div>
 
         {task.errorMessage && (
@@ -1109,7 +1109,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                         <span>
                           {formatDownloadSize(bytesDownloaded)} / {formatDownloadSize(totalBytes)} ({overallPercent}%) • {statusText}
                         </span>
-                        <span>{maxEta > 0 && isAnyDownloading ? `ETA: ${maxEta}s` : ''}</span>
+                        <span>{maxEta > 0 && isAnyDownloading ? `ETA: ${formatEtaDuration(maxEta)}` : ''}</span>
                       </div>
                     </div>
 

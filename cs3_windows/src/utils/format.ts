@@ -204,6 +204,22 @@ export function formatSetupSize(bytes: number): string {
 }
 
 /**
+ * A transfer duration in human-friendly prose (`45s`, `2m 5s`, `10m 0s`, `1h 15m 30s`).
+ *
+ * Answers an empty string when the duration is unknown, non-positive or non-finite.
+ */
+export function formatEtaDuration(seconds: number): string {
+  if (!seconds || seconds <= 0 || !Number.isFinite(seconds)) return '';
+  const total = Math.floor(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+/**
  * Time left on a transfer, or nothing at all.
  *
  * The empty string for an unknown ETA is load-bearing and every caller relies
@@ -212,7 +228,6 @@ export function formatSetupSize(bytes: number): string {
  * first seconds of every download, before a rate has been measured.
  */
 export function formatEta(seconds: number): string {
-  if (!seconds || seconds <= 0 || !Number.isFinite(seconds)) return '';
-  if (seconds < 60) return `${seconds}s remaining`;
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s remaining`;
+  const duration = formatEtaDuration(seconds);
+  return duration ? `${duration} remaining` : '';
 }

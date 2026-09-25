@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import type { DownloadTask } from '../../types/download';
 import { DownloadState } from '../../types/download';
-import { formatPanelSize, formatTransferRate } from '../../utils/format';
+import { formatEtaDuration, formatPanelSize, formatTransferRate } from '../../utils/format';
 
 /**
  * The download summary shown over the player.
@@ -420,7 +420,7 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
                   <span>
                     {formatPanelSize(task.bytesDownloaded)} / {formatPanelSize(task.totalBytes)} ({percent}%)
                   </span>
-                  <span>{task.etaSeconds > 0 ? `ETA: ${task.etaSeconds}s` : ''}</span>
+                  <span>{task.etaSeconds > 0 ? `ETA: ${formatEtaDuration(task.etaSeconds)}` : ''}</span>
                 </div>
 
                 {task.errorMessage && (

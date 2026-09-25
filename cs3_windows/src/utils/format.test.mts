@@ -23,6 +23,7 @@ import {
   formatCompactBytes,
   formatDownloadSize,
   formatEta,
+  formatEtaDuration,
   formatHistorySize,
   formatInfoFileSize,
   formatSetupSize,
@@ -243,6 +244,25 @@ test('formatEta returns nothing rather than a placeholder', () => {
   assert.equal(formatEta(NaN), '');
   assert.equal(formatEta(45), '45s remaining');
   assert.equal(formatEta(125), '2m 5s remaining');
+  assert.equal(formatEta(600), '10m 0s remaining');
+  assert.equal(formatEta(1200), '20m 0s remaining');
+  assert.equal(formatEta(3600), '1h 0m 0s remaining');
+  assert.equal(formatEta(3665), '1h 1m 5s remaining');
+});
+
+test('formatEtaDuration formats transfer durations in human-friendly hour/min/seconds', () => {
+  assert.equal(formatEtaDuration(0), '');
+  assert.equal(formatEtaDuration(-5), '');
+  assert.equal(formatEtaDuration(Number.POSITIVE_INFINITY), '');
+  assert.equal(formatEtaDuration(NaN), '');
+  assert.equal(formatEtaDuration(45), '45s');
+  assert.equal(formatEtaDuration(60), '1m 0s');
+  assert.equal(formatEtaDuration(125), '2m 5s');
+  assert.equal(formatEtaDuration(600), '10m 0s');
+  assert.equal(formatEtaDuration(1200), '20m 0s');
+  assert.equal(formatEtaDuration(3600), '1h 0m 0s');
+  assert.equal(formatEtaDuration(3665), '1h 1m 5s');
+  assert.equal(formatEtaDuration(7325), '2h 2m 5s');
 });
 
 // --- runner ----------------------------------------------------------------
