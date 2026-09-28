@@ -19,8 +19,9 @@
  * passes through, so the rule is enforced here rather than at each of them.
  */
 import assert from 'node:assert/strict';
-import { LibraryStore } from './libraryStore.ts';
+import { LibraryStore, mergeStoredSources } from './libraryStore.ts';
 import type { DatastoreManager } from '../datastore.ts';
+import type { TorrentResult } from '../../src/types/torrent.ts';
 
 const tests: Array<[string, () => void]> = [];
 const test = (name: string, fn: () => void) => tests.push([name, fn]);
@@ -148,6 +149,86 @@ test('an entry created by recordProgress carries no dead address either', () => 
   const entries = s.getEntries();
   assert.equal(entries.length, 1);
   assert.deepEqual(entries[0].urls, []);
+});
+
+// --- saved sources ---------------------------------------------------------
+
+function found(overrides: Partial<TorrentResult> = {}): TorrentResult {
+  return {
+    infoHash: 'ext-aaaaaaaaaaaaaaaa',
+    title: 'Dune Part Two 2024 1080p WEB-DL',
+    magnet: '',
+    sizeBytes: 0,
+    seeders: 1,
+    leechers: 0,
+    indexerId: 'provider',
+    indexerName: 'Voe',
+    providerName: 'VegaMovies',
+    directUrl: 'https://cdn.example/dune.mkv?Expires=9999999999',
+    parsed: { resolution: 1080 } as TorrentResult['parsed'],
+    score: 10,
+    scoreReasons: ['a reason'],
+    ...overrides,
+  };
+}
+
+test('a discovery for a library title is saved on that title', () => {
+  const s = store();
+  s.upsertEntry({ title: 'Dune Part Two', year: 2024, mediaUrl: PAGES[0] });
+
+  const key = s.mergeDiscoveredSources(PAGES[0], [found()]);
+
+  assert.ok(key);
+  const saved = s.getStoredSources(key);
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].providerName, 'VegaMovies');
+  assert.equal(saved[0].parsed, undefined, 'the bulky derived fields are not persisted');
+  assert.equal(saved[0].scoreReasons, undefined);
+});
+
+test('a discovery for a title not in the library saves nothing', () => {
+  const s = store();
+  s.upsertEntry({ title: 'Dune Part Two', year: 2024, mediaUrl: PAGES[0] });
+  assert.equal(s.mergeDiscoveredSources('https://elsewhere.example/other/', [found()]), null);
+});
+
+test('an episode discovery matches the page it was keyed by, query and all', () => {
+  const s = store();
+  s.upsertEntry({ title: 'Reacher', year: 2022, mediaUrl: 'cs3meta://tt9288030' });
+  const key = s.mergeDiscoveredSources('cs3meta://tt9288030?season=1&episode=2', [found()], 1, 2);
+  assert.ok(key);
+  assert.equal(s.getStoredSources(key)[0].episode, 2);
+});
+
+test('a re-resolved link replaces its release rather than adding a row', () => {
+  const s = store();
+  s.upsertEntry({ title: 'Dune Part Two', year: 2024, mediaUrl: PAGES[0] });
+  const key = s.mergeDiscoveredSources(PAGES[0], [found()])!;
+  const firstSeen = s.getStoredSources(key)[0].discoveredAt;
+
+  // Same release, new signed URL — and so a new synthetic infoHash.
+  s.mergeDiscoveredSources(PAGES[0], [
+    found({ infoHash: 'ext-bbbbbbbbbbbbbbbb', directUrl: 'https://cdn.example/dune.mkv?Expires=9999999998' }),
+  ]);
+
+  const saved = s.getStoredSources(key);
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].directUrl, 'https://cdn.example/dune.mkv?Expires=9999999998');
+  assert.equal(saved[0].discoveredAt, firstSeen, 'when it was first found is kept');
+});
+
+test('saved sources are capped, newest first', () => {
+  const existing = Array.from({ length: 10 }, (_, i) => ({
+    id: `old-${i}`,
+    infoHash: `old${i}`,
+    title: `Old ${i}`,
+    status: 'Available' as const,
+    discoveredAt: i,
+  }));
+  const incoming = [{ id: 'new', infoHash: 'new', title: 'New', status: 'Available' as const, discoveredAt: 99 }];
+  const merged = mergeStoredSources(existing, incoming, 5);
+  assert.equal(merged.length, 5);
+  assert.equal(merged[0].id, 'new');
 });
 
 // --- runner ----------------------------------------------------------------

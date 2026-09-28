@@ -171,6 +171,71 @@ export function torrentResultToStoredSource(res: TorrentResult): StoredSource {
 }
 
 /**
+ * Sources kept per library title.
+ *
+ * The library lives in the datastore, which is written whole; thirty sources
+ * with the bulky derived fields dropped is a few kilobytes a title, and the
+ * newest discoveries are the ones worth keeping.
+ */
+export const MAX_STORED_SOURCES = 30;
+
+/**
+ * What makes two stored sources the same release, across re-resolves.
+ *
+ * A provider link's `infoHash` is synthesised from its URL, so it changes every
+ * time the link is re-signed — keying on it would store every refresh of one
+ * release as a new row. Torrents have a real infohash; everything else is the
+ * provider, the release name and the resolution, the same triple
+ * `cs3/playedSource.ts` re-finds a release by.
+ */
+function releaseIdentity(source: StoredSource): string {
+  const scope = `${source.season ?? ''}|${source.episode ?? ''}`;
+  if (!source.directUrl && source.infoHash) return `${scope}|hash:${source.infoHash.toLowerCase()}`;
+  const provider = (source.providerName || source.indexerName || '').toLowerCase();
+  const release = (source.title || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return `${scope}|${provider}|${release}|${source.resolution ?? ''}`;
+}
+
+/**
+ * Folds newly discovered sources into what a library title already holds.
+ *
+ * A newer copy of a release replaces the older one in place — its link is the
+ * fresh one — while keeping when it was first found. Nothing is dropped for
+ * being expired: a magnet never expires, and an expired provider link still
+ * names the release to re-resolve. Newest first, capped.
+ */
+export function mergeStoredSources(
+  existing: StoredSource[],
+  incoming: StoredSource[],
+  cap = MAX_STORED_SOURCES
+): StoredSource[] {
+  const firstSeen = new Map(existing.map((source) => [releaseIdentity(source), source.discoveredAt]));
+  const merged = new Map<string, StoredSource>();
+  for (const source of incoming) {
+    const id = releaseIdentity(source);
+    if (merged.has(id)) continue;
+    merged.set(id, { ...source, discoveredAt: firstSeen.get(id) ?? source.discoveredAt });
+  }
+  for (const source of existing) {
+    const id = releaseIdentity(source);
+    if (!merged.has(id)) merged.set(id, source);
+  }
+  return [...merged.values()].slice(0, cap);
+}
+
+/** The stored form, without what can be rebuilt on the way back out. */
+function compactStoredSource(source: StoredSource): StoredSource {
+  const { parsed: _parsed, scoreReasons: _reasons, ...rest } = source;
+  return rest;
+}
+
+/** A page address without its query, which is how the source cache keys it. */
+function addressKey(url: string): string {
+  const index = url.indexOf('?');
+  return index >= 0 ? url.slice(0, index) : url;
+}
+
+/**
  * Converts a StoredSource back into a TorrentResult format for playback or download.
  */
 export function storedSourceToTorrentResult(src: StoredSource): TorrentResult {
@@ -380,6 +445,41 @@ export class LibraryStore {
   public getStoredSources(key: string): StoredSource[] {
     const entry = this.entries.get(key);
     return entry?.sources ?? [];
+  }
+
+  /**
+   * Keeps what a discovery found for a title that is in the library.
+   *
+   * Called for every discovery the source cache records, so a title's saved
+   * sources stay current without anyone pressing Refresh — the library is where
+   * someone comes back to, and "the sources I found last time" is the part of
+   * that visit a re-search cannot give back once a site has gone down.
+   *
+   * Matched on the page address the cache was keyed by. Returns the key of the
+   * entry updated, or null when the address is not in the library.
+   */
+  public mergeDiscoveredSources(
+    pageUrl: string,
+    results: TorrentResult[],
+    season?: number,
+    episode?: number
+  ): string | null {
+    if (!pageUrl || results.length === 0) return null;
+    const address = addressKey(pageUrl);
+    const entry = [...this.entries.values()].find((candidate) =>
+      candidate.urls.some((url) => addressKey(url) === address)
+    );
+    if (!entry) return null;
+
+    const incoming = results.map((result) =>
+      compactStoredSource({ ...torrentResultToStoredSource(result), season, episode })
+    );
+    entry.sources = mergeStoredSources(entry.sources ?? [], incoming);
+    entry.lastSourcesRefreshedAt = Date.now();
+    // Deliberately not `updatedAt`: the library is ordered by what the viewer
+    // did, and a background discovery is not something they did.
+    this.persistEntries();
+    return entry.key;
   }
 
   public updateSourceStatus(
