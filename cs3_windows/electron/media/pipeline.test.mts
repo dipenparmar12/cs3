@@ -410,6 +410,68 @@ test('seeking restarts the conversion at the requested time', async () => {
 });
 
 /**
+ * A trailer is two addresses, video and audio, muxed by one ffmpeg, and every
+ * seek restarts that ffmpeg on both. The fixture puts a white flash and a beep
+ * at the same instant, so any offset between the two inputs shows up as the
+ * distance between them. Seeked to 13s (keyframe at 12s), the arguments that
+ * seeked only the first input put the beep 13 seconds after the flash.
+ */
+test('a separate audio input is seeked with the video, so a restart stays in sync', async () => {
+  const make = (name: string, args: string[]) => {
+    const target = path.join(WORK, name);
+    execFileSync(FFMPEG!, ['-hide_banner', '-loglevel', 'error', '-y', ...args, target], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    return target;
+  };
+  const videoFile = make('pair-video.mp4', [
+    '-f', 'lavfi',
+    '-i', "color=c=black:s=320x240:r=24:d=20,drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill:enable='between(t,15,15.5)'",
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-g', '48', '-sc_threshold', '0',
+  ]);
+  const audioFile = make('pair-audio.m4a', [
+    '-f', 'lavfi', '-i', "aevalsrc='0.8*sin(2*PI*1000*t)*between(t,15,15.5)':s=44100:d=20",
+    '-c:a', 'aac',
+  ]);
+
+  const url = await transcoder.createSession(
+    videoFile,
+    {
+      videoAction: 'copy',
+      audioAction: 'copy',
+      selectedAudioIndex: 0,
+      containerAction: 'mp4_fragmented',
+      subtitleAction: 'ignore',
+    },
+    'progressive',
+    { audioUrl: audioFile }
+  );
+  const token = url!.split('/').pop()!;
+  const out = path.join(WORK, 'pair-seeked.mp4');
+  const response = await fetch(`${url}?t=13`);
+  fs.writeFileSync(out, Buffer.from(await response.arrayBuffer()));
+  transcoder.closeSession(token);
+
+  const detect = async (args: string[], pattern: RegExp) => {
+    const { stderr } = await runTool(
+      FFMPEG!,
+      ['-hide_banner', '-nostats', '-i', out, ...args, '-f', 'null', '-'],
+      20_000
+    );
+    const found = pattern.exec(stderr)?.[1];
+    assert.ok(found, `nothing detected with ${args.join(' ')}:\n${stderr.slice(-400)}`);
+    return Number(found);
+  };
+  const flashAt = await detect(['-an', '-vf', 'blackdetect=d=0.01:pix_th=0.5'], /black_end:([\d.]+)/);
+  const beepAt = await detect(['-vn', '-af', 'silencedetect=n=-30dB:d=0.1'], /silence_end: ([\d.]+)/);
+
+  assert.ok(
+    Math.abs(flashAt - beepAt) < 0.1,
+    `flash at ${flashAt}s and beep at ${beepAt}s should coincide after a seek`
+  );
+});
+
+/**
  * The image-named-segment case, end to end against the installed ffmpeg.
  *
  * This one earns a real fixture rather than a decision assertion because the
