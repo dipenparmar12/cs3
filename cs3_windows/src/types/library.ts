@@ -58,6 +58,9 @@ export interface StoredSource {
   expiresAt?: number;
   lastCheckedAt?: number;
   failureReason?: string;
+  /** Set when the source was found for one episode rather than the title. */
+  season?: number;
+  episode?: number;
 }
 
 export interface LibraryItemMetadata {
