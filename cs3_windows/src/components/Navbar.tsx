@@ -9,6 +9,7 @@ import type {
   SearchSuggestion,
 } from '../types/api';
 import { SearchSuggestions } from './SearchSuggestions';
+import type { SavedSearchSummary } from '../../electron/savedSearches';
 
 interface NavbarProps {
   onSearch: (query: string, options?: SearchOptions) => void;
@@ -40,6 +41,8 @@ interface NavbarProps {
    * re-render the app. This is the app *telling* the box what it just ran.
    */
   externalQuery?: string;
+  /** Reopens a search kept with Save results. */
+  onOpenSavedSearch?: (id: string) => void;
 }
 
 /**
@@ -72,6 +75,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onScopeChange,
   onOpenInspector,
   externalQuery,
+  onOpenSavedSearch,
 }) => {
   const [query, setQuery] = useState('');
 
@@ -97,8 +101,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
+  const [saved, setSaved] = useState<SavedSearchSummary[]>([]);
+
   const refreshHistory = useCallback(() => {
     window.cloudstream?.getSearchHistory().then(setHistory);
+    window.cloudstream?.listSavedSearches?.().then((list) => setSaved(list ?? []));
   }, []);
 
   useEffect(() => refreshHistory(), [refreshHistory]);
@@ -369,6 +376,15 @@ export const Navbar: React.FC<NavbarProps> = ({
           onClearHistory={() => {
             window.cloudstream?.clearSearchHistory().then(setHistory);
           }}
+          saved={saved}
+          onPickSaved={
+            onOpenSavedSearch
+              ? (id) => {
+                  setSuggestOpen(false);
+                  onOpenSavedSearch(id);
+                }
+              : undefined
+          }
         />
       </div>
 

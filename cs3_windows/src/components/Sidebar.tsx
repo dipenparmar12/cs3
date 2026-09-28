@@ -5,11 +5,13 @@ import {
   Film,
   History,
   Download,
+  Loader2,
   Puzzle,
   Settings,
   ShieldCheck,
   Tv,
 } from 'lucide-react';
+import { useExtensionJobs } from './extensions/useExtensionJobs';
 
 /**
  * The `ott:` arm is a template literal rather than a fixed union because the
@@ -67,6 +69,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
    * they need.
    */
   const [showUnavailable, setShowUnavailable] = useState(false);
+  const { snapshot: extensionJobs } = useExtensionJobs();
   const available = ottPlatforms.filter((p) => p.availability !== 'missing');
   const unavailable = ottPlatforms.filter((p) => p.availability === 'missing');
 
@@ -84,7 +87,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'library' as ActiveTab, label: 'Library', icon: Film },
     { id: 'history' as ActiveTab, label: 'History', icon: History },
     { id: 'downloads' as ActiveTab, label: 'Downloads', icon: Download, badge: downloadCount },
-    { id: 'extensions' as ActiveTab, label: 'Extensions', icon: Puzzle },
+    {
+      id: 'extensions' as ActiveTab,
+      label: 'Extensions',
+      icon: Puzzle,
+      // Installs keep going when the viewer leaves the screen, so the one
+      // place that is always visible says so.
+      activity: extensionJobs.running + extensionJobs.queued,
+    },
     {
       id: 'settings' as ActiveTab,
       label: 'Settings',
@@ -167,6 +177,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   borderRadius: 'var(--radius-full)'
                 }}>
                   {item.badge}
+                </span>
+              )}
+              {item.activity !== undefined && item.activity > 0 && (
+                <span
+                  title={`${item.activity} extension task${item.activity === 1 ? '' : 's'} running or waiting`}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    color: 'var(--accent-light)',
+                    fontSize: '0.7rem',
+                    fontWeight: 700,
+                  }}
+                >
+                  <Loader2 size={12} className="spin" /> {item.activity}
                 </span>
               )}
               {item.warnBadge && (

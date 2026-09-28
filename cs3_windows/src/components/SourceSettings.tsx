@@ -8,6 +8,7 @@ import type {
 } from '../types/torrent';
 import { IndexerKind, Resolution } from '../types/torrent';
 import { useReveal } from '../utils/ExperienceModeContext';
+import { InfoHint } from './settings/InfoHint';
 
 /**
  * Settings → Sources.
@@ -144,17 +145,16 @@ export const SourceSettings: React.FC = () => {
 
   return (
     <div className="settings-section">
-      <h3 className="settings-section__title">
-        <Radio size={17} /> Sources
-      </h3>
       {/*
-        Both sentences say the same thing; only one of them requires knowing
+        Both explanations say the same thing; only one of them requires knowing
         what an indexer is or why a domain would rotate. The named sites and the
         Jackett/Prowlarr route stay in the technical version because that is who
         they are for — someone who already runs one is not helped by being told
         that some places are blocked.
       */}
-      <p className="settings-section__hint">
+      <h3 className="settings-section__title">
+        <Radio size={17} /> Places searched
+        <InfoHint label="About these places">
         {technical ? (
           <>
             Indexers are searched in parallel and their results are merged and deduplicated.
@@ -171,7 +171,8 @@ export const SourceSettings: React.FC = () => {
             they start off — turn them on if searches keep coming back empty.
           </>
         )}
-      </p>
+        </InfoHint>
+      </h3>
 
       <ul className="indexer-list">
         {configs.map((config) => {
@@ -240,68 +241,82 @@ export const SourceSettings: React.FC = () => {
         })}
       </ul>
 
-      <div className="indexer-add">
-        <h4>Add a Jackett / Prowlarr indexer</h4>
-        <p className="muted">
-          One entry reaches every indexer that instance is configured with, and inherits its
-          proxy and CAPTCHA handling.
-        </p>
-        <div className="indexer-add__fields">
-          <input
-            placeholder="Name (optional)"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-          />
-          <input
-            placeholder="http://127.0.0.1:9117"
-            value={newUrl}
-            onChange={(e) => setNewUrl(e.target.value)}
-          />
-          <input
-            placeholder="API key"
-            value={newKey}
-            onChange={(e) => setNewKey(e.target.value)}
-          />
-          <button className="btn btn-primary" onClick={addTorznab}>
-            <Plus size={15} /> Add
-          </button>
+      {/*
+        Folded away: both forms are for people who already run the thing they
+        name, and two always-open forms with a paragraph each were most of this
+        section's height for everyone else.
+      */}
+      <details className="indexer-add-wrap">
+        <summary>
+          <Plus size={14} /> Add your own source
+        </summary>
+        <div className="indexer-add">
+          <h4>
+            Jackett / Prowlarr
+            <InfoHint label="About Jackett and Prowlarr">
+              One entry reaches every indexer that instance is configured with, and inherits its
+              proxy and CAPTCHA handling.
+            </InfoHint>
+          </h4>
+          <div className="indexer-add__fields">
+            <input
+              placeholder="Name (optional)"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+            />
+            <input
+              placeholder="http://127.0.0.1:9117"
+              value={newUrl}
+              onChange={(e) => setNewUrl(e.target.value)}
+            />
+            <input
+              placeholder="API key"
+              value={newKey}
+              onChange={(e) => setNewKey(e.target.value)}
+            />
+            <button className="btn btn-primary" onClick={addTorznab}>
+              <Plus size={15} /> Add
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div className="indexer-add">
-        <h4>Add a Stremio addon</h4>
-        <p className="muted">
-          Any Stremio stream addon works — Torrentio with your own tracker selection,
-          Jackettio, Comet, a self-hosted MediaFusion, or one configured with a debrid
-          account. Paste the addon URL (the manifest URL is fine). Addons are looked up by
-          IMDb id, so they only answer for titles with catalogue metadata.
-        </p>
-        <div className="indexer-add__fields">
-          <input
-            placeholder="Name (optional)"
-            value={addonName}
-            onChange={(e) => setAddonName(e.target.value)}
-          />
-          <input
-            placeholder="https://torrentio.strem.fun/providers=yts,eztv"
-            value={addonUrl}
-            onChange={(e) => setAddonUrl(e.target.value)}
-          />
-          <button className="btn btn-primary" onClick={addStremioAddon}>
-            <Plus size={15} /> Add
-          </button>
+        <div className="indexer-add">
+          <h4>
+            Stremio addon
+            <InfoHint label="About Stremio addons">
+              Any Stremio stream addon works — Torrentio with your own tracker selection,
+              Jackettio, Comet, a self-hosted MediaFusion, or one configured with a debrid
+              account. Paste the addon URL (the manifest URL is fine). Addons are looked up by
+              IMDb id, so they only answer for titles with catalogue metadata.
+            </InfoHint>
+          </h4>
+          <div className="indexer-add__fields">
+            <input
+              placeholder="Name (optional)"
+              value={addonName}
+              onChange={(e) => setAddonName(e.target.value)}
+            />
+            <input
+              placeholder="https://torrentio.strem.fun/providers=yts,eztv"
+              value={addonUrl}
+              onChange={(e) => setAddonUrl(e.target.value)}
+            />
+            <button className="btn btn-primary" onClick={addStremioAddon}>
+              <Plus size={15} /> Add
+            </button>
+          </div>
         </div>
-      </div>
+      </details>
 
       {prefs && (
         <>
           <h3 className="settings-section__title" style={{ marginTop: '1.75rem' }}>
-            Ranking &amp; filters
+            Quality &amp; filters
+            <InfoHint label="About quality and filters">
+              These decide which sources survive and in what order. If searches come back
+              empty, loosen the minimum seeders or resolution first.
+            </InfoHint>
           </h3>
-          <p className="settings-section__hint">
-            These decide which sources survive and in what order. If searches come back
-            empty, loosen the minimum seeders or resolution first.
-          </p>
 
           <div className="pref-grid">
             <label>

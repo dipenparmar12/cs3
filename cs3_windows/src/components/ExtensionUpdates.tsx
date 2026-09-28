@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import type {
   AvailableUpdate,
@@ -7,6 +7,7 @@ import type {
   UpdateSettings,
 } from '../../electron/cs3/extensionUpdater';
 import { describeError } from '../utils/errors';
+import { useExtensionJobs } from './extensions/useExtensionJobs';
 
 export interface StatusMessage {
   text: string;
@@ -27,8 +28,9 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
   const [failedOutcomes, setFailedOutcomes] = useState<UpdateOutcome[]>([]);
   const [settings, setSettings] = useState<UpdateSettings | null>(null);
   const [checking, setChecking] = useState(false);
-  const [busy, setBusy] = useState<Set<string>>(new Set());
+  /** Only the scheduled auto-update reports this; manual updates are queue jobs. */
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
+  const jobs = useExtensionJobs();
   const [message, setMessage] = useState<StatusMessage | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -66,6 +68,9 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
           setProgress(payload as { current: number; total: number });
           break;
         case 'extension:autoUpdateCompleted': {
+          // Nothing else ends the scheduled run's counter, and a stale
+          // "Updating 3/3" disables Update All until the next manual one.
+          setProgress(null);
           const { outcomes } = payload as { outcomes?: UpdateOutcome[] };
           const safeOutcomes = Array.isArray(outcomes) ? outcomes : [];
           const ok = safeOutcomes.filter((o) => o?.ok).length;
@@ -122,89 +127,110 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
     }
   }, [api]);
 
-  const updateOne = useCallback(
-    async (internalName: string) => {
-      if (!api) return;
-      setBusy((prev) => new Set(prev).add(internalName));
-      try {
-        const outcome = await api.updateExtension(internalName);
-        setMessage({ text: outcome.message, isError: !outcome.ok });
-        if (outcome.ok) {
-          setFailedOutcomes((prev) => prev.filter((f) => f.internalName !== internalName));
-          onUpdated?.();
-        } else {
-          setFailedOutcomes((prev) => {
-            const next = prev.filter((f) => f.internalName !== internalName);
-            next.push(outcome);
-            return next;
-          });
-        }
-        const cached = await api.getCachedExtensionUpdates().catch(() => []);
-        setUpdates(Array.isArray(cached) ? cached : []);
-      } catch (err) {
-        setMessage({ text: `Update failed: ${describeError(err)}`, isError: true });
-      } finally {
-        setBusy((prev) => {
-          const next = new Set(prev);
-          next.delete(internalName);
-          return next;
-        });
-      }
-    },
-    [api, onUpdated]
+  /**
+   * Updates are background jobs, like installs.
+   *
+   * Each Update press — and each extension an Update-all covers — is its own
+   * job in the shared queue, so they download side by side, the rest of the
+   * screen stays usable, and one failure keeps its reason and a Retry without
+   * holding the others back. The list below reconciles from the queue as jobs
+   * finish rather than from each press's reply.
+   */
+  const updateJobs = useMemo(
+    () => jobs.snapshot.jobs.filter((job) => job.kind === 'update'),
+    [jobs.snapshot]
+  );
+  const updating = updateJobs.filter((job) => job.state === 'queued' || job.state === 'running');
+  const seenJobs = useRef<Set<string> | null>(null);
+
+  useEffect(() => {
+    const finished = updateJobs.filter((job) => job.state === 'done' || job.state === 'failed');
+    // Jobs that had already finished when this mounted are history, not news.
+    if (seenJobs.current === null) {
+      seenJobs.current = new Set(finished.map((job) => job.id));
+      return;
+    }
+    const fresh = finished.filter((job) => !seenJobs.current!.has(job.id));
+    if (fresh.length === 0) return;
+    for (const job of fresh) seenJobs.current.add(job.id);
+
+    const names = (list: typeof fresh) => new Set(list.map((job) => job.target.slice('ext:'.length)));
+    const succeeded = names(fresh.filter((job) => job.state === 'done'));
+    const failed = fresh.filter((job) => job.state === 'failed');
+
+    setUpdates((prev) => prev.filter((u) => !succeeded.has(u.internalName)));
+    setFailedOutcomes((prev) => [
+      ...prev.filter((f) => !succeeded.has(f.internalName) && !names(failed).has(f.internalName)),
+      ...failed.map((job) => ({
+        internalName: job.target.slice('ext:'.length),
+        ok: false,
+        message: job.message ?? 'The update did not install.',
+      })),
+    ]);
+    if (failed.length > 0) setIsExpanded(true);
+    if (succeeded.size > 0) onUpdated?.();
+  }, [updateJobs, onUpdated]);
+
+  const isUpdating = (internalName: string) =>
+    updating.some((job) => job.target === `ext:${internalName}`);
+
+  const enqueueUpdates = useCallback(
+    (targets: Array<{ internalName: string; name?: string }>) =>
+      jobs.enqueue(
+        targets.map((target) => ({
+          kind: 'update' as const,
+          internalName: target.internalName,
+          name: target.name,
+        }))
+      ),
+    [jobs]
   );
 
+  const updateOne = useCallback(
+    (internalName: string) => {
+      setMessage(null);
+      const name = updates.find((u) => u.internalName === internalName)?.name;
+      void enqueueUpdates([{ internalName, name }]);
+    },
+    [enqueueUpdates, updates]
+  );
+
+  /*
+   * "Update everything" means everything out of date *now* — a fresh check,
+   * never the persisted list, which can be arbitrarily old (see
+   * `ExtensionUpdater.updateAll`) — and then one job per extension.
+   */
   const updateEverything = useCallback(async () => {
-    if (!api || updates.length === 0) return;
-    setProgress({ current: 0, total: updates.length });
+    if (!api) return;
+    setMessage(null);
+    setChecking(true);
     try {
-      const outcomes = await api.updateAllExtensions();
-      const safeOutcomes = Array.isArray(outcomes) ? outcomes : [];
-      const ok = safeOutcomes.filter((o) => o?.ok).length;
-      const failed = safeOutcomes.filter((o) => !o?.ok);
-      setFailedOutcomes(failed);
-      setMessage({
-        text: failed.length > 0
-          ? `Updated ${ok} of ${safeOutcomes.length} extension(s) (${failed.length} failed).`
-          : `Updated all ${ok} extension(s).`,
-        isError: failed.length > 0,
-      });
-      if (failed.length > 0) setIsExpanded(true);
-      const cached = await api.getCachedExtensionUpdates().catch(() => []);
-      setUpdates(Array.isArray(cached) ? cached : []);
-      onUpdated?.();
+      const response = await api.checkExtensionUpdates();
+      const fresh = response.ok && response.result ? response.result.updates ?? [] : updates;
+      setUpdates(fresh);
+      if (fresh.length === 0) {
+        setMessage({ text: 'Everything is already up to date.', isError: false });
+        return;
+      }
+      void enqueueUpdates(fresh);
+      setIsExpanded(true);
     } catch (err) {
       setMessage({ text: `Update all failed: ${describeError(err)}`, isError: true });
     } finally {
-      setProgress(null);
+      setChecking(false);
     }
-  }, [api, updates.length, onUpdated]);
+  }, [api, updates, enqueueUpdates]);
 
-  const retryFailed = useCallback(async () => {
-    if (!api || failedOutcomes.length === 0) return;
-    const targets = failedOutcomes.map((f) => f.internalName);
-    setProgress({ current: 0, total: targets.length });
-    try {
-      const outcomes = await api.updateAllExtensions(targets);
-      const safeOutcomes = Array.isArray(outcomes) ? outcomes : [];
-      const ok = safeOutcomes.filter((o) => o?.ok).length;
-      const stillFailed = safeOutcomes.filter((o) => !o?.ok);
-      setFailedOutcomes(stillFailed);
-      setMessage({
-        text: stillFailed.length > 0
-          ? `Updated ${ok} of ${safeOutcomes.length} extension(s) (${stillFailed.length} failed).`
-          : `Updated all ${ok} extension(s).`,
-        isError: stillFailed.length > 0,
-      });
-      const cached = await api.getCachedExtensionUpdates().catch(() => []);
-      setUpdates(Array.isArray(cached) ? cached : []);
-      onUpdated?.();
-    } catch (err) {
-      setMessage({ text: `Retry failed: ${describeError(err)}`, isError: true });
-    } finally {
-      setProgress(null);
-    }
-  }, [api, failedOutcomes, onUpdated]);
+  const retryFailed = useCallback(() => {
+    if (failedOutcomes.length === 0) return;
+    setMessage(null);
+    void enqueueUpdates(
+      failedOutcomes.map((f) => ({
+        internalName: f.internalName,
+        name: updates.find((u) => u.internalName === f.internalName)?.name,
+      }))
+    );
+  }, [failedOutcomes, updates, enqueueUpdates]);
 
   /*
    * The only way to change how updates happen.
@@ -327,12 +353,16 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
             <button
               className="btn btn-primary"
               onClick={updateEverything}
-              disabled={progress !== null}
+              disabled={progress !== null || checking}
               style={{ fontSize: '0.73rem', padding: '0.25rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
             >
               <ArrowUpCircle size={12} />
               <span>
-                {progress ? `Updating ${progress.current}/${progress.total}…` : `Update All (${safeUpdates.length})`}
+                {progress
+                  ? `Updating ${progress.current}/${progress.total}…`
+                  : updating.length > 0
+                    ? `Updating ${updating.length}…`
+                    : `Update All (${safeUpdates.length})`}
               </span>
             </button>
           )}
@@ -451,10 +481,10 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
               <button
                 className="btn btn-secondary"
                 onClick={() => updateOne(f.internalName)}
-                disabled={busy.has(f.internalName) || progress !== null}
+                disabled={isUpdating(f.internalName) || progress !== null}
                 style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', flexShrink: 0 }}
               >
-                {busy.has(f.internalName) ? 'Retrying…' : 'Retry'}
+                {isUpdating(f.internalName) ? 'Retrying…' : 'Retry'}
               </button>
             </div>
           ))}
@@ -499,10 +529,10 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
                 <button
                   className="btn btn-secondary"
                   onClick={() => updateOne(u.internalName)}
-                  disabled={busy.has(u.internalName) || progress !== null}
+                  disabled={isUpdating(u.internalName) || progress !== null}
                   style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', flexShrink: 0 }}
                 >
-                  {busy.has(u.internalName) ? 'Updating…' : 'Update'}
+                  {isUpdating(u.internalName) ? 'Updating…' : 'Update'}
                 </button>
               </div>
             ))}

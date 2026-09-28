@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Eye, EyeOff, ShieldAlert } from 'lucide-react';
+import { InfoHint } from './settings/InfoHint';
 
 type AdultMode = 'off' | 'ask' | 'on';
 
@@ -87,23 +88,20 @@ export const AdultContentSetting: React.FC = () => {
     setBusy(false);
   };
 
-  const current = MODES.find((entry) => entry.value === mode) ?? MODES[0];
-
   return (
     <section className="adult-setting">
       <header>
         {allowed ? <ShieldAlert size={16} /> : <EyeOff size={16} />}
         <h3>Adult content</h3>
+        <InfoHint label="About adult content">
+          Some extensions publish providers marked <code>NSFW</code>. This decides whether they
+          are offered in search, source discovery, downloads and the extensions list — a change
+          applies at once.
+        </InfoHint>
         <span className={`adult-setting__state${allowed ? ' adult-setting__state--on' : ''}`}>
           {allowed ? 'Shown' : 'Hidden'}
         </span>
       </header>
-
-      <p>
-        Some CloudStream extensions publish providers marked <code>NSFW</code>. This setting
-        decides whether they are offered in search, source discovery, downloads and the
-        extensions list — all of which read it fresh, so a change applies at once.
-      </p>
 
       <div className="adult-setting__modes" role="radiogroup" aria-label="Adult content">
         {MODES.map((entry) => (
@@ -164,8 +162,6 @@ export const AdultContentSetting: React.FC = () => {
           )}
         </div>
       )}
-
-      <p className="adult-setting__current muted">{current.detail}</p>
     </section>
   );
 };

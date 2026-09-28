@@ -16,6 +16,7 @@ import {
   Wrench,
   Activity,
 } from 'lucide-react';
+import { InfoHint } from './settings/InfoHint';
 import type { SystemRuntimeStatus, RuntimeProgress } from '../../electron/cs3/runtimeProvisioner';
 
 export interface ComponentSuiteState {
@@ -313,12 +314,16 @@ export const UnifiedComponentManager: React.FC = () => {
                 <CheckCircle2 size={20} style={{ color: '#10b981' }} />
               )}
               <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 600 }}>
-                {anyMissing ? `${totalCount - readyCount} Required Component${totalCount - readyCount > 1 ? 's' : ''} Need Setup` : 'All External Components Operational'}
+                {anyMissing
+                  ? `${totalCount - readyCount} part${totalCount - readyCount > 1 ? 's' : ''} of the app need setting up`
+                  : 'Everything the app needs is installed'}
               </h3>
+              <InfoHint label="About these components">
+                The extension engine (Java), the download accelerators and the audio and video
+                converter all live inside the app&apos;s own storage. Installing or repairing them
+                changes nothing else on this computer.
+              </InfoHint>
             </div>
-            <p style={{ margin: 0, fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.7)', maxWidth: '640px' }}>
-              All dependencies (Java execution engine, download accelerators, and audio transcoders) run in isolated app storage without system-wide changes.
-            </p>
           </div>
 
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -442,11 +447,12 @@ export const UnifiedComponentManager: React.FC = () => {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Cpu size={18} style={{ color: '#818cf8' }} />
-                <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>CloudStream Extension Runtime</h4>
+                <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Extension engine</h4>
+                <InfoHint label="About the extension engine">
+                  Runs community Android <code>.cs3</code> extensions in a separate, sandboxed JVM
+                  process. Includes OpenJDK 21, the DEX compatibility layer and the provider bridge.
+                </InfoHint>
               </div>
-              <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.65)' }}>
-                Runs community Android <code>.cs3</code> extensions in a secure, sandboxed JVM process. Includes OpenJDK 21, DEX compatibility layer, and provider bridge.
-              </p>
             </div>
           </div>
 
@@ -560,11 +566,12 @@ export const UnifiedComponentManager: React.FC = () => {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Zap size={18} style={{ color: '#38bdf8' }} />
-                <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Download Engines (aria2c & yt-dlp)</h4>
+                <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Download engines</h4>
+                <InfoHint label="About the download engines">
+                  <strong>aria2c</strong> downloads over several connections at once;{' '}
+                  <strong>yt-dlp</strong> extracts streams from pages that need it.
+                </InfoHint>
               </div>
-              <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.65)' }}>
-                Multi-connection HTTP downloader and stream extractor. Enables lightning-fast parallel segment downloading and video stream capture.
-              </p>
             </div>
           </div>
 
@@ -680,11 +687,13 @@ export const UnifiedComponentManager: React.FC = () => {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Wrench size={18} style={{ color: '#f43f5e' }} />
-                <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Media Components (FFmpeg & FFprobe)</h4>
+                <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Audio &amp; video converter</h4>
+                <InfoHint label="About the audio and video converter">
+                  <strong>FFmpeg</strong> and <strong>FFprobe</strong> identify what is inside a
+                  file and convert audio the built-in player cannot decode — AC-3, E-AC-3, DTS — so
+                  those videos play with sound.
+                </InfoHint>
               </div>
-              <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.65)' }}>
-                Audio transcoding and format compatibility engine. Identifies and decodes AC-3, E-AC-3, and DTS audio so videos with unsupported audio play with full sound.
-              </p>
             </div>
           </div>
 
