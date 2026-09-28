@@ -947,6 +947,43 @@ export class ContentService {
     return undefined;
   }
 
+  /**
+   * Everything the cache holds for a page, fresh and expired, across both scopes.
+   *
+   * For the library, which saves what was found for its titles: an expired
+   * provider link still names the release to re-resolve, so it is worth keeping.
+   */
+  public peekCachedSources(mediaUrl: string): TorrentResult[] {
+    if (!mediaUrl || mediaUrl.startsWith('magnet:')) return [];
+    const fromUrl = parseEpisodeParams(mediaUrl);
+    const base = stripQuery(mediaUrl);
+    const seen = new Set<string>();
+    const out: TorrentResult[] = [];
+    for (const scope of ['origin', 'all'] as const) {
+      const hit = this.cache.peek(this.cacheUrlFor(base, scope), fromUrl.season, fromUrl.episode);
+      for (const source of [...hit.fresh, ...hit.expired]) {
+        if (seen.has(source.infoHash)) continue;
+        seen.add(source.infoHash);
+        out.push(source);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Hears about every discovery that found something, keyed by page address.
+   *
+   * The cache key carries the scope as a `#all` suffix; that is an implementation
+   * detail of the cache, so it is removed before anyone outside sees it.
+   */
+  public onSourcesFound(
+    listener: (pageUrl: string, sources: TorrentResult[], season?: number, episode?: number) => void
+  ): void {
+    this.cache.onWrite((key, sources, season, episode) =>
+      listener(key.endsWith('#all') ? key.slice(0, -'#all'.length) : key, sources, season, episode)
+    );
+  }
+
   /** Identity of a discovery run, so two callers asking the same thing share one. */
   private sourceKey(request: SourceQuery, autoWiden: boolean): string {
     const fromUrl = parseEpisodeParams(request.mediaUrl);
@@ -2203,6 +2240,17 @@ export class ContentService {
    * leak in an app that stays open for days.
    */
   private alternateRoutes = new Map<string, string[]>();
+
+  /**
+   * Re-teaches the routes a saved search's rows carry.
+   *
+   * The map is per session, so a search saved last week and reopened today
+   * would otherwise open every merged row as a catalogue-only title — asking
+   * everything instead of the providers that actually produced it.
+   */
+  public rememberSearchRows(results: SearchResponse[]): void {
+    this.rememberRoutes(results);
+  }
 
   private rememberRoutes(results: SearchResponse[]): void {
     for (const result of results) {

@@ -1323,18 +1323,68 @@ export class PluginManager {
     repoUrl: string,
     options: { limit?: number; adultAllowed?: boolean } = {}
   ): Promise<{ ok: boolean; message: string; installed: number; failed: number; skipped: number }> {
+    const plan = await this.planRepositoryInstall(repoUrl, options);
+    if (!plan.ok) return { ok: false, message: plan.message, installed: 0, failed: 0, skipped: 0 };
+
+    let installed = 0;
+    let failed = 0;
+    for (const plugin of plan.plugins) {
+      try {
+        const outcome = await this.installPlugin(plugin, plan.repositoryUrl);
+        if (outcome.ok) installed++;
+        else failed++;
+      } catch {
+        // One archive that will not install must not end the batch — the
+        // remaining thirty are unaffected and the user asked for those too.
+        failed++;
+      }
+    }
+
+    return {
+      ok: true,
+      message:
+        `${plan.name}: installed ${installed}` +
+        (failed > 0 ? `, ${failed} failed` : '') +
+        (plan.skipped > 0 ? `, ${plan.skipped} adult extensions skipped` : ''),
+      installed,
+      failed,
+      skipped: plan.skipped,
+    };
+  }
+
+  /**
+   * What installing a whole repository would download, without downloading it.
+   *
+   * The repository is kept as soon as it is read, so it appears in the list
+   * while its extensions are still arriving. The background job queue turns the
+   * plan into one job per extension — which is what lets them download side by
+   * side, and lets one that fails be retried without re-running the other
+   * forty.
+   */
+  public async planRepositoryInstall(
+    repoUrl: string,
+    options: { limit?: number; adultAllowed?: boolean } = {}
+  ): Promise<{
+    ok: boolean;
+    message: string;
+    name: string;
+    repositoryUrl: string;
+    plugins: SitePlugin[];
+    skipped: number;
+    alreadyInstalled: number;
+  }> {
     let result: RepositoryFetchResult;
     try {
       result = await this.fetchRepository(repoUrl);
     } catch (error) {
       return {
         ok: false,
-        message: `That repository could not be read: ${
-          describeError(error)
-        }`,
-        installed: 0,
-        failed: 0,
+        message: `That repository could not be read: ${describeError(error)}`,
+        name: repoUrl,
+        repositoryUrl: repoUrl,
+        plugins: [],
         skipped: 0,
+        alreadyInstalled: 0,
       };
     }
 
@@ -1345,37 +1395,22 @@ export class PluginManager {
     );
     const skipped = result.plugins.length - wanted.length;
     const targets = options.limit ? wanted.slice(0, options.limit) : wanted;
-
-    let installed = 0;
-    let failed = 0;
-    for (const plugin of targets) {
-      // Already installed is not a failure and not work: re-downloading an
-      // archive the user already has would make "install the rest of this
-      // repository" cost as much as installing all of it.
-      if (this.installedPlugins.has(plugin.internalName)) continue;
-      try {
-        const outcome = await this.installPlugin(plugin, result.repositoryUrl);
-        if (outcome.ok) installed++;
-        else failed++;
-      } catch {
-        // One archive that will not install must not end the batch — the
-        // remaining thirty are unaffected and the user asked for those too.
-        failed++;
-      }
-    }
+    // Already installed is not a failure and not work: re-downloading an
+    // archive the user already has would make "install the rest of this
+    // repository" cost as much as installing all of it.
+    const plugins = targets.filter((plugin) => !this.installedPlugins.has(plugin.internalName));
 
     this.installedRepoUrls.add(result.repositoryUrl);
     this.persist();
 
     return {
       ok: true,
-      message:
-        `${result.name}: installed ${installed}` +
-        (failed > 0 ? `, ${failed} failed` : '') +
-        (skipped > 0 ? `, ${skipped} adult extensions skipped` : ''),
-      installed,
-      failed,
+      message: `${result.name}: ${plugins.length} to install`,
+      name: result.name,
+      repositoryUrl: result.repositoryUrl,
+      plugins,
       skipped,
+      alreadyInstalled: targets.length - plugins.length,
     };
   }
 
@@ -1474,6 +1509,26 @@ export class PluginManager {
     }
   }
 
+  /**
+   * The tail of the last install that entered the serialised section.
+   *
+   * Installs used to be serial only because every caller happened to issue them
+   * one at a time. The extension job queue runs several at once so their
+   * downloads overlap, and the half after the download — rename into place,
+   * translate, load into the JVM — must still run one at a time: providers
+   * self-register into a global and `diffProviders` attributes them by list
+   * length, so two overlapping loads claim each other's providers (measured
+   * once at 176 mis-attributed). A failure releases the next waiter; it never
+   * poisons the chain.
+   */
+  private installChain: Promise<unknown> = Promise.resolve();
+
+  private oneAtATime<T>(work: () => Promise<T>): Promise<T> {
+    const turn = this.installChain.then(work, work);
+    this.installChain = turn.catch(() => undefined);
+    return turn;
+  }
+
   public async installPlugin(
     plugin: SitePlugin,
     repositoryUrl?: string
@@ -1564,63 +1619,74 @@ export class PluginManager {
         }
       }
 
-      fs.writeFileSync(tempPath, buffer);
-
-      const previousPath = this.installedPlugins.get(plugin.internalName)?.filePath;
-      if (fs.existsSync(target) || (previousPath && fs.existsSync(previousPath))) {
-        await this.releaseArchive(plugin.internalName);
-      }
-      const installedPath = await this.putInPlace(
-        plugin.internalName,
-        tempPath,
-        target,
-        digest,
-        previousPath
-      );
-
-      const report = this.analyzer.analyzePlugin(plugin.name, plugin.internalName, installedPath);
-
-      this.installedPlugins.set(plugin.internalName, {
-        internalName: plugin.internalName,
-        // The artifact actually installed, so the updater re-fetches the same
-        // lane rather than silently swapping to the `.cs3` on the next version.
-        url: artifact.url,
-        isOnline: true,
-        filePath: installedPath,
-        version: plugin.version ?? 1,
-        tier: report.recommendedTier,
-        isEnabled: true,
-        // Stamp the originating repository so the updater can re-check this
-        // plugin later; a repository's plugin list does not always carry it.
-        meta: { ...plugin, repositoryUrl: repoUrl },
-      });
-      this.persist();
-      // Only now that the record names the new archive can the old one go.
-      this.sweepDisplacedArchives();
-
-      // Translate and classify now rather than on first use: DROP-2 requires
-      // translation to happen once at install time, and a plugin's tier has to
-      // be known before the user is told whether it works.
-      const runtime = await this.inspect(plugin.internalName, installedPath);
-
-      // Into the running JVM now, so the extension answers without a restart.
-      await this.reloadInstalledExtension(plugin.internalName);
-
+      // Downloads may overlap; placing the archive and loading it may not. See
+      // `oneAtATime` — this is what makes the background job queue safe.
       this.notifyInstallProgress({
         internalName: plugin.internalName,
         name: plugin.name,
-        step: 'complete',
-        percent: 100,
-        message: `${plugin.name} installed successfully.`,
+        step: 'analyzing',
+        percent: 90,
+        message: `Setting up ${plugin.name}...`,
       });
+      return await this.oneAtATime(async () => {
+        fs.writeFileSync(tempPath, buffer);
 
-      return {
-        ok: true,
-        report,
-        message: runtime
-          ? `${plugin.name} installed and verified. ${runtime.reason}`
-          : `${plugin.name} installed and verified. The extension runtime is unavailable, so it could not be analysed.`,
-      };
+        const previousPath = this.installedPlugins.get(plugin.internalName)?.filePath;
+        if (fs.existsSync(target) || (previousPath && fs.existsSync(previousPath))) {
+          await this.releaseArchive(plugin.internalName);
+        }
+        const installedPath = await this.putInPlace(
+          plugin.internalName,
+          tempPath,
+          target,
+          digest,
+          previousPath
+        );
+
+        const report = this.analyzer.analyzePlugin(plugin.name, plugin.internalName, installedPath);
+
+        this.installedPlugins.set(plugin.internalName, {
+          internalName: plugin.internalName,
+          // The artifact actually installed, so the updater re-fetches the same
+          // lane rather than silently swapping to the `.cs3` on the next version.
+          url: artifact.url,
+          isOnline: true,
+          filePath: installedPath,
+          version: plugin.version ?? 1,
+          tier: report.recommendedTier,
+          isEnabled: true,
+          // Stamp the originating repository so the updater can re-check this
+          // plugin later; a repository's plugin list does not always carry it.
+          meta: { ...plugin, repositoryUrl: repoUrl },
+        });
+        this.persist();
+        // Only now that the record names the new archive can the old one go.
+        this.sweepDisplacedArchives();
+
+        // Translate and classify now rather than on first use: DROP-2 requires
+        // translation to happen once at install time, and a plugin's tier has to
+        // be known before the user is told whether it works.
+        const runtime = await this.inspect(plugin.internalName, installedPath);
+
+        // Into the running JVM now, so the extension answers without a restart.
+        await this.reloadInstalledExtension(plugin.internalName);
+
+        this.notifyInstallProgress({
+          internalName: plugin.internalName,
+          name: plugin.name,
+          step: 'complete',
+          percent: 100,
+          message: `${plugin.name} installed successfully.`,
+        });
+
+        return {
+          ok: true,
+          report,
+          message: runtime
+            ? `${plugin.name} installed and verified. ${runtime.reason}`
+            : `${plugin.name} installed and verified. The extension runtime is unavailable, so it could not be analysed.`,
+        };
+      });
     } catch (error) {
       this.notifyInstallProgress({
         internalName: plugin.internalName,

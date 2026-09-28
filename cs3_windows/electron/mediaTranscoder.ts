@@ -497,21 +497,28 @@ export class MediaTranscoder {
         ]
       : [];
 
+    // Before -i: seeks by keyframe without decoding everything up to it.
+    const seek = seekSeconds > 0 ? ['-ss', String(seekSeconds)] : [];
+
     return [
       '-hide_banner', '-loglevel', 'error',
       ...inputOptionsFor(session.url, session.transport),
       ...decryption,
-      // Before -i: seeks by keyframe without decoding everything up to it.
-      ...(seekSeconds > 0 ? ['-ss', String(seekSeconds)] : []),
+      ...seek,
       '-i', session.url,
       /**
        * A second input, for a source whose audio has its own address.
        *
-       * The same `-ss` applies to it: it is placed before `-i` once and ffmpeg
-       * carries it to every input that follows, so both streams start at the
-       * seek point and stay in sync.
+       * It needs its own `-ss`. An input option applies to the next `-i` only,
+       * so the one before the video is spent by the time ffmpeg reaches this
+       * input. Measured on a fixture with a flash and a beep at the same
+       * instant, seeked to 13s: without it, the audio restarted from zero and
+       * the beep landed 13 seconds after the flash. That was every seek on
+       * every trailer. With both inputs seeked, `-avoid_negative_ts` shifts
+       * them by one offset, so the video's keyframe preroll stays aligned
+       * with the audio.
        */
-      ...(session.audioUrl ? ['-i', session.audioUrl] : []),
+      ...(session.audioUrl ? [...seek, '-i', session.audioUrl] : []),
       '-map', '0:v:0',
       ...(session.audioUrl
         ? // The whole point of the second input: take its audio, not the first

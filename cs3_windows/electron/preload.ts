@@ -44,6 +44,8 @@ import type {
   TorrentStreamStats,
 } from '../src/types/torrent';
 import type { OfficialRepository } from './officialRepositories';
+import type { ExtensionJobRequest, ExtensionJobsSnapshot } from './cs3/extensionJobs';
+import type { SaveSearchInput, SavedSearch, SavedSearchSummary } from './savedSearches';
 import type { MetadataDetail } from './metadataProvider';
 import type { ExtendedMetadata, PromoResolution } from '../src/types/metadata';
 import type {
@@ -347,6 +349,17 @@ export interface CloudStreamElectronAPI {
   getSearchHistory: () => Promise<SearchHistoryEntry[]>;
   removeSearchHistory: (query: string) => Promise<SearchHistoryEntry[]>;
   clearSearchHistory: () => Promise<SearchHistoryEntry[]>;
+  /**
+   * Search results kept on request, dated, to reopen later. Unlike history,
+   * which keeps only queries, these keep the rows — page addresses, which do
+   * not expire — and the screen always says when they were saved.
+   */
+  saveSearchResults: (
+    input: SaveSearchInput
+  ) => Promise<Envelope & { saved: SavedSearchSummary | null }>;
+  listSavedSearches: () => Promise<SavedSearchSummary[]>;
+  getSavedSearch: (id: string) => Promise<SavedSearch | null>;
+  removeSavedSearch: (id: string) => Promise<SavedSearchSummary[]>;
 
   // Torrent streaming
   startStream: (
@@ -1506,6 +1519,22 @@ export interface CloudStreamElectronAPI {
    * is indistinguishable from one that simply has no providers.
    */
   getExtensionRuntimeReport: (internalName: string) => Promise<PluginRuntimeReport | null>;
+  /**
+   * The background extension queue.
+   *
+   * Install, update and repository presses are enqueued and return at once, so
+   * any number can be pending; the reply and every `onExtensionJobs` push carry
+   * the whole queue. A press on something already queued joins that job.
+   */
+  enqueueExtensionJobs: (
+    requests: ExtensionJobRequest[]
+  ) => Promise<Envelope & { snapshot: ExtensionJobsSnapshot }>;
+  getExtensionJobs: () => Promise<ExtensionJobsSnapshot>;
+  cancelExtensionJob: (id: string) => Promise<ExtensionJobsSnapshot>;
+  cancelQueuedExtensionJobs: () => Promise<ExtensionJobsSnapshot>;
+  retryExtensionJob: (id: string) => Promise<ExtensionJobsSnapshot>;
+  clearFinishedExtensionJobs: () => Promise<ExtensionJobsSnapshot>;
+  onExtensionJobs: (callback: (snapshot: ExtensionJobsSnapshot) => void) => () => void;
   onExtensionInstallProgress: (
     callback: (progress: {
       internalName: string;
@@ -1926,6 +1955,10 @@ const api: CloudStreamElectronAPI = {
   getSearchHistory: () => ipcRenderer.invoke('api:getSearchHistory'),
   removeSearchHistory: (query) => ipcRenderer.invoke('api:removeSearchHistory', query),
   clearSearchHistory: () => ipcRenderer.invoke('api:clearSearchHistory'),
+  saveSearchResults: (input) => ipcRenderer.invoke('search:saveResults', input),
+  listSavedSearches: () => ipcRenderer.invoke('search:listSaved'),
+  getSavedSearch: (id) => ipcRenderer.invoke('search:getSaved', id),
+  removeSavedSearch: (id) => ipcRenderer.invoke('search:removeSaved', id),
 
   startStream: (source, season, episode) =>
     ipcRenderer.invoke('torrent:startStream', source, season, episode),
@@ -2227,6 +2260,13 @@ const api: CloudStreamElectronAPI = {
   getInstalledPlugins: () => ipcRenderer.invoke('extension:getInstalledPlugins'),
   getExtensionRuntimeReport: (internalName) =>
     ipcRenderer.invoke('extension:getRuntimeReport', internalName),
+  enqueueExtensionJobs: (requests) => ipcRenderer.invoke('extension:enqueueJobs', requests),
+  getExtensionJobs: () => ipcRenderer.invoke('extension:getJobs'),
+  cancelExtensionJob: (id) => ipcRenderer.invoke('extension:cancelJob', id),
+  cancelQueuedExtensionJobs: () => ipcRenderer.invoke('extension:cancelQueuedJobs'),
+  retryExtensionJob: (id) => ipcRenderer.invoke('extension:retryJob', id),
+  clearFinishedExtensionJobs: () => ipcRenderer.invoke('extension:clearFinishedJobs'),
+  onExtensionJobs: (callback) => subscribe('extension:jobsUpdate', callback),
   onExtensionInstallProgress: (callback) => subscribe('extension:installProgress', callback),
 
   checkExtensionUpdates: () => ipcRenderer.invoke('extension:checkUpdates'),

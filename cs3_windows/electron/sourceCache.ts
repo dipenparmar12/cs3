@@ -194,6 +194,23 @@ export class SourceCache {
     this.datastore = datastore;
   }
 
+  /**
+   * Told about every discovery that produced sources.
+   *
+   * The library keeps a durable copy of what was found for the titles on it;
+   * this is how it hears, without every discovery path having to remember to
+   * tell it.
+   */
+  private writeListener:
+    | ((mediaUrl: string, sources: TorrentResult[], season?: number, episode?: number) => void)
+    | null = null;
+
+  public onWrite(
+    listener: (mediaUrl: string, sources: TorrentResult[], season?: number, episode?: number) => void
+  ): void {
+    this.writeListener = listener;
+  }
+
   private static keyFor(mediaUrl: string, season?: number, episode?: number): string {
     return `${mediaUrl}|${season ?? ''}|${episode ?? ''}`;
   }
@@ -320,6 +337,12 @@ export class SourceCache {
       lastUsedAt: now,
     });
     this.save(entries);
+
+    try {
+      this.writeListener?.(mediaUrl, sources, season, episode);
+    } catch {
+      // A listener is a convenience; the cache write above is what matters.
+    }
   }
 
   /**

@@ -68,6 +68,7 @@ import { ContentService, type SourceQuery } from './contentService';
 import { PlaybackSessionManager } from './playbackSession';
 import { SearchSuggestionService } from './searchSuggestions';
 import { SearchHistoryStore } from './searchHistory';
+import { SavedSearchStore, type SaveSearchInput } from './savedSearches';
 import { SubtitleService } from './subtitleService';
 import { MediaTranscoder, VIDEO_CODEC_PROBES } from './mediaTranscoder';
 import { PlaybackEngine } from './media/playbackEngine';
@@ -95,6 +96,11 @@ import type {
 } from '../src/types/media';
 import type { MpvOpenRequest } from '../src/types/mpv';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
+import {
+  DEFAULT_JOB_CONCURRENCY,
+  ExtensionJobQueue,
+  type ExtensionJobRequest,
+} from './cs3/extensionJobs';
 import { OttService } from './cs3/ottService';
 import {
   MetadataEnrichmentService,
@@ -366,6 +372,7 @@ const bookmarks = new BookmarkStore(datastore);
  * `cs3/pageSnapshot.ts` for what a snapshot is and is not.
  */
 const pageSnapshots = new PageSnapshotStore(app.getPath('userData'));
+const savedSearches = new SavedSearchStore(app.getPath('userData'));
 contentService.setSnapshotStore(pageSnapshots);
 /**
  * The home screen's catalogue source, and the rows built from it.
@@ -395,7 +402,103 @@ const discovery = new DiscoveryService(
  * pressing Play during a prefetch joins it rather than starting a second scrape.
  */
 const sourcePrefetcher = new SourcePrefetcher(contentService, datastore);
+
+// Every discovery that finds something for a library title is kept on it, so
+// the library can show — and play — what was found without searching again.
+contentService.onSourcesFound((pageUrl, sources, season, episode) => {
+  libraryStore.mergeDiscoveredSources(pageUrl, sources, season, episode);
+});
+
+/**
+ * Looks for sources for a film just added to the library with none known yet.
+ *
+ * Adding a title is a stronger statement of intent than opening its page, which
+ * already prefetches — so this runs under the same switch ("Load sources while
+ * you read"), one at a time, without widening past the providers the title came
+ * from. Series are left alone: without an episode there is nothing precise to
+ * look for, and their episodes are captured as they are opened and played.
+ */
+let libraryCapture: Promise<unknown> = Promise.resolve();
+const libraryCapturing = new Set<string>();
+const SERIES_TYPES = new Set<string>(['TvSeries', 'Anime', 'AsianDrama', 'Live']);
+
+function captureLibrarySources(mediaUrl: string, title: string, type?: string): void {
+  if (!sourcePrefetcher.isEnabled() || libraryCapturing.has(mediaUrl)) return;
+  if (type && SERIES_TYPES.has(type)) return;
+  libraryCapturing.add(mediaUrl);
+  libraryCapture = libraryCapture
+    .then(() =>
+      contentService.getSources({ mediaUrl, titleOverride: title }, undefined, { autoWiden: false })
+    )
+    // Finding nothing leaves the entry as it was; the results, if any, arrive
+    // through `onSourcesFound` above.
+    .catch(() => undefined)
+    .finally(() => libraryCapturing.delete(mediaUrl));
+}
 const bootstrap = new BootstrapService(datastore, pluginManager);
+
+/**
+ * Install, update and add-repository presses, run behind the screen.
+ *
+ * Pushed to the renderer at most every 120ms: install progress arrives per
+ * downloaded chunk, and the tray does not need to repaint for each one.
+ */
+let jobsPushTimer: NodeJS.Timeout | null = null;
+const JOB_STEP_LABEL: Record<string, string | undefined> = {
+  downloading: 'Downloading',
+  verifying: 'Checking the download',
+  analyzing: 'Setting up',
+  complete: 'Finishing',
+};
+const extensionJobs: ExtensionJobQueue = new ExtensionJobQueue({
+  concurrency: DEFAULT_JOB_CONCURRENCY,
+  notify: () => {
+    if (jobsPushTimer) return;
+    jobsPushTimer = setTimeout(() => {
+      jobsPushTimer = null;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('extension:jobsUpdate', extensionJobs.snapshot());
+      }
+    }, 120);
+  },
+  run: async (request, report) => {
+    switch (request.kind) {
+      case 'install':
+        return pluginManager.installPlugin(request.plugin, request.repositoryUrl);
+      case 'update':
+        return extensionUpdater.updatePlugin(request.internalName);
+      case 'addRepository':
+        return pluginManager.addRepository(request.url);
+      case 'installRepository': {
+        report({ step: 'Reading the repository' });
+        // The adult setting is read here, never taken from the renderer.
+        const plan = await pluginManager.planRepositoryInstall(request.url, {
+          limit: request.limit,
+          adultAllowed: bootstrap.isAdultAllowed(),
+        });
+        if (!plan.ok) return plan;
+        // One job per extension, so they download side by side and a failure
+        // can be retried on its own.
+        extensionJobs.enqueue(
+          plan.plugins.map((plugin) => ({
+            kind: 'install' as const,
+            plugin,
+            repositoryUrl: plan.repositoryUrl,
+          }))
+        );
+        const parts = [
+          plan.plugins.length > 0
+            ? `${plan.plugins.length} extension${plan.plugins.length === 1 ? '' : 's'} queued`
+            : 'Nothing new to install',
+        ];
+        if (plan.alreadyInstalled > 0) parts.push(`${plan.alreadyInstalled} already installed`);
+        if (plan.skipped > 0) parts.push(`${plan.skipped} adult skipped`);
+        return { ok: true, message: `${plan.name}: ${parts.join(', ')}` };
+      }
+    }
+  },
+});
+
 const titleOutcomes = new TitleOutcomeStore(datastore);
 
 /**
@@ -1485,6 +1588,12 @@ app.whenReady().then(async () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('extension:installProgress', progress);
     }
+    // Installs and updates both come through here, so one listener feeds the
+    // job tray for both. An error carries no step: the job's own outcome says it.
+    extensionJobs.progress(`ext:${progress.internalName}`, {
+      percent: progress.percent,
+      step: JOB_STEP_LABEL[progress.step],
+    });
   });
 
   /**
@@ -1651,6 +1760,8 @@ async function shutdownServices(): Promise<void> {
   background.stop();
   downloadService.stop();
   extensionUpdater.stop();
+  // Installs already running finish or die with the sidecar; nothing new starts.
+  extensionJobs.cancelQueued();
   /**
    * The datastore's writes are coalesced on a 250ms timer now, so the last
    * change of a session — a window position, a finished episode, a setting just
@@ -1664,6 +1775,8 @@ async function shutdownServices(): Promise<void> {
   // The pages opened in the last few seconds of a session are the ones most
   // likely to be reopened in the first few of the next.
   pageSnapshots.flush();
+  // A search saved a moment before quitting is one the viewer expects to find.
+  savedSearches.flush();
   // The ledger's write is debounced, and the failures worth keeping cluster at
   // shutdown — a session that ended badly is the one whose last seconds matter.
   issueLog.flush();
@@ -1984,6 +2097,34 @@ ipcMain.handle('api:removeSearchHistory', async (_, query: string) =>
 );
 
 ipcMain.handle('api:clearSearchHistory', async () => searchHistory.clear());
+
+/**
+ * Search results kept on request — see `savedSearches.ts` for why these are
+ * safe to keep when history deliberately keeps only queries.
+ *
+ * The scope is taken from the caller's snapshot rather than the stored scope:
+ * a search is saved as it was run, and the stored scope may have changed since.
+ */
+ipcMain.handle('search:saveResults', async (_, input: SaveSearchInput) => {
+  try {
+    const saved = savedSearches.save(input);
+    return saved
+      ? { ok: true, saved }
+      : { ok: false, error: 'There were no results to save.', saved: null };
+  } catch (error) {
+    return { ...fail(error), saved: null };
+  }
+});
+
+ipcMain.handle('search:listSaved', async () => savedSearches.list());
+
+ipcMain.handle('search:getSaved', async (_, id: string) => {
+  const search = savedSearches.get(id);
+  if (search) contentService.rememberSearchRows(search.results);
+  return search;
+});
+
+ipcMain.handle('search:removeSaved', async (_, id: string) => savedSearches.remove(id));
 
 // --- diagnostics ----------------------------------------------------------
 
@@ -4532,6 +4673,33 @@ ipcMain.handle('extension:addRepository', async (_, repoUrl: string) => {
   }
 });
 
+/**
+ * The background queue behind the extensions screen.
+ *
+ * `enqueueJobs` returns as soon as the work is queued — the reply is the whole
+ * queue, and `extension:jobsUpdate` carries every change after it. The direct
+ * `installPlugin`/`installRepository` handlers remain for callers that need to
+ * await one result (OTT setup, the first-run bootstrap).
+ */
+ipcMain.handle('extension:enqueueJobs', async (_, requests: ExtensionJobRequest[]) => {
+  try {
+    const { snapshot } = extensionJobs.enqueue(Array.isArray(requests) ? requests : []);
+    return { ok: true, snapshot };
+  } catch (error) {
+    return { ...fail(error), snapshot: extensionJobs.snapshot() };
+  }
+});
+
+ipcMain.handle('extension:getJobs', async () => extensionJobs.snapshot());
+
+ipcMain.handle('extension:cancelJob', async (_, id: string) => extensionJobs.cancel(id));
+
+ipcMain.handle('extension:cancelQueuedJobs', async () => extensionJobs.cancelQueued());
+
+ipcMain.handle('extension:retryJob', async (_, id: string) => extensionJobs.retry(id));
+
+ipcMain.handle('extension:clearFinishedJobs', async () => extensionJobs.clearFinished());
+
 ipcMain.handle(
   'extension:installRepository',
   async (_, repoUrl: string, options?: { limit?: number }) => {
@@ -5099,6 +5267,20 @@ ipcMain.handle('library:upsertEntry', async (_, input: Parameters<LibraryStore['
    * that is the identity a library entry actually has.
    */
   pageSnapshots.setPinned({ url: input?.mediaUrl, title: entry?.title, year: entry?.year }, true);
+
+  /*
+   * The sources come with it. Whatever discovery already found for this page is
+   * saved on the entry now; a deliberate add (a bucket was chosen) with nothing
+   * found yet goes looking in the background.
+   */
+  if (entry && input?.mediaUrl) {
+    const cached = contentService.peekCachedSources(input.mediaUrl);
+    if (cached.length > 0) {
+      libraryStore.mergeDiscoveredSources(input.mediaUrl, cached);
+    } else if (input.status && !entry.sources?.length) {
+      captureLibrarySources(input.mediaUrl, entry.title, entry.type);
+    }
+  }
   return entry;
 });
 
@@ -5591,6 +5773,17 @@ const backupService = new BackupService(
           count++;
         }
         return count;
+      },
+    },
+    {
+      name: 'savedSearches',
+      label: 'Saved searches',
+      replaceable: true,
+      collect: () => savedSearches.exportAll(),
+      restore: (value: unknown, mode) => {
+        if (!Array.isArray(value)) return 0;
+        if (mode === 'replace') savedSearches.clear();
+        return savedSearches.importAll(value);
       },
     },
     {
