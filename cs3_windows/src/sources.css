@@ -3226,7 +3226,14 @@
   display: flex;
   flex-direction: column;
   gap: 1.1rem;
-  max-width: 780px;
+  max-width: 1080px;
+}
+.settings__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
 }
 .settings__head h2 {
   margin: 0;
@@ -3251,9 +3258,7 @@
 .settings__level {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 0.4rem;
-  margin-top: 0.8rem;
 }
 
 .settings__level-btn {
@@ -3275,62 +3280,119 @@
   border-color: rgba(59, 130, 246, 0.45);
   color: #dbeafe;
 }
-
-/* Says what is being held back. A filtered list that does not admit it is
-   filtered is the same failure as a scoped search that does not: the reader
-   cannot tell a setting they cannot find from one that does not exist. */
-.settings__level-note {
-  flex: 1 1 22ch;
-  min-width: 0;
-  font-size: 0.72rem;
-  color: var(--text-subtle);
-  line-height: 1.4;
-}
+/* The explanation opens leftwards: the switch sits at the right edge. */
+.settings__level .hint__bubble { left: auto; right: -0.5rem; }
 
 /*
- * The tabs wrap; they do not scroll sideways.
+ * Navigation down the side, content beside it.
  *
- * `overflow-x: auto` on a fixed set of tabs means that on an ordinary window a
- * user has to find and drag a horizontal scrollbar before they can click
- * "Advanced" — in a desktop app, for navigation that is always the same eight
- * items. Wrapping costs one extra line of height at narrow widths and makes
- * every destination clickable at every width, which is the whole job.
+ * The side column is sticky, so a destination is always one click away however
+ * long the section is. Below ~860px there is no room for two columns and the
+ * list folds back above the content as wrapping pills.
  */
-.settings__tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-  border-bottom: 1px solid var(--border-color);
-  padding-bottom: 0.5rem;
-  /* Sticky because "All settings" is one long page: navigation that scrolls
-     away is navigation you have to scroll back up to reach. */
+.settings__layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+.settings__nav {
   position: sticky;
   top: 0;
-  z-index: 3;
-  background: var(--bg-dark);
-  padding-top: 0.5rem;
-  margin-top: -0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
 }
-.settings__tab {
-  display: inline-flex;
+.settings__nav-list { display: flex; flex-direction: column; gap: 0.15rem; }
+.settings__nav-item {
+  display: flex;
   align-items: center;
-  gap: 0.35rem;
-  flex: 0 0 auto;
-  padding: 0.35rem 0.75rem;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.5rem 0.7rem;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   background: none;
   color: var(--text-muted);
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: 0.83rem;
+  font-weight: 500;
+  text-align: left;
   cursor: pointer;
-  white-space: nowrap;
+  transition: var(--transition);
 }
-.settings__tab:hover { color: #fff; }
-.settings__tab--on {
-  background: rgba(59, 130, 246, 0.16);
-  border-color: var(--accent-primary);
+.settings__nav-label { flex: 1; min-width: 0; }
+.settings__nav-item:hover { color: #fff; background: var(--bg-card-hover); }
+.settings__nav-item--on {
   color: #fff;
+  font-weight: 600;
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+.settings__nav-item--on svg { color: var(--accent-light); }
+.settings__nav-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.18);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.settings__find {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-subtle);
+}
+.settings__find:focus-within { border-color: var(--accent-primary); color: var(--accent-light); }
+.settings__find input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text-main);
+  font-size: 0.82rem;
+}
+.settings__find input::-webkit-search-cancel-button { display: none; }
+.settings__find-clear {
+  display: inline-flex;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.settings__find-clear:hover { color: #fff; }
+
+.settings__content { display: flex; flex-direction: column; gap: 1.1rem; min-width: 0; }
+.settings-found { display: contents; }
+.settings__find-note { margin: 0; font-size: 0.8rem; color: var(--text-muted); }
+.settings__find-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 2.5rem 1rem;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 860px) {
+  .settings__layout { grid-template-columns: minmax(0, 1fr); }
+  .settings__nav { position: static; }
+  .settings__nav-list { flex-direction: row; flex-wrap: wrap; }
+  .settings__nav-item { width: auto; border-radius: 999px; padding: 0.35rem 0.75rem; }
 }
 
 .settings__flash {
@@ -8376,3 +8438,101 @@
   padding-top: 0.55rem;
   border-top: 1px solid rgba(148, 163, 184, 0.14);
 }
+
+/* --- Saved sources on a library title -------------------------------------- */
+.saved-sources { display: flex; flex-direction: column; gap: .7rem; }
+.saved-sources__empty { margin: 0; padding: 1.25rem 0; text-align: center; font-size: .82rem; color: var(--text-muted); }
+.saved-sources__stamp { margin: 0; display: flex; align-items: center; gap: .35rem; font-size: .72rem; color: var(--text-subtle); }
+.saved-sources__group { display: flex; flex-direction: column; gap: .35rem; }
+.saved-sources__group h5 { margin: .2rem 0 0; font-size: .74rem; font-weight: 600; color: var(--text-muted); }
+.saved-sources__group ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .35rem; }
+.saved-sources__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .9rem;
+  padding: .6rem .75rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, .03);
+}
+.saved-sources__what { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+.saved-sources__title {
+  font-size: .83rem;
+  font-weight: 600;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.saved-sources__meta { display: flex; flex-wrap: wrap; gap: .25rem .6rem; font-size: .72rem; color: var(--text-muted); }
+.saved-sources__meta span { display: inline-flex; align-items: center; gap: .2rem; }
+.saved-sources__meta strong { color: var(--accent-light); }
+.saved-sources__found { color: var(--text-subtle); }
+
+/* --- Saved searches -------------------------------------------------------- */
+.search-head__actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.search-head__save { display: inline-flex; align-items: center; gap: .35rem; font-size: .8rem; }
+.search-head__save--done { color: var(--status-success); border-color: rgba(16, 185, 129, .4); }
+.search-alert--saved {
+  background: rgba(59, 130, 246, .1);
+  border-color: rgba(59, 130, 246, .35);
+  color: var(--text-main);
+}
+.search-alert--saved svg { color: var(--accent-light); }
+.saved-searches { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
+.saved-searches__row {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .5rem .6rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+}
+.saved-searches__row:hover { background: var(--bg-card-hover); }
+.saved-searches__open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: .85rem;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.saved-searches__posters { display: flex; gap: .2rem; flex-shrink: 0; }
+.saved-searches__posters img,
+.saved-searches__placeholder {
+  width: 34px;
+  height: 50px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: var(--bg-input);
+}
+.saved-searches__placeholder { display: flex; align-items: center; justify-content: center; color: var(--text-subtle); }
+.saved-searches__text { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.saved-searches__text strong { font-size: .92rem; color: var(--text-main); }
+.saved-searches__text > span { font-size: .75rem; color: var(--text-muted); display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.saved-searches__scoped { display: inline-flex; align-items: center; gap: .2rem; color: var(--accent-light); }
+
+/* --- Settings: text behind ⓘ rather than on the page ----------------------- */
+.settings-section__title .hint,
+.indexer-add h4 .hint { margin-left: 0.1rem; }
+.indexer-add h4 { display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.6rem; }
+.indexer-add-wrap { margin-top: 1rem; }
+.indexer-add-wrap > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--accent-light);
+  list-style: none;
+}
+.indexer-add-wrap > summary::-webkit-details-marker { display: none; }
+.indexer-add-wrap[open] > summary { margin-bottom: 0.2rem; }
