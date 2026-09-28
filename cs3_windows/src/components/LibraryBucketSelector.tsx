@@ -7,6 +7,11 @@ import { torrentResultToStoredSource } from '../../electron/cs3/libraryStore';
 interface LibraryBucketSelectorProps {
   item: SearchResponse;
   sources?: TorrentResult[];
+  /**
+   * What discovery is asked for on this title's behalf, when that is not its
+   * page — the episode on screen. Sent with the add so its sources are saved.
+   */
+  sourceQuery?: { mediaUrl: string; season?: number; episode?: number };
   size?: 'sm' | 'md';
   onStatusChanged?: (newStatus: WatchStatus | null) => void;
   buttonClassName?: string;
@@ -37,6 +42,7 @@ const BUCKETS: Array<{ status: WatchStatus; label: string }> = [
 export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
   item,
   sources,
+  sourceQuery,
   size = 'md',
   onStatusChanged,
   buttonClassName,
@@ -102,6 +108,7 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
         mediaUrl: item.url,
         status,
         sources: storedSources,
+        sourceQuery: sourceQuery?.mediaUrl !== item.url ? sourceQuery : undefined,
       });
 
       // Record library added history event

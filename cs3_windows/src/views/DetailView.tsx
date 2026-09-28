@@ -1153,6 +1153,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
         type: detail.type,
         posterUrl: detail.posterUrl,
         mediaUrl: detail.url,
+        // An episode is searched by its own address; linking it lets the
+        // library keep what that search finds.
+        sourceQuery: requested
+          ? { mediaUrl: requested.url, season: requested.season, episode: requested.episode }
+          : undefined,
       });
 
       // One local datastore read, needed before the player mounts so the
@@ -1310,6 +1315,13 @@ export const DetailView: React.FC<DetailViewProps> = ({
         type: detail.type,
         posterUrl: detail.posterUrl,
         mediaUrl: detail.url,
+        sourceQuery: pendingEpisode
+          ? {
+              mediaUrl: pendingEpisode.url,
+              season: pendingEpisode.season,
+              episode: pendingEpisode.episode,
+            }
+          : undefined,
       });
       rememberChoice(source, pendingEpisode);
 
@@ -1599,6 +1611,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
           <LibraryBucketSelector
             item={{ ...detail, apiName: mediaItem.apiName }}
             sources={pickerData?.sources || undefined}
+            sourceQuery={playTarget ?? undefined}
             size="sm"
           />
         }
