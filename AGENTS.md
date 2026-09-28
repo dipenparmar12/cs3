@@ -85,6 +85,9 @@ cs3/
 | Direct (non-torrent) indexer sources only | `cs3_windows/` | `bun run test direct-sources` (13 cases, pure) |
 | yt-dlp source mapping only | `cs3_windows/` | `bun run test ytdlp` (16 cases, pure) |
 | Repository catalogue only | `cs3_windows/` | `bun run test repositories` (9 cases, pure — fetches nothing) |
+| Extension job queue only | `cs3_windows/` | `bun run test jobs` (13 cases, pure — gated runners, no JVM) |
+| Saved searches only | `cs3_windows/` | `bun run test saved-searches` (9 cases, temp dirs) |
+| Settings search only | `cs3_windows/` | `bun run test settings-search` (6 cases, pure) |
 | Extended metadata (all) | `cs3_windows/` | `bun run test metadata` (92 cases, pure — fetches nothing) |
 | Metadata merge only | `cs3_windows/` | `bun run test metadata-merge` (34 cases, pure) |
 | Metadata sources only | `cs3_windows/` | `bun run test metadata-sources` (39 cases, stubbed transport) |
@@ -219,7 +222,8 @@ Fallible handlers return an **envelope** `{ ok, error?, …payload }` and never 
 | `natives:*` | Built-in provider roster: `list/setEnabled/addAddon/removeAddon` (Stremio addons by manifest URL), `addServer/removeServer` (Jellyfin/Emby — `addServer` takes a key, never returns one). Separate from `extension:*` (an inventory of *downloaded* things) because a compiled-in provider has no repository. |
 | `ott:*` | `listPlatforms/getCatalog/getCatalogPage/getSearchScope/getSuggestions/installSuggestion`. **`installSuggestion` takes a repository id, never a URL** — a URL would let "set up Netflix" install arbitrary code. |
 | `profiles:*` | `list/activate/create/rename/duplicate/delete`. Every one answers with the **whole** state (list + active id + unnamed draft) — those three must agree and rebuilding from a delta is how they stop agreeing. Profiles sit **above** `SearchScopeStore`; each change resolves to a `SearchScope` and writes it through, so nothing downstream learns profiles exist. `search:setScope` routes through the same layer. |
-| `extension:*` | `addRepository` and `installRepository` are deliberately two actions (fetch+persist vs. tens of downloads/translations). `rollback` restores a replaced archive. |
+| `extension:*` | `addRepository` and `installRepository` are deliberately two actions (fetch+persist vs. tens of downloads/translations). `rollback` restores a replaced archive. **The screen does not call them directly any more**: `enqueueJobs(requests)` queues install/update/add/install-repository and returns the whole queue; `extension:jobsUpdate` pushes it (≤ every 120ms); `cancelJob/cancelQueuedJobs/retryJob/clearFinishedJobs/getJobs`. One job per target — a second press joins it. The direct handlers stay for callers that await one result (OTT setup, bootstrap). |
+| saved searches | `search:saveResults({query, results, providers, indexers})` → `{ok, saved}`; `search:listSaved` (summaries, no rows); `search:getSaved(id)` (re-teaches `ContentService` the rows' alternate routes); `search:removeSaved`. The renderer draws a saved search as a finished `SearchSnapshot` with `savedView` set, so the screen always says it is saved and when. |
 | adult gate | `get/setAdultMode`, `unlock/lockAdultForSession`. `mode` is the setting; `allowed` is whether adult providers are offered *now* (they differ under `ask`). **The unlock is in-memory only and never persisted**; `unlockAdultForSession` refuses unless mode is already `ask`, so a renderer cannot use it to change the setting. |
 | `download:*` | **`request`** = a button press (reads task state, resumes/recovers/refuses, reports which) vs **`enqueue`** = "create this task". `preview` answers where a file would land, read-only — the renderer cannot compute the path (folder layout, variant segment and collision suffix come from the whole queue). `get/setConfirmPreference` (`ask`\|`immediate`, default `immediate`). |
 | `issues:*` | `list/annotate/report/clear` — the extension issue ledger; a third surface beside `log:*` and `diagnostics:*` (§5.5). |
@@ -331,6 +335,7 @@ rather than omitting the ones nothing serves.
 | `searchSession.ts` | One "Search" interaction; push-shaped, fans out per source, cancellable. |
 | `searchSuggestions.ts` | Autocomplete: Cinemeta + TVmaze + AniList merged, deduped, misspelling-tolerant. Instant from cache, progressive from the network, superseded runs aborted. |
 | `searchHistory.ts` | Past *queries* only — results go stale silently. |
+| `savedSearches.ts` | Result sets the viewer chose to keep (Save results). Own JSON file, hydrated on first use, 50 searches × 200 rows; same query + same scope updates in place. Rows are page addresses, which do not expire. In the backup table as `savedSearches`. |
 | `sourceCache.ts` | Per-source expiry: magnets never expire; provider links take a deadline from the URL (`Expires`/`exp`/JWT) or a short TTL. |
 | `subtitleService.ts` | Keyless OpenSubtitles v3 Stremio addon by IMDb id. SubRip→WebVTT is mandatory (`<track>` rejects `.srt` silently). |
 | `subtitles/convert.ts` | SubRip/ASS/SSA → WebVTT + charset detection. |
@@ -358,6 +363,7 @@ rather than omitting the ones nothing serves.
 | `cs3/providerRecovery.ts` | `planRecovery` (pure) — ordered steps to make a saved page's provider answer again; never adds an unknown repository. |
 | `cs3/extensionUpdater.ts` | Scheduled OTA extension updates. "Update all" re-checks rather than reading the persisted snapshot; an update installs into the directory the *record* names and downloads from the repository the *update* names. Auto-installs on every launch by default (Android parity); only a choice made in Settings overrides that. |
 | `cs3/archivePlacement.ts` | Replacing an archive Windows still holds: retry the rename, then place beside it and sweep the held copy later. Pure, tested with an injected filesystem. |
+| `cs3/extensionJobs.ts` | The background queue behind the extensions screen: install, update, add repository, install repository (expanded into one install job per extension). 3 at once, one job per target, failures kept with a reason and a retry, whole-state snapshots. Pure apart from the injected runner. |
 | `cs3/starterPlugins.ts` | Which extensions a new install starts with: the viewer's languages, working before beta before slow. Pure, tested. |
 | `cs3/rpcResult.ts` | `RpcResult` + `isTransportFailure` — "the runtime never answered" vs "the answer was no". Pure, tested. |
 | `cs3/bootstrap.ts` | First-run bundled-repo install + adult opt-in. |
@@ -415,6 +421,9 @@ rather than omitting the ones nothing serves.
 | File | Responsibility |
 |---|---|
 | `src/utils/savedPage.ts` | Draws a page from its snapshot and folds a live answer over it **without blanking**. |
+| `src/components/extensions/useExtensionJobs.ts` + `JobsTray.tsx` | The job queue as the renderer sees it — one module-level subscription shared by the tray, each row's button and the sidebar badge. `useOnJobsSettled` re-reads the tree when jobs finish (coalesced). |
+| `src/components/settings/settingsSearch.ts` | "Find a setting": every query word must appear in a row's label, note, ⓘ text or `keywords`. Pure, tested. Rows/groups filter themselves; whole panels are wrapped in `SettingsSection keywords=…`. |
+| `src/components/library/SavedSourcesList.tsx`, `SavedSearchesList.tsx` | A library title's saved sources, grouped by episode, playable when the link is usable and "Find again" when it has expired; the Library's Saved searches tab. |
 | `src/utils/errors.ts` | `describeError` — never returns empty; unwraps `error.cause`. |
 | `src/utils/format.ts` | The byte formatters, kept as parameters (see §12). |
 | `src/utils/sourceIdentity.ts` | `normaliseReleaseName` / `hasRealInfoHash`. |
@@ -490,6 +499,7 @@ registered) · `cs3/webViewHost.ts` (Cloudflare challenges) · `cs3/extensionIss
 - **Built-in providers use `cs3native://`, never `cs3ext://`** (wrong-attribution failures).
 - **The WebView host must finish before the sidecar stops waiting** (`cs3/hostDeadline.ts`) — the reverse channel carries one deadline and both ends used to spend it.
 - **A failed `load()` closes its class loader, and `unload` withdraws what the plugin registered.** A leaked loader holds a Windows handle on the `.cs3`, and every later update of that extension fails its rename with `EPERM` (measured: Ultima, which fails at `load()` on every launch, could never be updated). `unload` removes the plugin's entries from `APIHolder.apis`/`allProviders` and `extractorApis` by `sourcePlugin`, as upstream's `unloadPlugin` does. `PluginUnloadTest` pins both and fails on the old code.
+- **Installs and updates from the screen are background jobs** (`cs3/extensionJobs.ts`). Downloads overlap; everything after the verified download in `installPlugin` — rename, translate, load — runs through `PluginManager.oneAtATime`, because overlapping loads mis-attribute providers. Any new install path must go through `installPlugin` or take that lock.
 - **Replacing an archive goes through `cs3/archivePlacement.ts`.** Retry the rename for ~1.5s, then place the update beside the held file (`Name.hash.<sha12>.cs3`) and point the record at it; the held copy goes on `extension_displaced_archives` and is swept once released. Read an extension's archive from `record.filePath` (`archivePathFor`), never from the canonical path.
 - **Extension updates install automatically on every launch by default** — Android parity; see "Updates install automatically" in §5 detail.
 - **New installs start with the viewer's languages** (`cs3/starterPlugins.ts`): own locale + English, working before beta before slow, nothing marked down, 16 per bundled repository; a bundled repository in another language is skipped.
@@ -4709,6 +4719,7 @@ screen groups by subject and filters by *level*. All teardown happens on `before
 **Rules:**
 - **A links handle is not a page address** (`cs3/extensionAddress.ts`). `loadLinks` takes an opaque provider blob, often JSON; `load` takes a fetchable URL. Storing one as the other is how saved rows opened blank.
 - **`recordProgress` keys on `canonicalKey` + season + episode, never `mediaUrl`.**
+- **A library title keeps what discovery found for it.** `SourceCache.onWrite` → `LibraryStore.mergeDiscoveredSources`, matched on the page address or a linked episode address (`sourceAddresses`, set from the `sourceQuery` the detail page sends — a series is searched by each episode's own handle). Identity is provider + release + resolution (real infohash for torrents), 30 per title, `parsed`/`scoreReasons` dropped; never bumps `updatedAt`. A deliberate add with nothing cached runs one background discovery, under the "Load sources while you read" switch.
 - **A null episode means "Play"**, and the resume rule is *furthest episode with history wins* — never most-recently-updated.
 - **A later load may add and may correct, but may never blank.** Episode listings are all-or-nothing, never field-merged.
 - **A download is identified by its variant** (media + season + episode + provider + release name + resolution + quality + language + audio), never by title and never by a synthesised per-URL `infoHash`.

@@ -101,6 +101,9 @@ const PRESET_ALIASES = {
   discovery: ['electron/sharedDiscovery.test.mts'],
   'shared-discovery': ['electron/sharedDiscovery.test.mts'],
   updater: ['electron/cs3/extensionUpdater.test.mts'],
+  jobs: ['electron/cs3/extensionJobs.test.mts'],
+  'saved-searches': ['electron/savedSearches.test.mts'],
+  'settings-search': ['src/components/settings/settingsSearch.test.mts'],
 };
 
 // Colors for terminal output
