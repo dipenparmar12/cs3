@@ -34,6 +34,9 @@ import { SourceTree } from './SourceTree';
 import { BuiltInSources } from './BuiltInSources';
 import { RepositoryCatalog } from './RepositoryCatalog';
 import { ExtensionCatalog } from './ExtensionCatalog';
+import { JobsTray } from './JobsTray';
+import { InfoHint } from '../settings/InfoHint';
+import { useExtensionJobs, useOnJobsSettled } from './useExtensionJobs';
 import type { SitePlugin } from '../../types/plugin';
 import './extensions.css';
 import { describeError } from '../../utils/errors';
@@ -54,7 +57,10 @@ const TABS: Array<{ id: Tab; label: string; hint: string }> = [
 ];
 
 export const ExtensionsScreen: React.FC = () => {
-  const { state, progress, busy, refresh, actions, browseRepository } = useExtensionCatalog();
+  const { state, busy, refresh, actions, browseRepository } = useExtensionCatalog();
+  const jobs = useExtensionJobs();
+  // The tree is re-read, never predicted, once background work lands.
+  useOnJobsSettled(jobs.snapshot, () => void refresh());
   const [tab, setTab] = useState<Tab>('sources');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -144,11 +150,13 @@ export const ExtensionsScreen: React.FC = () => {
   );
 
   const install = useCallback(
-    async (plugin: SitePlugin) => {
+    (chosen: SitePlugin[]) => {
       if (!browsing) return;
-      await actions.installPlugin(plugin, browsing.url);
+      void jobs.enqueue(
+        chosen.map((plugin) => ({ kind: 'install' as const, plugin, repositoryUrl: browsing.url }))
+      );
     },
-    [actions, browsing]
+    [jobs, browsing]
   );
 
   return (
@@ -181,6 +189,8 @@ export const ExtensionsScreen: React.FC = () => {
       </header>
 
       {state.error ? <p className="ext-error">{state.error}</p> : null}
+
+      <JobsTray />
 
       {/*
         Extension updates, and the reason this line exists at all.
@@ -255,7 +265,7 @@ export const ExtensionsScreen: React.FC = () => {
           {selected.size > 0 ? (
             <BulkActionBar
               count={selected.size}
-              noun={selected.size === 1 ? 'provider' : 'providers'}
+              noun="provider"
               busy={busy === 'providers:bulk' ? 'Applying…' : null}
               onClear={() => setSelected(new Set())}
               onSelectAll={selectAllProviders}
@@ -301,6 +311,7 @@ export const ExtensionsScreen: React.FC = () => {
           adultAllowed={state.adultAllowed}
           filters={filters.state}
           busy={busy}
+          jobFor={jobs.jobFor}
           tree={state.tree}
           expandedUrl={browsing?.url ?? null}
           onBrowse={(repository) => void browse(repository)}
@@ -315,15 +326,17 @@ export const ExtensionsScreen: React.FC = () => {
               loading={browseLoading}
               error={browseError}
               busy={busy}
-              progress={progress}
+              jobFor={(internalName) => jobs.jobFor(`ext:${internalName}`)}
               embedded
-              onInstall={(plugin) => void install(plugin)}
+              onInstall={install}
               onUninstall={(name) => void actions.uninstallPlugin(name)}
+              onCancelJob={(id) => void jobs.cancel(id)}
+              onRetryJob={(id) => void jobs.retry(id)}
             />
           )}
           onRemove={(url) => void actions.removeRepository(url)}
-          onAdd={(url) => void actions.addRepository(url)}
-          onInstallAll={(url) => void actions.installRepository(url)}
+          onAdd={(url, name) => void jobs.enqueue([{ kind: 'addRepository', url, name }])}
+          onInstallAll={(url, name) => void jobs.enqueue([{ kind: 'installRepository', url, name }])}
         />
       ) : null}
 
@@ -347,12 +360,12 @@ export const ExtensionsScreen: React.FC = () => {
               enforcement — filtering at each call site would be five places to
               forget.
             */}
-            <em>
-              Off by default. A source counts as adult when it says so about itself, which
-              catches one bundled inside an otherwise ordinary add-on.
-            </em>
           </span>
         </label>
+        <InfoHint label="About adult providers">
+          Off by default. A source counts as adult when it says so about itself, which catches
+          one bundled inside an otherwise ordinary add-on.
+        </InfoHint>
       </footer>
     </div>
   );

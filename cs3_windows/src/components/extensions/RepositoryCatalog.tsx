@@ -31,18 +31,23 @@
  * the heavier action and says how many extensions it is about to fetch.
  */
 import React, { useMemo, useState } from 'react';
-import { ChevronDown, ChevronUp, Loader2, Search } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Clock, Loader2, Search } from 'lucide-react';
 import { Badge, ExternalLink } from './primitives';
 import { matchesQuery, type FilterState } from './useExtensionFilters';
 import type { ProviderTreeRepository } from '../../types/plugin';
 import type { OfficialRepository } from './useExtensionCatalog';
+import type { ExtensionJob } from './useExtensionJobs';
+import { InfoHint } from '../settings/InfoHint';
 
 interface RepositoryCatalogProps {
   official: OfficialRepository[];
   installed: string[];
   adultAllowed: boolean;
   filters: FilterState;
+  /** The key of a removal in progress; Add and Install all are queued jobs. */
   busy: string | null;
+  /** The queue's job for a target (`repo:<url>`, `repo-add:<url>`), if any. */
+  jobFor(target: string): ExtensionJob | null;
   /**
    * The installed tree, so a search can reach *through* a repository.
    *
@@ -62,10 +67,36 @@ interface RepositoryCatalogProps {
   renderExpanded(): React.ReactNode;
   onRemove(url: string): void;
   /** Keeps the repository without downloading any of its extensions. */
-  onAdd(url: string): void;
+  onAdd(url: string, name?: string): void;
   /** Downloads and installs its extensions. The expensive one. */
-  onInstallAll(url: string): void;
+  onInstallAll(url: string, name?: string): void;
 }
+
+const working = (job: ExtensionJob | null) =>
+  job !== null && (job.state === 'queued' || job.state === 'running');
+
+/** A job's state in the words a button can carry. */
+const JobLabel: React.FC<{ job: ExtensionJob | null; idle: string; active: string }> = ({
+  job,
+  idle,
+  active,
+}) => {
+  if (job?.state === 'queued') {
+    return (
+      <>
+        <Clock size={13} /> Waiting
+      </>
+    );
+  }
+  if (job?.state === 'running') {
+    return (
+      <>
+        <Loader2 size={13} className="spin" /> {active}
+      </>
+    );
+  }
+  return <>{idle}</>;
+};
 
 /**
  * What a repository matched on, when it did not match on its own text.
@@ -120,6 +151,7 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
   adultAllowed,
   filters,
   busy,
+  jobFor,
   tree,
   expandedUrl,
   onBrowse,
@@ -191,23 +223,27 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
         <button
           type="button"
           className="ext-btn"
-          disabled={!customUrl.trim() || busy !== null}
+          disabled={!customUrl.trim() || working(jobFor(`repo-add:${customUrl.trim()}`))}
           title="Keep this repository in your list without installing anything"
-          onClick={() => onAdd(customUrl.trim())}
+          onClick={() => {
+            onAdd(customUrl.trim());
+            setCustomUrl('');
+          }}
         >
-          {busy === `add:${customUrl.trim()}` ? <Loader2 size={13} className="spin" /> : null}
           Add
         </button>
+        <InfoHint label="Which addresses work">
+          Paste a repository link, a project page or a shortcode. There is no fixed place a
+          plugin list lives, so the usual branches and file names are tried for you.
+        </InfoHint>
       </form>
-      <p className="ext-hint">
-        A project page or repository shortcode works too. There is no convention for where a plugin list lives, so
-        the branch and filename are probed — <code>master/repo.json</code>,{' '}
-        <code>builds/repo.json</code> and <code>builds/plugins.json</code> are all in use.
-      </p>
 
       <ul className="ext-cards">
         {visible.map((repository) => {
           const here = isInstalled(repository, installed);
+          const addJob = jobFor(`repo-add:${repository.rawRepoUrl}`);
+          const installJob = jobFor(`repo:${repository.rawRepoUrl}`);
+          const failedJob = [installJob, addJob].find((job) => job?.state === 'failed') ?? null;
           const open = expandedUrl === repository.rawRepoUrl;
           const deep = deepMatchFor(repository, tree, filters.query);
           return (
@@ -272,7 +308,6 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                 <button
                   type="button"
                   className="ext-btn ext-btn--primary"
-                  disabled={busy !== null}
                   aria-expanded={open}
                   onClick={() =>
                     open
@@ -280,50 +315,49 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                       : onBrowse({ name: repository.name, url: repository.rawRepoUrl })
                   }
                 >
-                  {busy === `browse:${repository.rawRepoUrl}` ? (
-                    <Loader2 size={13} className="spin" />
-                  ) : open ? (
+                  {open ? (
                     <ChevronUp size={13} />
                   ) : (
                     <ChevronDown size={13} />
                   )}
                   {open ? 'Hide extensions' : 'Browse extensions'}
                 </button>
-                {here ? null : (
+                {here ? null : addJob?.state === 'done' ? (
+                  <span className="ext-item__installed">
+                    <Check size={13} /> Added
+                  </span>
+                ) : (
                   <button
                     type="button"
                     className="ext-btn"
-                    disabled={busy !== null}
+                    disabled={working(addJob)}
                     title="Keep this repository in your list without installing anything"
-                    onClick={() => onAdd(repository.rawRepoUrl)}
+                    onClick={() => onAdd(repository.rawRepoUrl, repository.name)}
                   >
-                    {busy === `add:${repository.rawRepoUrl}` ? (
-                      <Loader2 size={13} className="spin" />
-                    ) : null}
-                    Add
+                    <JobLabel job={addJob} idle="Add" active="Adding" />
                   </button>
                 )}
                 <button
                   type="button"
                   className="ext-btn"
-                  disabled={busy !== null}
-                  title="Download and install every extension this repository publishes"
-                  onClick={() => onInstallAll(repository.rawRepoUrl)}
+                  disabled={working(installJob)}
+                  title="Install every extension this repository publishes, in the background"
+                  onClick={() => onInstallAll(repository.rawRepoUrl, repository.name)}
                 >
-                  {busy === `installRepo:${repository.rawRepoUrl}` ? (
-                    <Loader2 size={13} className="spin" />
-                  ) : null}
-                  Install all
+                  <JobLabel job={installJob} idle="Install all" active="Reading list" />
                 </button>
                 {here ? (
                   <button
                     type="button"
                     className="ext-btn ext-btn--danger"
-                    disabled={busy !== null}
+                    disabled={busy === `remove:${repository.rawRepoUrl}`}
                     onClick={() => onRemove(repository.rawRepoUrl)}
                   >
                     Remove
                   </button>
+                ) : null}
+                {failedJob?.message ? (
+                  <span className="ext-item__error">{failedJob.message}</span>
                 ) : null}
               </div>
             </li>

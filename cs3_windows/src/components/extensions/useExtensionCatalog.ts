@@ -36,17 +36,6 @@ export interface CatalogState {
   error: string | null;
 }
 
-/** What `extension:installProgress` actually sends. */
-export interface InstallProgress {
-  internalName: string;
-  name: string;
-  step: 'downloading' | 'verifying' | 'analyzing' | 'complete' | 'error';
-  percent: number;
-  message?: string;
-  downloadedBytes?: number;
-  totalBytes?: number;
-}
-
 const EMPTY: CatalogState = {
   tree: [],
   installedRepositories: [],
@@ -59,7 +48,6 @@ const EMPTY: CatalogState = {
 
 export function useExtensionCatalog() {
   const [state, setState] = useState<CatalogState>(EMPTY);
-  const [progress, setProgress] = useState<InstallProgress | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   /** Guards against a slow refresh landing after the component has gone. */
   const alive = useRef(true);
@@ -112,22 +100,12 @@ export function useExtensionCatalog() {
   }, [refresh]);
 
   /**
-   * Real progress, from the main process.
+   * Runs one quick mutation, then re-reads. See the note at the top of this file.
    *
-   * `onExtensionInstallProgress` has always existed. The screen this replaces
-   * ignored it in favour of a scripted `setTimeout` sequence that announced
-   * "Translating DEX bytecode to JVM…" for a fixed 250 ms whether or not that
-   * was happening — inventing about half a second of delay per action and
-   * describing work it had no knowledge of.
+   * Installs, updates and repository adds are not here: they take seconds to
+   * minutes, so they go through the background job queue (`useExtensionJobs`)
+   * and the screen re-reads when a job settles.
    */
-  useEffect(() => {
-    const dispose = window.cloudstream?.onExtensionInstallProgress?.((update) => {
-      setProgress(update as InstallProgress);
-    });
-    return () => dispose?.();
-  }, []);
-
-  /** Runs one mutation, then re-reads. See the note at the top of this file. */
   const run = useCallback(
     async (key: string, action: () => Promise<unknown>) => {
       setBusy(key);
@@ -142,10 +120,7 @@ export function useExtensionCatalog() {
           }));
         }
       } finally {
-        if (alive.current) {
-          setBusy(null);
-          setProgress(null);
-        }
+        if (alive.current) setBusy(null);
       }
     },
     [refresh]
@@ -162,10 +137,6 @@ export function useExtensionCatalog() {
       run(`provider:${name}`, () => window.cloudstream!.setProviderEnabled(name, enabled)),
     setProvidersEnabled: (names: string[], enabled: boolean) =>
       run('providers:bulk', () => window.cloudstream!.setProvidersEnabled(names, enabled)),
-    installPlugin: (plugin: SitePlugin, repositoryUrl: string) =>
-      run(`install:${plugin.internalName}`, () =>
-        window.cloudstream!.installPlugin(plugin, repositoryUrl)
-      ),
     uninstallPlugin: (internalName: string) =>
       run(`uninstall:${internalName}`, () => window.cloudstream!.uninstallPlugin(internalName)),
     /**
@@ -180,18 +151,6 @@ export function useExtensionCatalog() {
       run(`remove:${url}`, () => window.cloudstream!.removeRepository(url)),
     setAdultAllowed: (enabled: boolean) =>
       run('adult', () => window.cloudstream!.setAdultAllowed(enabled)),
-    /**
-     * Keeps a repository without installing anything from it.
-     *
-     * Cheap and reversible, which is why it is separate from
-     * {@link installRepository}: browsing a catalogue should not commit anyone
-     * to downloading it.
-     */
-    addRepository: (url: string) =>
-      run(`add:${url}`, () => window.cloudstream!.addRepository(url)),
-    /** Installs a repository's extensions in one action rather than eighty. */
-    installRepository: (url: string, limit?: number) =>
-      run(`installRepo:${url}`, () => window.cloudstream!.installRepository(url, { limit })),
   };
 
   /**
@@ -214,5 +173,5 @@ export function useExtensionCatalog() {
     return response.repository;
   }, []);
 
-  return { state, progress, busy, refresh, actions, browseRepository };
+  return { state, busy, refresh, actions, browseRepository };
 }

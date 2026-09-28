@@ -318,8 +318,8 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
   if (tree.length === 0) {
     return (
       <p className="ext-empty">
-        Nothing installed yet. Open <strong>Repositories</strong> to browse the verified
-        catalogue, then install the extensions you want.
+        Nothing installed yet. Open <strong>Browse</strong> to pick from the verified catalogue —
+        you can install several at once.
       </p>
     );
   }

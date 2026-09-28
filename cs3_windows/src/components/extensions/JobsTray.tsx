@@ -11,6 +11,8 @@ import React, { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Clock, Loader2, RotateCcw, X } from 'lucide-react';
 import { ProgressBar } from './primitives';
 import { useExtensionJobs, type ExtensionJob } from './useExtensionJobs';
+import { useReveal } from '../../utils/ExperienceModeContext';
+import { plainMessage } from '../../utils/experienceMode';
 
 const KIND_LABEL: Record<ExtensionJob['kind'], string> = {
   install: 'Install',
@@ -28,53 +30,75 @@ function summary(queued: number, running: number, failed: number, done: number):
   return parts.join(' · ');
 }
 
+/**
+ * The outcome in words a viewer can use.
+ *
+ * An install's own message is the runtime's verdict — "every referenced type
+ * resolves against the runtime classpath" — which is the right thing for a
+ * developer and noise for everyone else. Standard mode says what happened and
+ * keeps the original one hover away; developer mode shows it as written.
+ */
+function outcomeText(job: ExtensionJob, technical: boolean): string | undefined {
+  if (!job.message || technical) return job.message;
+  if (job.state === 'done') {
+    if (job.kind === 'install') return 'Installed';
+    if (job.kind === 'update') return 'Updated';
+    return job.message;
+  }
+  return plainMessage(job.message).summary;
+}
+
 const JobRow: React.FC<{
   job: ExtensionJob;
   onCancel: (id: string) => void;
   onRetry: (id: string) => void;
-}> = ({ job, onCancel, onRetry }) => (
-  <li className={`ext-job ext-job--${job.state}`}>
-    <span className="ext-job__icon" aria-hidden>
-      {job.state === 'queued' ? <Clock size={13} /> : null}
-      {job.state === 'running' ? <Loader2 size={13} className="spin" /> : null}
-      {job.state === 'done' ? <CheckCircle2 size={13} /> : null}
-      {job.state === 'failed' ? <AlertCircle size={13} /> : null}
-      {job.state === 'cancelled' ? <X size={13} /> : null}
-    </span>
-    <span className="ext-job__main">
-      <span className="ext-job__label">
-        {job.label}
-        <span className="ext-job__kind">{KIND_LABEL[job.kind]}</span>
+}> = ({ job, onCancel, onRetry }) => {
+  const technical = useReveal('technical');
+  const outcome = outcomeText(job, technical);
+  return (
+    <li className={`ext-job ext-job--${job.state}`}>
+      <span className="ext-job__icon" aria-hidden>
+        {job.state === 'queued' ? <Clock size={13} /> : null}
+        {job.state === 'running' ? <Loader2 size={13} className="spin" /> : null}
+        {job.state === 'done' ? <CheckCircle2 size={13} /> : null}
+        {job.state === 'failed' ? <AlertCircle size={13} /> : null}
+        {job.state === 'cancelled' ? <X size={13} /> : null}
       </span>
-      {job.state === 'running' ? (
-        <ProgressBar step={job.step ?? 'Starting…'} percent={job.percent ?? 0} />
-      ) : null}
-      {job.state === 'queued' ? <span className="ext-job__note">Waiting for a free slot</span> : null}
-      {job.state === 'cancelled' ? <span className="ext-job__note">Cancelled</span> : null}
-      {(job.state === 'done' || job.state === 'failed') && job.message ? (
-        <span className="ext-job__note" title={job.message}>
-          {job.message}
+      <span className="ext-job__main">
+        <span className="ext-job__label">
+          {job.label}
+          <span className="ext-job__kind">{KIND_LABEL[job.kind]}</span>
         </span>
+        {job.state === 'running' ? (
+          <ProgressBar step={job.step ?? 'Starting…'} percent={job.percent ?? 0} />
+        ) : null}
+        {job.state === 'queued' ? <span className="ext-job__note">Waiting for a free slot</span> : null}
+        {job.state === 'cancelled' ? <span className="ext-job__note">Cancelled</span> : null}
+        {(job.state === 'done' || job.state === 'failed') && outcome ? (
+          <span className="ext-job__note" title={job.message}>
+            {outcome}
+          </span>
+        ) : null}
+      </span>
+      {job.state === 'queued' ? (
+        <button
+          type="button"
+          className="ext-btn ext-btn--icon"
+          aria-label={`Cancel ${job.label}`}
+          title="Cancel"
+          onClick={() => onCancel(job.id)}
+        >
+          <X size={12} />
+        </button>
       ) : null}
-    </span>
-    {job.state === 'queued' ? (
-      <button
-        type="button"
-        className="ext-btn ext-btn--icon"
-        aria-label={`Cancel ${job.label}`}
-        title="Cancel"
-        onClick={() => onCancel(job.id)}
-      >
-        <X size={12} />
-      </button>
-    ) : null}
-    {job.state === 'failed' || job.state === 'cancelled' ? (
-      <button type="button" className="ext-btn" onClick={() => onRetry(job.id)}>
-        <RotateCcw size={12} /> Retry
-      </button>
-    ) : null}
-  </li>
-);
+      {job.state === 'failed' || job.state === 'cancelled' ? (
+        <button type="button" className="ext-btn" onClick={() => onRetry(job.id)}>
+          <RotateCcw size={12} /> Retry
+        </button>
+      ) : null}
+    </li>
+  );
+};
 
 export const JobsTray: React.FC = () => {
   const { snapshot, cancel, cancelQueued, retry, clearFinished } = useExtensionJobs();

@@ -573,3 +573,146 @@
   padding: 0.15rem 0.35rem;
   font-size: 0.74rem;
 }
+
+/* --- a repository's extensions, as a list --- */
+
+.ext-btn--icon { padding: 0.32rem 0.42rem; }
+
+.ext-list__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border-color);
+}
+.ext-list__count { font-size: 0.78rem; color: var(--text-muted); }
+
+.ext-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ext-item {
+  display: grid;
+  grid-template-columns: 1.5rem 2.1rem minmax(0, 1fr) auto;
+  gap: 0.65rem;
+  align-items: start;
+  padding: 0.6rem 0.5rem;
+  border-bottom: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  transition: var(--transition);
+}
+.ext-item:last-child { border-bottom: none; }
+.ext-item:hover { background: var(--bg-card-hover); }
+.ext-item--picked { background: rgba(59, 130, 246, 0.08); }
+.ext-item__check { padding-top: 0.45rem; }
+
+.ext-item__avatar {
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 0.55rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--accent-light);
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.ext-item__body { min-width: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+.ext-item__title { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+.ext-item__name {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Two lines at most; the full text is on hover. A catalogue is scanned, not read. */
+.ext-item__description {
+  margin: 0;
+  font-size: 0.77rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ext-item__meta { font-size: 0.71rem; color: var(--text-subtle); }
+.ext-item__error { margin: 0; font-size: 0.74rem; color: var(--status-error); }
+
+.ext-item__actions { display: flex; align-items: center; gap: 0.35rem; padding-top: 0.2rem; }
+.ext-item__action { min-width: 7.2rem; justify-content: center; }
+.ext-item__installed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--status-success);
+}
+
+/* Repository descriptions stay on the card but no longer set its height. */
+.ext-card__description {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* --- the background job tray --- */
+
+.ext-jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+}
+.ext-jobs--busy { border-color: var(--accent-primary); }
+.ext-jobs__head { display: flex; align-items: center; gap: 0.5rem; color: var(--accent-light); }
+.ext-jobs__summary { font-size: 0.83rem; font-weight: 600; color: var(--text-main); }
+.ext-jobs__hint { font-size: 0.72rem; color: var(--text-subtle); }
+
+.ext-jobs__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 16rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.ext-job {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.35rem 0.4rem;
+  border-radius: var(--radius-sm);
+}
+.ext-job__icon { display: inline-flex; color: var(--text-subtle); }
+.ext-job--running .ext-job__icon { color: var(--accent-light); }
+.ext-job--done .ext-job__icon { color: var(--status-success); }
+.ext-job--failed .ext-job__icon { color: var(--status-error); }
+.ext-job__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.ext-job__label { font-size: 0.8rem; color: var(--text-main); display: flex; gap: 0.45rem; align-items: baseline; }
+.ext-job__kind { font-size: 0.68rem; color: var(--text-subtle); text-transform: uppercase; letter-spacing: 0.04em; }
+.ext-job__note {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ext-job--failed .ext-job__note { color: var(--status-error); }
+
+.ext-footer { display: flex; align-items: center; gap: 0.35rem; }
