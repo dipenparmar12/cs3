@@ -5,7 +5,7 @@ import type { SearchResponse } from '../types/api';
 import { TYPE_TABS, matchesTab, tabsFor } from '../utils/contentTypes';
 import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/resultGroups';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, Search, SearchX, Target, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Bookmark, BookmarkCheck, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, RotateCw, Search, SearchX, Target, Wrench, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
 import { partitionDeadRows } from '../utils/deadRows';
 import { FacetMenu, type FacetOption } from '../components/FacetMenu';
@@ -54,7 +54,58 @@ interface SearchViewProps {
    * providers that now work — which reads as the fix having failed.
    */
   onRetry?: () => void;
+  /**
+   * Set when the results on screen are a saved copy rather than a live search.
+   *
+   * The screen then says so, with the date, and offers to search again —
+   * saved results that looked live would be exactly the stale list that
+   * search history deliberately never keeps.
+   */
+  savedView?: { id: string; savedAt: number } | null;
+  /** Keeps these results to reopen from the Library or the search box. */
+  onSaveResults?: () => Promise<boolean>;
 }
+
+/** "3 Sep 2026, 14:05" — a date a person reads, not a relative age that drifts. */
+function savedDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+/**
+ * Save, then Saved.
+ *
+ * Tied to the search it saved: a new search is a new list, so the button goes
+ * back to Save for it. Saving the same query again updates the stored copy.
+ */
+const SaveResultsButton: React.FC<{ searchId: string; onSave: () => Promise<boolean> }> = ({
+  searchId,
+  onSave,
+}) => {
+  const [state, setState] = useState<{ id: string; phase: 'saving' | 'saved' } | null>(null);
+  const phase = state?.id === searchId ? state.phase : 'idle';
+  return (
+    <button
+      type="button"
+      className={`btn btn-secondary search-head__save${phase === 'saved' ? ' search-head__save--done' : ''}`}
+      disabled={phase === 'saving'}
+      title="Keep these results to come back to — they appear in the Library and under the search box"
+      onClick={async () => {
+        setState({ id: searchId, phase: 'saving' });
+        const ok = await onSave();
+        setState(ok ? { id: searchId, phase: 'saved' } : null);
+      }}
+    >
+      {phase === 'saved' ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
+      {phase === 'saved' ? 'Saved' : phase === 'saving' ? 'Saving…' : 'Save results'}
+    </button>
+  );
+};
 
 
 /**
@@ -186,6 +237,8 @@ export const SearchView: React.FC<SearchViewProps> = ({
   onUiChange,
   onSearchAllSources,
   onRetry,
+  savedView,
+  onSaveResults,
 }) => {
   const { sourceFilter, typeTab, openGroups } = ui;
   /** The provider names the fix modal is open for, or null when it is closed. */
@@ -314,17 +367,36 @@ export const SearchView: React.FC<SearchViewProps> = ({
           </p>
         </div>
 
-        {sourceOptions.length > 1 && (
-          <FacetMenu
-            label="Source"
-            title="Show only titles from one source"
-            value={sourceFilter}
-            options={sourceOptions}
-            onChange={setSourceFilter}
-            allLabel={`All sources (${results.length})`}
-          />
-        )}
+        <div className="search-head__actions">
+          {sourceOptions.length > 1 && (
+            <FacetMenu
+              label="Source"
+              title="Show only titles from one source"
+              value={sourceFilter}
+              options={sourceOptions}
+              onChange={setSourceFilter}
+              allLabel={`All sources (${results.length})`}
+            />
+          )}
+          {search?.done && !savedView && results.length > 0 && onSaveResults ? (
+            <SaveResultsButton searchId={search.id} onSave={onSaveResults} />
+          ) : null}
+        </div>
       </header>
+
+      {savedView ? (
+        <div className="search-alert search-alert--saved" role="status">
+          <BookmarkCheck size={14} />
+          <span>
+            Saved results from {savedDate(savedView.savedAt)}. Titles may have changed since.
+          </span>
+          {onRetry ? (
+            <button type="button" className="search-alert__action" onClick={onRetry}>
+              <RotateCw size={13} /> Search again
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Content-type tabs, directly under the header as on Android. */}
       {typeTabs.length > 1 && (
@@ -458,7 +530,9 @@ export const SearchView: React.FC<SearchViewProps> = ({
         />
       )}
 
-      {search?.done && !search.cancelled && filtered.length > 0 && <SourceSummary snapshot={search} />}
+      {search?.done && !search.cancelled && !savedView && filtered.length > 0 && (
+        <SourceSummary snapshot={search} />
+      )}
     </div>
   );
 };

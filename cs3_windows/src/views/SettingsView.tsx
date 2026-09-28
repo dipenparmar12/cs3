@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import {
   AlertTriangle,
   Archive,
@@ -13,13 +13,16 @@ import {
   RefreshCw,
   Scale,
   Search,
+  SearchX,
   ShieldAlert,
   Sliders,
   Sparkles,
   Trash2,
   Wrench,
+  X,
   Zap,
 } from 'lucide-react';
+import { InfoHint } from '../components/settings/InfoHint';
 import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
 import { HomeSettings } from '../components/settings/HomeSettings';
@@ -28,11 +31,12 @@ import { PlayerSettings } from '../components/PlayerSettings';
 import { ProviderRankingPanel } from '../components/settings/ProviderRankingPanel';
 import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
-import { SettingGroup, SettingRow } from '../components/settings/SettingRow';
+import { SettingGroup, SettingRow, SettingsSection } from '../components/settings/SettingRow';
 import { settingsLevelFor } from '../utils/experienceMode';
 import { useExperienceMode, useSetExperienceMode } from '../utils/ExperienceModeContext';
 import {
   SettingsLevelProvider,
+  SettingsQueryProvider,
   type SettingsLevel,
 } from '../components/settings/SettingsLevelContext';
 import { useFlash } from '../utils/useFlash';
@@ -235,62 +239,80 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
     if (applied) setConcurrency(applied);
   };
 
-  /** True on that tab, and on the everything view. */
-  const shows = (id: TabId) => tab === id || tab === 'all';
+  /**
+   * "Find a setting".
+   *
+   * A search spans every section, whatever tab is open: the point is to find a
+   * setting without knowing which section it lives in. Rows and groups filter
+   * themselves (`SettingRow`), whole panels declare their keywords
+   * (`SettingsSection`), and the section headings are dropped while searching
+   * because a heading over nothing reads as a failure to load.
+   */
+  const [query, setQuery] = useState('');
+  const searching = query.trim() !== '';
+  const content = useRef<HTMLDivElement | null>(null);
+  const [nothingFound, setNothingFound] = useState(false);
+  // Read from the DOM after the rows have filtered themselves: which rows are
+  // left is decided inside each row, so this is the one place that sees all of it.
+  useLayoutEffect(() => {
+    setNothingFound(
+      searching && !content.current?.querySelector('.setting-group, .settings-found')
+    );
+  }, [searching, query, level]);
+
+  /** True on that tab, on the everything view, and for every section while searching. */
+  const shows = (id: TabId) => searching || tab === id || tab === 'all';
   /** The heading that separates sections when they are all on one page. */
   const sectionTitle = (id: TabId, label: string) =>
-    tab === 'all' ? <h3 className="settings__section" id={`settings-${id}`}>{label}</h3> : null;
+    tab === 'all' && !searching ? (
+      <h3 className="settings__section" id={`settings-${id}`}>
+        {label}
+      </h3>
+    ) : null;
 
+  /*
+   * Ordered by how often a viewer comes here for it, with the one-page view
+   * last: it is for scanning everything, which is the rarer errand once there
+   * is a search box for finding one thing.
+   */
   const tabs: Array<{ id: TabId; label: string; icon: React.ReactNode; badge?: React.ReactNode }> = [
-    { id: 'all', label: 'All settings', icon: <List size={14} /> },
-    { id: 'general', label: 'General', icon: <Sliders size={14} /> },
-    { id: 'player', label: 'Playback', icon: <Play size={14} /> },
+    { id: 'general', label: 'General', icon: <Sliders size={15} /> },
+    { id: 'player', label: 'Playback', icon: <Play size={15} /> },
+    { id: 'sources', label: 'Where films come from', icon: <Layers size={15} /> },
+    { id: 'downloads', label: 'Downloads', icon: <Download size={15} /> },
+    { id: 'network', label: 'Connection', icon: <Globe size={15} /> },
     {
       id: 'components',
       // "Components & Binaries" names two implementation words and no outcome.
       // What this tab is actually for is checking the app has what it needs to
       // play and download, and installing it if not.
       label: 'Setup & repair',
-      icon: <Cpu size={14} />,
-      badge: missingComponentCount > 0 ? (
-        <span
-          style={{
-            marginLeft: '0.4rem',
-            padding: '0.1rem 0.45rem',
-            borderRadius: '10px',
-            fontSize: '0.7rem',
-            fontWeight: 700,
-            backgroundColor: 'rgba(245, 158, 11, 0.2)',
-            color: '#f59e0b',
-            border: '1px solid rgba(245, 158, 11, 0.4)',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.2rem',
-          }}
-        >
-          <AlertTriangle size={10} /> {missingComponentCount} missing
-        </span>
-      ) : undefined,
+      icon: <Cpu size={15} />,
+      badge:
+        missingComponentCount > 0 ? (
+          <span className="settings__nav-badge" title={`${missingComponentCount} missing`}>
+            <AlertTriangle size={10} /> {missingComponentCount}
+          </span>
+        ) : undefined,
     },
-    { id: 'sources', label: 'Where films come from', icon: <Layers size={14} /> },
-    { id: 'downloads', label: 'Downloads', icon: <Download size={14} /> },
-    { id: 'network', label: 'Connection', icon: <Globe size={14} /> },
-    { id: 'advanced', label: 'Advanced & diagnostics', icon: <Wrench size={14} /> },
+    { id: 'advanced', label: 'Advanced', icon: <Wrench size={15} /> },
+    { id: 'all', label: 'Everything on one page', icon: <List size={15} /> },
   ];
 
   return (
     <SettingsLevelProvider level={level}>
+    <SettingsQueryProvider query={query.trim()}>
     <div className="settings">
       <header className="settings__head">
-        <h2>Settings</h2>
-        <p>
-          Everything here has a sensible default — you can watch films without changing any of it.
-        </p>
+        <div className="settings__head-text">
+          <h2>Settings</h2>
+          <p>Sensible defaults throughout — change only what you need.</p>
+        </div>
         {/*
-          The level switch, at the top and stating what it is holding back.
-          A filtered list that does not say it is filtered is the same bug as a
-          scoped search that does not say it is scoped: the user cannot tell a
-          setting they cannot find from one that does not exist.
+          The level switch. It stopped being about this screen — it decides
+          what the player, the source list and every error message say as well —
+          so its explanation says that, behind the ⓘ rather than as a paragraph
+          under two buttons that are self-explanatory the rest of the time.
         */}
         <div className="settings__level" role="group" aria-label="How much to show">
           <button
@@ -311,39 +333,90 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           >
             Developer mode
           </button>
-          {/*
-            This switch stopped being about this screen. It now decides what the
-            player, the source list and every error message say as well, so the
-            note has to describe that rather than "rows on this page" — a
-            toggle whose visible effect is wider than its label is how a person
-            ends up changing something they did not mean to.
-          */}
-          <span className="settings__level-note">
+          <InfoHint label="About these two modes">
             {level === 'simple'
-              ? 'Technical details are hidden across the app. Nothing is switched off — it all still applies.'
-              : 'Showing diagnostics, provider and engine details, logs and debugging tools everywhere.'}
-          </span>
+              ? 'Just watching hides technical details across the app. Nothing is switched off — every setting still applies; switch to Developer mode to see and change the technical ones.'
+              : 'Developer mode shows diagnostics, provider and engine details, logs and debugging tools everywhere in the app.'}
+          </InfoHint>
         </div>
       </header>
 
-      <nav className="settings__tabs" role="tablist">
-        {tabs.map((entry) => (
-          <button
-            key={entry.id}
-            role="tab"
-            aria-selected={tab === entry.id}
-            className={`settings__tab${tab === entry.id ? ' settings__tab--on' : ''}`}
-            onClick={() => {
-              setTab(entry.id);
-              if (entry.id === 'components') void checkComponentStatus();
-            }}
-          >
-            {entry.icon}
-            <span>{entry.label}</span>
-            {entry.badge}
-          </button>
-        ))}
-      </nav>
+      <div className="settings__layout">
+        {/*
+          A column rather than a strip of tabs: eight destinations as wrapping
+          pills read as one more thing to scan, where a list down the side is
+          the settings pattern every desktop app has taught people to read.
+          Sticky, so it is there however far down a section goes.
+        */}
+        <nav className="settings__nav" aria-label="Settings sections">
+          <label className="settings__find">
+            <Search size={14} aria-hidden />
+            <input
+              type="search"
+              value={query}
+              placeholder="Find a setting"
+              aria-label="Find a setting"
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && query) {
+                  event.stopPropagation();
+                  setQuery('');
+                }
+              }}
+            />
+            {query ? (
+              <button
+                type="button"
+                className="settings__find-clear"
+                aria-label="Clear search"
+                onClick={() => setQuery('')}
+              >
+                <X size={13} />
+              </button>
+            ) : null}
+          </label>
+
+          <div role="tablist" aria-orientation="vertical" className="settings__nav-list">
+            {tabs.map((entry) => (
+              <button
+                key={entry.id}
+                role="tab"
+                aria-selected={!searching && tab === entry.id}
+                className={`settings__nav-item${
+                  !searching && tab === entry.id ? ' settings__nav-item--on' : ''
+                }`}
+                onClick={() => {
+                  setQuery('');
+                  setTab(entry.id);
+                  if (entry.id === 'components') void checkComponentStatus();
+                }}
+              >
+                {entry.icon}
+                <span className="settings__nav-label">{entry.label}</span>
+                {entry.badge}
+              </button>
+            ))}
+          </div>
+        </nav>
+
+        <div className="settings__content" ref={content}>
+      {searching ? (
+        <p className="settings__find-note">
+          Settings matching <strong>“{query.trim()}”</strong> across every section
+          {level === 'simple' ? ' (technical ones are hidden in Just watching mode)' : ''}.
+        </p>
+      ) : null}
+      {nothingFound ? (
+        <div className="settings__find-empty">
+          <SearchX size={20} />
+          <span>Nothing matches “{query.trim()}”.</span>
+          {level === 'simple' ? (
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => changeLevel('everything')}>
+              Search technical settings too
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {statusMessage && <div className="settings__flash">{statusMessage}</div>}
 
@@ -429,15 +502,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             the visit ledger, which is the one thing this app stores that is a
             list of what somebody has looked at.
           */}
-          <SettingGroup title="Marks on posters" icon={<Sparkles size={15} />}>
+          <SettingGroup
+            title="Marks on posters"
+            icon={<Sparkles size={15} />}
+            keywords="badge poster card visited watched failed downloaded marks legend"
+            hint="Posters remember what has already happened to them, so you do not have to open the same thing twice to find out. Every mark also explains itself when you hover it."
+          >
             <CardStatusLegend />
           </SettingGroup>
 
-          <SettingGroup title="Home screen" icon={<Home size={15} />}>
+          <SettingGroup
+            title="Home screen"
+            icon={<Home size={15} />}
+            keywords="home catalogue catalog rows trending cinemeta anime anilist"
+          >
             <HomeSettings />
           </SettingGroup>
 
-          <AdultContentSetting />
+          <SettingsSection keywords="adult nsfw 18 content mature hide show">
+            <AdultContentSetting />
+          </SettingsSection>
         </>
       )}
 
@@ -453,19 +537,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
 
       {shows('components') && (
         <>
-          {sectionTitle('components', 'Components & Binaries')}
-          <UnifiedComponentManager />
+          {sectionTitle('components', 'Setup & repair')}
+          <SettingsSection keywords="setup repair components install missing ffmpeg ffprobe mpv aria2 aria2c yt-dlp java runtime engine binaries">
+            <UnifiedComponentManager />
+          </SettingsSection>
         </>
       )}
 
       {shows('sources') && (
         <>
-          {sectionTitle('sources', 'Sources')}
-          <SourceSettings />
+          {sectionTitle('sources', 'Where films come from')}
+          <SettingsSection keywords="sources indexers torrent torrents jackett prowlarr torznab stremio addon quality resolution 4k 1080p seeders filters hdr h264 hevc cam screener">
+            <SourceSettings />
+          </SettingsSection>
           {/* Which providers are worth asking, measured rather than assumed.
               Lives under Sources because that is what it is about, and next to
               the enable switches it explains. */}
-          <ProviderRankingPanel />
+          <SettingsSection keywords="ranking rank providers score recommendations privacy analytics measurements pin never">
+            <ProviderRankingPanel />
+          </SettingsSection>
         </>
       )}
 
@@ -555,21 +645,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             <SettingRow
               label="aria2c and yt-dlp"
               level="advanced"
-              note="Managed in Components & Binaries"
+              note="Managed in Setup & repair"
               hint={
                 <>
                   Downloads run through portable copies of <strong>aria2c</strong> (multi-connection
                   downloader) and <strong>yt-dlp</strong> (used when a source needs extracting
-                  first). They are managed in the <strong>Components & Binaries</strong> tab.
+                  first). They are installed and repaired under <strong>Setup &amp; repair</strong>.
                 </>
               }
             >
               <button
-                onClick={() => setTab('components')}
+                onClick={() => {
+                  setQuery('');
+                  setTab('components');
+                }}
                 className="btn btn-secondary"
               >
                 <Cpu size={15} />
-                <span>Manage Components</span>
+                <span>Open Setup &amp; repair</span>
               </button>
             </SettingRow>
           </SettingGroup>
@@ -579,7 +672,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
       {shows('network') && (
         <>
           {sectionTitle('network', 'Connection')}
-          <NetworkSettings />
+          <SettingsSection keywords="connection network internet dns doh secure blocked isp resolver test reachable cloudflare google quad9">
+            <NetworkSettings />
+          </SettingsSection>
 
           {/*
             This is here rather than buried in a config file because it is the
@@ -667,11 +762,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             first thing to ask for when something goes wrong.
           */}
           {level === 'everything' && (
-            <>
+            <SettingsSection keywords="diagnostics logs startup profile slow issues errors extension problems report">
               <StartupProfilePanel />
               <ExtensionIssuesPanel />
               <DiagnosticsPanel />
-            </>
+            </SettingsSection>
           )}
 
           <SettingGroup title="Migration" icon={<RefreshCw size={15} />} level="advanced">
@@ -707,7 +802,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             Android-format import below it, which is a different job: that moves
             settings between the phone app and this one.
           */}
-          <SettingGroup title="Back up and restore" icon={<Archive size={15} />}>
+          <SettingGroup
+            title="Back up and restore"
+            icon={<Archive size={15} />}
+            keywords="backup restore export import move machine file"
+          >
             <BackupPanel />
           </SettingGroup>
 
@@ -716,14 +815,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             THIRD-PARTY-NOTICES.md are not. GPL-3.0 §6 asks that whoever has the
             binary can find the source; a notice nobody can open does not do it.
           */}
-          <SettingGroup title="About and licences" icon={<Scale size={15} />}>
+          <SettingGroup
+            title="About and licences"
+            icon={<Scale size={15} />}
+            keywords="about version licence license gpl open source third party notices"
+          >
             <div id="settings-about">
               <AboutPanel />
             </div>
           </SettingGroup>
         </>
       )}
+        </div>
+      </div>
     </div>
+    </SettingsQueryProvider>
     </SettingsLevelProvider>
   );
 };

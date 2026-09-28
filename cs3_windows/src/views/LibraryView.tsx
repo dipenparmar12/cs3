@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { badgeLabel, badgeTooltip, cardStateFor, primaryBadge } from '../utils/cardState';
-import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { EmptyState } from '../components/EmptyState';
 import { PlayedSourcePanel } from '../components/library/PlayedSourcePanel';
+import { SavedSourcesList } from '../components/library/SavedSourcesList';
+import { SavedSearchesList } from '../components/library/SavedSearchesList';
 import type { PlayedSource } from '../types/library';
 import type { TorrentResult } from '../types/torrent';
 import {
@@ -52,6 +53,8 @@ interface LibraryViewProps {
    * exactly where they were.
    */
   onBrowse?: () => void;
+  /** Reopens a saved search on the search screen. */
+  onOpenSavedSearch?: (id: string) => void;
 }
 
 /**
@@ -63,7 +66,7 @@ interface LibraryViewProps {
  * exact page I was on", which needs the opposite: the specific address, from
  * the specific provider. Neither can be expressed as a bucket of the other.
  */
-type LibraryMode = 'watching' | 'saved';
+type LibraryMode = 'watching' | 'saved' | 'searches';
 
 const BUCKETS: Array<{ status: WatchStatus; label: string }> = [
   { status: 'Watching', label: 'Watching' },
@@ -86,8 +89,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onSearch,
   onPlaySavedSource,
   onBrowse,
+  onOpenSavedSearch,
 }) => {
-  const isDeveloper = useIsDeveloper();
   const [entries, setEntries] = useState<LibraryEntry[]>([]);
 
   /**
@@ -109,6 +112,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     )
   );
   const [mode, setMode] = useState<LibraryMode>('watching');
+  const [savedSearchCount, setSavedSearchCount] = useState(0);
+
+  useEffect(() => {
+    void window.cloudstream?.listSavedSearches?.().then((list) => setSavedSearchCount(list?.length ?? 0));
+  }, []);
   const [activeStatus, setActiveStatus] = useState<WatchStatus>('Watching');
 
   const [progressByKey, setProgressByKey] = useState<Map<string, WatchProgress>>(new Map());
@@ -156,7 +164,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   };
 
   const [refreshingKey, setRefreshingKey] = useState<string | null>(null);
-  const [sourcesModalEntry, setSourcesModalEntry] = useState<LibraryEntry | null>(null);
+  /*
+   * Held by key and read from `entries`, so a Refresh inside the dialog shows
+   * the refreshed list — holding the entry object kept the pre-refresh copy on
+   * screen until the dialog was closed and reopened.
+   */
+  const [sourcesModalKey, setSourcesModalKey] = useState<string | null>(null);
+  const sourcesModalEntry = entries.find((entry) => entry.key === sourcesModalKey) ?? null;
+  const setSourcesModalEntry = (entry: LibraryEntry | null) => setSourcesModalKey(entry?.key ?? null);
 
   const shownBookmarks = providerFilter
     ? bookmarks.filter((bookmark) => bookmark.origin.provider === providerFilter)
@@ -255,9 +270,22 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         >
           <BookmarkCheck size={13} /> Saved pages{bookmarks.length ? ` (${bookmarks.length})` : ''}
         </button>
+        <button
+          role="tab"
+          aria-selected={mode === 'searches'}
+          className={`chip ${mode === 'searches' ? 'active' : ''}`}
+          onClick={() => setMode('searches')}
+        >
+          <Search size={13} /> Saved searches{savedSearchCount ? ` (${savedSearchCount})` : ''}
+        </button>
       </div>
 
-      {mode === 'saved' ? (
+      {mode === 'searches' ? (
+        <SavedSearchesList
+          onOpen={(id) => onOpenSavedSearch?.(id)}
+          onCount={setSavedSearchCount}
+        />
+      ) : mode === 'saved' ? (
         <SavedPages
           bookmarks={shownBookmarks}
           providers={bookmarkFacets.providers}
@@ -393,7 +421,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         title="View saved sources"
                       >
                         <Database size={10} />
-                        <span>{entry.sources.length} sources stored</span>
+                        <span>{entry.sources.length} saved sources</span>
                       </button>
                     </div>
                   )}
@@ -507,10 +535,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 </div>
                 <div>
                   <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#fff' }}>
-                    Stored Sources — {sourcesModalEntry.title}
+                    Saved sources — {sourcesModalEntry.title}
                   </h3>
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
-                    {sourcesModalEntry.sources?.length ?? 0} saved sources available
+                    {sourcesModalEntry.sources?.length ?? 0} kept with this title
                   </span>
                 </div>
               </div>
@@ -523,8 +551,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   disabled={refreshingKey === sourcesModalEntry.key}
                   title="Re-check enabled providers and discover newly available sources"
                 >
-                  <RotateCw size={13} className={refreshingKey === sourcesModalEntry.key ? 'animate-spin' : ''} />
-                  <span>Refresh Sources</span>
+                  <RotateCw size={13} className={refreshingKey === sourcesModalEntry.key ? 'spin' : ''} />
+                  <span>{refreshingKey === sourcesModalEntry.key ? 'Refreshing…' : 'Refresh'}</span>
                 </button>
                 <button
                   type="button"
@@ -550,57 +578,18 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 />
               </div>
 
-              <h4 className="played-source__section-heading">Everything discovery found</h4>
-              {!sourcesModalEntry.sources || sourcesModalEntry.sources.length === 0 ? (
-                <div style={{ padding: '2rem 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  No sources currently stored. Click "Refresh Sources" to search and save available streams.
-                </div>
-              ) : (
-                sourcesModalEntry.sources.map((src, idx) => (
-                  <div
-                    key={src.id || idx}
-                    style={{
-                      padding: '0.75rem 0.9rem',
-                      borderRadius: 'var(--radius-md)',
-                      backgroundColor: 'rgba(255, 255, 255, 0.03)',
-                      border: '1px solid var(--border-color)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.35rem',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#fff', wordBreak: 'break-all' }}>
-                        {src.title || src.sourceName}
-                      </span>
-                      {src.quality && (
-                        <span
-                          style={{
-                            padding: '0.1rem 0.4rem',
-                            borderRadius: '4px',
-                            backgroundColor: 'rgba(59, 130, 246, 0.15)',
-                            color: '#60a5fa',
-                            fontSize: '0.7rem',
-                            fontWeight: 700,
-                          }}
-                        >
-                          {src.quality}
-                        </span>
-                      )}
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.74rem', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
-                      <span>Provider: <strong style={{ color: 'var(--text-primary)' }}>{src.providerName || src.indexerName || 'Direct'}</strong></span>
-                      {/* Codec and seeder count describe the file and the swarm
-                          behind it; provider, quality and status describe what
-                          the viewer would actually be watching. */}
-                      {isDeveloper && src.videoCodec && <span>Codec: <strong style={{ color: 'var(--text-primary)' }}>{src.videoCodec}</strong></span>}
-                      {isDeveloper && src.seeders !== undefined && <span>Seeders: <strong style={{ color: '#34d399' }}>{src.seeders}</strong></span>}
-                      <span>Status: <strong style={{ color: src.status === 'Available' ? '#34d399' : '#fb7185' }}>{src.status || 'Available'}</strong></span>
-                    </div>
-                  </div>
-                ))
-              )}
+              <h4 className="played-source__section-heading">Everything found for it</h4>
+              <SavedSourcesList
+                entry={sourcesModalEntry}
+                onPlay={(source, record) => {
+                  setSourcesModalEntry(null);
+                  onPlaySavedSource?.(source, record);
+                }}
+                onOpenPage={() => {
+                  openEntry(sourcesModalEntry);
+                  setSourcesModalEntry(null);
+                }}
+              />
             </div>
 
             <div
