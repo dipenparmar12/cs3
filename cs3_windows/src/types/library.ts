@@ -94,6 +94,11 @@ export interface LibraryEntry {
   /** Persisted discovered sources associated with this library item. */
   sources?: StoredSource[];
   lastSourcesRefreshedAt?: number;
+  /**
+   * Addresses discovery was asked for on this title's behalf that are not its
+   * page — an episode's own handle, which is what a series is searched by.
+   */
+  sourceAddresses?: string[];
   metadata?: LibraryItemMetadata;
 }
 

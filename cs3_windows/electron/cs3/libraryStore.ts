@@ -179,6 +179,9 @@ export function torrentResultToStoredSource(res: TorrentResult): StoredSource {
  */
 export const MAX_STORED_SOURCES = 30;
 
+/** Episode addresses remembered per title; the newest win. */
+const MAX_SOURCE_ADDRESSES = 40;
+
 /**
  * What makes two stored sources the same release, across re-resolves.
  *
@@ -442,6 +445,27 @@ export class LibraryStore {
     return sources;
   }
 
+  /**
+   * Remembers that discovery for `address` is discovery for this title.
+   *
+   * A series is searched episode by episode, by each episode's own handle, and
+   * none of those is the page address the entry is keyed by — so without this
+   * no episode's sources would ever reach the library. An address belongs to
+   * the first title that claims it and is never linked to two.
+   */
+  public linkSourceAddress(key: string, address: string): void {
+    const entry = this.entries.get(key);
+    if (!entry || !address) return;
+    const wanted = addressKey(address);
+    if (entry.urls.some((url) => addressKey(url) === wanted)) return;
+    if (entry.sourceAddresses?.some((known) => addressKey(known) === wanted)) return;
+    for (const other of this.entries.values()) {
+      if (other.sourceAddresses?.some((known) => addressKey(known) === wanted)) return;
+    }
+    entry.sourceAddresses = [address, ...(entry.sourceAddresses ?? [])].slice(0, MAX_SOURCE_ADDRESSES);
+    this.persistEntries();
+  }
+
   public getStoredSources(key: string): StoredSource[] {
     const entry = this.entries.get(key);
     return entry?.sources ?? [];
@@ -467,7 +491,9 @@ export class LibraryStore {
     if (!pageUrl || results.length === 0) return null;
     const address = addressKey(pageUrl);
     const entry = [...this.entries.values()].find((candidate) =>
-      candidate.urls.some((url) => addressKey(url) === address)
+      [...candidate.urls, ...(candidate.sourceAddresses ?? [])].some(
+        (url) => addressKey(url) === address
+      )
     );
     if (!entry) return null;
 

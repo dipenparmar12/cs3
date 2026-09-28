@@ -415,20 +415,27 @@ contentService.onSourcesFound((pageUrl, sources, season, episode) => {
  * Adding a title is a stronger statement of intent than opening its page, which
  * already prefetches — so this runs under the same switch ("Load sources while
  * you read"), one at a time, without widening past the providers the title came
- * from. Series are left alone: without an episode there is nothing precise to
- * look for, and their episodes are captured as they are opened and played.
+ * from. A series without an episode on screen is left alone — there is nothing
+ * precise to look for — and its episodes are captured as they are played.
  */
 let libraryCapture: Promise<unknown> = Promise.resolve();
 const libraryCapturing = new Set<string>();
 const SERIES_TYPES = new Set<string>(['TvSeries', 'Anime', 'AsianDrama', 'Live']);
 
-function captureLibrarySources(mediaUrl: string, title: string, type?: string): void {
+function captureLibrarySources(
+  target: { mediaUrl: string; season?: number; episode?: number },
+  title: string,
+  type?: string
+): void {
+  const { mediaUrl, season, episode } = target;
   if (!sourcePrefetcher.isEnabled() || libraryCapturing.has(mediaUrl)) return;
   if (type && SERIES_TYPES.has(type)) return;
   libraryCapturing.add(mediaUrl);
   libraryCapture = libraryCapture
     .then(() =>
-      contentService.getSources({ mediaUrl, titleOverride: title }, undefined, { autoWiden: false })
+      contentService.getSources({ mediaUrl, season, episode, titleOverride: title }, undefined, {
+        autoWiden: false,
+      })
     )
     // Finding nothing leaves the entry as it was; the results, if any, arrive
     // through `onSourcesFound` above.
@@ -5258,31 +5265,46 @@ ipcMain.handle('library:getEntries', async (_, status?: WatchStatus) =>
   libraryStore.getEntries(status)
 );
 
-ipcMain.handle('library:upsertEntry', async (_, input: Parameters<LibraryStore['upsertEntry']>[0]) => {
-  const entry = libraryStore.upsertEntry(input);
-  /*
-   * Adding a title to the library is the statement that its page must keep
-   * opening. Pinning here rather than in the store keeps `LibraryStore` free of
-   * a dependency on the snapshot cache, and by title rather than URL because
-   * that is the identity a library entry actually has.
-   */
-  pageSnapshots.setPinned({ url: input?.mediaUrl, title: entry?.title, year: entry?.year }, true);
-
-  /*
-   * The sources come with it. Whatever discovery already found for this page is
-   * saved on the entry now; a deliberate add (a bucket was chosen) with nothing
-   * found yet goes looking in the background.
-   */
-  if (entry && input?.mediaUrl) {
-    const cached = contentService.peekCachedSources(input.mediaUrl);
-    if (cached.length > 0) {
-      libraryStore.mergeDiscoveredSources(input.mediaUrl, cached);
-    } else if (input.status && !entry.sources?.length) {
-      captureLibrarySources(input.mediaUrl, entry.title, entry.type);
+ipcMain.handle(
+  'library:upsertEntry',
+  async (
+    _,
+    input: Parameters<LibraryStore['upsertEntry']>[0] & {
+      sourceQuery?: { mediaUrl: string; season?: number; episode?: number };
     }
+  ) => {
+    const { sourceQuery, ...fields } = input ?? ({} as typeof input);
+    const entry = libraryStore.upsertEntry(fields);
+    /*
+     * Adding a title to the library is the statement that its page must keep
+     * opening. Pinning here rather than in the store keeps `LibraryStore` free of
+     * a dependency on the snapshot cache, and by title rather than URL because
+     * that is the identity a library entry actually has.
+     */
+    pageSnapshots.setPinned({ url: input?.mediaUrl, title: entry?.title, year: entry?.year }, true);
+
+    /*
+     * The sources come with it. Whatever discovery already found is saved on the
+     * entry now, and a deliberate add (a bucket was chosen) with nothing found yet
+     * goes looking in the background. A series is searched by its episode's own
+     * address, not its page — that address is linked to the entry so the
+     * episode's sources, now and later, are recognised as this title's.
+     */
+    if (entry && input?.mediaUrl) {
+      const target = sourceQuery?.mediaUrl ? sourceQuery : { mediaUrl: input.mediaUrl };
+      if (sourceQuery?.mediaUrl) {
+        libraryStore.linkSourceAddress(entry.key, sourceQuery.mediaUrl);
+      }
+      const cached = contentService.peekCachedSources(target.mediaUrl, target.season, target.episode);
+      if (cached.length > 0) {
+        libraryStore.mergeDiscoveredSources(target.mediaUrl, cached, target.season, target.episode);
+      } else if (input.status && !entry.sources?.length) {
+        captureLibrarySources(target, entry.title, sourceQuery ? undefined : entry.type);
+      }
+    }
+    return entry;
   }
-  return entry;
-});
+);
 
 ipcMain.handle('library:setStatus', async (_, key: string, status: WatchStatus) =>
   libraryStore.setStatus(key, status)

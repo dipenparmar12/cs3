@@ -200,6 +200,28 @@ test('an episode discovery matches the page it was keyed by, query and all', () 
   assert.equal(s.getStoredSources(key)[0].episode, 2);
 });
 
+test('an episode searched by its own handle reaches the series it was linked to', () => {
+  const s = store();
+  const entry = s.upsertEntry({ title: 'Reacher', year: 2022, mediaUrl: PAGES[0] });
+  const episodeHandle = 'cs3ext://VegaMovies/https%3A%2F%2Fvegamovies.example%2Freacher%2Fs01e02';
+
+  // Before it is linked, an episode's discovery is not recognised as this title's.
+  assert.equal(s.mergeDiscoveredSources(episodeHandle, [found()], 1, 2), null);
+
+  s.linkSourceAddress(entry.key, episodeHandle);
+  assert.equal(s.mergeDiscoveredSources(episodeHandle, [found()], 1, 2), entry.key);
+  assert.equal(s.getStoredSources(entry.key)[0].episode, 2);
+});
+
+test('an address is never linked to two titles', () => {
+  const s = store();
+  const a = s.upsertEntry({ title: 'Reacher', year: 2022, mediaUrl: PAGES[0] });
+  const b = s.upsertEntry({ title: 'Dune', year: 2021, mediaUrl: PAGES[1] });
+  s.linkSourceAddress(a.key, 'cs3ext://X/episode-1');
+  s.linkSourceAddress(b.key, 'cs3ext://X/episode-1');
+  assert.equal(s.mergeDiscoveredSources('cs3ext://X/episode-1', [found()]), a.key);
+});
+
 test('a re-resolved link replaces its release rather than adding a row', () => {
   const s = store();
   s.upsertEntry({ title: 'Dune Part Two', year: 2024, mediaUrl: PAGES[0] });

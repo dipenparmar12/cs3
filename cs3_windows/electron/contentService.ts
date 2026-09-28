@@ -953,14 +953,18 @@ export class ContentService {
    * For the library, which saves what was found for its titles: an expired
    * provider link still names the release to re-resolve, so it is worth keeping.
    */
-  public peekCachedSources(mediaUrl: string): TorrentResult[] {
+  public peekCachedSources(mediaUrl: string, season?: number, episode?: number): TorrentResult[] {
     if (!mediaUrl || mediaUrl.startsWith('magnet:')) return [];
     const fromUrl = parseEpisodeParams(mediaUrl);
     const base = stripQuery(mediaUrl);
     const seen = new Set<string>();
     const out: TorrentResult[] = [];
     for (const scope of ['origin', 'all'] as const) {
-      const hit = this.cache.peek(this.cacheUrlFor(base, scope), fromUrl.season, fromUrl.episode);
+      const hit = this.cache.peek(
+        this.cacheUrlFor(base, scope),
+        season ?? fromUrl.season,
+        episode ?? fromUrl.episode
+      );
       for (const source of [...hit.fresh, ...hit.expired]) {
         if (seen.has(source.infoHash)) continue;
         seen.add(source.infoHash);

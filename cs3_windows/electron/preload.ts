@@ -1569,6 +1569,11 @@ export interface CloudStreamElectronAPI {
     mediaUrl: string;
     status?: WatchStatus;
     sources?: StoredSource[];
+    /**
+     * What discovery is asked for on this title's behalf when that is not its
+     * page — the episode on screen — so the sources found for it are saved too.
+     */
+    sourceQuery?: { mediaUrl: string; season?: number; episode?: number };
   }) => Promise<LibraryEntry>;
   setLibraryStatus: (key: string, status: WatchStatus) => Promise<LibraryEntry | null>;
   setLibraryUserRating: (key: string, rating?: number) => Promise<LibraryEntry | null>;
