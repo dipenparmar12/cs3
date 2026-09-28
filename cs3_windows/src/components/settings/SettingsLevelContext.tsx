@@ -29,3 +29,28 @@ export const SettingsLevelProvider: React.FC<{
 export function useSettingsLevel(): SettingsLevel {
   return useContext(LevelContext);
 }
+
+/**
+ * What is typed in "Find a setting". Empty means no search is running.
+ *
+ * Beside the level because it is the same kind of thing — a filter over rows
+ * that each row applies to itself — and every row already reads this file.
+ */
+const QueryContext = createContext('');
+
+export const SettingsQueryProvider: React.FC<{ query: string; children: React.ReactNode }> = ({
+  query,
+  children,
+}) => <QueryContext.Provider value={query}>{children}</QueryContext.Provider>;
+
+export function useSettingsQuery(): string {
+  return useContext(QueryContext);
+}
+
+/**
+ * True inside a group whose own title or keywords matched the query.
+ *
+ * Searching "downloads" should show the whole Downloads group, not only the
+ * rows that happen to repeat the word; rows read this to stand down.
+ */
+export const GroupMatchContext = createContext(false);

@@ -1,7 +1,8 @@
 import React from 'react';
 import { Poster } from './Poster';
-import { Clock, Loader2, Search, Trash2, X } from 'lucide-react';
+import { BookmarkCheck, Clock, Loader2, Search, Trash2, X } from 'lucide-react';
 import type { SearchHistoryEntry, SearchSuggestion } from '../types/api';
+import type { SavedSearchSummary } from '../../electron/savedSearches';
 
 /**
  * The panel under the search box: what you searched before, and what you
@@ -26,6 +27,9 @@ interface SearchSuggestionsProps {
   onPickHistory: (entry: SearchHistoryEntry) => void;
   onRemoveHistory: (query: string) => void;
   onClearHistory: () => void;
+  /** Searches kept with Save results; offered while the box is empty. */
+  saved?: SavedSearchSummary[];
+  onPickSaved?: (id: string) => void;
 }
 
 function relativeTime(at: number): string {
@@ -52,13 +56,19 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
   onPickHistory,
   onRemoveHistory,
   onClearHistory,
+  saved = [],
+  onPickSaved,
 }) => {
   if (!open) return null;
 
   const hasQuery = query.trim().length >= 2;
   const showHistory = history.length > 0;
 
-  if (!loading && suggestions.length === 0 && !showHistory) return null;
+  // Saved searches are a place to go back to, so they are offered only before
+  // anything is typed; once a query is being written they would be noise.
+  const showSaved = !hasQuery && saved.length > 0 && Boolean(onPickSaved);
+
+  if (!loading && suggestions.length === 0 && !showHistory && !showSaved) return null;
 
   // History is offered first while the box is empty and demoted once the user
   // is typing, because at that point they are naming something new.
@@ -209,10 +219,39 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
     </div>
   );
 
+  const savedBlock = showSaved && (
+    <div className="search-suggest__group">
+      <div className="search-suggest__heading">
+        <span>
+          <BookmarkCheck size={12} /> Saved searches
+        </span>
+      </div>
+      {saved.slice(0, 5).map((entry) => (
+        <div key={entry.id} className="search-suggest__row search-suggest__row--history">
+          <button
+            type="button"
+            className="search-suggest__hit"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onPickSaved?.(entry.id);
+            }}
+          >
+            <BookmarkCheck size={14} className="search-suggest__icon" />
+            <span className="search-suggest__label">{entry.query}</span>
+            <span className="search-suggest__meta">
+              {entry.resultCount} saved · {relativeTime(entry.savedAt)}
+            </span>
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+
   return (
     <div className="search-suggest" role="listbox" aria-label="Search suggestions">
       {historyFirst ? (
         <>
+          {savedBlock}
           {historyBlock}
           {suggestionBlock}
         </>

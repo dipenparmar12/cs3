@@ -86,11 +86,6 @@ export const CardStatusLegend: React.FC = () => {
 
   return (
     <div className="card-legend">
-      <p className="card-legend__intro">
-        Posters remember what has already happened to them, so you do not have to open the
-        same thing twice to find out. Every mark also says what it means if you hover it.
-      </p>
-
       <ul className="card-legend__list">
         {/* The one state with nothing to hover, so it is stated first. */}
         <li className="card-legend__row">

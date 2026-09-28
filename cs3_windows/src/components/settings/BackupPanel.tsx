@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Archive, Download, Upload, Loader2, Check, AlertTriangle, Undo2 } from 'lucide-react';
 import { useFlash } from '../../utils/useFlash';
 import { formatBytes } from '../../utils/format';
+import { InfoHint } from './InfoHint';
 
 /**
  * Take this installation somewhere else, and bring it back.
@@ -28,6 +29,7 @@ const SECTION_LABELS: Record<string, string> = {
   history: 'Watch history',
   bookmarks: 'Saved pages',
   searchHistory: 'Past searches',
+  savedSearches: 'Saved searches',
   titleOutcomes: 'Title outcomes',
   providerAnalytics: 'Provider measurements',
   downloads: 'Download queue',
@@ -126,16 +128,15 @@ export const BackupPanel: React.FC = () => {
   return (
     <div className="backup-panel">
       <p className="backup-panel__lede">
-        One file holding your library, watch history, saved pages, searches, settings, which
-        repositories and extensions you have and which are switched off, and your indexer
-        configuration. Enough to make another machine into this one.
-      </p>
-      <p className="backup-panel__note">
-        Extension archives and downloaded files are not included — they are large and can be
-        fetched again. The backup records <em>which</em> ones you had, which is the part that
-        cannot be: a restore puts your repositories back and remembers what you had switched
-        off, then one press per repository fetches the archives. Tokens and device ids are
-        stripped on the way out.
+        Your library, history, saved pages and searches, settings and extensions — in one file.
+        <InfoHint label="What a backup holds">
+          Everything needed to make another machine into this one: the library, watch history,
+          saved pages and searches, settings, which repositories and extensions you have and
+          which are switched off, and your indexer configuration. Extension archives and
+          downloaded files are not included — they are large and can be fetched again; the
+          backup records <em>which</em> ones you had. Tokens and device ids are stripped on the
+          way out.
+        </InfoHint>
       </p>
 
       <div className="backup-panel__actions">

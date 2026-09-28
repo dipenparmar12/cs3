@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle, Check, CheckCircle2, Globe, Loader2, RotateCcw, XCircle,
 } from 'lucide-react';
+import { InfoHint } from './settings/InfoHint';
 
 /**
  * DNS settings, written for someone who does not know what DNS is.
@@ -92,12 +93,12 @@ export const NetworkSettings: React.FC = () => {
         <div>
           <h3>
             <Globe size={16} /> Connection
+            <InfoHint label="About the connection settings">
+              If searches keep finding nothing, your internet provider may be blocking the
+              sites this app looks in. Changing who resolves those addresses usually fixes it.
+              Test first to see whether that is the problem.
+            </InfoHint>
           </h3>
-          <p>
-            If searches keep finding nothing, your internet provider may be
-            blocking the sites this app looks in. Changing who resolves those
-            addresses usually fixes it.
-          </p>
         </div>
         <button className="btn btn-secondary" onClick={runTest} disabled={testing}>
           {testing ? <Loader2 size={14} className="spin" /> : <CheckCircle2 size={14} />}
@@ -191,9 +192,7 @@ export const NetworkSettings: React.FC = () => {
         <details className="netset__advanced">
           <summary>Filtering resolvers</summary>
           <p className="netset__note">
-            These block malware or advertising domains as well as resolving. Useful
-            in their own right — but if a site is unreachable, a filter is one of the
-            things that could be causing it.
+            These also block malware and ad domains — which can itself make a site unreachable.
           </p>
           <div className="netset__choices">
             {presets
@@ -224,10 +223,8 @@ export const NetworkSettings: React.FC = () => {
         <summary>Advanced</summary>
 
         <p className="netset__note">
-          These options use <strong>DNS over HTTPS</strong>. The resolver is
-          addressed by a URI template, and Chromium&apos;s network stack does the
-          resolving — so this covers searching, metadata and provider scraping.
-          Torrent peer connections still use the system resolver.
+          DNS over HTTPS, for searching, metadata and providers. Torrent peers still use the
+          system resolver.
         </p>
 
         <label className="netset__field">
