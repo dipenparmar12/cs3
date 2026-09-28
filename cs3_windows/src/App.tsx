@@ -107,6 +107,8 @@ export const App: React.FC = () => {
    */
   const [search, setSearch] = useState<SearchSnapshot | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
+  /** Set while the search screen shows a saved search rather than a live one. */
+  const [savedView, setSavedView] = useState<{ id: string; savedAt: number } | null>(null);
   /** The last query and options, so a scope change can re-run them. */
   const lastQuery = useRef<{ query: string; options?: SearchOptions } | null>(null);
   /**
@@ -753,6 +755,7 @@ export const App: React.FC = () => {
    */
   const handleSearch = useCallback(async (query: string, options?: SearchOptions) => {
     lastQuery.current = { query, options };
+    setSavedView(null);
     setSearchQuery(query);
     setSelectedMedia(null); // Instantly dismiss open DetailView overlay
     setSearch(null); // Instantly clear old search results
@@ -786,6 +789,64 @@ export const App: React.FC = () => {
     const response = await window.cloudstream?.cancelSearch(id);
     if (response?.snapshot) setSearch(response.snapshot);
   }, [search?.id]);
+
+  /**
+   * Opens a saved search as it was saved.
+   *
+   * Drawn through the same screen as a live search, from a finished snapshot,
+   * with `savedView` set so the screen says these are saved results and when —
+   * a saved list that looked live would be the stale-results failure that
+   * search history exists to avoid. Search again re-runs it under the scope it
+   * was saved with.
+   */
+  const handleOpenSavedSearch = useCallback(async (id: string) => {
+    const saved = await window.cloudstream?.getSavedSearch?.(id);
+    if (!saved) return;
+    lastQuery.current = {
+      query: saved.query,
+      options: saved.providers.length > 0 ? { providers: saved.providers } : undefined,
+    };
+    setSelectedMedia(null);
+    setSearchError(null);
+    setSearchUi(EMPTY_SEARCH_UI);
+    savedScroll.current = 0;
+    setSearchQuery(saved.query);
+    setSearch({
+      id: `saved:${saved.id}`,
+      query: saved.query,
+      results: saved.results,
+      settled: 0,
+      total: 0,
+      outcomes: [],
+      scope: {
+        active: saved.providers.length > 0 || saved.indexers.length > 0,
+        providers: saved.providers,
+        indexers: saved.indexers,
+        missingProviders: [],
+        missingIndexers: [],
+      },
+      done: true,
+      cancelled: false,
+    });
+    setSavedView({ id: saved.id, savedAt: saved.savedAt });
+    setActiveTab('search');
+  }, []);
+
+  /** Keeps the live search's results to reopen later. */
+  const handleSaveSearch = useCallback(async (): Promise<boolean> => {
+    if (!search || search.results.length === 0) return false;
+    const response = await window.cloudstream?.saveSearchResults?.({
+      query: search.query,
+      results: search.results,
+      providers: search.scope.active ? search.scope.providers : [],
+      indexers: search.scope.active ? search.scope.indexers : [],
+    });
+    if (!response?.ok) {
+      setActionNotice(response?.error ?? 'Those results could not be saved.');
+      return false;
+    }
+    return true;
+  }, [search]);
 
   /** Re-runs the current query under a scope the user just changed. */
   const handleScopeChange = useCallback(() => {
@@ -1528,6 +1589,7 @@ export const App: React.FC = () => {
           }}
           onTorrentPickFailed={(message) => setActionNotice(message)}
           onSearch={handleSearch}
+          onOpenSavedSearch={handleOpenSavedSearch}
           isSearching={Boolean(search && !search.done)}
           onScopeChange={handleScopeChange}
           onOpenInspector={() => setIsInspectorOpen(true)}
@@ -1882,6 +1944,8 @@ export const App: React.FC = () => {
                     onUiChange={setSearchUi}
                     onSearchAllSources={handleSearchAllSources}
                     onRetry={handleRetrySearch}
+                    savedView={savedView}
+                    onSaveResults={handleSaveSearch}
                   />
                 </ErrorBoundary>
               )}
@@ -1892,6 +1956,7 @@ export const App: React.FC = () => {
                     onSearch={handleSearchFromDetail}
                     onPlaySavedSource={handlePlaySavedSource}
                     onBrowse={() => setActiveTab('home')}
+                    onOpenSavedSearch={handleOpenSavedSearch}
                   />
                 </ErrorBoundary>
               )}
