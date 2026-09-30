@@ -8,7 +8,7 @@ import {
   type RawTorrent,
   type TorrentIndexer,
 } from './base.ts';
-import type { IndexerConfig, IndexerQuery } from '../../../src/types/torrent';
+import type { IndexerConfig, IndexerQuery } from '../../../src/types/torrent.ts';
 
 /**
  * Aggregator indexers — the ones that actually work behind ISP DNS blocks.

@@ -873,6 +873,7 @@ export interface CloudStreamElectronAPI {
   // Indexers and ranking preferences
   getIndexerConfigs: () => Promise<IndexerConfig[]>;
   saveIndexerConfig: (config: IndexerConfig) => Promise<IndexerConfig[]>;
+  saveIndexerConfigs: (configs: IndexerConfig[]) => Promise<IndexerConfig[]>;
   removeIndexerConfig: (id: string) => Promise<IndexerConfig[]>;
   testIndexer: (config: IndexerConfig) => Promise<{ ok: boolean; message: string }>;
   getIndexerHealth: () => Promise<IndexerHealth[]>;
@@ -2114,6 +2115,7 @@ const api: CloudStreamElectronAPI = {
 
   getIndexerConfigs: () => ipcRenderer.invoke('indexer:getConfigs'),
   saveIndexerConfig: (config) => ipcRenderer.invoke('indexer:saveConfig', config),
+  saveIndexerConfigs: (configs) => ipcRenderer.invoke('indexer:saveConfigs', configs),
   removeIndexerConfig: (id) => ipcRenderer.invoke('indexer:removeConfig', id),
   testIndexer: (config) => ipcRenderer.invoke('indexer:test', config),
   getIndexerHealth: () => ipcRenderer.invoke('indexer:getHealth'),

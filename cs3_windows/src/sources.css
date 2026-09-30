@@ -1924,6 +1924,72 @@
   color: #fff;
   margin-bottom: 0.35rem;
 }
+.settings-section__title--collapsible {
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 4px;
+  transition: color 0.15s ease;
+}
+.settings-section__title--collapsible:hover {
+  color: var(--accent-light, #93c5fd);
+}
+.settings-section__title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.settings-section__collapse-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0.38;
+  transition: opacity 0.15s ease, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.settings-section__title--collapsible:hover .settings-section__collapse-icon {
+  opacity: 0.85;
+}
+.settings-section__collapse-icon--collapsed {
+  transform: rotate(-90deg);
+}
+
+.indexer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0.85rem 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  flex-wrap: wrap;
+}
+.indexer-toolbar__stats {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.indexer-toolbar__count strong {
+  color: var(--text-normal, #f3f4f6);
+}
+.indexer-toolbar__progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--accent-light, #60a5fa);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+.indexer-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-left: auto;
+}
 .settings-section__hint {
   font-size: 0.8rem;
   color: var(--text-muted);
@@ -3409,6 +3475,10 @@
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   padding: 0.9rem 1.1rem 1rem;
+  transition: padding 0.2s ease, border-color 0.15s ease;
+}
+.setting-group--collapsed {
+  padding-bottom: 0.9rem;
 }
 /* Groups are the unit of scanning, so they need air between them — on the
    "All settings" view they are the only thing separating one area from the
@@ -3417,6 +3487,7 @@
 .setting-group h3 {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.45rem;
   margin: 0 0 0.5rem;
   font-size: 0.78rem;
@@ -3424,6 +3495,41 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-subtle);
+}
+.setting-group--collapsed h3 {
+  margin-bottom: 0;
+}
+.setting-group__head--collapsible {
+  cursor: pointer;
+  user-select: none;
+  border-radius: 4px;
+  transition: color 0.15s ease;
+}
+.setting-group__head--collapsible:hover {
+  color: var(--text-normal, #e5e7eb);
+}
+.setting-group__head--collapsible:focus-visible {
+  outline: 2px solid var(--accent-primary, #3b82f6);
+  outline-offset: 2px;
+}
+.setting-group__title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.setting-group__collapse-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0.38;
+  transition: opacity 0.15s ease, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.setting-group__head--collapsible:hover .setting-group__collapse-icon {
+  opacity: 0.85;
+}
+.setting-group__collapse-icon--collapsed {
+  transform: rotate(-90deg);
 }
 .setting-group__body {
   display: flex;
@@ -3549,12 +3655,46 @@
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  transition: padding 0.2s ease;
 }
-.adult-setting header {
+.adult-setting--collapsed {
+  gap: 0;
+}
+.adult-setting header,
+.adult-setting__head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
   color: #fff;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 4px;
+  transition: color 0.15s ease;
+}
+.adult-setting__head:hover {
+  color: var(--accent-light, #93c5fd);
+}
+.adult-setting__title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+}
+.adult-setting__collapse-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0.38;
+  margin-left: 0.5rem;
+  transition: opacity 0.15s ease, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.adult-setting__head:hover .adult-setting__collapse-icon {
+  opacity: 0.85;
+}
+.adult-setting__collapse-icon--collapsed {
+  transform: rotate(-90deg);
 }
 .adult-setting h3 {
   margin: 0;
@@ -4741,28 +4881,56 @@
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
+  transition: padding 0.2s ease;
+}
+.netset--collapsed {
+  gap: 0;
 }
 
 .netset__head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 4px;
+}
+.netset__title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 .netset__head h3 {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  margin: 0 0 0.2rem;
+  margin: 0;
   font-size: 1rem;
   color: #fff;
+  transition: color 0.15s ease;
 }
-.netset__head p {
-  margin: 0;
-  max-width: 60ch;
-  font-size: 0.78rem;
-  line-height: 1.5;
+.netset__head:hover h3 {
+  color: var(--accent-light, #93c5fd);
+}
+.netset__head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.netset__collapse-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-muted);
+  opacity: 0.38;
+  transition: opacity 0.15s ease, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.netset__head:hover .netset__collapse-icon {
+  opacity: 0.85;
+}
+.netset__collapse-icon--collapsed {
+  transform: rotate(-90deg);
 }
 
 .netset__verdict {

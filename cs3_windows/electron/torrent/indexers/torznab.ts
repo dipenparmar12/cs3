@@ -1,6 +1,6 @@
-import { fetchText } from '../http';
-import { parseIntSafe, parseSize, lazyXmlParser, type RawTorrent, type TorrentIndexer } from './base';
-import type { IndexerConfig, IndexerQuery } from '../../../src/types/torrent';
+import { fetchText } from '../http.ts';
+import { parseIntSafe, parseSize, lazyXmlParser, type RawTorrent, type TorrentIndexer } from './base.ts';
+import type { IndexerConfig, IndexerQuery } from '../../../src/types/torrent.ts';
 
 /**
  * Generic Torznab adapter — the primary and most robust indexer path.

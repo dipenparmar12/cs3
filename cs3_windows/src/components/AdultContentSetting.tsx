@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Eye, EyeOff, ShieldAlert } from 'lucide-react';
+import { ChevronDown, Eye, EyeOff, ShieldAlert } from 'lucide-react';
 import { InfoHint } from './settings/InfoHint';
+import { useSettingCollapse } from './settings/useSettingCollapse';
 
 type AdultMode = 'off' | 'ask' | 'on';
 
@@ -88,22 +89,50 @@ export const AdultContentSetting: React.FC = () => {
     setBusy(false);
   };
 
+  const [collapsed, toggleCollapse] = useSettingCollapse('adult-content');
+
   return (
-    <section className="adult-setting">
-      <header>
-        {allowed ? <ShieldAlert size={16} /> : <EyeOff size={16} />}
-        <h3>Adult content</h3>
-        <InfoHint label="About adult content">
-          Some extensions publish providers marked <code>NSFW</code>. This decides whether they
-          are offered in search, source discovery, downloads and the extensions list — a change
-          applies at once.
-        </InfoHint>
-        <span className={`adult-setting__state${allowed ? ' adult-setting__state--on' : ''}`}>
-          {allowed ? 'Shown' : 'Hidden'}
+    <section className={`adult-setting${collapsed ? ' adult-setting--collapsed' : ''}`}>
+      <header
+        className="adult-setting__head"
+        onClick={toggleCollapse}
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggleCollapse();
+          }
+        }}
+      >
+        <div className="adult-setting__title-wrap">
+          {allowed ? <ShieldAlert size={16} /> : <EyeOff size={16} />}
+          <h3>Adult content</h3>
+          <span onClick={(e) => e.stopPropagation()}>
+            <InfoHint label="About adult content">
+              Some extensions publish providers marked <code>NSFW</code>. This decides whether they
+              are offered in search, source discovery, downloads and the extensions list — a change
+              applies at once.
+            </InfoHint>
+          </span>
+          <span className={`adult-setting__state${allowed ? ' adult-setting__state--on' : ''}`}>
+            {allowed ? 'Shown' : 'Hidden'}
+          </span>
+        </div>
+        <span
+          className={`adult-setting__collapse-icon${
+            collapsed ? ' adult-setting__collapse-icon--collapsed' : ''
+          }`}
+          aria-hidden="true"
+        >
+          <ChevronDown size={14} />
         </span>
       </header>
 
-      <div className="adult-setting__modes" role="radiogroup" aria-label="Adult content">
+      {!collapsed && (
+        <>
+          <div className="adult-setting__modes" role="radiogroup" aria-label="Adult content">
         {MODES.map((entry) => (
           <button
             key={entry.value}
@@ -161,6 +190,8 @@ export const AdultContentSetting: React.FC = () => {
             </>
           )}
         </div>
+      )}
+        </>
       )}
     </section>
   );

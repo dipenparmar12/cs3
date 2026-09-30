@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  AlertTriangle, Check, CheckCircle2, Globe, Loader2, RotateCcw, XCircle,
+  AlertTriangle, Check, CheckCircle2, ChevronDown, Globe, Loader2, RotateCcw, XCircle,
 } from 'lucide-react';
 import { InfoHint } from './settings/InfoHint';
+import { useSettingCollapse } from './settings/useSettingCollapse';
 
 /**
  * DNS settings, written for someone who does not know what DNS is.
@@ -87,26 +88,54 @@ export const NetworkSettings: React.FC = () => {
   const usingPrivate = settings.dnsMode !== 'system';
   const blocked = results?.filter((r) => !r.ok) ?? [];
 
+  const [collapsed, toggleCollapse] = useSettingCollapse('network-connection');
+
   return (
-    <section className="netset">
-      <header className="netset__head">
-        <div>
+    <section className={`netset${collapsed ? ' netset--collapsed' : ''}`}>
+      <header
+        className="netset__head"
+        onClick={toggleCollapse}
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggleCollapse();
+          }
+        }}
+      >
+        <div className="netset__title-wrap">
           <h3>
             <Globe size={16} /> Connection
-            <InfoHint label="About the connection settings">
-              If searches keep finding nothing, your internet provider may be blocking the
-              sites this app looks in. Changing who resolves those addresses usually fixes it.
-              Test first to see whether that is the problem.
-            </InfoHint>
+            <span onClick={(e) => e.stopPropagation()}>
+              <InfoHint label="About the connection settings">
+                If searches keep finding nothing, your internet provider may be blocking the
+                sites this app looks in. Changing who resolves those addresses usually fixes it.
+                Test first to see whether that is the problem.
+              </InfoHint>
+            </span>
           </h3>
         </div>
-        <button className="btn btn-secondary" onClick={runTest} disabled={testing}>
-          {testing ? <Loader2 size={14} className="spin" /> : <CheckCircle2 size={14} />}
-          <span>{testing ? 'Testing…' : 'Test connection'}</span>
-        </button>
+        <div className="netset__head-actions" onClick={(e) => e.stopPropagation()}>
+          <button className="btn btn-secondary" onClick={runTest} disabled={testing}>
+            {testing ? <Loader2 size={14} className="spin" /> : <CheckCircle2 size={14} />}
+            <span>{testing ? 'Testing…' : 'Test connection'}</span>
+          </button>
+          <span
+            className={`netset__collapse-icon${
+              collapsed ? ' netset__collapse-icon--collapsed' : ''
+            }`}
+            aria-hidden="true"
+          >
+            <ChevronDown size={14} />
+          </span>
+        </div>
       </header>
 
-      {results && (
+      {!collapsed && (
+        <>
+          {results && (
         <div className={`netset__verdict${blocked.length > 0 ? ' netset__verdict--bad' : ''}`}>
           {blocked.length === 0 ? (
             <p>
@@ -276,6 +305,8 @@ export const NetworkSettings: React.FC = () => {
           <span>Restore system default</span>
         </button>
       </details>
+        </>
+      )}
     </section>
   );
 };

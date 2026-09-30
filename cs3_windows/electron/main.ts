@@ -4096,6 +4096,11 @@ ipcMain.handle('indexer:saveConfig', async (_, config: IndexerConfig) => {
   return contentService.getRegistry().getConfigs();
 });
 
+ipcMain.handle('indexer:saveConfigs', async (_, configs: IndexerConfig[]) => {
+  contentService.getRegistry().saveConfigs(configs);
+  return contentService.getRegistry().getConfigs();
+});
+
 ipcMain.handle('indexer:removeConfig', async (_, id: string) => {
   contentService.getRegistry().removeConfig(id);
   return contentService.getRegistry().getConfigs();

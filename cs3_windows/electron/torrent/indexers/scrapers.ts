@@ -1,5 +1,5 @@
 import type * as cheerio from 'cheerio';
-import { fetchDocument, fetchJson } from '../http';
+import { fetchDocument, fetchJson } from '../http.ts';
 import {
   buildMagnet,
   infoHashFromMagnet,
@@ -9,8 +9,8 @@ import {
   withEpisodeTerms,
   type RawTorrent,
   type TorrentIndexer,
-} from './base';
-import type { IndexerQuery } from '../../../src/types/torrent';
+} from './base.ts';
+import type { IndexerQuery } from '../../../src/types/torrent.ts';
 
 /**
  * `cheerio` is loaded when a scraper runs, not when the app starts.

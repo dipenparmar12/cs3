@@ -4,8 +4,8 @@ import {
   VideoCodec,
   type SourcePreferences,
   type TorrentResult,
-} from '../../src/types/torrent';
-import { titleSimilarity, matchesEpisode } from './releaseParser';
+} from '../../src/types/torrent.ts';
+import { titleSimilarity, matchesEpisode } from './releaseParser.ts';
 
 /**
  * Scores and filters indexer results.

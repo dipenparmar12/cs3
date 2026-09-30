@@ -278,7 +278,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const tabs: Array<{ id: TabId; label: string; icon: React.ReactNode; badge?: React.ReactNode }> = [
     { id: 'general', label: 'General', icon: <Sliders size={15} /> },
     { id: 'player', label: 'Playback', icon: <Play size={15} /> },
-    { id: 'sources', label: 'Where films come from', icon: <Layers size={15} /> },
+    { id: 'sources', label: 'Torrent & Indexer Sources', icon: <Layers size={15} /> },
     { id: 'downloads', label: 'Downloads', icon: <Download size={15} /> },
     { id: 'network', label: 'Connection', icon: <Globe size={15} /> },
     {
@@ -546,7 +546,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
 
       {shows('sources') && (
         <>
-          {sectionTitle('sources', 'Where films come from')}
+          {sectionTitle('sources', 'Torrent & Indexer Sources')}
           <SettingsSection keywords="sources indexers torrent torrents jackett prowlarr torznab stremio addon quality resolution 4k 1080p seeders filters hdr h264 hevc cam screener">
             <SourceSettings />
           </SettingsSection>
