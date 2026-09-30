@@ -25,7 +25,24 @@ The reverse rule is just as important: **explicit saves must not pass through th
 funnels**, or the gate breaks them. The one genuine collision (Save page depends on a
 page snapshot existing) is handled with a session-scoped volatile tier — see §6.4.
 
----
+### Adult and 18+ Content Privacy
+
+Users may choose to play adult or 18+ content, but this activity must be treated as highly sensitive and should not be exposed through normal application activity or to other users of the same system.
+
+Requirements:
+
+- Do not store adult or 18+ playback activity in normal watch history, recently played, continue watching, recommendations, analytics, or other activity records.
+- Do not expose adult or 18+ content activity in shared or family-user profiles.
+- Ensure adult or 18+ playback activity cannot be inferred from general application activity.
+- The privacy protection must apply regardless of which repository or provider supplies the content.
+- Adult and 18+ content should be playable in Incognito Mode without creating persistent activity records.
+- Adult and 18+ content privacy should be enabled by default and should not require users to manually configure it.
+- If the user explicitly wants adult or 18+ content to participate in normal history or activity tracking, provide an explicit setting to enable this behavior.
+- Clearly separate this setting from the general 18+ content access/consent setting.
+- Ensure sensitive playback information is not included in application logs, developer diagnostics, analytics, synchronization data, or other shared application data unless explicitly required and permitted.
+- The privacy behavior must remain consistent across search, details, playback, downloads, history, library, recommendations, and repository/provider activity.
+
+## The goal is that adult or 18+ content can be accessed when the user explicitly enables it, while its playback activity remains private by default and is not exposed to other users or shared through normal application activity.
 
 ## 2. Goals / non-goals
 
@@ -39,6 +56,7 @@ page snapshot existing) is handled with a session-scoped volatile tier — see �
   search screen.
 - Configurable download behaviour; optional remember-across-launches.
 - Session data discarded when Incognito ends or the app closes.
+- User might wanted to end play and stream the adult and 18 plus content they dont want it to us I store a related data that is played over having any activity related because it's a sensitive identity activity that's supposed to be not exposed to the our app or another users if app is using the multiple or family members of the system so we need to have that feature Two can who can work on any repository even on the incognito mode they can enable but it's supposed to be not enabled on the generally
 
 **Non-goals**
 
