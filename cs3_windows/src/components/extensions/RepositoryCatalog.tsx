@@ -31,12 +31,12 @@
  * the heavier action and says how many extensions it is about to fetch.
  */
 import React, { useMemo, useState } from 'react';
-import { Check, ChevronDown, ChevronUp, Clock, Loader2, Search } from 'lucide-react';
-import { Badge, ExternalLink } from './primitives';
+import { AlertTriangle, Check, ChevronDown, ChevronUp, Clock, Loader2, Search } from 'lucide-react';
+import { Badge, ExternalLink, ProgressBar } from './primitives';
 import { matchesQuery, type FilterState } from './useExtensionFilters';
 import type { ProviderTreeRepository } from '../../types/plugin';
 import type { OfficialRepository } from './useExtensionCatalog';
-import type { ExtensionJob } from './useExtensionJobs';
+import type { ExtensionJob, RepositoryJobsSummary } from './useExtensionJobs';
 import { InfoHint } from '../settings/InfoHint';
 
 interface RepositoryCatalogProps {
@@ -48,6 +48,8 @@ interface RepositoryCatalogProps {
   busy: string | null;
   /** The queue's job for a target (`repo:<url>`, `repo-add:<url>`), if any. */
   jobFor(target: string): ExtensionJob | null;
+  /** Active and finished jobs belonging to a repository and its extensions. */
+  jobsForRepository?(urls: { url?: string; rawRepoUrl?: string } | string): RepositoryJobsSummary;
   /**
    * The installed tree, so a search can reach *through* a repository.
    *
@@ -161,6 +163,7 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
   filters,
   busy,
   jobFor,
+  jobsForRepository,
   tree,
   expandedUrl,
   onBrowse,
@@ -247,6 +250,24 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
         </InfoHint>
       </form>
 
+      <div className="ext-tree-toolbar">
+        <span className="ext-tree-toolbar__count">
+          Showing <strong>{visible.length}</strong> of {official.length} repositories
+        </span>
+        <div className="ext-tree-toolbar__actions">
+          {expandedUrl ? (
+            <button
+              type="button"
+              className="ext-btn"
+              title="Collapse open repository"
+              onClick={onCollapse}
+            >
+              Collapse open repository
+            </button>
+          ) : null}
+        </div>
+      </div>
+
       <ul className="ext-cards">
         {visible.map((repository) => {
           const here = isInstalled(repository, installed);
@@ -255,15 +276,39 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
           const failedJob = [installJob, addJob].find((job) => job?.state === 'failed') ?? null;
           const open = expandedUrl === repository.rawRepoUrl;
           const deep = deepMatchFor(repository, tree, filters.query);
+
+          const repoJobs = jobsForRepository ? jobsForRepository(repository) : null;
+          const isRepoWorking = working(installJob) || working(addJob);
+          const activeJobCount = (repoJobs?.activeCount ?? 0) + (isRepoWorking ? 1 : 0);
+          const currentRunningJob =
+            repoJobs?.running[0] ??
+            (installJob?.state === 'running'
+              ? installJob
+              : addJob?.state === 'running'
+                ? addJob
+                : null);
+
           return (
             <React.Fragment key={repository.id}>
             <li className={`ext-card${open ? ' ext-card--open' : ''}`}>
               <div className="ext-row__title">
                 {repository.name}
+                {activeJobCount > 0 ? (
+                  <Badge tone="accent" title={`${activeJobCount} installation tasks active`}>
+                    <Loader2 size={11} className="spin" />
+                    {currentRunningJob ? `Installing (${activeJobCount})` : `Queued (${activeJobCount})`}
+                  </Badge>
+                ) : null}
                 {repository.shortcode ? (
                   <span className="ext-chip" title="Shortcode">
                     {repository.shortcode}
                   </span>
+                ) : null}
+                {repository.category ? (
+                  <Badge tone="neutral">{repository.category}</Badge>
+                ) : null}
+                {repository.language ? (
+                  <span className="ext-chip">{repository.language}</span>
                 ) : null}
                 {repository.verified ? (
                   <Badge tone="success" title="Confirmed to return a plugin list">
@@ -277,6 +322,31 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                 {here ? <Badge tone="accent">installed</Badge> : null}
               </div>
               <p className="ext-card__description">{repository.description}</p>
+              {activeJobCount > 0 ? (
+                <div className="ext-card__job-status">
+                  <div className="ext-card__job-info">
+                    <Loader2 size={13} className="spin" />
+                    <span>
+                      {currentRunningJob
+                        ? `Installing ${currentRunningJob.label}${currentRunningJob.percent ? ` (${Math.round(currentRunningJob.percent)}%)` : ''}${repoJobs && repoJobs.queued.length > 0 ? ` · ${repoJobs.queued.length} queued` : ''}`
+                        : `${repoJobs?.queued.length ?? 1} task(s) waiting in queue`}
+                    </span>
+                  </div>
+                  {currentRunningJob?.percent !== undefined ? (
+                    <ProgressBar
+                      step={currentRunningJob.step ?? 'Installing…'}
+                      percent={currentRunningJob.percent}
+                    />
+                  ) : null}
+                </div>
+              ) : repoJobs && repoJobs.failed.length > 0 ? (
+                <div className="ext-card__job-error">
+                  <AlertTriangle size={12} />
+                  <span>
+                    {repoJobs.failed.length} extension install{repoJobs.failed.length === 1 ? '' : 's'} failed
+                  </span>
+                </div>
+              ) : null}
               {/*
                 Why this row is in the results when its own text does not say so.
                 Without it, searching a provider name and getting a repository

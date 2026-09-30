@@ -716,3 +716,129 @@
 .ext-job--failed .ext-job__note { color: var(--status-error); }
 
 .ext-footer { display: flex; align-items: center; gap: 0.35rem; }
+
+/* --- built-in callout banner --- */
+
+.ext-builtin-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1.1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--accent-primary);
+  border-radius: var(--radius-md);
+  flex-wrap: wrap;
+}
+
+.ext-builtin-banner__content {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ext-builtin-banner__icon {
+  color: var(--accent-light);
+  flex-shrink: 0;
+}
+
+.ext-builtin-banner__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.ext-builtin-banner__text strong {
+  font-size: 0.88rem;
+  color: var(--text-main);
+}
+
+.ext-builtin-banner__text span {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+/* --- tree and catalog toolbars --- */
+
+.ext-tree-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.55rem 0.85rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin-bottom: 0.6rem;
+}
+
+.ext-tree-toolbar__count {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.ext-tree-toolbar__count strong {
+  color: var(--text-main);
+}
+
+.ext-tree-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.ext-btn--accent {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #fff;
+}
+
+.ext-btn--accent:hover {
+  background: var(--accent-hover, #2563eb);
+}
+
+.ext-btn--sm {
+  padding: 0.22rem 0.5rem;
+  font-size: 0.73rem;
+}
+
+/* --- parent card job status --- */
+
+.ext-card__job-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.45rem 0.6rem;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: var(--radius-sm);
+  margin-top: 0.2rem;
+}
+
+.ext-card__job-info {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--accent-light);
+  font-weight: 500;
+}
+
+.ext-card__job-error {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  color: var(--status-error);
+  margin-top: 0.2rem;
+}
+
+/* --- category filter row --- */
+
+.ext-filters__row--categories {
+  padding-bottom: 0.2rem;
+}
+

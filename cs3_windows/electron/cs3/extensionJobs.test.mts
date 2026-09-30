@@ -218,3 +218,17 @@ test('Install all after Add installs, rather than joining the Add', () => {
     ['addRepository', 'installRepository']
   );
 });
+
+test('enqueued jobs preserve their repositoryUrl', () => {
+  const gate = gatedRunner();
+  const queue = new ExtensionJobQueue({ run: gate.run, concurrency: 2 });
+
+  queue.enqueue([
+    install('pluginA'),
+    { kind: 'addRepository', url: 'https://r.test/repo.json' },
+  ]);
+
+  const jobs = queue.snapshot().jobs;
+  assert.equal(jobs[0].repositoryUrl, 'https://example.test/repo.json');
+  assert.equal(jobs[1].repositoryUrl, 'https://r.test/repo.json');
+});

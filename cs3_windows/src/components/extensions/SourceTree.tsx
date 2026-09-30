@@ -137,6 +137,8 @@ const ExtensionRow: React.FC<{
   filters: FilterState;
   busy: string | null;
   selected: Set<string>;
+  open?: boolean;
+  onToggleOpen?: () => void;
   onToggleSelected(name: string): void;
   onExtensionToggle(internalName: string, enabled: boolean): void;
   onProviderToggle(name: string, enabled: boolean): void;
@@ -146,12 +148,19 @@ const ExtensionRow: React.FC<{
   filters,
   busy,
   selected,
+  open: openProp,
+  onToggleOpen,
   onToggleSelected,
   onExtensionToggle,
   onProviderToggle,
   onUninstall,
 }) => {
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = openProp !== undefined ? openProp : localOpen;
+  const toggleOpen = () => {
+    if (onToggleOpen) onToggleOpen();
+    else setLocalOpen((value) => !value);
+  };
   const [showDetails, setShowDetails] = useState(false);
   const suppressed = suppression(extension, 'its repository');
 
@@ -195,7 +204,7 @@ const ExtensionRow: React.FC<{
           open={open}
           hidden={providers.length === 0}
           label={open ? 'Collapse providers' : 'Expand providers'}
-          onToggle={() => setOpen((value) => !value)}
+          onToggle={toggleOpen}
         />
         <TriStateCheckbox
           state={state}
@@ -287,19 +296,36 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
   onUninstall,
   onRemoveRepository,
 }) => {
-  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [openRepos, setOpenRepos] = useState<Record<string, boolean>>({});
+  const [openExtensions, setOpenExtensions] = useState<Record<string, boolean>>({});
   const [details, setDetails] = useState<Record<string, boolean>>({});
 
   /**
-   * A repository survives the filter when anything under it does.
-   *
-   * Filtering the leaves and keeping every branch would show empty repositories
-   * as though they matched; filtering the branches by their own fields would
-   * hide a repository whose providers are exactly what was searched for.
+   * Filter repositories by category and language, and filter extensions/providers.
    */
   const visible = useMemo(
     () =>
       tree
+        .filter((repository) => {
+          if (filters.categories.size > 0) {
+            if (!repository.category || !filters.categories.has(repository.category)) {
+              return false;
+            }
+          }
+          if (filters.languages.size > 0) {
+            const repoLang = (repository.language ?? '').toLowerCase();
+            const matchesRepoLang = [...filters.languages].some((l) =>
+              repoLang.includes(l.toLowerCase())
+            );
+            const hasMatchingExt = repository.extensions.some(
+              (ext) =>
+                matchesLanguages(ext.language, filters.languages) ||
+                ext.providers.some((p) => matchesLanguages(p.lang, filters.languages))
+            );
+            if (!matchesRepoLang && !hasMatchingExt) return false;
+          }
+          return true;
+        })
         .map((repository) => ({
           repository,
           extensions: repository.extensions.filter(
@@ -315,6 +341,40 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
     [tree, filters]
   );
 
+  const collapseAll = () => {
+    setOpenRepos({});
+    setOpenExtensions({});
+  };
+
+  const expandRepositories = () => {
+    const nextRepos: Record<string, boolean> = {};
+    for (const { repository } of visible) {
+      nextRepos[repository.id ?? repository.url] = true;
+    }
+    setOpenRepos(nextRepos);
+    setOpenExtensions({});
+  };
+
+  const expandAllWithProviders = () => {
+    const nextRepos: Record<string, boolean> = {};
+    const nextExts: Record<string, boolean> = {};
+    for (const { repository, extensions } of visible) {
+      nextRepos[repository.id ?? repository.url] = true;
+      for (const ext of extensions) {
+        nextExts[ext.id ?? ext.internalName] = true;
+      }
+    }
+    setOpenRepos(nextRepos);
+    setOpenExtensions(nextExts);
+  };
+
+  const toggleExtension = (extKey: string) => {
+    setOpenExtensions((current) => ({
+      ...current,
+      [extKey]: !(current[extKey] ?? false),
+    }));
+  };
+
   if (tree.length === 0) {
     return (
       <p className="ext-empty">
@@ -329,111 +389,170 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
   }
 
   return (
-    <ul className="ext-tree">
-      {visible.map(({ repository, extensions }) => {
-        const key = repository.id ?? repository.url;
-        const expanded = open[key] ?? true;
-        const providerCount = repository.extensions.reduce(
-          (total, extension) => total + extension.providers.length,
-          0
-        );
+    <div className="ext-tree-container">
+      <div className="ext-tree-toolbar">
+        <span className="ext-tree-toolbar__count">
+          <strong>{visible.length}</strong> {visible.length === 1 ? 'repository' : 'repositories'} installed
+        </span>
+        <div className="ext-tree-toolbar__actions">
+          <button
+            type="button"
+            className="ext-btn"
+            title="Collapse all repositories and providers"
+            onClick={collapseAll}
+          >
+            Collapse all
+          </button>
+          <button
+            type="button"
+            className="ext-btn"
+            title="Expand all repositories (Level 1)"
+            onClick={expandRepositories}
+          >
+            Expand repositories
+          </button>
+          <button
+            type="button"
+            className="ext-btn ext-btn--accent"
+            title="Expand all repositories and all providers (Level 2)"
+            onClick={expandAllWithProviders}
+          >
+            Expand all (+ providers)
+          </button>
+        </div>
+      </div>
 
-        const provenance: Provenance = {
-          kind: 'repository',
-          title: repository.name,
-          chain: [repository.name],
-          description: repository.description,
-          category: repository.category,
-          tags: repository.tvTypes,
-          url: repository.url,
-          homepageUrl: repository.homepageUrl,
-          verified: repository.verified,
-          bundled: repository.bundled,
-          counts: [
-            { label: 'Extensions', value: String(repository.extensions.length) },
-            { label: 'Providers', value: String(providerCount) },
-          ],
-        };
+      <ul className="ext-tree">
+        {visible.map(({ repository, extensions }) => {
+          const key = repository.id ?? repository.url;
+          // By default, repositories are collapsed
+          const expanded = openRepos[key] ?? false;
+          const providerCount = repository.extensions.reduce(
+            (total, extension) => total + extension.providers.length,
+            0
+          );
 
-        return (
-          <li key={key} className="ext-node ext-node--repository">
-            <div className="ext-row__head">
-              <Disclosure
-                open={expanded}
-                label={expanded ? 'Collapse extensions' : 'Expand extensions'}
-                onToggle={() => setOpen((current) => ({ ...current, [key]: !expanded }))}
-              />
-              <Package size={15} className="ext-node__icon" />
-              <div className="ext-row__grow">
-                <div className="ext-row__title">
-                  {repository.name}
-                  {/*
-                    Bundled repositories are labelled, never hidden, and always
-                    removable — the label explains where they came from rather
-                    than protecting them.
-                  */}
-                  {repository.bundled ? <Badge tone="accent">first run</Badge> : null}
-                  {repository.verified ? <Badge tone="success">verified</Badge> : null}
+          const areAllRepoExtsOpen =
+            extensions.length > 0 &&
+            extensions.every((ext) => openExtensions[ext.id ?? ext.internalName]);
+
+          const toggleAllRepoExts = () => {
+            const target = !areAllRepoExtsOpen;
+            setOpenExtensions((current) => {
+              const next = { ...current };
+              for (const ext of extensions) {
+                next[ext.id ?? ext.internalName] = target;
+              }
+              return next;
+            });
+          };
+
+          const provenance: Provenance = {
+            kind: 'repository',
+            title: repository.name,
+            chain: [repository.name],
+            description: repository.description,
+            category: repository.category,
+            tags: repository.tvTypes,
+            url: repository.url,
+            homepageUrl: repository.homepageUrl,
+            verified: repository.verified,
+            bundled: repository.bundled,
+            counts: [
+              { label: 'Extensions', value: String(repository.extensions.length) },
+              { label: 'Providers', value: String(providerCount) },
+            ],
+          };
+
+          return (
+            <li key={key} className="ext-node ext-node--repository">
+              <div className="ext-row__head">
+                <Disclosure
+                  open={expanded}
+                  label={expanded ? 'Collapse extensions' : 'Expand extensions'}
+                  onToggle={() => setOpenRepos((current) => ({ ...current, [key]: !expanded }))}
+                />
+                <Package size={15} className="ext-node__icon" />
+                <div className="ext-row__grow">
+                  <div className="ext-row__title">
+                    {repository.name}
+                    {repository.category ? <Badge tone="neutral">{repository.category}</Badge> : null}
+                    {repository.language ? <span className="ext-chip">{repository.language}</span> : null}
+                    {repository.bundled ? <Badge tone="accent">first run</Badge> : null}
+                    {repository.verified ? <Badge tone="success">verified</Badge> : null}
+                  </div>
+                  <div className="ext-row__subtitle">
+                    <span>
+                      {repository.extensions.length}{' '}
+                      {repository.extensions.length === 1 ? 'extension' : 'extensions'}
+                    </span>
+                    <span>
+                      {providerCount} {providerCount === 1 ? 'provider' : 'providers'}
+                    </span>
+                    <ExternalLink url={repository.homepageUrl ?? repository.url} />
+                  </div>
                 </div>
-                <div className="ext-row__subtitle">
-                  <span>
-                    {repository.extensions.length}{' '}
-                    {repository.extensions.length === 1 ? 'extension' : 'extensions'}
-                  </span>
-                  <span>
-                    {providerCount} {providerCount === 1 ? 'provider' : 'providers'}
-                  </span>
-                  <ExternalLink url={repository.homepageUrl ?? repository.url} />
-                </div>
+                {expanded && extensions.length > 0 ? (
+                  <button
+                    type="button"
+                    className="ext-btn ext-btn--sm"
+                    title={areAllRepoExtsOpen ? 'Collapse all providers' : 'Expand all providers'}
+                    onClick={toggleAllRepoExts}
+                  >
+                    {areAllRepoExtsOpen ? 'Collapse providers' : 'Expand providers'}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="ext-icon-button"
+                  title="Where this repository came from"
+                  aria-expanded={details[key] ?? false}
+                  onClick={() => setDetails((current) => ({ ...current, [key]: !current[key] }))}
+                >
+                  <Info size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="ext-icon-button ext-icon-button--danger"
+                  title="Remove this repository and uninstall the extensions it installed"
+                  disabled={busy === `remove:${repository.url}`}
+                  onClick={() => onRemoveRepository(repository.url)}
+                >
+                  <Trash2 size={14} />
+                </button>
+                <Toggle
+                  on={repository.enabled !== false}
+                  label="Keep everything installed, but stop asking this repository's providers"
+                  disabled={busy === `repo:${key}`}
+                  onChange={(next) => onRepositoryToggle(repository.id ?? repository.url, next)}
+                />
               </div>
-              <button
-                type="button"
-                className="ext-icon-button"
-                title="Where this repository came from"
-                aria-expanded={details[key] ?? false}
-                onClick={() => setDetails((current) => ({ ...current, [key]: !current[key] }))}
-              >
-                <Info size={14} />
-              </button>
-              <button
-                type="button"
-                className="ext-icon-button ext-icon-button--danger"
-                title="Remove this repository and uninstall the extensions it installed"
-                disabled={busy === `remove:${repository.url}`}
-                onClick={() => onRemoveRepository(repository.url)}
-              >
-                <Trash2 size={14} />
-              </button>
-              <Toggle
-                on={repository.enabled !== false}
-                label="Keep everything installed, but stop asking this repository's providers"
-                disabled={busy === `repo:${key}`}
-                onChange={(next) => onRepositoryToggle(repository.id ?? repository.url, next)}
-              />
-            </div>
 
-            {details[key] ? <ProvenancePanel details={provenance} /> : null}
+              {details[key] ? <ProvenancePanel details={provenance} /> : null}
 
-            {expanded ? (
-              <ul className="ext-children">
-                {extensions.map((extension) => (
-                  <ExtensionRow
-                    key={extension.id ?? extension.internalName}
-                    extension={extension}
-                    filters={filters}
-                    busy={busy}
-                    selected={selected}
-                    onToggleSelected={onToggleSelected}
-                    onExtensionToggle={onExtensionToggle}
-                    onProviderToggle={onProviderToggle}
-                    onUninstall={onUninstall}
-                  />
-                ))}
-              </ul>
-            ) : null}
-          </li>
-        );
-      })}
-    </ul>
+              {expanded ? (
+                <ul className="ext-children">
+                  {extensions.map((extension) => (
+                    <ExtensionRow
+                      key={extension.id ?? extension.internalName}
+                      extension={extension}
+                      filters={filters}
+                      busy={busy}
+                      selected={selected}
+                      open={openExtensions[extension.id ?? extension.internalName] ?? false}
+                      onToggleOpen={() => toggleExtension(extension.id ?? extension.internalName)}
+                      onToggleSelected={onToggleSelected}
+                      onExtensionToggle={onExtensionToggle}
+                      onProviderToggle={onProviderToggle}
+                      onUninstall={onUninstall}
+                    />
+                  ))}
+                </ul>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 };

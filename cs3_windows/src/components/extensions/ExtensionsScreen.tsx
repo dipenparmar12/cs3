@@ -24,7 +24,7 @@
  * reconstruction's plain switch could not.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { Boxes, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
+import { Boxes, Library, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { useExtensionCatalog } from './useExtensionCatalog';
 import { useExtensionFilters } from './useExtensionFilters';
 import { FilterBar } from './FilterBar';
@@ -42,18 +42,17 @@ import './extensions.css';
 import { describeError } from '../../utils/errors';
 
 /**
- * Two tabs, not three.
- *
- * "What does this repository offer?" was a third destination, and reaching it
- * meant leaving the list the question was asked from. It is not a separate
- * question — it is a detail of one repository — so it is now a panel that opens
- * under that repository's card, and the tab it used to need is gone.
+ * Three tabs:
+ * - **Installed** — community extensions & providers tree
+ * - **Browse** — official & community repository catalog
+ * - **Built-in Sources** — native scrapers, Stremio addons, & self-hosted media servers
  */
-type Tab = 'sources' | 'repositories';
+type Tab = 'sources' | 'repositories' | 'builtin';
 
 const TABS: Array<{ id: Tab; label: string; hint: string }> = [
   { id: 'sources', label: 'Installed', hint: 'What you have, and what will be searched' },
   { id: 'repositories', label: 'Browse', hint: 'Collections of add-ons you can install' },
+  { id: 'builtin', label: 'Built-in Sources', hint: 'Ship with the app — native scrapers & servers' },
 ];
 
 export const ExtensionsScreen: React.FC = () => {
@@ -242,19 +241,28 @@ export const ExtensionsScreen: React.FC = () => {
         facets={filters.facets}
         activeCount={filters.activeCount}
         onReset={filters.reset}
-        showCategories={tab === 'repositories'}
+        showCategories={tab !== 'builtin'}
         scope={tab === 'repositories' ? 'repositories' : 'sources'}
       />
 
       {tab === 'sources' ? (
         <>
-          {/*
-            Above the tree, because these are the sources that always work.
-            A new install has no extensions and, before this lane existed, an
-            empty Sources tab — which reads as an app that cannot do anything
-            until you go and find plugins for it.
-          */}
-          <BuiltInSources />
+          <div className="ext-builtin-banner">
+            <div className="ext-builtin-banner__content">
+              <Library size={18} className="ext-builtin-banner__icon" />
+              <div className="ext-builtin-banner__text">
+                <strong>Built-in sources</strong>
+                <span>Ship with the app — nothing to install, and they cannot break on an update.</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="ext-btn ext-btn--primary"
+              onClick={() => setTab('builtin')}
+            >
+              View Built-in Sources
+            </button>
+          </div>
 
           {/*
             Bulk actions apply to providers, which is the level the enable
@@ -312,6 +320,7 @@ export const ExtensionsScreen: React.FC = () => {
           filters={filters.state}
           busy={busy}
           jobFor={jobs.jobFor}
+          jobsForRepository={jobs.jobsForRepository}
           tree={state.tree}
           expandedUrl={browsing?.url ?? null}
           onBrowse={(repository) => void browse(repository)}
@@ -338,6 +347,10 @@ export const ExtensionsScreen: React.FC = () => {
           onAdd={(url, name) => void jobs.enqueue([{ kind: 'addRepository', url, name }])}
           onInstallAll={(url, name) => void jobs.enqueue([{ kind: 'installRepository', url, name }])}
         />
+      ) : null}
+
+      {tab === 'builtin' ? (
+        <BuiltInSources />
       ) : null}
 
 

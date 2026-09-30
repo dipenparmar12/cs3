@@ -282,6 +282,7 @@ export interface ProviderTreeRepository {
   /** Present when the catalogue knows this repository; absent for sideloads. */
   description?: string;
   category?: string;
+  language?: string;
   iconUrl?: string;
   /** Whether the catalogue verified this URL returns a document. */
   verified?: boolean;
@@ -2207,6 +2208,7 @@ export class PluginManager {
           bundled: catalogued?.bundled === true,
           description: catalogued?.description,
           category: catalogued?.category,
+          language: catalogued?.language,
           iconUrl: catalogued?.iconUrl,
           verified: catalogued?.verified,
           homepageUrl: catalogued?.url,
