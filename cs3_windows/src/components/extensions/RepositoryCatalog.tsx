@@ -140,9 +140,18 @@ function deepMatchFor(
   return { extensions, providers };
 }
 
+function normalizeRepoUrl(url: string): string {
+  return (url || '').replace(/\/refs\/heads\//, '/').replace(/\/$/, '').toLowerCase();
+}
+
 /** A repository is installed if any of the URLs it is known by is. */
 function isInstalled(repository: OfficialRepository, installed: string[]): boolean {
-  return installed.some((url) => url === repository.url || url === repository.rawRepoUrl);
+  const normRepoUrl = normalizeRepoUrl(repository.url);
+  const normRawUrl = normalizeRepoUrl(repository.rawRepoUrl);
+  return installed.some((url) => {
+    const norm = normalizeRepoUrl(url);
+    return norm === normRepoUrl || norm === normRawUrl;
+  });
 }
 
 export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({

@@ -310,7 +310,13 @@ function repositoryLabel(url: string): string {
   try {
     const parsed = new URL(url);
     const segments = parsed.pathname.split('/').filter(Boolean);
-    if (parsed.hostname.includes('github') && segments.length >= 2) {
+    if (
+      (parsed.hostname.includes('github') ||
+        parsed.hostname.includes('gitlab') ||
+        parsed.hostname.includes('disroot') ||
+        parsed.hostname.includes('codeberg')) &&
+      segments.length >= 2
+    ) {
       return `${segments[0]}/${segments[1]}`;
     }
     return parsed.hostname;
@@ -486,6 +492,12 @@ const KNOWN_OWNER_MAP = new Map<string, { owner: string; repo: string }>([
   ['recloudstream/cloudstream-extensions-phisher', { owner: 'phisher98', repo: 'cloudstream-extensions-phisher' }],
   ['recloudstream/skillshare-repo', { owner: 'techtanic', repo: 'SkillShare-Repo' }],
   ['recloudstream/italianprovider', { owner: 'Gian-Fr', repo: 'ItalianProvider' }],
+  ['recloudstream/raghav', { owner: 'KSHITIJ8473', repo: 'raghav' }],
+  ['recloudstream/cloudstream-frenchrepo', { owner: 'mouradchaouche', repo: 'cloudstream-frenchrepo' }],
+  ['recloudstream/allforu-repo', { owner: 'RVRBEAST76', repo: 'allforu-repo' }],
+  ['recloudstream/ayu-cloudstream-games', { owner: 'errorcode26', repo: 'Ayu-CloudStream-Games' }],
+  ['recloudstream/flummox-repo', { owner: 'FlummoxGamer', repo: 'FLUMMOX-Repo' }],
+  ['recloudstream/desi', { owner: 'Faisal0786', repo: 'Desi' }],
 ]);
 
 /**

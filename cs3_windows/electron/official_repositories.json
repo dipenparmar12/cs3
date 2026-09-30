@@ -446,5 +446,93 @@
     "verified": true,
     "documentKind": "repository",
     "adult": true
+  },
+  {
+    "id": "raghav",
+    "name": "Raghav Repo",
+    "internalName": "raghav",
+    "description": "Raghav CloudStream extensions for anime streaming (AniChan, Anidap, AnimePahe, etc.).",
+    "url": "https://github.com/KSHITIJ8473/raghav",
+    "rawRepoUrl": "https://raw.githubusercontent.com/KSHITIJ8473/raghav/builds/repo.json",
+    "category": "Anime",
+    "language": "English",
+    "iconUrl": "https://i.pinimg.com/236x/bb/d4/4b/bbd44b37f18e40a01543b8b4721b1cce.jpg",
+    "verified": true,
+    "documentKind": "repository"
+  },
+  {
+    "id": "amsc_french",
+    "name": "AMSC French",
+    "internalName": "cloudstream-frenchrepo",
+    "description": "French media and anime providers including Wiflix / Flemmix, French Anime, and French Stream.",
+    "url": "https://github.com/mouradchaouche/cloudstream-frenchrepo",
+    "rawRepoUrl": "https://raw.githubusercontent.com/mouradchaouche/cloudstream-frenchrepo/main/repo.json",
+    "category": "Regional",
+    "language": "French",
+    "iconUrl": "https://raw.githubusercontent.com/mouradchaouche/cloudstream-frenchrepo/main/Build/img/amsc.jpg",
+    "verified": true,
+    "documentKind": "repository"
+  },
+  {
+    "id": "yorik_french",
+    "name": "French Providers (yorik100)",
+    "internalName": "Cloudstream-yorik100",
+    "description": "French providers repository featuring AfterDark, Frembed, Flemmix/Wiflix, and Xalaflix.",
+    "url": "https://github.com/yorik100/Cloudstream",
+    "rawRepoUrl": "https://raw.githubusercontent.com/yorik100/Cloudstream/refs/heads/builds/repo.json",
+    "category": "Regional",
+    "language": "French",
+    "verified": true,
+    "documentKind": "repository"
+  },
+  {
+    "id": "allforu",
+    "name": "AllForU Repo",
+    "internalName": "allforu-repo",
+    "description": "AllForU community repository for CloudStream.",
+    "url": "https://github.com/RVRBEAST76/allforu-repo",
+    "rawRepoUrl": "https://raw.githubusercontent.com/RVRBEAST76/allforu-repo/builds/repo.json",
+    "category": "Community",
+    "language": "English",
+    "verified": false,
+    "documentKind": "repository"
+  },
+  {
+    "id": "ayu_games",
+    "name": "Ayu CloudStream Games",
+    "internalName": "Ayu-CloudStream-Games",
+    "description": "Interactive retro emulation runtimes and classic homebrew engine plugins for CloudStream 3.",
+    "url": "https://github.com/errorcode26/Ayu-CloudStream-Games",
+    "rawRepoUrl": "https://raw.githubusercontent.com/errorcode26/Ayu-CloudStream-Games/builds/repo.json",
+    "category": "Community",
+    "language": "English",
+    "iconUrl": "https://raw.githubusercontent.com/errorcode26/Ayu-CloudStream-Games/builds/icon.png",
+    "verified": true,
+    "documentKind": "repository"
+  },
+  {
+    "id": "flummox",
+    "name": "FLUMMOX Repo",
+    "internalName": "FLUMMOX-Repo",
+    "description": "Movies, TV Series, and Anime streaming providers including BingeCloud and Otakutsu.",
+    "url": "https://github.com/FlummoxGamer/FLUMMOX-Repo",
+    "rawRepoUrl": "https://raw.githubusercontent.com/FlummoxGamer/FLUMMOX-Repo/builds/repo.json",
+    "category": "Movies & Shows",
+    "language": "English",
+    "iconUrl": "https://raw.githubusercontent.com/FlummoxGamer/FLUMMOX-Repo/main/icon.png",
+    "verified": true,
+    "documentKind": "repository"
+  },
+  {
+    "id": "desi",
+    "name": "Desi Extensions",
+    "internalName": "Desi",
+    "description": "Multi-language Indian & Asian streaming providers (VegaMovies, The Movie Flix, OttSource, MovieBox, TamilToon, etc.).",
+    "url": "https://github.com/Faisal0786/Desi",
+    "rawRepoUrl": "https://raw.githubusercontent.com/Faisal0786/Desi/main/repo.json",
+    "category": "Regional",
+    "language": "Hindi / English",
+    "verified": true,
+    "documentKind": "repository"
   }
 ]
