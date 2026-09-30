@@ -1,14 +1,14 @@
-import http from 'http';
-import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
-import type { AddressInfo } from 'net';
+import http from 'http'
+import crypto from 'crypto'
+import fs from 'fs'
+import path from 'path'
+import type { AddressInfo } from 'net'
 // `.ts` is load-bearing: the test suite runs under Node's type stripping, which
 // is an ESM loader and will not resolve an extensionless specifier. Rollup is
 // indifferent and `allowImportingTsExtensions` is already set in both tsconfigs.
-import { classifyNetworkError } from './networkResilience.ts';
-import type { DiagnosticsSink } from './pluginManager.ts';
-import type { SourceLease } from './media/sourceLease.ts';
+import { classifyNetworkError } from './networkResilience.ts'
+import type { DiagnosticsSink } from './pluginManager.ts'
+import type { SourceLease } from './media/sourceLease.ts'
 
 /**
  * Serves a provider's stream with the headers that provider requires.
@@ -52,13 +52,13 @@ import type { SourceLease } from './media/sourceLease.ts';
  * headers, and must never be reachable from off the machine.
  */
 
-import os from 'os';
+import os from 'os'
 
 /** Attempts to resume a broken stream before giving up on it. */
-const MAX_RESUME_ATTEMPTS = 4;
+const MAX_RESUME_ATTEMPTS = 4
 
 /** Pause before a resume, so a CDN having a moment is not hammered. */
-const RESUME_DELAY_MS = 400;
+const RESUME_DELAY_MS = 400
 
 /** LRU cache limits to prevent memory accumulation in long-running sessions. */
 /**
@@ -69,8 +69,8 @@ const RESUME_DELAY_MS = 400;
  * the cost of *one* film, so the table thrashed and evicted the playlists that
  * were driving playback. A route is a URL, a small header map and two numbers.
  */
-const MAX_ROUTES = 20000;
-const ROUTE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const MAX_ROUTES = 20000
+const ROUTE_TTL_MS = 60 * 60 * 1000 // 1 hour
 
 /**
  * What a trim leaves behind, and how often the expiry sweep may run.
@@ -82,19 +82,19 @@ const ROUTE_TTL_MS = 60 * 60 * 1000; // 1 hour
  * short relative to `ROUTE_TTL_MS`, so a route still expires when it says it
  * does, give or take a sweep.
  */
-const ROUTE_LOW_WATER = Math.floor(MAX_ROUTES * 0.9);
-const SWEEP_INTERVAL_MS = 30_000;
+const ROUTE_LOW_WATER = Math.floor(MAX_ROUTES * 0.9)
+const SWEEP_INTERVAL_MS = 30_000
 
 /** Rate limiting thresholds per stream token to prevent flood loops. */
-const RATE_LIMIT_WINDOW_MS = 5000;
-const RATE_LIMIT_MAX_REQUESTS = 250;
+const RATE_LIMIT_WINDOW_MS = 5000
+const RATE_LIMIT_MAX_REQUESTS = 250
 
-type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
 interface Route {
-  url: string;
-  headers: Record<string, string>;
-  key?: string;
+  url: string
+  headers: Record<string, string>
+  key?: string
   /**
    * When this route was minted, or last re-minted by a playlist rewrite.
    *
@@ -103,15 +103,15 @@ interface Route {
    * player is reading points at me", and `lastAccess` says "the player has
    * actually fetched me". A route can be vital and never yet fetched.
    */
-  createdAt?: number;
+  createdAt?: number
   /** When this route last served a request. Undefined until it serves one. */
-  lastAccess?: number;
+  lastAccess?: number
   /**
    * Minted while rewriting a playlist, so this is a segment, key or child
    * playlist rather than a URL the app chose. Only these are examined for an
    * image header glued on the front — see {@link unwrapDisguisedSegment}.
    */
-  fromPlaylist?: boolean;
+  fromPlaylist?: boolean
   /**
    * Whether this origin honoured a `Range`, once it has been asked one.
    *
@@ -119,7 +119,7 @@ interface Route {
    * asks the question once, at open, and every later decision it makes about
    * seeking rests on that first answer.
    */
-  rangeSupport?: 'yes' | 'no';
+  rangeSupport?: 'yes' | 'no'
   /**
    * This origin serves **only bounded byte ranges**, and refuses anything else.
    *
@@ -143,12 +143,12 @@ interface Route {
    * response the client expects. Nothing else changes, and no other route takes
    * that path.
    */
-  boundedRanges?: boolean;
+  boundedRanges?: boolean
 }
 
 interface LocalRoute {
-  file: string;
-  lastAccess: number;
+  file: string
+  lastAccess: number
 }
 
 /** Response headers worth passing through; the rest are the proxy's own business. */
@@ -159,7 +159,7 @@ const FORWARDED_RESPONSE_HEADERS = [
   'accept-ranges',
   'last-modified',
   'etag',
-];
+]
 
 /** Forbidden and hop-by-hop headers that must never be forwarded. */
 const FORBIDDEN_REQUEST_HEADERS = new Set([
@@ -173,10 +173,10 @@ const FORBIDDEN_REQUEST_HEADERS = new Set([
   'trailer',
   'transfer-encoding',
   'upgrade',
-]);
+])
 
 /** Playlist attributes whose quoted value is a URL. */
-const URI_ATTRIBUTE = /URI="([^"]+)"/g;
+const URI_ATTRIBUTE = /URI="([^"]+)"/g
 
 /**
  * Keeps a `Referer` from getting the whole request thrown away.
@@ -203,51 +203,51 @@ const URI_ATTRIBUTE = /URI="([^"]+)"/g;
  */
 export function alignRefererScheme(
   targetUrl: string,
-  headers: Record<string, string>
+  headers: Record<string, string>,
 ): Record<string, string> {
-  if (!/^http:\/\//i.test(targetUrl)) return headers;
+  if (!/^http:\/\//i.test(targetUrl)) return headers
 
-  const out = { ...headers };
+  const out = { ...headers }
   for (const [name, value] of Object.entries(out)) {
-    if (name.toLowerCase() !== 'referer') continue;
-    if (/^https:\/\//i.test(value)) out[name] = value.replace(/^https:/i, 'http:');
+    if (name.toLowerCase() !== 'referer') continue
+    if (/^https:\/\//i.test(value)) out[name] = value.replace(/^https:/i, 'http:')
   }
-  return out;
+  return out
 }
 
 /** Our own servers, which need no header injection and no extra hop. */
 function isLoopback(url: string): boolean {
   try {
-    const host = new URL(url).hostname.toLowerCase();
-    return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+    const host = new URL(url).hostname.toLowerCase()
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]'
   } catch {
-    return false;
+    return false
   }
 }
 
 /** First byte of `bytes 40000-99999/1000000`, which is where a resume continues. */
 function offsetFromContentRange(value: string | null): number | null {
-  const match = value?.match(/bytes\s+(\d+)-/i);
-  return match ? Number(match[1]) : null;
+  const match = value?.match(/bytes\s+(\d+)-/i)
+  return match ? Number(match[1]) : null
 }
 
 /** First byte of a request's own `bytes=40000-` — a seek, before any reply. */
 function offsetFromRange(value: string | undefined): number | null {
-  const match = value?.match(/bytes=(\d+)-/i);
-  return match ? Number(match[1]) : null;
+  const match = value?.match(/bytes=(\d+)-/i)
+  return match ? Number(match[1]) : null
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /** `\x89PNG\r\n\x1a\n` — the signature a disguised segment opens with. */
-const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 /** MPEG-TS packets are 188 bytes and each starts with this. */
-const TS_PACKET_SIZE = 188;
-const TS_SYNC_BYTE = 0x47;
+const TS_PACKET_SIZE = 188
+const TS_SYNC_BYTE = 0x47
 /** How far into a segment a disguising header may plausibly run. */
-const MAX_DISGUISE_PREFIX = 4096;
+const MAX_DISGUISE_PREFIX = 4096
 
 /**
  * Where the real MPEG-TS starts inside a segment wearing an image header, or 0.
@@ -258,20 +258,20 @@ const MAX_DISGUISE_PREFIX = 4096;
  * that is simultaneously a valid PNG and a valid transport stream.
  */
 function disguisedTsOffset(head: Uint8Array): number {
-  if (head.length < PNG_SIGNATURE.length) return 0;
-  if (!PNG_SIGNATURE.every((byte, i) => head[i] === byte)) return 0;
+  if (head.length < PNG_SIGNATURE.length) return 0
+  if (!PNG_SIGNATURE.every((byte, i) => head[i] === byte)) return 0
 
-  const limit = Math.min(head.length - TS_PACKET_SIZE * 3, MAX_DISGUISE_PREFIX);
+  const limit = Math.min(head.length - TS_PACKET_SIZE * 3, MAX_DISGUISE_PREFIX)
   for (let offset = PNG_SIGNATURE.length; offset < limit; offset++) {
     if (
       head[offset] === TS_SYNC_BYTE &&
       head[offset + TS_PACKET_SIZE] === TS_SYNC_BYTE &&
       head[offset + TS_PACKET_SIZE * 2] === TS_SYNC_BYTE
     ) {
-      return offset;
+      return offset
     }
   }
-  return 0;
+  return 0
 }
 
 /**
@@ -282,77 +282,160 @@ function disguisedTsOffset(head: Uint8Array): number {
  * then re-emitted with nothing copied that did not have to be.
  */
 async function unwrapDisguisedSegment(
-  source: ReadableStream<Uint8Array<ArrayBuffer>>
+  source: ReadableStream<Uint8Array<ArrayBuffer>>,
 ): Promise<{ body: ReadableStream<Uint8Array<ArrayBuffer>>; stripped: number }> {
-  const reader = source.getReader();
-  const chunks: Uint8Array[] = [];
-  let buffered = 0;
-  const needed = PNG_SIGNATURE.length + MAX_DISGUISE_PREFIX + TS_PACKET_SIZE * 3;
+  const reader = source.getReader()
+  const chunks: Uint8Array[] = []
+  let buffered = 0
+  const needed = PNG_SIGNATURE.length + MAX_DISGUISE_PREFIX + TS_PACKET_SIZE * 3
 
-  let done = false;
+  let done = false
   while (buffered < needed) {
-    const next = await reader.read();
+    const next = await reader.read()
     if (next.done) {
-      done = true;
-      break;
+      done = true
+      break
     }
-    if (!next.value) continue;
-    chunks.push(next.value);
-    buffered += next.value.byteLength;
+    if (!next.value) continue
+    chunks.push(next.value)
+    buffered += next.value.byteLength
     // A body that does not start with the signature can never match, so there
     // is no reason to hold more of it while finding that out.
-    if (chunks.length === 1 && disguisedTsOffset(next.value) === 0 &&
-        next.value.byteLength >= PNG_SIGNATURE.length &&
-        !PNG_SIGNATURE.every((byte, i) => next.value![i] === byte)) {
-      break;
+    if (
+      chunks.length === 1 &&
+      disguisedTsOffset(next.value) === 0 &&
+      next.value.byteLength >= PNG_SIGNATURE.length &&
+      !PNG_SIGNATURE.every((byte, i) => next.value![i] === byte)
+    ) {
+      break
     }
   }
 
-  const head = new Uint8Array(buffered);
-  let at = 0;
+  const head = new Uint8Array(buffered)
+  let at = 0
   for (const chunk of chunks) {
-    head.set(chunk, at);
-    at += chunk.byteLength;
+    head.set(chunk, at)
+    at += chunk.byteLength
   }
 
-  const stripped = disguisedTsOffset(head);
-  const prelude = stripped > 0 ? head.subarray(stripped) : head;
+  const stripped = disguisedTsOffset(head)
+  const prelude = stripped > 0 ? head.subarray(stripped) : head
 
   const body = new ReadableStream<Uint8Array<ArrayBuffer>>({
     start(controller) {
-      if (prelude.byteLength > 0) controller.enqueue(prelude);
-      if (done) controller.close();
+      if (prelude.byteLength > 0) controller.enqueue(prelude)
+      if (done) controller.close()
     },
     async pull(controller) {
-      if (done) return;
-      const next = await reader.read();
+      if (done) return
+      const next = await reader.read()
       if (next.done) {
-        done = true;
-        controller.close();
-        return;
+        done = true
+        controller.close()
+        return
       }
-      if (next.value) controller.enqueue(next.value);
+      if (next.value) controller.enqueue(next.value)
     },
     cancel(reason) {
-      return reader.cancel(reason);
+      return reader.cancel(reason)
     },
-  });
+  })
 
-  return { body, stripped };
+  return { body, stripped }
+}
+
+/** Every HLS playlist opens with this line (RFC 8216 §4.1), as bytes. */
+const HLS_MAGIC = [0x23, 0x45, 0x58, 0x54, 0x4d, 0x33, 0x55] // `#EXTM3U`
+
+/** How much of a body is read to decide whether it is a playlist. */
+const PLAYLIST_PROBE_BYTES = 512
+
+/**
+ * Whether a body's first bytes are an HLS playlist.
+ *
+ * The magic is checked, not searched: a playlist that does not *open* with the
+ * tag is not one RFC 8216 recognises either. A UTF-8 BOM is tolerated because
+ * some origins prepend one; leading whitespace is not, for the same reason
+ * `groupingForm` keeps bare integers — a lenient reader invents documents out
+ * of binary noise.
+ */
+function startsWithHlsMagic(head: Uint8Array): boolean {
+  let offset = 0
+  if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) offset = 3
+  if (head.length < offset + HLS_MAGIC.length) return false
+  return HLS_MAGIC.every((byte, i) => head[offset + i] === byte)
+}
+
+/**
+ * Reads just enough of a body to recognise a playlist, then hands back a
+ * stream that replays what was read.
+ *
+ * Same contract as {@link unwrapDisguisedSegment}: the buffered head is
+ * re-emitted before anything else and the remainder flows through untouched,
+ * so a body that turns out not to be a playlist loses nothing by having been
+ * peeked at.
+ */
+async function bufferHead(
+  source: ReadableStream<Uint8Array>,
+  maxBytes: number,
+): Promise<{ head: Uint8Array; body: ReadableStream<Uint8Array> }> {
+  const reader = source.getReader()
+  const chunks: Uint8Array[] = []
+  let buffered = 0
+  let done = false
+  while (buffered < maxBytes) {
+    const next = await reader.read()
+    if (next.done) {
+      done = true
+      break
+    }
+    if (!next.value) continue
+    chunks.push(next.value)
+    buffered += next.value.byteLength
+  }
+
+  const head = new Uint8Array(buffered)
+  let at = 0
+  for (const chunk of chunks) {
+    head.set(chunk, at)
+    at += chunk.byteLength
+  }
+
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (head.byteLength > 0) controller.enqueue(head)
+      if (done) controller.close()
+    },
+    async pull(controller) {
+      if (done) return
+      const next = await reader.read()
+      if (next.done) {
+        done = true
+        controller.close()
+        return
+      }
+      if (next.value) controller.enqueue(next.value)
+    },
+    cancel(reason) {
+      return reader.cancel(reason)
+    },
+  })
+
+  return { head, body }
 }
 
 function looksLikeHls(url: string, contentType: string | null): boolean {
   if (contentType) {
-    const type = contentType.toLowerCase();
-    if (type.includes('mpegurl') || type.includes('m3u8')) return true;
+    const type = contentType.toLowerCase()
+    if (type.includes('mpegurl') || type.includes('m3u8')) return true
   }
-  const clean = url.split(/[?#]/)[0].toLowerCase();
+  const clean = url.split(/[?#]/)[0].toLowerCase()
   return (
     clean.endsWith('.m3u8') ||
     clean.endsWith('.m3u') ||
     /\/(getm3u8|m3u8|hls)\b/i.test(clean) ||
     /[?&]format=m3u8/i.test(url)
-  );
+  )
 }
 
 /**
@@ -364,10 +447,10 @@ function looksLikeHls(url: string, contentType: string | null): boolean {
  * at all. `<MPD` in the first bytes is unambiguous where the URL is not.
  */
 function looksLikeDash(url: string, contentType: string | null, body?: string): boolean {
-  if (body && /^\s*(<\?xml[^>]*\?>\s*)?<MPD[\s>]/i.test(body.slice(0, 512))) return true;
-  if (contentType && contentType.toLowerCase().includes('dash+xml')) return true;
-  const clean = url.split(/[?#]/)[0].toLowerCase();
-  return clean.endsWith('.mpd');
+  if (body && /^\s*(<\?xml[^>]*\?>\s*)?<MPD[\s>]/i.test(body.slice(0, 512))) return true
+  if (contentType && contentType.toLowerCase().includes('dash+xml')) return true
+  const clean = url.split(/[?#]/)[0].toLowerCase()
+  return clean.endsWith('.mpd')
 }
 
 /**
@@ -376,34 +459,34 @@ function looksLikeDash(url: string, contentType: string | null, body?: string): 
  * A DASH manifest is kilobytes; a film is gigabytes. Anything above this is
  * streamed without being looked at.
  */
-const MAX_SNIFF_BYTES = 4 * 1024 * 1024;
+const MAX_SNIFF_BYTES = 4 * 1024 * 1024
 
 /** `<BaseURL>…</BaseURL>`, and the three attributes that name a segment. */
-const DASH_BASE_URL = /<BaseURL([^>]*)>([^<]*)<\/BaseURL>/gi;
-const DASH_URL_ATTRIBUTE = /\b(media|initialization|sourceURL|initializationSegmentURL)="([^"]*)"/gi;
+const DASH_BASE_URL = /<BaseURL([^>]*)>([^<]*)<\/BaseURL>/gi
+const DASH_URL_ATTRIBUTE = /\b(media|initialization|sourceURL|initializationSegmentURL)="([^"]*)"/gi
 
 export class MediaProxy {
-  private server: http.Server | null = null;
-  private port = 0;
-  private routes = new Map<string, Route>();
+  private server: http.Server | null = null
+  private port = 0
+  private routes = new Map<string, Route>()
   /** Directory routes, for DASH — see {@link prefixRouteFor}. */
-  private prefixes = new Map<string, Route>();
+  private prefixes = new Map<string, Route>()
   /** Leases held by token, for signed URL re-resolution per PRD-40.1 §4.1. */
-  private leases = new Map<string, SourceLease>();
+  private leases = new Map<string, SourceLease>()
   /** Reverse index so a playlist's hundred segments do not mint a token each. */
-  private tokensByKey = new Map<string, string>();
+  private tokensByKey = new Map<string, string>()
   /** Files served from disk, and the reverse map that keeps tokens stable. */
-  private localRoutes = new Map<string, LocalRoute>();
-  private localTokensByPath = new Map<string, string>();
+  private localRoutes = new Map<string, LocalRoute>()
+  private localTokensByPath = new Map<string, string>()
   /**
    * When the expiry sweep last ran. Zero so the first mint of a session sweeps
    * immediately rather than waiting out an interval against an empty table.
    */
-  private lastSweepAt = 0;
+  private lastSweepAt = 0
   /** Allowed directory paths for local file serving. */
-  private allowedDirectories = new Set<string>();
+  private allowedDirectories = new Set<string>()
   /** Request rate tracking for flood protection. */
-  private rateLimits = new Map<string, { count: number; windowStart: number }>();
+  private rateLimits = new Map<string, { count: number; windowStart: number }>()
   /**
    * Route tokens are unguessable, not sequential.
    *
@@ -420,17 +503,17 @@ export class MediaProxy {
    * (url, headers) pair, so nothing downstream notices the change.
    */
   private mintToken(): string {
-    return crypto.randomBytes(16).toString('hex');
+    return crypto.randomBytes(16).toString('hex')
   }
-  private fetchImpl: FetchLike;
-  private diagnostics: DiagnosticsSink | null = null;
+  private fetchImpl: FetchLike
+  private diagnostics: DiagnosticsSink | null = null
 
   constructor(fetchImpl: FetchLike) {
-    this.fetchImpl = fetchImpl;
+    this.fetchImpl = fetchImpl
     // Default safe directory whitelist
-    this.allowedDirectories.add(path.resolve(os.tmpdir()));
+    this.allowedDirectories.add(path.resolve(os.tmpdir()))
     try {
-      this.allowedDirectories.add(path.resolve(process.cwd()));
+      this.allowedDirectories.add(path.resolve(process.cwd()))
     } catch {}
   }
 
@@ -438,23 +521,23 @@ export class MediaProxy {
    * Adds an allowed base directory for serving local files (e.g. userData, downloads).
    */
   public addAllowedDirectory(dirPath: string): void {
-    if (!dirPath) return;
-    this.allowedDirectories.add(path.resolve(dirPath));
+    if (!dirPath) return
+    this.allowedDirectories.add(path.resolve(dirPath))
   }
 
   /**
    * Validates whether a path is located within allowed directory trees.
    */
   public isPathAllowed(filePath: string): boolean {
-    if (!filePath || filePath.includes('\0')) return false;
-    const resolved = path.resolve(filePath);
+    if (!filePath || filePath.includes('\0')) return false
+    const resolved = path.resolve(filePath)
     for (const allowed of this.allowedDirectories) {
-      const normalizedAllowed = allowed.endsWith(path.sep) ? allowed : allowed + path.sep;
+      const normalizedAllowed = allowed.endsWith(path.sep) ? allowed : allowed + path.sep
       if (resolved === allowed || resolved.startsWith(normalizedAllowed)) {
-        return true;
+        return true
       }
     }
-    return false;
+    return false
   }
 
   /**
@@ -465,7 +548,7 @@ export class MediaProxy {
    * succeeded and the failure happened long after anything was watching.
    */
   public setDiagnostics(sink: DiagnosticsSink): void {
-    this.diagnostics = sink;
+    this.diagnostics = sink
   }
 
   /**
@@ -487,10 +570,10 @@ export class MediaProxy {
        * is *expected to fail* on every ordinary source, and a 403 on a provider
        * link already means something else entirely.
        */
-      boundedRanges?: boolean;
-    } = {}
+      boundedRanges?: boolean
+    } = {},
   ): Promise<string> {
-    if (!/^https?:\/\//i.test(url)) return url;
+    if (!/^https?:\/\//i.test(url)) return url
     /**
      * A loopback URL is already ours and is returned untouched.
      *
@@ -503,11 +586,11 @@ export class MediaProxy {
      * There is nothing to gain either way: header injection exists to satisfy a
      * third-party CDN's hotlink check, and our own servers set what they need.
      */
-    if (isLoopback(url)) return url;
-    const cleaned = this.clean(headers);
+    if (isLoopback(url)) return url
+    const cleaned = this.clean(headers)
 
-    await this.ensureServer();
-    return this.routeFor(url, cleaned, false, options.boundedRanges);
+    await this.ensureServer()
+    return this.routeFor(url, cleaned, false, options.boundedRanges)
   }
 
   /**
@@ -517,25 +600,25 @@ export class MediaProxy {
    * the proxy re-resolves the fresh URL beneath the same loopback token.
    */
   public async wrapLease(lease: SourceLease): Promise<string> {
-    const loopbackUrl = await this.wrap(lease.url, lease.headers);
-    const token = loopbackUrl.match(/\/stream\/([0-9a-f]{32})/)?.[1];
+    const loopbackUrl = await this.wrap(lease.url, lease.headers)
+    const token = loopbackUrl.match(/\/stream\/([0-9a-f]{32})/)?.[1]
     if (token) {
-      this.leases.set(token, lease);
+      this.leases.set(token, lease)
     }
-    return loopbackUrl;
+    return loopbackUrl
   }
 
   /**
    * Returns the underlying target URL and headers for a loopback stream token.
    */
   public getTargetRoute(loopbackUrl: string): Route | null {
-    if (!isLoopback(loopbackUrl)) return null;
-    const direct = loopbackUrl.match(/\/stream\/([0-9a-f]{32})/)?.[1];
+    if (!isLoopback(loopbackUrl)) return null
+    const direct = loopbackUrl.match(/\/stream\/([0-9a-f]{32})/)?.[1]
     if (direct) {
-      const route = this.routes.get(direct);
-      if (route) return { url: route.url, headers: { ...route.headers } };
+      const route = this.routes.get(direct)
+      if (route) return { url: route.url, headers: { ...route.headers } }
     }
-    return null;
+    return null
   }
 
   /**
@@ -554,29 +637,29 @@ export class MediaProxy {
    */
   public async serveFile(filePath: string): Promise<string> {
     if (!filePath || filePath.includes('\0')) {
-      throw new Error(`Invalid file path: ${filePath}`);
+      throw new Error(`Invalid file path: ${filePath}`)
     }
 
-    const resolved = path.resolve(filePath);
+    const resolved = path.resolve(filePath)
 
     // Whitelist path verification to prevent path traversal
     if (this.allowedDirectories.size > 0 && !this.isPathAllowed(resolved)) {
-      throw new Error(`Access denied: path outside allowed directories: ${resolved}`);
+      throw new Error(`Access denied: path outside allowed directories: ${resolved}`)
     }
 
     // Checked here rather than at play time so a moved or deleted file is a
     // clear failure now instead of an empty player later.
-    const stat = await fs.promises.stat(resolved);
-    if (!stat.isFile()) throw new Error(`Not a file: ${resolved}`);
+    const stat = await fs.promises.stat(resolved)
+    if (!stat.isFile()) throw new Error(`Not a file: ${resolved}`)
 
-    await this.ensureServer();
-    this.evictExpiredRoutes();
+    await this.ensureServer()
+    this.evictExpiredRoutes()
 
-    const existing = this.localTokensByPath.get(resolved);
-    const token = existing ?? this.mintToken();
-    this.localTokensByPath.set(resolved, token);
-    this.localRoutes.set(token, { file: resolved, lastAccess: Date.now() });
-    return `http://127.0.0.1:${this.port}/local/${token}`;
+    const existing = this.localTokensByPath.get(resolved)
+    const token = existing ?? this.mintToken()
+    this.localTokensByPath.set(resolved, token)
+    this.localRoutes.set(token, { file: resolved, lastAccess: Date.now() })
+    return `http://127.0.0.1:${this.port}/local/${token}`
   }
 
   /**
@@ -588,44 +671,44 @@ export class MediaProxy {
    * rather than something to paper over.
    */
   private serveLocal(req: http.IncomingMessage, res: http.ServerResponse, file: string): void {
-    let size: number;
+    let size: number
     try {
-      size = fs.statSync(file).size;
+      size = fs.statSync(file).size
     } catch {
-      res.writeHead(404).end('That file is no longer on disk.');
-      return;
+      res.writeHead(404).end('That file is no longer on disk.')
+      return
     }
 
-    const match = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''));
-    const start = match && match[1] ? Number(match[1]) : 0;
-    const end = match && match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+    const match = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''))
+    const start = match && match[1] ? Number(match[1]) : 0
+    const end = match && match[2] ? Math.min(Number(match[2]), size - 1) : size - 1
 
     if (start >= size || start > end) {
       // The header the spec requires with a 416; without it a player retries
       // the same bad range forever instead of correcting itself.
-      res.writeHead(416, { 'Content-Range': `bytes */${size}` }).end();
-      return;
+      res.writeHead(416, { 'Content-Range': `bytes */${size}` }).end()
+      return
     }
 
-    const partial = Boolean(match);
+    const partial = Boolean(match)
     res.writeHead(partial ? 206 : 200, {
       'Content-Type': 'video/mp4',
       'Content-Length': String(end - start + 1),
       'Accept-Ranges': 'bytes',
       ...(partial ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}),
       'Access-Control-Allow-Origin': '*',
-    });
+    })
     if (req.method === 'HEAD') {
-      res.end();
-      return;
+      res.end()
+      return
     }
 
-    const stream = fs.createReadStream(file, { start, end });
-    stream.on('error', () => res.destroy());
+    const stream = fs.createReadStream(file, { start, end })
+    stream.on('error', () => res.destroy())
     // Seeking abandons the response mid-flight, and an undestroyed read stream
     // holds the file handle open for the life of the process.
-    res.on('close', () => stream.destroy());
-    stream.pipe(res);
+    res.on('close', () => stream.destroy())
+    stream.pipe(res)
   }
 
   /**
@@ -635,19 +718,19 @@ export class MediaProxy {
    * forwarding a provider's stale values produces requests the origin rejects.
    */
   private clean(headers?: Record<string, string>): Record<string, string> {
-    const out: Record<string, string> = {};
+    const out: Record<string, string> = {}
     for (const [key, value] of Object.entries(headers ?? {})) {
-      if (!value) continue;
+      if (!value) continue
       // Sanitize header key & value against CRLF / null-byte injection
-      const cleanKey = key.replace(/[\r\n\0]/g, '').trim();
-      const cleanValue = value.replace(/[\r\n\0]/g, '').trim();
-      if (!cleanKey || !cleanValue) continue;
+      const cleanKey = key.replace(/[\r\n\0]/g, '').trim()
+      const cleanValue = value.replace(/[\r\n\0]/g, '').trim()
+      if (!cleanKey || !cleanValue) continue
 
-      const name = cleanKey.toLowerCase();
-      if (FORBIDDEN_REQUEST_HEADERS.has(name)) continue;
-      out[cleanKey] = cleanValue;
+      const name = cleanKey.toLowerCase()
+      if (FORBIDDEN_REQUEST_HEADERS.has(name)) continue
+      out[cleanKey] = cleanValue
     }
-    return out;
+    return out
   }
 
   /**
@@ -696,39 +779,39 @@ export class MediaProxy {
    * ones, and among never-served the newest go first.
    */
   private evictExpiredRoutes(): void {
-    const now = Date.now();
+    const now = Date.now()
 
     /** How long a route has been idle: since it last served, else since it was minted. */
-    const idleSince = (route: Route): number => route.lastAccess ?? route.createdAt ?? 0;
+    const idleSince = (route: Route): number => route.lastAccess ?? route.createdAt ?? 0
 
     /**
      * Over the cap is not negotiable — memory is the thing the cap exists for,
      * and a burst can cross it long before the next sweep is due. Everything
      * else waits for the interval.
      */
-    const overCap = this.routes.size > MAX_ROUTES;
-    if (!overCap && now - this.lastSweepAt < SWEEP_INTERVAL_MS) return;
-    this.lastSweepAt = now;
+    const overCap = this.routes.size > MAX_ROUTES
+    if (!overCap && now - this.lastSweepAt < SWEEP_INTERVAL_MS) return
+    this.lastSweepAt = now
 
     // 1. Evict expired routes
     for (const [token, route] of this.routes.entries()) {
       if (now - idleSince(route) > ROUTE_TTL_MS) {
-        if (route.key) this.tokensByKey.delete(route.key);
-        this.routes.delete(token);
+        if (route.key) this.tokensByKey.delete(route.key)
+        this.routes.delete(token)
       }
     }
 
     for (const [token, prefix] of this.prefixes.entries()) {
       if (now - idleSince(prefix) > ROUTE_TTL_MS) {
-        if (prefix.key) this.tokensByKey.delete(prefix.key);
-        this.prefixes.delete(token);
+        if (prefix.key) this.tokensByKey.delete(prefix.key)
+        this.prefixes.delete(token)
       }
     }
 
     for (const [token, local] of this.localRoutes.entries()) {
       if (now - local.lastAccess > ROUTE_TTL_MS) {
-        this.localTokensByPath.delete(local.file);
-        this.localRoutes.delete(token);
+        this.localTokensByPath.delete(local.file)
+        this.localRoutes.delete(token)
       }
     }
 
@@ -763,16 +846,16 @@ export class MediaProxy {
      * the player re-reads the playlist and the routes are minted again.
      */
     if (this.routes.size > MAX_ROUTES) {
-      const entries = [...this.routes.entries()];
-      const served = entries.filter(([, r]) => r.lastAccess !== undefined);
-      const unserved = entries.filter(([, r]) => r.lastAccess === undefined);
-      served.sort((a, b) => idleSince(a[1]) - idleSince(b[1]));
-      unserved.sort((a, b) => idleSince(b[1]) - idleSince(a[1]));
+      const entries = [...this.routes.entries()]
+      const served = entries.filter(([, r]) => r.lastAccess !== undefined)
+      const unserved = entries.filter(([, r]) => r.lastAccess === undefined)
+      served.sort((a, b) => idleSince(a[1]) - idleSince(b[1]))
+      unserved.sort((a, b) => idleSince(b[1]) - idleSince(a[1]))
 
-      const toRemove = [...served, ...unserved].slice(0, this.routes.size - ROUTE_LOW_WATER);
+      const toRemove = [...served, ...unserved].slice(0, this.routes.size - ROUTE_LOW_WATER)
       for (const [token, route] of toRemove) {
-        if (route.key) this.tokensByKey.delete(route.key);
-        this.routes.delete(token);
+        if (route.key) this.tokensByKey.delete(route.key)
+        this.routes.delete(token)
       }
     }
   }
@@ -781,14 +864,14 @@ export class MediaProxy {
     url: string,
     headers: Record<string, string>,
     fromPlaylist = false,
-    boundedRanges = false
+    boundedRanges = false,
   ): string {
-    this.evictExpiredRoutes();
-    const key = `${url} ${JSON.stringify(headers)}`;
-    let token = this.tokensByKey.get(key);
+    this.evictExpiredRoutes()
+    const key = `${url} ${JSON.stringify(headers)}`
+    let token = this.tokensByKey.get(key)
     if (!token) {
-      token = this.mintToken();
-      this.tokensByKey.set(key, token);
+      token = this.mintToken()
+      this.tokensByKey.set(key, token)
       this.routes.set(token, {
         url,
         headers,
@@ -796,14 +879,14 @@ export class MediaProxy {
         createdAt: Date.now(),
         fromPlaylist,
         boundedRanges,
-      });
+      })
     } else {
       // Re-minting is a playlist saying it still points here, which is a reason
       // to keep the route but not evidence anything has fetched it.
-      const existing = this.routes.get(token);
-      if (existing) existing.createdAt = Date.now();
+      const existing = this.routes.get(token)
+      if (existing) existing.createdAt = Date.now()
     }
-    return `http://127.0.0.1:${this.port}/stream/${token}`;
+    return `http://127.0.0.1:${this.port}/stream/${token}`
   }
 
   /**
@@ -820,19 +903,19 @@ export class MediaProxy {
    * replacing the last path element.
    */
   private prefixRouteFor(baseUrl: string, headers: Record<string, string>): string {
-    this.evictExpiredRoutes();
-    const normalised = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
-    const key = `base ${normalised} ${JSON.stringify(headers)}`;
-    let token = this.tokensByKey.get(key);
+    this.evictExpiredRoutes()
+    const normalised = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`
+    const key = `base ${normalised} ${JSON.stringify(headers)}`
+    let token = this.tokensByKey.get(key)
     if (!token) {
-      token = this.mintToken();
-      this.tokensByKey.set(key, token);
-      this.prefixes.set(token, { url: normalised, headers, key, createdAt: Date.now() });
+      token = this.mintToken()
+      this.tokensByKey.set(key, token)
+      this.prefixes.set(token, { url: normalised, headers, key, createdAt: Date.now() })
     } else {
-      const existing = this.prefixes.get(token);
-      if (existing) existing.createdAt = Date.now();
+      const existing = this.prefixes.get(token)
+      if (existing) existing.createdAt = Date.now()
     }
-    return `http://127.0.0.1:${this.port}/base/${token}/`;
+    return `http://127.0.0.1:${this.port}/base/${token}/`
   }
 
   /**
@@ -844,43 +927,43 @@ export class MediaProxy {
    * fine when *we* chose the URL and is not when a manifest did.
    */
   private resolvePrefixed(token: string, rest: string): Route | null {
-    const prefix = this.prefixes.get(token);
-    if (!prefix) return null;
-    prefix.lastAccess = Date.now();
+    const prefix = this.prefixes.get(token)
+    if (!prefix) return null
+    prefix.lastAccess = Date.now()
     try {
-      const target = new URL(rest, prefix.url);
-      const base = new URL(prefix.url);
-      if (target.origin !== base.origin) return null;
-      if (!target.pathname.startsWith(base.pathname)) return null;
-      return { url: target.toString(), headers: prefix.headers };
+      const target = new URL(rest, prefix.url)
+      const base = new URL(prefix.url)
+      if (target.origin !== base.origin) return null
+      if (!target.pathname.startsWith(base.pathname)) return null
+      return { url: target.toString(), headers: prefix.headers }
     } catch {
-      return null;
+      return null
     }
   }
 
   private isRateLimited(key: string): boolean {
-    const now = Date.now();
-    const tracker = this.rateLimits.get(key);
+    const now = Date.now()
+    const tracker = this.rateLimits.get(key)
     if (!tracker || now - tracker.windowStart > RATE_LIMIT_WINDOW_MS) {
-      this.rateLimits.set(key, { count: 1, windowStart: now });
-      return false;
+      this.rateLimits.set(key, { count: 1, windowStart: now })
+      return false
     }
-    tracker.count++;
-    return tracker.count > RATE_LIMIT_MAX_REQUESTS;
+    tracker.count++
+    return tracker.count > RATE_LIMIT_MAX_REQUESTS
   }
 
   private async ensureServer(): Promise<void> {
-    if (this.server) return;
+    if (this.server) return
     this.server = http.createServer((req, res) => {
-      void this.handle(req, res);
-    });
+      void this.handle(req, res)
+    })
     await new Promise<void>((resolve) => {
       // Loopback only: see the class comment.
       this.server!.listen(0, '127.0.0.1', () => {
-        this.port = (this.server!.address() as AddressInfo).port;
-        resolve();
-      });
-    });
+        this.port = (this.server!.address() as AddressInfo).port
+        resolve()
+      })
+    })
   }
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -895,10 +978,10 @@ export class MediaProxy {
      * A missing `Host` is allowed: HTTP/1.0 clients omit it, and some ffmpeg
      * builds do too.
      */
-    const host = req.headers.host;
+    const host = req.headers.host
     if (host && !/^(127\.0\.0\.1|localhost|\[::1\]|::1)(:\d+)?$/.test(host)) {
-      res.writeHead(403).end('Forbidden');
-      return;
+      res.writeHead(403).end('Forbidden')
+      return
     }
 
     if (req.method === 'OPTIONS') {
@@ -906,62 +989,60 @@ export class MediaProxy {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': '*',
         'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-      });
-      res.end();
-      return;
+      })
+      res.end()
+      return
     }
 
     /**
      * Two shapes: `/stream/<token>` is one file, `/base/<token>/<rest>` is a
      * path inside a directory route. Only DASH mints the second kind.
      */
-    const local = req.url?.match(/^\/local\/([0-9a-f]{32})/)?.[1];
+    const local = req.url?.match(/^\/local\/([0-9a-f]{32})/)?.[1]
     if (local) {
       if (this.isRateLimited(`local_${local}`)) {
-        res.writeHead(429, { 'Retry-After': '1' }).end('Too Many Requests');
-        return;
+        res.writeHead(429, { 'Retry-After': '1' }).end('Too Many Requests')
+        return
       }
-      const entry = this.localRoutes.get(local);
+      const entry = this.localRoutes.get(local)
       if (!entry) {
-        res.writeHead(404).end('Unknown file');
-        return;
+        res.writeHead(404).end('Unknown file')
+        return
       }
-      entry.lastAccess = Date.now();
-      this.serveLocal(req, res, entry.file);
-      return;
+      entry.lastAccess = Date.now()
+      this.serveLocal(req, res, entry.file)
+      return
     }
 
-    const direct = req.url?.match(/^\/stream\/([0-9a-f]{32})/)?.[1];
-    const prefixed = req.url?.match(/^\/base\/([0-9a-f]{32})\/(.*)$/);
-    const routeToken = direct ?? prefixed?.[1];
+    const direct = req.url?.match(/^\/stream\/([0-9a-f]{32})/)?.[1]
+    const prefixed = req.url?.match(/^\/base\/([0-9a-f]{32})\/(.*)$/)
+    const routeToken = direct ?? prefixed?.[1]
     if (routeToken && this.isRateLimited(`route_${routeToken}`)) {
-      res.writeHead(429, { 'Retry-After': '1' }).end('Too Many Requests');
-      return;
+      res.writeHead(429, { 'Retry-After': '1' }).end('Too Many Requests')
+      return
     }
 
     const route = direct
       ? this.routes.get(direct)
       : prefixed
         ? this.resolvePrefixed(prefixed[1], decodeURIComponent(prefixed[2]))
-        : undefined;
+        : undefined
     if (!route) {
-      res.writeHead(404).end('Unknown stream');
-      return;
+      res.writeHead(404).end('Unknown stream')
+      return
     }
-    route.lastAccess = Date.now();
+    route.lastAccess = Date.now()
 
     const CHROME_USER_AGENT =
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
 
-    const hasUserAgent = Object.keys(route.headers).some(
-      (k) => k.toLowerCase() === 'user-agent'
-    );
+    const hasUserAgent = Object.keys(route.headers).some((k) => k.toLowerCase() === 'user-agent')
 
     const requestHeaders: Record<string, string> = alignRefererScheme(route.url, {
       ...(hasUserAgent ? {} : { 'User-Agent': CHROME_USER_AGENT }),
       ...route.headers,
       ...(req.headers.range ? { Range: String(req.headers.range) } : {}),
-    });
+    })
 
     /**
      * Tears the upstream request down when the client walks away.
@@ -977,18 +1058,18 @@ export class MediaProxy {
      * completion of a response, and aborting there would cancel a request that
      * has already delivered everything it was asked for.
      */
-    const abort = new AbortController();
+    const abort = new AbortController()
     res.on('close', () => {
-      if (!res.writableEnded) abort.abort();
-    });
+      if (!res.writableEnded) abort.abort()
+    })
 
     /**
      * An origin that refuses everything but a bounded window is served by
      * stitching windows, so nothing downstream learns it is unusual.
      */
     if (route.boundedRanges && req.method !== 'HEAD') {
-      await this.serveWindowed(route, req, res, requestHeaders, abort);
-      return;
+      await this.serveWindowed(route, req, res, requestHeaders, abort)
+      return
     }
 
     try {
@@ -997,9 +1078,9 @@ export class MediaProxy {
         headers: requestHeaders,
         redirect: 'follow',
         signal: abort.signal,
-      });
+      })
 
-      const lease = direct ? this.leases.get(direct) : undefined;
+      const lease = direct ? this.leases.get(direct) : undefined
 
       // PRD-40.1 §4.1: Signed-URL token expiry pattern detection and refresh.
       if (
@@ -1008,50 +1089,95 @@ export class MediaProxy {
         lease.shouldTriggerRefresh(upstream.status)
       ) {
         try {
-          const fresh = await lease.refreshSource();
-          route.url = fresh.url;
-          route.headers = this.clean(fresh.headers);
+          const fresh = await lease.refreshSource()
+          route.url = fresh.url
+          route.headers = this.clean(fresh.headers)
           // A refreshed link can land on a different host in the same CDN pool,
           // and the two halves of that pool do not always agree about ranges.
           // The old verdict describes a URL that is gone.
-          route.rangeSupport = undefined;
+          route.rangeSupport = undefined
           const freshHasUserAgent = Object.keys(route.headers).some(
-            (k) => k.toLowerCase() === 'user-agent'
-          );
+            (k) => k.toLowerCase() === 'user-agent',
+          )
           const refreshedHeaders = alignRefererScheme(route.url, {
             ...(freshHasUserAgent ? {} : { 'User-Agent': CHROME_USER_AGENT }),
             ...route.headers,
             ...(req.headers.range ? { Range: String(req.headers.range) } : {}),
-          });
+          })
           upstream = await this.fetchImpl(route.url, {
             method: req.method === 'HEAD' ? 'HEAD' : 'GET',
             headers: refreshedHeaders,
             redirect: 'follow',
             signal: abort.signal,
-          });
+          })
         } catch (refreshErr) {
           this.recordFailure(
             route.url,
             refreshErr,
-            `SourceLease refresh failed on token ${direct} (status ${upstream.status})`
-          );
+            `SourceLease refresh failed on token ${direct} (status ${upstream.status})`,
+          )
         }
       }
 
-      const contentType = upstream.headers.get('content-type');
+      const contentType = upstream.headers.get('content-type')
 
-      if (looksLikeHls(route.url, contentType)) {
-        const body = await upstream.text();
-        const rewritten = this.rewritePlaylist(body, upstream.url || route.url, route.headers);
+      /**
+       * A URL that *looks* like a playlist is a hint, not a verdict — the
+       * body decides.
+       *
+       * Measured on Castle TV's CDN (`img.klnwm.com`, 2026-09-30): every
+       * segment is served from a path containing `/hls/` (`…/hls/<id>/720/s_0.jpg`),
+       * so the URL test below matched all 854 segments of a film. Each one
+       * entered this branch, was read as text and "rewritten": split on
+       * newline bytes, every binary chunk run through `routeFor` — minting
+       * thousands of garbage routes and handing the player a body of loopback
+       * URLs where MPEG-TS belonged. hls.js answered `fragParsingError` and
+       * FFmpeg `Error when loading first segment`, while downloading the very
+       * same playlist worked, because the downloader never asked this proxy
+       * to parse anything.
+       *
+       * The content type still asserts a playlist outright (that claim comes
+       * from the origin and is what the fast path is for); the URL pattern
+       * only earns the body a peek at its first bytes.
+       */
+      const playlistByType = Boolean(contentType && /mpegurl|m3u8/i.test(contentType))
+      let servesPlaylist = playlistByType
+      /** Set when a URL-only HLS match turned out to be a binary body. */
+      let peekedBody: ReadableStream<Uint8Array> | null = null
+      /** Playlist bytes, when the peek already buffered them. */
+      let peekedPlaylist: Buffer | null = null
+
+      if (!servesPlaylist && looksLikeHls(route.url, contentType)) {
+        if (req.method === 'HEAD' || !upstream.body) {
+          // Nothing to peek at; keep the old HEAD behaviour of answering
+          // from the headers alone.
+          servesPlaylist = true
+        } else {
+          const peeked = await bufferHead(upstream.body, PLAYLIST_PROBE_BYTES)
+          if (startsWithHlsMagic(peeked.head)) {
+            servesPlaylist = true
+            const rest = peeked.body
+              ? Buffer.from(await new Response(peeked.body).arrayBuffer())
+              : Buffer.alloc(0)
+            peekedPlaylist = Buffer.concat([Buffer.from(peeked.head), rest])
+          } else {
+            peekedBody = peeked.body
+          }
+        }
+      }
+
+      if (servesPlaylist) {
+        const body = peekedPlaylist ? peekedPlaylist.toString('utf8') : await upstream.text()
+        const rewritten = this.rewritePlaylist(body, upstream.url || route.url, route.headers)
         res.writeHead(upstream.status, {
           'Content-Type': contentType ?? 'application/vnd.apple.mpegurl',
           'Cache-Control': 'no-store',
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Headers': '*',
           'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-        });
-        res.end(rewritten);
-        return;
+        })
+        res.end(rewritten)
+        return
       }
 
       /**
@@ -1068,20 +1194,22 @@ export class MediaProxy {
        *
        * The manifest is fetched as text before the check because a provider
        * serving `application/octet-stream` is routine; `looksLikeDash` reads the
-       * body when the headers will not say.
+       * body when the headers will not say. Skipped when the HLS peek above
+       * already consumed the body and found it was not a playlist — a body is
+       * read once.
        */
-      if (looksLikeDash(route.url, contentType)) {
-        const body = await upstream.text();
-        const rewritten = this.rewriteDashManifest(body, upstream.url || route.url, route.headers);
+      if (!peekedBody && looksLikeDash(route.url, contentType)) {
+        const body = await upstream.text()
+        const rewritten = this.rewriteDashManifest(body, upstream.url || route.url, route.headers)
         res.writeHead(upstream.status, {
           'Content-Type': 'application/dash+xml',
           'Cache-Control': 'no-store',
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Headers': '*',
           'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-        });
-        res.end(rewritten);
-        return;
+        })
+        res.end(rewritten)
+        return
       }
 
       /**
@@ -1096,10 +1224,12 @@ export class MediaProxy {
        * the origin said how big it is and it is manifest-sized, or when the
        * content type already says XML.
        */
-      const declaredLength = Number(upstream.headers.get('content-length') ?? NaN);
+      const declaredLength = Number(upstream.headers.get('content-length') ?? NaN)
       const sniffable =
-        (Number.isFinite(declaredLength) && declaredLength > 0 && declaredLength <= MAX_SNIFF_BYTES) ||
-        /application\/xml|text\/xml/i.test(contentType ?? '');
+        (Number.isFinite(declaredLength) &&
+          declaredLength > 0 &&
+          declaredLength <= MAX_SNIFF_BYTES) ||
+        /application\/xml|text\/xml/i.test(contentType ?? '')
 
       if (sniffable && !req.headers.range) {
         /**
@@ -1114,30 +1244,32 @@ export class MediaProxy {
          * which skips this branch — so only the occasional un-ranged first
          * fetch of a small segment was corrupted, and it read as a bad source.
          */
-        const raw = Buffer.from(await upstream.arrayBuffer());
-        const body = raw.toString('utf8');
+        const raw = peekedBody
+          ? Buffer.from(await new Response(peekedBody).arrayBuffer())
+          : Buffer.from(await upstream.arrayBuffer())
+        const body = raw.toString('utf8')
         if (looksLikeDash(route.url, contentType, body)) {
-          const rewritten = this.rewriteDashManifest(body, upstream.url || route.url, route.headers);
+          const rewritten = this.rewriteDashManifest(body, upstream.url || route.url, route.headers)
           res.writeHead(upstream.status, {
             'Content-Type': 'application/dash+xml',
             'Cache-Control': 'no-store',
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Headers': '*',
             'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-          });
-          res.end(rewritten);
-          return;
+          })
+          res.end(rewritten)
+          return
         }
         // A disguised segment can arrive here too, when the player's first
         // fetch of it carries no Range.
-        const stripped = route.fromPlaylist ? disguisedTsOffset(raw) : 0;
+        const stripped = route.fromPlaylist ? disguisedTsOffset(raw) : 0
         res.writeHead(upstream.status, {
-          'Content-Type': stripped > 0 ? 'video/mp2t' : contentType ?? 'application/octet-stream',
+          'Content-Type': stripped > 0 ? 'video/mp2t' : (contentType ?? 'application/octet-stream'),
           'Cache-Control': 'no-store',
           'Access-Control-Allow-Origin': '*',
-        });
-        res.end(stripped > 0 ? raw.subarray(stripped) : raw);
-        return;
+        })
+        res.end(stripped > 0 ? raw.subarray(stripped) : raw)
+        return
       }
 
       /**
@@ -1163,9 +1295,9 @@ export class MediaProxy {
        * A ranged request answered `200` proves it did not. Either way the client
        * is told explicitly, so it never has to guess and never has to be forced.
        */
-      const rangeRequested = offsetFromRange(requestHeaders.Range) !== null;
+      const rangeRequested = offsetFromRange(requestHeaders.Range) !== null
       const honouredRange =
-        upstream.status === 206 || Boolean(upstream.headers.get('content-range'));
+        upstream.status === 206 || Boolean(upstream.headers.get('content-range'))
       /**
        * Only a reply that succeeded says anything about ranges.
        *
@@ -1177,7 +1309,7 @@ export class MediaProxy {
        * source that seeks perfectly, for the rest of the session.
        */
       if (rangeRequested && upstream.status < 400) {
-        route.rangeSupport = honouredRange ? 'yes' : 'no';
+        route.rangeSupport = honouredRange ? 'yes' : 'no'
       }
 
       /**
@@ -1190,26 +1322,28 @@ export class MediaProxy {
        * served — and leaves the player to carry on from where it already is
        * rather than resyncing onto rubbish.
        */
-      const requestedOffset = offsetFromRange(String(req.headers.range ?? '')) ?? 0;
+      const requestedOffset = offsetFromRange(String(req.headers.range ?? '')) ?? 0
       if (requestedOffset > 0 && !honouredRange && upstream.status === 200) {
         this.recordFailure(
           route.url,
           new Error(`origin ignored Range: bytes=${requestedOffset}- and answered HTTP 200`),
-          'Refused to serve byte-zero data as a mid-file range'
-        );
+          'Refused to serve byte-zero data as a mid-file range',
+        )
         try {
-          await upstream.body?.cancel();
+          await upstream.body?.cancel()
         } catch {
           // The origin hung up first; nothing left to release.
         }
-        const total = upstream.headers.get('content-length');
-        res.writeHead(416, {
-          'Cache-Control': 'no-store',
-          'Access-Control-Allow-Origin': '*',
-          'Accept-Ranges': 'none',
-          ...(total ? { 'Content-Range': `bytes */${total}` } : {}),
-        }).end();
-        return;
+        const total = upstream.headers.get('content-length')
+        res
+          .writeHead(416, {
+            'Cache-Control': 'no-store',
+            'Access-Control-Allow-Origin': '*',
+            'Accept-Ranges': 'none',
+            ...(total ? { 'Content-Range': `bytes */${total}` } : {}),
+          })
+          .end()
+        return
       }
 
       const headers: Record<string, string> = {
@@ -1217,10 +1351,10 @@ export class MediaProxy {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': '*',
         'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-      };
+      }
       for (const name of FORWARDED_RESPONSE_HEADERS) {
-        const value = upstream.headers.get(name);
-        if (value) headers[name] = value;
+        const value = upstream.headers.get(name)
+        if (value) headers[name] = value
       }
 
       /**
@@ -1232,13 +1366,13 @@ export class MediaProxy {
        * by reading the file from the beginning — which on a 3.2 GB link is the
        * frozen timeline this whole path was reported for.
        */
-      const support = route.rangeSupport ?? (honouredRange ? 'yes' : undefined);
-      if (support) headers['Accept-Ranges'] = support === 'yes' ? 'bytes' : 'none';
+      const support = route.rangeSupport ?? (honouredRange ? 'yes' : undefined)
+      if (support) headers['Accept-Ranges'] = support === 'yes' ? 'bytes' : 'none'
 
       if (req.method === 'HEAD' || !upstream.body) {
-        res.writeHead(upstream.status, headers);
-        res.end();
-        return;
+        res.writeHead(upstream.status, headers)
+        res.end()
+        return
       }
 
       /**
@@ -1259,21 +1393,21 @@ export class MediaProxy {
        * Measured on a real segment — 704,318 bytes in, 3,745 aligned packets and
        * a clean `h264 + aac` after the strip.
        */
-      let body = upstream.body;
+      let body = peekedBody ?? upstream.body
       if (route.fromPlaylist) {
-        const unwrapped = await unwrapDisguisedSegment(body);
-        body = unwrapped.body;
+        const unwrapped = await unwrapDisguisedSegment(body)
+        body = unwrapped.body
         if (unwrapped.stripped > 0) {
-          const declared = Number(headers['content-length']);
+          const declared = Number(headers['content-length'])
           if (Number.isFinite(declared)) {
-            headers['content-length'] = String(Math.max(0, declared - unwrapped.stripped));
+            headers['content-length'] = String(Math.max(0, declared - unwrapped.stripped))
           }
           // The container is decided by the bytes, and the bytes are TS now.
-          headers['content-type'] = 'video/mp2t';
+          headers['content-type'] = 'video/mp2t'
         }
       }
 
-      res.writeHead(upstream.status, headers);
+      res.writeHead(upstream.status, headers)
 
       await this.stream(
         new Response(body, { status: upstream.status, headers: upstream.headers }),
@@ -1281,12 +1415,12 @@ export class MediaProxy {
         route,
         requestHeaders,
         lease,
-        abort.signal
-      );
+        abort.signal,
+      )
     } catch (error) {
-      this.recordFailure(route.url, error, 'Upstream request failed before any body was sent');
-      if (!res.headersSent) res.writeHead(502);
-      res.end(error instanceof Error ? error.message : 'Upstream request failed');
+      this.recordFailure(route.url, error, 'Upstream request failed before any body was sent')
+      if (!res.headersSent) res.writeHead(502)
+      res.end(error instanceof Error ? error.message : 'Upstream request failed')
     }
   }
 
@@ -1310,7 +1444,7 @@ export class MediaProxy {
     route: Route,
     requestHeaders: Record<string, string>,
     lease?: SourceLease,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<void> {
     /**
      * Where this response started in the file.
@@ -1320,44 +1454,51 @@ export class MediaProxy {
      * that began at 40 MB from byte zero would splice the start of the film into
      * the middle of it.
      */
-    const startedAt = offsetFromContentRange(first.headers.get('content-range')) ??
+    const startedAt =
+      offsetFromContentRange(first.headers.get('content-range')) ??
       offsetFromRange(requestHeaders.Range) ??
-      0;
+      0
 
     // Resuming is only sound when the origin honours ranges. Several of the
     // hosts these links point at answer a range request with a 200 and the whole
     // file, and re-requesting one of those would restart the film rather than
     // continue it.
     const resumable =
-      first.status === 206 || (first.headers.get('accept-ranges') ?? '').toLowerCase().includes('bytes');
+      first.status === 206 ||
+      (first.headers.get('accept-ranges') ?? '').toLowerCase().includes('bytes')
 
-    let response = first;
-    let sent = 0;
-    let clientGone = false;
+    let response = first
+    let sent = 0
+    let clientGone = false
     res.on('close', () => {
-      clientGone = true;
-    });
+      clientGone = true
+    })
 
     for (let attempt = 0; attempt <= MAX_RESUME_ATTEMPTS; attempt++) {
       try {
-        await this.pump(response, res, () => clientGone, (n) => {
-          sent += n;
-          if (sent > 0 && lease) {
-            lease.markStreamSuccess();
-          }
-        });
-        res.end();
-        return;
+        await this.pump(
+          response,
+          res,
+          () => clientGone,
+          (n) => {
+            sent += n
+            if (sent > 0 && lease) {
+              lease.markStreamSuccess()
+            }
+          },
+        )
+        res.end()
+        return
       } catch (error) {
         // The viewer closed the player or seeked elsewhere. Not a failure, and
         // resuming would fetch a film nobody is watching.
-        if (clientGone || res.writableEnded) return;
+        if (clientGone || res.writableEnded) return
 
-        const failure = classifyNetworkError(error);
-        const canResume = resumable && failure.retryable && attempt < MAX_RESUME_ATTEMPTS;
+        const failure = classifyNetworkError(error)
+        const canResume = resumable && failure.retryable && attempt < MAX_RESUME_ATTEMPTS
 
         if (lease && canResume) {
-          lease.recordReconnect();
+          lease.recordReconnect()
         }
 
         this.recordFailure(
@@ -1370,26 +1511,26 @@ export class MediaProxy {
             attempt: attempt + 1,
             resumable,
             offset: startedAt + sent,
-          }
-        );
+          },
+        )
 
         if (!canResume) {
           // Ending rather than destroying: a short read is something the player
           // and ffmpeg both understand, and it lets the failover in
           // `playbackSession` see a source that stopped rather than a hang.
-          res.end();
-          return;
+          res.end()
+          return
         }
 
-        await delay(RESUME_DELAY_MS * (attempt + 1));
-        if (clientGone || res.writableEnded) return;
+        await delay(RESUME_DELAY_MS * (attempt + 1))
+        if (clientGone || res.writableEnded) return
 
         response = await this.fetchImpl(route.url, {
           method: 'GET',
           headers: { ...requestHeaders, Range: `bytes=${startedAt + sent}-` },
           redirect: 'follow',
           signal,
-        });
+        })
 
         // An origin that answers a resume with 200 is about to send the file
         // from the beginning, which would corrupt what has already been written.
@@ -1397,10 +1538,10 @@ export class MediaProxy {
           this.recordFailure(
             route.url,
             new Error(`resume answered HTTP ${response.status}`),
-            'Origin ignored the resume range; ending the stream instead of corrupting it'
-          );
-          res.end();
-          return;
+            'Origin ignored the resume range; ending the stream instead of corrupting it',
+          )
+          res.end()
+          return
         }
       }
     }
@@ -1442,7 +1583,7 @@ export class MediaProxy {
     req: http.IncomingMessage,
     res: http.ServerResponse,
     baseHeaders: Record<string, string>,
-    abort: AbortController
+    abort: AbortController,
   ): Promise<void> {
     /**
      * How much is asked for at once.
@@ -1452,7 +1593,7 @@ export class MediaProxy {
      * leave a large transfer running — the cost `probeUrl` taught this
      * repository to care about.
      */
-    const WINDOW_BYTES = 1024 * 1024;
+    const WINDOW_BYTES = 1024 * 1024
 
     /**
      * The first window is small, and that is not a warm-up.
@@ -1469,22 +1610,22 @@ export class MediaProxy {
      * reply carries `Content-Range: … /<total>` — so one small request buys the
      * length, and its bytes are part of the answer rather than thrown away.
      */
-    const FIRST_WINDOW_BYTES = 64 * 1024;
+    const FIRST_WINDOW_BYTES = 64 * 1024
 
-    const requested = String(req.headers.range ?? '');
-    const bounds = requested.match(/bytes=(\d+)-(\d*)/i);
-    const start = bounds ? Number.parseInt(bounds[1], 10) : 0;
-    const explicitEnd = bounds?.[2] ? Number.parseInt(bounds[2], 10) : undefined;
+    const requested = String(req.headers.range ?? '')
+    const bounds = requested.match(/bytes=(\d+)-(\d*)/i)
+    const start = bounds ? Number.parseInt(bounds[1], 10) : 0
+    const explicitEnd = bounds?.[2] ? Number.parseInt(bounds[2], 10) : undefined
 
-    let offset = start;
-    let total: number | undefined;
-    let wroteHead = false;
+    let offset = start
+    let total: number | undefined
+    let wroteHead = false
 
     try {
       for (;;) {
-        if (abort.signal.aborted || res.writableEnded) return;
-        if (total !== undefined && offset >= total) break;
-        if (explicitEnd !== undefined && offset > explicitEnd) break;
+        if (abort.signal.aborted || res.writableEnded) return
+        if (total !== undefined && offset >= total) break
+        if (explicitEnd !== undefined && offset > explicitEnd) break
 
         /**
          * A refused window is halved and asked again before giving up.
@@ -1497,44 +1638,44 @@ export class MediaProxy {
          * and it stops at 64 KB because below that the failure is about the URL
          * rather than the size.
          */
-        let upstream: Response | null = null;
-        let window = total === undefined ? FIRST_WINDOW_BYTES : WINDOW_BYTES;
-        let last = offset;
+        let upstream: Response | null = null
+        let window = total === undefined ? FIRST_WINDOW_BYTES : WINDOW_BYTES
+        let last = offset
         for (;;) {
           last = Math.min(
             offset + window - 1,
             explicitEnd ?? Number.MAX_SAFE_INTEGER,
-            total !== undefined ? total - 1 : Number.MAX_SAFE_INTEGER
-          );
+            total !== undefined ? total - 1 : Number.MAX_SAFE_INTEGER,
+          )
           const attempt = await this.fetchImpl(route.url, {
             method: 'GET',
             headers: { ...baseHeaders, Range: `bytes=${offset}-${last}` },
             redirect: 'follow',
             signal: abort.signal,
-          });
+          })
           if (attempt.status === 206 || attempt.status === 200) {
-            upstream = attempt;
-            break;
+            upstream = attempt
+            break
           }
-          await attempt.body?.cancel().catch(() => undefined);
+          await attempt.body?.cancel().catch(() => undefined)
           if (window <= FIRST_WINDOW_BYTES) {
             if (!wroteHead) {
-              res.writeHead(attempt.status, { 'Access-Control-Allow-Origin': '*' });
+              res.writeHead(attempt.status, { 'Access-Control-Allow-Origin': '*' })
             }
-            res.end();
-            return;
+            res.end()
+            return
           }
-          window = Math.max(FIRST_WINDOW_BYTES, Math.floor(window / 2));
+          window = Math.max(FIRST_WINDOW_BYTES, Math.floor(window / 2))
         }
 
         if (total === undefined) {
-          const range = upstream.headers.get('content-range');
-          const parsed = range?.match(/\/(\d+)\s*$/);
-          total = parsed ? Number.parseInt(parsed[1], 10) : undefined;
+          const range = upstream.headers.get('content-range')
+          const parsed = range?.match(/\/(\d+)\s*$/)
+          total = parsed ? Number.parseInt(parsed[1], 10) : undefined
         }
 
         if (!wroteHead) {
-          const end = explicitEnd ?? (total !== undefined ? total - 1 : undefined);
+          const end = explicitEnd ?? (total !== undefined ? total - 1 : undefined)
           const headers: Record<string, string> = {
             'Content-Type': upstream.headers.get('content-type') ?? 'video/mp4',
             'Accept-Ranges': 'bytes',
@@ -1542,34 +1683,34 @@ export class MediaProxy {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Headers': '*',
             'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-          };
+          }
           if (total !== undefined && end !== undefined) {
-            headers['Content-Length'] = String(end - start + 1);
+            headers['Content-Length'] = String(end - start + 1)
             // A client that asked for a range gets a range; one that asked for
             // the file gets the file, whatever shape upstream answered in.
-            if (bounds) headers['Content-Range'] = `bytes ${start}-${end}/${total}`;
+            if (bounds) headers['Content-Range'] = `bytes ${start}-${end}/${total}`
           }
-          res.writeHead(bounds ? 206 : 200, headers);
-          wroteHead = true;
+          res.writeHead(bounds ? 206 : 200, headers)
+          wroteHead = true
         }
 
-        let written = 0;
+        let written = 0
         await this.pump(
           upstream,
           res,
           () => abort.signal.aborted,
           (count) => {
-            written += count;
-          }
-        );
-        if (written === 0) break;
-        offset += written;
+            written += count
+          },
+        )
+        if (written === 0) break
+        offset += written
       }
     } catch (error) {
-      this.recordFailure(route.url, error, 'windowed range fetch failed');
-      if (!wroteHead) res.writeHead(502, { 'Access-Control-Allow-Origin': '*' });
+      this.recordFailure(route.url, error, 'windowed range fetch failed')
+      if (!wroteHead) res.writeHead(502, { 'Access-Control-Allow-Origin': '*' })
     } finally {
-      if (!res.writableEnded) res.end();
+      if (!res.writableEnded) res.end()
     }
   }
 
@@ -1577,29 +1718,29 @@ export class MediaProxy {
     response: Response,
     res: http.ServerResponse,
     cancelled: () => boolean,
-    onBytes: (count: number) => void
+    onBytes: (count: number) => void,
   ): Promise<void> {
-    if (!response.body) return;
-    const reader = response.body.getReader();
+    if (!response.body) return
+    const reader = response.body.getReader()
 
     try {
       for (;;) {
-        const { done, value } = await reader.read();
-        if (done) return;
-        if (cancelled() || res.writableEnded) return;
-        if (!value) continue;
+        const { done, value } = await reader.read()
+        if (done) return
+        if (cancelled() || res.writableEnded) return
+        if (!value) continue
 
-        onBytes(value.byteLength);
+        onBytes(value.byteLength)
         if (!res.write(Buffer.from(value.buffer, value.byteOffset, value.byteLength))) {
           await new Promise<void>((resolve) => {
             const finish = () => {
-              res.off('drain', finish);
-              res.off('close', finish);
-              resolve();
-            };
-            res.once('drain', finish);
-            res.once('close', finish);
-          });
+              res.off('drain', finish)
+              res.off('close', finish)
+              resolve()
+            }
+            res.once('drain', finish)
+            res.once('close', finish)
+          })
         }
       }
     } finally {
@@ -1620,7 +1761,7 @@ export class MediaProxy {
        * discarded the data without stopping the transfer either.
        */
       try {
-        await reader.cancel();
+        await reader.cancel()
       } catch {
         // Already released by the error that brought us here.
       }
@@ -1631,10 +1772,10 @@ export class MediaProxy {
     url: string,
     error: unknown,
     message: string,
-    extra: Record<string, unknown> = {}
+    extra: Record<string, unknown> = {},
   ): void {
-    const failure = classifyNetworkError(error);
-    if (failure.aborted) return;
+    const failure = classifyNetworkError(error)
+    if (failure.aborted) return
 
     this.diagnostics?.record({
       level: 'warn',
@@ -1647,7 +1788,7 @@ export class MediaProxy {
         `raw:    ${failure.message}`,
         ...Object.entries(extra).map(([key, value]) => `${key.padEnd(7)}: ${String(value)}`),
       ].join('\n'),
-    });
+    })
   }
 
   /**
@@ -1665,26 +1806,26 @@ export class MediaProxy {
   private rewritePlaylist(body: string, baseUrl: string, headers: Record<string, string>): string {
     const absolute = (uri: string): string => {
       try {
-        return this.routeFor(new URL(uri, baseUrl).toString(), headers, true);
+        return this.routeFor(new URL(uri, baseUrl).toString(), headers, true)
       } catch {
-        return uri;
+        return uri
       }
-    };
+    }
 
     return body
       .split('\n')
       .map((line) => {
-        const trimmed = line.trim();
-        if (!trimmed) return line;
+        const trimmed = line.trim()
+        if (!trimmed) return line
 
         if (trimmed.startsWith('#')) {
           return trimmed.includes('URI="')
             ? line.replace(URI_ATTRIBUTE, (_, uri: string) => `URI="${absolute(uri)}"`)
-            : line;
+            : line
         }
-        return absolute(trimmed);
+        return absolute(trimmed)
       })
-      .join('\n');
+      .join('\n')
   }
 
   /**
@@ -1715,59 +1856,59 @@ export class MediaProxy {
   private rewriteDashManifest(
     body: string,
     manifestUrl: string,
-    headers: Record<string, string>
+    headers: Record<string, string>,
   ): string {
-    const directoryOf = (url: string): string => url.slice(0, url.lastIndexOf('/') + 1);
-    const manifestBase = directoryOf(manifestUrl);
+    const directoryOf = (url: string): string => url.slice(0, url.lastIndexOf('/') + 1)
+    const manifestBase = directoryOf(manifestUrl)
 
     const proxiedDirectory = (absolute: string): string =>
-      this.prefixRouteFor(directoryOf(absolute), headers);
+      this.prefixRouteFor(directoryOf(absolute), headers)
 
-    let sawBaseUrl = false;
+    let sawBaseUrl = false
     let rewritten = body.replace(DASH_BASE_URL, (match, attrs: string, value: string) => {
-      const trimmed = value.trim();
-      if (!trimmed) return match;
-      sawBaseUrl = true;
+      const trimmed = value.trim()
+      if (!trimmed) return match
+      sawBaseUrl = true
       try {
-        const absolute = new URL(trimmed, manifestBase).toString();
-        return `<BaseURL${attrs}>${this.prefixRouteFor(absolute, headers)}</BaseURL>`;
+        const absolute = new URL(trimmed, manifestBase).toString()
+        return `<BaseURL${attrs}>${this.prefixRouteFor(absolute, headers)}</BaseURL>`
       } catch {
-        return match;
+        return match
       }
-    });
+    })
 
     rewritten = rewritten.replace(DASH_URL_ATTRIBUTE, (match, name: string, value: string) => {
       // Relative values are handled by BaseURL; only absolute ones escape it.
-      if (!/^https?:\/\//i.test(value)) return match;
+      if (!/^https?:\/\//i.test(value)) return match
       try {
-        const directory = proxiedDirectory(value);
-        const file = value.slice(value.lastIndexOf('/') + 1);
-        return `${name}="${directory}${file}"`;
+        const directory = proxiedDirectory(value)
+        const file = value.slice(value.lastIndexOf('/') + 1)
+        return `${name}="${directory}${file}"`
       } catch {
-        return match;
+        return match
       }
-    });
+    })
 
     if (!sawBaseUrl) {
-      const base = this.prefixRouteFor(manifestBase, headers);
+      const base = this.prefixRouteFor(manifestBase, headers)
       rewritten = rewritten.replace(
         /(<MPD[^>]*>)/i,
-        (match) => `${match}\n  <BaseURL>${base}</BaseURL>`
-      );
+        (match) => `${match}\n  <BaseURL>${base}</BaseURL>`,
+      )
     }
 
-    return rewritten;
+    return rewritten
   }
 
   /** Wired into app shutdown, like every other socket owner. */
   public shutdown(): void {
-    this.routes.clear();
-    this.prefixes.clear();
-    this.tokensByKey.clear();
-    this.localRoutes.clear();
-    this.localTokensByPath.clear();
-    this.rateLimits.clear();
-    this.server?.close();
-    this.server = null;
+    this.routes.clear()
+    this.prefixes.clear()
+    this.tokensByKey.clear()
+    this.localRoutes.clear()
+    this.localTokensByPath.clear()
+    this.rateLimits.clear()
+    this.server?.close()
+    this.server = null
   }
 }
