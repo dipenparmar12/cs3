@@ -5,7 +5,6 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
-  Globe,
   Loader2,
   Maximize2,
   Minimize2,
@@ -14,7 +13,6 @@ import {
   RotateCcw,
   RotateCw,
   Subtitles,
-  Tv,
   Volume2,
   VolumeX,
   X,
@@ -41,35 +39,6 @@ function atTime(url: string, seconds: number): string {
   return seconds > 0 ? `${base}?t=${Math.floor(seconds)}` : base;
 }
 
-/**
- * Derives a privacy-enhanced, clean embedded player URL if this video is web-embeddable.
- */
-export function getEmbedUrl(video?: TitleVideo | null): string | null {
-  if (!video) return null;
-  const isYt =
-    video.host === 'youtube' ||
-    video.url.includes('youtube.com') ||
-    video.url.includes('youtu.be') ||
-    video.id.startsWith('youtube:');
-  if (isYt) {
-    const rawId = video.id.startsWith('youtube:')
-      ? video.id.slice(8)
-      : video.url.match(/(?:v=|youtu\.be\/|embed\/)([\w-]{11})/)?.[1];
-    if (rawId && /^[\w-]{11}$/.test(rawId)) {
-      return `https://www.youtube-nocookie.com/embed/${rawId}?autoplay=1&enablejsapi=1&rel=0`;
-    }
-  }
-  const dmMatch = video.url.match(/dailymotion\.com\/(?:video|embed\/video)\/([a-zA-Z0-9]+)/);
-  if (dmMatch) {
-    return `https://www.dailymotion.com/embed/video/${dmMatch[1]}?autoplay=1`;
-  }
-  const vimeoMatch = video.url.match(/vimeo\.com\/(?:video\/)?(\d+)/);
-  if (vimeoMatch) {
-    return `https://player.vimeo.com/video/${vimeoMatch[1]}?autoplay=1`;
-  }
-  return null;
-}
-
 /** Where the current entry has got to. One entry, one state. */
 type Stage =
   | { phase: 'resolving' }
@@ -82,15 +51,9 @@ type Stage =
       sessionId?: string;
     }
   | {
-      phase: 'embed';
-      embedUrl: string;
-    }
-  | {
       phase: 'error';
       message: string;
       needsComponents?: boolean;
-      canWebEmbed?: boolean;
-      embedUrl?: string;
     };
 
 const AUTOPLAY_SECONDS = 5;
@@ -109,8 +72,6 @@ export const TrailerPopup: React.FC<{
   const next = useMemo(() => upNext(queue), [queue]);
   const previous = useMemo(() => step(queue, -1), [queue]);
 
-  const embedUrl = useMemo(() => getEmbedUrl(video), [video]);
-  const [playerMode, setPlayerMode] = useState<'stream' | 'embed'>('stream');
   const [stage, setStage] = useState<Stage>({ phase: 'resolving' });
   const [attempt, setAttempt] = useState(0);
   const [autoplay, setAutoplay] = useState(true);
@@ -209,17 +170,11 @@ export const TrailerPopup: React.FC<{
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
-  /** Resolve, then classify. Direct stream or web embed. */
+  /** Resolve, then prepare direct stream. */
   useEffect(() => {
     if (!video) return;
     let cancelled = false;
     let opened = '';
-
-    // If viewer preferred embed mode and an embed URL is available:
-    if (playerMode === 'embed' && embedUrl) {
-      setStage({ phase: 'embed', embedUrl });
-      return;
-    }
 
     setStage({ phase: 'resolving' });
     setCountdown(null);
@@ -233,20 +188,12 @@ export const TrailerPopup: React.FC<{
         const resolved = await api?.resolvePromoVideo?.(video.url);
         if (cancelled) return;
         if (!resolved?.ok || !resolved.streamUrl) {
-          // If direct stream extraction failed, fallback to web embed seamlessly
-          if (embedUrl) {
-            setStage({ phase: 'embed', embedUrl });
-            setPlayerMode('embed');
-            return;
-          }
           setStage({
             phase: 'error',
             message: resolved?.needsComponents
               ? 'Direct streaming needs yt-dlp. Settings → Components can install it.'
-              : (resolved?.error ?? 'That trailer could not be opened.'),
+              : (resolved?.error ?? 'That trailer could not be opened in the player.'),
             needsComponents: resolved?.needsComponents,
-            canWebEmbed: Boolean(embedUrl),
-            embedUrl: embedUrl ?? undefined,
           });
           return;
         }
@@ -262,17 +209,10 @@ export const TrailerPopup: React.FC<{
           return;
         }
         if (!prepared?.ok || !prepared.playbackUrl) {
-          if (embedUrl) {
-            setStage({ phase: 'embed', embedUrl });
-            setPlayerMode('embed');
-            return;
-          }
           setStage({
             phase: 'error',
             message: prepared?.error ?? 'This trailer could not be prepared for playback.',
             needsComponents: prepared?.needsComponents,
-            canWebEmbed: Boolean(embedUrl),
-            embedUrl: embedUrl ?? undefined,
           });
           return;
         }
@@ -282,16 +222,9 @@ export const TrailerPopup: React.FC<{
 
         const strategy = prepared.capability.requiredStrategy;
         if (strategy === 'NATIVE_MPV') {
-          if (embedUrl) {
-            setStage({ phase: 'embed', embedUrl });
-            setPlayerMode('embed');
-            return;
-          }
           setStage({
             phase: 'error',
             message: 'This video needs the native player, which trailers do not use.',
-            canWebEmbed: Boolean(embedUrl),
-            embedUrl: embedUrl ?? undefined,
           });
           return;
         }
@@ -306,12 +239,7 @@ export const TrailerPopup: React.FC<{
         });
       } catch (error) {
         if (!cancelled) {
-          if (embedUrl) {
-            setStage({ phase: 'embed', embedUrl });
-            setPlayerMode('embed');
-          } else {
-            setStage({ phase: 'error', message: describeError(error) });
-          }
+          setStage({ phase: 'error', message: describeError(error) });
         }
       }
     })();
@@ -325,7 +253,7 @@ export const TrailerPopup: React.FC<{
         }
       }
     };
-  }, [video, attempt, playerMode, embedUrl]);
+  }, [video, attempt]);
 
   /** Attach video source. */
   useEffect(() => {
@@ -585,31 +513,12 @@ export const TrailerPopup: React.FC<{
             {context && <span className="trailer-popup__context">{context}</span>}
           </div>
           <div className="trailer-popup__actions-group">
-            {embedUrl && (
-              <button
-                type="button"
-                className={`btn btn-secondary btn-sm ${playerMode === 'embed' ? 'btn-primary' : ''}`}
-                onClick={() => {
-                  const nextMode = playerMode === 'embed' ? 'stream' : 'embed';
-                  setPlayerMode(nextMode);
-                  if (nextMode === 'embed') {
-                    setStage({ phase: 'embed', embedUrl });
-                  } else {
-                    setAttempt((a) => a + 1);
-                  }
-                }}
-                title={playerMode === 'embed' ? 'Switch to direct stream' : 'Switch to web player'}
-              >
-                {playerMode === 'embed' ? <Tv size={13} /> : <Globe size={13} />}
-                <span>{playerMode === 'embed' ? 'Direct Stream' : 'Web Player'}</span>
-              </button>
-            )}
             <button
               type="button"
               className="btn btn-secondary btn-icon"
               onClick={() => void window.cloudstream?.openExternalLink?.(video.url)}
-              title="Open video in external browser"
-              aria-label="Open video externally"
+              title={`Open video in external browser (${video.url})`}
+              aria-label={`Open video in external browser: ${video.url}`}
             >
               <ExternalLink size={14} />
             </button>
@@ -631,54 +540,38 @@ export const TrailerPopup: React.FC<{
           onMouseMove={handleMouseMove}
           onMouseLeave={() => isPlaying && setShowControls(false)}
         >
-          {stage.phase === 'embed' ? (
-            <iframe
-              className="trailer-popup__iframe"
-              src={stage.embedUrl}
-              title={video.title}
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              allowFullScreen
-            />
-          ) : (
-            <video
-              ref={videoRef}
-              className="trailer-popup__video"
-              playsInline
-              onPlay={() => setIsPlaying(true)}
-              onPause={() => setIsPlaying(false)}
-              onTimeUpdate={handleTimeUpdate}
-              onDurationChange={(e) => {
-                const d = e.currentTarget.duration;
-                if (Number.isFinite(d) && d > 0) setElementDuration(d);
-              }}
-              onEnded={handleEnded}
-              onClick={togglePlay}
-              onDoubleClick={toggleFullscreen}
-              onError={() => {
-                if (embedUrl) {
-                  setPlayerMode('embed');
-                  setStage({ phase: 'embed', embedUrl });
-                } else {
-                  setStage((held) =>
-                    held.phase === 'ready'
-                      ? { phase: 'error', message: 'This trailer would not play.' }
-                      : held
-                  );
-                }
-              }}
-            >
-              {stage.phase === 'ready' &&
-                stage.subtitles?.map((sub, i) => (
-                  <track
-                    key={sub.url}
-                    kind="subtitles"
-                    label={sub.name}
-                    src={sub.url}
-                    default={i === 0 && /en|eng|english/i.test(sub.name)}
-                  />
-                ))}
-            </video>
-          )}
+          <video
+            ref={videoRef}
+            className="trailer-popup__video"
+            playsInline
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onTimeUpdate={handleTimeUpdate}
+            onDurationChange={(e) => {
+              const d = e.currentTarget.duration;
+              if (Number.isFinite(d) && d > 0) setElementDuration(d);
+            }}
+            onEnded={handleEnded}
+            onClick={togglePlay}
+            onDoubleClick={toggleFullscreen}
+            onError={() => {
+              setStage({
+                phase: 'error',
+                message: 'This trailer could not be played in the player.',
+              });
+            }}
+          >
+            {stage.phase === 'ready' &&
+              stage.subtitles?.map((sub, i) => (
+                <track
+                  key={sub.url}
+                  kind="subtitles"
+                  label={sub.name}
+                  src={sub.url}
+                  default={i === 0 && /en|eng|english/i.test(sub.name)}
+                />
+              ))}
+          </video>
 
           {/* Center Play button when paused */}
           {stage.phase === 'ready' && !isPlaying && countdown === null && (
@@ -820,31 +713,33 @@ export const TrailerPopup: React.FC<{
 
           {stage.phase === 'error' && (
             <div className="trailer-popup__overlay trailer-popup__overlay--error" role="alert">
-              <AlertTriangle size={20} />
+              <AlertTriangle size={24} />
               <span>{stage.message}</span>
-              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                {stage.canWebEmbed && stage.embedUrl && (
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    onClick={() => {
-                      setPlayerMode('embed');
-                      setStage({ phase: 'embed', embedUrl: stage.embedUrl! });
-                    }}
-                  >
-                    <Globe size={13} /> Play in Web Player
-                  </button>
-                )}
+              <div className="trailer-popup__error-actions">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => void window.cloudstream?.openExternalLink?.(video.url)}
+                  title={`Open ${video.url} in external browser`}
+                >
+                  <ExternalLink size={15} />
+                  <span>Open in external browser</span>
+                </button>
                 {!stage.needsComponents && (
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
                     onClick={() => setAttempt((count) => count + 1)}
+                    title="Retry loading this trailer"
                   >
-                    <RotateCcw size={13} /> Try again
+                    <RotateCcw size={13} />
+                    <span>Try again</span>
                   </button>
                 )}
               </div>
+              <span className="trailer-popup__error-url" title={video.url}>
+                {video.url}
+              </span>
             </div>
           )}
 

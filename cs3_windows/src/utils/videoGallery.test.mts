@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import {
   formatVideoDate,
   formatVideoDuration,
-  groupVideos,
   mergeVideos,
   youTubeIdFrom,
   youTubeThumbnail,
