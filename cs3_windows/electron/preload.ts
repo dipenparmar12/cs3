@@ -110,6 +110,9 @@ import type {
 import type { StreamHandle } from './torrent/torrentEngine';
 import type { PlaybackSnapshot } from './playbackSession';
 import type { SubtitleSearchResult } from './subtitleService';
+import type { SavedSubtitle, SaveRequest as SubtitleSaveRequest } from './subtitles/subtitleLibrary';
+export type { SavedSubtitle };
+export type SubtitleDownloadRequest = Omit<SubtitleSaveRequest, 'vtt'> & { vtt?: string };
 import type {
   PlaybackDiagnosticEvent,
   PlaybackStreamRequest,
@@ -347,6 +350,17 @@ export interface CloudStreamElectronAPI {
   >;
   /** Downloads one subtitle, already converted from SubRip to WebVTT. */
   fetchSubtitle: (url: string) => Promise<Envelope & { vtt: string }>;
+  /** Saves a subtitle to the subtitle folder; reuses an existing copy unless `refresh`. */
+  downloadSubtitle: (request: SubtitleDownloadRequest) => Promise<Envelope & { entry: SavedSubtitle | null; reused: boolean }>;
+  /** Subtitles saved for one title (and episode). */
+  listSavedSubtitles: (
+    title: string,
+    year?: number,
+    season?: number,
+    episode?: number
+  ) => Promise<Envelope & { entries: SavedSubtitle[] }>;
+  readSavedSubtitle: (id: string) => Promise<Envelope & { vtt: string }>;
+  removeSavedSubtitle: (id: string) => Promise<{ ok: boolean }>;
 
   getSearchHistory: () => Promise<SearchHistoryEntry[]>;
   removeSearchHistory: (query: string) => Promise<SearchHistoryEntry[]>;
@@ -1960,6 +1974,11 @@ const api: CloudStreamElectronAPI = {
   searchSubtitlesByTitle: (query, season, episode, mediaUrl) =>
     ipcRenderer.invoke('subtitles:searchByTitle', query, season, episode, mediaUrl),
   fetchSubtitle: (url) => ipcRenderer.invoke('subtitles:fetch', url),
+  downloadSubtitle: (request) => ipcRenderer.invoke('subtitles:download', request),
+  listSavedSubtitles: (title, year, season, episode) =>
+    ipcRenderer.invoke('subtitles:listSaved', title, year, season, episode),
+  readSavedSubtitle: (id) => ipcRenderer.invoke('subtitles:readSaved', id),
+  removeSavedSubtitle: (id) => ipcRenderer.invoke('subtitles:removeSaved', id),
 
   getSearchHistory: () => ipcRenderer.invoke('api:getSearchHistory'),
   removeSearchHistory: (query) => ipcRenderer.invoke('api:removeSearchHistory', query),

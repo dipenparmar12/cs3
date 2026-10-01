@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { X, Search, Loader2, Check, AlertTriangle, Subtitles, CheckCircle2 } from 'lucide-react';
+import { X, Search, Loader2, Check, AlertTriangle, Subtitles, CheckCircle2, Download, RotateCcw, HardDrive, Minus, Plus } from 'lucide-react';
+import type { SavedSubtitle } from '../../../electron/subtitles/subtitleLibrary';
 import type { SubtitleSearchResult } from '../../../electron/subtitleService';
 
 /**
@@ -40,6 +41,17 @@ interface SubtitlePanelProps {
   activeUrl: string | null;
   onClose: () => void;
   onSelect: (url: string | null, label: string) => void;
+  year?: number;
+  /** Seconds the cues are shifted by; positive shows them later. */
+  delay: number;
+  onDelayChange: (seconds: number) => void;
+}
+
+type DownloadState = { status: 'saving' } | { status: 'saved'; reused: boolean } | { status: 'failed'; error: string };
+
+/** Where a result came from, in words a viewer can act on. */
+function originLabel(result: SubtitleSearchResult): string {
+  return result.id.startsWith('provider:') ? 'from this source' : 'OpenSubtitles';
 }
 
 export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
@@ -53,10 +65,73 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   activeUrl,
   onClose,
   onSelect,
+  year,
+  delay,
+  onDelayChange,
 }) => {
   const [results, setResults] = useState<SubtitleSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<SavedSubtitle[]>([]);
+  const [downloads, setDownloads] = useState<Record<string, DownloadState>>({});
+
+  const refreshSaved = useCallback(async () => {
+    if (!title) {
+      setSaved([]);
+      return;
+    }
+    const response = await window.cloudstream?.listSavedSubtitles(title, year, season, episode);
+    setSaved(response?.ok ? response.entries : []);
+  }, [title, year, season, episode]);
+
+  useEffect(() => {
+    if (open) void refreshSaved();
+  }, [open, refreshSaved]);
+
+  /**
+   * Saves a result to the subtitle folder. A second press on a saved row asks
+   * for a fresh copy; the first one never re-downloads what is already there.
+   * Nothing here touches the track that is playing.
+   */
+  const downloadResult = useCallback(
+    async (result: SubtitleSearchResult, refresh: boolean) => {
+      if (!title) return;
+      setDownloads((d) => ({ ...d, [result.id]: { status: 'saving' } }));
+      const response = await window.cloudstream?.downloadSubtitle({
+        title,
+        year,
+        season,
+        episode,
+        lang: result.lang,
+        langName: result.langName,
+        origin: result.id.startsWith('provider:') ? 'provider' : 'opensubtitles',
+        sourceUrl: result.url,
+        refresh,
+      });
+      setDownloads((d) => ({
+        ...d,
+        [result.id]: response?.ok
+          ? { status: 'saved', reused: response.reused }
+          : { status: 'failed', error: response?.error ?? 'The subtitle could not be saved.' },
+      }));
+      if (response?.ok) void refreshSaved();
+    },
+    [title, year, season, episode, refreshSaved]
+  );
+
+  const applySaved = useCallback(
+    async (entry: SavedSubtitle) => {
+      const response = await window.cloudstream?.readSavedSubtitle(entry.id);
+      if (!response?.ok || !response.vtt) {
+        setError(response?.error ?? 'That saved subtitle could not be read.');
+        void refreshSaved();
+        return;
+      }
+      onSelect(URL.createObjectURL(new Blob([response.vtt], { type: 'text/vtt' })), entry.langName);
+      onClose();
+    },
+    [onSelect, onClose, refreshSaved]
+  );
   const [applying, setApplying] = useState<string | null>(null);
 
   // Custom search query and episode parameters
@@ -253,6 +328,20 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               <X size={14} />
             </button>
           )}
+          {title && searchQuery !== title && (
+            <button
+              type="button"
+              className="subtitle-panel__search-btn"
+              onClick={() => {
+                setSearchQuery(title);
+                void runSearch(title);
+              }}
+              title="Search with the detected title again"
+              aria-label="Reset to detected title"
+            >
+              <RotateCcw size={14} />
+            </button>
+          )}
           <button
             type="submit"
             className="subtitle-panel__search-btn"
@@ -344,6 +433,64 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         ))}
       </ul>
 
+      <div className="subtitle-panel__sync" aria-label="Subtitle timing">
+        <span>Timing</span>
+        <button
+          className="icon-button"
+          onClick={() => onDelayChange(Math.round((delay - 0.25) * 100) / 100)}
+          aria-label="Show subtitles earlier"
+          title="Earlier by 0.25s"
+        >
+          <Minus size={14} />
+        </button>
+        <output>
+          {delay > 0 ? '+' : ''}
+          {delay.toFixed(2)}s
+        </output>
+        <button
+          className="icon-button"
+          onClick={() => onDelayChange(Math.round((delay + 0.25) * 100) / 100)}
+          aria-label="Show subtitles later"
+          title="Later by 0.25s"
+        >
+          <Plus size={14} />
+        </button>
+        {delay !== 0 && (
+          <button className="subtitle-panel__sync-reset" onClick={() => onDelayChange(0)}>
+            Reset
+          </button>
+        )}
+      </div>
+
+      {saved.length > 0 && (
+        <div className="player-panel__sub-group">
+          <div className="player-panel__sub-heading">Saved on this computer</div>
+          <ul className="player-panel__subs">
+            {saved.map((entry) => (
+              <li key={entry.id}>
+                <button
+                  className="player-panel__sub"
+                  onClick={() => void applySaved(entry)}
+                  title={entry.filePath}
+                >
+                  <HardDrive size={13} />
+                  <span className="player-panel__sub-label">{entry.langName}</span>
+                  <span className="player-panel__sub-tag">
+                    saved · {entry.origin === 'opensubtitles' ? 'OpenSubtitles' : 'from source'}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {!loading && lastSearched && results.length === 0 && !error && (
+        <p className="player-panel__error">
+          No matching subtitle was found online. Edit the title above and search again.
+        </p>
+      )}
+
       {error && (
         <p className="player-panel__error">
           <AlertTriangle size={14} /> {error}
@@ -354,24 +501,51 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         <div key={language} className="player-panel__sub-group">
           <div className="player-panel__sub-heading">{language}</div>
           <ul className="player-panel__subs">
-            {items.map((item, index) => (
-              <li key={item.id}>
-                <button
-                  className="player-panel__sub"
-                  onClick={() => applySubtitle(item)}
-                  disabled={applying !== null}
-                >
-                  {applying === item.id ? (
-                    <Loader2 className="spin" size={13} />
-                  ) : (
-                    <Subtitles size={13} />
-                  )}
-                  <span className="player-panel__sub-label">
-                    {language} {items.length > 1 ? `#${index + 1}` : ''}
-                  </span>
-                </button>
-              </li>
-            ))}
+            {items.map((item, index) => {
+              const state = downloads[item.id];
+              return (
+                <li key={item.id} className="subtitle-panel__row">
+                  <button
+                    className="player-panel__sub"
+                    onClick={() => applySubtitle(item)}
+                    disabled={applying !== null}
+                  >
+                    {applying === item.id ? (
+                      <Loader2 className="spin" size={13} />
+                    ) : (
+                      <Subtitles size={13} />
+                    )}
+                    <span className="player-panel__sub-label">
+                      {language} {items.length > 1 ? `#${index + 1}` : ''}
+                    </span>
+                    <span className="player-panel__sub-tag">{originLabel(item)}</span>
+                  </button>
+                  <button
+                    className="icon-button subtitle-panel__download"
+                    onClick={() => void downloadResult(item, state?.status === 'saved')}
+                    disabled={!title || state?.status === 'saving'}
+                    title={
+                      state?.status === 'saved'
+                        ? `${state.reused ? 'Already saved' : 'Saved'}. Press to download again`
+                        : state?.status === 'failed'
+                          ? `${state.error} Press to retry.`
+                          : 'Download this subtitle'
+                    }
+                    aria-label="Download subtitle"
+                  >
+                    {state?.status === 'saving' ? (
+                      <Loader2 className="spin" size={13} />
+                    ) : state?.status === 'saved' ? (
+                      <Check size={13} />
+                    ) : state?.status === 'failed' ? (
+                      <AlertTriangle size={13} />
+                    ) : (
+                      <Download size={13} />
+                    )}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </div>
       ))}

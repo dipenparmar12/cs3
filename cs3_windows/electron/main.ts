@@ -70,6 +70,7 @@ import { SearchSuggestionService } from './searchSuggestions';
 import { SearchHistoryStore } from './searchHistory';
 import { SavedSearchStore, type SaveSearchInput } from './savedSearches';
 import { SubtitleService } from './subtitleService';
+import { SubtitleLibrary, type SaveRequest as SubtitleSaveRequest } from './subtitles/subtitleLibrary';
 import { MediaTranscoder, VIDEO_CODEC_PROBES } from './mediaTranscoder';
 import { PlaybackEngine } from './media/playbackEngine';
 import { InspectionStore } from './media/inspectionStore';
@@ -591,6 +592,8 @@ const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
 const subtitles = new SubtitleService();
+// Beside the media downloads, so a viewer who opens the folder finds both.
+const subtitleLibrary = new SubtitleLibrary(path.join(os.homedir(), 'Downloads', 'CloudStream', 'Subtitles'));
 const mediaTranscoder = new MediaTranscoder(binaryDownloader);
 /**
  * Lets `resolvePromoVideo` mux a video and an audio address into one stream.
@@ -2097,6 +2100,48 @@ ipcMain.handle('subtitles:fetch', async (_, url: string) => {
     return { ...fail(error), vtt: '' };
   }
 });
+
+/**
+ * Subtitles kept on disk for reuse. `download` fetches (or takes the VTT the
+ * renderer already has), converts and saves; a second press on the same result
+ * answers with the existing file unless `refresh` is set. Failures here never
+ * touch playback — the renderer already has the cues it is showing.
+ */
+ipcMain.handle(
+  'subtitles:download',
+  async (_, request: Omit<SubtitleSaveRequest, 'vtt'> & { vtt?: string }) => {
+    try {
+      if (!request?.title || !request.sourceUrl) throw new Error('A subtitle needs a title and a source to be saved.');
+      const existing = request.refresh ? undefined : subtitleLibrary.findBySource(request.sourceUrl);
+      if (existing) return { ok: true, entry: existing, reused: true };
+      const vtt = request.vtt || (await subtitles.fetchAsVtt(request.sourceUrl));
+      const { entry, reused } = subtitleLibrary.save({ ...request, vtt });
+      return { ok: true, entry, reused };
+    } catch (error) {
+      return { ...fail(error), entry: null, reused: false };
+    }
+  }
+);
+
+ipcMain.handle(
+  'subtitles:listSaved',
+  async (_, title: string, year?: number, season?: number, episode?: number) => {
+    try {
+      return { ok: true, entries: title ? subtitleLibrary.list(title, year, season, episode) : [] };
+    } catch (error) {
+      return { ...fail(error), entries: [] };
+    }
+  }
+);
+
+ipcMain.handle('subtitles:readSaved', async (_, id: string) => {
+  const vtt = subtitleLibrary.read(id);
+  return vtt === null
+    ? { ok: false, error: 'That saved subtitle is no longer on disk.', vtt: '' }
+    : { ok: true, vtt };
+});
+
+ipcMain.handle('subtitles:removeSaved', async (_, id: string) => ({ ok: subtitleLibrary.remove(id) }));
 
 ipcMain.handle('api:getSearchHistory', async () => searchHistory.list());
 

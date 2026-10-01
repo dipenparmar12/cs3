@@ -2165,6 +2165,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setIsMuted(preferences.muted);
       setSpeed(preferences.speed);
       if (preferences.subtitleLanguage) preferredSubtitleLanguage.current = preferences.subtitleLanguage;
+      // An empty stored language is an explicit "Off", not an absence of choice.
+      subtitlesOff.current = preferences.subtitleLanguage === '';
       if (preferences.audioLanguage) preferredAudioLanguage.current = preferences.audioLanguage;
       setFloatingMode(preferences.floatingMode ?? 'mini');
       setBackgroundPlayback(preferences.backgroundPlayback ?? 'continue');
@@ -2205,6 +2207,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const preferredAudioLanguage = useRef<string | null>(null);
   const preferredSubtitleLanguage = useRef<string | null>(null);
+  const subtitlesOff = useRef(false);
 
   /**
    * A record of the *previous* engine says nothing about the next one.
@@ -2825,6 +2828,113 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video.textTracks.addEventListener?.('addtrack', apply);
     return () => video.textTracks.removeEventListener?.('addtrack', apply);
   }, [activeSubtitle, allSubtitles]);
+
+  /**
+   * Subtitle timing. `TextTrack` has no delay property, so every cue is moved,
+   * measured from its original times (kept in a WeakMap so repeated nudges do
+   * not accumulate drift). Cues arrive only once a `<track>` loads, hence the
+   * `load` listeners. mpv has `sub-delay` and is simply told.
+   */
+  const [subtitleDelay, setSubtitleDelay] = useState(0);
+  const cueOrigins = useRef(new WeakMap<TextTrackCue, [number, number]>());
+  useEffect(() => {
+    if (isNativeEngine) {
+      void window.cloudstream?.mpvSetSubtitleDelay(subtitleDelay);
+      return;
+    }
+    const video = videoRef.current;
+    if (!video) return;
+    const shift = () => {
+      const tracks = video.textTracks;
+      for (let i = 0; i < tracks.length; i++) {
+        const cues = tracks[i].cues;
+        if (!cues) continue;
+        for (let j = 0; j < cues.length; j++) {
+          const cue = cues[j];
+          let origin = cueOrigins.current.get(cue);
+          if (!origin) {
+            origin = [cue.startTime, cue.endTime];
+            cueOrigins.current.set(cue, origin);
+          }
+          cue.startTime = Math.max(0, origin[0] + subtitleDelay);
+          cue.endTime = Math.max(0, origin[1] + subtitleDelay);
+        }
+      }
+    };
+    shift();
+    const elements = Array.from(video.querySelectorAll('track'));
+    elements.forEach((el) => el.addEventListener('load', shift));
+    return () => elements.forEach((el) => el.removeEventListener('load', shift));
+  }, [subtitleDelay, activeSubtitle, allSubtitles, isNativeEngine]);
+
+  // A new film or episode starts in sync; an offset is a property of one file.
+  useEffect(() => {
+    setSubtitleDelay(0);
+  }, [title, subtitleContext?.season, subtitleContext?.episode]);
+
+  /**
+   * Picks a subtitle on its own when nothing has been chosen: the stream's own
+   * track in the preferred language first, then one saved on disk for this
+   * title, then an online search. English unless the viewer chose otherwise;
+   * a viewer who turned subtitles off is left alone. Runs once per title and
+   * episode, and a failure only means no subtitle — playback never waits on it.
+   */
+  const autoSubtitleKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!prepared || activeSubtitle || subtitlesOff.current || !title) return;
+    const key = `${title}|${subtitleContext?.season ?? ''}|${subtitleContext?.episode ?? ''}`;
+    if (autoSubtitleKey.current === key) return;
+    autoSubtitleKey.current = key;
+
+    const wanted = (preferredSubtitleLanguage.current || 'English').toLowerCase();
+    const matches = (label: string) => {
+      const l = label.toLowerCase();
+      return l.startsWith(wanted) || (wanted === 'english' && /\b(eng|english|en)\b/.test(l));
+    };
+    const pick = (url: string, label: string) => {
+      setFetchedSubtitles((prev) => (prev.some((s) => s.url === url) ? prev : [...prev, { name: label, url }]));
+      setActiveSubtitle(url);
+      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(url, label);
+    };
+
+    const inStream = allSubtitles.find((s) => matches(s.name));
+    if (inStream) {
+      setActiveSubtitle(inStream.url);
+      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(inStream.url, inStream.name);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const api = window.cloudstream;
+      if (!api) return;
+      const { season, episode, imdbId } = subtitleContext ?? {};
+      const saved = await api.listSavedSubtitles(title, progress?.year, season, episode).catch(() => null);
+      const local = saved?.entries.find((e) => matches(e.langName));
+      if (local) {
+        const read = await api.readSavedSubtitle(local.id);
+        if (!cancelled && read.ok && read.vtt) {
+          pick(URL.createObjectURL(new Blob([read.vtt], { type: 'text/vtt' })), local.langName);
+        }
+        return;
+      }
+      const found = await api
+        .searchSubtitles(imdbId || title, season, episode, progress?.mediaUrl)
+        .catch(() => null);
+      const best = found?.results.find((r) => matches(r.langName));
+      if (!best || cancelled) return;
+      const fetched = await api.fetchSubtitle(best.url).catch(() => null);
+      if (!cancelled && fetched?.ok && fetched.vtt) {
+        pick(URL.createObjectURL(new Blob([fetched.vtt], { type: 'text/vtt' })), best.langName);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // allSubtitles is read once at the moment the stream is prepared; later
+    // additions are the viewer's own choices and must not re-trigger this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prepared, title, subtitleContext?.season, subtitleContext?.episode]);
 
   // Blob URLs from the subtitle search are owned by this component; leaking
   // them would pin every subtitle a viewer auditioned for the session's life.
@@ -3713,7 +3823,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           const language = url ? label?.split(/[^A-Za-z]+/)[0] ?? '' : '';
           void window.cloudstream?.setPlayerPreferences({ subtitleLanguage: language });
           preferredSubtitleLanguage.current = language || null;
+          subtitlesOff.current = !url;
         }}
+        year={progress?.year}
+        delay={subtitleDelay}
+        onDelayChange={setSubtitleDelay}
       />
 
       <PlayerDownloadPanel

@@ -339,6 +339,7 @@ rather than omitting the ones nothing serves.
 | `sourceCache.ts` | Per-source expiry: magnets never expire; provider links take a deadline from the URL (`Expires`/`exp`/JWT) or a short TTL. |
 | `subtitleService.ts` | Keyless OpenSubtitles v3 Stremio addon by IMDb id. SubRip→WebVTT is mandatory (`<track>` rejects `.srt` silently). |
 | `subtitles/convert.ts` | SubRip/ASS/SSA → WebVTT + charset detection. |
+| `subtitles/subtitleLibrary.ts` | Subtitles saved for reuse, in `Downloads/CloudStream/Subtitles` as `.vtt`, indexed by work (title+year+season+episode), never by stream URL. Same source twice = reuse unless `refresh`. IPC `subtitles:download/listSaved/readSaved/removeSaved`. The player auto-loads the preferred language (English default; an explicit Off is respected): stream track → saved file → online search, never blocking playback. Timing offset moves cues (element) or sets `sub-delay` (mpv). |
 | `mediaProxy.ts` | Loopback HTTP with provider headers applied; HLS/DASH manifest rewriting; range handling. |
 | `mediaTranscoder.ts` | Executes a `TransformationPlan` as live fragmented-MP4 on loopback; embedded-subtitle extraction. |
 | `media/mediaInspector.ts` | ffprobe → `MediaMetadata`; transport and DRM from the manifest **body**, never the URL. |

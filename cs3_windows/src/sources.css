@@ -8733,3 +8733,41 @@
 }
 .indexer-add-wrap > summary::-webkit-details-marker { display: none; }
 .indexer-add-wrap[open] > summary { margin-bottom: 0.2rem; }
+
+/* Subtitle timing, per-result download and saved files (player subtitle panel). */
+.subtitle-panel__sync {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.8rem;
+  opacity: 0.9;
+}
+.subtitle-panel__sync > span {
+  margin-right: auto;
+}
+.subtitle-panel__sync output {
+  min-width: 3.6rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.subtitle-panel__sync-reset {
+  background: none;
+  border: 0;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+.subtitle-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.subtitle-panel__row > .player-panel__sub {
+  flex: 1;
+  min-width: 0;
+}
+.subtitle-panel__download {
+  flex-shrink: 0;
+}
