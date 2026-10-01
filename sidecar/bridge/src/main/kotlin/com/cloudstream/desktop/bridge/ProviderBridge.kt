@@ -311,6 +311,17 @@ object ProviderBridge {
         field("duration", response.duration)
         stringArray("actors", response.actors?.mapNotNull { it.actor.name })
         rawArray("recommendations", response.recommendations.orEmpty().map { encodeSearchResponse(it, api) })
+        val trailers = response.trailers
+        if (!trailers.isNullOrEmpty()) {
+            rawArray("trailers", trailers.map { trailer ->
+                json {
+                    field("extractorUrl", trailer.extractorUrl)
+                    field("referer", trailer.referer)
+                    field("raw", trailer.raw)
+                    stringMap("headers", trailer.headers)
+                }
+            })
+        }
 
         // The playable identity differs by shape: a film carries a single data
         // URL, a series carries episodes. The host needs whichever exists,

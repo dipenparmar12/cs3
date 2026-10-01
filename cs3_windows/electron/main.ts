@@ -106,6 +106,7 @@ import {
   MetadataEnrichmentService,
   type EnrichmentRequest,
 } from './metadata/enrichmentService';
+import { searchYouTubeTrailers } from './metadata/youtube';
 import { OttCatalogService } from './cs3/ottCatalog';
 import { TorrentImportService, classifyDroppedPath, looksLikeMagnet } from './torrent/torrentImport';
 import { parseReleaseName } from './torrent/releaseParser';
@@ -3118,6 +3119,16 @@ ipcMain.handle('metadata:clearCache', async () => {
     return { ok: true, cleared: metadataEnrichment.clear() };
   } catch (error) {
     return { ...fail(error), cleared: 0 };
+  }
+});
+
+ipcMain.handle('metadata:findTrailers', async (_, title: string, year?: number) => {
+  try {
+    const query = `${title || ''} ${year ? year : ''} official trailer`.trim();
+    const videos = await searchYouTubeTrailers(query, { maxResults: 8 });
+    return { ok: true, videos };
+  } catch (error) {
+    return { ...fail(error), videos: [] };
   }
 });
 

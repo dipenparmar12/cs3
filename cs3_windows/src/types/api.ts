@@ -207,6 +207,12 @@ export interface LoadResponse {
   recommendations?: SearchResponse[];
   id?: number;
   /**
+   * Promotional trailers provided directly by the extension or scraper.
+   *
+   * Maps from `TrailerData` on CloudStream Android.
+   */
+  trailers?: ProviderTrailerData[];
+  /**
    * A live channel rather than a recording.
    *
    * `LiveStreamLoadResponse` on the Android side, and a whole content category
@@ -217,6 +223,13 @@ export interface LoadResponse {
    * channel going off air rather than a title finishing.
    */
   isLive?: boolean;
+}
+
+export interface ProviderTrailerData {
+  extractorUrl: string;
+  referer?: string;
+  raw?: boolean;
+  headers?: Record<string, string>;
 }
 
 /**

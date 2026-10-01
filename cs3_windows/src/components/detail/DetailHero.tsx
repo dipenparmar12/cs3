@@ -7,6 +7,7 @@ import {
   Calendar,
   Clock,
   Download,
+  Film,
   Layers,
   ListVideo,
   MoreHorizontal,
@@ -134,6 +135,8 @@ interface DetailHeroProps {
   onFindMoreSources: () => void;
   onRefreshSources: () => void;
   onSearchTitle?: () => void;
+  /** Opens the trailer viewer for this title. */
+  onWatchTrailer?: () => void;
   /**
    * The share control, passed in rather than built here.
    *
@@ -172,6 +175,7 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   onFindMoreSources,
   onRefreshSources,
   onSearchTitle,
+  onWatchTrailer,
   shareControl,
   onDownloadSeason,
   libraryControl,
@@ -384,6 +388,18 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
           {libraryControl}
 
           {shareControl}
+
+          {onWatchTrailer && (
+            <button
+              type="button"
+              className="detail-action detail-action--trailer"
+              onClick={onWatchTrailer}
+              title="Watch trailer"
+            >
+              <Film size={15} />
+              <span>Trailer</span>
+            </button>
+          )}
 
           <button
             type="button"

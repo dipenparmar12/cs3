@@ -86,7 +86,7 @@ import {
 import type { TitleEnricher } from '../cs3/titleEnricher.ts';
 import { fetchWikipediaNotes, type WikipediaNotes } from './wikipedia.ts';
 import { parseCinemetaExtras, type CinemetaExtras } from './cinemetaExtras.ts';
-import { describeYouTubeVideos, type YouTubeVideoFacts } from './youtube.ts';
+import { describeYouTubeVideos, searchYouTubeTrailers, type YouTubeVideoFacts } from './youtube.ts';
 import { classifyVideoTitle, looksOfficial, orderVideos } from './videoTitles.ts';
 import type { TitleVideo } from '../../src/types/metadata.ts';
 import { fetchJson } from '../torrent/http.ts';
@@ -121,6 +121,8 @@ export interface EnrichmentRequest {
   type?: TvType;
   title?: string;
   year?: number;
+  /** Promotional trailers supplied by the provider or scraper. */
+  providerVideos?: TitleVideo[];
 }
 
 /** Called with a fuller record each time a source lands. */
@@ -410,6 +412,7 @@ export class MetadataEnrichmentService {
     let wikipedia: WikipediaNotes | null = null;
     /** What YouTube said each collected trailer is. Filled in phase two. */
     let videoFacts: Awaited<ReturnType<typeof describeYouTubeVideos>> | null = null;
+    let discoveredVideos: TitleVideo[] = [];
 
     /**
      * What the catalogues believe this is, when the provider had no id.
@@ -453,7 +456,7 @@ export class MetadataEnrichmentService {
       const snapshot = this.assemble(
         request,
         ids,
-        { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia, videoFacts },
+        { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia, videoFacts, discoveredVideos },
         outcomes,
         partial
       );
@@ -640,6 +643,7 @@ export class MetadataEnrichmentService {
     const collected = mergeVideos([
       (cinemeta as CinemetaExtras | null)?.videos ?? [],
       (anilist as AniListCredits | null)?.videos ?? [],
+      request.providerVideos ?? [],
     ]);
     if (collected.length > 0) {
       const startedAt = Date.now();
@@ -663,6 +667,24 @@ export class MetadataEnrichmentService {
       // Published before Wikipedia rather than after it: the gallery is the
       // fastest half of phase two and has no reason to wait for prose.
       publish(true);
+    } else if (request.title) {
+      // Automatic fallback: when catalogues had no trailers, search public YouTube keylessly!
+      const startedAt = Date.now();
+      try {
+        const query = `${request.title} ${request.year ? request.year : ''} official trailer`.trim();
+        const found = await searchYouTubeTrailers(query, { signal, maxResults: 5 });
+        if (found.length > 0) {
+          discoveredVideos = found;
+          outcomes.push(outcome(MetadataSource.YouTube, 'ok', startedAt));
+          publish(true);
+        } else {
+          outcomes.push(
+            outcome(MetadataSource.YouTube, 'empty', startedAt, 'no trailers found on YouTube')
+          );
+        }
+      } catch (error) {
+        outcomes.push(outcome(MetadataSource.YouTube, 'failed', startedAt, describe(error)));
+      }
     }
 
     // Phase two, second half. The article URL is a sitelink from Wikidata,
@@ -718,11 +740,12 @@ export class MetadataEnrichmentService {
       tvmazeFacts: TvMazeShowFacts | null;
       wikipedia: WikipediaNotes | null;
       videoFacts: Awaited<ReturnType<typeof describeYouTubeVideos>> | null;
+      discoveredVideos?: TitleVideo[];
     },
     outcomes: MetadataSourceOutcome[],
     partial: boolean
   ): ExtendedMetadata {
-    const { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia, videoFacts } = parts;
+    const { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia, videoFacts, discoveredVideos } = parts;
 
     const people = orderCredits(
       mergeCredits([
@@ -807,7 +830,12 @@ export class MetadataEnrichmentService {
       production: mergeNotes([wikipedia?.production ?? []]),
       trivia: mergeNotes([wikipedia?.trivia ?? [], anilist?.trivia ?? []]),
       videos: describeVideos(
-        mergeVideos([cinemeta?.videos ?? [], anilist?.videos ?? []]),
+        mergeVideos([
+          cinemeta?.videos ?? [],
+          anilist?.videos ?? [],
+          request.providerVideos ?? [],
+          discoveredVideos ?? [],
+        ]),
         videoFacts
       ),
       backdropUrl: cinemeta?.backdropUrl ?? anilist?.backdropUrl,
