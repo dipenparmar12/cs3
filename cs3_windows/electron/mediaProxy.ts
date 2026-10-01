@@ -282,8 +282,8 @@ function disguisedTsOffset(head: Uint8Array): number {
  * then re-emitted with nothing copied that did not have to be.
  */
 async function unwrapDisguisedSegment(
-  source: ReadableStream<Uint8Array<ArrayBuffer>>,
-): Promise<{ body: ReadableStream<Uint8Array<ArrayBuffer>>; stripped: number }> {
+  source: ReadableStream<Uint8Array>,
+): Promise<{ body: ReadableStream<Uint8Array>; stripped: number }> {
   const reader = source.getReader()
   const chunks: Uint8Array[] = []
   let buffered = 0
@@ -321,7 +321,7 @@ async function unwrapDisguisedSegment(
   const stripped = disguisedTsOffset(head)
   const prelude = stripped > 0 ? head.subarray(stripped) : head
 
-  const body = new ReadableStream<Uint8Array<ArrayBuffer>>({
+  const body = new ReadableStream<Uint8Array>({
     start(controller) {
       if (prelude.byteLength > 0) controller.enqueue(prelude)
       if (done) controller.close()
