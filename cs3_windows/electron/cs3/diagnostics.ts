@@ -1,6 +1,7 @@
 import { app } from 'electron';
 import path from 'path';
 import { JsonFileStore } from '../util/jsonFileStore';
+import { isPrivateSession } from './privacyMode';
 
 import type { FailureKind } from '../../src/types/analytics';
 import { classifyFailure, FAILURE_KIND_LABELS, groupingForm } from './failureTaxonomy';
@@ -163,6 +164,9 @@ export class DiagnosticsLog {
   public record(entry: Omit<DiagnosticRecord, 'id' | 'at'> & { at?: number }): void {
     this.ensureRestored();
     if (!entry.message) return;
+    // Incognito: the failure is still worth knowing about, the activity is not
+    // (PRD-52 §12). What was searched, which title and which address are dropped.
+    if (isPrivateSession()) entry = { ...entry, query: undefined, title: undefined, url: undefined };
 
     const record: DiagnosticRecord = {
       id: `d${this.nextId++}`,

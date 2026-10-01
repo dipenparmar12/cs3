@@ -3,6 +3,7 @@ import { JsonFileStore } from '../util/jsonFileStore.ts';
 import { canonicalKey } from './libraryStore.ts';
 import type { Episode, SearchResponse, TvType } from '../../src/types/api';
 import { prune } from '../util/prune.ts';
+import { isPrivateSession } from './privacyMode.ts';
 
 /**
  * The last detail page that actually worked, kept so it can be shown again.
@@ -193,7 +194,8 @@ export class PageSnapshotStore {
     this.file = new JsonFileStore<PageSnapshot[]>(
       path.join(directory, 'page-snapshots.json'),
       WRITE_DEBOUNCE_MS,
-      () => [...this.snapshots.values()]
+      // Pages first met in a private session never reach the file (PRD-52 §10).
+      () => [...this.snapshots.values()].filter((entry) => !this.privateUrls.has(entry.url))
     );
   }
 
@@ -246,6 +248,12 @@ export class PageSnapshotStore {
     const existing = this.snapshots.get(url);
     const merged = mergeSnapshot(existing, input, now);
 
+    if (isPrivateSession()) {
+      // A page already saved before the session is answered, not touched:
+      // updating its last-seen time would record the private visit.
+      if (existing && !this.privateUrls.has(url)) return merged;
+      this.privateUrls.add(url);
+    }
     this.snapshots.set(url, merged);
     this.index(merged);
     this.evict();
@@ -320,8 +328,22 @@ export class PageSnapshotStore {
     const entry = this.find(query);
     if (!entry) return false;
     entry.pinned = pinned;
+    // Saving is the explicit action that promotes a private capture to disk.
+    if (pinned) this.privateUrls.delete(entry.url);
     this.file.schedule();
     return true;
+  }
+
+  /** Pages captured privately and never saved; dropped when the session ends. */
+  private readonly privateUrls = new Set<string>();
+
+  public discardPrivate(): void {
+    for (const url of this.privateUrls) {
+      const entry = this.snapshots.get(url);
+      this.snapshots.delete(url);
+      if (entry) this.byKey.get(entry.key)?.delete(url);
+    }
+    this.privateUrls.clear();
   }
 
   public forget(url: string): boolean {

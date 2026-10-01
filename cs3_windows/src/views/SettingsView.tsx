@@ -27,6 +27,7 @@ import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
 import { HomeSettings } from '../components/settings/HomeSettings';
 import { SubtitleSettings } from '../components/settings/SubtitleSettings';
+import { PrivacySettings } from '../components/settings/PrivacySettings';
 import { PlayerSettings } from '../components/PlayerSettings';
 import { ProviderRankingPanel } from '../components/settings/ProviderRankingPanel';
 import { NetworkSettings } from '../components/NetworkSettings';
@@ -522,6 +523,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           <SettingsSection keywords="adult nsfw 18 content mature hide show">
             <AdultContentSetting />
           </SettingsSection>
+
+          <PrivacySettings />
         </>
       )}
 

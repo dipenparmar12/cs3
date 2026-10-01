@@ -600,6 +600,7 @@ try {
 // A private session discovers into memory only; leaving it drops what was found.
 contentService.getCache().setVolatileMode(privacyMode.isActive());
 privacyMode.onChange((state) => contentService.getCache().setVolatileMode(state.active));
+privacyMode.onClearSession(() => pageSnapshots.discardPrivate());
 const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
@@ -2858,6 +2859,9 @@ ipcMain.handle(
   'pages:setPinned',
   async (_, query: { url?: string; title?: string; year?: number }, pinned: boolean) => {
     try {
+      if (pinned !== false && privacyMode.isActive() && !privacyMode.getState().settings.allowExplicitSaves) {
+        return { ok: false, error: 'Saving pages is turned off in Incognito.', pinned: false };
+      }
       return { ok: true, pinned: pageSnapshots.setPinned(query ?? {}, pinned !== false) };
     } catch (error) {
       return { ...fail(error), pinned: false };
@@ -4204,7 +4208,12 @@ ipcMain.handle('sources:savePreferences', async (_, prefs: Partial<SourcePrefere
 
 // --- downloads -----------------------------------------------------------
 
-ipcMain.handle('download:enqueue', async (_, task: DownloadTask) => downloadService.enqueue(task));
+ipcMain.handle('download:enqueue', async (_, task: DownloadTask) => {
+  if (privacyMode.isActive() && !privacyMode.getState().settings.allowDownloads) {
+    throw new Error('Downloads are turned off in Incognito.');
+  }
+  return downloadService.enqueue(task);
+});
 /**
  * The state-aware Download press.
  *
@@ -4216,6 +4225,9 @@ ipcMain.handle('download:enqueue', async (_, task: DownloadTask) => downloadServ
  */
 ipcMain.handle('download:request', async (_, task: DownloadTask) => {
   try {
+    if (privacyMode.isActive() && !privacyMode.getState().settings.allowDownloads) {
+      return { ok: false, error: 'Downloads are turned off in Incognito.', action: 'refused', message: 'Downloads are turned off in Incognito. Change this in Settings → General → Privacy.' };
+    }
     return await downloadService.request(task);
   } catch (error) {
     return {
