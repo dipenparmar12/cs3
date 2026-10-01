@@ -1,5 +1,5 @@
 import { TvType } from '../types/api.ts';
-import type { Episode, SearchResponse } from '../types/api.ts';
+import type { Episode, SearchResponse, ProviderTrailerData } from '../types/api.ts';
 import type { PageSnapshot } from '../../electron/cs3/pageSnapshot.ts';
 
 /**
@@ -36,6 +36,7 @@ export interface SavedPageDetail {
   isLive?: boolean;
   actors?: string[];
   recommendations?: SearchResponse[];
+  trailers?: ProviderTrailerData[];
 }
 
 /**
@@ -100,6 +101,7 @@ export function mergeDetail<T extends SavedPageDetail>(live: T, stored: PageSnap
     // stored one would invent a season no provider offers.
     episodes: keepList(live.episodes, stored.episodes),
     recommendations: keepList(live.recommendations, stored.recommendations),
+    trailers: keepList(live.trailers, (stored as any).trailers),
   };
 }
 

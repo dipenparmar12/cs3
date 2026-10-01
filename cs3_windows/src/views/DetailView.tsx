@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Play, ArrowLeft, Loader2, AlertTriangle, ListVideo, Search,
 } from 'lucide-react';
-import type { SearchResponse, Episode } from '../types/api';
+import type { SearchResponse, Episode, ProviderTrailerData } from '../types/api';
 import { TvType } from '../types/api';
 import type { DownloadRequestResult, DownloadTask } from '../types/download';
 import { buildDownloadTask } from '../utils/downloadIdentity';
@@ -166,6 +166,7 @@ interface DetailData {
    */
   actors?: string[];
   recommendations?: SearchResponse[];
+  trailers?: ProviderTrailerData[];
 }
 
 /** Groups episodes by season so a 200-episode series is navigable. */
@@ -211,6 +212,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
   /** The catalogues are being asked and have not finished. See the effect. */
   const [metadataPending, setMetadataPending] = useState(false);
+
+  /** Public trailers found on-demand via YouTube fallback. */
+  const [discoveredVideos, setDiscoveredVideos] = useState<TitleVideo[]>([]);
+  const [searchingTrailers, setSearchingTrailers] = useState(false);
 
   /**
    * Card states for the "More like this" rail, and for this title itself.
@@ -348,6 +353,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
       setFellBackTo(null);
       setSnapshot(null);
       setServedFromSnapshot(null);
+      setDiscoveredVideos([]);
+      setSearchingTrailers(false);
 
       if (!window.cloudstream) {
         setLoadError('Desktop bridge unavailable.');
@@ -619,6 +626,50 @@ export const DetailView: React.FC<DetailViewProps> = ({
   snapshotRef.current = snapshot;
 
   /**
+   * Promotional trailers provided directly by the extension or scraper.
+   */
+  const providerVideos = useMemo<TitleVideo[]>(() => {
+    if (!detail?.trailers?.length) return [];
+    const list: TitleVideo[] = [];
+    for (const [idx, item] of detail.trailers.entries()) {
+      const ytId = youTubeIdFrom(item.extractorUrl);
+      if (ytId) {
+        list.push({
+          id: `youtube:${ytId}`,
+          title: `${detail.name} Trailer ${idx > 0 ? idx + 1 : ''}`.trim(),
+          url: item.extractorUrl,
+          kind: TitleVideoKind.Trailer,
+          label: idx === 0 ? 'Official Trailer' : `Trailer ${idx + 1}`,
+          host: 'youtube',
+          thumbnailUrl: youTubeThumbnail(ytId),
+          official: true,
+          sources: [MetadataSource.Provider],
+        });
+      } else if (item.extractorUrl) {
+        list.push({
+          id: `web:${item.extractorUrl}`,
+          title: `${detail.name} Promo`,
+          url: item.extractorUrl,
+          kind: TitleVideoKind.Trailer,
+          label: 'Trailer',
+          host: 'web',
+          official: true,
+          sources: [MetadataSource.Provider],
+        });
+      }
+    }
+    return list;
+  }, [detail?.trailers, detail?.name]);
+
+  /**
+   * Unified list of videos from all sources: catalogues (Cinemeta/AniList),
+   * direct extension trailers, and on-demand YouTube searches.
+   */
+  const allVideos = useMemo<TitleVideo[]>(() => {
+    return mergeVideos([extended?.videos, providerVideos, discoveredVideos]);
+  }, [extended?.videos, providerVideos, discoveredVideos]);
+
+  /**
    * Cast, crew, ratings and production notes, fetched after the page is drawn.
    *
    * Deliberately *not* part of the `loadMedia` effect above. That one is on the
@@ -678,6 +729,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         type: detail?.type,
         title: detail?.name,
         year: detail?.year,
+        providerVideos: providerVideos.length > 0 ? providerVideos : undefined,
       });
       if (cancelled) return;
       // Cleared whatever came back, including nothing. The alternative is a
@@ -691,7 +743,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [detail?.url, detail?.imdbId, detail?.type, detail?.name, detail?.year]);
+  }, [detail?.url, detail?.imdbId, detail?.type, detail?.name, detail?.year, providerVideos]);
 
   /**
    * Fuller records arriving as each catalogue answers.
@@ -1288,6 +1340,59 @@ export const DetailView: React.FC<DetailViewProps> = ({
    */
   const [trailerId, setTrailerId] = useState<string | null>(null);
 
+  /**
+   * Primary action to watch a trailer from the hero banner or on demand.
+   * Plays existing trailer if present, or dynamically discovers public trailers
+   * via YouTube search fallback for titles without catalogue trailer IDs.
+   */
+  const handleWatchTrailer = useCallback(async () => {
+    const firstTrailer =
+      allVideos.find((v) => v.kind === TitleVideoKind.Trailer) || allVideos[0];
+    if (firstTrailer) {
+      setTrailerId(firstTrailer.id);
+      return;
+    }
+
+    if (window.cloudstream?.findTrailers && detail?.name) {
+      setSearchingTrailers(true);
+      try {
+        const response = await window.cloudstream.findTrailers(detail.name, detail.year);
+        if (response?.ok && response.videos?.length) {
+          setDiscoveredVideos((prev) => mergeVideos([prev, response.videos]));
+          setTrailerId(response.videos[0].id);
+        } else {
+          flash('No trailers found for this title.');
+        }
+      } catch {
+        flash('Could not find trailers.');
+      } finally {
+        setSearchingTrailers(false);
+      }
+    } else {
+      flash('No trailers available.');
+    }
+  }, [allVideos, detail?.name, detail?.year, flash]);
+
+  /**
+   * On-demand search to expand the trailer gallery with more public YouTube trailers.
+   */
+  const handleFindMoreTrailers = useCallback(async () => {
+    if (!window.cloudstream?.findTrailers || !detail?.name) return;
+    setSearchingTrailers(true);
+    try {
+      const response = await window.cloudstream.findTrailers(detail.name, detail.year);
+      if (response?.ok && response.videos?.length) {
+        setDiscoveredVideos((prev) => mergeVideos([prev, response.videos]));
+      } else {
+        flash('No additional trailers found.');
+      }
+    } catch {
+      flash('Could not search for trailers.');
+    } finally {
+      setSearchingTrailers(false);
+    }
+  }, [detail?.name, detail?.year, flash]);
+
   const handlePlaySource = useCallback(
     async (source: TorrentResult) => {
       if (!window.cloudstream || !detail) return;
@@ -1607,6 +1712,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
             : undefined
         }
         onDownloadSeason={isSeries ? () => setSeasonDownloadOpen(true) : undefined}
+        onWatchTrailer={handleWatchTrailer}
         libraryControl={
           // The selector keys off a search result; `detail` carries everything
           // except the provider name, which the originating item still has.
@@ -1707,9 +1813,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
         streaming service puts it.
       */}
       <TrailerGallery
-        videos={extended?.videos}
-        pending={metadataPending}
+        videos={allVideos}
+        pending={metadataPending || searchingTrailers}
         onPlay={(video) => setTrailerId(video.id)}
+        onSearchMore={handleFindMoreTrailers}
+        searchingMore={searchingTrailers}
       />
 
       <TitleMetadata
@@ -1794,7 +1902,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
       */}
       {trailerId && (
         <TrailerPopup
-          videos={extended?.videos ?? []}
+          videos={allVideos}
           startId={trailerId}
           titleName={detail.name}
           onClose={() => setTrailerId(null)}

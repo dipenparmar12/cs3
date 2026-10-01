@@ -188,7 +188,7 @@ export function youTubeIdFrom(value: string | undefined): string | null {
   if (/^[\w-]{11}$/.test(text)) return text;
   try {
     const url = new URL(text);
-    if (!/(^|\.)youtube\.com$|(^|\.)youtu\.be$/i.test(url.hostname)) return null;
+    if (!/(^|\.)youtube\.com$|(^|\.)youtube-nocookie\.com$|(^|\.)youtu\.be$/i.test(url.hostname)) return null;
     if (url.hostname.endsWith('youtu.be')) {
       const id = url.pathname.slice(1);
       return /^[\w-]{11}$/.test(id) ? id : null;
