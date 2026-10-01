@@ -7,6 +7,7 @@ import type {
   HistoryStats,
 } from '../../src/types/history';
 import { canonicalKey } from './libraryStore';
+import { isPrivateSession } from './privacyMode.ts';
 
 const HISTORY_KEY = 'media_history_events_v1';
 const MAX_HISTORY_EVENTS = 10_000;
@@ -55,6 +56,9 @@ export class HistoryStore {
       mediaKey,
       timestamp,
     };
+
+    // Incognito: the event is answered to the caller and never kept.
+    if (isPrivateSession()) return event;
 
     // Newest first
     this.events.unshift(event);

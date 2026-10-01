@@ -112,6 +112,8 @@ import type { PlaybackSnapshot } from './playbackSession';
 import type { SubtitleSearchResult } from './subtitleService';
 import type { SavedSubtitle, SaveRequest as SubtitleSaveRequest } from './subtitles/subtitleLibrary';
 export type { SavedSubtitle };
+import type { PrivacyState, IncognitoSettings } from './cs3/privacyMode';
+export type { PrivacyState, IncognitoSettings };
 export type SubtitleDownloadRequest = Omit<SubtitleSaveRequest, 'vtt'> & { vtt?: string };
 import type {
   PlaybackDiagnosticEvent,
@@ -350,6 +352,11 @@ export interface CloudStreamElectronAPI {
   >;
   /** Downloads one subtitle, already converted from SubRip to WebVTT. */
   fetchSubtitle: (url: string) => Promise<Envelope & { vtt: string }>;
+  /** Incognito (PRD-52): whole state on every call and every push. */
+  getPrivacyState: () => Promise<PrivacyState>;
+  setIncognito: (active: boolean) => Promise<PrivacyState>;
+  updatePrivacySettings: (partial: Partial<IncognitoSettings>) => Promise<PrivacyState>;
+  onPrivacyChanged: (callback: (state: PrivacyState) => void) => () => void;
   /** Saves a subtitle to the subtitle folder; reuses an existing copy unless `refresh`. */
   downloadSubtitle: (request: SubtitleDownloadRequest) => Promise<Envelope & { entry: SavedSubtitle | null; reused: boolean }>;
   /** Subtitles saved for one title (and episode). */
@@ -1974,6 +1981,10 @@ const api: CloudStreamElectronAPI = {
   searchSubtitlesByTitle: (query, season, episode, mediaUrl) =>
     ipcRenderer.invoke('subtitles:searchByTitle', query, season, episode, mediaUrl),
   fetchSubtitle: (url) => ipcRenderer.invoke('subtitles:fetch', url),
+  getPrivacyState: () => ipcRenderer.invoke('privacy:getState'),
+  setIncognito: (active) => ipcRenderer.invoke('privacy:setActive', active),
+  updatePrivacySettings: (partial) => ipcRenderer.invoke('privacy:updateSettings', partial),
+  onPrivacyChanged: (callback) => subscribe('privacy:changed', callback),
   downloadSubtitle: (request) => ipcRenderer.invoke('subtitles:download', request),
   listSavedSubtitles: (title, year, season, episode) =>
     ipcRenderer.invoke('subtitles:listSaved', title, year, season, episode),

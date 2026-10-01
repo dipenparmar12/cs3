@@ -51,6 +51,7 @@ import type {
 } from '../../src/types/interactions';
 import { canonicalKey, type LibraryStore } from './libraryStore.ts';
 import type { TitleOutcomeStore } from './titleOutcomes.ts';
+import { isPrivateSession } from './privacyMode.ts';
 
 const KEY = 'cs3_title_visits';
 
@@ -166,7 +167,7 @@ export class TitleInteractionStore {
    */
   public recordVisit(title: string, year?: number): VisitRecord | null {
     const key = canonicalKey(title ?? '', year);
-    if (!key) return null;
+    if (!key || isPrivateSession()) return null;
 
     const now = Date.now();
     const rows = this.rows();

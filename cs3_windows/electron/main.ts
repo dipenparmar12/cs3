@@ -70,6 +70,7 @@ import { SearchSuggestionService } from './searchSuggestions';
 import { SearchHistoryStore } from './searchHistory';
 import { SavedSearchStore, type SaveSearchInput } from './savedSearches';
 import { SubtitleService } from './subtitleService';
+import { PrivacyMode, type IncognitoSettings } from './cs3/privacyMode';
 import { SubtitleLibrary, type SaveRequest as SubtitleSaveRequest } from './subtitles/subtitleLibrary';
 import { MediaTranscoder, VIDEO_CODEC_PROBES } from './mediaTranscoder';
 import { PlaybackEngine } from './media/playbackEngine';
@@ -178,6 +179,14 @@ app.setAppUserModelId(APP_ID);
 let mainWindow: BrowserWindow | null = null;
 
 const datastore = new DatastoreManager();
+// Constructed before every store that records activity, so the first write any
+// of them makes already sees the right answer (PRD-52).
+const privacyMode = new PrivacyMode(datastore);
+privacyMode.onChange((state) => {
+  BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('privacy:changed', state));
+  const item = Menu.getApplicationMenu()?.getMenuItemById('incognito-toggle');
+  if (item) item.checked = state.active;
+});
 
 /**
  * The structured log, constructed before the services that write to it.
@@ -588,6 +597,9 @@ try {
   contentService.getProxy().addAllowedDirectory(app.getPath('userData'));
   contentService.getProxy().addAllowedDirectory(app.getPath('downloads'));
 } catch {}
+// A private session discovers into memory only; leaving it drops what was found.
+contentService.getCache().setVolatileMode(privacyMode.isActive());
+privacyMode.onChange((state) => contentService.getCache().setVolatileMode(state.active));
 const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
@@ -992,6 +1004,14 @@ function buildApplicationMenu(): Menu {
           label: 'Open File…',
           accelerator: 'CmdOrCtrl+O',
           click: () => void openLocalMediaDialog(),
+        },
+        {
+          id: 'incognito-toggle',
+          label: 'Incognito',
+          type: 'checkbox',
+          checked: privacyMode.isActive(),
+          accelerator: 'CmdOrCtrl+Shift+N',
+          click: () => void privacyMode.setActive(!privacyMode.isActive()),
         },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' },
@@ -1820,6 +1840,7 @@ app.on('before-quit', async (event) => {
   if (quitting) return;
   quitting = true;
   event.preventDefault();
+  privacyMode.shutdown();
 
   /**
    * Shutdown is raced against a deadline, and that is not belt-and-braces.
@@ -2142,6 +2163,13 @@ ipcMain.handle('subtitles:readSaved', async (_, id: string) => {
 });
 
 ipcMain.handle('subtitles:removeSaved', async (_, id: string) => ({ ok: subtitleLibrary.remove(id) }));
+
+/** Incognito (PRD-52). Every answer is the whole state, never a delta. */
+ipcMain.handle('privacy:getState', async () => privacyMode.getState());
+ipcMain.handle('privacy:setActive', async (_, active: boolean) => privacyMode.setActive(active === true));
+ipcMain.handle('privacy:updateSettings', async (_, partial: Partial<IncognitoSettings>) =>
+  privacyMode.updateSettings(partial ?? {})
+);
 
 ipcMain.handle('api:getSearchHistory', async () => searchHistory.list());
 

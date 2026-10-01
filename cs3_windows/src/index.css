@@ -591,3 +591,27 @@ select option:checked {
 .startup-profile__row--bad {
   background: rgba(255, 120, 100, 0.08);
 }
+
+/* Incognito (PRD-52): a subtle accent, never a theme change. */
+.navbar--incognito {
+  box-shadow: inset 0 -2px 0 rgba(168, 85, 247, 0.55);
+}
+.navbar__incognito {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.navbar__incognito--on {
+  background: rgba(168, 85, 247, 0.18);
+  color: #e9d5ff;
+  border: 1px solid rgba(168, 85, 247, 0.5);
+  padding: 0.35rem 0.7rem;
+  font-size: 0.78rem;
+}
+.player__incognito {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  opacity: 0.85;
+}

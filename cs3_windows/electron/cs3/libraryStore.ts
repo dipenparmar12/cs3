@@ -11,6 +11,7 @@ import type {
 import type { TorrentResult } from '../../src/types/torrent';
 import { deadlineFromUrl } from '../sourceCache.ts';
 import { looksLikeLinksHandle, parseExtensionUrl } from './extensionAddress.ts';
+import { isPrivateSession } from './privacyMode.ts';
 
 export { WatchStatus };
 
@@ -488,6 +489,7 @@ export class LibraryStore {
     season?: number,
     episode?: number
   ): string | null {
+    if (isPrivateSession()) return null;
     if (!pageUrl || results.length === 0) return null;
     const address = addressKey(pageUrl);
     const entry = [...this.entries.values()].find((candidate) =>
@@ -582,6 +584,8 @@ export class LibraryStore {
       playCount: (existing?.playCount ?? 0) + 1,
     };
 
+    // Incognito: a source learned privately must not steer normal mode.
+    if (isPrivateSession()) return record;
     played.set(slot, record);
     this.persistPlayedSources(played);
     return record;
@@ -682,6 +686,7 @@ export class LibraryStore {
     season?: number,
     episode?: number
   ): void {
+    if (isPrivateSession()) return;
     const played = this.loadPlayedSources();
     const slot = LibraryStore.playedSlot(key, season, episode);
     const record = played.get(slot);
@@ -749,6 +754,8 @@ export class LibraryStore {
     durationSeconds: number;
     type?: TvType;
   }): WatchProgress | null {
+    // Incognito: no Continue Watching, no resume point.
+    if (isPrivateSession()) return null;
     if (!Number.isFinite(input.positionSeconds) || !Number.isFinite(input.durationSeconds)) {
       return null;
     }

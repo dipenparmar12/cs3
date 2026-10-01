@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFlash } from '../utils/useFlash';
+import { usePrivacy } from '../utils/usePrivacy';
+import { EyeOff } from 'lucide-react';
 import { historyEventForTask } from '../utils/historyEvent';
 import Hls from 'hls.js';
 import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
@@ -2208,6 +2210,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const preferredAudioLanguage = useRef<string | null>(null);
   const preferredSubtitleLanguage = useRef<string | null>(null);
   const subtitlesOff = useRef(false);
+  const { active: incognito } = usePrivacy();
 
   /**
    * A record of the *previous* engine says nothing about the next one.
@@ -3228,6 +3231,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         other, and the stack itself carries the blur.
       */}
       <div className="player__messages player__messages--top">
+        {incognito && (
+          <div className="player__incognito" title="Progress and history from this session are not saved.">
+            <EyeOff size={13} /> Incognito
+          </div>
+        )}
         {externalControl && (
           <div className="player__external-banner">
             <MonitorPlay size={18} />

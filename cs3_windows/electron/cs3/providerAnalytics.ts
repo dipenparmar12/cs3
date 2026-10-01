@@ -12,6 +12,7 @@ import {
   type StageOutcome,
 } from '../../src/types/analytics';
 import { classifyFailure, isScoredFailure } from './failureTaxonomy';
+import { isPrivateSession } from './privacyMode.ts';
 
 /**
  * How every provider has actually behaved, counted.
@@ -249,6 +250,8 @@ export class ProviderAnalytics {
   /** Records one measured outcome. Cheap, synchronous, never throws. */
   public observe(input: ObservationInput): void {
     if (!this.settings.enabled) return;
+    // Incognito: private observations never move the ranking.
+    if (isPrivateSession()) return;
     if (!input.provider) return;
 
     /**

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Search, Bug, Loader2, Paperclip } from 'lucide-react';
+import { Search, Bug, Loader2, Paperclip, EyeOff } from 'lucide-react';
+import { usePrivacy } from '../utils/usePrivacy';
 import { DeveloperOnly } from '../utils/ExperienceModeContext';
 import { SearchScopePicker } from './SearchScopePicker';
 import type {
@@ -78,6 +79,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSavedSearch,
 }) => {
   const [query, setQuery] = useState('');
+  const { active: incognito, setActive: setIncognito } = usePrivacy();
 
   /**
    * Adopts a query the app started elsewhere.
@@ -306,7 +308,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   }, [onTorrentPicked, onTorrentPickFailed]);
 
   return (
-    <header className="navbar">
+    <header className={`navbar${incognito ? ' navbar--incognito' : ''}`}>
       {/* Search Input Bar */}
       <div className="search-bar">
         {isSearching ? (
@@ -318,7 +320,11 @@ export const Navbar: React.FC<NavbarProps> = ({
           ref={inputRef}
           type="text"
           className="search-input"
-          placeholder="Search movies, anime, TV shows across providers or paste URL..."
+          placeholder={
+            incognito
+              ? "Incognito: searches aren't saved. Search movies, anime, TV shows…"
+              : 'Search movies, anime, TV shows across providers or paste URL...'
+          }
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -390,6 +396,21 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', position: 'relative' }}>
         <SearchScopePicker onScopeChange={onScopeChange} />
+
+        <button
+          type="button"
+          onClick={() => setIncognito(!incognito)}
+          className={`btn btn-icon navbar__incognito${incognito ? ' navbar__incognito--on' : ' btn-secondary'}`}
+          aria-pressed={incognito}
+          title={
+            incognito
+              ? "Incognito: activity isn't being saved. Bookmarks and downloads you choose are still kept. (Ctrl+Shift+N to leave)"
+              : 'Incognito (Ctrl+Shift+N): stop saving history, progress and searches for this session'
+          }
+        >
+          <EyeOff size={16} />
+          {incognito && <span>Incognito</span>}
+        </button>
 
         {/*
           The inspector is a debugger, and a bug icon in the main toolbar is the

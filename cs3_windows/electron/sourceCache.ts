@@ -195,6 +195,19 @@ export class SourceCache {
   }
 
   /**
+   * Incognito (PRD-52 §9). While set, the cache answers from an in-memory copy
+   * seeded with what was persisted, and every write — new sources, successes,
+   * failures — lands in that copy only. Reuse, expiry and failure suppression
+   * keep working for the session; nothing about it reaches the datastore, and
+   * leaving the mode discards it.
+   */
+  private volatile: CacheEntry[] | null = null;
+
+  public setVolatileMode(active: boolean): void {
+    this.volatile = active ? this.persisted() : null;
+  }
+
+  /**
    * Told about every discovery that produced sources.
    *
    * The library keeps a durable copy of what was found for the titles on it;
@@ -216,11 +229,17 @@ export class SourceCache {
   }
 
   private load(): CacheEntry[] {
+    if (this.volatile) return structuredClone(this.volatile);
+    return this.persisted();
+  }
+
+  private persisted(): CacheEntry[] {
     const stored = this.datastore.getObject<CacheEntry[]>(KEY, []);
     return Array.isArray(stored) ? stored : [];
   }
 
   private snapshot(): Map<string, CacheEntry> {
+    if (this.volatile) return new Map(this.volatile.map((entry) => [entry.key, entry]));
     const raw = this.datastore.getString(KEY, '');
     if (this.parsed?.raw === raw) return this.parsed.byKey;
     let entries: unknown = [];
@@ -242,6 +261,10 @@ export class SourceCache {
       .filter((entry) => Date.now() - entry.createdAt < ENTRY_TTL_MS)
       .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
       .slice(0, MAX_ENTRIES);
+    if (this.volatile) {
+      this.volatile = pruned;
+      return;
+    }
     this.datastore.setObject(KEY, pruned);
   }
 
@@ -339,7 +362,7 @@ export class SourceCache {
     this.save(entries);
 
     try {
-      this.writeListener?.(mediaUrl, sources, season, episode);
+      if (!this.volatile) this.writeListener?.(mediaUrl, sources, season, episode);
     } catch {
       // A listener is a convenience; the cache write above is what matters.
     }
@@ -431,6 +454,7 @@ export class SourceCache {
   }
 
   public clear(): void {
+    if (this.volatile) this.volatile = [];
     this.datastore.setObject(KEY, []);
   }
 
