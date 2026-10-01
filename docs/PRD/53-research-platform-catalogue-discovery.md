@@ -90,3 +90,26 @@ Rules:
 
 - Does the user want *every* `hasMainPage` provider in the index, or only ones that look like services? (Android: every one.) Default to Android's behaviour, filtered.
 - Repository `plugins.json` has no `hasMainPage` field, so installable entries can't be pre-filtered on it; show them as "install to browse".
+
+## 7. Requirement added 2026-10-01: home-screen provider picker (Android parity)
+
+On Android the **home screen itself** lets the user pick any installed provider
+that has a gallery/catalogue (`hasMainPage`), and the home rows become that
+provider's `getMainPage` (`HomeFragment.kt:384,494`, `HomeViewModel.loadAndCancel`).
+Desktop has no such picker: Home shows Cinemeta/AniList/native rows only
+(`cs3/discovery.ts`), and provider catalogues are reachable only from the three
+OTT pages (`ott:getCatalog` / `ott:getCatalogPage`).
+
+Build, before the sidebar work in §5 (it is the same index, surfaced first):
+
+1. A "Home source" selector at the top of Home: **Default (Cinemeta)** + every
+   entry from `platformIndex` that is browsable, with search, language and
+   media-type chips and pins — Android's dialog.
+2. Choosing a provider replaces the Home rows with its `getMainPage` sections;
+   each row's "Show all" pages with `getCatalogPage(provider, section, page)`
+   (1-based). Reuse `HomeRow`/`CategoryGrid`.
+3. Remember the choice (datastore key, per profile if profiles apply); a
+   provider that is later disabled/uninstalled falls back to Default and says so.
+4. Cards open the normal detail page; sources come from normal discovery.
+5. `providerHealth` band beside each provider in the picker, so dead ones are
+   visible before they are picked.
