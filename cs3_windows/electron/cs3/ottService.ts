@@ -2,6 +2,7 @@ import type { PluginManager } from '../pluginManager';
 import type { ProviderCatalog, ProviderCatalogPage } from '../../src/types/api';
 import { OFFICIAL_REPOSITORIES } from '../officialRepositories';
 import type { DatastoreManager } from '../datastore';
+import type { CatalogueCache, CatalogueReadOptions } from './catalogueCache';
 import {
   buildOttPlatformViews,
   DISCOVERED_PREFIX,
@@ -50,10 +51,12 @@ const SETTINGS_KEY_OTT_PINNED = 'ott_pinned_platforms';
 export class OttService {
   private plugins: PluginManager;
   private datastore: DatastoreManager;
+  private cache: CatalogueCache | null;
 
-  constructor(plugins: PluginManager, datastore: DatastoreManager) {
+  constructor(plugins: PluginManager, datastore: DatastoreManager, cache: CatalogueCache | null = null) {
     this.plugins = plugins;
     this.datastore = datastore;
+    this.cache = cache;
   }
 
   /**
@@ -264,19 +267,23 @@ export class OttService {
    */
   public async getProviderCatalog(
     platformId: string,
-    provider: string
-  ): Promise<ProviderCatalog | null> {
+    provider: string,
+    options: CatalogueReadOptions = {}
+  ): Promise<(ProviderCatalog & { fetchedAt?: number }) | null> {
     const providers = await this.providersFor(platformId);
     if (!providers.includes(provider)) return null;
-    return this.plugins.loadCatalog(provider);
+    const fetch = () => this.plugins.loadCatalog(provider);
+    return this.cache ? this.cache.catalog(provider, options, fetch) : fetch();
   }
 
   public async getCatalogPage(
     provider: string,
     section: { name: string; data: string; horizontalImages?: boolean },
-    page: number
+    page: number,
+    options: CatalogueReadOptions = {}
   ): Promise<ProviderCatalogPage> {
-    return this.plugins.loadCatalogPage(provider, section, page);
+    const fetch = () => this.plugins.loadCatalogPage(provider, section, page);
+    return this.cache ? this.cache.page(provider, section, page, options, fetch) : fetch();
   }
 
   /**

@@ -1456,10 +1456,16 @@ export interface CloudStreamElectronAPI {
     platformId: string
   ) => Promise<{ ok: boolean; error?: string; catalog: ProviderCatalog | null }>;
   /** One provider's catalogue, so a page can draw each provider as it lands. */
+  /** Answered from cache when there is one; `refresh` asks the provider. */
   getOttProviderCatalog: (
     platformId: string,
-    provider: string
-  ) => Promise<{ ok: boolean; error?: string; catalog: ProviderCatalog | null }>;
+    provider: string,
+    options?: { refresh?: boolean }
+  ) => Promise<{
+    ok: boolean;
+    error?: string;
+    catalog: (ProviderCatalog & { fetchedAt?: number }) | null;
+  }>;
   /** Every matching provider's own catalogue, richest first. */
   getOttCatalogs: (platformId: string) => Promise<{
     ok: boolean;
@@ -1474,10 +1480,12 @@ export interface CloudStreamElectronAPI {
    * opaque handle for the row and is not a URL. Rebuilding it here — or
    * "cleaning" it — is how a browse request stops matching the row it names.
    */
+  /** Answered from cache when there is one; `refresh` asks the provider. */
   getOttCatalogPage: (
     provider: string,
     section: { name: string; data: string; horizontalImages?: boolean },
-    page: number
+    page: number,
+    options?: { refresh?: boolean }
   ) => Promise<{ ok: boolean; error?: string; page: ProviderCatalogPage | null }>;
   /**
    * The providers a search from this platform's page should be scoped to.
@@ -2302,10 +2310,10 @@ const api: CloudStreamElectronAPI = {
   listOttPlatforms: () => ipcRenderer.invoke('ott:listPlatforms'),
   getOttCatalog: (platformId) => ipcRenderer.invoke('ott:getCatalog', platformId),
   getOttCatalogs: (platformId) => ipcRenderer.invoke('ott:getCatalogs', platformId),
-  getOttProviderCatalog: (platformId, provider) =>
-    ipcRenderer.invoke('ott:getProviderCatalog', platformId, provider),
-  getOttCatalogPage: (provider, section, page) =>
-    ipcRenderer.invoke('ott:getCatalogPage', provider, section, page),
+  getOttProviderCatalog: (platformId, provider, options) =>
+    ipcRenderer.invoke('ott:getProviderCatalog', platformId, provider, options),
+  getOttCatalogPage: (provider, section, page, options) =>
+    ipcRenderer.invoke('ott:getCatalogPage', provider, section, page, options),
   getOttSearchScope: (platformId) => ipcRenderer.invoke('ott:getSearchScope', platformId),
   getOttSuggestions: (platformId) => ipcRenderer.invoke('ott:getSuggestions', platformId),
   installOttSuggestion: (platformId, repositoryId) =>

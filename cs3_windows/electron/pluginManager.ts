@@ -648,14 +648,24 @@ const SETTINGS_KEY_SEARCH_CONCURRENCY = 'cs3_provider_search_concurrency';
  * groups by it — and a provider that answers under a different label would
  * appear in the results as a source the user cannot find in the picker.
  */
-function mapProviderResults(providerName: string, raw: unknown): SearchResponse[] {
+/**
+ * `allowUnnamed` is for catalogue rows only. A search result with no name is
+ * useless in a list of text matches, but a home-page row is often posters
+ * alone, and dropping those emptied every row NetMirror publishes.
+ */
+function mapProviderResults(
+  providerName: string,
+  raw: unknown,
+  options: { allowUnnamed?: boolean } = {}
+): SearchResponse[] {
   if (!Array.isArray(raw)) return [];
 
   const out: SearchResponse[] = [];
   for (const item of raw as Array<Record<string, unknown>>) {
-    if (!item.name || !item.url) continue;
+    if (!item?.url) continue;
+    if (!item.name && !options.allowUnnamed) continue;
     out.push({
-      name: String(item.name),
+      name: item.name ? String(item.name) : '',
       url: buildExtensionUrl(providerName, String(item.url)),
       apiName: providerName,
       type: item.type as SearchResponse['type'],
@@ -3547,15 +3557,20 @@ export class PluginManager {
     page: number
   ): Promise<ProviderCatalogPage> {
     const requested = Math.max(1, Math.floor(page) || 1);
-    const empty = (): ProviderCatalogPage => ({
+    const empty = (error?: string): ProviderCatalogPage => ({
       provider: providerName,
       section: section.name,
       page: requested,
       items: [],
+      lists: [],
       hasNext: false,
+      error,
+      fetchedAt: Date.now(),
     });
 
-    if (!this.isProviderEnabled(providerName)) return empty();
+    if (!this.isProviderEnabled(providerName)) {
+      return empty(this.explainMissingProvider(providerName));
+    }
 
     await this.ensureProviderActive(providerName);
     const started = Date.now();
@@ -3587,7 +3602,9 @@ export class PluginManager {
         latencyMs,
         error: message,
       });
-      return empty();
+      // The reason travels with the page. Returning a bare empty page here made
+      // a timeout or a blocked host read as "nothing in this row".
+      return empty(message);
     };
 
     if (!response.ok) return fail(response.error ?? 'The extension runtime did not answer.');
@@ -3607,9 +3624,19 @@ export class PluginManager {
      * app had requested them would put rows on screen the user cannot page.
      */
     const items: SearchResponse[] = [];
+    const lists: ProviderCatalogPage['lists'] = [];
     if (Array.isArray(parsed.sections)) {
       for (const raw of parsed.sections as Array<Record<string, unknown>>) {
-        items.push(...mapProviderResults(providerName, raw?.items));
+        // Unnamed items are kept: a home-page row is often posters only —
+        // NetMirror sends 340 items, every one with an empty `name` — and
+        // Android draws them as poster cards. The title comes with `load()`.
+        const listItems = mapProviderResults(providerName, raw?.items, { allowUnnamed: true });
+        items.push(...listItems);
+        lists.push({
+          name: typeof raw?.name === 'string' ? raw.name : '',
+          horizontalImages: raw?.horizontalImages === true,
+          items: listItems,
+        });
       }
     }
 
@@ -3626,7 +3653,9 @@ export class PluginManager {
       section: section.name,
       page: requested,
       items,
+      lists,
       hasNext: parsed.hasNext === true && items.length > 0,
+      fetchedAt: Date.now(),
     };
   }
 

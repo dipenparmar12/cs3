@@ -104,6 +104,7 @@ import {
   type ExtensionJobRequest,
 } from './cs3/extensionJobs';
 import { OttService } from './cs3/ottService';
+import { CatalogueCache } from './cs3/catalogueCache';
 import {
   MetadataEnrichmentService,
   type EnrichmentRequest,
@@ -366,7 +367,10 @@ metadataEnrichment.setListener((metadata) =>
   mainWindow?.webContents.send('metadata:extendedUpdate', metadata)
 );
 
-const ottService = new OttService(pluginManager, datastore);
+const catalogueCache = new CatalogueCache(
+  path.join(app.getPath('userData'), 'cs3-catalogue-cache.json')
+);
+const ottService = new OttService(pluginManager, datastore, catalogueCache);
 /** Metadata catalogues for the platforms no installed provider can describe. */
 const ottCatalog = new OttCatalogService();
 const batchDownloader = new BatchDownloader(contentService, downloadService);
@@ -1815,6 +1819,8 @@ async function shutdownServices(): Promise<void> {
   // Cast lists arrive over seconds and the write is debounced, so a viewer who
   // opens a title and quits would otherwise re-fetch four hosts next launch.
   metadataEnrichment.flush();
+  // Streaming-service rows fetched this session draw instantly next launch.
+  catalogueCache.flush();
   mediaTranscoder.shutdown();
   contentService.shutdown();
   // Imported torrents are debounced to disk; without this the last few opens
@@ -4998,15 +5004,22 @@ ipcMain.handle('ott:setPlatformsEnabled', async (_, changes: Record<string, bool
   }
 });
 
-ipcMain.handle('ott:getProviderCatalog', async (_, platformId: string, provider: string) => {
-  try {
-    const catalog = await ottService.getProviderCatalog(platformId, provider);
-    if (!catalog) return { ok: false, error: `${provider} is not part of this service.`, catalog: null };
-    return { ok: true, catalog };
-  } catch (error) {
-    return { ...fail(error), catalog: null };
+ipcMain.handle(
+  'ott:getProviderCatalog',
+  async (_, platformId: string, provider: string, options?: { refresh?: boolean }) => {
+    try {
+      const catalog = await ottService.getProviderCatalog(platformId, provider, {
+        refresh: options?.refresh === true,
+      });
+      if (!catalog) {
+        return { ok: false, error: `${provider} is not part of this service.`, catalog: null };
+      }
+      return { ok: true, catalog };
+    } catch (error) {
+      return { ...fail(error), catalog: null };
+    }
   }
-});
+);
 
 ipcMain.handle('ott:getCatalogs', async (_, platformId: string) => {
   try {
@@ -5030,10 +5043,16 @@ ipcMain.handle(
     _,
     provider: string,
     section: { name: string; data: string; horizontalImages?: boolean },
-    page: number
+    page: number,
+    options?: { refresh?: boolean }
   ) => {
     try {
-      return { ok: true, page: await ottService.getCatalogPage(provider, section, page) };
+      return {
+        ok: true,
+        page: await ottService.getCatalogPage(provider, section, page, {
+          refresh: options?.refresh === true,
+        }),
+      };
     } catch (error) {
       return { ...fail(error), page: null };
     }

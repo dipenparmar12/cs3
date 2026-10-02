@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { ChevronRight, Loader2, PlugZap, Search, SlidersHorizontal, Sparkles, X } from 'lucide-react';
-import type { ProviderCatalog, ProviderCatalogSection, SearchResponse } from '../types/api';
+import type { ProviderCatalog, ProviderCatalogPage, SearchResponse } from '../types/api';
 import type { HomeCategoryState } from './homeCategoryState';
+import { applyPage, itemsForRow, rowsFromCatalog, type CatalogueRow } from './ottRows';
+import { describeError } from '../utils/errors';
 import { CategoryGrid } from '../components/home/CategoryGrid';
 import { PosterCard } from '../components/PosterCard';
 import { EmptyState } from '../components/EmptyState';
@@ -85,6 +87,8 @@ export interface OttCategoryState extends HomeCategoryState {
   platformId: string;
   provider: string;
   section: { name: string; data: string; horizontalImages?: boolean };
+  /** For a row split out of a multi-list answer: which list to page. */
+  list?: string;
 }
 
 /**
@@ -138,18 +142,10 @@ function matchesQuery(text: string, queryWords: string[]): boolean {
   return queryWords.every((q) => haystack.some((w) => w.startsWith(q)));
 }
 
-interface LoadedSection extends ProviderCatalogSection {
-  /** `provider::name` — two providers routinely both publish "Trending". */
-  key: string;
-  provider: string;
-  /** Asked for at least once, so switching back to a provider does not re-fetch. */
-  fetched: boolean;
-  items: SearchResponse[];
-  page: number;
-  hasNext: boolean;
-  loading: boolean;
-  error?: string;
-}
+/** How long a cached catalogue or row counts as fresh: inside it, nothing is re-fetched. */
+const FRESH_MS = 10 * 60 * 1000;
+/** How long the viewer stays on a page before stale rows are refreshed behind it. */
+const DWELL_MS = 3000;
 
 /**
  * The preload bridge, or nothing.
@@ -180,7 +176,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
    */
   const [adultAccepted, setAdultAccepted] = useState(isAdultAcknowledged);
   const ageCheckPending = Boolean(platform.adult) && !adultAccepted;
-  const [catalogs, setCatalogs] = useState<ProviderCatalog[]>([]);
+  const [catalogs, setCatalogs] = useState<Array<ProviderCatalog & { fetchedAt?: number }>>([]);
   /** Providers that matched the platform but publish nothing to browse. */
   const [unbrowsable, setUnbrowsable] = useState<Array<{ provider: string; reason: string }>>([]);
   /**
@@ -191,7 +187,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
   const [activeProvider, setActiveProvider] = useState<string | null>(null);
   /** The provider whose catalogue is being read right now, for the progress line. */
   const [pendingProvider, setPendingProvider] = useState<string | null>(null);
-  const [sections, setSections] = useState<LoadedSection[]>([]);
+  const [sections, setSections] = useState<CatalogueRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<
@@ -229,37 +225,29 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     platformRef.current = platform.id;
   }, [platform.id]);
 
+  /**
+   * Fetches one page of a row and folds it in (`ottRows.applyPage`). Answered
+   * from the main process's cache when there is one, so a page opened before
+   * draws at once; `refresh` asks the provider and is `quiet` — it never blanks
+   * or errors a row that is already showing something.
+   */
   const loadRow = useCallback(
-    async (section: LoadedSection, page: number) => {
+    async (row: CatalogueRow, page: number, refresh = false) => {
       const forPlatform = platformRef.current;
       const bridge = api();
       if (!bridge) return;
-      const response = await bridge.getOttCatalogPage(
-        section.provider,
-        { name: section.name, data: section.data, horizontalImages: section.horizontalImages },
-        page
-      );
+      let answer: ProviderCatalogPage | { error: string };
+      try {
+        const response = await bridge.getOttCatalogPage(row.provider, row.request, page, { refresh });
+        answer =
+          response.ok && response.page
+            ? response.page
+            : { error: response.error ?? 'That row could not be loaded.' };
+      } catch (error) {
+        answer = { error: describeError(error) };
+      }
       if (platformRef.current !== forPlatform) return;
-
-      setSections((current) =>
-        current.map((row) => {
-          if (row.key !== section.key) return row;
-          if (!response.ok || !response.page) {
-            return { ...row, loading: false, error: response.error ?? 'That row could not be loaded.' };
-          }
-          return {
-            ...row,
-            loading: false,
-            error: undefined,
-            page: response.page.page,
-            hasNext: response.page.hasNext,
-            // Appended rather than replaced: paging a row is "more of this",
-            // and replacing would make the second page look like the first
-            // one vanished.
-            items: page > 1 ? [...row.items, ...response.page.items] : response.page.items,
-          };
-        })
-      );
+      setSections((current) => applyPage(current, row.key, page, answer, { quiet: refresh }));
     },
     []
   );
@@ -343,6 +331,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
         let response: Awaited<ReturnType<NonNullable<ReturnType<typeof api>>['getOttProviderCatalog']>> | null =
           null;
         try {
+          // Cached when this provider has been opened before — instant.
           response = (await api()?.getOttProviderCatalog(platform.id, provider)) ?? null;
         } catch {
           response = null;
@@ -351,19 +340,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
         const catalog = response?.ok ? response.catalog : null;
         if (catalog?.hasMainPage && catalog.sections.length > 0) {
           setCatalogs((current) => [...current, catalog]);
-          setSections((current) => [
-            ...current,
-            ...catalog.sections.map((section) => ({
-              ...section,
-              key: `${catalog.provider}::${section.name}`,
-              provider: catalog.provider,
-              fetched: false,
-              items: [],
-              page: 1,
-              hasNext: false,
-              loading: false,
-            })),
-          ]);
+          setSections((current) => [...current, ...rowsFromCatalog(catalog)]);
           setActiveProvider((current) => current ?? catalog.provider);
         } else {
           setUnbrowsable((current) => [
@@ -431,11 +408,12 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     [filtering, queryWords, sections]
   );
 
-  const showAll = (section: LoadedSection) =>
+  const showAll = (section: CatalogueRow) =>
     onCategoryChange({
       platformId: platform.id,
       provider: section.provider,
-      section: { name: section.name, data: section.data, horizontalImages: section.horizontalImages },
+      section: section.request,
+      list: section.list,
       id: `ott:${platform.id}:${section.key}`,
       title: section.name,
       subtitle: `${platform.name} · ${section.provider}`,
@@ -455,7 +433,13 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     if (!response?.ok || !response.page) {
       return { ok: false, error: response?.error ?? 'More titles could not be loaded.' };
     }
-    return { ok: true, items: response.page.items, hasNext: response.page.hasNext };
+    if (response.page.error) return { ok: false, error: response.page.error };
+    // A row split out of a multi-list answer pages its own list, not all of them.
+    return {
+      ok: true,
+      items: itemsForRow({ list: current.list }, response.page),
+      hasNext: response.page.hasNext,
+    };
   }, []);
 
   const submitSearch = (event: React.FormEvent) => {
@@ -505,21 +489,80 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
   );
 
   /** `retry` re-asks a row that failed; otherwise a row is fetched once. */
-  const fetchRow = (section: LoadedSection, retry = false) => {
+  const fetchRow = (section: CatalogueRow, retry = false) => {
     if (started.current.has(section.key) && !retry) return;
     started.current.add(section.key);
     setSections((current) =>
-      current.map((row) => (row.key === section.key ? { ...row, loading: true, fetched: true } : row))
+      current.map((row) =>
+        row.key === section.key ? { ...row, loading: true, fetched: true, error: undefined } : row
+      )
     );
     void loadRow(section, 1);
   };
+
+  /*
+   * Background refresh, once per visit and only after the viewer has stayed
+   * `DWELL_MS`: rows older than `FRESH_MS` are re-asked quietly, one request
+   * per provider answer (split rows share theirs), so what is on screen updates
+   * in place and nothing flashes back to a spinner. Paging through services or
+   * coming back from a title inside the fresh window fetches nothing at all.
+   */
+  const sectionsRef = useRef(sections);
+  sectionsRef.current = sections;
+  const catalogsRef = useRef(catalogs);
+  catalogsRef.current = catalogs;
+  useEffect(() => {
+    if (!activeProvider || ageCheckPending) return;
+    const timer = window.setTimeout(() => {
+      const now = Date.now();
+      const asked = new Set<string>();
+      const stale = sectionsRef.current.filter((row) => {
+        if (row.provider !== activeProvider || !row.fetchedAt || row.loading) return false;
+        if (now - row.fetchedAt < FRESH_MS) return false;
+        const request = row.parent ?? row.key;
+        if (asked.has(request)) return false;
+        asked.add(request);
+        return true;
+      });
+      const forPlatform = platformRef.current;
+      void (async () => {
+        // The row list itself: a provider that adds or drops a row is picked
+        // up, while rows that still exist keep what they are showing.
+        const known = catalogsRef.current.find((c) => c.provider === activeProvider);
+        if (known?.fetchedAt && now - known.fetchedAt >= FRESH_MS) {
+          const response = await api()
+            ?.getOttProviderCatalog(forPlatform, activeProvider, { refresh: true })
+            .catch(() => null);
+          const fresh = response?.ok ? response.catalog : null;
+          if (platformRef.current === forPlatform && fresh?.hasMainPage && fresh.sections.length > 0) {
+            const signature = (c: ProviderCatalog) => c.sections.map((s) => `${s.name}\u0000${s.data}`).join('\u0001');
+            setCatalogs((current) => current.map((c) => (c.provider === activeProvider ? fresh : c)));
+            if (signature(fresh) !== signature(known)) {
+              const next = rowsFromCatalog(fresh);
+              setSections((current) => {
+                const mine = current.filter((row) => row.provider === activeProvider);
+                const kept = next.flatMap((row) => {
+                  const existing = mine.filter((m) => m.key === row.key || m.parent === row.key);
+                  return existing.length > 0 ? existing : [row];
+                });
+                return [...current.filter((row) => row.provider !== activeProvider), ...kept];
+              });
+            }
+          }
+        }
+        // One at a time — this is background work against someone's site.
+        for (const row of stale) await loadRow(row, 1, true);
+      })();
+    }, DWELL_MS);
+    return () => window.clearTimeout(timer);
+  }, [activeProvider, ageCheckPending, loadRow]);
 
   /**
    * One provider row: a rail of its first page and "Show all", as on Home.
    * "Show all" opens the row as a grid that pages as it is scrolled — the
    * provider's own `getMainPage` paging, so the whole row is reachable.
    */
-  const renderRow = (section: LoadedSection, labelProvider: boolean) => (
+  const renderRow = (section: CatalogueRow, labelProvider: boolean) => (
     <section className="home-row" key={section.key}>
       <header>
         <h3>

@@ -352,9 +352,24 @@ export interface ProviderCatalogPage {
   /** The section this page belongs to, echoed so a late reply can be placed. */
   section: string;
   page: number;
+  /** Every item on the page, all lists flattened. */
   items: SearchResponse[];
+  /**
+   * The lists the provider actually answered with. Usually one; a provider
+   * that declares a single unnamed row (upstream's default `mainPage`) answers
+   * it with its whole home page — NetMirror returns 18 named rows from one
+   * request — and each of those is a row of its own on Android.
+   */
+  lists: Array<{ name: string; horizontalImages: boolean; items: SearchResponse[] }>;
   /** Whether asking for `page + 1` is worth doing. */
   hasNext: boolean;
+  /**
+   * Set when the request failed, as opposed to answering with nothing. A row
+   * must say "this failed" and offer a retry, not "nothing here".
+   */
+  error?: string;
+  /** Epoch ms this page was fetched; older than now means it came from cache. */
+  fetchedAt?: number;
 }
 
 /** What a provider offers to browse, before anything is fetched. */
