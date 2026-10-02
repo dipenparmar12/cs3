@@ -113,6 +113,13 @@
   color: #fff;
 }
 
+/* The "18+ only" option is tinted like the 18+ badge, so it reads as the same thing. */
+.ssp__chip--adult[aria-pressed='true'] {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #fca5a5;
+}
+
 .ssp__chip-count {
   color: var(--text-subtle);
   font-weight: 500;

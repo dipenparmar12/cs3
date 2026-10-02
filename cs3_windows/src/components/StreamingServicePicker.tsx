@@ -99,6 +99,11 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
   const [types, setTypes] = useState<Set<string>>(new Set());
   const [langs, setLangs] = useState<Set<string>>(new Set());
   const [selectedOnly, setSelectedOnly] = useState(false);
+  /**
+   * Adult catalogues get their own control rather than a type chip: "hide
+   * them" is the common wish, and a type chip can only *narrow to* a type.
+   */
+  const [adultFilter, setAdultFilter] = useState<'all' | 'hide' | 'only'>('all');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -150,7 +155,12 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
   );
 
   const all = useMemo(() => platforms ?? [], [platforms]);
-  const typeFacet = useMemo(() => facet(all.map((p) => p.types ?? [])), [all]);
+  // NSFW is left out of the type chips; the adult control below owns it.
+  const typeFacet = useMemo(
+    () => facet(all.map((p) => (p.types ?? []).filter((t) => t.toUpperCase() !== 'NSFW'))),
+    [all]
+  );
+  const adultCount = useMemo(() => all.filter((p) => p.adult).length, [all]);
   const langFacet = useMemo(
     () => facet(all.map((p) => (p.lang ? [p.lang] : []))),
     [all]
@@ -161,6 +171,8 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
     const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return all.filter((p) => {
       if (selectedOnly && !enabled.has(p.id)) return false;
+      if (adultFilter === 'hide' && p.adult) return false;
+      if (adultFilter === 'only' && !p.adult) return false;
       if (types.size > 0 && !(p.types ?? []).some((t) => types.has(t))) return false;
       if (langs.size > 0 && !(p.lang && langs.has(p.lang))) return false;
       if (words.length === 0) return true;
@@ -174,7 +186,7 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
         .toLowerCase();
       return words.every((w) => hay.includes(w));
     });
-  }, [all, query, types, langs, selectedOnly, enabled]);
+  }, [all, query, types, langs, selectedOnly, enabled, adultFilter]);
 
   /**
    * One flat list. Grouping by extension was mostly groups of one — an
@@ -199,7 +211,8 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
     );
 
   const visibleOn = visible.filter((p) => enabled.has(p.id)).length;
-  const filtered = query.trim() !== '' || types.size > 0 || langs.size > 0 || selectedOnly;
+  const filtered =
+    query.trim() !== '' || types.size > 0 || langs.size > 0 || selectedOnly || adultFilter !== 'all';
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -289,6 +302,30 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
             </div>
           )}
 
+          {adultCount > 0 && (
+            <div className="ssp__chips" role="radiogroup" aria-label="Adult content (18+)">
+              {(
+                [
+                  ['all', 'All content'],
+                  ['hide', 'Hide 18+'],
+                  ['only', `18+ only (${adultCount})`],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={adultFilter === value}
+                  aria-pressed={adultFilter === value}
+                  className={`ssp__chip${value === 'only' ? ' ssp__chip--adult' : ''}`}
+                  onClick={() => setAdultFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="ssp__toolbar">
             <button
               className="ssp__btn"
@@ -320,6 +357,7 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
                   setTypes(new Set());
                   setLangs(new Set());
                   setSelectedOnly(false);
+                  setAdultFilter('all');
                 }}
               >
                 Reset filters
