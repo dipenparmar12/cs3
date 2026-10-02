@@ -6976,6 +6976,8 @@
   text-shadow: var(--cue-shadow, none);
   line-height: 1.35;
   white-space: pre-line;
+  max-width: 90vw;
+  box-sizing: border-box;
 }
 
 /* Lifting cues clear of hard-subbed text burned into the picture, which is
@@ -6983,7 +6985,16 @@
    element has no property for this, so the track container is moved instead —
    `::cue` positioning is ignored by Chromium for anything but line. */
 .player video::-webkit-media-text-track-container {
-  transform: translateY(calc(-1 * var(--cue-lift, 0%)));
+  overflow: visible !important;
+  transform: translateY(clamp(-35%, calc(-1 * var(--cue-lift, 0%)), 0%));
+  pointer-events: none;
+  max-height: 100%;
+}
+
+.player video::-webkit-media-text-track-display {
+  overflow: visible !important;
+  max-width: 90% !important;
+  margin: 0 auto;
 }
 
 /* --- Subtitle appearance settings ------------------------------------------ */

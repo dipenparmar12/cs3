@@ -1039,6 +1039,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           setActiveAudioTrack(snapshot.selectedAudioId);
         }
       }
+      if (snapshot.videoTracks && snapshot.videoTracks.length > 0) {
+        setQualities(
+          snapshot.videoTracks.map((t, idx) => ({
+            level: t.id,
+            label: t.title || (t.codec ? `${t.codec.toUpperCase()} (${idx + 1})` : `Track ${idx + 1}`),
+            detail: t.codec,
+          }))
+        );
+        if (snapshot.selectedVideoId != null) {
+          setQuality(snapshot.selectedVideoId);
+        }
+      }
       if (snapshot.state === 'error' && snapshot.error) {
         setError(snapshot.error);
       }
@@ -1058,6 +1070,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (s.positionSeconds >= 0) setCurrentTime(s.positionSeconds);
         if (s.durationSeconds > 0) setDuration(s.durationSeconds);
         if (s.bufferedSeconds >= 0) setBuffered(s.bufferedSeconds);
+        if (s.videoTracks && s.videoTracks.length > 0) {
+          setQualities(
+            s.videoTracks.map((t, idx) => ({
+              level: t.id,
+              label: t.title || (t.codec ? `${t.codec.toUpperCase()} (${idx + 1})` : `Track ${idx + 1}`),
+              detail: t.codec,
+            }))
+          );
+          if (s.selectedVideoId != null) {
+            setQuality(s.selectedVideoId);
+          }
+        }
+        if (s.audioTracks && s.audioTracks.length > 0) {
+          setAudioTracks(
+            s.audioTracks.map((t, idx) => ({
+              id: t.id,
+              label: trackLabel(t, idx),
+              language: t.language,
+              active: t.selected || t.id === s.selectedAudioId,
+            }))
+          );
+          if (s.selectedAudioId != null) {
+            setActiveAudioTrack(s.selectedAudioId);
+          }
+        }
       }
     });
 
@@ -1521,12 +1558,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   useEffect(() => {
     const hls = hlsRef.current;
-    if (hls) hls.currentLevel = quality;
+    const video = videoRef.current;
+    if (hls) {
+      if (quality === AUTO_QUALITY) {
+        hls.currentLevel = -1;
+        hls.nextLevel = -1;
+        hls.loadLevel = -1;
+      } else {
+        hls.currentLevel = quality;
+        hls.nextLevel = quality;
+        hls.loadLevel = quality;
+        if (video && !video.paused && Number.isFinite(video.currentTime)) {
+          const current = video.currentTime;
+          video.currentTime = current;
+        }
+      }
+    }
     // Shaka calls the same thing a "variant track", and selecting one turns its
     // adaptive switching off — so `AUTO_QUALITY` has to turn it back on rather
     // than simply selecting nothing, or the menu becomes a one-way door.
     shakaRef.current?.selectQuality(quality);
-  }, [quality]);
+    if (isNativeEngine) {
+      void window.cloudstream?.mpvSetVideoTrack?.(quality === AUTO_QUALITY ? 'auto' : quality);
+    }
+  }, [quality, isNativeEngine]);
 
   // --- audio tracks (multi-audio & audio volume sync) ---------------------
 
@@ -1607,15 +1662,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         for (let i = 0; i < nativeList.length; i++) {
           const t = nativeList[i];
           const currentId = t.id !== undefined && t.id !== '' ? t.id : i;
-          const match = String(currentId) === String(trackId);
+          const match = String(currentId) === String(trackId) || i === Number(trackId);
           t.enabled = match;
         }
       }
 
       // 2. HLS.js audioTrack
       const hls = hlsRef.current;
-      if (hls && typeof trackId === 'number') {
-        hls.audioTrack = trackId;
+      if (hls && (typeof trackId === 'number' || !isNaN(Number(trackId)))) {
+        hls.audioTrack = Number(trackId);
       }
 
       setActiveAudioTrack(trackId);
@@ -2067,49 +2122,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
   }, []);
 
-  useEffect(() => {
-    // Still mounted, but the viewer is looking at another screen. Leaving this
-    // bound would make typing in a search box seek the film.
-    //
-    // The mini player is disarmed for the same reason and it matters more
-    // there: it is *visible*, so it looks like it has focus, and the whole
-    // point of it is that the viewer is typing somewhere else. A space bar in
-    // the search box must not pause the film.
-    if (hidden || mini) return;
-
-    const onKey = (e: KeyboardEvent) => {
-      switch (e.key) {
-        case ' ': case 'k': e.preventDefault(); togglePlay(); break;
-        case 'ArrowRight': seekBy(SKIP_SECONDS); break;
-        case 'ArrowLeft': seekBy(-SKIP_SECONDS); break;
-        case 'l': seekBy(30); break;
-        case 'j': seekBy(-30); break;
-        case 'f': toggleFullscreen(); break;
-        case 'm': setIsMuted((v) => !v); break;
-        case 'e': if (series) setPanelOpen((v) => !v); break;
-        case 'n': if (nextEpisode && onSelectEpisode) onSelectEpisode(nextEpisode); break;
-        case 'p': if (previousEpisode && onSelectEpisode) onSelectEpisode(previousEpisode); break;
-        case 'Escape':
-          if (panelOpen || sourcePanelOpen || subtitlePanelOpen || downloadPanelOpen) {
-            setPanelOpen(false);
-            setSourcePanelOpen(false);
-            setSubtitlePanelOpen(false);
-            setDownloadPanelOpen(false);
-          } else if (!document.fullscreenElement) {
-            onBack();
-          }
-          break;
-        default: break;
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [
-    togglePlay, seekBy, toggleFullscreen, onBack, series, nextEpisode, previousEpisode,
-    onSelectEpisode, panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen,
-    hidden, mini,
-  ]);
-
   /**
    * Volume, mute and speed, remembered across media and across restarts.
    *
@@ -2184,6 +2196,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     })();
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.cloudstream?.onPlayerPreferencesChanged?.((prefs) => {
+      setSubtitleStyle({
+        scale: prefs.subtitleScale ?? DEFAULT_SUBTITLE_STYLE.scale,
+        color: prefs.subtitleColor ?? DEFAULT_SUBTITLE_STYLE.color,
+        background: prefs.subtitleBackground ?? DEFAULT_SUBTITLE_STYLE.background,
+        weight: prefs.subtitleWeight ?? DEFAULT_SUBTITLE_STYLE.weight,
+        position: prefs.subtitlePosition ?? DEFAULT_SUBTITLE_STYLE.position,
+      });
+      if (prefs.floatingMode) setFloatingMode(prefs.floatingMode);
+      if (prefs.backgroundPlayback) setBackgroundPlayback(prefs.backgroundPlayback);
+      if (typeof prefs.alwaysOnTop === 'boolean') setAlwaysOnTop(prefs.alwaysOnTop);
+      if (prefs.audioLanguage) preferredAudioLanguage.current = prefs.audioLanguage;
+      if (prefs.subtitleLanguage) {
+        preferredSubtitleLanguage.current = prefs.subtitleLanguage;
+        subtitlesOff.current = false;
+      } else if (prefs.subtitleLanguage === '') {
+        subtitlesOff.current = true;
+      }
+    });
+    return () => {
+      unsubscribe?.();
     };
   }, []);
 
@@ -2741,17 +2778,71 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         preferredAudioLanguage.current = language;
         void window.cloudstream?.setPlayerPreferences({ audioLanguage: language });
       }
-      if (!prepared?.sessionId) return;
+
+      if (isNativeEngine) {
+        const match =
+          audioTracks[index] ??
+          audioTracks.find((t) => t.language === language) ??
+          audioTracks.find((t) => Number(t.id) === index + 1);
+        if (match) {
+          void window.cloudstream?.mpvSetAudioTrack(Number(match.id));
+          setActiveAudioTrack(match.id);
+          setAudioTracks((prev) =>
+            prev.map((t) => ({ ...t, active: String(t.id) === String(match.id) }))
+          );
+        }
+        return;
+      }
 
       const video = videoRef.current;
-      const at = playbackOffset + (video?.currentTime ?? 0);
-      const result = await window.cloudstream?.switchAudioTrack(prepared.sessionId, index, at);
-      if (!result?.ok || !result.url) return;
+      const at = (isConverted ? playbackOffset : 0) + (video?.currentTime ?? 0);
 
-      setPlaybackOffset(at);
-      setPrepared({ ...prepared, playbackUrl: result.url });
+      if (prepared?.sessionId) {
+        const result = await window.cloudstream?.switchAudioTrack(prepared.sessionId, index, at);
+        if (result?.ok && result.url) {
+          setPlaybackOffset(at);
+          setPrepared({ ...prepared, playbackUrl: result.url });
+          return;
+        }
+      }
+
+      selectAudioTrack(index);
+
+      const hasNativeAudioSwitching = Boolean((video as any)?.audioTracks?.length > 1 || hlsRef.current);
+      if (!hasNativeAudioSwitching && streamUrl && window.cloudstream?.preparePlaybackStream) {
+        setConverting(true);
+        try {
+          const response = await window.cloudstream.preparePlaybackStream({
+            url: streamUrl,
+            headers: activeSource?.directHeaders,
+            provider: providerProvenance?.provider,
+            preferredAudioLanguage: language,
+            refresh: true,
+            force: true,
+          });
+          if (response?.ok && response.playbackUrl) {
+            const previous = prepared?.sessionId;
+            if (previous) void window.cloudstream?.closePlaybackStream(previous);
+            setError(null);
+            setPlaybackOffset(at);
+            setPrepared({ ...response, playbackUrl: atTime(response.playbackUrl, at) });
+          }
+        } finally {
+          setConverting(false);
+        }
+      }
     },
-    [prepared, playbackOffset]
+    [
+      prepared,
+      isConverted,
+      playbackOffset,
+      isNativeEngine,
+      audioTracks,
+      selectAudioTrack,
+      streamUrl,
+      activeSource?.directHeaders,
+      providerProvenance?.provider,
+    ]
   );
 
   /** Audio tracks as the inspection reported them, labelled for the picker. */
@@ -2818,11 +2909,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video) return;
 
     const apply = () => {
+      const selectedSub = allSubtitles.find((s) => s.url === activeSubtitle);
+
+      // 1. DOM <track> elements
+      const elements = Array.from(video.querySelectorAll('track'));
+      const handledTracks = new Set<TextTrack>();
+
+      for (const el of elements) {
+        if (!el.track) continue;
+        handledTracks.add(el.track);
+        const match = Boolean(
+          activeSubtitle &&
+            (el.getAttribute('src') === activeSubtitle ||
+              el.src === activeSubtitle ||
+              (selectedSub && el.label === selectedSub.name))
+        );
+        el.track.mode = match ? 'showing' : 'disabled';
+      }
+
+      // 2. Embedded in-stream text tracks not represented by <track> elements
       const tracks = video.textTracks;
       for (let i = 0; i < tracks.length; i++) {
         const track = tracks[i];
-        const source = allSubtitles[i];
-        track.mode = source && source.url === activeSubtitle ? 'showing' : 'disabled';
+        if (handledTracks.has(track)) continue;
+        const match = Boolean(
+          activeSubtitle &&
+            selectedSub &&
+            (track.label === selectedSub.name ||
+              (track.language && selectedSub.name.toLowerCase().includes(track.language.toLowerCase())))
+        );
+        track.mode = match ? 'showing' : 'disabled';
       }
     };
 
@@ -2947,6 +3063,200 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     },
     [fetchedSubtitles]
   );
+
+  useEffect(() => {
+    // Still mounted, but the viewer is looking at another screen. Leaving this
+    // bound would make typing in a search box seek the film.
+    //
+    // The mini player is disarmed for the same reason and it matters more
+    // there: it is *visible*, so it looks like it has focus, and the whole
+    // point of it is that the viewer is typing somewhere else. A space bar in
+    // the search box must not pause the film.
+    if (hidden || mini) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isEditable = target && (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable
+      );
+      if (isEditable) {
+        if (e.key === 'Escape') {
+          target.blur();
+        }
+        return;
+      }
+
+      switch (e.key) {
+        case ' ':
+        case 'k':
+        case 'K':
+          e.preventDefault();
+          togglePlay();
+          break;
+        case 'ArrowRight':
+          e.preventDefault();
+          seekBy(SKIP_SECONDS);
+          break;
+        case 'ArrowLeft':
+          e.preventDefault();
+          seekBy(-SKIP_SECONDS);
+          break;
+        case 'l':
+        case 'L':
+          e.preventDefault();
+          seekBy(30);
+          break;
+        case 'j':
+        case 'J':
+          e.preventDefault();
+          seekBy(-30);
+          break;
+        case 'ArrowUp': {
+          e.preventDefault();
+          const next = Math.min(1, Math.round((volume + 0.05) * 100) / 100);
+          setVolume(next);
+          if (isMuted) setIsMuted(false);
+          notify(`Volume: ${Math.round(next * 100)}%`);
+          revealControls();
+          break;
+        }
+        case 'ArrowDown': {
+          e.preventDefault();
+          const next = Math.max(0, Math.round((volume - 0.05) * 100) / 100);
+          setVolume(next);
+          if (next === 0) setIsMuted(true);
+          notify(next === 0 ? 'Muted' : `Volume: ${Math.round(next * 100)}%`);
+          revealControls();
+          break;
+        }
+        case 'm':
+        case 'M':
+          e.preventDefault();
+          setIsMuted((v) => {
+            const next = !v;
+            notify(next ? 'Muted' : `Volume: ${Math.round(volume * 100)}%`);
+            return next;
+          });
+          revealControls();
+          break;
+        case 'f':
+        case 'F':
+          e.preventDefault();
+          toggleFullscreen();
+          break;
+        case 'c':
+        case 'C': {
+          e.preventDefault();
+          if (activeSubtitle) {
+            setActiveSubtitle(null);
+            if (isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
+            notify('Subtitles: Off');
+          } else if (allSubtitles.length > 0) {
+            const first = allSubtitles[0];
+            setActiveSubtitle(first.url);
+            if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(first.url, first.name);
+            notify(`Subtitles: ${first.name}`);
+          }
+          revealControls();
+          break;
+        }
+        case '0':
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9': {
+          e.preventDefault();
+          const pct = Number(e.key) / 10;
+          const targetTime = duration * pct;
+          seekTo(targetTime);
+          notify(`${Math.round(pct * 100)}%`);
+          revealControls();
+          break;
+        }
+        case 'Home':
+          e.preventDefault();
+          seekTo(0);
+          notify('0:00');
+          revealControls();
+          break;
+        case 'End':
+          e.preventDefault();
+          if (duration > 0) {
+            seekTo(Math.max(0, duration - 1));
+          }
+          revealControls();
+          break;
+        case '>':
+        case '.':
+        case ']': {
+          e.preventDefault();
+          const currentIndex = SPEEDS.findIndex((s) => Math.abs(s - speed) < 0.05);
+          const nextIndex = currentIndex >= 0 && currentIndex < SPEEDS.length - 1 ? currentIndex + 1 : currentIndex;
+          const nextSpeed = SPEEDS[nextIndex] ?? speed;
+          setSpeed(nextSpeed);
+          notify(`Speed: ${nextSpeed}×`);
+          revealControls();
+          break;
+        }
+        case '<':
+        case ',':
+        case '[': {
+          e.preventDefault();
+          const currentIndex = SPEEDS.findIndex((s) => Math.abs(s - speed) < 0.05);
+          const prevIndex = currentIndex > 0 ? currentIndex - 1 : 0;
+          const prevSpeed = SPEEDS[prevIndex] ?? speed;
+          setSpeed(prevSpeed);
+          notify(`Speed: ${prevSpeed}×`);
+          revealControls();
+          break;
+        }
+        case 's':
+        case 'S':
+          e.preventDefault();
+          setSubtitlePanelOpen((v) => !v);
+          break;
+        case 'e':
+        case 'E':
+          if (series) setPanelOpen((v) => !v);
+          break;
+        case 'n':
+        case 'N':
+          if (nextEpisode && onSelectEpisode) onSelectEpisode(nextEpisode);
+          break;
+        case 'p':
+        case 'P':
+          if (previousEpisode && onSelectEpisode) onSelectEpisode(previousEpisode);
+          break;
+        case 'Escape':
+          if (panelOpen || sourcePanelOpen || subtitlePanelOpen || downloadPanelOpen) {
+            setPanelOpen(false);
+            setSourcePanelOpen(false);
+            setSubtitlePanelOpen(false);
+            setDownloadPanelOpen(false);
+          } else if (!document.fullscreenElement) {
+            onBack();
+          }
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [
+    togglePlay, seekBy, seekTo, toggleFullscreen, onBack, series, nextEpisode, previousEpisode,
+    onSelectEpisode, panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen,
+    hidden, mini, volume, isMuted, speed, duration, activeSubtitle, allSubtitles, isNativeEngine,
+    notify, revealControls,
+  ]);
 
   // Close any open side-panel when the user clicks outside it on the player, and reveal controls.
   const handlePlayerPointerDown = useCallback(
@@ -4152,7 +4462,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               icon={<Subtitles size={16} />}
               label="Subtitles"
               value={activeSubtitle ?? ''}
-              onChange={(next) => setActiveSubtitle(next === '' ? null : String(next))}
+              onChange={(next) => {
+                const url = next === '' ? null : String(next);
+                setActiveSubtitle(url);
+                if (isNativeEngine) {
+                  if (!url) {
+                    void window.cloudstream?.mpvSetSubtitleTrack(null);
+                  } else {
+                    const sub = allSubtitles.find((s) => s.url === url);
+                    void window.cloudstream?.mpvAddSubtitle(url, sub?.name);
+                  }
+                }
+                const label = allSubtitles.find((s) => s.url === url)?.name;
+                const language = url ? label?.split(/[^A-Za-z]+/)[0] ?? '' : '';
+                void window.cloudstream?.setPlayerPreferences({ subtitleLanguage: language });
+                preferredSubtitleLanguage.current = language || null;
+                subtitlesOff.current = !url;
+              }}
               triggerText={
                 activeSubtitle
                   ? (allSubtitles.find((s) => s.url === activeSubtitle)?.name ?? 'On')
@@ -4167,8 +4493,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           {/* Probed tracks take precedence over the element's own list: a
               `<video>` does not expose tracks it cannot decode at all, so the
-              AC-3 Japanese dub simply would not appear without the probe. */}
-          {probedAudioTracks.length > 1 ? (
+              AC-3 Japanese dub simply would not appear without the probe.
+              Under the native engine, mpv's own live track list is used directly. */}
+          {isNativeEngine ? (
+            audioTracks.length > 1 && (
+              <HoverMenu
+                icon={<Volume2 size={16} />}
+                label="Audio"
+                value={activeAudioTrack}
+                onChange={(val) => selectAudioTrack(val)}
+                triggerText={
+                  audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
+                }
+                options={audioTracks.map((track) => ({
+                  value: track.id,
+                  label: track.label,
+                  detail: track.language ? track.language.toUpperCase() : undefined,
+                }))}
+              />
+            )
+          ) : probedAudioTracks.length > 1 ? (
             <HoverMenu
               icon={<Volume2 size={16} />}
               label="Audio"

@@ -96,6 +96,39 @@ interface ActiveSession {
   snapshot: PlaybackSnapshot;
 }
 
+export const DEFAULT_OTT_PLATFORMS: OttPlatformSummary[] = [
+  {
+    id: 'netflix',
+    name: 'Netflix',
+    tagline: 'Films and series from Netflix catalogues, through installed extensions.',
+    accent: '#e50914',
+    availability: 'missing',
+    providers: [],
+    disabledProviders: [],
+    suggestedRepositories: ['netmirror', 'cncverse'],
+  },
+  {
+    id: 'primevideo',
+    name: 'Prime Video',
+    tagline: 'Amazon Prime Video catalogues, through installed extensions.',
+    accent: '#00a8e1',
+    availability: 'missing',
+    providers: [],
+    disabledProviders: [],
+    suggestedRepositories: ['netmirror', 'cncverse'],
+  },
+  {
+    id: 'disney',
+    name: 'Disney+',
+    tagline: 'The Disney+ catalogue, through installed extensions.',
+    accent: '#113ccf',
+    availability: 'missing',
+    providers: [],
+    disabledProviders: [],
+    suggestedRepositories: ['netmirror', 'cncverse'],
+  },
+];
+
 export const App: React.FC = () => {
   const { active: incognito } = usePrivacy();
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -268,7 +301,7 @@ export const App: React.FC = () => {
    * kind of split the extensions screen already had once between `enabled` and
    * `effectivelyEnabled`.
    */
-  const [ottPlatforms, setOttPlatforms] = useState<OttPlatformSummary[]>([]);
+  const [ottPlatforms, setOttPlatforms] = useState<OttPlatformSummary[]>(DEFAULT_OTT_PLATFORMS);
   /** A platform row opened with "Show all" — held here so Back from a title returns to it. */
   const [ottCategory, setOttCategory] = useState<OttCategoryState | null>(null);
 
@@ -282,7 +315,11 @@ export const App: React.FC = () => {
    */
   const refreshOttPlatforms = useCallback(async () => {
     const response = await window.cloudstream?.listOttPlatforms();
-    if (response?.platforms) setOttPlatforms(response.platforms as OttPlatformSummary[]);
+    if (response?.ok && Array.isArray(response.platforms)) {
+      setOttPlatforms(response.platforms as OttPlatformSummary[]);
+    } else if (response?.platforms && response.platforms.length > 0) {
+      setOttPlatforms(response.platforms as OttPlatformSummary[]);
+    }
   }, []);
 
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
@@ -404,6 +441,12 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     let disposeProgress: (() => void) | undefined;
+    let disposeProviderLoad: (() => void) | undefined;
+    let disposeDiscovery: (() => void) | undefined;
+    let disposeExtensionUpdate: (() => void) | undefined;
+    let disposeBootstrap: (() => void) | undefined;
+    let disposeInstallProgress: (() => void) | undefined;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
     if (window.cloudstream) {
       window.cloudstream.getDownloadQueue().then(setDownloadQueue);
@@ -415,6 +458,35 @@ export const App: React.FC = () => {
         .getIndexerConfigs()
         .then((configs) => setProvidersList(configs.filter((c) => c.enabled).map((c) => c.name)));
       void refreshOttPlatforms();
+
+      const debouncedRefresh = () => {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => {
+          void refreshOttPlatforms();
+        }, 300);
+      };
+
+      disposeProviderLoad = window.cloudstream.onProviderLoadProgress?.((progress) => {
+        if (!progress.running || progress.providers > 0) {
+          debouncedRefresh();
+        }
+      });
+      disposeDiscovery = window.cloudstream.onDiscoveryInvalidated?.(() => {
+        debouncedRefresh();
+      });
+      disposeExtensionUpdate = window.cloudstream.onExtensionUpdateEvent?.(() => {
+        debouncedRefresh();
+      });
+      disposeBootstrap = window.cloudstream.onBootstrapProgress?.((progress) => {
+        if (progress.phase === 'done') {
+          debouncedRefresh();
+        }
+      });
+      disposeInstallProgress = window.cloudstream.onExtensionInstallProgress?.((progress) => {
+        if (progress.step === 'complete') {
+          debouncedRefresh();
+        }
+      });
     }
 
     /**
@@ -487,7 +559,13 @@ export const App: React.FC = () => {
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      if (refreshTimer) clearTimeout(refreshTimer);
       disposeProgress?.();
+      disposeProviderLoad?.();
+      disposeDiscovery?.();
+      disposeExtensionUpdate?.();
+      disposeBootstrap?.();
+      disposeInstallProgress?.();
       disposePlayback?.();
       disposeSearch?.();
       disposeInspector?.();

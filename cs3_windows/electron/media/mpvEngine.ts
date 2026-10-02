@@ -145,6 +145,21 @@ export const NATIVE_KEY_BINDINGS: ReadonlyArray<readonly [key: string, command: 
   ['WHEEL_DOWN', 'add volume -5'],
   ['m', 'cycle mute'],
   ['f', 'cycle fullscreen'],
+  ['c', 'cycle sub-visibility'],
+  ['v', 'cycle sub'],
+  ['[', 'multiply speed 1/1.1'],
+  [']', 'multiply speed 1.1'],
+  ['0', 'seek 0 absolute-percent'],
+  ['1', 'seek 10 absolute-percent'],
+  ['2', 'seek 20 absolute-percent'],
+  ['3', 'seek 30 absolute-percent'],
+  ['4', 'seek 40 absolute-percent'],
+  ['5', 'seek 50 absolute-percent'],
+  ['6', 'seek 60 absolute-percent'],
+  ['7', 'seek 70 absolute-percent'],
+  ['8', 'seek 80 absolute-percent'],
+  ['9', 'seek 90 absolute-percent'],
+  ['HOME', 'seek 0 absolute'],
   /**
    * Leaves fullscreen and never quits. `ESC` is the reflex for "get me out of
    * this", and in mpv's default set that is exactly what it does — quitting is
@@ -952,11 +967,12 @@ export class MpvEngine {
     return typeof value === 'number' && Number.isFinite(value) ? value : 0;
   }
 
-  private tracks(): { audio: MpvTrack[]; subtitles: MpvTrack[] } {
+  private tracks(): { audio: MpvTrack[]; subtitles: MpvTrack[]; video: MpvTrack[] } {
     const raw = this.properties.get('track-list');
     const audio: MpvTrack[] = [];
     const subtitles: MpvTrack[] = [];
-    if (!Array.isArray(raw)) return { audio, subtitles };
+    const video: MpvTrack[] = [];
+    if (!Array.isArray(raw)) return { audio, subtitles, video };
 
     for (const entry of raw as Array<Record<string, unknown>>) {
       const track: MpvTrack = {
@@ -981,12 +997,13 @@ export class MpvEngine {
       };
       if (track.type === 'audio') audio.push(track);
       else if (track.type === 'sub') subtitles.push(track);
+      else if (track.type === 'video') video.push(track);
     }
-    return { audio, subtitles };
+    return { audio, subtitles, video };
   }
 
   public snapshot(): MpvSnapshot {
-    const { audio, subtitles } = this.tracks();
+    const { audio, subtitles, video } = this.tracks();
     const params = this.properties.get('video-params') as Record<string, unknown> | undefined;
 
     const position = this.numberProperty('time-pos');
@@ -1038,6 +1055,11 @@ export class MpvEngine {
       frameRate: this.numberProperty('estimated-vf-fps'),
       droppedFrames: this.numberProperty('frame-drop-count'),
 
+      videoTracks: video,
+      selectedVideoId:
+        typeof this.properties.get('vid') === 'number'
+          ? (this.properties.get('vid') as number)
+          : null,
       audioTracks: audio,
       subtitleTracks: subtitles,
       selectedAudioId:
@@ -1193,6 +1215,10 @@ export class MpvEngine {
    */
   public setVideoEnabled(enabled: boolean): Promise<MpvCommandResult> {
     return this.command(['set_property', 'vid', enabled ? 'auto' : 'no']);
+  }
+
+  public setVideoTrack(id: number | 'auto' | 'no'): Promise<MpvCommandResult> {
+    return this.command(['set_property', 'vid', id === 'auto' ? 'auto' : id === 'no' ? 'no' : Number(id)]);
   }
 
   public setOnTop(onTop: boolean): Promise<MpvCommandResult> {

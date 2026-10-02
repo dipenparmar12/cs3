@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Captions, Cpu, Loader2, Maximize, RotateCcw, Volume2 } from 'lucide-react';
+import { Captions, Cpu, Loader2, Maximize, RotateCcw, Video, Volume2 } from 'lucide-react';
 import type { MpvSnapshot, MpvTrack } from '../../types/mpv';
 import type { SourceCapabilityModel } from '../../types/media';
 
@@ -276,6 +276,26 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
         */}
         {!loading && (
           <div className="native-stage__tracks">
+            {(snapshot?.videoTracks?.length ?? 0) > 1 && (
+              <label className="native-stage__field">
+                <Video size={13} />
+                <select
+                  className="native-stage__select"
+                  value={snapshot?.selectedVideoId ?? ''}
+                  onChange={(event) =>
+                    void window.cloudstream?.mpvSetVideoTrack(Number(event.target.value))
+                  }
+                  aria-label="Video track"
+                >
+                  {snapshot?.videoTracks.map((track, index) => (
+                    <option key={track.id} value={track.id}>
+                      {trackLabel(track, index)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
             {(snapshot?.audioTracks.length ?? 0) > 1 && (
               <label className="native-stage__field">
                 <Volume2 size={13} />

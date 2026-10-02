@@ -3837,13 +3837,26 @@ ipcMain.handle('mpv:setVolume', async (_, volume: number) => mpvEngine.setVolume
 ipcMain.handle('mpv:setMuted', async (_, muted: boolean) => mpvEngine.setMuted(muted));
 ipcMain.handle('mpv:setSpeed', async (_, speed: number) => mpvEngine.setSpeed(speed));
 ipcMain.handle('mpv:setFullscreen', async (_, on: boolean) => mpvEngine.setFullscreen(on));
+ipcMain.handle('mpv:setVideoTrack', async (_, id: number | 'auto' | 'no') =>
+  mpvEngine.setVideoTrack(id)
+);
 ipcMain.handle('mpv:setAudioTrack', async (_, id: number | null) => mpvEngine.setAudioTrack(id));
 ipcMain.handle('mpv:setSubtitleTrack', async (_, id: number | null) =>
   mpvEngine.setSubtitleTrack(id)
 );
-ipcMain.handle('mpv:addSubtitle', async (_, url: string, title?: string, language?: string) =>
-  mpvEngine.addSubtitle(url, title, language)
-);
+ipcMain.handle('mpv:addSubtitle', async (_, url: string, title?: string, language?: string) => {
+  let target = url;
+  if (url && (url.startsWith('WEBVTT') || url.includes('-->') || url.startsWith('blob:'))) {
+    try {
+      const tempPath = path.join(os.tmpdir(), `cs3-sub-${Date.now()}-${Math.random().toString(36).slice(2)}.vtt`);
+      fs.writeFileSync(tempPath, url, 'utf8');
+      target = tempPath;
+    } catch {
+      // If write fails, leave as-is
+    }
+  }
+  return mpvEngine.addSubtitle(target, title, language);
+});
 ipcMain.handle('mpv:setSubtitleDelay', async (_, seconds: number) =>
   mpvEngine.setSubtitleDelay(seconds)
 );
@@ -4486,7 +4499,9 @@ ipcMain.handle(
     // Merged rather than replaced: the player writes volume/mute/speed while the
     // track panels write languages, and a whole-record write from either would
     // erase the other's choice.
-    datastore.setObject(PLAYER_PREFERENCES_KEY, { ...current, ...patch }, true);
+    const merged = { ...current, ...patch };
+    datastore.setObject(PLAYER_PREFERENCES_KEY, merged, true);
+    mainWindow?.webContents.send('player:preferencesChanged', merged);
     return { ok: true };
   }
 );

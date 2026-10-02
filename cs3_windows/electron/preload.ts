@@ -100,7 +100,7 @@ import type {
 import type { DiagnosticRecord, DiagnosticStage } from './cs3/diagnostics';
 import type { ExtensionIssue, IssueSummary } from './cs3/extensionIssues';
 import type { ExternalPlayer } from './externalPlayer';
-import type { ExternalPlaybackSnapshot } from '../src/types/player';
+import type { ExternalPlaybackSnapshot, StoredPlayerPreferences } from '../src/types/player';
 import type {
   LibraryEntry,
   SourceMemory,
@@ -763,6 +763,7 @@ export interface CloudStreamElectronAPI {
   mpvSetSpeed: (speed: number) => Promise<MpvCommandResult>;
   mpvSetFullscreen: (fullscreen: boolean) => Promise<MpvCommandResult>;
   /** mpv track ids, which are 1-based and per type — not ffprobe ordinals. */
+  mpvSetVideoTrack: (id: number | 'auto' | 'no') => Promise<MpvCommandResult>;
   mpvSetAudioTrack: (id: number | null) => Promise<MpvCommandResult>;
   mpvSetSubtitleTrack: (id: number | null) => Promise<MpvCommandResult>;
   mpvAddSubtitle: (url: string, title?: string, language?: string) => Promise<MpvCommandResult>;
@@ -972,6 +973,9 @@ export interface CloudStreamElectronAPI {
     backgroundPlayback?: 'continue' | 'audio-only' | 'pause';
     alwaysOnTop?: boolean;
   }) => Promise<Envelope>;
+  onPlayerPreferencesChanged: (
+    callback: (preferences: StoredPlayerPreferences) => void
+  ) => () => void;
   /**
    * Pins the application window above everything else.
    *
@@ -2126,10 +2130,21 @@ const api: CloudStreamElectronAPI = {
   mpvSetMuted: (muted) => ipcRenderer.invoke('mpv:setMuted', muted),
   mpvSetSpeed: (speed) => ipcRenderer.invoke('mpv:setSpeed', speed),
   mpvSetFullscreen: (fullscreen) => ipcRenderer.invoke('mpv:setFullscreen', fullscreen),
+  mpvSetVideoTrack: (id) => ipcRenderer.invoke('mpv:setVideoTrack', id),
   mpvSetAudioTrack: (id) => ipcRenderer.invoke('mpv:setAudioTrack', id),
   mpvSetSubtitleTrack: (id) => ipcRenderer.invoke('mpv:setSubtitleTrack', id),
-  mpvAddSubtitle: (url, title, language) =>
-    ipcRenderer.invoke('mpv:addSubtitle', url, title, language),
+  mpvAddSubtitle: async (url, title, language) => {
+    let target = url;
+    if (url && typeof url === 'string' && url.startsWith('blob:')) {
+      try {
+        const response = await fetch(url);
+        target = await response.text();
+      } catch {
+        // Fall back to url
+      }
+    }
+    return ipcRenderer.invoke('mpv:addSubtitle', target, title, language);
+  },
   mpvSetSubtitleDelay: (seconds) => ipcRenderer.invoke('mpv:setSubtitleDelay', seconds),
   mpvSetSubtitleStyle: (properties) => ipcRenderer.invoke('mpv:setSubtitleStyle', properties),
   mpvStop: () => ipcRenderer.invoke('mpv:stop'),
@@ -2188,6 +2203,7 @@ const api: CloudStreamElectronAPI = {
   removeDownload: (id, deleteFile) => ipcRenderer.invoke('download:remove', id, deleteFile),
   getPlayerPreferences: () => ipcRenderer.invoke('player:getPreferences'),
   setPlayerPreferences: (patch) => ipcRenderer.invoke('player:setPreferences', patch),
+  onPlayerPreferencesChanged: (callback) => subscribe('player:preferencesChanged', callback),
   setWindowAlwaysOnTop: (onTop) => ipcRenderer.invoke('window:setAlwaysOnTop', onTop),
   getWindowAlwaysOnTop: () => ipcRenderer.invoke('window:getAlwaysOnTop'),
   setMpvOnTop: (onTop) => ipcRenderer.invoke('mpv:setOnTop', onTop),

@@ -103,7 +103,7 @@ export function isSignificantChange(
   for (const key of keys) {
     if (COALESCEABLE.has(key)) continue;
 
-    if (key === 'audioTracks' || key === 'subtitleTracks') {
+    if (key === 'audioTracks' || key === 'subtitleTracks' || key === 'videoTracks') {
       // Compared by identity and selection rather than deep-equal: the menus
       // read nothing else, and mpv re-sends `track-list` as one whole array
       // whenever any member of it is re-read.

@@ -62,3 +62,19 @@ export interface ExternalPlaybackSnapshot {
   muted: boolean;
   error: string | null;
 }
+
+export interface StoredPlayerPreferences {
+  volume: number;
+  muted: boolean;
+  speed: number;
+  audioLanguage?: string;
+  subtitleLanguage?: string;
+  subtitleScale: number;
+  subtitleColor: string;
+  subtitleBackground: 'none' | 'shadow' | 'outline' | 'box';
+  subtitleWeight: 'normal' | 'bold';
+  subtitlePosition: number;
+  floatingMode: 'mini' | 'floating' | 'pip' | 'background';
+  backgroundPlayback: 'continue' | 'audio-only' | 'pause';
+  alwaysOnTop: boolean;
+}

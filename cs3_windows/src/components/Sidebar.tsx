@@ -87,6 +87,27 @@ interface SidebarProps {
   onOttPlatformsChanged?: () => void;
 }
 
+export const DEFAULT_SIDEBAR_PLATFORMS: SidebarOttPlatform[] = [
+  {
+    id: 'netflix',
+    name: 'Netflix',
+    accent: '#e50914',
+    availability: 'missing',
+  },
+  {
+    id: 'primevideo',
+    name: 'Prime Video',
+    accent: '#00a8e1',
+    availability: 'missing',
+  },
+  {
+    id: 'disney',
+    name: 'Disney+',
+    accent: '#113ccf',
+    availability: 'missing',
+  },
+];
+
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   setActiveTab,
@@ -98,18 +119,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOttPlatformsChanged,
 }) => {
   /**
-   * Services with nothing installed are collapsed behind a disclosure.
-   *
-   * All seven are always *listed* somewhere — a user looking for Sony LIV has
-   * to be able to find out it is reachable — but showing four dead rows above
-   * the fold on a fresh install makes the sidebar read as mostly broken. The
-   * ones that work sit at the top; the rest are one click away and say what
-   * they need.
+   * Services with nothing installed are collapsed behind a disclosure once some
+   * services are available. On launch or when none are ready yet, all default
+   * platforms are shown so the navigation list is never an empty void.
    */
-  const [showUnavailable, setShowUnavailable] = useState(false);
+  const [showUnavailable, setShowUnavailable] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const available = ottPlatforms.filter((p) => p.availability !== 'missing');
-  const unavailable = ottPlatforms.filter((p) => p.availability === 'missing');
+  const platformsList = ottPlatforms.length > 0 ? ottPlatforms : DEFAULT_SIDEBAR_PLATFORMS;
+  const available = platformsList.filter((p) => p.availability !== 'missing');
+  const unavailable = platformsList.filter((p) => p.availability === 'missing');
 
   /*
    * Find a service by typing. Matches the sidebar's own rows first, then every
@@ -139,8 +157,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     // "net" finds Netflix; "primev" finds Prime Video; "disney plus" finds Disney+.
     return queryWords.every((q) => folded.split(' ').some((w) => w.startsWith(q)) || compact.includes(q));
   };
-  const shownMatches = searching ? ottPlatforms.filter((p) => matchesService(p.name)) : [];
-  const shownIds = new Set(ottPlatforms.map((p) => p.id));
+  const shownMatches = searching ? platformsList.filter((p) => matchesService(p.name)) : [];
+  const shownIds = new Set(platformsList.map((p) => p.id));
   const extraMatches = searching
     ? (allPlatforms ?? []).filter(
         (p) => !shownIds.has(p.id) && p.availability !== 'missing' && matchesService(p.name)
@@ -152,7 +170,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
    * `localPinned` only holds a change until that list comes back, so a drag
    * lands where it was dropped instead of snapping back for a moment.
    */
-  const serverPinned = ottPlatforms.filter((p) => p.pinned).map((p) => p.id);
+  const serverPinned = platformsList.filter((p) => p.pinned).map((p) => p.id);
   const [localPinned, setLocalPinned] = useState<string[] | null>(null);
   const serverPinnedKey = serverPinned.join('|');
   useEffect(() => setLocalPinned(null), [serverPinnedKey]);
@@ -229,14 +247,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
     void savePinned(next);
   };
 
-  const byId = new Map(ottPlatforms.map((p) => [p.id, p]));
+  const byId = new Map(platformsList.map((p) => [p.id, p]));
   const pinnedRows = pinnedIds
     .map((pid) => byId.get(pid))
     .filter((p): p is SidebarOttPlatform => Boolean(p));
+
+  // If there are no available platforms, always show unavailable platforms so
+  // the streaming services section is never an empty void.
+  const shouldShowUnavailable = showUnavailable || available.length === 0;
+
   const orderedRows = [
     ...pinnedRows,
     ...available.filter((p) => !pinnedIds.includes(p.id)),
-    ...(showUnavailable ? unavailable.filter((p) => !pinnedIds.includes(p.id)) : []),
+    ...(shouldShowUnavailable ? unavailable.filter((p) => !pinnedIds.includes(p.id)) : []),
   ];
 
   const openService = async (platform: SidebarOttPlatform) => {
@@ -431,7 +454,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           );
         })}
 
-        {ottPlatforms.length > 0 && (
+        {platformsList.length > 0 && (
           <>
             <div style={{
               display: 'flex',
@@ -663,7 +686,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             )}
 
-            {!searching && unavailable.length > 0 && (
+            {!searching && unavailable.length > 0 && available.length > 0 && (
               <button
                 onClick={() => setShowUnavailable((on) => !on)}
                 style={{
@@ -678,7 +701,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   cursor: 'pointer',
                 }}
               >
-                {showUnavailable
+                {shouldShowUnavailable
                   ? 'Hide services you have not added'
                   : `${unavailable.length} more available to add`}
               </button>

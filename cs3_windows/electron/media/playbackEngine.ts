@@ -300,7 +300,7 @@ export class PlaybackEngine {
   private async measure(
     resolvedUrl: string,
     originUrl: string,
-    request: Pick<PlaybackStreamRequest, 'isM3u8' | 'isDash' | 'drm' | 'headers'>
+    request: Pick<PlaybackStreamRequest, 'isM3u8' | 'isDash' | 'drm' | 'headers' | 'preferredAudioLanguage'>
   ): Promise<SourceCapabilityModel> {
     const host = await this.hostCapability();
     const { isM3u8 } = request;
@@ -454,7 +454,8 @@ export class PlaybackEngine {
       this.capabilities,
       host,
       inspection.drm,
-      this.deps.nativeEngine()
+      this.deps.nativeEngine(),
+      request.preferredAudioLanguage
     );
 
     return {

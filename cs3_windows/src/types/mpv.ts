@@ -73,6 +73,8 @@ export interface MpvSnapshot {
   frameRate: number;
   droppedFrames: number;
 
+  videoTracks: MpvTrack[];
+  selectedVideoId: number | null;
   audioTracks: MpvTrack[];
   subtitleTracks: MpvTrack[];
   selectedAudioId: number | null;
