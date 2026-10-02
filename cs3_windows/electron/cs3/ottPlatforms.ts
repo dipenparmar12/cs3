@@ -276,6 +276,25 @@ export interface OttPlatformView {
   carriedBy: string[];
   /** Repositories to offer when `availability` is `missing`. */
   suggestedRepositories: RepositoryId[];
+  /**
+   * True for a platform discovered from an installed provider rather than
+   * listed in `OTT_PLATFORMS`. Off in the sidebar until the viewer picks it.
+   */
+  discovered?: boolean;
+  /** For a discovered platform: the extension that registered the provider. */
+  extension?: string;
+  /** For a discovered platform: the provider's declared `TvType`s and language. */
+  types?: string[];
+  lang?: string;
+}
+
+/** What the inventory knows about one provider, from the registry — no JVM. */
+export interface OttProviderDetail {
+  name: string;
+  pluginName: string;
+  hasMainPage: boolean;
+  supportedTypes: string[];
+  lang?: string;
 }
 
 export interface OttInventory {
@@ -285,6 +304,66 @@ export interface OttInventory {
   enabledProviders: string[];
   /** `internalName` of every installed extension. */
   installedExtensions: string[];
+  /**
+   * Per-provider facts, for discovery. Absent means no discovered platforms,
+   * so the hand-listed table still answers on its own.
+   */
+  providerDetails?: OttProviderDetail[];
+}
+
+/** Id prefix for a platform discovered from a provider. The rest is its name. */
+export const DISCOVERED_PREFIX = 'provider:';
+
+export function discoveredPlatformId(providerName: string): string {
+  return `${DISCOVERED_PREFIX}${providerName}`;
+}
+
+/** A stable colour from the name, so a discovered row keeps its dot. */
+function accentFor(name: string): string {
+  let hash = 0;
+  for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) | 0;
+  return `hsl(${Math.abs(hash) % 360} 65% 55%)`;
+}
+
+/**
+ * Every enabled provider that publishes a main page and is not already one of
+ * the hand-listed platforms, as a platform of its own.
+ *
+ * This is Android's home-screen picker: upstream has no platform table — the
+ * home screen offers every `MainAPI` with `hasMainPage`, and its rows are that
+ * provider's `getMainPage`. So the list follows whatever the installed
+ * extensions register (NetMirror's Hotstar, CNC Verse's services, a regional
+ * site) without a row being written here for each.
+ *
+ * Enabled providers only: a provider held back by the adult gate or switched
+ * off must not appear in a picker by name.
+ */
+export function discoverPlatforms(inventory: OttInventory): OttPlatformView[] {
+  const enabled = new Set(inventory.enabledProviders);
+  const seen = new Set<string>();
+  const out: OttPlatformView[] = [];
+  for (const detail of inventory.providerDetails ?? []) {
+    if (!detail.hasMainPage || !enabled.has(detail.name)) continue;
+    if (ottPlatformForProvider(detail.name)) continue;
+    if (seen.has(detail.name)) continue;
+    seen.add(detail.name);
+    out.push({
+      id: discoveredPlatformId(detail.name),
+      name: detail.name,
+      tagline: `${detail.name}'s own catalogue, from the ${detail.pluginName} extension.`,
+      accent: accentFor(detail.name),
+      availability: 'ready',
+      providers: [detail.name],
+      disabledProviders: [],
+      carriedBy: [],
+      suggestedRepositories: [],
+      discovered: true,
+      extension: detail.pluginName,
+      types: detail.supportedTypes,
+      lang: detail.lang,
+    });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
@@ -312,7 +391,7 @@ export function buildOttPlatformViews(inventory: OttInventory): OttPlatformView[
     (enabled.has(provider) ? bucket.on : bucket.off).push(provider);
   }
 
-  return OTT_PLATFORMS.map((platform) => {
+  const listed = OTT_PLATFORMS.map((platform): OttPlatformView => {
     const bucket = byPlatform.get(platform.id) ?? { on: [], off: [] };
     const carriedBy = platform.aggregateExtensions.filter((name) =>
       installedExtensions.has(normaliseProviderName(name))
@@ -336,4 +415,5 @@ export function buildOttPlatformViews(inventory: OttInventory): OttPlatformView[
       suggestedRepositories: platform.suggestedRepositories,
     };
   });
+  return [...listed, ...discoverPlatforms(inventory)];
 }

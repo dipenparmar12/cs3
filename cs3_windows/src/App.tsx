@@ -1578,6 +1578,7 @@ export const App: React.FC = () => {
         downloadCount={downloadQueue.filter((t) => t.state === 'Downloading' || t.state === 'Queued').length}
         missingComponentCount={missingComponents}
         ottPlatforms={ottPlatforms}
+        onOttPlatformsChanged={() => void refreshOttPlatforms()}
       />
 
       {/* Main App View Area */}

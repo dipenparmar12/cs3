@@ -9,9 +9,11 @@ import {
   Puzzle,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Tv,
 } from 'lucide-react';
 import { useExtensionJobs } from './extensions/useExtensionJobs';
+import { StreamingServicePicker } from './StreamingServicePicker';
 
 /**
  * The `ott:` arm is a template literal rather than a fixed union because the
@@ -50,6 +52,8 @@ interface SidebarProps {
    * otherwise show the state it saw at launch forever.
    */
   ottPlatforms?: SidebarOttPlatform[];
+  /** Re-reads the list after the service picker changes it. */
+  onOttPlatformsChanged?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -58,6 +62,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   downloadCount,
   missingComponentCount = 0,
   ottPlatforms = [],
+  onOttPlatformsChanged,
 }) => {
   /**
    * Services with nothing installed are collapsed behind a disclosure.
@@ -69,6 +74,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
    * they need.
    */
   const [showUnavailable, setShowUnavailable] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const { snapshot: extensionJobs } = useExtensionJobs();
   const available = ottPlatforms.filter((p) => p.availability !== 'missing');
   const unavailable = ottPlatforms.filter((p) => p.availability === 'missing');
@@ -139,7 +145,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Nav List */}
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', flex: 1 }}>
+      <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
@@ -226,7 +232,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
               color: 'var(--text-subtle)',
             }}>
               <Tv size={13} aria-hidden />
-              <span>Streaming services</span>
+              <span style={{ flex: 1 }}>Streaming services</span>
+              {onOttPlatformsChanged && (
+                <button
+                  onClick={() => setPickerOpen(true)}
+                  title="Choose which services appear here"
+                  aria-label="Choose streaming services"
+                  style={{ background: 'none', border: 'none', color: 'var(--text-subtle)', cursor: 'pointer', padding: '0 0.4rem' }}
+                >
+                  <SlidersHorizontal size={13} />
+                </button>
+              )}
             </div>
 
             {[...available, ...(showUnavailable ? unavailable : [])].map((platform) => {
@@ -306,6 +322,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </>
         )}
       </nav>
+
+      {pickerOpen && onOttPlatformsChanged && (
+        <StreamingServicePicker
+          onClose={() => setPickerOpen(false)}
+          onChanged={onOttPlatformsChanged}
+        />
+      )}
 
       {/* Status Footer */}
       <div style={{

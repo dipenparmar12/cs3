@@ -4,6 +4,7 @@ import { OFFICIAL_REPOSITORIES } from '../officialRepositories';
 import type { DatastoreManager } from '../datastore';
 import {
   buildOttPlatformViews,
+  DISCOVERED_PREFIX,
   ottPlatformById,
   OTT_PLATFORMS,
   type OttPlatformView,
@@ -66,9 +67,15 @@ export class OttService {
       SETTINGS_KEY_OTT_ENABLED,
       {}
     );
-    return OTT_PLATFORMS.filter((platform) =>
+    const listed = OTT_PLATFORMS.filter((platform) =>
       typeof stored?.[platform.id] === 'boolean' ? stored[platform.id] : platform.defaultEnabled
     ).map((platform) => platform.id);
+    // Discovered platforms are off until picked, as on Android's home screen
+    // where the viewer chooses which provider's catalogue to see.
+    const picked = Object.entries(stored ?? {})
+      .filter(([id, on]) => id.startsWith(DISCOVERED_PREFIX) && on === true)
+      .map(([id]) => id);
+    return [...listed, ...picked];
   }
 
   public setPlatformEnabled(platformId: string, enabled: boolean): string[] {
@@ -97,6 +104,13 @@ export class OttService {
       installedExtensions: this.plugins
         .getInstalledPlugins()
         .map((plugin) => plugin.internalName),
+      providerDetails: this.plugins.getProviders().map((provider) => ({
+        name: provider.name,
+        pluginName: provider.pluginName || provider.pluginInternalName,
+        hasMainPage: provider.hasMainPage,
+        supportedTypes: provider.supportedTypes ?? [],
+        lang: provider.lang,
+      })),
     });
     /*
      * `includeHidden` is for the settings screen, which has to list what is

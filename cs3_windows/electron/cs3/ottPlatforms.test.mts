@@ -23,6 +23,37 @@ import {
 const tests: Array<[string, () => void]> = [];
 const test = (name: string, fn: () => void) => tests.push([name, fn]);
 
+// --- discovery: Android's home-screen picker -------------------------------
+
+const detail = (name: string, hasMainPage = true) => ({
+  name,
+  pluginName: 'Ext',
+  hasMainPage,
+  supportedTypes: ['Movie'],
+});
+
+test('discovers enabled providers with a main page that no listed platform claims', () => {
+  const views = buildOttPlatformViews({
+    allProviders: ['Hotstar', 'Netflix', 'NoHome', 'Off'],
+    enabledProviders: ['Hotstar', 'Netflix', 'NoHome'],
+    installedExtensions: [],
+    providerDetails: [detail('Hotstar'), detail('Netflix'), detail('NoHome', false), detail('Off')],
+  });
+  const discovered = views.filter((v) => v.discovered).map((v) => v.id);
+  // Netflix stays on its listed row; no main page and switched-off are not offered.
+  assert.deepEqual(discovered, ['provider:Hotstar']);
+  assert.deepEqual(views.find((v) => v.id === 'netflix')?.providers, ['Netflix']);
+});
+
+test('no provider details means no discovered platforms', () => {
+  const views = buildOttPlatformViews({
+    allProviders: ['Hotstar'],
+    enabledProviders: ['Hotstar'],
+    installedExtensions: [],
+  });
+  assert.equal(views.some((v) => v.discovered), false);
+});
+
 // --- what NetMirror actually registers -------------------------------------
 
 /**
