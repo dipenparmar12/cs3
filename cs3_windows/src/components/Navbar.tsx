@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Bug, Loader2, Paperclip, EyeOff, X, Square } from 'lucide-react';
 import { usePrivacy } from '../utils/usePrivacy';
 import { DeveloperOnly } from '../utils/ExperienceModeContext';
@@ -11,6 +11,7 @@ import type {
 } from '../types/api';
 import { SearchSuggestions } from './SearchSuggestions';
 import type { SavedSearchSummary } from '../../electron/savedSearches';
+import { mergeHistoryAndSaved } from '../utils/searchHistoryMerge';
 
 interface NavbarProps {
   onSearch: (query: string, options?: SearchOptions) => void;
@@ -117,6 +118,21 @@ export const Navbar: React.FC<NavbarProps> = ({
   }, []);
 
   useEffect(() => refreshHistory(), [refreshHistory]);
+
+  const mergedHistory = useMemo(() => {
+    return mergeHistoryAndSaved(history, saved);
+  }, [history, saved]);
+
+  const trimmedQuery = query.trim();
+  const displayHistory = useMemo(() => {
+    if (!trimmedQuery) {
+      return mergedHistory.slice(0, 15);
+    }
+    const lower = trimmedQuery.toLowerCase();
+    return mergedHistory
+      .filter((entry) => entry.query.toLowerCase().includes(lower))
+      .slice(0, 8);
+  }, [mergedHistory, trimmedQuery]);
 
   /**
    * Fetches suggestions for the current query, debounced.
@@ -245,12 +261,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   const historyFirst = query.trim().length < SUGGEST_MIN_LENGTH;
   const orderedRows: Array<{ kind: 'suggestion' | 'history'; index: number }> = historyFirst
     ? [
-        ...history.map((_, index) => ({ kind: 'history' as const, index })),
+        ...displayHistory.map((_, index) => ({ kind: 'history' as const, index })),
         ...suggestions.map((_, index) => ({ kind: 'suggestion' as const, index })),
       ]
     : [
         ...suggestions.map((_, index) => ({ kind: 'suggestion' as const, index })),
-        ...history.map((_, index) => ({ kind: 'history' as const, index })),
+        ...displayHistory.map((_, index) => ({ kind: 'history' as const, index })),
       ];
 
   const handleClear = useCallback(() => {
@@ -297,8 +313,17 @@ export const Navbar: React.FC<NavbarProps> = ({
       if (row) {
         // Enter on a highlighted row is the same commitment as clicking it, so
         // it carries the same identity rather than degrading to a text search.
-        if (row.kind === 'suggestion') pickSuggestion(suggestions[row.index]);
-        else runSearch(history[row.index].query);
+        if (row.kind === 'suggestion') {
+          pickSuggestion(suggestions[row.index]);
+        } else {
+          const entry = displayHistory[row.index];
+          if (entry?.isSaved && entry.savedId && onOpenSavedSearch) {
+            setSuggestOpen(false);
+            onOpenSavedSearch(entry.savedId);
+          } else if (entry) {
+            runSearch(entry.query);
+          }
+        }
         return;
       }
       runSearch(query);
@@ -426,27 +451,40 @@ export const Navbar: React.FC<NavbarProps> = ({
           open={suggestOpen}
           query={query}
           suggestions={suggestions}
-          history={history}
+          history={displayHistory}
           loading={suggestLoading}
           highlightedIndex={highlightedIndex}
           onHighlight={setHighlightedIndex}
           onPickSuggestion={pickSuggestion}
-          onPickHistory={(entry) => runSearch(entry.query)}
-          onRemoveHistory={(value) => {
-            window.cloudstream?.removeSearchHistory(value).then(setHistory);
+          onPickHistory={(entry) => {
+            if (entry.isSaved && entry.savedId && onOpenSavedSearch) {
+              setSuggestOpen(false);
+              onOpenSavedSearch(entry.savedId);
+            } else {
+              runSearch(entry.query);
+            }
           }}
-          onClearHistory={() => {
-            window.cloudstream?.clearSearchHistory().then(setHistory);
+          onRunFreshSearch={(text) => runSearch(text)}
+          onRemoveHistory={async (entry) => {
+            if (entry.savedId) {
+              await window.cloudstream?.removeSavedSearch?.(entry.savedId);
+            }
+            const nextHistory = await window.cloudstream?.removeSearchHistory(entry.query);
+            setHistory(nextHistory ?? []);
+            const nextSaved = await window.cloudstream?.listSavedSearches?.();
+            setSaved(nextSaved ?? []);
           }}
-          saved={saved}
-          onPickSaved={
-            onOpenSavedSearch
-              ? (id) => {
-                  setSuggestOpen(false);
-                  onOpenSavedSearch(id);
-                }
-              : undefined
-          }
+          onClearHistory={async () => {
+            await window.cloudstream?.clearSearchHistory();
+            const savedList = await window.cloudstream?.listSavedSearches?.();
+            if (savedList && savedList.length > 0) {
+              for (const item of savedList) {
+                await window.cloudstream?.removeSavedSearch?.(item.id);
+              }
+            }
+            setHistory([]);
+            setSaved([]);
+          }}
         />
       </div>
 

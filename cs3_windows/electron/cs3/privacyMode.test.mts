@@ -178,7 +178,7 @@ test('historyStore.update returns null and does not mutate in private session', 
   const hist = new HistoryStore(store as any);
 
   // Record an event in normal mode
-  const event = hist.record({ title: 'Test Movie', action: 'play_started', status: 'Played' });
+  const event = hist.record({ title: 'Test Movie', mediaUrl: 'cs3://test', action: 'playback_started', status: 'Played' });
   assert.ok(event.id);
 
   // In private session, update must return null and not change status

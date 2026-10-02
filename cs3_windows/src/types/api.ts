@@ -178,6 +178,14 @@ export interface SearchHistoryEntry {
   at: number;
   /** How many results it produced, so a fruitless query looks different. */
   resultCount?: number;
+  /** Identifier of the saved search if results for this query were saved. */
+  savedId?: string;
+  /** True when results for this search are saved. */
+  isSaved?: boolean;
+  /** When the search results were saved. */
+  savedAt?: number;
+  /** Result count captured at the time of saving. */
+  savedResultCount?: number;
 }
 
 export interface Episode {
