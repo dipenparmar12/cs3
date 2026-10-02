@@ -18,7 +18,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 900;
+  /* Above the player (10000) and the mini player (9000): a dialog the player
+     itself opened — "where should this download go?" — was drawn underneath
+     the film that asked the question, unreachable. */
+  z-index: 10100;
   padding: 2rem;
 }
 
