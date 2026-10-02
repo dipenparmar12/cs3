@@ -308,7 +308,12 @@ async function main() {
   if (args.json) fs.writeFileSync(args.json, JSON.stringify({ tally, report }, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+export { Sidecar, findInstalled, parse, resolveJava };
+
+// Run only when invoked directly; `links-e2e.mjs` imports the helpers above.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

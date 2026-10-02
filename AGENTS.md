@@ -121,6 +121,7 @@ cs3/
 | Vendor stream matrix | root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — §6.9 |
 | Corpus liveness | root | `node tools/research/survey-repositories.mjs` (PRD-43) |
 | Provider catalogues (`getMainPage`) | root | `node tools/e2e/catalogue-e2e.mjs --installed netflix,prime` — every row of the installed providers via the sidecar, classified OK/MULTI/EMPTY/DROPPED/ERROR; tells provider-side from app-side |
+| Fresh links for a reported title | root | `node tools/e2e/links-e2e.mjs --case "Hindmoviez=Dune Part Two" --out l.json`, then `cs3_windows/node_modules/electron/dist/electron tools/e2e/links-play.cjs l.json` — re-resolves through the installed providers and fetches each link via Electron `net.fetch` (HLS down to a segment), also under the default referrer policy. Issue-file links expire within hours; re-resolve before judging |
 
 Test suites are **auto-discovered** (`*.test.mts`); `PRESET_ALIASES` in `scripts/test-runner.mjs` are just shortcuts. Run `bun run test --list` for the current set rather than trusting a count written here.
 
