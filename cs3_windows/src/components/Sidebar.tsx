@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Home,
   Search,
@@ -13,6 +13,7 @@ import {
   Settings,
   ShieldCheck,
   SlidersHorizontal,
+  Trash2,
 } from 'lucide-react';
 import { useExtensionJobs } from './extensions/useExtensionJobs';
 import { StreamingServicePicker } from './StreamingServicePicker';
@@ -70,6 +71,10 @@ interface SidebarProps {
   setActiveTab: (tab: ActiveTab) => void;
   downloadCount: number;
   missingComponentCount?: number;
+  /** Whether search results are currently active on screen. */
+  hasSearchResults?: boolean;
+  /** Clears active search results from screen. */
+  onClearResults?: () => void;
   /**
    * The streaming services, newest inventory first.
    *
@@ -87,6 +92,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setActiveTab,
   downloadCount,
   missingComponentCount = 0,
+  hasSearchResults = false,
+  onClearResults,
   ottPlatforms = [],
   onOttPlatformsChanged,
 }) => {
@@ -152,6 +159,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const pinnedIds = localPinned ?? serverPinned;
   const [dragging, setDragging] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const navRef = useRef<HTMLElement | null>(null);
+  const scrollIntervalRef = useRef<number | null>(null);
+
+  const stopAutoScroll = useCallback(() => {
+    if (scrollIntervalRef.current !== null) {
+      window.clearInterval(scrollIntervalRef.current);
+      scrollIntervalRef.current = null;
+    }
+  }, []);
+
+  const handleNavDragOver = useCallback((e: React.DragEvent) => {
+    if (!dragging || !navRef.current) return;
+    const nav = navRef.current;
+    const rect = nav.getBoundingClientRect();
+    const mouseY = e.clientY;
+    const threshold = 40;
+    const topZone = rect.top + threshold;
+    const bottomZone = rect.bottom - threshold;
+
+    if (mouseY < topZone) {
+      const speed = Math.max(3, Math.min(15, (topZone - mouseY) / 2));
+      if (!scrollIntervalRef.current) {
+        scrollIntervalRef.current = window.setInterval(() => {
+          if (navRef.current) {
+            navRef.current.scrollTop -= speed;
+          }
+        }, 16);
+      }
+    } else if (mouseY > bottomZone) {
+      const speed = Math.max(3, Math.min(15, (mouseY - bottomZone) / 2));
+      if (!scrollIntervalRef.current) {
+        scrollIntervalRef.current = window.setInterval(() => {
+          if (navRef.current) {
+            navRef.current.scrollTop += speed;
+          }
+        }, 16);
+      }
+    } else {
+      stopAutoScroll();
+    }
+  }, [dragging, stopAutoScroll]);
+
+  useEffect(() => {
+    return () => stopAutoScroll();
+  }, [stopAutoScroll]);
 
   const savePinned = async (next: string[]) => {
     setLocalPinned(next);
@@ -264,7 +316,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Nav List */}
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      <nav
+        ref={navRef}
+        onDragOver={handleNavDragOver}
+        style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', flex: 1, minHeight: 0, overflowY: 'auto' }}
+      >
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
@@ -288,10 +344,49 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 transition: 'var(--transition)'
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <Icon size={18} style={{ color: isActive ? 'var(--accent-light)' : 'inherit' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0 }}>
+                <Icon size={18} style={{ color: isActive ? 'var(--accent-light)' : 'inherit', flexShrink: 0 }} />
                 <span>{item.label}</span>
               </div>
+              {item.id === 'search' && hasSearchResults && onClearResults && (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClearResults();
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      onClearResults();
+                    }
+                  }}
+                  title="Clear search results"
+                  aria-label="Clear search results"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '3px 5px',
+                    borderRadius: 'var(--radius-sm)',
+                    color: 'var(--text-subtle)',
+                    cursor: 'pointer',
+                    transition: 'color 0.15s ease, background 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = '#ef4444';
+                    e.currentTarget.style.background = 'rgba(239, 68, 68, 0.12)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = 'var(--text-subtle)';
+                    e.currentTarget.style.background = 'transparent';
+                  }}
+                >
+                  <Trash2 size={13} />
+                </span>
+              )}
               {item.badge !== undefined && item.badge > 0 && (
                 <span style={{
                   background: 'var(--accent-primary)',
@@ -425,26 +520,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     'ott-side-row',
                     dropTarget === platform.id ? 'ott-side-row--drop' : '',
                     lastPinned && !searching ? 'ott-side-row--last-pinned' : '',
+                    dragging === platform.id ? 'ott-side-row--dragging' : '',
                   ].join(' ')}
                   // Only pinned rows reorder, and only among themselves.
                   draggable={isPinned && !searching}
                   onDragStart={(event) => {
-                    setDragging(platform.id);
+                    event.stopPropagation();
+                    event.dataTransfer.setData('application/x-ott-platform', platform.id);
                     event.dataTransfer.effectAllowed = 'move';
+                    setDragging(platform.id);
                   }}
                   onDragOver={(event) => {
                     if (!dragging || !isPinned || dragging === platform.id) return;
                     event.preventDefault();
+                    event.stopPropagation();
                     setDropTarget(platform.id);
                   }}
-                  onDragLeave={() => setDropTarget((t) => (t === platform.id ? null : t))}
+                  onDragLeave={(event) => {
+                    event.stopPropagation();
+                    setDropTarget((t) => (t === platform.id ? null : t));
+                  }}
                   onDrop={(event) => {
                     event.preventDefault();
+                    event.stopPropagation();
+                    stopAutoScroll();
                     if (dragging) movePinned(dragging, platform.id);
                     setDragging(null);
                     setDropTarget(null);
                   }}
-                  onDragEnd={() => {
+                  onDragEnd={(event) => {
+                    event.stopPropagation();
+                    stopAutoScroll();
                     setDragging(null);
                     setDropTarget(null);
                   }}
