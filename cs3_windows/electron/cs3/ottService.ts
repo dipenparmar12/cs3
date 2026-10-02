@@ -88,6 +88,23 @@ export class OttService {
   }
 
   /**
+   * Many at once — the picker's Select all / Select none. One write and one
+   * answer, so a bulk change cannot land half-applied.
+   */
+  public setPlatformsEnabled(changes: Record<string, boolean>): string[] {
+    const stored = this.datastore.getObject<Record<string, boolean>>(
+      SETTINGS_KEY_OTT_ENABLED,
+      {}
+    );
+    const next = { ...(stored ?? {}) };
+    for (const [id, on] of Object.entries(changes)) {
+      if (id && typeof on === 'boolean') next[id] = on;
+    }
+    this.datastore.setObject(SETTINGS_KEY_OTT_ENABLED, next);
+    return this.getEnabledPlatformIds();
+  }
+
+  /**
    * Every platform, with what is installed behind it.
    *
    * Always returns the full list, including platforms nothing can serve.

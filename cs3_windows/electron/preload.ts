@@ -1862,6 +1862,10 @@ export interface CloudStreamElectronAPI {
     platformId: string,
     enabled: boolean
   ) => Promise<Envelope & { enabled?: string[] }>;
+  /** Bulk form of `setOttPlatformEnabled`; answers the whole enabled set. */
+  setOttPlatformsEnabled: (
+    changes: Record<string, boolean>
+  ) => Promise<Envelope & { enabled?: string[] }>;
   planProviderRecovery: (provider: string) => Promise<
     Envelope & {
       plan?: {
@@ -2294,6 +2298,7 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('ott:getMetadataCatalog', platformId),
   setOttPlatformEnabled: (platformId, enabled) =>
     ipcRenderer.invoke('ott:setPlatformEnabled', platformId, enabled),
+  setOttPlatformsEnabled: (changes) => ipcRenderer.invoke('ott:setPlatformsEnabled', changes),
   addRepository: (url) => ipcRenderer.invoke('extension:addRepository', url),
   installRepository: (url, options) => ipcRenderer.invoke('extension:installRepository', url, options),
   removeRepository: (repoUrl) => ipcRenderer.invoke('extension:removeRepository', repoUrl),

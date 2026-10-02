@@ -4981,6 +4981,15 @@ ipcMain.handle('ott:setPlatformEnabled', async (_, platformId: string, enabled: 
   }
 });
 
+ipcMain.handle('ott:setPlatformsEnabled', async (_, changes: Record<string, boolean>) => {
+  try {
+    if (!changes || typeof changes !== 'object') return { ok: false, error: 'No platforms were named.' };
+    return { ok: true, enabled: ottService.setPlatformsEnabled(changes) };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
 ipcMain.handle('ott:getCatalog', async (_, platformId: string) => {
   try {
     return { ok: true, catalog: await ottService.getCatalog(platformId) };
