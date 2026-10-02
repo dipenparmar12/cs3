@@ -7433,6 +7433,11 @@
   cursor: grab;
 }
 
+.ott-side-row--dragging {
+  opacity: 0.4;
+  transform: scale(0.98);
+}
+
 .ott-side-row--drop::before {
   content: '';
   position: absolute;
