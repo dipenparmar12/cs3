@@ -72,8 +72,6 @@ function languageLabel(code: string): string {
   }
 }
 
-const FEATURED = 'Featured';
-
 function availabilityNote(p: PickerPlatform): string {
   switch (p.availability) {
     case 'missing':
@@ -176,18 +174,22 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
     });
   }, [all, query, types, langs, selectedOnly, enabled]);
 
-  const groups = useMemo(() => {
-    const map = new Map<string, PickerPlatform[]>();
-    for (const p of visible) {
-      const key = p.discovered ? (p.extension ?? 'Other extensions') : FEATURED;
-      const list = map.get(key) ?? [];
-      list.push(p);
-      map.set(key, list);
-    }
-    return [...map].sort(([a], [b]) =>
-      a === FEATURED ? -1 : b === FEATURED ? 1 : a.localeCompare(b)
-    );
-  }, [visible]);
+  /**
+   * One flat list. Grouping by extension was mostly groups of one — an
+   * extension usually registers a single catalogue — so the headings cost more
+   * than they told. The extension is on each row instead. The three listed
+   * services lead, then alphabetical; order never depends on selection, so a
+   * row does not jump away from the pointer that just clicked it.
+   */
+  const rows = useMemo(
+    () =>
+      [...visible].sort(
+        (a, b) =>
+          Number(Boolean(a.discovered)) - Number(Boolean(b.discovered)) ||
+          a.name.localeCompare(b.name)
+      ),
+    [visible]
+  );
 
   const setAll = (list: PickerPlatform[], on: boolean) =>
     void apply(
@@ -329,65 +331,57 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
             <div className="ssp__empty">
               <Loader2 size={16} className="spin" /> Reading installed providers…
             </div>
-          ) : groups.length === 0 ? (
+          ) : rows.length === 0 ? (
             <div className="ssp__empty">
               {filtered
                 ? 'Nothing matches these filters.'
                 : 'No installed provider publishes a catalogue yet. Add a repository on the Extensions screen.'}
             </div>
           ) : (
-            groups.map(([group, list]) => {
-              const on = list.filter((p) => enabled.has(p.id)).length;
-              return (
-                <section key={group}>
-                  <label className="ssp__group-head">
-                    <input
-                      type="checkbox"
-                      checked={on === list.length}
-                      ref={(el) => {
-                        if (el) el.indeterminate = on > 0 && on < list.length;
-                      }}
-                      onChange={() => setAll(list, on !== list.length)}
-                      aria-label={`Select every service in ${group}`}
-                    />
-                    <span>
-                      {group} · {on}/{list.length}
+            <div className="ssp__list" role="list">
+              {rows.map((p) => {
+                const selected = enabled.has(p.id);
+                const details = p.discovered
+                  ? [
+                      p.lang && languageLabel(p.lang),
+                      (p.types ?? []).slice(0, 3).map(typeLabel).join(', '),
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')
+                  : availabilityNote(p);
+                return (
+                  <button
+                    key={p.id}
+                    role="listitem"
+                    className="ssp__row"
+                    aria-pressed={selected}
+                    title={details ? `${p.name} — ${details}` : p.name}
+                    style={{ '--tile-accent': p.accent } as React.CSSProperties}
+                    onClick={() => void apply({ [p.id]: !selected })}
+                  >
+                    <span className="ssp__badge" aria-hidden>
+                      {p.name.trim().charAt(0).toUpperCase()}
                     </span>
-                  </label>
-                  <div className="ssp__grid">
-                    {list.map((p) => {
-                      const selected = enabled.has(p.id);
-                      const sub = p.discovered
-                        ? [p.lang && languageLabel(p.lang), (p.types ?? []).slice(0, 2).map(typeLabel).join(', ')]
-                            .filter(Boolean)
-                            .join(' · ')
-                        : availabilityNote(p);
-                      return (
-                        <button
-                          key={p.id}
-                          className="ssp__tile"
-                          aria-pressed={selected}
-                          title={sub ? `${p.name} — ${sub}` : p.name}
-                          style={{ '--tile-accent': p.accent } as React.CSSProperties}
-                          onClick={() => void apply({ [p.id]: !selected })}
-                        >
-                          <span className="ssp__badge" aria-hidden>
-                            {p.name.trim().charAt(0).toUpperCase()}
-                          </span>
-                          <span className="ssp__tile-text">
-                            <span className="ssp__tile-name">{p.name}</span>
-                            {sub && <span className="ssp__tile-sub">{sub}</span>}
-                          </span>
-                          <span className="ssp__check" aria-hidden>
-                            {selected && <Check size={12} strokeWidth={3} />}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-              );
-            })
+                    <span className="ssp__tile-text">
+                      <span className="ssp__tile-name">{p.name}</span>
+                      {details && <span className="ssp__tile-sub">{details}</span>}
+                    </span>
+                    {/* The extension, unless it only repeats the name — an archive
+                        registering one provider named after itself is the common case. */}
+                    {p.discovered ? (
+                      p.extension && p.extension !== p.name && (
+                        <span className="ssp__source">{p.extension}</span>
+                      )
+                    ) : (
+                      <span className="ssp__source ssp__source--featured">Featured</span>
+                    )}
+                    <span className="ssp__check" aria-hidden>
+                      {selected && <Check size={12} strokeWidth={3} />}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           )}
         </div>
 
