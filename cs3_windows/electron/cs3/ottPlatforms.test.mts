@@ -57,6 +57,19 @@ test('a provider declaring NSFW is flagged adult; others are not', () => {
   assert.equal(views.find((v) => v.name === 'Hotstar')?.adult, false);
 });
 
+test('a provider declaring NSFW beside general types is mixed, not adult', () => {
+  const views = buildOttPlatformViews({
+    allProviders: ['9kMovies'],
+    enabledProviders: ['9kMovies'],
+    providerDetails: [
+      { name: '9kMovies', pluginName: '9kMovies', hasMainPage: true, supportedTypes: ['Movie', 'TvSeries', 'NSFW'] },
+    ],
+  });
+  const view = views.find((v) => v.name === '9kMovies')!;
+  assert.equal(view.adult, false);
+  assert.equal(view.mixedAdult, true);
+});
+
 test('no provider details means no discovered platforms', () => {
   const views = buildOttPlatformViews({
     allProviders: ['Hotstar'],

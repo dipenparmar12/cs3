@@ -3,6 +3,7 @@ import type { ProviderCatalog, ProviderCatalogPage } from '../../src/types/api';
 import { OFFICIAL_REPOSITORIES } from '../officialRepositories';
 import type { DatastoreManager } from '../datastore';
 import type { CatalogueCache, CatalogueReadOptions } from './catalogueCache';
+import { isSensitiveRow, screenLists, screenSections } from '../../src/utils/adultContent';
 import {
   buildOttPlatformViews,
   DISCOVERED_PREFIX,
@@ -273,7 +274,15 @@ export class OttService {
     const providers = await this.providersFor(platformId);
     if (!providers.includes(provider)) return null;
     const fetch = () => this.plugins.loadCatalog(provider);
-    return this.cache ? this.cache.catalog(provider, options, fetch) : fetch();
+    const catalog = this.cache ? await this.cache.catalog(provider, options, fetch) : await fetch();
+    // Screened after the cache, so the cache holds the provider's full answer
+    // and turning adult content on later needs no re-fetch.
+    const screened = screenSections(
+      catalog.sections,
+      this.plugins.providerAdultKind(provider),
+      this.plugins.adultContentAllowed()
+    );
+    return { ...catalog, sections: screened.sections, hiddenAdultRows: screened.hidden };
   }
 
   public async getCatalogPage(
@@ -283,7 +292,22 @@ export class OttService {
     options: CatalogueReadOptions = {}
   ): Promise<ProviderCatalogPage> {
     const fetch = () => this.plugins.loadCatalogPage(provider, section, page);
-    return this.cache ? this.cache.page(provider, section, page, options, fetch) : fetch();
+    const answer = this.cache
+      ? await this.cache.page(provider, section, page, options, fetch)
+      : await fetch();
+    const screened = screenLists(
+      answer.lists ?? [],
+      this.plugins.providerAdultKind(provider),
+      this.plugins.adultContentAllowed(),
+      isSensitiveRow(section)
+    );
+    if (screened.lists === answer.lists) return answer;
+    return {
+      ...answer,
+      lists: screened.lists,
+      items: screened.lists.flatMap((list) => list.items),
+      hiddenAdultRows: screened.hidden,
+    };
   }
 
   /**

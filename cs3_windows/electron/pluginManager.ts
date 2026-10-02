@@ -92,6 +92,7 @@ import {
   type RecoveryPlan,
 } from './cs3/providerRecovery.js';
 import { describeError } from '../src/utils/errors.ts';
+import { isSensitiveTitle, providerAdultKind, type AdultKind } from '../src/utils/adultContent.ts';
 
 export interface RepositoryFetchResult {
   repositoryUrl: string;
@@ -426,6 +427,19 @@ export interface KnownPlugin {
  */
 function isAdultProvider(provider: ExtensionProvider): boolean {
   return provider.supportedTypes.some((type) => type.toUpperCase() === 'NSFW');
+}
+
+/**
+ * Whether the adult gate removes a provider entirely.
+ *
+ * Only a provider that is *nothing but* adult. One declaring NSFW beside
+ * general types (9kMovies: `Movie, TvSeries, NSFW`) stays available with adult
+ * content off, and its 18+ rows and titles are filtered out instead — see
+ * `src/utils/adultContent.ts`. Gating it whole hid its Bollywood, Tamil and
+ * Hollywood rows from everyone who had adult content off.
+ */
+function isAdultOnlyProvider(provider: ExtensionProvider): boolean {
+  return providerAdultKind(provider.supportedTypes) === 'adult';
 }
 
 /**
@@ -2247,7 +2261,8 @@ export class PluginManager {
             // If these two ever disagree the screen is lying about what a
             // search will ask, which is the failure this whole tree exists to
             // prevent.
-            effectivelyEnabled: ownEnabled && extensionEffective && (allowAdult || !adult),
+            effectivelyEnabled:
+              ownEnabled && extensionEffective && (allowAdult || !isAdultOnlyProvider(provider)),
             extensionInternalName: record.internalName,
             extensionName: record.meta?.name ?? record.internalName,
             repositoryId: repoId,
@@ -2640,7 +2655,7 @@ export class PluginManager {
       if (this.getDisabledRepositories().includes(repositoryId)) {
         return `${name} comes from ${known.pluginName}, whose repository is switched off. Turn that repository back on in Extensions.`;
       }
-      if (isAdultProvider(known) && !this.adultAllowed()) {
+      if (isAdultOnlyProvider(known) && !this.adultAllowed()) {
         return `${name} is an adult-content provider and adult content is turned off in Settings.`;
       }
       return `${name} is installed but the extension runtime does not have it loaded. Restarting the app usually restores it.`;
@@ -3131,6 +3146,27 @@ export class PluginManager {
     return this.datastore.getBool(SETTINGS_KEY_ADULT_ENABLED, false);
   }
 
+  /** Whether adult content is allowed right now — for callers that filter rows. */
+  public adultContentAllowed(): boolean {
+    return this.adultAllowed();
+  }
+
+  /** `none`, `mixed` or `adult`, from what the provider declares. */
+  public providerAdultKind(name: string): AdultKind {
+    const provider = this.providers.get(name);
+    return provider ? providerAdultKind(provider.supportedTypes) : 'none';
+  }
+
+  /**
+   * A mixed provider's explicit 18+ titles, removed while adult content is off.
+   * Adult-only providers never get this far (the gate drops them whole), and a
+   * provider declaring no NSFW at all is left alone.
+   */
+  private withoutAdultTitles<T extends { name: string }>(provider: string, items: T[]): T[] {
+    if (this.adultAllowed() || this.providerAdultKind(provider) !== 'mixed') return items;
+    return items.filter((item) => !isSensitiveTitle(item.name));
+  }
+
   /**
    * Every gate, applied in one place.
    *
@@ -3151,7 +3187,7 @@ export class PluginManager {
       .filter((provider) => !disabled.has(provider.name))
       .filter((provider) => !disabledExtensions.has(provider.pluginInternalName))
       .filter((provider) => !disabledRepositories.has(this.repositoryIdOf(provider.pluginInternalName)))
-      .filter((provider) => allowAdult || !isAdultProvider(provider))
+      .filter((provider) => allowAdult || !isAdultOnlyProvider(provider))
       .map((provider) => provider.name);
   }
 
@@ -3212,7 +3248,7 @@ export class PluginManager {
     if (disabled.has(provider.name)) return false;
     if (disabledExtensions.has(provider.pluginInternalName)) return false;
     if (disabledRepositories.has(this.repositoryIdOf(provider.pluginInternalName))) return false;
-    if (!this.adultAllowed() && isAdultProvider(provider)) return false;
+    if (!this.adultAllowed() && isAdultOnlyProvider(provider)) return false;
     return true;
   }
 
@@ -3445,7 +3481,7 @@ export class PluginManager {
       return { provider: name, results: [], latencyMs, error };
     }
 
-    const results = mapProviderResults(name, parsed.results);
+    const results = this.withoutAdultTitles(name, mapProviderResults(name, parsed.results));
     // Recorded at `info`: knowing a provider answered — and how fast — is what
     // makes a later failure by the same provider diagnosable rather than just
     // annoying.
@@ -3823,7 +3859,10 @@ export class PluginManager {
        * restated; it also drops entries missing a name or url, which providers
        * do emit.
        */
-      recommendations: mapProviderResults(ref.provider, detail.recommendations),
+      recommendations: this.withoutAdultTitles(
+        ref.provider,
+        mapProviderResults(ref.provider, detail.recommendations)
+      ),
       // A film has no episode list; its `dataUrl` is the playable handle and is
       // re-addressed the same way an episode's is.
       id: undefined,

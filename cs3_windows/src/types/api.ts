@@ -344,6 +344,13 @@ export interface ProviderCatalogSection {
   data: string;
   /** Landscape artwork, which changes the card shape rather than the content. */
   horizontalImages?: boolean;
+  /**
+   * An 18+ row inside a provider that also carries general content (see
+   * `src/utils/adultContent.ts`). Inferred from the row's own text — upstream
+   * publishes no per-row flag. Only ever set while adult content is allowed;
+   * otherwise such rows are removed before they leave the main process.
+   */
+  sensitive?: boolean;
 }
 
 /** One fetched page of one catalogue row. */
@@ -360,7 +367,9 @@ export interface ProviderCatalogPage {
    * it with its whole home page — NetMirror returns 18 named rows from one
    * request — and each of those is a row of its own on Android.
    */
-  lists: Array<{ name: string; horizontalImages: boolean; items: SearchResponse[] }>;
+  lists: Array<{ name: string; horizontalImages: boolean; items: SearchResponse[]; sensitive?: boolean }>;
+  /** 18+ lists removed from this page because adult content is off. */
+  hiddenAdultRows?: number;
   /** Whether asking for `page + 1` is worth doing. */
   hasNext: boolean;
   /**
@@ -383,4 +392,6 @@ export interface ProviderCatalog {
    * is different from reporting a failure.
    */
   unavailableReason?: string;
+  /** 18+ rows removed because adult content is off, so the page can say so. */
+  hiddenAdultRows?: number;
 }

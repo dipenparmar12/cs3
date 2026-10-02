@@ -43,14 +43,27 @@ export interface SidebarOttPlatform {
   adult?: boolean;
   /** Pinned by the viewer; the list arrives with pinned rows first, in order. */
   pinned?: boolean;
+  /** Mostly general content with some 18+ rows — badged, but no age warning. */
+  mixedAdult?: boolean;
 }
 
-/** The 18+ flag on a service row: sensitive content is disclosed before it is opened. */
-const AdultFlag: React.FC = () => (
-  <span className="adult-badge" title="Adult content (18+) — you will be asked to confirm your age">
-    18+
-  </span>
-);
+/**
+ * The 18+ flag on a service row: sensitive content is disclosed before it is
+ * opened. Outlined for a service that is general content with some 18+ rows.
+ */
+const AdultFlag: React.FC<{ partial?: boolean }> = ({ partial }) =>
+  partial ? (
+    <span
+      className="adult-badge adult-badge--partial"
+      title="Has some adult (18+) rows — hidden while adult content is off, otherwise shown after you confirm your age"
+    >
+      18+
+    </span>
+  ) : (
+    <span className="adult-badge" title="Adult content (18+) — you will be asked to confirm your age">
+      18+
+    </span>
+  );
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -484,7 +497,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
                     {platform.name}
                   </span>
-                  {platform.adult && <AdultFlag />}
+                  {platform.adult ? <AdultFlag /> : platform.mixedAdult ? <AdultFlag partial /> : null}
                 </button>
                 {onOttPlatformsChanged && (
                   <button
@@ -531,7 +544,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
                       {platform.name}
                     </span>
-                    {platform.adult && <AdultFlag />}
+                    {platform.adult ? <AdultFlag /> : platform.mixedAdult ? <AdultFlag partial /> : null}
                     <Plus size={13} aria-hidden />
                   </button>
                 ))}

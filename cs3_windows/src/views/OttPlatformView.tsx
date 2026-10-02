@@ -188,6 +188,11 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
   /** The provider whose catalogue is being read right now, for the progress line. */
   const [pendingProvider, setPendingProvider] = useState<string | null>(null);
   const [sections, setSections] = useState<CatalogueRow[]>([]);
+  /**
+   * 18+ lists removed from fetched pages (adult content off), per request, so
+   * the page can say how many rows it is not showing rather than shrink quietly.
+   */
+  const [pageHiddenAdult, setPageHiddenAdult] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<
@@ -247,6 +252,11 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
         answer = { error: describeError(error) };
       }
       if (platformRef.current !== forPlatform) return;
+      const hidden = 'items' in answer ? (answer.hiddenAdultRows ?? 0) : 0;
+      const hiddenKey = row.parent ?? row.key;
+      setPageHiddenAdult((current) =>
+        (current[hiddenKey] ?? 0) === hidden ? current : { ...current, [hiddenKey]: hidden }
+      );
       setSections((current) => applyPage(current, row.key, page, answer, { quiet: refresh }));
     },
     []
@@ -269,6 +279,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     setUnbrowsable([]);
     setActiveProvider(null);
     setSections([]);
+    setPageHiddenAdult({});
     setQuery('');
 
     if (platform.availability === 'missing') {
@@ -374,6 +385,11 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     [sections, activeProvider]
   );
   const providerHasItems = sections.some((row) => row.items.length > 0);
+  const hiddenAdultRows =
+    (catalogs.find((c) => c.provider === activeProvider)?.hiddenAdultRows ?? 0) +
+    Object.entries(pageHiddenAdult)
+      .filter(([key]) => key.startsWith(`${activeProvider}::`))
+      .reduce((sum, [, count]) => sum + count, 0);
 
   /*
    * Typing filters what is already on the page, instantly and with no network:
@@ -562,11 +578,43 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
    * "Show all" opens the row as a grid that pages as it is scrolled — the
    * provider's own `getMainPage` paging, so the whole row is reachable.
    */
-  const renderRow = (section: CatalogueRow, labelProvider: boolean) => (
+  const revealAdult = () => {
+    acknowledgeAdult();
+    setAdultAccepted(true);
+  };
+
+  const renderRow = (section: CatalogueRow, labelProvider: boolean) =>
+    section.sensitive && !adultAccepted ? (
+      /*
+       * An 18+ row inside a general catalogue (adult content is on, but not yet
+       * confirmed this launch). Covered and *not fetched* — no posters load
+       * behind a blur — until the viewer confirms, which reveals every such
+       * row for the rest of the launch.
+       */
+      <section className="home-row" key={section.key}>
+        <header>
+          <h3>
+            {section.name} <span className="adult-badge" title="Adult content (18+)">18+</span>
+          </h3>
+        </header>
+        <div className="ott-view__sensitive-cover">
+          <p>Adult content. Hidden until you confirm your age — asked once per launch.</p>
+          <button type="button" className="btn btn-sm btn-secondary" onClick={revealAdult}>
+            I am 18 or older — show 18+ rows
+          </button>
+        </div>
+      </section>
+    ) : (
     <section className="home-row" key={section.key}>
       <header>
         <h3>
           {section.name}
+          {section.sensitive && (
+            <>
+              {' '}
+              <span className="adult-badge" title="Adult content (18+)">18+</span>
+            </>
+          )}
           {labelProvider && <span className="ott-view__row-provider"> · {section.provider}</span>}
         </h3>
         {section.loading && <Loader2 size={12} className="spin" />}
@@ -837,6 +885,15 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
 
       {catalogs.length === 1 && (
         <p className="ott-view__provider-single">Catalogue from {catalogs[0].provider}</p>
+      )}
+
+      {/* Rows removed for being 18+ are counted, not silently dropped. */}
+      {hiddenAdultRows > 0 && !filtering && (
+        <p className="ott-view__adult-note">
+          <span className="adult-badge" aria-hidden>18+</span>
+          {hiddenAdultRows} adult row{hiddenAdultRows === 1 ? '' : 's'} hidden — this provider also
+          carries 18+ content, and adult content is off in Settings.
+        </p>
       )}
 
       {platform.availability === 'ready' &&

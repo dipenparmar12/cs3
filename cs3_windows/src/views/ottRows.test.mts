@@ -114,6 +114,23 @@ test('repeated list names get distinct keys', () => {
   assert.equal(new Set(out.map((r) => r.key)).size, 2);
 });
 
+test('an 18+ flag travels from the catalogue and from a split list onto the row', () => {
+  const rows = rowsFromCatalog({
+    provider: 'P',
+    hasMainPage: true,
+    sections: [{ name: '18+ Movies', data: '/18', sensitive: true }, { name: '', data: '' }],
+  });
+  assert.equal(rows[0].sensitive, true);
+  const split = applyPage(rows, rows[1].key, 1, {
+    ...page([['Hot Series', [item('1')]], ['Bollywood', [item('2')]]]),
+    lists: [
+      { name: 'Hot Series', horizontalImages: false, items: [item('1')], sensitive: true },
+      { name: 'Bollywood', horizontalImages: false, items: [item('2')] },
+    ],
+  });
+  assert.deepEqual(split.slice(1).map((r) => r.sensitive), [true, false]);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

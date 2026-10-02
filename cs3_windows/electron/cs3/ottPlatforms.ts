@@ -45,6 +45,8 @@
  * removed. A provider named after one of them is picked up by discovery.
  */
 
+import { providerAdultKind } from '../../src/utils/adultContent.ts';
+
 /** A repository id from `official_repositories.json`. */
 export type RepositoryId = string;
 
@@ -223,6 +225,11 @@ export interface OttPlatformView {
    * the 18+ badge and the once-per-launch warning before the page loads.
    */
   adult?: boolean;
+  /**
+   * Declares NSFW beside general content (9kMovies): opens without the age
+   * warning, with its 18+ rows hidden or blurred per row.
+   */
+  mixedAdult?: boolean;
   /** Pinned to the top of the sidebar by the viewer. Set by `OttService`. */
   pinned?: boolean;
 }
@@ -297,7 +304,11 @@ export function discoverPlatforms(inventory: OttInventory): OttPlatformView[] {
       extension: detail.pluginName,
       types: detail.supportedTypes,
       lang: detail.lang,
-      adult: detail.supportedTypes.some((type) => type.toUpperCase() === 'NSFW'),
+      // Adult-only providers get the age warning before their page opens.
+      // Mixed ones (9kMovies) open normally; their 18+ rows are screened per
+      // row instead — see `src/utils/adultContent.ts`.
+      adult: providerAdultKind(detail.supportedTypes) === 'adult',
+      mixedAdult: providerAdultKind(detail.supportedTypes) === 'mixed',
     });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));

@@ -33,6 +33,8 @@ export interface CatalogueRow {
   error?: string;
   /** When the items on screen were fetched; drives the background refresh. */
   fetchedAt?: number;
+  /** An 18+ row from a provider that also carries general content. */
+  sensitive?: boolean;
 }
 
 /** A section heading for a row whose provider gave it no name. */
@@ -44,6 +46,7 @@ export function rowsFromCatalog(catalog: ProviderCatalog): CatalogueRow[] {
     provider: catalog.provider,
     name: section.name || UNNAMED,
     request: { name: section.name, data: section.data, horizontalImages: section.horizontalImages },
+    sensitive: section.sensitive === true,
     fetched: false,
     loading: false,
     items: [],
@@ -128,6 +131,7 @@ export function applyPage(
           request: row.request,
           list: listKey,
           parent: parentKey,
+          sensitive: row.sensitive || list.sensitive === true,
           fetched: true,
           loading: false,
           items: list.items,
@@ -175,6 +179,7 @@ export function applyPage(
     return {
       ...candidate,
       name: !candidate.request.name && lists[0]?.name ? lists[0].name : candidate.name,
+      sensitive: candidate.sensitive || lists.some((list) => list.sensitive === true),
       loading: false,
       fetched: true,
       error: undefined,

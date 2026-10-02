@@ -26,6 +26,7 @@ interface PickerPlatform {
   types?: string[];
   lang?: string;
   adult?: boolean;
+  mixedAdult?: boolean;
 }
 
 interface Props {
@@ -407,6 +408,15 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
                         {p.name}
                         {p.adult && (
                           <span className="adult-badge" style={{ marginLeft: '0.4rem' }} title="Adult content (18+)">
+                            18+
+                          </span>
+                        )}
+                        {!p.adult && p.mixedAdult && (
+                          <span
+                            className="adult-badge adult-badge--partial"
+                            style={{ marginLeft: '0.4rem' }}
+                            title="Has some adult (18+) rows; the rest is general content"
+                          >
                             18+
                           </span>
                         )}
