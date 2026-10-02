@@ -57,10 +57,8 @@ export class OttService {
    * The platforms shown in the sidebar.
    *
    * Absent from the stored map means "as shipped", not "off" — see the key's
-   * comment. The four with a provider named after them are on; the three that
-   * exist only behind aggregate scrapers are off, because their pages open onto
-   * a search box rather than a catalogue and a sidebar of those reads as four
-   * working entries and three broken ones.
+   * comment. The three listed platforms are on as shipped; discovered ones are
+   * off until picked.
    */
   public getEnabledPlatformIds(): string[] {
     const stored = this.datastore.getObject<Record<string, boolean>>(
@@ -107,10 +105,9 @@ export class OttService {
   /**
    * Every platform, with what is installed behind it.
    *
-   * Always returns the full list, including platforms nothing can serve.
-   * Hiding those would answer the wrong question: a user looking for Sony LIV
-   * needs to be told it is reachable and how, not shown a sidebar that silently
-   * omits it and leaves them to conclude the app does not do that.
+   * The three listed platforms always appear, installed or not, so their pages
+   * can offer the extension; everything else is discovered from what is
+   * installed.
    */
   public async listPlatforms(includeHidden = false): Promise<OttPlatformView[]> {
     const enabledProviders = await this.plugins.listEnabledProviders();
@@ -118,9 +115,6 @@ export class OttService {
     const views = buildOttPlatformViews({
       allProviders: this.plugins.getProvidersList(),
       enabledProviders,
-      installedExtensions: this.plugins
-        .getInstalledPlugins()
-        .map((plugin) => plugin.internalName),
       providerDetails: this.plugins.getProviders().map((provider) => ({
         name: provider.name,
         pluginName: provider.pluginName || provider.pluginInternalName,
@@ -153,32 +147,13 @@ export class OttService {
    * must not be turned into a global search somewhere downstream, which is
    * exactly what `SearchScopeStore.override` refuses to do.
    *
-   * The aggregate fallback is what makes Sony LIV, ZEE5 and JioCinema more than
-   * decoration. No CloudStream provider is *named* after any of them, but the
-   * MovieBox and CNC Verse extensions carry their catalogues, and the platform
-   * table records which. So when no provider matches the platform directly, the
-   * scope becomes the providers those extensions registered — which is a real
-   * search of the right content rather than an empty page under a heading the
-   * user recognised.
-   *
-   * It is a fallback and not a merge: a platform with a provider of its own is
-   * better served by that provider alone, and adding an aggregate beside it
-   * would put a general scraper's results under a specific platform's name.
+   * Only providers that *are* the platform. There is no fallback to some other
+   * extension said to "carry" it: that was a hardcoded claim about third-party
+   * scrapers, and it put a general scraper's results under a brand heading.
    */
   public async providersFor(platformId: string): Promise<string[]> {
     const view = await this.getPlatform(platformId);
-    if (!view) return [];
-    if (view.providers.length > 0) return view.providers;
-    if (view.carriedBy.length === 0) return [];
-
-    const carrying = new Set(view.carriedBy);
-    const enabled = new Set(await this.plugins.listEnabledProviders());
-    return this.plugins
-      .getProviders()
-      .filter(
-        (provider) => carrying.has(provider.pluginInternalName) && enabled.has(provider.name)
-      )
-      .map((provider) => provider.name);
+    return view?.providers ?? [];
   }
 
   /**

@@ -20,7 +20,7 @@ interface PickerPlatform {
   id: string;
   name: string;
   accent: string;
-  availability: 'ready' | 'disabled' | 'aggregate' | 'missing';
+  availability: 'ready' | 'disabled' | 'missing';
   discovered?: boolean;
   extension?: string;
   types?: string[];
@@ -80,8 +80,6 @@ function availabilityNote(p: PickerPlatform): string {
       return 'Not installed — its page offers the extension';
     case 'disabled':
       return 'Installed but switched off';
-    case 'aggregate':
-      return 'Carried by another extension';
     default:
       return 'Installed';
   }

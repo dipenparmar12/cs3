@@ -31,11 +31,10 @@ import { useFlash } from '../utils/useFlash';
  * addressed as `cs3ext://provider/handle`. The binding is the whole point, and
  * it is why this page can promise something the home screen cannot.
  *
- * ## Four states, and none of them is a blank page
+ * ## Three states, and none of them is a blank page
  *
- * `ready`, `disabled`, `aggregate`, `missing` each get their own answer,
- * because they need different actions from the user: nothing, a switch, an
- * explanation, or an install. Collapsing them into "no content" is the failure
+ * `ready`, `disabled`, `missing` each get their own answer, because they need
+ * different actions from the user: nothing, a switch, or an install. Collapsing them into "no content" is the failure
  * this component exists to avoid — a user who turned a provider off last week
  * being told the platform does not exist.
  */
@@ -45,10 +44,9 @@ export interface OttPlatformSummary {
   name: string;
   tagline: string;
   accent: string;
-  availability: 'ready' | 'disabled' | 'aggregate' | 'missing';
+  availability: 'ready' | 'disabled' | 'missing';
   providers: string[];
   disabledProviders: string[];
-  carriedBy: string[];
   suggestedRepositories: string[];
 }
 
@@ -372,20 +370,6 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
             // rows on screen were built from the old answer.
             onInventoryChanged?.();
           }}
-        />
-      )}
-
-      {platform.availability === 'aggregate' && (
-        <EmptyState
-          icon={Sparkles}
-          title={`${platform.name} is covered by ${platform.carriedBy.join(' and ')}`}
-          description={
-            <>
-              No extension publishes a provider named after {platform.name}, so there is no
-              catalogue to browse here. {platform.carriedBy.join(' and ')} carries its titles,
-              and the search box above asks it directly.
-            </>
-          }
         />
       )}
 

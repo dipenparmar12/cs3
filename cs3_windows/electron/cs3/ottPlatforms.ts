@@ -34,16 +34,15 @@
  * `Netfilm`) cannot reach them. `ottPlatforms.test.mts` pins those three by
  * name; add a case there before loosening anything here.
  *
- * ## Platforms with no provider are still listed
+ * ## Only three are listed; everything else is discovered
  *
- * Sony LIV, ZEE5 and JioCinema have no per-platform CloudStream provider in the
- * reachable ecosystem — the community reaches them through aggregate scrapers
- * (MovieBox and CNC Verse both advertise it) rather than through a provider
- * named after the service. Dropping them from the catalogue would be tidier and
- * would answer the wrong question: the user knows the platform, not the scraper
- * that carries it. They are listed with `aggregateExtensions` naming the
- * extensions that do carry them, and the page says so instead of showing an
- * empty grid that reads as a bug.
+ * Netflix, Prime Video and Disney+ are the only hand-listed platforms. Every
+ * other service appears because an installed extension registers a provider
+ * with a main page (`discoverPlatforms`), the way Android's home screen works.
+ * Sony LIV, ZEE5 and JioCinema were once listed as "carried by" aggregate
+ * extensions with no provider of their own; that put a brand heading over a
+ * search box and a hardcoded claim about somebody else's scraper, so they were
+ * removed. A provider named after one of them is picked up by discovery.
  */
 
 /** A repository id from `official_repositories.json`. */
@@ -67,30 +66,9 @@ export interface OttPlatformDefinition {
    * normalised name, never the raw one.
    */
   providerPatterns: RegExp[];
-  /**
-   * Extension internal names that carry a meaningful amount of this platform's
-   * catalogue without registering a provider named after it. Matched on the
-   * extension, because that is the identity a repository index publishes and
-   * therefore the only one verifiable without installing anything.
-   */
-  aggregateExtensions: string[];
   /** Repositories to offer when nothing for this platform is installed. */
   suggestedRepositories: RepositoryId[];
-  /**
-   * Whether this platform appears in the sidebar without being asked for.
-   *
-   * The three that are on by default are the ones with both a provider *named
-   * after them* and something to browse — NetMirror registers Netflix, Prime
-   * Video and Disney Plus, and CNC Verse adds its own. Sony LIV, ZEE5 and
-   * JioCinema have no such provider anywhere: they are reachable only through
-   * aggregate scrapers, so their pages open onto a search box rather than a
-   * catalogue.
-   *
-   * Listing them off by default rather than dropping them is deliberate, and
-   * it is the same argument that put them in the table at all: the user knows
-   * the platform, not the scraper. Hiding them entirely answers "can I watch
-   * ZEE5?" with silence, which reads as the app not knowing what ZEE5 is.
-   */
+  /** Whether this platform appears in the sidebar without being asked for. */
   defaultEnabled: boolean;
 }
 
@@ -112,7 +90,6 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
     accent: '#e50914',
     providerNames: ['Netflix', 'NetflixMirror'],
     providerPatterns: [/^netflix/],
-    aggregateExtensions: [],
     suggestedRepositories: ['netmirror', 'cncverse'],
     defaultEnabled: true,
   },
@@ -124,7 +101,6 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
     providerNames: ['Prime Video', 'Amazon Prime Video', 'PrimeVideoMirror'],
     // Anchored, so `PrimeWire` — a real provider in this corpus — cannot reach it.
     providerPatterns: [/^(amazon)?primevideo/],
-    aggregateExtensions: [],
     suggestedRepositories: ['netmirror', 'cncverse'],
     defaultEnabled: true,
   },
@@ -138,10 +114,10 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
    * direction: the user reads a heading as a promise about what is behind it.
    *
    * Removing the row does not hide the providers. `Hotstar` and `JioHotstar`
-   * stay installed, enabled and searchable exactly as before; they simply no
-   * longer have a platform page of their own. **Do not re-add this row without
-   * a catalogue** — either a service code in `PLATFORM_CATALOGS` or a provider
-   * that actually publishes `getMainPage` for it.
+   * stay installed, enabled and searchable, and one that publishes
+   * `getMainPage` is offered by `discoverPlatforms` under its own name.
+   * **Do not re-add this row** — discovery is how services beyond these three
+   * appear.
    *
    * This is why `disney`'s pattern below stays anchored and terminated. With no
    * Hotstar row to claim it, `Disney+ Hotstar` normalises to `disneyhotstar`
@@ -168,49 +144,8 @@ export const OTT_PLATFORMS: OttPlatformDefinition[] = [
      * only one anchored tightly enough to be broken by it.
      */
     providerPatterns: [/^disney(plus)?m?$/],
-    aggregateExtensions: [],
     suggestedRepositories: ['netmirror', 'cncverse'],
     defaultEnabled: true,
-  },
-  {
-    id: 'sonyliv',
-    name: 'Sony LIV',
-    tagline: 'Sony LIV titles, carried by multi-platform extensions.',
-    accent: '#f26522',
-    providerNames: ['Sony LIV'],
-    providerPatterns: [/^sonyliv/],
-    // Both advertise Sony LIV coverage in their published descriptions.
-    aggregateExtensions: ['MovieBoxProvider', 'MovieBoxProviderIN', 'CNC Verse'],
-    suggestedRepositories: ['cncverse', 'phisher'],
-    defaultEnabled: false,
-  },
-  {
-    id: 'zee5',
-    name: 'ZEE5',
-    tagline: 'ZEE5 titles, carried by multi-platform extensions.',
-    accent: '#8230c6',
-    providerNames: ['ZEE5'],
-    providerPatterns: [/^zee5/],
-    aggregateExtensions: ['MovieBoxProvider', 'MovieBoxProviderIN', 'CNC Verse'],
-    suggestedRepositories: ['cncverse', 'phisher'],
-    defaultEnabled: false,
-  },
-  {
-    id: 'jiocinema',
-    name: 'JioCinema',
-    tagline: 'JioCinema titles, carried by multi-platform extensions.',
-    accent: '#d61f6b',
-    providerNames: ['JioCinema'],
-    /**
-     * `jiocinema` only. JioCinema merged into JioHotstar, and a `^jio` pattern
-     * here would take that provider — filing a Hotstar library under the
-     * JioCinema heading. Hotstar has no page of its own any more, so there is
-     * nowhere better for it to go; unmatched is the honest answer.
-     */
-    providerPatterns: [/^jiocinema/],
-    aggregateExtensions: ['MovieBoxProvider', 'MovieBoxProviderIN', 'CNC Verse'],
-    suggestedRepositories: ['cncverse', 'phisher'],
-    defaultEnabled: false,
   },
 ];
 
@@ -257,8 +192,6 @@ export type OttAvailability =
   | 'ready'
   /** Installed, but switched off somewhere in the repository/extension/provider cascade. */
   | 'disabled'
-  /** No provider of its own, but an installed extension carries its catalogue. */
-  | 'aggregate'
   /** Nothing installed can serve it; the repositories that might are offered. */
   | 'missing';
 
@@ -272,8 +205,6 @@ export interface OttPlatformView {
   providers: string[];
   /** Providers that are this platform but are switched off. */
   disabledProviders: string[];
-  /** Installed extensions that carry the platform without being named after it. */
-  carriedBy: string[];
   /** Repositories to offer when `availability` is `missing`. */
   suggestedRepositories: RepositoryId[];
   /**
@@ -302,8 +233,6 @@ export interface OttInventory {
   allProviders: string[];
   /** The subset a search would actually ask — the full enable cascade applied. */
   enabledProviders: string[];
-  /** `internalName` of every installed extension. */
-  installedExtensions: string[];
   /**
    * Per-provider facts, for discovery. Absent means no discovered platforms,
    * so the hand-listed table still answers on its own.
@@ -355,7 +284,6 @@ export function discoverPlatforms(inventory: OttInventory): OttPlatformView[] {
       availability: 'ready',
       providers: [detail.name],
       disabledProviders: [],
-      carriedBy: [],
       suggestedRepositories: [],
       discovered: true,
       extension: detail.pluginName,
@@ -370,14 +298,11 @@ export function discoverPlatforms(inventory: OttInventory): OttPlatformView[] {
  * Turns what is installed into what the sidebar should show.
  *
  * Pure, and takes the inventory rather than reaching for `PluginManager`, so
- * the interesting cases — a provider installed but disabled, a platform reachable
- * only through an aggregate — are testable without a JVM anywhere near them.
+ * the interesting cases — a provider installed but disabled, a provider
+ * discovered from its main page — are testable without a JVM anywhere near them.
  */
 export function buildOttPlatformViews(inventory: OttInventory): OttPlatformView[] {
   const enabled = new Set(inventory.enabledProviders);
-  const installedExtensions = new Set(
-    inventory.installedExtensions.map((name) => normaliseProviderName(name))
-  );
 
   const byPlatform = new Map<string, { on: string[]; off: string[] }>();
   for (const provider of inventory.allProviders) {
@@ -393,14 +318,10 @@ export function buildOttPlatformViews(inventory: OttInventory): OttPlatformView[
 
   const listed = OTT_PLATFORMS.map((platform): OttPlatformView => {
     const bucket = byPlatform.get(platform.id) ?? { on: [], off: [] };
-    const carriedBy = platform.aggregateExtensions.filter((name) =>
-      installedExtensions.has(normaliseProviderName(name))
-    );
 
     let availability: OttAvailability;
     if (bucket.on.length > 0) availability = 'ready';
     else if (bucket.off.length > 0) availability = 'disabled';
-    else if (carriedBy.length > 0) availability = 'aggregate';
     else availability = 'missing';
 
     return {
@@ -411,7 +332,6 @@ export function buildOttPlatformViews(inventory: OttInventory): OttPlatformView[
       availability,
       providers: bucket.on,
       disabledProviders: bucket.off,
-      carriedBy,
       suggestedRepositories: platform.suggestedRepositories,
     };
   });

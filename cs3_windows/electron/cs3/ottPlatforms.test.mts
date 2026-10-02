@@ -1,11 +1,11 @@
-/**
+﻿/**
  * Which installed provider counts as which OTT platform.
  *
  *   bun run test:ott
  *   node --experimental-strip-types electron/cs3/ottPlatforms.test.mts
  *
  * Pinned because the expensive failure here is silent. A matcher that is one
- * character too loose does not throw and does not log — it fills the Prime
+ * character too loose does not throw and does not log â€” it fills the Prime
  * Video page with results from a torrent aggregator called PrimeWire, which
  * looks like working software right up until someone notices the catalogue is
  * wrong. The three false-positive rows below are real provider names from this
@@ -36,7 +36,6 @@ test('discovers enabled providers with a main page that no listed platform claim
   const views = buildOttPlatformViews({
     allProviders: ['Hotstar', 'Netflix', 'NoHome', 'Off'],
     enabledProviders: ['Hotstar', 'Netflix', 'NoHome'],
-    installedExtensions: [],
     providerDetails: [detail('Hotstar'), detail('Netflix'), detail('NoHome', false), detail('Off')],
   });
   const discovered = views.filter((v) => v.discovered).map((v) => v.id);
@@ -49,7 +48,6 @@ test('no provider details means no discovered platforms', () => {
   const views = buildOttPlatformViews({
     allProviders: ['Hotstar'],
     enabledProviders: ['Hotstar'],
-    installedExtensions: [],
   });
   assert.equal(views.some((v) => v.discovered), false);
 });
@@ -112,13 +110,13 @@ test('no Hotstar name leaks onto a neighbouring platform', () => {
    */
   assert.equal(ottPlatformForProvider('Disney+ Hotstar'), null);
   assert.equal(ottPlatformForProvider('JioHotstar'), null);
-  assert.equal(ottPlatformForProvider('JioCinema')?.id, 'jiocinema');
+  assert.equal(ottPlatformForProvider('JioCinema'), null);
 });
 
 test('the CNC Verse provider names, measured, land on the right pages', () => {
   /**
    * Read off a real `--plugins 20` harness run, not invented. The `CNC Verse`
-   * extension registers `Netflix, Prime Video, Hotstar, Disney, …` and
+   * extension registers `Netflix, Prime Video, Hotstar, Disney, â€¦` and
    * `CNC Verse Mobile` registers the same set suffixed with `M`. `DisneyM` is
    * the case that broke the first version of the Disney pattern.
    */
@@ -143,7 +141,7 @@ test('a renamed mirror still matches by pattern', () => {
 
 // --- availability ----------------------------------------------------------
 
-const EMPTY = { allProviders: [], enabledProviders: [], installedExtensions: [] };
+const EMPTY = { allProviders: [], enabledProviders: [] };
 
 test('nothing installed reports every platform as missing, with somewhere to go', () => {
   const views = buildOttPlatformViews(EMPTY);
@@ -158,7 +156,6 @@ test('an enabled provider makes its platform ready', () => {
   const views = buildOttPlatformViews({
     allProviders: ['Netflix', 'Cinevood'],
     enabledProviders: ['Netflix', 'Cinevood'],
-    installedExtensions: ['Netmirror'],
   });
   const netflix = views.find((v) => v.id === 'netflix')!;
   assert.equal(netflix.availability, 'ready');
@@ -174,7 +171,6 @@ test('installed but switched off is `disabled`, never `missing`', () => {
   const views = buildOttPlatformViews({
     allProviders: ['Netflix'],
     enabledProviders: [],
-    installedExtensions: ['Netmirror'],
   });
   const netflix = views.find((v) => v.id === 'netflix')!;
   assert.equal(netflix.availability, 'disabled');
@@ -182,26 +178,21 @@ test('installed but switched off is `disabled`, never `missing`', () => {
   assert.deepEqual(netflix.providers, []);
 });
 
-test('a platform with no provider of its own is carried by an aggregate extension', () => {
-  const views = buildOttPlatformViews({
-    allProviders: [],
-    enabledProviders: [],
-    installedExtensions: ['MovieBoxProvider'],
-  });
-  const sony = views.find((v) => v.id === 'sonyliv')!;
-  assert.equal(sony.availability, 'aggregate');
-  assert.deepEqual(sony.carriedBy, ['MovieBoxProvider']);
+test('only Netflix, Prime Video and Disney+ are hand-listed', () => {
+  // Everything else must come from discovery, never from a row written here.
+  assert.deepEqual(OTT_PLATFORMS.map((p) => p.id).sort(), ['disney', 'netflix', 'primevideo']);
 });
 
-test('a real provider outranks an aggregate', () => {
-  // Both are true at once; the page should offer the one that can be browsed.
+test('a ZEE5 provider is discovered, not hardcoded or "carried by" anything', () => {
   const views = buildOttPlatformViews({
-    allProviders: ['SonyLIV'],
-    enabledProviders: ['SonyLIV'],
-    installedExtensions: ['MovieBoxProvider'],
+    allProviders: ['ZEE5', 'MovieBoxProvider'],
+    enabledProviders: ['ZEE5', 'MovieBoxProvider'],
+    providerDetails: [detail('ZEE5'), detail('MovieBoxProvider')],
   });
-  const sony = views.find((v) => v.id === 'sonyliv')!;
-  assert.equal(sony.availability, 'ready');
+  const zee5 = views.find((v) => v.name === 'ZEE5')!;
+  assert.equal(zee5.discovered, true);
+  assert.deepEqual(zee5.providers, ['ZEE5']);
+  assert.equal(views.some((v) => v.id === 'zee5'), false);
 });
 
 test('every platform id resolves back to its definition', () => {
@@ -228,7 +219,7 @@ test('no two platforms claim the same provider name', () => {
 
 test('every declared provider name matches its own platform', () => {
   // Catches a name added to one platform that a different platform's pattern
-  // reaches first — the same order-dependence the Disney/Hotstar case has.
+  // reaches first â€” the same order-dependence the Disney/Hotstar case has.
   for (const platform of OTT_PLATFORMS) {
     for (const name of platform.providerNames) {
       assert.equal(ottPlatformForProvider(name)?.id, platform.id, name);
@@ -240,35 +231,9 @@ test('every declared provider name matches its own platform', () => {
 
 // --- which platforms ship switched on ------------------------------------------
 
-test('only the platforms with a provider of their own are on by default', () => {
-  /**
-   * The three that are on are the ones with both a provider named after them
-   * and something behind it to browse: Netflix, Prime Video and Disney Plus.
-   *
-   * Sony LIV, ZEE5 and JioCinema have no such provider anywhere in the
-   * reachable ecosystem — they are served only by aggregate scrapers, so their
-   * pages are a search box. Hotstar had the provider and not the catalogue,
-   * which is the same empty page reached from the other side, so it is not a
-   * platform at all now. Shipping entries that cannot browse reads as broken.
-   */
+test('the three listed platforms ship switched on', () => {
   const on = OTT_PLATFORMS.filter((p) => p.defaultEnabled).map((p) => p.id).sort();
   assert.deepEqual(on, ['disney', 'netflix', 'primevideo']);
-});
-
-test('a platform that is off by default is still in the table', () => {
-  /**
-   * Off is not gone, and the difference is the whole reason they are listed.
-   * The user knows the platform, not the scraper; answering "can I watch ZEE5?"
-   * by omitting ZEE5 reads as the app not knowing what it is.
-   */
-  const off = OTT_PLATFORMS.filter((p) => !p.defaultEnabled);
-  assert.equal(off.length, 3);
-  for (const platform of off) {
-    assert.ok(
-      platform.aggregateExtensions.length > 0 || platform.suggestedRepositories.length > 0,
-      `${platform.id} is off by default and offers no way to reach it either`
-    );
-  }
 });
 
 let failed = 0;

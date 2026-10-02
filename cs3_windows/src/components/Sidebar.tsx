@@ -36,7 +36,7 @@ export interface SidebarOttPlatform {
   id: string;
   name: string;
   accent: string;
-  availability: 'ready' | 'disabled' | 'aggregate' | 'missing';
+  availability: 'ready' | 'disabled' | 'missing';
 }
 
 interface SidebarProps {
@@ -257,9 +257,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       ? platform.name
                       : platform.availability === 'disabled'
                         ? `${platform.name} — installed but switched off`
-                        : platform.availability === 'aggregate'
-                          ? `${platform.name} — carried by another extension`
-                          : `${platform.name} — not installed yet`
+                        : `${platform.name} — not installed yet`
                   }
                   style={{
                     display: 'flex',
