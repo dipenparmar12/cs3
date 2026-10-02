@@ -4990,6 +4990,16 @@ ipcMain.handle('ott:setPlatformsEnabled', async (_, changes: Record<string, bool
   }
 });
 
+ipcMain.handle('ott:getProviderCatalog', async (_, platformId: string, provider: string) => {
+  try {
+    const catalog = await ottService.getProviderCatalog(platformId, provider);
+    if (!catalog) return { ok: false, error: `${provider} is not part of this service.`, catalog: null };
+    return { ok: true, catalog };
+  } catch (error) {
+    return { ...fail(error), catalog: null };
+  }
+});
+
 ipcMain.handle('ott:getCatalogs', async (_, platformId: string) => {
   try {
     return { ok: true, ...(await ottService.getCatalogs(platformId)) };

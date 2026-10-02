@@ -6,11 +6,11 @@ import {
   History,
   Download,
   Loader2,
+  Plus,
   Puzzle,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
-  Tv,
 } from 'lucide-react';
 import { useExtensionJobs } from './extensions/useExtensionJobs';
 import { StreamingServicePicker } from './StreamingServicePicker';
@@ -75,6 +75,52 @@ export const Sidebar: React.FC<SidebarProps> = ({
    */
   const [showUnavailable, setShowUnavailable] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+
+  /*
+   * Find a service by typing. Matches the sidebar's own rows first, then every
+   * other enabled service the extensions provide (read when the box opens),
+   * which can be added and opened in one click.
+   */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [serviceQuery, setServiceQuery] = useState('');
+  const [allPlatforms, setAllPlatforms] = useState<SidebarOttPlatform[] | null>(null);
+  useEffect(() => {
+    if (!searchOpen) return;
+    let live = true;
+    setAllPlatforms(null);
+    void window.cloudstream?.listAllOttPlatforms().then((response) => {
+      if (live) setAllPlatforms((response?.platforms ?? []) as SidebarOttPlatform[]);
+    });
+    return () => {
+      live = false;
+    };
+  }, [searchOpen]);
+
+  const queryWords = serviceQuery.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const searching = searchOpen && queryWords.length > 0;
+  const matchesService = (name: string) => {
+    const folded = name.toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+    const compact = folded.replace(/ /g, '');
+    // "net" finds Netflix; "primev" finds Prime Video; "disney plus" finds Disney+.
+    return queryWords.every((q) => folded.split(' ').some((w) => w.startsWith(q)) || compact.includes(q));
+  };
+  const shownMatches = searching ? ottPlatforms.filter((p) => matchesService(p.name)) : [];
+  const shownIds = new Set(ottPlatforms.map((p) => p.id));
+  const extraMatches = searching
+    ? (allPlatforms ?? []).filter(
+        (p) => !shownIds.has(p.id) && p.availability !== 'missing' && matchesService(p.name)
+      )
+    : [];
+
+  const openService = async (platform: SidebarOttPlatform) => {
+    if (!shownIds.has(platform.id)) {
+      await window.cloudstream?.setOttPlatformEnabled(platform.id, true);
+      onOttPlatformsChanged?.();
+    }
+    setActiveTab(`ott:${platform.id}`);
+    setSearchOpen(false);
+    setServiceQuery('');
+  };
   const { snapshot: extensionJobs } = useExtensionJobs();
   const available = ottPlatforms.filter((p) => p.availability !== 'missing');
   const unavailable = ottPlatforms.filter((p) => p.availability === 'missing');
@@ -231,7 +277,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
               textTransform: 'uppercase',
               color: 'var(--text-subtle)',
             }}>
-              <Tv size={13} aria-hidden />
+              <button
+                onClick={() => {
+                  setSearchOpen((open) => !open);
+                  setServiceQuery('');
+                }}
+                title="Find a streaming service"
+                aria-label="Find a streaming service"
+                aria-expanded={searchOpen}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: searchOpen ? 'var(--accent-light)' : 'var(--text-subtle)',
+                  cursor: 'pointer',
+                  padding: 0,
+                  display: 'inline-flex',
+                }}
+              >
+                <Search size={13} />
+              </button>
               <span style={{ flex: 1 }}>Streaming services</span>
               {onOttPlatformsChanged && (
                 <button
@@ -245,7 +309,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )}
             </div>
 
-            {[...available, ...(showUnavailable ? unavailable : [])].map((platform) => {
+            {searchOpen && (
+              <input
+                autoFocus
+                value={serviceQuery}
+                onChange={(event) => setServiceQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.stopPropagation();
+                    setSearchOpen(false);
+                    setServiceQuery('');
+                  } else if (event.key === 'Enter') {
+                    const first = shownMatches[0] ?? extraMatches[0];
+                    if (first) void openService(first);
+                  }
+                }}
+                placeholder="Type to find… e.g. net"
+                aria-label="Find a streaming service"
+                style={{
+                  margin: '0 0.4rem 0.35rem',
+                  padding: '0.4rem 0.6rem',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--bg-card)',
+                  color: '#fff',
+                  fontSize: '0.8rem',
+                }}
+              />
+            )}
+
+            {(searching ? shownMatches : [...available, ...(showUnavailable ? unavailable : [])]).map((platform) => {
               const id: ActiveTab = `ott:${platform.id}`;
               const isActive = activeTab === id;
               return (
@@ -297,7 +390,48 @@ export const Sidebar: React.FC<SidebarProps> = ({
               );
             })}
 
-            {unavailable.length > 0 && (
+            {/* Enabled services that are not in the sidebar yet: one click adds
+                and opens, so finding one never means a trip to the picker. */}
+            {searching && extraMatches.length > 0 && (
+              <>
+                <div style={{ padding: '0.4rem 0.9rem 0.15rem', fontSize: '0.66rem', color: 'var(--text-subtle)' }}>
+                  Not in sidebar — click to add
+                </div>
+                {extraMatches.map((platform) => (
+                  <button
+                    key={platform.id}
+                    onClick={() => void openService(platform)}
+                    title={`Add ${platform.name} to the sidebar and open it`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.75rem',
+                      padding: '0.45rem 0.9rem',
+                      borderRadius: 'var(--radius-md)',
+                      background: 'transparent',
+                      border: '1px dashed var(--border-color)',
+                      color: 'var(--text-muted)',
+                      fontSize: '0.8rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span aria-hidden style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: platform.accent }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
+                      {platform.name}
+                    </span>
+                    <Plus size={13} aria-hidden />
+                  </button>
+                ))}
+              </>
+            )}
+
+            {searching && shownMatches.length === 0 && extraMatches.length === 0 && (
+              <div style={{ padding: '0.35rem 0.9rem', fontSize: '0.75rem', color: 'var(--text-subtle)' }}>
+                {allPlatforms === null ? 'Looking…' : `No enabled service matches “${serviceQuery.trim()}”`}
+              </div>
+            )}
+
+            {!searching && unavailable.length > 0 && (
               <button
                 onClick={() => setShowUnavailable((on) => !on)}
                 style={{

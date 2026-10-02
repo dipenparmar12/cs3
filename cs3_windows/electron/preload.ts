@@ -1455,6 +1455,11 @@ export interface CloudStreamElectronAPI {
   getOttCatalog: (
     platformId: string
   ) => Promise<{ ok: boolean; error?: string; catalog: ProviderCatalog | null }>;
+  /** One provider's catalogue, so a page can draw each provider as it lands. */
+  getOttProviderCatalog: (
+    platformId: string,
+    provider: string
+  ) => Promise<{ ok: boolean; error?: string; catalog: ProviderCatalog | null }>;
   /** Every matching provider's own catalogue, richest first. */
   getOttCatalogs: (platformId: string) => Promise<{
     ok: boolean;
@@ -2295,6 +2300,8 @@ const api: CloudStreamElectronAPI = {
   listOttPlatforms: () => ipcRenderer.invoke('ott:listPlatforms'),
   getOttCatalog: (platformId) => ipcRenderer.invoke('ott:getCatalog', platformId),
   getOttCatalogs: (platformId) => ipcRenderer.invoke('ott:getCatalogs', platformId),
+  getOttProviderCatalog: (platformId, provider) =>
+    ipcRenderer.invoke('ott:getProviderCatalog', platformId, provider),
   getOttCatalogPage: (provider, section, page) =>
     ipcRenderer.invoke('ott:getCatalogPage', provider, section, page),
   getOttSearchScope: (platformId) => ipcRenderer.invoke('ott:getSearchScope', platformId),

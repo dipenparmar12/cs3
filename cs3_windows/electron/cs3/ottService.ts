@@ -223,6 +223,25 @@ export class OttService {
     return { catalogs, unavailable };
   }
 
+  /**
+   * One provider's catalogue, for a page that draws each provider as it lands.
+   *
+   * `getCatalogs` answers only once every provider has loaded, and loading is
+   * serial in the JVM — on an install with four Netflix providers behind a
+   * background warm-up that was minutes of a blank page. The renderer asks one
+   * provider at a time instead and shows the first catalogue the moment it
+   * exists. The provider must belong to the platform: this channel is not a way
+   * to browse arbitrary providers by name.
+   */
+  public async getProviderCatalog(
+    platformId: string,
+    provider: string
+  ): Promise<ProviderCatalog | null> {
+    const providers = await this.providersFor(platformId);
+    if (!providers.includes(provider)) return null;
+    return this.plugins.loadCatalog(provider);
+  }
+
   public async getCatalogPage(
     provider: string,
     section: { name: string; data: string; horizontalImages?: boolean },

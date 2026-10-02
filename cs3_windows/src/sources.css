@@ -7345,6 +7345,37 @@
   color: var(--text-muted);
 }
 
+/* A row's first page on its way: poster-shaped, so the rail keeps its height. */
+.ott-view__placeholder {
+  flex: 0 0 auto;
+  width: 150px;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-md);
+  background: linear-gradient(100deg, var(--bg-card) 30%, var(--bg-card-hover) 50%, var(--bg-card) 70%);
+  background-size: 200% 100%;
+  animation: ott-placeholder 1.4s ease-in-out infinite;
+}
+
+@keyframes ott-placeholder {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ott-view__placeholder { animation: none; }
+}
+
+.ott-view__row-empty {
+  margin: 0;
+  padding: 1rem 0;
+  font-size: 0.8rem;
+  color: var(--text-subtle);
+}
+
+.ott-view__row-trigger {
+  height: 1px;
+}
+
 .ott-view__row-provider {
   font-weight: 500;
   color: var(--text-subtle);

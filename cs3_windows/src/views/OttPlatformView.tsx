@@ -82,6 +82,40 @@ export interface OttCategoryState extends HomeCategoryState {
   section: { name: string; data: string; horizontalImages?: boolean };
 }
 
+/**
+ * Fires `onVisible` once, when the node comes within a screen of the viewport.
+ *
+ * A row fetches itself as it is scrolled to — no "Show this row" button to
+ * press — while a catalogue of forty rows still costs only the ones somebody
+ * actually scrolls past. Each fetch is a live scrape of someone's site, so the
+ * margin is about a screen, not the whole page.
+ */
+const RowTrigger: React.FC<{ onVisible: () => void }> = ({ onVisible }) => {
+  const node = useRef<HTMLDivElement>(null);
+  const callback = useRef(onVisible);
+  callback.current = onVisible;
+  useEffect(() => {
+    const element = node.current;
+    if (!element) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      callback.current();
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          observer.disconnect();
+          callback.current();
+        }
+      },
+      { rootMargin: '600px 0px' }
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return <div ref={node} aria-hidden className="ott-view__row-trigger" />;
+};
+
 /** Lowercase words, punctuation folded away — "spider-man" finds "Spider Man". */
 function words(text: string): string[] {
   return text
@@ -122,8 +156,6 @@ interface LoadedSection extends ProviderCatalogSection {
  */
 const api = () => window.cloudstream;
 
-/** How many rows are fetched before the rest wait for a scroll. */
-const INITIAL_ROWS = 4;
 
 export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
   platform,
@@ -144,6 +176,8 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
    * fetching every provider's rows at once is a burst of scrapes nobody asked for.
    */
   const [activeProvider, setActiveProvider] = useState<string | null>(null);
+  /** The provider whose catalogue is being read right now, for the progress line. */
+  const [pendingProvider, setPendingProvider] = useState<string | null>(null);
   const [sections, setSections] = useState<LoadedSection[]>([]);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
@@ -217,31 +251,16 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     []
   );
 
-  /** Marks rows as loading and fetches their first page. */
-  const startRows = useCallback(
-    (rows: LoadedSection[]) => {
-      if (rows.length === 0) return;
-      const keys = new Set(rows.map((row) => row.key));
-      setSections((current) =>
-        current.map((row) => (keys.has(row.key) ? { ...row, loading: true, fetched: true } : row))
-      );
-      for (const row of rows) void loadRow(row, 1);
-    },
-    [loadRow]
-  );
-
-  // Switching provider fetches the first rows of that provider, once.
+  /*
+   * Rows fetch themselves when scrolled into view (`RowTrigger`), so there is
+   * no "first N rows" effect beside it — two triggers for one row is the same
+   * page scraped twice. `started` is the guard: an observer callback can land
+   * after the state that would have told it the row was already asked for.
+   */
+  const started = useRef(new Set<string>());
   useEffect(() => {
-    if (!activeProvider) return;
-    const pending = sections
-      .filter((row) => row.provider === activeProvider)
-      .slice(0, INITIAL_ROWS)
-      .filter((row) => !row.fetched);
-    startRows(pending);
-    // `sections` is read, not depended on: re-running on every row update would
-    // fire the same fetch again while it is in flight.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProvider, startRows]);
+    started.current = new Set();
+  }, [platform.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -264,48 +283,56 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     setMetaSections([]);
 
     /*
-     * Third-party listings are a fallback, not the page. The providers' own
-     * catalogues — NetflixM's rows, say — are what can actually play, so the
-     * listings are fetched only when no installed provider publishes one.
+     * Third-party listings are fetched at once, in parallel, and shown only
+     * until a provider's own rows arrive. Waiting for the providers first left
+     * the page blank for as long as the extension runtime took to load them —
+     * minutes, behind the background warm-up.
      */
-    const loadListings = () => {
-      setMetaLoading(true);
-      void api()
-        ?.getOttMetadataCatalog(platform.id)
-        .then((response) => {
-          if (cancelled) return;
-          setMetaLoading(false);
-          setMetaSupported(Boolean(response?.supported));
-          setMetaSections(response?.sections ?? []);
-        })
-        .catch(() => {
-          if (!cancelled) setMetaLoading(false);
-        });
-    };
+    setMetaLoading(true);
+    void api()
+      ?.getOttMetadataCatalog(platform.id)
+      .then((response) => {
+        if (cancelled) return;
+        setMetaLoading(false);
+        setMetaSupported(Boolean(response?.supported));
+        setMetaSections(response?.sections ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setMetaLoading(false);
+      });
 
     if (platform.availability !== 'ready') {
-      loadListings();
       return () => {
         cancelled = true;
       };
     }
 
-    setLoading(true);
-    void api()
-      ?.getOttCatalogs(platform.id)
-      .then((response) => {
+    /*
+     * One provider at a time, each drawn the moment it answers. Serial because
+     * the JVM loads providers serially anyway (§5), and asking for all of them
+     * at once only queues the first one behind the rest. The first provider
+     * with a catalogue opens; the others join the tabs as they land.
+     */
+    const providers = platform.providers;
+    setLoading(providers.length > 0);
+    void (async () => {
+      for (const provider of providers) {
         if (cancelled) return;
-        setLoading(false);
-        const found = response?.ok ? response.catalogs : [];
-        setCatalogs(found);
-        setUnbrowsable(response?.unavailable ?? []);
-        if (found.length === 0) {
-          loadListings();
-          return;
+        setPendingProvider(provider);
+        let response: Awaited<ReturnType<NonNullable<ReturnType<typeof api>>['getOttProviderCatalog']>> | null =
+          null;
+        try {
+          response = (await api()?.getOttProviderCatalog(platform.id, provider)) ?? null;
+        } catch {
+          response = null;
         }
-        setSections(
-          found.flatMap((catalog) =>
-            catalog.sections.map((section) => ({
+        if (cancelled) return;
+        const catalog = response?.ok ? response.catalog : null;
+        if (catalog?.hasMainPage && catalog.sections.length > 0) {
+          setCatalogs((current) => [...current, catalog]);
+          setSections((current) => [
+            ...current,
+            ...catalog.sections.map((section) => ({
               ...section,
               key: `${catalog.provider}::${section.name}`,
               provider: catalog.provider,
@@ -314,27 +341,41 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
               page: 1,
               hasNext: false,
               loading: false,
-            }))
-          )
-        );
-        // Richest first, so the page opens on the fullest catalogue.
-        setActiveProvider(found[0].provider);
-      })
-      .catch(() => {
-        if (cancelled) return;
+            })),
+          ]);
+          setActiveProvider((current) => current ?? catalog.provider);
+        } else {
+          setUnbrowsable((current) => [
+            ...current,
+            {
+              provider,
+              reason:
+                catalog?.unavailableReason ??
+                response?.error ??
+                'Publishes no catalogue — search it instead.',
+            },
+          ]);
+        }
+      }
+      if (!cancelled) {
         setLoading(false);
-        loadListings();
-      });
+        setPendingProvider(null);
+      }
+    })();
 
     return () => {
       cancelled = true;
     };
-  }, [platform.id, platform.availability]);
+    // The provider list is compared by value: the platform object is rebuilt on
+    // every inventory refresh, and identity would restart the whole load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [platform.id, platform.availability, platform.providers.join('\u0000')]);
 
   const visibleSections = useMemo(
     () => sections.filter((row) => row.provider === activeProvider),
     [sections, activeProvider]
   );
+  const providerHasItems = sections.some((row) => row.items.length > 0);
 
   /*
    * Typing filters what is already on the page, instantly and with no network:
@@ -368,12 +409,6 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     () => (filtering ? sections.filter((row) => matchesQuery(row.name, queryWords)) : []),
     [filtering, queryWords, sections]
   );
-
-  // A matching row nobody has opened yet is fetched, so it is not an empty rail.
-  useEffect(() => {
-    startRows(rowMatches.filter((row) => !row.fetched).slice(0, INITIAL_ROWS));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rowMatches.map((row) => row.key).join('|'), startRows]);
 
   const showAll = (section: LoadedSection) =>
     onCategoryChange({
@@ -448,7 +483,10 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     )
   );
 
-  const fetchRow = (section: LoadedSection) => {
+  /** `retry` re-asks a row that failed; otherwise a row is fetched once. */
+  const fetchRow = (section: LoadedSection, retry = false) => {
+    if (started.current.has(section.key) && !retry) return;
+    started.current.add(section.key);
     setSections((current) =>
       current.map((row) => (row.key === section.key ? { ...row, loading: true, fetched: true } : row))
     );
@@ -496,14 +534,24 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
             <ChevronRight size={20} aria-hidden />
           </button>
         )}
-        {/* An unfetched row is announced, so a rail below the fold does not
-            read as an empty one. */}
-        {!section.loading && section.items.length === 0 && !section.error && (
-          <button type="button" className="ott-view__more" onClick={() => fetchRow(section)}>
-            Show {section.name}
+        {/* Placeholders while the row's first page is on its way, so a row
+            that is loading never reads as an empty one. */}
+        {section.items.length === 0 &&
+          !section.error &&
+          (!section.fetched || section.loading) &&
+          Array.from({ length: 6 }, (_, index) => (
+            <div key={index} className="ott-view__placeholder" aria-hidden />
+          ))}
+        {section.items.length === 0 && section.fetched && !section.loading && !section.error && (
+          <p className="ott-view__row-empty">Nothing in this row right now.</p>
+        )}
+        {section.error && (
+          <button type="button" className="ott-view__more" onClick={() => fetchRow(section, true)}>
+            Try again
           </button>
         )}
       </div>
+      {!section.fetched && <RowTrigger onVisible={() => fetchRow(section)} />}
     </section>
   );
 
@@ -652,8 +700,15 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
       )}
 
       {loading && (
-        <p className="ott-view__loading">
-          <Loader2 size={14} className="spin" aria-hidden /> Reading {platform.name}'s catalogue…
+        <p className="ott-view__loading" role="status">
+          <Loader2 size={14} className="spin" aria-hidden />
+          {pendingProvider
+            ? ` Reading ${pendingProvider}'s catalogue (${
+                catalogs.length + unbrowsable.length + 1
+              } of ${platform.providers.length})…`
+            : ` Reading ${platform.name}'s catalogue…`}
+          {catalogs.length === 0 &&
+            ' The first time, an extension has to be loaded before it can answer.'}
         </p>
       )}
 
@@ -701,11 +756,12 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
         )}
 
       {/*
-        * What is on the service, only when no installed provider publishes a
-        * catalogue. A provider row is something this app can play and one of
-        * these is only something that exists, so it is labelled, not blended.
+        * What is on the service, until an installed provider's own rows have
+        * something in them — so the page is never blank while extensions load.
+        * A provider row is something this app can play and one of these is
+        * only something that exists, so it is labelled, not blended.
         */}
-      {catalogs.length === 0 && metaSections.length > 0 && (
+      {!filtering && !providerHasItems && metaSections.length > 0 && (
         <div className="ott-view__meta">
           <div className="ott-view__meta-head">
             <Sparkles size={13} aria-hidden />
@@ -713,7 +769,9 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
               Popular on {platform.name} right now.{' '}
               {platform.availability !== 'ready'
                 ? 'Nothing installed can play these yet — opening one searches every source you have.'
-                : 'These come from a listings service, not from an installed extension: opening one searches every source you have for it.'}
+                : loading
+                  ? 'Shown while the installed providers load their own catalogues; opening one searches every source you have.'
+                  : 'These come from a listings service, not from an installed extension: opening one searches every source you have for it.'}
             </p>
           </div>
           {metaSections.map((section) => (
