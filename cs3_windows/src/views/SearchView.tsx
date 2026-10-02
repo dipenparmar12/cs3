@@ -5,7 +5,7 @@ import type { SearchResponse } from '../types/api';
 import { TYPE_TABS, matchesTab, tabsFor } from '../utils/contentTypes';
 import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/resultGroups';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
-import { AlertTriangle, Bookmark, BookmarkCheck, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, RotateCw, Search, SearchX, Target, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Bookmark, BookmarkCheck, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, RotateCw, Search, SearchX, Target, Trash2, Wrench, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
 import { partitionDeadRows } from '../utils/deadRows';
 import { FacetMenu, type FacetOption } from '../components/FacetMenu';
@@ -64,6 +64,8 @@ interface SearchViewProps {
   savedView?: { id: string; savedAt: number } | null;
   /** Keeps these results to reopen from the Library or the search box. */
   onSaveResults?: () => Promise<boolean>;
+  /** Clears active search results and returns view to clean state. */
+  onClearResults?: () => void;
 }
 
 /** "3 Sep 2026, 14:05" — a date a person reads, not a relative age that drifts. */
@@ -239,6 +241,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
   onRetry,
   savedView,
   onSaveResults,
+  onClearResults,
 }) => {
   const { sourceFilter, typeTab, openGroups } = ui;
   /** The provider names the fix modal is open for, or null when it is closed. */

@@ -130,6 +130,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const [confirmDownloads, setConfirmDownloads] = useState<'ask' | 'immediate'>('immediate');
   const [useLiveStreams, setUseLiveStreams] = useState(true);
   const [torrentMirrors, setTorrentMirrors] = useState(true);
+  const [showTorrentAttachment, setShowTorrentAttachment] = useState(false);
   const { message: statusMessage, flash } = useFlash<string>(3000);
   const [missingComponentCount, setMissingComponentCount] = useState<number>(0);
   const [concurrency, setConcurrency] = useState<{
@@ -164,6 +165,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
     window.cloudstream
       ?.getSetting('torrent_http_metadata_cache', 'true')
       .then((value) => setTorrentMirrors(value !== 'false'));
+    window.cloudstream
+      ?.getSetting('show_torrent_attachment', 'false')
+      .then((value) => setShowTorrentAttachment(value === 'true'));
     window.cloudstream?.getSearchConcurrency?.().then(setConcurrency);
     void checkComponentStatus();
   }, [checkComponentStatus]);
@@ -184,6 +188,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
       enabled
         ? 'Torrent details may be fetched from public mirrors.'
         : 'Torrent details will come from the swarm only.'
+    );
+  };
+
+  const handleToggleTorrentAttachment = async (enabled: boolean) => {
+    setShowTorrentAttachment(enabled);
+    await window.cloudstream?.setSetting('show_torrent_attachment', enabled);
+    window.dispatchEvent(
+      new CustomEvent('cs3:settings-changed', {
+        detail: { key: 'show_torrent_attachment', value: enabled },
+      })
+    );
+    flash(
+      enabled
+        ? 'Torrent attachment button will appear when the search bar is empty.'
+        : 'Torrent attachment button hidden from search bar.'
     );
   };
 
@@ -702,6 +721,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                   onChange={(event) => handleToggleTorrentMirrors(event.target.checked)}
                 />
                 <span>{torrentMirrors ? 'On' : 'Off'}</span>
+              </label>
+            </SettingRow>
+
+            <SettingRow
+              label="Show torrent file attachment button in search bar"
+              level="standard"
+              note={showTorrentAttachment ? 'Visible when search is empty' : 'Hidden'}
+              hint="Displays a paperclip icon in the search bar to pick and open .torrent files from disk when the search bar is empty. When disabled, you can still open torrents by dragging and dropping them into the app window."
+            >
+              <label className="settings__switch">
+                <input
+                  type="checkbox"
+                  checked={showTorrentAttachment}
+                  onChange={(event) => handleToggleTorrentAttachment(event.target.checked)}
+                />
+                <span>{showTorrentAttachment ? 'On' : 'Off'}</span>
               </label>
             </SettingRow>
           </SettingGroup>

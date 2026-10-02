@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Bug, Loader2, Paperclip, EyeOff, X, Square } from 'lucide-react';
+import { Search, Bug, Loader2, Paperclip, EyeOff, X, Square, Trash2 } from 'lucide-react';
 import { usePrivacy } from '../utils/usePrivacy';
 import { DeveloperOnly } from '../utils/ExperienceModeContext';
 import { SearchScopePicker } from './SearchScopePicker';
@@ -19,6 +19,10 @@ interface NavbarProps {
   onCancelSearch?: () => void;
   /** Fired when the query is cleared via the clear button or Esc. */
   onClearSearch?: () => void;
+  /** Clears active search results from screen. */
+  onClearResults?: () => void;
+  /** Whether search results are currently active on screen. */
+  hasSearchResults?: boolean;
   /**
    * A torrent was picked from disk, so the app can open its page.
    *
@@ -77,6 +81,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSearch,
   onCancelSearch,
   onClearSearch,
+  onClearResults,
+  hasSearchResults = false,
   onTorrentPicked,
   onTorrentPickFailed,
   isSearching = false,
@@ -87,6 +93,24 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const [query, setQuery] = useState('');
   const { active: incognito, setActive: setIncognito } = usePrivacy();
+  const [showTorrentAttachment, setShowTorrentAttachment] = useState(false);
+
+  useEffect(() => {
+    const update = () => {
+      window.cloudstream
+        ?.getSetting('show_torrent_attachment', 'false')
+        .then((val) => setShowTorrentAttachment(val === 'true'));
+    };
+    update();
+    const handleSettingsChanged = (e: Event) => {
+      const custom = e as CustomEvent<{ key?: string; value?: unknown }>;
+      if (!custom.detail || custom.detail.key === 'show_torrent_attachment') {
+        update();
+      }
+    };
+    window.addEventListener('cs3:settings-changed', handleSettingsChanged);
+    return () => window.removeEventListener('cs3:settings-changed', handleSettingsChanged);
+  }, []);
 
   /**
    * Adopts a query the app started elsewhere.
@@ -403,24 +427,39 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         )}
 
-        {/*
-          The other way in.
-          
-          Drag-and-drop is a gesture plenty of people never use — it is awkward
-          on a trackpad and invisible if nobody has told you it exists. This is
-          the same import behind a control that looks like one, next to the box
-          where somebody is already looking for something to watch.
-        */}
-        <button
-          type="button"
-          onClick={() => void pickTorrent()}
-          disabled={picking}
-          className="search-bar__attach"
-          title="Open a .torrent file"
-          aria-label="Open a torrent file"
-        >
-          {picking ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}
-        </button>
+        {showTorrentAttachment && !query.trim() && !isSearching && (
+          <button
+            type="button"
+            onClick={() => void pickTorrent()}
+            disabled={picking}
+            className="search-bar__attach"
+            title="Open a .torrent file"
+            aria-label="Open a torrent file"
+          >
+            {picking ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}
+          </button>
+        )}
+
+        {hasSearchResults && onClearResults && !isSearching && (
+          <button
+            type="button"
+            onClick={onClearResults}
+            className="btn btn-secondary search-bar__clear-results-btn"
+            style={{
+              padding: '0.35rem 0.65rem',
+              fontSize: '0.8rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              color: 'var(--text-muted)',
+            }}
+            title="Clear current search results"
+            aria-label="Clear current search results"
+          >
+            <Trash2 size={13} />
+            <span>Clear</span>
+          </button>
+        )}
 
         {isSearching ? (
           <button
