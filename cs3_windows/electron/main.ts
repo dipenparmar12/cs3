@@ -723,7 +723,16 @@ app.commandLine.appendSwitch('enable-features', CHROMIUM_FEATURES.join(','));
  * `configureHostResolver`, and therefore the user's DNS setting.
  */
 const resilientFetch = new ResilientFetch({
-  primary: (input, init) => net.fetch(input, init),
+  /*
+   * `unsafe-url`: send the provider's `Referer` exactly as given, as OkHttp does
+   * on Android. Under Chromium's default policy a full-path referrer on a
+   * cross-site request is not trimmed but refused outright with
+   * `ERR_BLOCKED_BY_CLIENT` — measured 2026-10-02 on NetMirror/Jio Hotstar,
+   * whose `https://net52.cc/mobile/home?app=1` referrer killed every variant
+   * playlist on `freecdn34.top` while the same-site master played. Downloads
+   * (aria2) worked throughout, which is what made it look like a stream bug.
+   */
+  primary: (input, init) => net.fetch(input, { referrerPolicy: 'unsafe-url', ...init }),
   fallback: (input, init) => fetch(input, init),
   diagnostics,
 });
