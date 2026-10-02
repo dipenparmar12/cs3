@@ -40,12 +40,20 @@ interface ProviderSummary {
   requiresKey: boolean;
   selectable: boolean;
   active: boolean;
+  accent?: string;
+  category?: 'general' | 'streaming' | 'anime';
   health: {
     status: 'healthy' | 'degraded' | 'unavailable' | 'unchecked';
     reason?: string;
     needsKey?: boolean;
   } | null;
 }
+
+const CATEGORIES: Array<{ key: 'streaming' | 'general' | 'anime'; title: string }> = [
+  { key: 'streaming', title: 'Streaming Platforms' },
+  { key: 'general', title: 'General Catalogues' },
+  { key: 'anime', title: 'Anime' },
+];
 
 export const CataloguePicker: React.FC<{
   /** Re-runs discovery once the catalogue has actually changed. */
@@ -134,6 +142,13 @@ export const CataloguePicker: React.FC<{
         aria-haspopup="menu"
         title="Where the rows on this page come from"
       >
+        {current?.accent && (
+          <span
+            className="cat-picker__button-dot"
+            style={{ backgroundColor: current.accent }}
+            aria-hidden
+          />
+        )}
         <Layers size={13} aria-hidden />
         <span className="cat-picker__label">{current?.name ?? 'Catalogue'}</span>
         <ChevronDown size={13} aria-hidden />
@@ -150,57 +165,77 @@ export const CataloguePicker: React.FC<{
               <Loader2 size={13} className="spin" aria-hidden /> Reading catalogues…
             </p>
           ) : (
-            <ul className="cat-picker__list">
-              {providers.map((provider) => {
-                /*
-                 * `selectable` is the registry's own answer and is the only
-                 * thing worth reading here. An *unchecked* provider is
-                 * selectable — the health probe is expensive and is not forced
-                 * on open — so treating "no health record" as broken would grey
-                 * out every entry on a cold start.
-                 */
-                const blocked = !provider.selectable;
-                const reason =
-                  provider.health?.reason ??
-                  (provider.health?.status === 'unavailable'
-                    ? 'Not answering right now'
-                    : provider.requiresKey
-                      ? 'Needs a key, set in Settings → Home'
-                      : undefined);
+            <div className="cat-picker__list-scroll">
+              {CATEGORIES.map(({ key, title }) => {
+                const group = providers.filter((p) => (p.category ?? 'general') === key);
+                if (group.length === 0) return null;
                 return (
-                  <li key={provider.id}>
-                    <button
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={provider.id === selected}
-                      className={`cat-picker__item${
-                        provider.id === selected ? ' cat-picker__item--on' : ''
-                      }${blocked ? ' cat-picker__item--blocked' : ''}`}
-                      onClick={() => void choose(provider.id)}
-                      disabled={switching !== null || blocked}
-                    >
-                      <span className="cat-picker__tick">
-                        {switching === provider.id ? (
-                          <Loader2 size={12} className="spin" aria-hidden />
-                        ) : provider.id === selected ? (
-                          <Check size={12} aria-hidden />
-                        ) : null}
-                      </span>
-                      <span className="cat-picker__text">
-                        <strong>{provider.name}</strong>
-                        {/* The reason, when there is one — an entry greyed out
-                            with no explanation reads as a broken menu. */}
-                        {blocked && reason ? (
-                          <em className="cat-picker__why">{reason}</em>
-                        ) : provider.description ? (
-                          <em>{provider.description}</em>
-                        ) : null}
-                      </span>
-                    </button>
-                  </li>
+                  <div key={key} className="cat-picker__group">
+                    <div className="cat-picker__group-title">{title}</div>
+                    <ul className="cat-picker__list">
+                      {group.map((provider) => {
+                        /*
+                         * `selectable` is the registry's own answer and is the only
+                         * thing worth reading here. An *unchecked* provider is
+                         * selectable — the health probe is expensive and is not forced
+                         * on open — so treating "no health record" as broken would grey
+                         * out every entry on a cold start.
+                         */
+                        const blocked = !provider.selectable;
+                        const reason =
+                          provider.health?.reason ??
+                          (provider.health?.status === 'unavailable'
+                            ? 'Not answering right now'
+                            : provider.requiresKey
+                              ? 'Needs a key, set in Settings → Home'
+                              : undefined);
+                        return (
+                          <li key={provider.id}>
+                            <button
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={provider.id === selected}
+                              className={`cat-picker__item${
+                                provider.id === selected ? ' cat-picker__item--on' : ''
+                              }${blocked ? ' cat-picker__item--blocked' : ''}`}
+                              onClick={() => void choose(provider.id)}
+                              disabled={switching !== null || blocked}
+                            >
+                              <span className="cat-picker__tick">
+                                {switching === provider.id ? (
+                                  <Loader2 size={12} className="spin" aria-hidden />
+                                ) : provider.id === selected ? (
+                                  <Check size={12} aria-hidden />
+                                ) : null}
+                              </span>
+                              <span className="cat-picker__text">
+                                <span className="cat-picker__title-row">
+                                  {provider.accent && (
+                                    <span
+                                      className="cat-picker__badge-dot"
+                                      style={{ backgroundColor: provider.accent }}
+                                      aria-hidden
+                                    />
+                                  )}
+                                  <strong>{provider.name}</strong>
+                                </span>
+                                {/* The reason, when there is one — an entry greyed out
+                                    with no explanation reads as a broken menu. */}
+                                {blocked && reason ? (
+                                  <em className="cat-picker__why">{reason}</em>
+                                ) : provider.description ? (
+                                  <em>{provider.description}</em>
+                                ) : null}
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
                 );
               })}
-            </ul>
+            </div>
           )}
 
           {/*

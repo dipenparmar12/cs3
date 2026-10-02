@@ -1654,6 +1654,8 @@ export interface CloudStreamElectronAPI {
         genres: number;
         selectable: boolean;
         active: boolean;
+        accent?: string;
+        category?: 'general' | 'streaming' | 'anime';
         health: {
           status: 'healthy' | 'degraded' | 'unavailable' | 'unchecked';
           latencyMs?: number;

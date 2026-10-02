@@ -32,6 +32,8 @@ type Provider = {
   genres: number;
   selectable: boolean;
   active: boolean;
+  accent?: string;
+  category?: 'general' | 'streaming' | 'anime';
   health: Health | null;
 };
 
@@ -168,50 +170,74 @@ export const HomeSettings: React.FC = () => {
           <Loader2 size={13} className="spin" /> Checking catalogues…
         </p>
       ) : (
-        <div className="home-settings__providers">
-          {providers.map((provider) => {
-            const health = provider.health;
-            const status = health?.status ?? 'unchecked';
+        <div className="home-settings__groups">
+          {([
+            { key: 'streaming' as const, title: 'Streaming Platforms' },
+            { key: 'general' as const, title: 'General Catalogues' },
+            { key: 'anime' as const, title: 'Anime' },
+          ]).map(({ key, title }) => {
+            const group = providers.filter((p) => (p.category ?? 'general') === key);
+            if (group.length === 0) return null;
             return (
-              <label
-                key={provider.id}
-                className={`home-settings__provider home-settings__provider--${status}${
-                  provider.id === selected ? ' home-settings__provider--selected' : ''
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="home-provider"
-                  checked={provider.id === selected}
-                  disabled={!provider.selectable}
-                  onChange={() => void choose(provider.id)}
-                />
-                <div className="home-settings__provider-body">
-                  <div className="home-settings__provider-head">
-                    <strong>{provider.name}</strong>
-                    <span className={`home-settings__status home-settings__status--${status}`}>
-                      {STATUS_LABEL[status]}
-                      {health?.latencyMs !== undefined && status !== 'unavailable'
-                        ? ` · ${health.latencyMs} ms`
-                        : ''}
-                    </span>
-                  </div>
-                  <p className="muted">{provider.description}</p>
-                  {health?.reason && (
-                    <p className="home-settings__reason">{health.reason}</p>
-                  )}
-                  <p className="home-settings__catalogs">
-                    {provider.catalogs.map((c) => CATALOG_LABEL[c] ?? c).join(' · ')}
-                    {provider.genres > 0 ? ` · ${provider.genres} genres` : ''}
-                    {/* Item and artwork counts are what "healthy" actually
-                        means here: a 200 with five blank cards is not a working
-                        catalogue, and this is where that shows. */}
-                    {health?.items !== undefined
-                      ? ` · ${health.withArtwork ?? 0}/${health.items} with artwork`
-                      : ''}
-                  </p>
+              <div key={key} className="home-settings__group">
+                <h4 className="home-settings__group-title">{title}</h4>
+                <div className="home-settings__providers">
+                  {group.map((provider) => {
+                    const health = provider.health;
+                    const status = health?.status ?? 'unchecked';
+                    return (
+                      <label
+                        key={provider.id}
+                        className={`home-settings__provider home-settings__provider--${status}${
+                          provider.id === selected ? ' home-settings__provider--selected' : ''
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="home-provider"
+                          checked={provider.id === selected}
+                          disabled={!provider.selectable}
+                          onChange={() => void choose(provider.id)}
+                        />
+                        <div className="home-settings__provider-body">
+                          <div className="home-settings__provider-head">
+                            <span className="home-settings__provider-title">
+                              {provider.accent && (
+                                <span
+                                  className="home-settings__accent-dot"
+                                  style={{ backgroundColor: provider.accent }}
+                                  aria-hidden
+                                />
+                              )}
+                              <strong>{provider.name}</strong>
+                            </span>
+                            <span className={`home-settings__status home-settings__status--${status}`}>
+                              {STATUS_LABEL[status]}
+                              {health?.latencyMs !== undefined && status !== 'unavailable'
+                                ? ` · ${health.latencyMs} ms`
+                                : ''}
+                            </span>
+                          </div>
+                          <p className="muted">{provider.description}</p>
+                          {health?.reason && (
+                            <p className="home-settings__reason">{health.reason}</p>
+                          )}
+                          <p className="home-settings__catalogs">
+                            {provider.catalogs.map((c) => CATALOG_LABEL[c] ?? c).join(' · ')}
+                            {provider.genres > 0 ? ` · ${provider.genres} genres` : ''}
+                            {/* Item and artwork counts are what "healthy" actually
+                                means here: a 200 with five blank cards is not a working
+                                catalogue, and this is where that shows. */}
+                            {health?.items !== undefined
+                              ? ` · ${health.withArtwork ?? 0}/${health.items} with artwork`
+                              : ''}
+                          </p>
+                        </div>
+                      </label>
+                    );
+                  })}
                 </div>
-              </label>
+              </div>
             );
           })}
         </div>
