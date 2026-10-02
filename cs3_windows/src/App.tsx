@@ -1594,6 +1594,12 @@ export const App: React.FC = () => {
           }}
           onTorrentPickFailed={(message) => setActionNotice(message)}
           onSearch={handleSearch}
+          onCancelSearch={handleCancelSearch}
+          onClearSearch={() => {
+            if (search && !search.done) {
+              void handleCancelSearch();
+            }
+          }}
           onOpenSavedSearch={handleOpenSavedSearch}
           isSearching={Boolean(search && !search.done)}
           onScopeChange={handleScopeChange}

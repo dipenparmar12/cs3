@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Search, Bug, Loader2, Paperclip, EyeOff } from 'lucide-react';
+import { Search, Bug, Loader2, Paperclip, EyeOff, X, Square } from 'lucide-react';
 import { usePrivacy } from '../utils/usePrivacy';
 import { DeveloperOnly } from '../utils/ExperienceModeContext';
 import { SearchScopePicker } from './SearchScopePicker';
@@ -14,6 +14,10 @@ import type { SavedSearchSummary } from '../../electron/savedSearches';
 
 interface NavbarProps {
   onSearch: (query: string, options?: SearchOptions) => void;
+  /** Stops the active search fan-out. */
+  onCancelSearch?: () => void;
+  /** Fired when the query is cleared via the clear button or Esc. */
+  onClearSearch?: () => void;
   /**
    * A torrent was picked from disk, so the app can open its page.
    *
@@ -70,6 +74,8 @@ const SUGGEST_MIN_LENGTH = 1;
 
 export const Navbar: React.FC<NavbarProps> = ({
   onSearch,
+  onCancelSearch,
+  onClearSearch,
   onTorrentPicked,
   onTorrentPickFailed,
   isSearching = false,
@@ -247,10 +253,28 @@ export const Navbar: React.FC<NavbarProps> = ({
         ...history.map((_, index) => ({ kind: 'history' as const, index })),
       ];
 
+  const handleClear = useCallback(() => {
+    setQuery('');
+    lastExternal.current = '';
+    setSuggestOpen(false);
+    setHighlightedIndex(-1);
+    inputRef.current?.focus();
+    onClearSearch?.();
+    if (isSearching) {
+      onCancelSearch?.();
+    }
+  }, [isSearching, onClearSearch, onCancelSearch]);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
-      setSuggestOpen(false);
-      setHighlightedIndex(-1);
+      if (suggestOpen) {
+        setSuggestOpen(false);
+        setHighlightedIndex(-1);
+      } else if (query) {
+        handleClear();
+      } else if (isSearching) {
+        onCancelSearch?.();
+      }
       return;
     }
 
@@ -337,6 +361,23 @@ export const Navbar: React.FC<NavbarProps> = ({
           aria-expanded={suggestOpen}
           aria-autocomplete="list"
         />
+
+        {query.length > 0 && (
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              // Keep focus on the input so typing or clearing feels instant
+              e.preventDefault();
+            }}
+            onClick={handleClear}
+            className="search-bar__clear"
+            title="Clear search (Esc)"
+            aria-label="Clear search"
+          >
+            <X size={15} />
+          </button>
+        )}
+
         {/*
           The other way in.
           
@@ -356,15 +397,30 @@ export const Navbar: React.FC<NavbarProps> = ({
           {picking ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}
         </button>
 
-        <button
-          onClick={() => runSearch(query)}
-          disabled={isSearching}
-          className="btn btn-primary"
-          style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-        >
-          {isSearching ? <Loader2 size={14} className="spin" /> : <Search size={14} />}
-          <span>{isSearching ? 'Searching…' : 'Search'}</span>
-        </button>
+        {isSearching ? (
+          <button
+            type="button"
+            onClick={onCancelSearch}
+            className="btn search-bar__stop-btn"
+            title="Stop searching"
+            aria-label="Stop search"
+          >
+            <Square size={11} fill="currentColor" />
+            <span>Stop</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => runSearch(query)}
+            className="btn btn-primary"
+            style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+            title="Search"
+            aria-label="Search"
+          >
+            <Search size={14} />
+            <span>Search</span>
+          </button>
+        )}
 
         <SearchSuggestions
           open={suggestOpen}
