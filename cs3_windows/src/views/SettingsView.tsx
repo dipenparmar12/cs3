@@ -726,7 +726,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
 
             <SettingRow
               label="Show torrent file attachment button in search bar"
-              level="standard"
+              level="basic"
               note={showTorrentAttachment ? 'Visible when search is empty' : 'Hidden'}
               hint="Displays a paperclip icon in the search bar to pick and open .torrent files from disk when the search bar is empty. When disabled, you can still open torrents by dragging and dropping them into the app window."
             >

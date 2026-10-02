@@ -33,6 +33,11 @@ export interface SeriesContext {
   /** URL of the episode currently playing, used to highlight and to seed next/prev. */
   currentEpisodeUrl?: string;
   /**
+   * Canonical URL of the title/series detail page (e.g. detail.url),
+   * used to reopen the title page rather than relying on an episode playback handle.
+   */
+  pageUrl?: string;
+  /**
    * Watch history per episode, keyed by `episodeKey`.
    *
    * Without it the panel is just a list of names, and the viewer has to remember
