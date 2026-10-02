@@ -3684,10 +3684,35 @@ async function describeUnreadableSource(url: string): Promise<{
       },
       { operation: 'source-probe' }
     );
-    try {
-      await response.body?.cancel();
-    } catch {
-      // Nothing to cancel.
+    /*
+     * A 502 from our own proxy is not the host's answer — it is ours, saying the
+     * host could not be reached, with the reason as the body. Measured
+     * 2026-10-02 on MovieBlast's `move.mbaccess.site`: the name has no address
+     * record at all, and the viewer was told the link "may have expired, or need
+     * credentials". Read the (short) body so the sentence names the real cause.
+     */
+    let proxyReason = '';
+    if (response.status === 502 && /^https?:\/\/127\.0\.0\.1[:/]/i.test(url)) {
+      proxyReason = (await response.text().catch(() => '')).slice(0, 500);
+    } else {
+      try {
+        await response.body?.cancel();
+      } catch {
+        // Nothing to cancel.
+      }
+    }
+
+    if (proxyReason) {
+      const unresolved = /ENOTFOUND|EAI_AGAIN|NAME_NOT_RESOLVED|name resolution|getaddrinfo|no such host/i.test(
+        proxyReason
+      );
+      return {
+        status: response.status,
+        dead: true,
+        reason: unresolved
+          ? "This source's server can't be found any more — its web address no longer exists. Try another source."
+          : `This source's server could not be reached (${proxyReason.split('\n')[0]}). Try another source.`,
+      };
     }
 
     if (response.status >= 400) {

@@ -7,6 +7,7 @@ import { TvType } from '../types/api';
 import type { DownloadRequestResult, DownloadTask } from '../types/download';
 import { buildDownloadTask } from '../utils/downloadIdentity';
 import { useFlash } from '../utils/useFlash';
+import { RECOVERY_SEARCH_MS, sameWorkMatches } from '../utils/sameWork';
 import type { TorrentResult } from '../types/torrent';
 import type { PlaybackSnapshot } from '../../electron/playbackSession';
 import { SourcePicker, type SourcePickerData } from '../components/SourcePicker';
@@ -221,6 +222,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [extended, setExtended] = useState<ExtendedMetadata | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** The title being looked for on other providers after every known route failed. */
+  const [recovering, setRecovering] = useState<string | null>(null);
   const [disabledProvider, setDisabledProvider] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -366,6 +369,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
        */
       setIsLoading(true);
       setLoadError(null);
+      setRecovering(null);
       setDisabledProvider(null);
       setDetail(null);
       setFellBackTo(null);
@@ -438,13 +442,29 @@ export const DetailView: React.FC<DetailViewProps> = ({
       ].filter((route, index, all) => route && all.indexOf(route) === index);
       const reasons: string[] = [];
 
-      for (const [index, route] of routes.entries()) {
+      /** Routes found by the automatic search below, with the provider that offered each. */
+      const recoveredNames = new Map<string, string>();
+      let searchedElsewhere = false;
+
+      for (let index = 0; index < routes.length; index++) {
+        const route = routes[index];
         const response = await window.cloudstream.loadMedia(route);
         if (cancelled) return;
 
         if (response.ok && response.detail) {
           const data = mergeDetail(response.detail as DetailData, stored);
           setDetail(data);
+          if (recoveredNames.has(route)) {
+            void window.cloudstream?.recordDiagnostic?.({
+              level: 'warn',
+              stage: 'detail',
+              source: mediaItem.apiName,
+              title: data.name,
+              url: mediaItem.url,
+              message: `Opened from ${recoveredNames.get(route)} after the original source failed`,
+              detail: reasons.join(' · ').slice(0, 1000),
+            });
+          }
           setServedFromSnapshot(null);
           setDisabledProvider(null);
           window.cloudstream?.recordTitleOutcome?.(mediaItem.url, 'played');
@@ -484,7 +504,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
             index === 0
               ? null
               : ((mediaItem.alternates ?? []).find((alternate) => alternate.url === route)
-                  ?.apiName ?? 'another source')
+                  ?.apiName ?? recoveredNames.get(route) ?? 'another source')
           );
           /**
            * How the viewer got here, recorded alongside what they got.
@@ -514,6 +534,36 @@ export const DetailView: React.FC<DetailViewProps> = ({
         }
 
         if (response.error) reasons.push(response.error);
+
+        /*
+         * Every known route failed: find the title elsewhere before giving up.
+         *
+         * A catalogue poster whose provider is down, a saved row holding a dead
+         * address, a site that changed shape this morning — in each case the
+         * same title is usually one search away on another provider. Asking the
+         * viewer to press "Search again" and pick the right row is exactly the
+         * friction a streaming app must not have, so the search runs here, once,
+         * and only rows that are the same work (title, and year where both know
+         * it) are tried. Anything looser would open a different film.
+         */
+        if (index === routes.length - 1 && !searchedElsewhere) {
+          searchedElsewhere = true;
+          const wanted = extractMediaTitle(mediaItem) || mediaItem.originalTitle || mediaItem.name;
+          if (wanted && window.cloudstream.searchAll) {
+            setRecovering(wanted);
+            const reply = await Promise.race([
+              window.cloudstream.searchAll(wanted).catch(() => null),
+              new Promise<null>((resolve) => setTimeout(() => resolve(null), RECOVERY_SEARCH_MS)),
+            ]);
+            if (cancelled) return;
+            setRecovering(null);
+            for (const match of sameWorkMatches(reply?.results ?? [], wanted, mediaItem.year)) {
+              if (routes.includes(match.url)) continue;
+              routes.push(match.url);
+              recoveredNames.set(match.url, match.apiName);
+            }
+          }
+        }
       }
 
       // Every route failed. Report what each one said rather than a summary:
@@ -521,6 +571,17 @@ export const DetailView: React.FC<DetailViewProps> = ({
       // completely different responses from the user.
       const combined =
         reasons.length > 0 ? [...new Set(reasons)].join(' · ') : 'No source could open this title.';
+
+      // Logged with the exact on-screen text, so "Copy error" finds it without a paste.
+      void window.cloudstream?.recordDiagnostic?.({
+        level: 'error',
+        stage: 'detail',
+        source: mediaItem.apiName,
+        title: mediaItem.originalTitle || mediaItem.name,
+        url: mediaItem.url,
+        message: combined,
+        detail: `routes tried: ${routes.length}; searched elsewhere: ${searchedElsewhere ? 'yes' : 'no'}`,
+      });
 
       /**
        * Nothing answered — so the stored copy stands, and says so.
@@ -1517,7 +1578,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
     return (
       <div className="detail-view detail-view--state">
         <Loader2 className="spin" size={32} />
-        <p>Loading {mediaItem.name}…</p>
+        <p>
+          {recovering
+            ? `That source isn't answering — finding “${recovering}” on another one…`
+            : `Loading ${mediaItem.name}…`}
+        </p>
       </div>
     );
   }
@@ -1555,7 +1620,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         <p>{loadError ?? 'No details available.'}</p>
         {isPlaybackHandle && (
           <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: '480px' }}>
-            This address points to an episode stream handle rather than a browseable media page. Searching for the title globally will find fresh sources and full episode listings.
+            This link can't be opened as a page any more, and no other source answered with the same title. A search may find it under a slightly different name.
           </p>
         )}
         {(mediaItem.alternates?.length ?? 0) > 0 && (

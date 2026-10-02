@@ -1420,7 +1420,13 @@ export class MediaProxy {
     } catch (error) {
       this.recordFailure(route.url, error, 'Upstream request failed before any body was sent')
       if (!res.headersSent) res.writeHead(502)
-      res.end(error instanceof Error ? error.message : 'Upstream request failed')
+      // The cause carries the real reason (ENOTFOUND, ECONNREFUSED); `fetch failed` alone names nothing.
+      const cause = error instanceof Error ? (error.cause as { code?: string; message?: string } | undefined) : undefined
+      res.end(
+        error instanceof Error
+          ? [error.message, cause?.code, cause?.message].filter(Boolean).join(' — ')
+          : 'Upstream request failed'
+      )
     }
   }
 

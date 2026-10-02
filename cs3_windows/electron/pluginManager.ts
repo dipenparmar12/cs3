@@ -3726,12 +3726,17 @@ export class PluginManager {
      * made. Refusing here keeps the blame where it belongs and lets callers fall
      * back on their own real diagnosis.
      */
-    if (looksLikeLinksHandle(ref.target)) {
-      throw new Error(
-        `That address is a playback handle from ${ref.provider}, not a page it can open. ` +
-          'Search for the title again to get a fresh page.'
-      );
-    }
+    /**
+     * …but JSON is also a legitimate *page* handle for part of the corpus.
+     * MovieBox Native's catalogue and search rows carry
+     * `{"season":0,"isMovie":true,"episode":0,"id":"…"}` as `SearchResponse.url`,
+     * and HDO's carry `{"imdbID":…}` — exactly what their `load()` expects.
+     * Refusing JSON outright made every one of those posters unopenable
+     * (measured 2026-10-02, MovieBox Native "Ice Cream Man"). So a JSON target
+     * is asked, and only a reply proving it was a links blob — OkHttp refusing
+     * it as a URL — is turned into the handle explanation, unscored.
+     */
+    const speculative = looksLikeLinksHandle(ref.target);
 
     if (!this.isProviderEnabled(ref.provider)) {
       throw new Error(
@@ -3760,6 +3765,21 @@ export class PluginManager {
      */
     /** Records the failure and hands back the error to throw. */
     const fail = (message: string, detail?: string): Error => {
+      if (speculative && /no scheme was found|Expected URL scheme|unexpected url/i.test(message)) {
+        const handle =
+          `That address is a playback handle from ${ref.provider}, not a page it can open. ` +
+          'Search for the title again to get a fresh page.';
+        // Recorded so a copied report can find it, never scored: the call was our guess.
+        this.diagnostics?.record({
+          level: 'warn',
+          stage: 'detail',
+          source: ref.provider,
+          url,
+          message: handle,
+          detail: message,
+        });
+        return new Error(handle);
+      }
       // A provider that is not loaded was never asked, so it is a warning about
       // the app's state rather than an error the provider committed.
       const absent = detail === 'PROVIDER_NOT_LOADED';
