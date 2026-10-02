@@ -187,6 +187,42 @@ export class OttService {
     };
   }
 
+  /**
+   * Every provider's catalogue for this platform, richest first.
+   *
+   * `getCatalog` stops at the first provider that answers, and on a Netflix page
+   * that is often a thin mirror while `NetflixM` beside it publishes a dozen
+   * rows — so the page showed the weak one and fell back to third-party
+   * listings. Each catalogue stays whole and labelled with its provider rather
+   * than being interleaved: two providers' "Trending" are different lists.
+   *
+   * Asked one at a time on purpose — provider loading cannot overlap (§5), and
+   * reading section names is cheap once the plugin is loaded.
+   */
+  public async getCatalogs(platformId: string): Promise<{
+    catalogs: ProviderCatalog[];
+    unavailable: Array<{ provider: string; reason: string }>;
+  }> {
+    const providers = await this.providersFor(platformId);
+    const catalogs: ProviderCatalog[] = [];
+    const unavailable: Array<{ provider: string; reason: string }> = [];
+    for (const provider of providers) {
+      try {
+        const catalog = await this.plugins.loadCatalog(provider);
+        if (catalog.hasMainPage && catalog.sections.length > 0) catalogs.push(catalog);
+        else
+          unavailable.push({
+            provider,
+            reason: catalog.unavailableReason ?? 'Publishes no catalogue — search it instead.',
+          });
+      } catch (error) {
+        unavailable.push({ provider, reason: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    catalogs.sort((a, b) => b.sections.length - a.sections.length);
+    return { catalogs, unavailable };
+  }
+
   public async getCatalogPage(
     provider: string,
     section: { name: string; data: string; horizontalImages?: boolean },

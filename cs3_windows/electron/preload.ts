@@ -1455,6 +1455,13 @@ export interface CloudStreamElectronAPI {
   getOttCatalog: (
     platformId: string
   ) => Promise<{ ok: boolean; error?: string; catalog: ProviderCatalog | null }>;
+  /** Every matching provider's own catalogue, richest first. */
+  getOttCatalogs: (platformId: string) => Promise<{
+    ok: boolean;
+    error?: string;
+    catalogs: ProviderCatalog[];
+    unavailable: Array<{ provider: string; reason: string }>;
+  }>;
   /**
    * One page of one catalogue row.
    *
@@ -2287,6 +2294,7 @@ const api: CloudStreamElectronAPI = {
   removeMediaServer: (localId: string) => ipcRenderer.invoke('natives:removeServer', localId),
   listOttPlatforms: () => ipcRenderer.invoke('ott:listPlatforms'),
   getOttCatalog: (platformId) => ipcRenderer.invoke('ott:getCatalog', platformId),
+  getOttCatalogs: (platformId) => ipcRenderer.invoke('ott:getCatalogs', platformId),
   getOttCatalogPage: (provider, section, page) =>
     ipcRenderer.invoke('ott:getCatalogPage', provider, section, page),
   getOttSearchScope: (platformId) => ipcRenderer.invoke('ott:getSearchScope', platformId),

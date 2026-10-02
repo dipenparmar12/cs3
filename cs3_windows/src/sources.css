@@ -7286,6 +7286,50 @@
   color: var(--text-subtle);
 }
 
+/* Which provider's catalogue a platform page is showing. */
+.ott-view__providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.ott-view__provider-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ott-view__provider-tab:hover {
+  color: #fff;
+  background: var(--bg-card-hover);
+}
+
+.ott-view__provider-tab[aria-selected='true'] {
+  color: #fff;
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.55);
+}
+
+.ott-view__provider-count {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-subtle);
+}
+
+.ott-view__provider-single {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--text-subtle);
+}
+
 .ott-view__notice {
   padding: 0.65rem 0.9rem;
   border-radius: var(--radius-md);

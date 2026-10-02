@@ -4990,6 +4990,14 @@ ipcMain.handle('ott:setPlatformsEnabled', async (_, changes: Record<string, bool
   }
 });
 
+ipcMain.handle('ott:getCatalogs', async (_, platformId: string) => {
+  try {
+    return { ok: true, ...(await ottService.getCatalogs(platformId)) };
+  } catch (error) {
+    return { ...fail(error), catalogs: [], unavailable: [] };
+  }
+});
+
 ipcMain.handle('ott:getCatalog', async (_, platformId: string) => {
   try {
     return { ok: true, catalog: await ottService.getCatalog(platformId) };

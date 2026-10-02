@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { Loader2, PlugZap, Search, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import type { ProviderCatalog, ProviderCatalogSection, SearchResponse } from '../types/api';
@@ -14,7 +14,7 @@ import { useFlash } from '../utils/useFlash';
  *
  * The reported friction is search-and-backtrack: search a title, try provider
  * A, go back, try provider B, go back. That is a symptom of the app having no
- * notion of *where you are* — every search is global, so every result set is a
+ * notion of *where you are* â€” every search is global, so every result set is a
  * mixture and every failure is one row out of thirty.
  *
  * This page is the opposite arrangement. It is bound to a platform, everything
@@ -24,7 +24,7 @@ import { useFlash } from '../utils/useFlash';
  *
  * ## Browse comes from the provider, not from a catalogue service
  *
- * The rows are the provider's own `getMainPage` — its editorial, the same rows
+ * The rows are the provider's own `getMainPage` â€” its editorial, the same rows
  * the Android app shows. That is a different source from the home screen, which
  * is Cinemeta and AniList and is addressed by IMDb id: a home-screen card has
  * to be *resolved* to a provider before it can play, and a card here is already
@@ -35,7 +35,7 @@ import { useFlash } from '../utils/useFlash';
  *
  * `ready`, `disabled`, `missing` each get their own answer, because they need
  * different actions from the user: nothing, a switch, or an install. Collapsing them into "no content" is the failure
- * this component exists to avoid — a user who turned a provider off last week
+ * this component exists to avoid â€” a user who turned a provider off last week
  * being told the platform does not exist.
  */
 
@@ -68,7 +68,11 @@ interface OttPlatformViewProps {
 }
 
 interface LoadedSection extends ProviderCatalogSection {
+  /** `provider::name` â€” two providers routinely both publish "Trending". */
+  key: string;
   provider: string;
+  /** Asked for at least once, so switching back to a provider does not re-fetch. */
+  fetched: boolean;
   items: SearchResponse[];
   page: number;
   hasNext: boolean;
@@ -80,7 +84,7 @@ interface LoadedSection extends ProviderCatalogSection {
  * The preload bridge, or nothing.
  *
  * `window.cloudstream` is optional in the renderer's types because the same
- * components render in contexts that have no preload — and a non-null
+ * components render in contexts that have no preload â€” and a non-null
  * assertion here would turn that into a runtime `TypeError` inside a `.then`,
  * which surfaces as a blank page rather than as a missing bridge.
  */
@@ -97,7 +101,15 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
   onOpenExtensions,
   onInventoryChanged,
 }) => {
-  const [catalog, setCatalog] = useState<ProviderCatalog | null>(null);
+  const [catalogs, setCatalogs] = useState<ProviderCatalog[]>([]);
+  /** Providers that matched the platform but publish nothing to browse. */
+  const [unbrowsable, setUnbrowsable] = useState<Array<{ provider: string; reason: string }>>([]);
+  /**
+   * Whose catalogue is on screen. One provider at a time, as Android's home
+   * screen does: two providers' rows interleaved is a list neither meant, and
+   * fetching every provider's rows at once is a burst of scrapes nobody asked for.
+   */
+  const [activeProvider, setActiveProvider] = useState<string | null>(null);
   const [sections, setSections] = useState<LoadedSection[]>([]);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
@@ -128,7 +140,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
    *
    * Switching from Netflix to Hotstar while the first page is still loading is
    * an ordinary thing to do, and the reply that lands afterwards would
-   * otherwise draw Netflix rows under the Hotstar heading — which reads as the
+   * otherwise draw Netflix rows under the Hotstar heading â€” which reads as the
    * providers being confused rather than as us.
    */
   const platformRef = useRef(platform.id);
@@ -150,7 +162,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
 
       setSections((current) =>
         current.map((row) => {
-          if (row.name !== section.name) return row;
+          if (row.key !== section.key) return row;
           if (!response.ok || !response.page) {
             return { ...row, loading: false, error: response.error ?? 'That row could not be loaded.' };
           }
@@ -171,9 +183,37 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     []
   );
 
+  /** Marks rows as loading and fetches their first page. */
+  const startRows = useCallback(
+    (rows: LoadedSection[]) => {
+      if (rows.length === 0) return;
+      const keys = new Set(rows.map((row) => row.key));
+      setSections((current) =>
+        current.map((row) => (keys.has(row.key) ? { ...row, loading: true, fetched: true } : row))
+      );
+      for (const row of rows) void loadRow(row, 1);
+    },
+    [loadRow]
+  );
+
+  // Switching provider fetches the first rows of that provider, once.
+  useEffect(() => {
+    if (!activeProvider) return;
+    const pending = sections
+      .filter((row) => row.provider === activeProvider)
+      .slice(0, INITIAL_ROWS)
+      .filter((row) => !row.fetched);
+    startRows(pending);
+    // `sections` is read, not depended on: re-running on every row update would
+    // fire the same fetch again while it is in flight.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProvider, startRows]);
+
   useEffect(() => {
     let cancelled = false;
-    setCatalog(null);
+    setCatalogs([]);
+    setUnbrowsable([]);
+    setActiveProvider(null);
     setSections([]);
     setQuery('');
 
@@ -187,54 +227,80 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     }
 
     setSuggestions([]);
+    setMetaSections([]);
 
     /*
-     * The metadata catalogue is fetched for every platform, including ones no
-     * provider serves. That is the case it exists for: "Netflix" with nothing
-     * installed used to be a search box and an apology, and the platform's own
-     * editorial is the thing a viewer came to the page for. Opening a row runs
-     * the ordinary search, so the answer to "can this app play it?" is given
-     * where it can actually be answered.
+     * Third-party listings are a fallback, not the page. The providers' own
+     * catalogues â€” NetflixM's rows, say â€” are what can actually play, so the
+     * listings are fetched only when no installed provider publishes one.
      */
-    setMetaSections([]);
-    setMetaLoading(true);
-    void api()
-      ?.getOttMetadataCatalog(platform.id)
-      .then((response) => {
-        if (cancelled) return;
-        setMetaLoading(false);
-        setMetaSupported(Boolean(response?.supported));
-        setMetaSections(response?.sections ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setMetaLoading(false);
-      });
+    const loadListings = () => {
+      setMetaLoading(true);
+      void api()
+        ?.getOttMetadataCatalog(platform.id)
+        .then((response) => {
+          if (cancelled) return;
+          setMetaLoading(false);
+          setMetaSupported(Boolean(response?.supported));
+          setMetaSections(response?.sections ?? []);
+        })
+        .catch(() => {
+          if (!cancelled) setMetaLoading(false);
+        });
+    };
 
-    if (platform.availability !== 'ready') return;
+    if (platform.availability !== 'ready') {
+      loadListings();
+      return () => {
+        cancelled = true;
+      };
+    }
 
     setLoading(true);
-    void api()?.getOttCatalog(platform.id).then((response) => {
-      if (cancelled) return;
-      setLoading(false);
-      if (!response.ok || !response.catalog) return;
-
-      setCatalog(response.catalog);
-      const rows: LoadedSection[] = response.catalog.sections.map((section, index) => ({
-        ...section,
-        provider: response.catalog!.provider,
-        items: [],
-        page: 1,
-        hasNext: false,
-        loading: index < INITIAL_ROWS,
-      }));
-      setSections(rows);
-      for (const row of rows.slice(0, INITIAL_ROWS)) void loadRow(row, 1);
-    });
+    void api()
+      ?.getOttCatalogs(platform.id)
+      .then((response) => {
+        if (cancelled) return;
+        setLoading(false);
+        const found = response?.ok ? response.catalogs : [];
+        setCatalogs(found);
+        setUnbrowsable(response?.unavailable ?? []);
+        if (found.length === 0) {
+          loadListings();
+          return;
+        }
+        setSections(
+          found.flatMap((catalog) =>
+            catalog.sections.map((section) => ({
+              ...section,
+              key: `${catalog.provider}::${section.name}`,
+              provider: catalog.provider,
+              fetched: false,
+              items: [],
+              page: 1,
+              hasNext: false,
+              loading: false,
+            }))
+          )
+        );
+        // Richest first, so the page opens on the fullest catalogue.
+        setActiveProvider(found[0].provider);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setLoading(false);
+        loadListings();
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [platform.id, platform.availability, loadRow]);
+  }, [platform.id, platform.availability]);
+
+  const visibleSections = useMemo(
+    () => sections.filter((row) => row.provider === activeProvider),
+    [sections, activeProvider]
+  );
 
   const submitSearch = (event: React.FormEvent) => {
     event.preventDefault();
@@ -269,7 +335,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
    * Card states for both rails at once.
    *
    * A platform page draws the provider's own rows and the listings rows, and
-   * the same film routinely appears in both — one call for the union keeps
+   * the same film routinely appears in both â€” one call for the union keeps
    * them in the same state rather than resolving the two independently.
    */
   const { interactionFor } = useTitleInteractions(
@@ -333,7 +399,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
         This offered only "Open Extensions", which is accurate and is PRD 43's
         F-1 exactly: a true statement with the work left to the reader. It is
         the harder version of that failure, too, because the sentence below
-        names three possible switches and cannot say which — so the viewer
+        names three possible switches and cannot say which â€” so the viewer
         arrived in Extensions knowing only that one of three things, somewhere
         in a tree, is off.
 
@@ -348,7 +414,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
           description={
             <>
               {platform.disabledProviders.join(', ')}{' '}
-              {platform.disabledProviders.length === 1 ? 'is' : 'are'} turned off — either the
+              {platform.disabledProviders.length === 1 ? 'is' : 'are'} turned off â€” either the
               provider itself, the extension that registered it, or the repository it came from.
               Turning any of those back on brings this page to life; nothing needs downloading
               again.
@@ -366,7 +432,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
           onFixed={() => {
             setFixing(null);
             // The platform's availability is computed in the main process from
-            // what is enabled, so the page has to be told to re-read it — the
+            // what is enabled, so the page has to be told to re-read it â€” the
             // rows on screen were built from the old answer.
             onInventoryChanged?.();
           }}
@@ -381,7 +447,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
             description={
               <>
                 {platform.name} comes from a community extension, the same ones the Android app
-                uses. Installing one of these adds it — and everything it registers stays under
+                uses. Installing one of these adds it â€” and everything it registers stays under
                 your control on the Extensions screen.
               </>
             }
@@ -398,7 +464,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
                 >
                   {installing === suggestion.id ? (
                     <>
-                      <Loader2 size={13} className="spin" /> Installing…
+                      <Loader2 size={13} className="spin" /> Installingâ€¦
                     </>
                   ) : suggestion.installed ? (
                     'Already added'
@@ -414,41 +480,66 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
 
       {loading && (
         <p className="ott-view__loading">
-          <Loader2 size={14} className="spin" aria-hidden /> Reading {platform.name}'s catalogue…
+          <Loader2 size={14} className="spin" aria-hidden /> Reading {platform.name}'s catalogueâ€¦
         </p>
+      )}
+
+      {/*
+        Whose catalogue is showing, and the others to switch to. Every provider
+        that is this platform is offered â€” a NetMirror Netflix and CNC Verse's
+        NetflixM are different libraries â€” with its row count so the fuller one
+        is obvious before it is opened.
+      */}
+      {catalogs.length > 1 && (
+        <div className="ott-view__providers" role="tablist" aria-label={`${platform.name} catalogues`}>
+          {catalogs.map((entry) => (
+            <button
+              key={entry.provider}
+              type="button"
+              role="tab"
+              aria-selected={entry.provider === activeProvider}
+              className="ott-view__provider-tab"
+              onClick={() => setActiveProvider(entry.provider)}
+            >
+              {entry.provider}
+              <span className="ott-view__provider-count">{entry.sections.length} rows</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {catalogs.length === 1 && (
+        <p className="ott-view__provider-single">Catalogue from {catalogs[0].provider}</p>
       )}
 
       {platform.availability === 'ready' &&
         !loading &&
-        sections.length === 0 &&
+        catalogs.length === 0 &&
         metaSections.length === 0 &&
         !metaLoading && (
           <EmptyState
             icon={Search}
             title={`${platform.name} has no catalogue to browse`}
             description={
-              catalog?.unavailableReason ??
-              'This provider only answers searches. Use the box above to find a title.'
+              unbrowsable[0]?.reason ??
+              'These providers only answer searches. Use the box above to find a title.'
             }
           />
         )}
 
       {/*
-        * What is on the service, when no installed provider publishes a
-        * catalogue. Shown *below* the provider's own rows when both exist,
-        * because a provider row is something this app can play and one of these
-        * is only something that exists — and the heading says which is which.
-        * A grid of posters that silently cannot play is the failure this
-        * codebase keeps having to fix, so it is labelled rather than blended.
+        * What is on the service, only when no installed provider publishes a
+        * catalogue. A provider row is something this app can play and one of
+        * these is only something that exists, so it is labelled, not blended.
         */}
-      {metaSections.length > 0 && (
+      {catalogs.length === 0 && metaSections.length > 0 && (
         <div className="ott-view__meta">
           <div className="ott-view__meta-head">
             <Sparkles size={13} aria-hidden />
             <p>
               Popular on {platform.name} right now.{' '}
-              {sections.length === 0 && platform.availability !== 'ready'
-                ? 'Nothing installed can play these yet — opening one searches every source you have.'
+              {platform.availability !== 'ready'
+                ? 'Nothing installed can play these yet â€” opening one searches every source you have.'
                 : 'These come from a listings service, not from an installed extension: opening one searches every source you have for it.'}
             </p>
           </div>
@@ -476,12 +567,12 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
       {metaLoading && metaSections.length === 0 && metaSupported && (
         <p className="ott-view__loading">
           <Loader2 size={14} className="spin" aria-hidden /> Finding what is popular on{' '}
-          {platform.name}…
+          {platform.name}â€¦
         </p>
       )}
 
-      {sections.map((section) => (
-        <section className="home-row" key={`${section.provider}:${section.name}`}>
+      {visibleSections.map((section) => (
+        <section className="home-row" key={section.key}>
           <header>
             <h3>{section.name}</h3>
             {section.loading && <Loader2 size={12} className="spin" />}
@@ -510,7 +601,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
                 onClick={() => {
                   setSections((current) =>
                     current.map((row) =>
-                      row.name === section.name ? { ...row, loading: true } : row
+                      row.key === section.key ? { ...row, loading: true, fetched: true } : row
                     )
                   );
                   void loadRow(section, section.page + 1);
@@ -528,7 +619,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
                 onClick={() => {
                   setSections((current) =>
                     current.map((row) =>
-                      row.name === section.name ? { ...row, loading: true } : row
+                      row.key === section.key ? { ...row, loading: true, fetched: true } : row
                     )
                   );
                   void loadRow(section, 1);
