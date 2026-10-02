@@ -6,7 +6,7 @@ import { Sidebar } from './components/Sidebar';
 import type { ActiveTab } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
 import { MiniPlayerBar } from './components/player/MiniPlayerBar';
-import type { OttPlatformSummary } from './views/OttPlatformView';
+import type { OttCategoryState, OttPlatformSummary } from './views/OttPlatformView';
 import type { TorrentPlayRequest } from './views/TorrentView';
 import { ProviderInspector } from './components/ProviderInspector';
 import { useIsDeveloper } from './utils/ExperienceModeContext';
@@ -247,6 +247,8 @@ export const App: React.FC = () => {
    * `effectivelyEnabled`.
    */
   const [ottPlatforms, setOttPlatforms] = useState<OttPlatformSummary[]>([]);
+  /** A platform row opened with "Show all" — held here so Back from a title returns to it. */
+  const [ottCategory, setOttCategory] = useState<OttCategoryState | null>(null);
 
   /**
    * Re-reads the streaming-service inventory.
@@ -1574,6 +1576,8 @@ export const App: React.FC = () => {
           // Home in the sidebar means the home rows, including from inside a
           // "Show all" grid.
           if (tab === 'home') setHomeCategory(null);
+          // Same for a streaming service: its sidebar row means its own page.
+          if (tab.startsWith('ott:')) setOttCategory(null);
         }}
         downloadCount={downloadQueue.filter((t) => t.state === 'Downloading' || t.state === 'Queued').length}
         missingComponentCount={missingComponents}
@@ -1927,6 +1931,8 @@ export const App: React.FC = () => {
                         }
                         onOpenExtensions={() => setActiveTab('extensions')}
                         onInventoryChanged={() => void refreshOttPlatforms()}
+                        category={ottCategory}
+                        onCategoryChange={setOttCategory}
                       />
                     );
                   })()}

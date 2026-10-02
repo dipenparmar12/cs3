@@ -1,11 +1,11 @@
-﻿/**
+/**
  * Which installed provider counts as which OTT platform.
  *
  *   bun run test:ott
  *   node --experimental-strip-types electron/cs3/ottPlatforms.test.mts
  *
  * Pinned because the expensive failure here is silent. A matcher that is one
- * character too loose does not throw and does not log â€” it fills the Prime
+ * character too loose does not throw and does not log — it fills the Prime
  * Video page with results from a torrent aggregator called PrimeWire, which
  * looks like working software right up until someone notices the catalogue is
  * wrong. The three false-positive rows below are real provider names from this
@@ -116,7 +116,7 @@ test('no Hotstar name leaks onto a neighbouring platform', () => {
 test('the CNC Verse provider names, measured, land on the right pages', () => {
   /**
    * Read off a real `--plugins 20` harness run, not invented. The `CNC Verse`
-   * extension registers `Netflix, Prime Video, Hotstar, Disney, â€¦` and
+   * extension registers `Netflix, Prime Video, Hotstar, Disney, …` and
    * `CNC Verse Mobile` registers the same set suffixed with `M`. `DisneyM` is
    * the case that broke the first version of the Disney pattern.
    */
@@ -219,7 +219,7 @@ test('no two platforms claim the same provider name', () => {
 
 test('every declared provider name matches its own platform', () => {
   // Catches a name added to one platform that a different platform's pattern
-  // reaches first â€” the same order-dependence the Disney/Hotstar case has.
+  // reaches first — the same order-dependence the Disney/Hotstar case has.
   for (const platform of OTT_PLATFORMS) {
     for (const name of platform.providerNames) {
       assert.equal(ottPlatformForProvider(name)?.id, platform.id, name);

@@ -18,13 +18,37 @@ import { describeError } from '../../utils/errors';
  * The state is the caller's (see `homeCategoryState.ts`), so a title opened
  * from here and closed again comes back to the same place in the same grid.
  */
-export const CategoryGrid: React.FC<{
-  category: HomeCategoryState;
-  onChange: (next: HomeCategoryState) => void;
+/** One page of a row, from wherever the row comes from. */
+export type CategoryPageLoader<T extends HomeCategoryState> = (current: T) => Promise<{
+  ok: boolean;
+  items?: SearchResponse[];
+  error?: string;
+  /** The source's own "there is more"; absent means "keep asking until a page adds nothing". */
+  hasNext?: boolean;
+}>;
+
+/**
+ * `loadPage` makes the grid serve any paged row — a provider's own catalogue
+ * on a streaming-service page as well as a home row. Absent, it pages the home
+ * screen's discovery rows as it always has.
+ */
+export function CategoryGrid<T extends HomeCategoryState>({
+  category,
+  onChange,
+  onBack,
+  onOpen,
+  onPlayDirectly,
+  loadPage,
+  backLabel = 'Home',
+}: {
+  category: T;
+  onChange: (next: T) => void;
   onBack: () => void;
   onOpen: (item: SearchResponse) => void;
   onPlayDirectly?: (item: SearchResponse) => void;
-}> = ({ category, onChange, onBack, onOpen, onPlayDirectly }) => {
+  loadPage?: CategoryPageLoader<T>;
+  backLabel?: string;
+}): React.ReactElement {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sentinel = useRef<HTMLDivElement>(null);
@@ -49,10 +73,12 @@ export const CategoryGrid: React.FC<{
     setLoading(true);
     setError(null);
     try {
-      const response = await window.cloudstream?.getMoreDiscovery?.(current.id, {
-        skip: current.skip,
-        page: current.page + 1,
-      });
+      const response = loadPage
+        ? await loadPage(current)
+        : await window.cloudstream?.getMoreDiscovery?.(current.id, {
+            skip: current.skip,
+            page: current.page + 1,
+          });
       // Left, or moved to another row, while the page was in flight.
       if (!mounted.current || latest.current.id !== current.id) return;
       if (!response?.ok) {
@@ -61,12 +87,13 @@ export const CategoryGrid: React.FC<{
       }
       const page = response.items ?? [];
       const merged = mergePage(current.items, page);
+      const hasNext = 'hasNext' in response ? response.hasNext : undefined;
       onChange({
         ...current,
         items: merged.items,
         skip: current.skip + page.length,
         page: current.page + 1,
-        done: merged.added === 0,
+        done: merged.added === 0 || hasNext === false,
       });
     } catch (err) {
       if (mounted.current) setError(describeError(err));
@@ -74,7 +101,7 @@ export const CategoryGrid: React.FC<{
       busy.current = false;
       if (mounted.current) setLoading(false);
     }
-  }, [onChange]);
+  }, [onChange, loadPage]);
 
   /*
    * Re-observed whenever the grid grows. An observer reports a change of
@@ -102,7 +129,7 @@ export const CategoryGrid: React.FC<{
     <div className="category-page">
       <header className="category-page__head">
         <button type="button" className="category-page__back" onClick={onBack}>
-          <ArrowLeft size={16} aria-hidden /> Home
+          <ArrowLeft size={16} aria-hidden /> {backLabel}
         </button>
         <div className="category-page__title">
           <h2>{category.title}</h2>
@@ -143,4 +170,4 @@ export const CategoryGrid: React.FC<{
       </div>
     </div>
   );
-};
+}
