@@ -316,6 +316,27 @@ async function download(mirrors, target, archiveName) {
       log(`  ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+
+  // If every mirror failed (network down / mirrors unreachable / rate-limited),
+  // fall back to any valid cached archive for this component.
+  if (!REFRESH && fs.existsSync(CACHE_DIR)) {
+    const cachedFiles = fs.readdirSync(CACHE_DIR)
+      .filter((file) => file.endsWith(`-${archiveName}`) && fs.statSync(path.join(CACHE_DIR, file)).size > 0)
+      .map((file) => ({
+        path: path.join(CACHE_DIR, file),
+        mtime: fs.statSync(path.join(CACHE_DIR, file)).mtimeMs,
+      }))
+      .sort((a, b) => b.mtime - a.mtime);
+
+    if (cachedFiles.length > 0) {
+      const fallback = cachedFiles[0];
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(fallback.path, target);
+      log(`reusing previously cached ${(fs.statSync(target).size / 1048576).toFixed(1)} MB archive from ${path.basename(fallback.path)} (all mirrors unreachable)`);
+      return true;
+    }
+  }
+
   return false;
 }
 
