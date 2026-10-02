@@ -157,6 +157,14 @@ export const App: React.FC = () => {
    * button that does nothing when clicked.
    */
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!actionNotice) return;
+    const timer = window.setTimeout(() => {
+      setActionNotice(null);
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, [actionNotice]);
   /**
    * The imported torrent being browsed, or null.
    *
@@ -675,10 +683,28 @@ export const App: React.FC = () => {
    * navigation now; this turns the gesture into the thing the user meant.
    */
   useEffect(() => {
-    const allow = (event: DragEvent) => event.preventDefault();
+    const isFileDrag = (event: DragEvent) => {
+      const types = event.dataTransfer?.types;
+      if (!types) return false;
+      if (types.includes('application/x-ott-platform')) return false;
+      return types.includes('Files') || types.includes('text/plain');
+    };
+
+    const allow = (event: DragEvent) => {
+      if (isFileDrag(event)) {
+        event.preventDefault();
+      }
+    };
     const onDrop = (event: DragEvent) => {
+      if (!isFileDrag(event)) {
+        setDragging(false);
+        dragDepth.current = 0;
+        return;
+      }
+
       event.preventDefault();
       setDragging(false);
+      dragDepth.current = 0;
 
       /*
        * Dragged *text* is checked first, because a magnet dragged out of a
@@ -708,14 +734,9 @@ export const App: React.FC = () => {
         .filter((filePath): filePath is string => Boolean(filePath));
 
       if (paths.length === 0) {
-        // Never silent. A drop that resolves to nothing has to say so, or it is
-        // indistinguishable from an app that ignores dropped files — which is
-        // exactly how this read for as long as it was broken.
-        setActionNotice(
-          files.length > 0
-            ? 'That could not be read from disk. Try the paperclip beside the search box.'
-            : 'Drop a .torrent file, a video, or a magnet link.'
-        );
+        if (files.length > 0) {
+          setActionNotice('That could not be read from disk. Try the paperclip beside the search box.');
+        }
         return;
       }
 
@@ -733,12 +754,13 @@ export const App: React.FC = () => {
      * enters and leaves is what makes it stable.
      */
     const onDragEnter = (event: DragEvent) => {
+      if (!isFileDrag(event)) return;
       event.preventDefault();
-      if (!event.dataTransfer?.types?.length) return;
       dragDepth.current += 1;
       setDragging(true);
     };
-    const onDragLeave = () => {
+    const onDragLeave = (event: DragEvent) => {
+      if (!isFileDrag(event)) return;
       dragDepth.current = Math.max(0, dragDepth.current - 1);
       if (dragDepth.current === 0) setDragging(false);
     };
@@ -805,6 +827,23 @@ export const App: React.FC = () => {
     const response = await window.cloudstream?.cancelSearch(id);
     if (response?.snapshot) setSearch(response.snapshot);
   }, [search?.id]);
+
+  /**
+   * Resets active search results, query, and UI filters to empty state without
+   * clearing persistent search history or saved searches.
+   */
+  const handleClearSearchResults = useCallback(async () => {
+    if (search && !search.done) {
+      await window.cloudstream?.cancelSearch(search.id);
+    }
+    setSearch(null);
+    setSearchQuery('');
+    setSavedView(null);
+    setSearchError(null);
+    setSearchUi(EMPTY_SEARCH_UI);
+  }, [search]);
+
+  const hasSearchResults = Boolean(search && (search.results.length > 0 || !search.done));
 
   /**
    * Opens a saved search as it was saved.
@@ -1597,6 +1636,8 @@ export const App: React.FC = () => {
         }}
         downloadCount={downloadQueue.filter((t) => t.state === 'Downloading' || t.state === 'Queued').length}
         missingComponentCount={missingComponents}
+        hasSearchResults={hasSearchResults}
+        onClearResults={handleClearSearchResults}
         ottPlatforms={ottPlatforms}
         onOttPlatformsChanged={() => void refreshOttPlatforms()}
       />
@@ -1616,6 +1657,8 @@ export const App: React.FC = () => {
               void handleCancelSearch();
             }
           }}
+          onClearResults={handleClearSearchResults}
+          hasSearchResults={hasSearchResults}
           onOpenSavedSearch={handleOpenSavedSearch}
           isSearching={Boolean(search && !search.done)}
           onScopeChange={handleScopeChange}
@@ -1976,6 +2019,7 @@ export const App: React.FC = () => {
                     onRetry={handleRetrySearch}
                     savedView={savedView}
                     onSaveResults={handleSaveSearch}
+                    onClearResults={handleClearSearchResults}
                   />
                 </ErrorBoundary>
               )}

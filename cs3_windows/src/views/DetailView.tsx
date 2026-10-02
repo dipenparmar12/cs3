@@ -184,6 +184,24 @@ function groupBySeason(episodes: Episode[]): Map<number, Episode[]> {
   return map;
 }
 
+/** Extracts the cleanest title available for a media item, falling back through aliases and query params. */
+function extractMediaTitle(item: SearchResponse): string {
+  if (item.name?.trim()) return item.name.trim();
+  if (item.originalTitle?.trim()) return item.originalTitle.trim();
+  const rawTitle = (item as unknown as Record<string, unknown>).title;
+  if (typeof rawTitle === 'string' && rawTitle.trim()) return rawTitle.trim();
+  try {
+    if (item.url?.includes('?')) {
+      const params = new URLSearchParams(item.url.split('?')[1]);
+      const titleParam = params.get('title') || params.get('name');
+      if (titleParam?.trim()) return titleParam.trim();
+    }
+  } catch {
+    // Ignore URL parse error
+  }
+  return '';
+}
+
 export const DetailView: React.FC<DetailViewProps> = ({
   mediaItem,
   onBack,
@@ -1154,6 +1172,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         duration: detail.duration,
         episodes: detail.episodes ?? [],
         currentEpisodeUrl: episode?.url,
+        pageUrl: detail.url,
         watchState,
       };
     },
@@ -1524,14 +1543,24 @@ export const DetailView: React.FC<DetailViewProps> = ({
       );
     }
 
+    const displayTitle = extractMediaTitle(mediaItem);
+    const isPlaybackHandle = Boolean(
+      loadError && /playback handle|not a page it can open/i.test(loadError)
+    );
+
     return (
       <div className="detail-view detail-view--state">
         <AlertTriangle size={32} />
         {/* Every route's own reason, not a summary of them. */}
         <p>{loadError ?? 'No details available.'}</p>
+        {isPlaybackHandle && (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: '480px' }}>
+            This address points to an episode stream handle rather than a browseable media page. Searching for the title globally will find fresh sources and full episode listings.
+          </p>
+        )}
         {(mediaItem.alternates?.length ?? 0) > 0 && (
           <p className="detail-view__tried">
-            Tried {(mediaItem.alternates?.length ?? 0) + 1} sources for “{mediaItem.name}”.
+            Tried {(mediaItem.alternates?.length ?? 0) + 1} sources for “{displayTitle || mediaItem.name}”.
           </p>
         )}
         <div className="detail-view__actions">
@@ -1549,9 +1578,16 @@ export const DetailView: React.FC<DetailViewProps> = ({
           {onSearch && (
             <button
               className="btn btn-primary"
-              onClick={() => onSearch(mediaItem.originalTitle || mediaItem.name)}
+              onClick={() => onSearch(displayTitle || mediaItem.name)}
             >
-              <Search size={16} /> Find “{mediaItem.name}” again
+              <Search size={16} />{' '}
+              {isPlaybackHandle
+                ? displayTitle
+                  ? `Search “${displayTitle}” globally`
+                  : 'Search title globally'
+                : displayTitle
+                  ? `Find “${displayTitle}” again`
+                  : 'Find title again'}
             </button>
           )}
           <button className="btn" onClick={onBack}>
@@ -1559,7 +1595,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
           </button>
           <CopyErrorButton
             context={{
-              title: mediaItem.name,
+              title: displayTitle || mediaItem.name,
               url: mediaItem.url,
               source: mediaItem.apiName,
               message: loadError ?? undefined,
