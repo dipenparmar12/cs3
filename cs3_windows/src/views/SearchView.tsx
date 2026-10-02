@@ -384,6 +384,19 @@ export const SearchView: React.FC<SearchViewProps> = ({
           {search?.done && !savedView && results.length > 0 && onSaveResults ? (
             <SaveResultsButton searchId={search.id} onSave={onSaveResults} />
           ) : null}
+          {results.length > 0 && onClearResults && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={onClearResults}
+              title="Clear current search results"
+              aria-label="Clear current search results"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem' }}
+            >
+              <Trash2 size={13} />
+              <span>Clear results</span>
+            </button>
+          )}
         </div>
       </header>
 
