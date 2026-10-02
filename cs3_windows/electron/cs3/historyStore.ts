@@ -6,7 +6,7 @@ import type {
   HistoryListResponse,
   HistoryStats,
 } from '../../src/types/history';
-import { canonicalKey } from './libraryStore';
+import { canonicalKey } from './libraryStore.ts';
 import { isPrivateSession } from './privacyMode.ts';
 
 const HISTORY_KEY = 'media_history_events_v1';

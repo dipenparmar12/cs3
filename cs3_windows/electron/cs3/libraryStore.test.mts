@@ -63,7 +63,7 @@ test('a page address is stored unchanged', () => {
   for (const page of PAGES) {
     const s = store();
     const entry = s.upsertEntry({ title: 'Dune', year: 2024, mediaUrl: page });
-    assert.deepEqual(entry.urls, [page], page);
+    assert.deepEqual(entry!.urls, [page], page);
   }
 });
 
@@ -71,7 +71,7 @@ test('a bare links blob is refused as a library address', () => {
   for (const handle of LINKS_HANDLES) {
     const s = store();
     const entry = s.upsertEntry({ title: 'Dune', year: 2024, mediaUrl: handle });
-    assert.deepEqual(entry.urls, [], handle);
+    assert.deepEqual(entry!.urls, [], handle);
   }
 });
 
@@ -81,7 +81,7 @@ test('a links blob wrapped in cs3ext:// is refused too', () => {
   for (const handle of LINKS_HANDLES) {
     const s = store();
     const url = `cs3ext://VegaMovies/${encodeURIComponent(handle)}`;
-    assert.deepEqual(s.upsertEntry({ title: 'Dune', year: 2024, mediaUrl: url }).urls, [], url);
+    assert.deepEqual(s.upsertEntry({ title: 'Dune', year: 2024, mediaUrl: url })!.urls, [], url);
   }
 });
 
@@ -94,7 +94,7 @@ test('a refused address does not displace one already stored', () => {
     year: 2024,
     mediaUrl: `cs3ext://VegaMovies/${encodeURIComponent(LINKS_HANDLES[0])}`,
   });
-  assert.deepEqual(after.urls, [page]);
+  assert.deepEqual(after!.urls, [page]);
 });
 
 test('watch progress still records when the address is refused', () => {
@@ -208,18 +208,18 @@ test('an episode searched by its own handle reaches the series it was linked to'
   // Before it is linked, an episode's discovery is not recognised as this title's.
   assert.equal(s.mergeDiscoveredSources(episodeHandle, [found()], 1, 2), null);
 
-  s.linkSourceAddress(entry.key, episodeHandle);
-  assert.equal(s.mergeDiscoveredSources(episodeHandle, [found()], 1, 2), entry.key);
-  assert.equal(s.getStoredSources(entry.key)[0].episode, 2);
+  s.linkSourceAddress(entry!.key, episodeHandle);
+  assert.equal(s.mergeDiscoveredSources(episodeHandle, [found()], 1, 2), entry!.key);
+  assert.equal(s.getStoredSources(entry!.key)[0].episode, 2);
 });
 
 test('an address is never linked to two titles', () => {
   const s = store();
   const a = s.upsertEntry({ title: 'Reacher', year: 2022, mediaUrl: PAGES[0] });
   const b = s.upsertEntry({ title: 'Dune', year: 2021, mediaUrl: PAGES[1] });
-  s.linkSourceAddress(a.key, 'cs3ext://X/episode-1');
-  s.linkSourceAddress(b.key, 'cs3ext://X/episode-1');
-  assert.equal(s.mergeDiscoveredSources('cs3ext://X/episode-1', [found()]), a.key);
+  s.linkSourceAddress(a!.key, 'cs3ext://X/episode-1');
+  s.linkSourceAddress(b!.key, 'cs3ext://X/episode-1');
+  assert.equal(s.mergeDiscoveredSources('cs3ext://X/episode-1', [found()]), a!.key);
 });
 
 test('a re-resolved link replaces its release rather than adding a row', () => {

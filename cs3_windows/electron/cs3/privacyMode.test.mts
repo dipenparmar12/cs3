@@ -1,7 +1,16 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { PrivacyMode, isPrivateSession, resetPrivacyModeForTests } from './privacyMode.ts';
+import {
+  PrivacyMode,
+  isPrivateSession,
+  allowsExplicitSaves,
+  allowsDownloads,
+  resetPrivacyModeForTests,
+} from './privacyMode.ts';
 import { SearchHistoryStore } from '../searchHistory.ts';
+import { LibraryStore, WatchStatus } from './libraryStore.ts';
+import { HistoryStore } from './historyStore.ts';
+import { BookmarkStore } from './bookmarkStore.ts';
 
 function memoryStore() {
   const bools = new Map<string, boolean>();
@@ -100,4 +109,118 @@ test('a private session discovers into memory and forgets it after', async () =>
   assert.equal(heard, 0);
   cache.setVolatileMode(false);
   assert.equal(cache.peek('cs3meta://dune').hit, false);
+});
+
+test('allowsExplicitSaves and allowsDownloads reflect active state and settings', () => {
+  const store = memoryStore();
+  assert.equal(allowsExplicitSaves(), true);
+  assert.equal(allowsDownloads(), true);
+
+  const privacy = new PrivacyMode(store);
+  privacy.setActive(true);
+  assert.equal(allowsExplicitSaves(), true);
+  assert.equal(allowsDownloads(), true);
+
+  privacy.updateSettings({ allowExplicitSaves: false, allowDownloads: false });
+  assert.equal(allowsExplicitSaves(), false);
+  assert.equal(allowsDownloads(), false);
+
+  privacy.setActive(false);
+  // In normal mode, actions are always allowed
+  assert.equal(allowsExplicitSaves(), true);
+  assert.equal(allowsDownloads(), true);
+});
+
+test('libraryStore blocks automatic upserts and respects explicit saves setting in private session', () => {
+  const store = memoryStore();
+  const privacy = new PrivacyMode(store);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lib = new LibraryStore(store as any);
+
+  // Normal mode: automatic upsert (without status) succeeds
+  const normal = lib.upsertEntry({ title: 'Interstellar', year: 2014, mediaUrl: 'https://example.com/interstellar' });
+  assert.ok(normal);
+  assert.equal(normal.status, WatchStatus.Watching);
+
+  // Enter private mode
+  privacy.setActive(true);
+
+  // Automatic upsert on playback (no status) must return null and not persist
+  const autoPrivate = lib.upsertEntry({ title: 'Dune', year: 2021, mediaUrl: 'https://example.com/dune' });
+  assert.equal(autoPrivate, null);
+  assert.equal(lib.getEntry('dune::2021'), null);
+
+  // Explicit user addition (status provided) is allowed when allowExplicitSaves is true
+  const explicitSave = lib.upsertEntry({
+    title: 'Dune',
+    year: 2021,
+    mediaUrl: 'https://example.com/dune',
+    status: WatchStatus.PlanToWatch,
+  });
+  assert.ok(explicitSave);
+  assert.equal(explicitSave.status, WatchStatus.PlanToWatch);
+
+  // Explicit save when allowExplicitSaves is disabled is blocked
+  privacy.updateSettings({ allowExplicitSaves: false });
+  const blockedSave = lib.upsertEntry({
+    title: 'Blade Runner',
+    year: 2049,
+    mediaUrl: 'https://example.com/br',
+    status: WatchStatus.PlanToWatch,
+  });
+  assert.equal(blockedSave, null);
+  assert.equal(lib.getEntry('bladerunner::2049'), null);
+});
+
+test('historyStore.update returns null and does not mutate in private session', () => {
+  const store = memoryStore();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const hist = new HistoryStore(store as any);
+
+  // Record an event in normal mode
+  const event = hist.record({ title: 'Test Movie', action: 'play_started', status: 'Played' });
+  assert.ok(event.id);
+
+  // In private session, update must return null and not change status
+  const privacy = new PrivacyMode(store);
+  privacy.setActive(true);
+  const updated = hist.update(event.id, { status: 'Failed' });
+  assert.equal(updated, null);
+
+  privacy.setActive(false);
+  const current = hist.get(event.id);
+  assert.equal(current?.status, 'Played');
+});
+
+test('bookmarkStore does not track opened counts in private session and respects allowExplicitSaves', () => {
+  const store = memoryStore();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bms = new BookmarkStore(store as any);
+
+  // Save a bookmark in normal mode
+  bms.save({
+    mediaUrl: 'https://example.com/movie',
+    title: 'Movie',
+    origin: { provider: 'Test' },
+  });
+
+  const privacy = new PrivacyMode(store);
+  privacy.setActive(true);
+
+  // Mark opened during private session must not increment count or lastOpenedAt
+  bms.markOpened('https://example.com/movie');
+  const bm = bms.get('https://example.com/movie');
+  assert.equal(bm?.openCount, 0);
+  assert.equal(bm?.lastOpenedAt, undefined);
+
+  // Toggling bookmark when explicit saves are disallowed returns null
+  privacy.updateSettings({ allowExplicitSaves: false });
+  const result = bms.toggle({
+    mediaUrl: 'https://example.com/secret',
+    title: 'Secret',
+    origin: { provider: 'Test' },
+  });
+  assert.equal(result.saved, false);
+  assert.equal(result.bookmark, null);
+  assert.equal(bms.isSaved('https://example.com/secret'), false);
 });

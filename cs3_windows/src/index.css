@@ -671,3 +671,20 @@ select option:checked {
   font-size: 0.75rem;
   opacity: 0.85;
 }
+
+/* Full-app 4-corner Incognito boundary indicator */
+.app-container--incognito::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  border: 2px solid rgba(168, 85, 247, 0.85);
+  box-shadow: inset 0 0 12px rgba(168, 85, 247, 0.18);
+  pointer-events: none;
+  z-index: 99999;
+}
+
+:fullscreen .app-container--incognito::after,
+.app-container--incognito:fullscreen::after,
+body:has(:fullscreen) .app-container--incognito::after {
+  display: none !important;
+}

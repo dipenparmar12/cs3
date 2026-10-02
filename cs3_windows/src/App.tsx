@@ -97,6 +97,19 @@ interface ActiveSession {
 }
 
 export const App: React.FC = () => {
+  const { active: incognito } = usePrivacy();
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
   const [activeTab, setActiveTab] = useState<ActiveTab>('home');
   const [searchQuery, setSearchQuery] = useState('');
   /**
@@ -1566,8 +1579,10 @@ export const App: React.FC = () => {
     setHasBinaries(true);
   };
 
+  const isIncognitoBorderActive = incognito && !isFullscreen;
+
   return (
-    <div className="app-container">
+    <div className={`app-container${isIncognitoBorderActive ? ' app-container--incognito' : ''}`}>
       {/* Sidebar Navigation */}
       <Sidebar
         activeTab={activeTab}
