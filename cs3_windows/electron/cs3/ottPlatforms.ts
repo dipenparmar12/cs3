@@ -223,6 +223,8 @@ export interface OttPlatformView {
    * the 18+ badge and the once-per-launch warning before the page loads.
    */
   adult?: boolean;
+  /** Pinned to the top of the sidebar by the viewer. Set by `OttService`. */
+  pinned?: boolean;
 }
 
 /** What the inventory knows about one provider, from the registry — no JVM. */

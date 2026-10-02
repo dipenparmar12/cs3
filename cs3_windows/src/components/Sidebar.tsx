@@ -6,6 +6,8 @@ import {
   History,
   Download,
   Loader2,
+  Pin,
+  PinOff,
   Plus,
   Puzzle,
   Settings,
@@ -37,7 +39,18 @@ export interface SidebarOttPlatform {
   name: string;
   accent: string;
   availability: 'ready' | 'disabled' | 'missing';
+  /** Declared adult (NSFW) by its provider — shown with an 18+ flag. */
+  adult?: boolean;
+  /** Pinned by the viewer; the list arrives with pinned rows first, in order. */
+  pinned?: boolean;
 }
+
+/** The 18+ flag on a service row: sensitive content is disclosed before it is opened. */
+const AdultFlag: React.FC = () => (
+  <span className="adult-badge" title="Adult content (18+) — you will be asked to confirm your age">
+    18+
+  </span>
+);
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -75,6 +88,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
    */
   const [showUnavailable, setShowUnavailable] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const available = ottPlatforms.filter((p) => p.availability !== 'missing');
+  const unavailable = ottPlatforms.filter((p) => p.availability === 'missing');
 
   /*
    * Find a service by typing. Matches the sidebar's own rows first, then every
@@ -112,6 +127,53 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )
     : [];
 
+  /*
+   * Pinning. The main process owns the order and sends the list pinned-first;
+   * `localPinned` only holds a change until that list comes back, so a drag
+   * lands where it was dropped instead of snapping back for a moment.
+   */
+  const serverPinned = ottPlatforms.filter((p) => p.pinned).map((p) => p.id);
+  const [localPinned, setLocalPinned] = useState<string[] | null>(null);
+  const serverPinnedKey = serverPinned.join('|');
+  useEffect(() => setLocalPinned(null), [serverPinnedKey]);
+  const pinnedIds = localPinned ?? serverPinned;
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+
+  const savePinned = async (next: string[]) => {
+    setLocalPinned(next);
+    const response = await window.cloudstream?.setOttPinnedPlatforms(next);
+    if (!response?.ok) setLocalPinned(null);
+    onOttPlatformsChanged?.();
+  };
+  const togglePin = (platformId: string) =>
+    void savePinned(
+      pinnedIds.includes(platformId)
+        ? pinnedIds.filter((pid) => pid !== platformId)
+        : [...pinnedIds, platformId]
+    );
+  /** Drops `from` into `to`'s place among the pinned rows. */
+  const movePinned = (from: string, to: string) => {
+    if (from === to || !pinnedIds.includes(from) || !pinnedIds.includes(to)) return;
+    const next = pinnedIds.filter((pid) => pid !== from);
+    const target = next.indexOf(to);
+    const fromIndex = pinnedIds.indexOf(from);
+    const toIndex = pinnedIds.indexOf(to);
+    // Dragging down lands after the target, dragging up lands before it.
+    next.splice(fromIndex < toIndex ? target + 1 : target, 0, from);
+    void savePinned(next);
+  };
+
+  const byId = new Map(ottPlatforms.map((p) => [p.id, p]));
+  const pinnedRows = pinnedIds
+    .map((pid) => byId.get(pid))
+    .filter((p): p is SidebarOttPlatform => Boolean(p));
+  const orderedRows = [
+    ...pinnedRows,
+    ...available.filter((p) => !pinnedIds.includes(p.id)),
+    ...(showUnavailable ? unavailable.filter((p) => !pinnedIds.includes(p.id)) : []),
+  ];
+
   const openService = async (platform: SidebarOttPlatform) => {
     if (!shownIds.has(platform.id)) {
       await window.cloudstream?.setOttPlatformEnabled(platform.id, true);
@@ -122,8 +184,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setServiceQuery('');
   };
   const { snapshot: extensionJobs } = useExtensionJobs();
-  const available = ottPlatforms.filter((p) => p.availability !== 'missing');
-  const unavailable = ottPlatforms.filter((p) => p.availability === 'missing');
 
   // Opening a service that is not installed should not then hide the row that
   // is currently selected.
@@ -338,25 +398,63 @@ export const Sidebar: React.FC<SidebarProps> = ({
               />
             )}
 
-            {(searching ? shownMatches : [...available, ...(showUnavailable ? unavailable : [])]).map((platform) => {
+            {(searching ? shownMatches : orderedRows).map((platform, index, list) => {
               const id: ActiveTab = `ott:${platform.id}`;
               const isActive = activeTab === id;
+              const isPinned = pinnedIds.includes(platform.id);
+              // A hairline under the last pinned row — the only mark the pinned
+              // group gets, so the list stays as plain as it was.
+              const lastPinned = isPinned && !pinnedIds.includes(list[index + 1]?.id ?? '');
               return (
-                <button
+                <div
                   key={platform.id}
+                  className={[
+                    'ott-side-row',
+                    dropTarget === platform.id ? 'ott-side-row--drop' : '',
+                    lastPinned && !searching ? 'ott-side-row--last-pinned' : '',
+                  ].join(' ')}
+                  // Only pinned rows reorder, and only among themselves.
+                  draggable={isPinned && !searching}
+                  onDragStart={(event) => {
+                    setDragging(platform.id);
+                    event.dataTransfer.effectAllowed = 'move';
+                  }}
+                  onDragOver={(event) => {
+                    if (!dragging || !isPinned || dragging === platform.id) return;
+                    event.preventDefault();
+                    setDropTarget(platform.id);
+                  }}
+                  onDragLeave={() => setDropTarget((t) => (t === platform.id ? null : t))}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    if (dragging) movePinned(dragging, platform.id);
+                    setDragging(null);
+                    setDropTarget(null);
+                  }}
+                  onDragEnd={() => {
+                    setDragging(null);
+                    setDropTarget(null);
+                  }}
+                >
+                <button
                   onClick={() => setActiveTab(id)}
                   title={
-                    platform.availability === 'ready'
+                    platform.adult
+                      ? `${platform.name} — adult content (18+)`
+                      : platform.availability === 'ready'
                       ? platform.name
                       : platform.availability === 'disabled'
                         ? `${platform.name} — installed but switched off`
                         : `${platform.name} — not installed yet`
                   }
                   style={{
+                    flex: 1,
+                    minWidth: 0,
                     display: 'flex',
                     alignItems: 'center',
                     gap: '0.75rem',
                     padding: '0.55rem 0.9rem',
+                    paddingRight: '1.9rem',
                     borderRadius: 'var(--radius-md)',
                     backgroundColor: isActive ? 'var(--bg-card-hover)' : 'transparent',
                     color: isActive ? '#fff' : 'var(--text-muted)',
@@ -383,10 +481,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       boxShadow: isActive ? `0 0 6px ${platform.accent}` : 'none',
                     }}
                   />
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
                     {platform.name}
                   </span>
+                  {platform.adult && <AdultFlag />}
                 </button>
+                {onOttPlatformsChanged && (
+                  <button
+                    type="button"
+                    className={`ott-side-pin${isPinned ? ' ott-side-pin--on' : ''}`}
+                    onClick={() => togglePin(platform.id)}
+                    title={isPinned ? `Unpin ${platform.name}` : `Pin ${platform.name} to the top`}
+                    aria-label={isPinned ? `Unpin ${platform.name}` : `Pin ${platform.name} to the top`}
+                    aria-pressed={isPinned}
+                  >
+                    {isPinned ? <PinOff size={12} /> : <Pin size={12} />}
+                  </button>
+                )}
+                </div>
               );
             })}
 
@@ -419,6 +531,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
                       {platform.name}
                     </span>
+                    {platform.adult && <AdultFlag />}
                     <Plus size={13} aria-hidden />
                   </button>
                 ))}

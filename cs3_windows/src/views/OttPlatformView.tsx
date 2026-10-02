@@ -8,6 +8,7 @@ import { PosterCard } from '../components/PosterCard';
 import { EmptyState } from '../components/EmptyState';
 import { FixProvidersModal } from '../components/FixProvidersModal';
 import { useFlash } from '../utils/useFlash';
+import { acknowledgeAdult, isAdultAcknowledged } from '../utils/adultNotice';
 
 /**
  * One OTT platform, as a destination.
@@ -50,6 +51,8 @@ export interface OttPlatformSummary {
   providers: string[];
   disabledProviders: string[];
   suggestedRepositories: string[];
+  /** Declared adult (NSFW) by its provider: badged, and warned before loading. */
+  adult?: boolean;
 }
 
 interface OttPlatformViewProps {
@@ -73,6 +76,8 @@ interface OttPlatformViewProps {
    */
   category: OttCategoryState | null;
   onCategoryChange: (next: OttCategoryState | null) => void;
+  /** Leaves the page — the adult warning's "Go back". */
+  onLeave: () => void;
 }
 
 /** One provider row opened as a full grid. */
@@ -166,7 +171,15 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
   onInventoryChanged,
   category,
   onCategoryChange,
+  onLeave,
 }) => {
+  /*
+   * An adult catalogue asks first, once per launch. Until it is answered the
+   * page fetches nothing — not the catalogue, not the listings — so declining
+   * contacts no adult site at all.
+   */
+  const [adultAccepted, setAdultAccepted] = useState(isAdultAcknowledged);
+  const ageCheckPending = Boolean(platform.adult) && !adultAccepted;
   const [catalogs, setCatalogs] = useState<ProviderCatalog[]>([]);
   /** Providers that matched the platform but publish nothing to browse. */
   const [unbrowsable, setUnbrowsable] = useState<Array<{ provider: string; reason: string }>>([]);
@@ -281,6 +294,14 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
 
     setSuggestions([]);
     setMetaSections([]);
+    setLoading(false);
+
+    // Adult catalogue not yet confirmed this launch: fetch nothing.
+    if (ageCheckPending) {
+      return () => {
+        cancelled = true;
+      };
+    }
 
     /*
      * Third-party listings are fetched at once, in parallel, and shown only
@@ -369,7 +390,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     // The provider list is compared by value: the platform object is rebuilt on
     // every inventory refresh, and identity would restart the whole load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [platform.id, platform.availability, platform.providers.join('\u0000')]);
+  }, [platform.id, platform.availability, platform.providers.join('\u0000'), ageCheckPending]);
 
   const visibleSections = useMemo(
     () => sections.filter((row) => row.provider === activeProvider),
@@ -554,6 +575,41 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
       {!section.fetched && <RowTrigger onVisible={() => fetchRow(section)} />}
     </section>
   );
+
+  if (ageCheckPending) {
+    return (
+      <div className="ott-view">
+        <div className="ott-view__age-gate" role="alertdialog" aria-labelledby="ott-age-title" aria-describedby="ott-age-body">
+          <span className="ott-view__age-badge" aria-hidden>18+</span>
+          <h2 id="ott-age-title">{platform.name} contains adult content</h2>
+          <p id="ott-age-body">
+            Its provider declares this catalogue as adult (18+) material, which may include explicit
+            sexual content. Continue only if you are 18 or older and it is legal to view where you
+            are. Nothing from it has been loaded yet.
+          </p>
+          <p className="ott-view__age-note">
+            You will be asked again the next time CloudStream starts. Adult content can be turned off
+            entirely in Settings.
+          </p>
+          <div className="ott-view__age-actions">
+            <button type="button" className="btn btn-secondary" onClick={onLeave} autoFocus>
+              Go back
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                acknowledgeAdult();
+                setAdultAccepted(true);
+              }}
+            >
+              I am 18 or older — show it
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (category && category.platformId === platform.id) {
     return (

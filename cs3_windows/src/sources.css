@@ -7365,6 +7365,138 @@
   .ott-view__placeholder { animation: none; }
 }
 
+/*
+ * Sidebar streaming-service rows. The pin is invisible until the row is
+ * hovered (or the pin itself has keyboard focus), so the list looks exactly as
+ * plain as before; pinned rows can be dragged to reorder.
+ */
+.ott-side-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.ott-side-row[draggable='true'] {
+  cursor: grab;
+}
+
+.ott-side-row--drop::before {
+  content: '';
+  position: absolute;
+  left: 0.6rem;
+  right: 0.6rem;
+  top: -2px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent-light);
+}
+
+.ott-side-row--last-pinned {
+  margin-bottom: 0.3rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ott-side-pin {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.ott-side-row:hover .ott-side-pin,
+.ott-side-pin:focus-visible {
+  opacity: 1;
+}
+
+.ott-side-pin:hover {
+  color: #fff;
+  background: var(--bg-card-hover);
+}
+
+.ott-side-pin--on {
+  color: var(--accent-light);
+}
+
+/* Adult catalogue: asked once per launch, before anything is fetched. */
+.ott-view__age-gate {
+  max-width: 520px;
+  margin: 3rem auto;
+  padding: 1.75rem;
+  border-radius: 14px;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.07);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.ott-view__age-gate h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  color: #fff;
+}
+
+.ott-view__age-gate p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.ott-view__age-gate .ott-view__age-note {
+  font-size: 0.75rem;
+  color: var(--text-subtle);
+}
+
+.ott-view__age-badge,
+.adult-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: rgba(239, 68, 68, 0.18);
+  border: 1px solid rgba(239, 68, 68, 0.6);
+  color: #fca5a5;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+
+.ott-view__age-badge {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+/* The small sidebar / picker flag. */
+.adult-badge {
+  padding: 0 0.35rem;
+  font-size: 0.6rem;
+  height: 1.05rem;
+  line-height: 1;
+}
+
+.ott-view__age-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
 .ott-view__row-empty {
   margin: 0;
   padding: 1rem 0;

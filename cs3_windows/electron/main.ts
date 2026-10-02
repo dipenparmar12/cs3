@@ -4981,6 +4981,14 @@ ipcMain.handle('ott:setPlatformEnabled', async (_, platformId: string, enabled: 
   }
 });
 
+ipcMain.handle('ott:setPinnedPlatforms', async (_, ids: string[]) => {
+  try {
+    return { ok: true, pinned: ottService.setPinnedPlatformIds(ids) };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
 ipcMain.handle('ott:setPlatformsEnabled', async (_, changes: Record<string, boolean>) => {
   try {
     if (!changes || typeof changes !== 'object') return { ok: false, error: 'No platforms were named.' };

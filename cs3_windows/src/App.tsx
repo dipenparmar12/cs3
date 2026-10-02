@@ -1933,6 +1933,7 @@ export const App: React.FC = () => {
                         onInventoryChanged={() => void refreshOttPlatforms()}
                         category={ottCategory}
                         onCategoryChange={setOttCategory}
+                        onLeave={() => setActiveTab('home')}
                       />
                     );
                   })()}

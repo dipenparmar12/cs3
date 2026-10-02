@@ -25,6 +25,7 @@ interface PickerPlatform {
   extension?: string;
   types?: string[];
   lang?: string;
+  adult?: boolean;
 }
 
 interface Props {
@@ -51,6 +52,7 @@ const TYPE_LABELS: Record<string, string> = {
   Podcast: 'Podcasts',
   CustomMedia: 'Other',
   Others: 'Other',
+  NSFW: 'Adult (18+)',
 };
 
 const typeLabel = (type: string) => TYPE_LABELS[type] ?? type;
@@ -363,7 +365,14 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
                       {p.name.trim().charAt(0).toUpperCase()}
                     </span>
                     <span className="ssp__tile-text">
-                      <span className="ssp__tile-name">{p.name}</span>
+                      <span className="ssp__tile-name">
+                        {p.name}
+                        {p.adult && (
+                          <span className="adult-badge" style={{ marginLeft: '0.4rem' }} title="Adult content (18+)">
+                            18+
+                          </span>
+                        )}
+                      </span>
                       {details && <span className="ssp__tile-sub">{details}</span>}
                     </span>
                     {/* The extension, unless it only repeats the name — an archive

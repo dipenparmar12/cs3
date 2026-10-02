@@ -1874,6 +1874,8 @@ export interface CloudStreamElectronAPI {
     platformId: string,
     enabled: boolean
   ) => Promise<Envelope & { enabled?: string[] }>;
+  /** Replaces the pinned services, in order; answers the whole pinned list. */
+  setOttPinnedPlatforms: (ids: string[]) => Promise<Envelope & { pinned?: string[] }>;
   /** Bulk form of `setOttPlatformEnabled`; answers the whole enabled set. */
   setOttPlatformsEnabled: (
     changes: Record<string, boolean>
@@ -2314,6 +2316,7 @@ const api: CloudStreamElectronAPI = {
   setOttPlatformEnabled: (platformId, enabled) =>
     ipcRenderer.invoke('ott:setPlatformEnabled', platformId, enabled),
   setOttPlatformsEnabled: (changes) => ipcRenderer.invoke('ott:setPlatformsEnabled', changes),
+  setOttPinnedPlatforms: (ids) => ipcRenderer.invoke('ott:setPinnedPlatforms', ids),
   addRepository: (url) => ipcRenderer.invoke('extension:addRepository', url),
   installRepository: (url, options) => ipcRenderer.invoke('extension:installRepository', url, options),
   removeRepository: (repoUrl) => ipcRenderer.invoke('extension:removeRepository', repoUrl),

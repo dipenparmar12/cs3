@@ -44,6 +44,9 @@ import {
  */
 const SETTINGS_KEY_OTT_ENABLED = 'ott_enabled_platforms';
 
+/** Platform ids the viewer pinned, in their chosen order — top of the sidebar. */
+const SETTINGS_KEY_OTT_PINNED = 'ott_pinned_platforms';
+
 export class OttService {
   private plugins: PluginManager;
   private datastore: DatastoreManager;
@@ -83,6 +86,21 @@ export class OttService {
     );
     this.datastore.setObject(SETTINGS_KEY_OTT_ENABLED, { ...(stored ?? {}), [platformId]: enabled });
     return this.getEnabledPlatformIds();
+  }
+
+  public getPinnedPlatformIds(): string[] {
+    const stored = this.datastore.getObject<string[]>(SETTINGS_KEY_OTT_PINNED, []);
+    return Array.isArray(stored) ? stored.filter((id) => typeof id === 'string') : [];
+  }
+
+  /**
+   * The whole pinned list, in order — pin, unpin and reorder are all this one
+   * write, so the order and the set cannot disagree.
+   */
+  public setPinnedPlatformIds(ids: string[]): string[] {
+    const clean = [...new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && id))];
+    this.datastore.setObject(SETTINGS_KEY_OTT_PINNED, clean);
+    return clean;
   }
 
   /**
@@ -129,7 +147,18 @@ export class OttService {
      * user's chosen set — a sidebar that showed the hidden ones would make the
      * setting look broken.
      */
-    return includeHidden ? views : views.filter((view) => shown.has(view.id));
+    // Pinned first, in the viewer's order; everything else keeps its own order.
+    const pinned = this.getPinnedPlatformIds();
+    const rank = new Map(pinned.map((id, index) => [id, index]));
+    const ordered = views
+      .map((view, index) => ({ view: { ...view, pinned: rank.has(view.id) }, index }))
+      .sort((a, b) => {
+        const ra = rank.get(a.view.id) ?? Number.MAX_SAFE_INTEGER;
+        const rb = rank.get(b.view.id) ?? Number.MAX_SAFE_INTEGER;
+        return ra - rb || a.index - b.index;
+      })
+      .map((entry) => entry.view);
+    return includeHidden ? ordered : ordered.filter((view) => shown.has(view.id));
   }
 
   public async getPlatform(platformId: string): Promise<OttPlatformView | null> {
