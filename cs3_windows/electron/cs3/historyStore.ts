@@ -70,6 +70,7 @@ export class HistoryStore {
    * Updates an existing live event (e.g. updating progress, duration, or completion status).
    */
   public update(id: string, updates: Partial<HistoryEvent>): HistoryEvent | null {
+    if (isPrivateSession()) return null;
     const index = this.events.findIndex((e) => e.id === id);
     if (index < 0) return null;
 

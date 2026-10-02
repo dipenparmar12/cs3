@@ -165,8 +165,11 @@ export class DiagnosticsLog {
     this.ensureRestored();
     if (!entry.message) return;
     // Incognito: the failure is still worth knowing about, the activity is not
-    // (PRD-52 §12). What was searched, which title and which address are dropped.
-    if (isPrivateSession()) entry = { ...entry, query: undefined, title: undefined, url: undefined };
+    // (PRD-52 §12). Info-level activity logs are suppressed, and query, title, url, detail are dropped.
+    if (isPrivateSession()) {
+      if (entry.level === 'info') return;
+      entry = { ...entry, query: undefined, title: undefined, url: undefined, detail: undefined };
+    }
 
     const record: DiagnosticRecord = {
       id: `d${this.nextId++}`,

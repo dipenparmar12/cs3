@@ -70,7 +70,12 @@ import { SearchSuggestionService } from './searchSuggestions';
 import { SearchHistoryStore } from './searchHistory';
 import { SavedSearchStore, type SaveSearchInput } from './savedSearches';
 import { SubtitleService } from './subtitleService';
-import { PrivacyMode, type IncognitoSettings } from './cs3/privacyMode';
+import {
+  PrivacyMode,
+  isPrivateSession,
+  allowsExplicitSaves,
+  type IncognitoSettings,
+} from './cs3/privacyMode';
 import { SubtitleLibrary, type SaveRequest as SubtitleSaveRequest } from './subtitles/subtitleLibrary';
 import { MediaTranscoder, VIDEO_CODEC_PROBES } from './mediaTranscoder';
 import { PlaybackEngine } from './media/playbackEngine';
@@ -770,11 +775,14 @@ setChallengeSolver(async (url) => {
  * `.mpd` served as `application/octet-stream` are both routine, and the only
  * reliable classifier is the first few bytes of the body.
  */
+const inspectionStore = new InspectionStore(datastore);
+privacyMode.onClearSession(() => inspectionStore.clearVolatile());
+
 const playbackEngine = new PlaybackEngine({
   proxy: contentService.getProxy(),
   transcoder: mediaTranscoder,
   nativeEngine: () => ({ available: mpvEngine.isAvailable(), policy: nativeEnginePolicy() }),
-  inspections: new InspectionStore(datastore),
+  inspections: inspectionStore,
   fetchText: async (url, bytes) => {
     try {
       const response = await resilientFetch.fetch(
@@ -2195,6 +2203,9 @@ ipcMain.handle('api:clearSearchHistory', async () => searchHistory.clear());
  */
 ipcMain.handle('search:saveResults', async (_, input: SaveSearchInput) => {
   try {
+    if (isPrivateSession() && !allowsExplicitSaves()) {
+      return { ok: false, error: 'Explicit saves are disabled in Incognito mode.', saved: null };
+    }
     const saved = savedSearches.save(input);
     return saved
       ? { ok: true, saved }
@@ -2788,14 +2799,19 @@ ipcMain.handle(
   'bookmarks:toggle',
   async (_, input: Parameters<BookmarkStore['toggle']>[0]) => {
     try {
+      if (isPrivateSession() && !allowsExplicitSaves()) {
+        return { ok: false, error: 'Explicit saves are disabled in Incognito mode.', saved: false, bookmark: null };
+      }
       const result = bookmarks.toggle(input);
       // Saving a page is the same statement as adding a title to the library:
       // keep the copy that lets it open. Unsaving releases it to the cache
       // again rather than deleting it — the page is still worth drawing fast.
-      pageSnapshots.setPinned(
-        { url: input?.mediaUrl, title: input?.title, year: input?.year },
-        result.saved
-      );
+      if (!isPrivateSession()) {
+        pageSnapshots.setPinned(
+          { url: input?.mediaUrl, title: input?.title, year: input?.year },
+          result.saved
+        );
+      }
       return { ok: true, ...result };
     } catch (error) {
       return { ...fail(error), saved: false, bookmark: null };
@@ -5430,6 +5446,9 @@ ipcMain.handle(
   ) => {
     const { sourceQuery, ...fields } = input ?? ({} as typeof input);
     const entry = libraryStore.upsertEntry(fields);
+    if (!entry) return null;
+    if (isPrivateSession()) return entry;
+
     /*
      * Adding a title to the library is the statement that its page must keep
      * opening. Pinning here rather than in the store keeps `LibraryStore` free of

@@ -37,6 +37,7 @@ import { pickResumePoint } from './utils/resumePoint';
 import { historyEventForTask } from './utils/historyEvent';
 import { decodeShareLink } from './utils/shareLink';
 import { loadWatchState } from './components/player/seriesContext';
+import { usePrivacy } from './utils/usePrivacy';
 
 /**
  * Every screen except Home, loaded when it is opened.

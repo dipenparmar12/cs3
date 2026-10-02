@@ -11,7 +11,7 @@ import type {
 import type { TorrentResult } from '../../src/types/torrent';
 import { deadlineFromUrl } from '../sourceCache.ts';
 import { looksLikeLinksHandle, parseExtensionUrl } from './extensionAddress.ts';
-import { isPrivateSession } from './privacyMode.ts';
+import { isPrivateSession, allowsExplicitSaves } from './privacyMode.ts';
 
 export { WatchStatus };
 
@@ -337,7 +337,14 @@ export class LibraryStore {
     status?: WatchStatus;
     sources?: StoredSource[];
     metadata?: LibraryItemMetadata;
-  }): LibraryEntry {
+  }): LibraryEntry | null {
+    if (isPrivateSession()) {
+      // Automatic add (no status provided, e.g. on playback) is never persisted in Incognito.
+      if (!input.status) return null;
+      // Explicit bucket selection is gated by allowExplicitSaves.
+      if (!allowsExplicitSaves()) return null;
+    }
+
     const key = canonicalKey(input.title, input.year);
     const now = Date.now();
     const existing = this.entries.get(key);
@@ -390,6 +397,7 @@ export class LibraryStore {
   }
 
   public setStatus(key: string, status: WatchStatus): LibraryEntry | null {
+    if (isPrivateSession() && !allowsExplicitSaves()) return null;
     const entry = this.entries.get(key);
     if (!entry) return null;
     entry.status = status;
@@ -399,6 +407,7 @@ export class LibraryStore {
   }
 
   public setUserRating(key: string, rating: number | undefined): LibraryEntry | null {
+    if (isPrivateSession() && !allowsExplicitSaves()) return null;
     const entry = this.entries.get(key);
     if (!entry) return null;
     entry.userRating = rating;
@@ -408,6 +417,7 @@ export class LibraryStore {
   }
 
   public removeEntry(key: string): boolean {
+    if (isPrivateSession() && !allowsExplicitSaves()) return false;
     const removed = this.entries.delete(key);
     if (removed) {
       for (const [id, p] of this.progress) if (p.key === key) this.progress.delete(id);
@@ -437,6 +447,7 @@ export class LibraryStore {
   // --- source persistence --------------------------------------------------
 
   public setSources(key: string, sources: StoredSource[]): StoredSource[] {
+    if (isPrivateSession()) return sources;
     const entry = this.entries.get(key);
     if (!entry) return sources;
     entry.sources = sources;
@@ -455,6 +466,7 @@ export class LibraryStore {
    * the first title that claims it and is never linked to two.
    */
   public linkSourceAddress(key: string, address: string): void {
+    if (isPrivateSession()) return;
     const entry = this.entries.get(key);
     if (!entry || !address) return;
     const wanted = addressKey(address);
@@ -516,6 +528,7 @@ export class LibraryStore {
     status: SourceStatus,
     failureReason?: string
   ): void {
+    if (isPrivateSession()) return;
     const entry = this.entries.get(key);
     if (!entry || !entry.sources) return;
 
@@ -655,6 +668,7 @@ export class LibraryStore {
     season?: number,
     episode?: number
   ): PlayedSource | null {
+    if (isPrivateSession()) return null;
     const played = this.loadPlayedSources();
     const slot = LibraryStore.playedSlot(key, season, episode);
     const record = played.get(slot);
@@ -898,6 +912,7 @@ export class LibraryStore {
   // --- source memory -------------------------------------------------------
 
   public rememberSource(input: Omit<SourceMemory, 'chosenAt'>): void {
+    if (isPrivateSession()) return;
     this.sources.set(progressId(input), { ...input, chosenAt: Date.now() });
     this.persistSources();
   }

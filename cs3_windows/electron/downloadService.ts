@@ -23,6 +23,7 @@ import type { AnalyticsSink } from './pluginManager';
 import type { TorrentResult } from '../src/types/torrent';
 import type { HistoryStore } from './cs3/historyStore';
 import type { HistoryAction, HistoryStatus } from '../src/types/history';
+import { isPrivateSession } from './cs3/privacyMode.ts';
 import { scopedLogger } from './logging/logger.ts';
 import { describeError } from '../src/utils/errors.ts';
 
@@ -93,7 +94,7 @@ export class DownloadService {
     status: HistoryStatus,
     failureReason?: string
   ): void {
-    if (!this.historyStore) return;
+    if (!this.historyStore || task.isPrivate || isPrivateSession()) return;
     try {
       this.historyStore.record(historyEventForTask(task, action, status, failureReason));
     } catch (e) {
@@ -377,6 +378,9 @@ export class DownloadService {
   }
 
   public async enqueue(task: DownloadTask): Promise<string> {
+    if (isPrivateSession()) {
+      task.isPrivate = true;
+    }
     task.state = DownloadState.Queued;
     task.createdTime = task.createdTime || Date.now();
     task.errorMessage = undefined;
@@ -733,13 +737,15 @@ export class DownloadService {
     // Counted here rather than at the engine: a download that retried through a
     // refreshed source still succeeded, and the provider that supplied the link
     // that finally worked is the one that earned the credit.
-    this.analytics?.observe({
-      provider: task.providerName,
-      stage: 'download',
-      outcome: 'success',
-      produced: 1,
-      latencyMs: Date.now() - task.createdTime,
-    });
+    if (!task.isPrivate && !isPrivateSession()) {
+      this.analytics?.observe({
+        provider: task.providerName,
+        stage: 'download',
+        outcome: 'success',
+        produced: 1,
+        latencyMs: Date.now() - task.createdTime,
+      });
+    }
 
     task.state = DownloadState.Completed;
     task.totalBytes = actual || expected || task.totalBytes;
@@ -1210,13 +1216,15 @@ export class DownloadService {
     // Only after every refresh and retry has been exhausted. Counting the first
     // failed attempt would penalise a provider whose links simply expire
     // quickly but always regenerate.
-    this.analytics?.observe({
-      provider: task.providerName,
-      stage: 'download',
-      outcome: 'failure',
-      latencyMs: Date.now() - task.createdTime,
-      error: message,
-    });
+    if (!task.isPrivate && !isPrivateSession()) {
+      this.analytics?.observe({
+        provider: task.providerName,
+        stage: 'download',
+        outcome: 'failure',
+        latencyMs: Date.now() - task.createdTime,
+        error: message,
+      });
+    }
     task.state = DownloadState.Failed;
     task.errorMessage = message;
     task.downloadSpeed = 0;

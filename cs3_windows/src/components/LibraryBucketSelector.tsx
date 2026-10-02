@@ -125,7 +125,7 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
       });
 
       setCurrentStatus(status);
-      setEntryKey(updated.key);
+      setEntryKey(updated?.key ?? null);
       onStatusChanged?.(status);
     } finally {
       setLoading(false);

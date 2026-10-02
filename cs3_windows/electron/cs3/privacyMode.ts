@@ -63,6 +63,14 @@ export function isPrivateSession(): boolean {
   return current?.isActive() ?? false;
 }
 
+export function allowsExplicitSaves(): boolean {
+  return !current?.isActive() || (current?.getState().settings.allowExplicitSaves ?? true);
+}
+
+export function allowsDownloads(): boolean {
+  return !current?.isActive() || (current?.getState().settings.allowDownloads ?? true);
+}
+
 export class PrivacyMode {
   private active: boolean;
   private settings: IncognitoSettings;

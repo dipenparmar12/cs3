@@ -257,7 +257,9 @@ export class PageSnapshotStore {
     this.snapshots.set(url, merged);
     this.index(merged);
     this.evict();
-    this.file.schedule();
+    if (!isPrivateSession()) {
+      this.file.schedule();
+    }
     return merged;
   }
 
@@ -307,6 +309,7 @@ export class PageSnapshotStore {
   }
 
   private touch(entry: PageSnapshot): PageSnapshot {
+    if (isPrivateSession()) return entry;
     entry.lastUsedAt = Date.now();
     this.file.schedule();
     return entry;
