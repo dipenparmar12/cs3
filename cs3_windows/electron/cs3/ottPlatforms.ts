@@ -217,6 +217,12 @@ export interface OttPlatformView {
   /** For a discovered platform: the provider's declared `TvType`s and language. */
   types?: string[];
   lang?: string;
+  /**
+   * Adult content, read from the provider's own declaration (upstream's `NSFW`
+   * `TvType`) — the same signal the adult gate uses, never a name list. Drives
+   * the 18+ badge and the once-per-launch warning before the page loads.
+   */
+  adult?: boolean;
 }
 
 /** What the inventory knows about one provider, from the registry — no JVM. */
@@ -289,6 +295,7 @@ export function discoverPlatforms(inventory: OttInventory): OttPlatformView[] {
       extension: detail.pluginName,
       types: detail.supportedTypes,
       lang: detail.lang,
+      adult: detail.supportedTypes.some((type) => type.toUpperCase() === 'NSFW'),
     });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));

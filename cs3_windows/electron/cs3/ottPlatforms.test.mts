@@ -44,6 +44,19 @@ test('discovers enabled providers with a main page that no listed platform claim
   assert.deepEqual(views.find((v) => v.id === 'netflix')?.providers, ['Netflix']);
 });
 
+test('a provider declaring NSFW is flagged adult; others are not', () => {
+  const views = buildOttPlatformViews({
+    allProviders: ['AdultSite', 'Hotstar'],
+    enabledProviders: ['AdultSite', 'Hotstar'],
+    providerDetails: [
+      { name: 'AdultSite', pluginName: 'Ext', hasMainPage: true, supportedTypes: ['NSFW'] },
+      detail('Hotstar'),
+    ],
+  });
+  assert.equal(views.find((v) => v.name === 'AdultSite')?.adult, true);
+  assert.equal(views.find((v) => v.name === 'Hotstar')?.adult, false);
+});
+
 test('no provider details means no discovered platforms', () => {
   const views = buildOttPlatformViews({
     allProviders: ['Hotstar'],
