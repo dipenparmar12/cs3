@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Loader2, RefreshCw } from 'lucide-react';
+import { ArrowLeft, ArrowUp, Loader2, RefreshCw } from 'lucide-react';
 import type { SearchResponse } from '../../types/api';
 import type { HomeCategoryState } from '../../views/homeCategoryState';
 import { PosterCard } from '../PosterCard';
@@ -66,6 +66,31 @@ export function CategoryGrid<T extends HomeCategoryState>({
     };
   }, []);
 
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const viewport = containerRef.current?.closest<HTMLElement>('.view-viewport');
+    if (!viewport) return;
+
+    const handleScroll = () => {
+      setScrolled(viewport.scrollTop > 30);
+    };
+
+    handleScroll();
+    viewport.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      viewport.removeEventListener('scroll', handleScroll);
+    };
+  }, []);
+
+  const scrollToTop = useCallback(() => {
+    const viewport = containerRef.current?.closest<HTMLElement>('.view-viewport');
+    if (viewport) {
+      viewport.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, []);
+
   const loadMore = useCallback(async () => {
     const current = latest.current;
     if (busy.current || current.done) return;
@@ -126,18 +151,41 @@ export function CategoryGrid<T extends HomeCategoryState>({
   const { interactionFor } = useTitleInteractions(category.items);
 
   return (
-    <div className="category-page">
-      <header className="category-page__head">
-        <button type="button" className="category-page__back" onClick={onBack}>
-          <ArrowLeft size={16} aria-hidden /> {backLabel}
-        </button>
-        <div className="category-page__title">
-          <h2>{category.title}</h2>
-          {category.subtitle && <p>{category.subtitle}</p>}
+    <div className="category-page" ref={containerRef}>
+      <header className={`category-page__head${scrolled ? ' category-page__head--scrolled' : ''}`}>
+        <div className="category-page__head-start">
+          <button
+            type="button"
+            className="category-page__back"
+            onClick={onBack}
+            title={`Back to ${backLabel}`}
+          >
+            <ArrowLeft size={16} aria-hidden />
+            <span>{backLabel}</span>
+          </button>
+          <div className="category-page__title">
+            <h2>{category.title}</h2>
+            {category.subtitle && <p>{category.subtitle}</p>}
+          </div>
         </div>
-        <span className="category-page__count">
-          {category.items.length} title{category.items.length === 1 ? '' : 's'}
-        </span>
+
+        <div className="category-page__head-end">
+          <span className="category-page__count">
+            {category.items.length} title{category.items.length === 1 ? '' : 's'}
+          </span>
+          {scrolled && (
+            <button
+              type="button"
+              className="category-page__top-btn"
+              onClick={scrollToTop}
+              title="Scroll to top"
+              aria-label="Scroll to top"
+            >
+              <ArrowUp size={13} aria-hidden />
+              <span>Top</span>
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="poster-grid">
