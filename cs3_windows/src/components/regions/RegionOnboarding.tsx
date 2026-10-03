@@ -1,0 +1,101 @@
+import React, { useEffect, useState } from 'react';
+import { Globe2 } from 'lucide-react';
+import type { RegionState } from '../../../electron/cs3/bootstrap';
+import type { RegionId } from '../../../electron/cs3/regions';
+import { describeError } from '../../utils/errors';
+import { RegionPicker } from './RegionPicker';
+
+/**
+ * Asked once, before anything is installed (PRD-54 §6): where the viewer's
+ * content comes from. Pre-ticked from the system locale, so pressing Continue
+ * without reading is still a sensible answer, and Skip stores that suggestion
+ * so the question never becomes a wall.
+ *
+ * Adult content sits under "Optional content", collapsed and off: it is
+ * findable by anyone who looks, and asked of nobody who does not.
+ */
+export const RegionOnboarding: React.FC = () => {
+  const [state, setState] = useState<RegionState | null>(null);
+  const [selected, setSelected] = useState<RegionId[]>([]);
+  const [adult, setAdult] = useState(false);
+  const [adultInitial, setAdultInitial] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const api = window.cloudstream;
+    const load = () =>
+      api?.getRegions?.().then((next) => {
+        setState(next);
+        setSelected(next.selected);
+      });
+    load();
+    // An existing install's adult setting is the starting point, never reset.
+    api?.getAdultMode?.().then((result) => {
+      setAdult(result.mode === 'on');
+      setAdultInitial(result.mode === 'on');
+    });
+    return api?.onBootstrapProgress?.((progress) => {
+      if (progress.phase === 'needs-regions') load();
+    });
+  }, []);
+
+  if (!state?.needsSelection) return null;
+
+  const save = async (choice: RegionId[]) => {
+    const api = window.cloudstream;
+    if (!api) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // Adult first, so the run the regions start already knows the answer.
+      if (adult !== adultInitial) await api.setAdultMode(adult ? 'on' : 'off');
+      const result = await api.setRegions(choice);
+      if (!result.ok) throw new Error(result.error);
+      setState(result.state);
+    } catch (cause) {
+      setError(describeError(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal region-onboarding" role="dialog" aria-modal="true" aria-labelledby="region-onboarding-title">
+        <header className="modal__head">
+          <h3 id="region-onboarding-title">
+            <Globe2 size={17} /> Where is your content from?
+          </h3>
+        </header>
+
+        <p className="region-onboarding__lead">
+          Pick one or more regions. CloudStream sets up the repositories, extensions and providers for
+          them — in their languages — and leaves the rest of the world one click away in Extensions. You
+          can change this any time in Settings.
+        </p>
+
+        <RegionPicker regions={state.regions} selected={selected} onChange={setSelected} disabled={busy} />
+
+        <details className="region-onboarding__optional">
+          <summary>Optional content</summary>
+          <label>
+            <input type="checkbox" checked={adult} disabled={busy} onChange={(e) => setAdult(e.target.checked)} />
+            Include adult / 18+ content
+          </label>
+        </details>
+
+        {error && <p className="region-onboarding__error">{error}</p>}
+
+        <footer className="modal__foot">
+          <button className="btn btn-secondary" disabled={busy} onClick={() => save(state.suggested)}>
+            Skip
+          </button>
+          <button className="btn btn-primary" disabled={busy || selected.length === 0} onClick={() => save(selected)}>
+            {busy ? 'Saving…' : 'Continue'}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+};
