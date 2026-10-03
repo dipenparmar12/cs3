@@ -20,12 +20,37 @@ import type { SearchResponse } from '../types/api';
 export const RAIL_LIMIT = 20;
 
 const HIDDEN_KEY = 'home_hidden_rows';
+const CONTINUE_WATCHING_COLLAPSED_KEY = 'home_continue_watching_collapsed';
 /** The single toggle this replaced, read once so nobody's choice is lost. */
 const LEGACY_ANIME_KEY = 'home_include_anime';
 const ANIME_ROW = 'trending-anime';
 
 type ReadableStorage = Pick<Storage, 'getItem'>;
 type WritableStorage = Pick<Storage, 'setItem'>;
+
+/**
+ * Whether Continue watching is collapsed on the home screen.
+ * Defaults to false (expanded by default).
+ */
+export function readContinueWatchingCollapsed(storage: ReadableStorage | null | undefined): boolean {
+  try {
+    return storage?.getItem(CONTINUE_WATCHING_COLLAPSED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function writeContinueWatchingCollapsed(
+  storage: WritableStorage | null | undefined,
+  collapsed: boolean
+): void {
+  try {
+    storage?.setItem(CONTINUE_WATCHING_COLLAPSED_KEY, collapsed ? 'true' : 'false');
+  } catch {
+    // A refused write still applies for this session; nothing to report.
+  }
+}
+
 
 /**
  * The rows switched off, from `localStorage`.
