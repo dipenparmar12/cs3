@@ -5033,11 +5033,8 @@ ipcMain.handle('ott:getMetadataCatalog', async (_, platformId: string) => {
 
 ipcMain.handle('ott:listAllPlatforms', async () => {
   try {
-    return {
-      ok: true,
-      platforms: await ottService.listPlatforms(true),
-      enabled: ottService.getEnabledPlatformIds(),
-    };
+    const platforms = await ottService.listPlatforms(true);
+    return { ok: true, platforms, enabled: ottService.shownPlatformIds(platforms) };
   } catch (error) {
     return fail(error);
   }
@@ -5046,7 +5043,8 @@ ipcMain.handle('ott:listAllPlatforms', async () => {
 ipcMain.handle('ott:setPlatformEnabled', async (_, platformId: string, enabled: boolean) => {
   try {
     if (!platformId) return { ok: false, error: 'No platform was named.' };
-    return { ok: true, enabled: ottService.setPlatformEnabled(platformId, enabled) };
+    ottService.setPlatformEnabled(platformId, enabled);
+    return { ok: true, enabled: ottService.shownPlatformIds(await ottService.listPlatforms(true)) };
   } catch (error) {
     return fail(error);
   }
@@ -5063,7 +5061,8 @@ ipcMain.handle('ott:setPinnedPlatforms', async (_, ids: string[]) => {
 ipcMain.handle('ott:setPlatformsEnabled', async (_, changes: Record<string, boolean>) => {
   try {
     if (!changes || typeof changes !== 'object') return { ok: false, error: 'No platforms were named.' };
-    return { ok: true, enabled: ottService.setPlatformsEnabled(changes) };
+    ottService.setPlatformsEnabled(changes);
+    return { ok: true, enabled: ottService.shownPlatformIds(await ottService.listPlatforms(true)) };
   } catch (error) {
     return fail(error);
   }

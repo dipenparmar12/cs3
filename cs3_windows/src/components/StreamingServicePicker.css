@@ -307,3 +307,15 @@
     display: none;
   }
 }
+
+/* Filter groups: one line each; "+N more" opens the rest in a bounded box. */
+.ssp__facet { align-items: center; }
+.ssp__facet--open { max-height: 120px; overflow-y: auto; }
+.ssp__facet-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+  min-width: 64px;
+}
+.ssp__chip--more { opacity: 0.8; font-style: italic; }

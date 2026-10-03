@@ -274,33 +274,25 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
           </label>
 
           {typeFacet.length > 1 && (
-            <div className="ssp__chips" role="group" aria-label="Content type">
-              {typeFacet.map(([type, count]) => (
-                <button
-                  key={type}
-                  className="ssp__chip"
-                  aria-pressed={types.has(type)}
-                  onClick={() => setTypes((set) => toggleIn(set, type))}
-                >
-                  {typeLabel(type)} <span className="ssp__chip-count">{count}</span>
-                </button>
-              ))}
-            </div>
+            <FacetRow
+              label="Type"
+              entries={typeFacet}
+              selected={types}
+              format={typeLabel}
+              onToggle={(value) => setTypes((set) => toggleIn(set, value))}
+              onClear={() => setTypes(new Set())}
+            />
           )}
 
           {langFacet.length > 1 && (
-            <div className="ssp__chips" role="group" aria-label="Language">
-              {langFacet.map(([lang, count]) => (
-                <button
-                  key={lang}
-                  className="ssp__chip"
-                  aria-pressed={langs.has(lang)}
-                  onClick={() => setLangs((set) => toggleIn(set, lang))}
-                >
-                  {languageLabel(lang)} <span className="ssp__chip-count">{count}</span>
-                </button>
-              ))}
-            </div>
+            <FacetRow
+              label="Language"
+              entries={langFacet}
+              selected={langs}
+              format={languageLabel}
+              onToggle={(value) => setLangs((set) => toggleIn(set, value))}
+              onClear={() => setLangs(new Set())}
+            />
           )}
 
           {adultCount > 0 && (
@@ -463,3 +455,57 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
     </div>
   );
 };
+
+/**
+ * One filter group on a single line: the label, every selected chip, then the
+ * most common few, with the rest behind "+N more". Dozens of wrapping chips
+ * used to push the service list — the point of this dialog — off screen.
+ */
+function FacetRow({
+  label,
+  entries,
+  selected,
+  format,
+  onToggle,
+  onClear,
+}: {
+  label: string;
+  entries: Array<[string, number]>;
+  selected: Set<string>;
+  format: (value: string) => string;
+  onToggle: (value: string) => void;
+  onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const TOP = 5;
+  const shown = open
+    ? entries
+    : entries.filter(([value], index) => index < TOP || selected.has(value));
+  const hidden = entries.length - shown.length;
+  return (
+    <div className={`ssp__chips ssp__facet${open ? ' ssp__facet--open' : ''}`} role="group" aria-label={label}>
+      <span className="ssp__facet-label">{label}</span>
+      {shown.map(([value, count]) => (
+        <button
+          key={value}
+          type="button"
+          className="ssp__chip"
+          aria-pressed={selected.has(value)}
+          onClick={() => onToggle(value)}
+        >
+          {format(value)} <span className="ssp__chip-count">{count}</span>
+        </button>
+      ))}
+      {(hidden > 0 || open) && entries.length > TOP && (
+        <button type="button" className="ssp__chip ssp__chip--more" onClick={() => setOpen((v) => !v)}>
+          {open ? 'Less' : `+${hidden} more`}
+        </button>
+      )}
+      {selected.size > 0 && (
+        <button type="button" className="ssp__chip ssp__chip--more" onClick={onClear}>
+          Clear
+        </button>
+      )}
+    </div>
+  );
+}

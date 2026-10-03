@@ -133,7 +133,6 @@ export class OttService {
    */
   public async listPlatforms(includeHidden = false): Promise<OttPlatformView[]> {
     const enabledProviders = await this.plugins.listEnabledProviders();
-    const shown = new Set(this.getEnabledPlatformIds());
     const views = buildOttPlatformViews({
       allProviders: this.plugins.getProvidersList(),
       enabledProviders,
@@ -162,7 +161,28 @@ export class OttService {
         return ra - rb || a.index - b.index;
       })
       .map((entry) => entry.view);
-    return includeHidden ? ordered : ordered.filter((view) => shown.has(view.id));
+    if (includeHidden) return ordered;
+    const shown = new Set(this.shownPlatformIds(ordered));
+    return ordered.filter((view) => shown.has(view.id));
+  }
+
+  /**
+   * Which of these views the sidebar shows. A stored choice always wins; with
+   * none, a discovered platform from an enabled provider is shown — new
+   * extensions' services appear without a trip to the picker — except an
+   * adult one, which needs an explicit pick even with the adult gate open.
+   * Removing a service stores `false`, so it stays removed across refreshes.
+   */
+  public shownPlatformIds(views: OttPlatformView[]): string[] {
+    const stored = this.datastore.getObject<Record<string, boolean>>(SETTINGS_KEY_OTT_ENABLED, {}) ?? {};
+    const listed = new Set(this.getEnabledPlatformIds());
+    return views
+      .filter((view) => {
+        if (typeof stored[view.id] === 'boolean') return stored[view.id];
+        if (listed.has(view.id)) return true;
+        return view.id.startsWith(DISCOVERED_PREFIX) && view.availability === 'ready' && !view.adult;
+      })
+      .map((view) => view.id);
   }
 
   public async getPlatform(platformId: string): Promise<OttPlatformView | null> {
