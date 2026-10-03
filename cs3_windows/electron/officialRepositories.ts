@@ -18,6 +18,13 @@ export interface OfficialRepository {
     | 'Compatibility'
     | 'Adult';
   language: string;
+  /**
+   * Where its content is from (PRD-54): region ids from `cs3/regions.ts`, or
+   * `"*"` for a global repository. Decides which viewers get it on first run.
+   */
+  regions?: string[];
+  /** ISO 639-1 codes its content is in; `mul` for multilingual. */
+  languages?: string[];
   iconUrl?: string;
   isInstalled?: boolean;
   /**

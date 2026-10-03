@@ -15,6 +15,7 @@ import {
   Search,
   SearchX,
   ShieldAlert,
+  Globe2,
   Sliders,
   Sparkles,
   Trash2,
@@ -32,6 +33,7 @@ import { PlayerSettings } from '../components/PlayerSettings';
 import { ProviderRankingPanel } from '../components/settings/ProviderRankingPanel';
 import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
+import { RegionSettings } from '../components/regions/RegionSettings';
 import { SettingGroup, SettingRow, SettingsSection } from '../components/settings/SettingRow';
 import { settingsLevelFor } from '../utils/experienceMode';
 import { useExperienceMode, useSetExperienceMode } from '../utils/ExperienceModeContext';
@@ -537,6 +539,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             keywords="home catalogue catalog rows trending cinemeta anime anilist"
           >
             <HomeSettings />
+          </SettingGroup>
+
+          <SettingGroup
+            title="Regions"
+            icon={<Globe2 size={15} />}
+            keywords="region country language india global asia europe repositories extensions providers onboarding"
+          >
+            <RegionSettings />
           </SettingGroup>
 
           <SettingsSection keywords="adult nsfw 18 content mature hide show">

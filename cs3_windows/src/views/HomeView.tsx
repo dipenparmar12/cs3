@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import type { SearchResponse } from '../types/api';
 import { matchesTab, tabsFor } from '../utils/contentTypes';
-import { Play, History, Loader2, RefreshCw, Sparkles, X, Trash2 } from 'lucide-react';
+import { Play, History, Loader2, RefreshCw, Sparkles, X, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import type { WatchProgress } from '../../electron/cs3/libraryStore';
 import type { DiscoverySection } from '../../electron/cs3/discovery';
 import { TvType } from '../types/api';
@@ -12,7 +12,13 @@ import { CategoryGrid } from '../components/home/CategoryGrid';
 import { HomeRow } from '../components/home/HomeRow';
 import { RowPicker } from '../components/home/RowPicker';
 import { describeError } from '../utils/errors';
-import { RAIL_LIMIT, readHiddenRows, writeHiddenRows } from '../utils/homeRows';
+import {
+  RAIL_LIMIT,
+  readContinueWatchingCollapsed,
+  readHiddenRows,
+  writeContinueWatchingCollapsed,
+  writeHiddenRows,
+} from '../utils/homeRows';
 import type { HomeCategoryState } from './homeCategoryState';
 
 /** Anime is a row like any other now; this id is also how the old switch is read. */

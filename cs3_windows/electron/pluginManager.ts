@@ -340,7 +340,7 @@ function repositoryLabel(url: string): string {
  * Both sides are therefore normalised through the same `owner/repo` reduction
  * `repositoryLabel` uses, with an exact match on either URL tried first.
  */
-function findOfficialRepository(repoUrl: string): OfficialRepository | undefined {
+export function findOfficialRepository(repoUrl: string): OfficialRepository | undefined {
   if (!repoUrl) return undefined;
   const exact = OFFICIAL_REPOSITORIES.find(
     (repo) => repo.rawRepoUrl === repoUrl || repo.url === repoUrl

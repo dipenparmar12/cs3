@@ -24,6 +24,7 @@ import type { PlaybackRequest, PlaybackSessionRequest } from './views/DetailView
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ViewSkeleton } from './components/ViewSkeleton';
 import { FirstRunBanner } from './components/FirstRunBanner';
+import { RegionOnboarding } from './components/regions/RegionOnboarding';
 
 import { TvType, type Episode, type SearchOptions, type SearchResponse } from './types/api';
 import type { HistoryEvent } from './types/history';
@@ -1789,6 +1790,8 @@ export const App: React.FC = () => {
         {/* First launch only, and never blocking: the app works while the
             bundled repositories install behind it. */}
         <FirstRunBanner />
+        {/* Asked once, before anything installs (PRD-54). */}
+        <RegionOnboarding />
 
         {/*
           One boundary for every route, placed inside `main` rather than around

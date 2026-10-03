@@ -35,7 +35,7 @@ export const FirstRunBanner: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [progress?.phase, progress?.installed]);
 
-  if (dismissed || !progress || progress.phase === 'idle') return null;
+  if (dismissed || !progress || progress.phase === 'idle' || progress.phase === 'needs-regions') return null;
   if (progress.phase === 'done' && progress.installed === 0) return null;
 
   const done = progress.phase === 'done';

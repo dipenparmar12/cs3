@@ -4751,6 +4751,21 @@ ipcMain.handle('extension:setAdultAllowed', async (_, enabled: boolean) => {
 });
 
 /**
+ * PRD-54: the viewer's content regions. `regions:set` answers at once with
+ * what a removed region leaves behind (for review — nothing is disabled here);
+ * the additions run in the background on `extension:bootstrapProgress`.
+ */
+ipcMain.handle('regions:get', async () => bootstrap.getRegionState());
+
+ipcMain.handle('regions:set', async (_, selection: string[]) => {
+  try {
+    return { ok: true, ...bootstrap.setRegions(Array.isArray(selection) ? selection : []) };
+  } catch (error) {
+    return { ...fail(error), state: bootstrap.getRegionState(), affected: [] };
+  }
+});
+
+/**
  * The three-state gate.
  *
  * `allowed` and `mode` are both reported because they answer different

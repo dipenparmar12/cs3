@@ -88,7 +88,7 @@ import type {
   UpdateSettings,
 } from './cs3/extensionUpdater';
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
-import type { BootstrapProgress } from './cs3/bootstrap';
+import type { BootstrapProgress, RegionAffectedRepository, RegionState } from './cs3/bootstrap';
 import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
 import type { StoredSource, PlayedSource } from '../src/types/library';
 import type {
@@ -512,6 +512,15 @@ export interface CloudStreamElectronAPI {
    * someone sharing a machine chooses it for.
    */
   getAdultMode: () => Promise<Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean }>;
+  /** PRD-54: the viewer's content regions, and whether they have been asked yet. */
+  getRegions: () => Promise<RegionState>;
+  /**
+   * Stores a selection; additions run in the background (bootstrap progress).
+   * `affected` lists what a removed region leaves behind, for review only.
+   */
+  setRegions: (
+    selection: string[]
+  ) => Promise<Envelope & { state: RegionState; affected: RegionAffectedRepository[] }>;
   setAdultMode: (
     mode: 'off' | 'ask' | 'on'
   ) => Promise<Envelope & { mode: 'off' | 'ask' | 'on'; allowed?: boolean; providers?: string[] }>;
@@ -2065,6 +2074,8 @@ const api: CloudStreamElectronAPI = {
   getAdultAllowed: () => ipcRenderer.invoke('extension:getAdultAllowed'),
   setAdultAllowed: (enabled) => ipcRenderer.invoke('extension:setAdultAllowed', enabled),
   getAdultMode: () => ipcRenderer.invoke('extension:getAdultMode'),
+  getRegions: () => ipcRenderer.invoke('regions:get'),
+  setRegions: (selection) => ipcRenderer.invoke('regions:set', selection),
   setAdultMode: (mode) => ipcRenderer.invoke('extension:setAdultMode', mode),
   unlockAdultForSession: () => ipcRenderer.invoke('extension:unlockAdultForSession'),
   lockAdultForSession: () => ipcRenderer.invoke('extension:lockAdultForSession'),
