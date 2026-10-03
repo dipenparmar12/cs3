@@ -86,9 +86,20 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [continueWatching, setContinueWatching] = useState<WatchProgress[]>([]);
+  const [continueWatchingCollapsed, setContinueWatchingCollapsed] = useState<boolean>(() =>
+    readContinueWatchingCollapsed(storage())
+  );
   const [typeTab, setTypeTab] = useState<string>('all');
   const [confirmClear, setConfirmClear] = useState(false);
   const topRef = useRef<HTMLDivElement>(null);
+
+  const toggleContinueWatchingCollapsed = useCallback(() => {
+    setContinueWatchingCollapsed((prev) => {
+      const next = !prev;
+      writeContinueWatchingCollapsed(storage(), next);
+      return next;
+    });
+  }, []);
   /**
    * The rows switched off in the row picker.
    *
@@ -355,6 +366,24 @@ export const HomeView: React.FC<HomeViewProps> = ({
           <header>
             <History size={17} />
             <h3>Continue watching</h3>
+            <button
+              type="button"
+              className="home-row__action"
+              style={{ marginLeft: 0 }}
+              onClick={toggleContinueWatchingCollapsed}
+              title={continueWatchingCollapsed ? 'Expand Continue watching' : 'Collapse Continue watching'}
+              aria-label={continueWatchingCollapsed ? 'Expand Continue watching' : 'Collapse Continue watching'}
+            >
+              {continueWatchingCollapsed ? (
+                <>
+                  <ChevronRight size={13} /> Expand ({continueWatching.length})
+                </>
+              ) : (
+                <>
+                  <ChevronDown size={13} /> Collapse
+                </>
+              )}
+            </button>
             {/*
               Inline rather than a modal. A modal over the home screen to
               confirm tidying a row is a heavier interruption than the action
@@ -393,7 +422,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
               </button>
             )}
           </header>
-          <div className="home-rail">
+          {!continueWatchingCollapsed && (
+            <div className="home-rail">
             {continueWatching.map((row) => {
               const percent = row.durationSeconds
                 ? (row.positionSeconds / row.durationSeconds) * 100
@@ -472,6 +502,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
               );
             })}
           </div>
+          )}
         </section>
       )}
 
