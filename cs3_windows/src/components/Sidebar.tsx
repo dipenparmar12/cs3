@@ -175,6 +175,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const serverPinnedKey = serverPinned.join('|');
   useEffect(() => setLocalPinned(null), [serverPinnedKey]);
   const pinnedIds = localPinned ?? serverPinned;
+  // Right-click on a service row: Pin/Unpin and Remove. Remove only takes the
+  // service out of the sidebar (its provider and extension stay enabled); the
+  // picker can add it back.
+  const [rowMenu, setRowMenu] = useState<{ id: string; name: string; x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!rowMenu) return;
+    const close = () => setRowMenu(null);
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('click', close);
+    window.addEventListener('blur', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('blur', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [rowMenu]);
   const [dragging, setDragging] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const navRef = useRef<HTMLElement | null>(null);
@@ -547,6 +564,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   ].join(' ')}
                   // Only pinned rows reorder, and only among themselves.
                   draggable={isPinned && !searching}
+                  onContextMenu={(event) => {
+                    if (!onOttPlatformsChanged) return;
+                    event.preventDefault();
+                    setRowMenu({ id: platform.id, name: platform.name, x: event.clientX, y: event.clientY });
+                  }}
                   onDragStart={(event) => {
                     event.stopPropagation();
                     event.dataTransfer.setData('application/x-ott-platform', platform.id);
@@ -709,6 +731,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </>
         )}
       </nav>
+
+      {rowMenu && onOttPlatformsChanged && (
+        <div
+          className="ott-side-menu"
+          role="menu"
+          style={{ position: 'fixed', left: rowMenu.x, top: rowMenu.y, zIndex: 10200 }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" role="menuitem" onClick={() => { void togglePin(rowMenu.id); setRowMenu(null); }}>
+            {pinnedIds.includes(rowMenu.id) ? 'Unpin' : 'Pin'}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={async () => {
+              const { id } = rowMenu;
+              setRowMenu(null);
+              if (pinnedIds.includes(id)) await window.cloudstream?.setOttPinnedPlatforms(pinnedIds.filter((p) => p !== id));
+              await window.cloudstream?.setOttPlatformEnabled(id, false);
+              if (activeTab === `ott:${id}`) setActiveTab('home');
+              onOttPlatformsChanged();
+            }}
+          >
+            Remove
+          </button>
+        </div>
+      )}
 
       {pickerOpen && onOttPlatformsChanged && (
         <StreamingServicePicker

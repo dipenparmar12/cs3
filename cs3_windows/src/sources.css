@@ -9313,3 +9313,27 @@
 .subtitle-panel__download {
   flex-shrink: 0;
 }
+
+/* Right-click menu on a sidebar streaming service (Pin/Unpin, Remove). */
+.ott-side-menu {
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: 4px;
+  background: var(--bg-card, #1c1c22);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.ott-side-menu button {
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  color: #fff;
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.ott-side-menu button:hover,
+.ott-side-menu button:focus-visible { background: rgba(255, 255, 255, 0.08); }
