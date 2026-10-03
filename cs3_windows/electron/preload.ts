@@ -1392,6 +1392,10 @@ export interface CloudStreamElectronAPI {
   fetchRepository: (
     repoUrl: string
   ) => Promise<Envelope & { repository: RepositoryFetchResult | null }>;
+  /** The stored listing for a repository, if one has been read before. Fetches nothing. */
+  peekRepository: (
+    repoUrl: string
+  ) => Promise<Envelope & { repository: RepositoryFetchResult | null; fetchedAt: number | null }>;
   analyzePlugin: (plugin: SitePlugin) => Promise<PluginCompatibilityReport>;
   installPlugin: (
     plugin: SitePlugin,
@@ -2326,6 +2330,7 @@ const api: CloudStreamElectronAPI = {
 
   getOfficialRepositories: () => ipcRenderer.invoke('extension:getOfficialRepositories'),
   fetchRepository: (repoUrl) => ipcRenderer.invoke('extension:fetchRepository', repoUrl),
+  peekRepository: (repoUrl) => ipcRenderer.invoke('extension:peekRepository', repoUrl),
   analyzePlugin: (plugin) => ipcRenderer.invoke('extension:analyzePlugin', plugin),
   installPlugin: (plugin, repoUrl) =>
     ipcRenderer.invoke('extension:installPlugin', plugin, repoUrl),

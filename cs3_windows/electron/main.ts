@@ -110,6 +110,7 @@ import {
 } from './cs3/extensionJobs';
 import { OttService } from './cs3/ottService';
 import { CatalogueCache } from './cs3/catalogueCache';
+import { RepositoryListingCache } from './cs3/repositoryListingCache';
 import {
   MetadataEnrichmentService,
   type EnrichmentRequest,
@@ -374,6 +375,9 @@ metadataEnrichment.setListener((metadata) =>
 
 const catalogueCache = new CatalogueCache(
   path.join(app.getPath('userData'), 'cs3-catalogue-cache.json')
+);
+const repositoryListings = new RepositoryListingCache(
+  path.join(app.getPath('userData'), 'cs3-repository-listings.json')
 );
 const ottService = new OttService(pluginManager, datastore, catalogueCache);
 /** Metadata catalogues for the platforms no installed provider can describe. */
@@ -1752,6 +1756,31 @@ app.whenReady().then(async () => {
     run: () => torrentEngine.warmUp(),
   });
 
+  // Every catalogue card opens from a stored listing, so the first expand of a
+  // session never says "Reading the list…". Own lane: it shares nothing with
+  // the JVM warm-up, and one failing repository costs only itself.
+  background.add({
+    id: 'repository-listings',
+    label: 'Refreshing the lists of add-ons you can install',
+    priority: 20,
+    delayMs: 20_000,
+    lane: 'catalogue',
+    run: async () => {
+      const day = 24 * 60 * 60 * 1000;
+      for (const repository of bootstrap.visibleRepositories()) {
+        if (repositoryListings.isFresh(repository.url, day)) continue;
+        try {
+          repositoryListings.put(
+            repository.url,
+            await pluginManager.fetchRepository(repository.url, { remember: false })
+          );
+        } catch {
+          // An unreachable repository keeps whatever listing it already has.
+        }
+      }
+    },
+  });
+
   background.start();
 
   /**
@@ -1838,6 +1867,7 @@ async function shutdownServices(): Promise<void> {
   metadataEnrichment.flush();
   // Streaming-service rows fetched this session draw instantly next launch.
   catalogueCache.flush();
+  repositoryListings.flush();
   mediaTranscoder.shutdown();
   contentService.shutdown();
   // Imported torrents are debounced to disk; without this the last few opens
@@ -4826,9 +4856,17 @@ ipcMain.handle('extension:lockAdultForSession', async () => {
   };
 });
 
+/** What a repository offered last time, instantly. Fetches nothing. */
+ipcMain.handle('extension:peekRepository', async (_, repoUrl: string) => {
+  const entry = repositoryListings.peek(repoUrl);
+  return { ok: true, repository: entry?.value ?? null, fetchedAt: entry?.fetchedAt ?? null };
+});
+
 ipcMain.handle('extension:fetchRepository', async (_, repoUrl: string) => {
   try {
-    return { ok: true, repository: await pluginManager.fetchRepository(repoUrl) };
+    const repository = await pluginManager.fetchRepository(repoUrl);
+    repositoryListings.put(repoUrl, repository);
+    return { ok: true, repository };
   } catch (error) {
     return { ...fail(error), repository: null };
   }

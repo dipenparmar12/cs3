@@ -171,5 +171,11 @@ export function useExtensionCatalog() {
     return response.repository;
   }, []);
 
-  return { state, busy, refresh, actions, browseRepository };
+  /** The stored listing, or null if this repository has never been read. Instant. */
+  const peekRepository = useCallback(async (url: string) => {
+    const response = await window.cloudstream?.peekRepository?.(url);
+    return response?.ok ? response.repository : null;
+  }, []);
+
+  return { state, busy, refresh, actions, browseRepository, peekRepository };
 }

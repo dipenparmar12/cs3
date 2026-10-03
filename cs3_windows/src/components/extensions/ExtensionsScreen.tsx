@@ -23,7 +23,7 @@
  * originals won — `Toggle` carrying a `suppressedReason` says something the
  * reconstruction's plain switch could not.
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Boxes, Library, Loader2, RefreshCw } from 'lucide-react';
 import { useExtensionCatalog } from './useExtensionCatalog';
 import { useExtensionFilters } from './useExtensionFilters';
@@ -57,7 +57,8 @@ const TABS: Array<{ id: Tab; label: string; hint: string }> = [
 ];
 
 export const ExtensionsScreen: React.FC = () => {
-  const { state, busy, refresh, actions, browseRepository } = useExtensionCatalog();
+  const { state, busy, refresh, actions, browseRepository, peekRepository } = useExtensionCatalog();
+  const browseToken = useRef(0);
   const adult = useAdultState();
   const jobs = useExtensionJobs();
   // The tree is re-read, never predicted, once background work lands.
@@ -130,24 +131,40 @@ export const ExtensionsScreen: React.FC = () => {
    */
   const browse = useCallback(
     async (repository: { name: string; url: string }) => {
+      const token = ++browseToken.current;
+      const current = () => token === browseToken.current;
       setTab('repositories');
       setBrowsing(repository);
-      setBrowseLoading(true);
       setBrowseError(null);
-      setPlugins([]);
-      setWarnings([]);
+
+      // Show the stored listing at once; the fetch below only refreshes it.
+      const cached = await peekRepository(repository.url).catch(() => null);
+      if (!current()) return;
+      if (cached) {
+        setBrowsing({ name: cached.name || repository.name, url: cached.repositoryUrl });
+        setPlugins(cached.plugins ?? []);
+        setWarnings(cached.warnings ?? []);
+        setBrowseLoading(false);
+      } else {
+        setPlugins([]);
+        setWarnings([]);
+        setBrowseLoading(true);
+      }
+
       try {
         const result = await browseRepository(repository.url);
+        if (!current()) return;
         setBrowsing({ name: result.name || repository.name, url: result.repositoryUrl });
         setPlugins(result.plugins ?? []);
         setWarnings(result.warnings ?? []);
       } catch (error) {
-        setBrowseError(describeError(error));
+        // A failed refresh must not replace a listing that is already on screen.
+        if (current() && !cached) setBrowseError(describeError(error));
       } finally {
-        setBrowseLoading(false);
+        if (current()) setBrowseLoading(false);
       }
     },
-    [browseRepository]
+    [browseRepository, peekRepository]
   );
 
   const install = useCallback(

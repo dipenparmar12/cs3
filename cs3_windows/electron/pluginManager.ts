@@ -1195,14 +1195,19 @@ export class PluginManager {
    * (`RepositoryManager.kt:39,185-190`), so no real plugin metadata was ever
    * retrieved.
    */
-  public async fetchRepository(repoUrl: string): Promise<RepositoryFetchResult> {
+  public async fetchRepository(
+    repoUrl: string,
+    options: { remember?: boolean } = {}
+  ): Promise<RepositoryFetchResult> {
+    // A background refresh of a listing is not the viewer adding a repository.
+    const remember = options.remember !== false;
     const warnings: string[] = [];
     const resolved = await resolveRepositoryDocument(repoUrl);
     const repo = resolved.document;
     const finalUrl = resolved.url;
     if (finalUrl !== repoUrl) {
       warnings.push(`Resolved to ${finalUrl}.`);
-      if (this.installedRepoUrls.has(repoUrl)) {
+      if (remember && this.installedRepoUrls.has(repoUrl)) {
         this.installedRepoUrls.delete(repoUrl);
       }
     }
@@ -1216,8 +1221,10 @@ export class PluginManager {
       if (plugins.length !== repo.length) {
         warnings.push(`${repo.length - plugins.length} entries lacked an internalName or url.`);
       }
-      this.installedRepoUrls.add(finalUrl);
-      this.persist();
+      if (remember) {
+        this.installedRepoUrls.add(finalUrl);
+        this.persist();
+      }
       return {
         repositoryUrl: finalUrl,
         name: 'Plugin list',
@@ -1258,8 +1265,10 @@ export class PluginManager {
       }
     });
 
-    this.installedRepoUrls.add(finalUrl);
-    this.persist();
+    if (remember) {
+      this.installedRepoUrls.add(finalUrl);
+      this.persist();
+    }
 
     return {
       repositoryUrl: finalUrl,
