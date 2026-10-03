@@ -24,7 +24,7 @@
  * reconstruction's plain switch could not.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { Boxes, Library, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
+import { Boxes, Library, Loader2, RefreshCw } from 'lucide-react';
 import { useExtensionCatalog } from './useExtensionCatalog';
 import { useExtensionFilters } from './useExtensionFilters';
 import { FilterBar } from './FilterBar';
@@ -35,11 +35,12 @@ import { BuiltInSources } from './BuiltInSources';
 import { RepositoryCatalog } from './RepositoryCatalog';
 import { ExtensionCatalog } from './ExtensionCatalog';
 import { JobsTray } from './JobsTray';
-import { InfoHint } from '../settings/InfoHint';
 import { useExtensionJobs, useOnJobsSettled } from './useExtensionJobs';
 import type { SitePlugin } from '../../types/plugin';
 import './extensions.css';
 import { describeError } from '../../utils/errors';
+import { AdultContentSetting } from '../AdultContentSetting';
+import { useAdultState } from '../../utils/useAdultMode';
 
 /**
  * Three tabs:
@@ -57,6 +58,7 @@ const TABS: Array<{ id: Tab; label: string; hint: string }> = [
 
 export const ExtensionsScreen: React.FC = () => {
   const { state, busy, refresh, actions, browseRepository } = useExtensionCatalog();
+  const adult = useAdultState();
   const jobs = useExtensionJobs();
   // The tree is re-read, never predicted, once background work lands.
   useOnJobsSettled(jobs.snapshot, () => void refresh());
@@ -316,7 +318,7 @@ export const ExtensionsScreen: React.FC = () => {
         <RepositoryCatalog
           official={state.official}
           installed={state.installedRepositories}
-          adultAllowed={state.adultAllowed}
+          adultAllowed={adult.allowed}
           filters={filters.state}
           busy={busy}
           jobFor={jobs.jobFor}
@@ -356,29 +358,8 @@ export const ExtensionsScreen: React.FC = () => {
 
 
       <footer className="ext-footer">
-        <label className="ext-adult">
-          <input
-            type="checkbox"
-            checked={state.adultAllowed}
-            disabled={busy === 'adult'}
-            onChange={(event) => void actions.setAdultAllowed(event.target.checked)}
-          />
-          <ShieldAlert size={14} />
-          <span>
-            Show adult providers
-            {/*
-              The gate is enforced in `PluginManager.enabledProviderNames`, which
-              search, the scope picker, source discovery, playback and downloads
-              all funnel through. This checkbox is the setting, not the
-              enforcement — filtering at each call site would be five places to
-              forget.
-            */}
-          </span>
-        </label>
-        <InfoHint label="About adult providers">
-          Off by default. A source counts as adult when it says so about itself, which catches
-          one bundled inside an otherwise ordinary add-on.
-        </InfoHint>
+        {/* The same control as Settings → Adult content, bound to the same state. */}
+        <AdultContentSetting />
       </footer>
     </div>
   );

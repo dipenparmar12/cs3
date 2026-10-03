@@ -1,9 +1,13 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { ChevronDown, Eye, EyeOff, ShieldAlert } from 'lucide-react';
 import { InfoHint } from './settings/InfoHint';
 import { useSettingCollapse } from './settings/useSettingCollapse';
-
-type AdultMode = 'off' | 'ask' | 'on';
+import {
+  revealAdultForSession,
+  setAdultMode,
+  useAdultState,
+  type AdultMode,
+} from '../utils/useAdultMode';
 
 const MODES: Array<{ value: AdultMode; label: string; detail: string }> = [
   {
@@ -46,29 +50,14 @@ const MODES: Array<{ value: AdultMode; label: string; detail: string }> = [
  * launch.
  */
 export const AdultContentSetting: React.FC = () => {
-  const [mode, setMode] = useState<AdultMode>('off');
-  /** Whether adult providers are being offered *right now*. Differs from `mode` under `ask`. */
-  const [allowed, setAllowed] = useState(false);
+  // The state is shared with every other screen that shows this setting.
+  const { mode, allowed } = useAdultState();
   const [confirming, setConfirming] = useState<AdultMode | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const read = useCallback(() => {
-    void window.cloudstream?.getAdultMode?.().then((response) => {
-      if (!response?.ok) return;
-      setMode(response.mode);
-      setAllowed(response.allowed);
-    });
-  }, []);
-
-  useEffect(read, [read]);
-
   const apply = async (next: AdultMode) => {
     setBusy(true);
-    const response = await window.cloudstream?.setAdultMode?.(next);
-    if (response?.ok) {
-      setMode(response.mode);
-      setAllowed(response.allowed ?? false);
-    }
+    await setAdultMode(next);
     setConfirming(null);
     setBusy(false);
   };
@@ -82,10 +71,7 @@ export const AdultContentSetting: React.FC = () => {
 
   const reveal = async (unlock: boolean) => {
     setBusy(true);
-    const response = unlock
-      ? await window.cloudstream?.unlockAdultForSession?.()
-      : await window.cloudstream?.lockAdultForSession?.();
-    if (response?.ok) setAllowed(response.allowed);
+    await revealAdultForSession(unlock);
     setBusy(false);
   };
 

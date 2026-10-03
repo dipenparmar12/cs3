@@ -3,6 +3,7 @@ import { Globe2 } from 'lucide-react';
 import type { RegionState } from '../../../electron/cs3/bootstrap';
 import type { RegionId } from '../../../electron/cs3/regions';
 import { describeError } from '../../utils/errors';
+import { setAdultMode, useAdultState } from '../../utils/useAdultMode';
 import { CrossRegionOption, RegionPicker } from './RegionPicker';
 
 /**
@@ -17,9 +18,11 @@ import { CrossRegionOption, RegionPicker } from './RegionPicker';
 export const RegionOnboarding: React.FC = () => {
   const [state, setState] = useState<RegionState | null>(null);
   const [selected, setSelected] = useState<RegionId[]>([]);
-  const [adult, setAdult] = useState(false);
+  const adultState = useAdultState();
+  // Untouched until the viewer ticks the box, so an existing `ask` or `on` survives Skip.
+  const [adultChoice, setAdultChoice] = useState<boolean | null>(null);
+  const adult = adultChoice ?? adultState.mode === 'on';
   const [crossRegion, setCrossRegion] = useState(true);
-  const [adultInitial, setAdultInitial] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,11 +35,6 @@ export const RegionOnboarding: React.FC = () => {
         setCrossRegion(next.crossRegion);
       });
     load();
-    // An existing install's adult setting is the starting point, never reset.
-    api?.getAdultMode?.().then((result) => {
-      setAdult(result.mode === 'on');
-      setAdultInitial(result.mode === 'on');
-    });
     return api?.onBootstrapProgress?.((progress) => {
       if (progress.phase === 'needs-regions') load();
     });
@@ -51,7 +49,9 @@ export const RegionOnboarding: React.FC = () => {
     setError(null);
     try {
       // Adult first, so the run the regions start already knows the answer.
-      if (adult !== adultInitial) await api.setAdultMode(adult ? 'on' : 'off');
+      if (adultChoice !== null && adultChoice !== (adultState.mode === 'on')) {
+        await setAdultMode(adultChoice ? 'on' : 'off');
+      }
       const result = await api.setRegions(choice, { crossRegion });
       if (!result.ok) throw new Error(result.error);
       setState(result.state);
@@ -90,7 +90,7 @@ export const RegionOnboarding: React.FC = () => {
         <details className="region-onboarding__optional">
           <summary>Optional content</summary>
           <label>
-            <input type="checkbox" checked={adult} disabled={busy} onChange={(e) => setAdult(e.target.checked)} />
+            <input type="checkbox" checked={adult} disabled={busy} onChange={(e) => setAdultChoice(e.target.checked)} />
             Include adult / 18+ content
           </label>
         </details>

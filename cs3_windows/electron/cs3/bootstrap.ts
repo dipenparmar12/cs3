@@ -117,6 +117,13 @@ export class BootstrapService {
    * restart would make `ask` into `on` with extra steps.
    */
   private adultUnlockedThisSession = false;
+
+  /**
+   * Everything that shows or hides adult content must hear about a change the
+   * moment it happens, from whichever surface made it — otherwise each screen
+   * holds its own copy of one decision and they drift apart.
+   */
+  private adultListeners = new Set<() => void>();
   private plugins: PluginManager;
   private notifier: ((progress: BootstrapProgress) => void) | null = null;
   private progress: BootstrapProgress = { phase: 'idle', installed: 0, failed: 0, total: 0 };
@@ -143,6 +150,21 @@ export class BootstrapService {
    * reveals them. Default false, and read fresh every time rather than cached:
    * turning it off must take effect immediately, everywhere.
    */
+  public onAdultChange(listener: () => void): () => void {
+    this.adultListeners.add(listener);
+    return () => this.adultListeners.delete(listener);
+  }
+
+  private notifyAdultChange(): void {
+    for (const listener of this.adultListeners) {
+      try {
+        listener();
+      } catch {
+        // One broken subscriber must not stop the others hearing about it.
+      }
+    }
+  }
+
   public isAdultAllowed(): boolean {
     const mode = this.adultMode();
     if (mode === 'on') return true;
@@ -183,6 +205,7 @@ export class BootstrapService {
     this.datastore.setBool(KEY_ADULT_ENABLED, mode === 'on');
     // Switching away from `ask` ends any unlock; switching *to* it starts locked.
     this.adultUnlockedThisSession = false;
+    this.notifyAdultChange();
     return mode;
   }
 
@@ -197,11 +220,13 @@ export class BootstrapService {
   public unlockAdultForSession(): boolean {
     if (this.adultMode() !== 'ask') return this.isAdultAllowed();
     this.adultUnlockedThisSession = true;
+    this.notifyAdultChange();
     return true;
   }
 
   public lockAdultForSession(): void {
     this.adultUnlockedThisSession = false;
+    this.notifyAdultChange();
   }
 
   public setAdultAllowed(enabled: boolean): boolean {

@@ -90,7 +90,16 @@ Given a selection `S` (set of region ids):
      the construction-kit first run `bootstrap.ts` exists to avoid.
    - Adult repositories are added (when allowed) but never auto-installed from; NSFW extensions are
      never auto-installed while adult content is off.
-4. **Providers** registered by installed extensions are enabled by default (the enable list is a
+4. **Cross-region language search** (option, **on by default**, offered on first run and in Settings as
+   "Also find <languages> providers in other regions' repositories"). Every repository that did *not*
+   match is fetched and searched for extensions whose `language` is **exactly** one of the selection's
+   (`strictLanguage` — an undeclared or `multi` plugin in a German repository is far likelier German).
+   A repository kept this way is kept only if something was installed from it; otherwise it is removed
+   again, so it never appears as an empty row. A fetch failure there is not counted as a run failure.
+   Adult repositories are never searched this way. `ALL` makes it moot. Why: a regional repository's
+   language describes most of it, not all of it — German Providers can carry an English scraper, and a
+   viewer new to the app would never know to look.
+5. **Providers** registered by installed extensions are enabled by default (the enable list is a
    disable list) and pass through the unchanged cascade. OTT platform pages and provider catalogues
    follow automatically: they are discovered from enabled providers (`OttService`).
 
@@ -124,6 +133,7 @@ Settings → Content → **Regions** (beside the adult setting). Same grid.
 ## 8. Persistence and overrides
 
 - Selection: datastore key `cs3_content_regions` (JSON array). Travels in backups (datastore section).
+- Cross-region option: `cs3_content_regions_cross` (bool, default true).
 - Adult: the existing `cs3_adult_content_mode` — independent of regions.
 - Repositories, extensions, providers: existing stores. **The region system only ever adds.** A
   repository already installed is skipped, so a repository/extension/provider the viewer switched off is
@@ -134,7 +144,8 @@ Settings → Content → **Regions** (beside the adult setting). Same grid.
 ## 9. IPC
 
 `regions:get` → `{ selected, needsSelection, suggested, regions }`;
-`regions:set(selected)` → `{ ok, state, affected: {url,name}[] }`. Applying is background work reported
+`regions:set(selected, { crossRegion? })` → `{ ok, state, affected: {url,name}[] }`; `state.crossRegion`
+reports the option. Applying is background work reported
 on `extension:bootstrapProgress`.
 
 ## 10. Acceptance

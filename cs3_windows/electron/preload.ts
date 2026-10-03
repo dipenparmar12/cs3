@@ -357,6 +357,8 @@ export interface CloudStreamElectronAPI {
   setIncognito: (active: boolean) => Promise<PrivacyState>;
   updatePrivacySettings: (partial: Partial<IncognitoSettings>) => Promise<PrivacyState>;
   onPrivacyChanged: (callback: (state: PrivacyState) => void) => () => void;
+  /** The adult gate changed, from any screen, the backup restore or the session unlock. */
+  onAdultChanged: (callback: (state: { mode: 'off' | 'ask' | 'on'; allowed: boolean }) => void) => () => void;
   /** Saves a subtitle to the subtitle folder; reuses an existing copy unless `refresh`. */
   downloadSubtitle: (request: SubtitleDownloadRequest) => Promise<Envelope & { entry: SavedSubtitle | null; reused: boolean }>;
   /** Subtitles saved for one title (and episode). */
@@ -2027,6 +2029,7 @@ const api: CloudStreamElectronAPI = {
   setIncognito: (active) => ipcRenderer.invoke('privacy:setActive', active),
   updatePrivacySettings: (partial) => ipcRenderer.invoke('privacy:updateSettings', partial),
   onPrivacyChanged: (callback) => subscribe('privacy:changed', callback),
+  onAdultChanged: (callback) => subscribe('adult:changed', callback),
   downloadSubtitle: (request) => ipcRenderer.invoke('subtitles:download', request),
   listSavedSubtitles: (title, year, season, episode) =>
     ipcRenderer.invoke('subtitles:listSaved', title, year, season, episode),

@@ -4739,6 +4739,12 @@ ipcMain.handle('search:setConcurrency', async (_, value: number) => ({
   ...pluginManager.searchConcurrencyBounds(),
 }));
 
+/** One push for every change to the adult gate, whoever made it. */
+bootstrap.onAdultChange(() => {
+  const state = { mode: bootstrap.adultMode(), allowed: bootstrap.isAdultAllowed() };
+  BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('adult:changed', state));
+});
+
 ipcMain.handle('extension:getAdultAllowed', async () => bootstrap.isAdultAllowed());
 
 /**
@@ -6132,6 +6138,8 @@ const backupService = new BackupService(
          */
         providerOrigins: pluginManager.exportProviderOrigins(),
         adultAllowed: bootstrap.isAdultAllowed(),
+        // `adultAllowed` alone cannot tell `ask` from `off`, so a restore would flatten it.
+        adultMode: bootstrap.adultMode(),
       }),
       /**
        * The cheap half is restored; the expensive half is offered.
@@ -6163,9 +6171,13 @@ const backupService = new BackupService(
           disabledRepositories?: string[];
           providerOrigins?: Record<string, { internalName: string; pluginName: string }>;
           adultAllowed?: boolean;
+          adultMode?: 'off' | 'ask' | 'on';
         };
         let count = 0;
-        if (typeof payload?.adultAllowed === 'boolean') {
+        if (payload?.adultMode === 'off' || payload?.adultMode === 'ask' || payload?.adultMode === 'on') {
+          bootstrap.setAdultMode(payload.adultMode);
+          count++;
+        } else if (typeof payload?.adultAllowed === 'boolean') {
           bootstrap.setAdultAllowed(payload.adultAllowed);
           count++;
         }
