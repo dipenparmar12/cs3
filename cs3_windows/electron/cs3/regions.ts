@@ -133,6 +133,12 @@ export function matchRepository(
 
 export interface RegionalPlanEntry<R extends RegionalRepository> {
   repo: R;
+  /**
+   * Why it is in the plan. `language`: another region's repository, kept only
+   * for the extensions in the viewer's languages — German Providers carrying
+   * an English scraper. Kept only if one is found, never merely added.
+   */
+  reason: 'regional' | 'global' | 'language';
   /** Install starter extensions from it, not only add it. */
   install: boolean;
   /** Languages its starter extensions must be in; `null` = any. */
@@ -153,11 +159,15 @@ export interface RegionalPlanEntry<R extends RegionalRepository> {
  *   the first run this app exists not to have.
  * - Adult repositories are added only when adult content is allowed, and never
  *   installed from. Unverified (known-dead) repositories never match.
+ * - With `crossRegion`, every other repository is searched for extensions in
+ *   the selection's languages: a regional repository's language is a summary
+ *   of most of it, not all of it, and an English scraper inside a German pack
+ *   is one a Global viewer would want and would never think to look for.
  */
 export function planRegionalSetup<R extends RegionalRepository>(
   catalogue: readonly R[],
   selection: readonly RegionId[],
-  options: { adultAllowed: boolean; skip?: ReadonlySet<string> }
+  options: { adultAllowed: boolean; crossRegion?: boolean; skip?: ReadonlySet<string> }
 ): RegionalPlanEntry<R>[] {
   const languages = wantedLanguages(selection);
   const plan: RegionalPlanEntry<R>[] = [];
@@ -166,9 +176,12 @@ export function planRegionalSetup<R extends RegionalRepository>(
     if (repo.adult && !options.adultAllowed) continue;
     if (options.skip?.has(repo.rawRepoUrl)) continue;
     const match = matchRepository(repo, selection);
-    if (!match) continue;
-    const install = !repo.adult && (match === 'regional' || repo.bundled === true);
-    plan.push({ repo, install, languages: match === 'regional' ? null : languages });
+    if (match) {
+      const install = !repo.adult && (match === 'regional' || repo.bundled === true);
+      plan.push({ repo, reason: match, install, languages: match === 'regional' ? null : languages });
+    } else if (options.crossRegion && !repo.adult && languages && languages.length > 0) {
+      plan.push({ repo, reason: 'language', install: true, languages });
+    }
   }
   return plan;
 }

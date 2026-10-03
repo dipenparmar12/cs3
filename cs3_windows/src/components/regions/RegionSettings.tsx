@@ -3,7 +3,7 @@ import type { RegionAffectedRepository, RegionState } from '../../../electron/cs
 import type { RegionId } from '../../../electron/cs3/regions';
 import { describeError } from '../../utils/errors';
 import { useFlash } from '../../utils/useFlash';
-import { RegionPicker } from './RegionPicker';
+import { CrossRegionOption, RegionPicker } from './RegionPicker';
 
 /**
  * Changing regions after the first run (PRD-54 §7).
@@ -17,6 +17,7 @@ export const RegionSettings: React.FC = () => {
   const [state, setState] = useState<RegionState | null>(null);
   const [selected, setSelected] = useState<RegionId[]>([]);
   const [affected, setAffected] = useState<RegionAffectedRepository[]>([]);
+  const [crossRegion, setCrossRegion] = useState(true);
   const [busy, setBusy] = useState(false);
   const { message, flash } = useFlash();
 
@@ -24,21 +25,24 @@ export const RegionSettings: React.FC = () => {
     window.cloudstream?.getRegions?.().then((next) => {
       setState(next);
       setSelected(next.selected);
+      setCrossRegion(next.crossRegion);
     });
   }, []);
 
   if (!state) return null;
-  const changed = [...selected].sort().join() !== [...state.selected].sort().join();
+  const changed =
+    [...selected].sort().join() !== [...state.selected].sort().join() || crossRegion !== state.crossRegion;
 
   const save = async () => {
     const api = window.cloudstream;
     if (!api) return;
     setBusy(true);
     try {
-      const result = await api.setRegions(selected);
+      const result = await api.setRegions(selected, { crossRegion });
       if (!result.ok) throw new Error(result.error);
       setState(result.state);
       setSelected(result.state.selected);
+      setCrossRegion(result.state.crossRegion);
       setAffected(result.affected);
       flash('Saved. Anything new is being set up in the background.', 4000);
     } catch (cause) {
@@ -75,6 +79,14 @@ export const RegionSettings: React.FC = () => {
       </p>
 
       <RegionPicker regions={state.regions} selected={selected} onChange={setSelected} disabled={busy} />
+
+      <CrossRegionOption
+        regions={state.regions}
+        selected={selected}
+        checked={crossRegion}
+        onChange={setCrossRegion}
+        disabled={busy}
+      />
 
       <div className="region-settings__actions">
         <button className="btn btn-primary btn-sm" disabled={busy || !changed || selected.length === 0} onClick={save}>

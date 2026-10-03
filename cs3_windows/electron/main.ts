@@ -4757,9 +4757,10 @@ ipcMain.handle('extension:setAdultAllowed', async (_, enabled: boolean) => {
  */
 ipcMain.handle('regions:get', async () => bootstrap.getRegionState());
 
-ipcMain.handle('regions:set', async (_, selection: string[]) => {
+ipcMain.handle('regions:set', async (_, selection: string[], options?: { crossRegion?: boolean }) => {
   try {
-    return { ok: true, ...bootstrap.setRegions(Array.isArray(selection) ? selection : []) };
+    const crossRegion = typeof options?.crossRegion === 'boolean' ? options.crossRegion : undefined;
+    return { ok: true, ...bootstrap.setRegions(Array.isArray(selection) ? selection : [], { crossRegion }) };
   } catch (error) {
     return { ...fail(error), state: bootstrap.getRegionState(), affected: [] };
   }

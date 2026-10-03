@@ -42,3 +42,44 @@ export const RegionPicker: React.FC<{
     </div>
   );
 };
+
+/** "English, Hindi, Tamil +9" — the languages a selection watches, as a person would say them. */
+function languageSummary(regions: Region[], selected: RegionId[]): string {
+  const codes = [...new Set(regions.filter((r) => selected.includes(r.id)).flatMap((r) => r.languages))];
+  let names: Intl.DisplayNames | null = null;
+  try {
+    names = new Intl.DisplayNames(['en'], { type: 'language' });
+  } catch {
+    names = null;
+  }
+  const named = codes.map((code) => names?.of(code) ?? code);
+  return named.length > 3 ? `${named.slice(0, 3).join(', ')} +${named.length - 3}` : named.join(', ');
+}
+
+/**
+ * Also search other regions' repositories for extensions in the viewer's
+ * languages (PRD-54 §5). A regional repository's language describes most of
+ * it, not all of it: German Providers can carry an English scraper, and
+ * nobody new to the app would know to look there. Shared so first-run and
+ * Settings describe it identically.
+ */
+export const CrossRegionOption: React.FC<{
+  regions: Region[];
+  selected: RegionId[];
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+}> = ({ regions, selected, checked, onChange, disabled }) => {
+  // All regions already takes everything; there is nothing left to look through.
+  if (selected.includes('ALL') || selected.length === 0) return null;
+  const languages = languageSummary(regions, selected);
+  return (
+    <label className="region-cross">
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <span>
+        Also find {languages} providers in other regions' repositories
+        <em>For example an English-language provider inside a German repository. Only those are added.</em>
+      </span>
+    </label>
+  );
+};

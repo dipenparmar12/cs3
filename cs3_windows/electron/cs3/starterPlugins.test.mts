@@ -86,3 +86,11 @@ test('a bundled repository in another language is left to the catalogue', () => 
   assert.equal(repositorySpeaks('German (DE)', preferredLanguages('de-AT')), true);
   assert.equal(repositorySpeaks(undefined, english), true, 'an undeclared language is not a reason to skip');
 });
+
+test('strict language keeps only plugins naming a wanted language', () => {
+  const picked = pickStarterPlugins(
+    [plugin('En', { language: 'en' }), plugin('De', { language: 'de' }), plugin('Multi', { language: 'multi' }), plugin('None', { language: '' })],
+    { languages: ['en'], strictLanguage: true, allowAdult: false, limit: 10 }
+  );
+  assert.deepEqual(picked.map((p) => p.internalName), ['En']);
+});

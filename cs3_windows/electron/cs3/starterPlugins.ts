@@ -35,6 +35,12 @@ export interface StarterPreferences {
    * plugins' language tags say.
    */
   anyLanguage?: boolean;
+  /**
+   * Only plugins that name a wanted language. For another region's repository
+   * (PRD-54 cross-region), where an undeclared or "multi" plugin is far more
+   * likely to be in that region's language than in the viewer's.
+   */
+  strictLanguage?: boolean;
   allowAdult: boolean;
   limit: number;
 }
@@ -82,6 +88,7 @@ export function pickStarterPlugins(plugins: SitePlugin[], preferences: StarterPr
     const language = languageOf(plugin);
     const index = wanted.indexOf(language);
     if (index >= 0) return index;
+    if (preferences.strictLanguage) return -1;
     if (UNIVERSAL.has(language)) return wanted.length;
     return preferences.anyLanguage ? wanted.length + 1 : -1;
   };

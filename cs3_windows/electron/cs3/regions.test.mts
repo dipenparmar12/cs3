@@ -114,3 +114,17 @@ test('the locale suggests a starting selection', () => {
 test('a stored selection is normalised against the region table', () => {
   assert.deepEqual(normaliseSelection(['in', 'GLOBAL', 'IN', 'mars']), ['IN', 'GLOBAL']);
 });
+
+test('cross-region searches other regions’ repositories for the selection’s languages only', () => {
+  const german = repo('german', { regions: ['EU'], language: 'German (DE)', bundled: true });
+  const plan = planRegionalSetup([global, german, adult], ['GLOBAL'], { adultAllowed: true, crossRegion: true });
+  const entry = plan.find((candidate) => candidate.repo.name === 'german');
+  assert.equal(entry?.reason, 'language');
+  assert.equal(entry?.install, true);
+  assert.deepEqual(entry?.languages, ['en']);
+  assert.ok(!plan.some((c) => c.repo.name === 'adult' && c.reason === 'language'), 'never through the back door');
+  assert.ok(!planRegionalSetup([german], ['GLOBAL'], { adultAllowed: false }).length, 'off means off');
+  assert.ok(!planRegionalSetup([german], ['ALL'], { adultAllowed: false, crossRegion: true }).some(
+    (c) => c.reason === 'language'
+  ));
+});

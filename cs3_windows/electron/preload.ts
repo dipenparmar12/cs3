@@ -519,7 +519,8 @@ export interface CloudStreamElectronAPI {
    * `affected` lists what a removed region leaves behind, for review only.
    */
   setRegions: (
-    selection: string[]
+    selection: string[],
+    options?: { crossRegion?: boolean }
   ) => Promise<Envelope & { state: RegionState; affected: RegionAffectedRepository[] }>;
   setAdultMode: (
     mode: 'off' | 'ask' | 'on'
@@ -2075,7 +2076,7 @@ const api: CloudStreamElectronAPI = {
   setAdultAllowed: (enabled) => ipcRenderer.invoke('extension:setAdultAllowed', enabled),
   getAdultMode: () => ipcRenderer.invoke('extension:getAdultMode'),
   getRegions: () => ipcRenderer.invoke('regions:get'),
-  setRegions: (selection) => ipcRenderer.invoke('regions:set', selection),
+  setRegions: (selection, options) => ipcRenderer.invoke('regions:set', selection, options),
   setAdultMode: (mode) => ipcRenderer.invoke('extension:setAdultMode', mode),
   unlockAdultForSession: () => ipcRenderer.invoke('extension:unlockAdultForSession'),
   lockAdultForSession: () => ipcRenderer.invoke('extension:lockAdultForSession'),

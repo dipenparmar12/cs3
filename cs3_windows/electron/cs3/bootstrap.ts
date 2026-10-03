@@ -45,6 +45,8 @@ const KEY_ADULT_ENABLED = 'cs3_adult_content_enabled';
 const KEY_ADULT_MODE = 'cs3_adult_content_mode';
 /** The viewer's content regions (PRD-54), a JSON array. A datastore key, so backups carry it. */
 const KEY_REGIONS = 'cs3_content_regions';
+/** Also look in other regions' repositories for extensions in the viewer's languages. Default on. */
+const KEY_CROSS_REGION = 'cs3_content_regions_cross';
 
 /**
  * Bumped when the bundled set changes, so an existing install gets the addition.
@@ -97,6 +99,8 @@ export interface RegionState {
   /** Offered pre-ticked, from the system locale. */
   suggested: RegionId[];
   regions: Region[];
+  /** Other regions' repositories are searched for extensions in the selection's languages. */
+  crossRegion: boolean;
 }
 
 /** An installed catalogue repository that matched only through a region just removed. */
@@ -256,7 +260,13 @@ export class BootstrapService {
   public getRegionState(): RegionState {
     const stored = this.storedRegions();
     const suggested = suggestRegions(this.locale);
-    return { selected: stored ?? suggested, needsSelection: stored === null, suggested, regions: REGIONS };
+    return {
+      selected: stored ?? suggested,
+      needsSelection: stored === null,
+      suggested,
+      regions: REGIONS,
+      crossRegion: this.datastore.getBool(KEY_CROSS_REGION, true),
+    };
   }
 
   /**
@@ -266,7 +276,10 @@ export class BootstrapService {
    * viewer switched off is switched back on. What a removed region leaves
    * behind is *returned* for review, never disabled here.
    */
-  public setRegions(selection: readonly string[]): {
+  public setRegions(
+    selection: readonly string[],
+    options: { crossRegion?: boolean } = {}
+  ): {
     state: RegionState;
     affected: RegionAffectedRepository[];
   } {
@@ -274,6 +287,7 @@ export class BootstrapService {
     if (next.length === 0) throw new Error('Choose at least one region.');
     const before = this.storedRegions() ?? [];
     this.datastore.setString(KEY_REGIONS, JSON.stringify(next));
+    if (typeof options.crossRegion === 'boolean') this.datastore.setBool(KEY_CROSS_REGION, options.crossRegion);
 
     const installed = this.plugins.getInstalledRepositories().flatMap((url) => {
       const entry = findOfficialRepository(url);
@@ -346,6 +360,7 @@ export class BootstrapService {
      */
     const plan = planRegionalSetup(OFFICIAL_REPOSITORIES, regions, {
       adultAllowed: allowAdult,
+      crossRegion: this.datastore.getBool(KEY_CROSS_REGION, true),
       skip: already,
     });
     const targets = plan.filter((entry) => entry.install);
@@ -380,7 +395,7 @@ export class BootstrapService {
       plugins: Awaited<ReturnType<PluginManager['fetchRepository']>>['plugins'];
     }> = [];
 
-    for (const { repo, languages } of targets) {
+    for (const { repo, languages, reason } of targets) {
       try {
         const fetched = await this.plugins.fetchRepository(repo.rawRepoUrl);
         /**
@@ -396,12 +411,23 @@ export class BootstrapService {
         const usable = pickStarterPlugins(fetched.plugins, {
           languages: languages ?? [],
           anyLanguage: languages === null,
+          strictLanguage: reason === 'language',
           allowAdult,
           limit: PLUGINS_PER_REPOSITORY,
         });
+        // Another region's repository is kept only for what it had in the
+        // viewer's languages. `fetchRepository` has already recorded it, and
+        // nothing was installed from it before this run (installed ones are
+        // skipped), so removing it touches nothing of the viewer's.
+        if (reason === 'language' && usable.length === 0) {
+          this.plugins.removeRepository(fetched.repositoryUrl);
+          continue;
+        }
         plans.push({ repo, repositoryUrl: fetched.repositoryUrl, plugins: usable });
         this.progress.total += usable.length;
       } catch (error) {
+        // A repository only being searched in passing is not a failure of the run.
+        if (reason === 'language') continue;
         this.progress.failed += 1;
         this.progress.message = `${repo.name}: ${describeError(error)}`;
       }

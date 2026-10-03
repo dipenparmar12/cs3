@@ -3,7 +3,7 @@ import { Globe2 } from 'lucide-react';
 import type { RegionState } from '../../../electron/cs3/bootstrap';
 import type { RegionId } from '../../../electron/cs3/regions';
 import { describeError } from '../../utils/errors';
-import { RegionPicker } from './RegionPicker';
+import { CrossRegionOption, RegionPicker } from './RegionPicker';
 
 /**
  * Asked once, before anything is installed (PRD-54 §6): where the viewer's
@@ -18,6 +18,7 @@ export const RegionOnboarding: React.FC = () => {
   const [state, setState] = useState<RegionState | null>(null);
   const [selected, setSelected] = useState<RegionId[]>([]);
   const [adult, setAdult] = useState(false);
+  const [crossRegion, setCrossRegion] = useState(true);
   const [adultInitial, setAdultInitial] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +29,7 @@ export const RegionOnboarding: React.FC = () => {
       api?.getRegions?.().then((next) => {
         setState(next);
         setSelected(next.selected);
+        setCrossRegion(next.crossRegion);
       });
     load();
     // An existing install's adult setting is the starting point, never reset.
@@ -50,7 +52,7 @@ export const RegionOnboarding: React.FC = () => {
     try {
       // Adult first, so the run the regions start already knows the answer.
       if (adult !== adultInitial) await api.setAdultMode(adult ? 'on' : 'off');
-      const result = await api.setRegions(choice);
+      const result = await api.setRegions(choice, { crossRegion });
       if (!result.ok) throw new Error(result.error);
       setState(result.state);
     } catch (cause) {
@@ -77,6 +79,14 @@ export const RegionOnboarding: React.FC = () => {
 
         <RegionPicker regions={state.regions} selected={selected} onChange={setSelected} disabled={busy} />
 
+        <CrossRegionOption
+          regions={state.regions}
+          selected={selected}
+          checked={crossRegion}
+          onChange={setCrossRegion}
+          disabled={busy}
+        />
+
         <details className="region-onboarding__optional">
           <summary>Optional content</summary>
           <label>
@@ -84,6 +94,11 @@ export const RegionOnboarding: React.FC = () => {
             Include adult / 18+ content
           </label>
         </details>
+
+        <p className="region-onboarding__next">
+          Nothing else to set up: after Continue, CloudStream installs and switches everything on in the
+          background — search and press Play. Settings → Regions and the Extensions screen change any of it.
+        </p>
 
         {error && <p className="region-onboarding__error">{error}</p>}
 
