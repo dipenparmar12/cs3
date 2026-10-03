@@ -11,7 +11,13 @@
     "iconUrl": "https://raw.githubusercontent.com/recloudstream/cloudstream/master/app/src/main/res/drawable/ic_splash_logo.png",
     "verified": true,
     "documentKind": "repository",
-    "bundled": true
+    "bundled": true,
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "mul"
+    ]
   },
   {
     "id": "extensions",
@@ -23,7 +29,13 @@
     "category": "Official",
     "language": "English / Global",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "netmirror",
@@ -36,7 +48,14 @@
     "language": "Hindi / English",
     "iconUrl": "https://raw.githubusercontent.com/Sushan64/NetMirror-Extension/refs/heads/master/Netmirror/logo.jpeg",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "IN"
+    ],
+    "languages": [
+      "hi",
+      "en"
+    ]
   },
   {
     "id": "cncverse",
@@ -49,7 +68,19 @@
     "language": "Multilingual",
     "iconUrl": "https://raw.githubusercontent.com/NivinCNC/CNCVerse-Cloud-Stream-Extension/refs/heads/builds/cnc.png",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "IN"
+    ],
+    "languages": [
+      "hi",
+      "ta",
+      "te",
+      "ml",
+      "kn",
+      "bn",
+      "en"
+    ]
   },
   {
     "id": "aniyomi_compat",
@@ -61,7 +92,13 @@
     "category": "Compatibility",
     "language": "Multilingual",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "mul"
+    ]
   },
   {
     "id": "german_providers",
@@ -74,7 +111,13 @@
     "language": "German (DE)",
     "verified": true,
     "documentKind": "repository",
-    "bundled": true
+    "bundled": true,
+    "regions": [
+      "EU"
+    ],
+    "languages": [
+      "de"
+    ]
   },
   {
     "id": "italia_in_streaming",
@@ -86,7 +129,13 @@
     "category": "Regional",
     "language": "Italian (IT)",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "EU"
+    ],
+    "languages": [
+      "it"
+    ]
   },
   {
     "id": "re_3arabi",
@@ -98,7 +147,13 @@
     "category": "Regional",
     "language": "Arabic (AR)",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "ME"
+    ],
+    "languages": [
+      "ar"
+    ]
   },
   {
     "id": "cloudstream_vietnamese",
@@ -110,7 +165,13 @@
     "category": "Regional",
     "language": "Vietnamese (VI)",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "SEA"
+    ],
+    "languages": [
+      "vi"
+    ]
   },
   {
     "id": "csx",
@@ -123,7 +184,15 @@
     "language": "English",
     "verified": true,
     "documentKind": "pluginList",
-    "bundled": true
+    "bundled": true,
+    "regions": [
+      "*",
+      "IN"
+    ],
+    "languages": [
+      "hi",
+      "en"
+    ]
   },
   {
     "id": "cuxplug",
@@ -135,7 +204,13 @@
     "category": "Community",
     "language": "English",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "fstream",
@@ -147,7 +222,13 @@
     "category": "Regional",
     "language": "French (FR)",
     "verified": false,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "EU"
+    ],
+    "languages": [
+      "fr"
+    ]
   },
   {
     "id": "indostream",
@@ -159,7 +240,13 @@
     "category": "Regional",
     "language": "Indonesian (ID)",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "SEA"
+    ],
+    "languages": [
+      "id"
+    ]
   },
   {
     "id": "luna712",
@@ -171,7 +258,13 @@
     "category": "Anime",
     "language": "Multilingual",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "mul"
+    ]
   },
   {
     "id": "cartoonyrepo",
@@ -183,7 +276,13 @@
     "category": "Movies & Shows",
     "language": "English",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "cinephile",
@@ -196,7 +295,13 @@
     "language": "English",
     "verified": true,
     "documentKind": "repository",
-    "bundled": true
+    "bundled": true,
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "redowan",
@@ -208,7 +313,13 @@
     "category": "Community",
     "language": "Multilingual",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "mul"
+    ]
   },
   {
     "id": "uk_extensions",
@@ -220,7 +331,13 @@
     "category": "Regional",
     "language": "English (UK)",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "EU"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "storm_ext",
@@ -232,7 +349,13 @@
     "category": "Community",
     "language": "English",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "reflex_repo",
@@ -244,7 +367,13 @@
     "category": "Community",
     "language": "English",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "pitipitii",
@@ -256,7 +385,13 @@
     "category": "Community",
     "language": "Multilingual",
     "verified": false,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "mul"
+    ]
   },
   {
     "id": "cs_karma",
@@ -268,7 +403,13 @@
     "category": "Community",
     "language": "English",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "cs_kraptor",
@@ -280,7 +421,13 @@
     "category": "Community",
     "language": "English",
     "verified": false,
-    "documentKind": "pluginList"
+    "documentKind": "pluginList",
+    "regions": [
+      "ME"
+    ],
+    "languages": [
+      "tr"
+    ]
   },
   {
     "id": "dogiors",
@@ -292,7 +439,13 @@
     "category": "Community",
     "language": "English",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "phisher",
@@ -305,7 +458,13 @@
     "language": "English",
     "verified": true,
     "documentKind": "repository",
-    "bundled": true
+    "bundled": true,
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "skillshare",
@@ -317,7 +476,13 @@
     "category": "Community",
     "language": "English",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "saimuelrepo",
@@ -329,7 +494,13 @@
     "category": "Community",
     "language": "English",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "italian_provider",
@@ -341,7 +512,13 @@
     "category": "Regional",
     "language": "Italian (IT)",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "EU"
+    ],
+    "languages": [
+      "it"
+    ]
   },
   {
     "id": "cloudstream_18plus",
@@ -354,7 +531,13 @@
     "language": "Multilingual",
     "verified": true,
     "documentKind": "pluginList",
-    "adult": true
+    "adult": true,
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "mul"
+    ]
   },
   {
     "id": "cxxx",
@@ -369,7 +552,13 @@
     "language": "Multilingual",
     "verified": true,
     "documentKind": "repository",
-    "adult": true
+    "adult": true,
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "mul"
+    ]
   },
   {
     "id": "gizlikeyif",
@@ -384,7 +573,13 @@
     "language": "Turkish (TR) / Multilingual",
     "verified": true,
     "documentKind": "repository",
-    "adult": true
+    "adult": true,
+    "regions": [
+      "ME"
+    ],
+    "languages": [
+      "tr"
+    ]
   },
   {
     "id": "xr3ed",
@@ -396,7 +591,18 @@
     "category": "Community",
     "language": "Multilingual",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "id",
+      "en",
+      "hi",
+      "de",
+      "bn",
+      "zh"
+    ]
   },
   {
     "id": "hexated",
@@ -408,19 +614,35 @@
     "category": "Community",
     "language": "Multilingual",
     "verified": true,
-    "documentKind": "pluginList"
+    "documentKind": "pluginList",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "id",
+      "en",
+      "de",
+      "hi"
+    ]
   },
   {
     "id": "arabic_extensions",
     "name": "Arabic Extensions",
     "internalName": "cloudstream-extensions-arabic",
-    "description": "15 Arabic providers \u2014 Akwam, FaselHD, MyCima, CimaNow, ArabSeed, Shahid4u, EgyDead and others. Complements re-3arabi rather than repeating it.",
+    "description": "15 Arabic providers — Akwam, FaselHD, MyCima, CimaNow, ArabSeed, Shahid4u, EgyDead and others. Complements re-3arabi rather than repeating it.",
     "url": "https://github.com/ImZaw/cloudstream-extensions-arabic",
     "rawRepoUrl": "https://raw.githubusercontent.com/ImZaw/cloudstream-extensions-arabic/builds/plugins.json",
     "category": "Regional",
     "language": "Arabic (AR)",
     "verified": true,
-    "documentKind": "pluginList"
+    "documentKind": "pluginList",
+    "regions": [
+      "ME",
+      "AF"
+    ],
+    "languages": [
+      "ar"
+    ]
   },
   {
     "id": "indochannel",
@@ -432,7 +654,13 @@
     "category": "Regional",
     "language": "Indonesian (ID)",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "SEA"
+    ],
+    "languages": [
+      "id"
+    ]
   },
   {
     "id": "codegeasse",
@@ -445,7 +673,13 @@
     "language": "Multilingual",
     "verified": true,
     "documentKind": "repository",
-    "adult": true
+    "adult": true,
+    "regions": [
+      "CN"
+    ],
+    "languages": [
+      "zh"
+    ]
   },
   {
     "id": "raghav",
@@ -458,7 +692,13 @@
     "language": "English",
     "iconUrl": "https://i.pinimg.com/236x/bb/d4/4b/bbd44b37f18e40a01543b8b4721b1cce.jpg",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "amsc_french",
@@ -471,7 +711,13 @@
     "language": "French",
     "iconUrl": "https://raw.githubusercontent.com/mouradchaouche/cloudstream-frenchrepo/main/Build/img/amsc.jpg",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "EU"
+    ],
+    "languages": [
+      "fr"
+    ]
   },
   {
     "id": "yorik_french",
@@ -483,7 +729,13 @@
     "category": "Regional",
     "language": "French",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "EU"
+    ],
+    "languages": [
+      "fr"
+    ]
   },
   {
     "id": "allforu",
@@ -495,7 +747,13 @@
     "category": "Community",
     "language": "English",
     "verified": false,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "ayu_games",
@@ -508,7 +766,13 @@
     "language": "English",
     "iconUrl": "https://raw.githubusercontent.com/errorcode26/Ayu-CloudStream-Games/builds/icon.png",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "flummox",
@@ -521,7 +785,13 @@
     "language": "English",
     "iconUrl": "https://raw.githubusercontent.com/FlummoxGamer/FLUMMOX-Repo/main/icon.png",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
   },
   {
     "id": "desi",
@@ -533,6 +803,15 @@
     "category": "Regional",
     "language": "Hindi / English",
     "verified": true,
-    "documentKind": "repository"
+    "documentKind": "repository",
+    "regions": [
+      "IN"
+    ],
+    "languages": [
+      "hi",
+      "ta",
+      "te",
+      "en"
+    ]
   }
 ]
