@@ -2673,15 +2673,27 @@
 .search-suggest__remove {
   display: flex;
   align-items: center;
-  padding: 0.35rem 0.5rem;
+  justify-content: center;
+  padding: 0.35rem 0.45rem;
   border: none;
   background: none;
   color: var(--text-subtle);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, background-color 0.15s ease;
 }
 .search-suggest__row--history:hover .search-suggest__remove,
-.search-suggest__remove:hover { color: var(--status-danger, #f87171); }
+.search-suggest__row--active .search-suggest__remove {
+  opacity: 0.75;
+}
+.search-suggest__remove:hover,
+.search-suggest__remove:focus-visible {
+  opacity: 1;
+  color: var(--status-danger, #f87171);
+  background: rgba(248, 113, 113, 0.16);
+  outline: none;
+}
 
 /* Saved search row highlighting */
 .search-suggest__row--saved {
