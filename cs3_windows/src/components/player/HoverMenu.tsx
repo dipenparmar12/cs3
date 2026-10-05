@@ -35,6 +35,7 @@ interface HoverMenuProps<T> {
   /** Text on the trigger; falls back to the active option's label. */
   triggerText?: string;
   align?: 'left' | 'right';
+  onOpenChange?: (open: boolean) => void;
 }
 
 const CLOSE_DELAY_MS = 220;
@@ -47,11 +48,16 @@ export function HoverMenu<T extends string | number>({
   onChange,
   triggerText,
   align = 'right',
+  onOpenChange,
 }: HoverMenuProps<T>) {
   const [open, setOpen] = useState(false);
   const closeTimer = useRef<number | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const menuId = useId();
+
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
 
   const cancelClose = useCallback(() => {
     if (closeTimer.current !== null) {
@@ -111,6 +117,8 @@ export function HoverMenu<T extends string | number>({
     <div
       ref={rootRef}
       className="hover-menu"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
       onMouseEnter={() => {
         cancelClose();
         setOpen(true);

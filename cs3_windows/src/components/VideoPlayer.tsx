@@ -399,6 +399,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [showSubtitlesControl, setShowSubtitlesControl] = useState(showSubtitlesControlProp ?? true);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isHoveringControls, setIsHoveringControls] = useState(false);
+  const [isInteracting, setIsInteracting] = useState(false);
+  const [activeMenuCount, setActiveMenuCount] = useState(0);
+  const onMenuOpenChange = useCallback((open: boolean) => {
+    setActiveMenuCount((c) => Math.max(0, c + (open ? 1 : -1)));
+  }, []);
+
+  const pendingSeekTargetRef = useRef<number | null>(null);
+  const seekDebounceTimerRef = useRef<any>(null);
+  const seekSettlingTimerRef = useRef<any>(null);
+  const currentPositionRef = useRef<number>(0);
+  const durationRef = useRef<number>(0);
+  const clickTimerRef = useRef<any>(null);
+
   const [error, setError] = useState<string | null>(null);
   /** A forced second attempt at this source is running; see `forceTranscodeRef`. */
   const [converting, setConverting] = useState(false);
@@ -1818,9 +1831,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video) return;
 
     const onTime = () => {
+      const realPos = offsetRef.current + video.currentTime;
+      currentPositionRef.current = realPos;
       // A remuxed stream always starts at zero regardless of where the viewer
       // seeked to, so the offset is what makes the scrubber tell the truth.
-      setCurrentTime(offsetRef.current + video.currentTime);
+      if (pendingSeekTargetRef.current === null) {
+        setCurrentTime(realPos);
+      }
       if (video.buffered.length > 0) {
         setBuffered(offsetRef.current + video.buffered.end(video.buffered.length - 1));
       }
@@ -1833,7 +1850,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // ffmpeg reports the remaining duration from the seek point, not the
       // whole file; the probe knows the real length.
       const probed = probedDurationRef.current;
-      setDuration(probed && probed > 0 ? probed : video.duration);
+      const dur = probed && probed > 0 ? probed : video.duration;
+      setDuration(dur);
+      durationRef.current = dur;
     };
     const onPlay = () => setIsPlaying(true);
     const onPause = () => {
@@ -1889,6 +1908,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
 
     const onSeeked = () => {
+      currentPositionRef.current = offsetRef.current + video.currentTime;
+      pendingSeekTargetRef.current = null;
       setIsWaitingForBuffer(false);
     };
 
@@ -2014,51 +2035,81 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * remux at the target time and remembering the offset, which is what keeps
    * the scrubber honest — the element always believes it is at zero.
    */
+  const commitSeek = useCallback(
+    (target: number) => {
+      currentPositionRef.current = target;
+      if (externalControl?.capability === 'full') {
+        void window.cloudstream?.externalSeek(target);
+      } else if (isNativeEngine) {
+        void window.cloudstream?.mpvSeek(target);
+      } else {
+        const video = videoRef.current;
+        if (video) {
+          if (isConverted && prepared) {
+            offsetRef.current = target;
+            setPlaybackOffset(target);
+            const wasPlaying = !video.paused;
+            video.src = atTime(prepared.playbackUrl, target);
+            video.load();
+            if (wasPlaying) void video.play().catch(() => undefined);
+          } else {
+            video.currentTime = target;
+          }
+        }
+      }
+
+      if (seekSettlingTimerRef.current) clearTimeout(seekSettlingTimerRef.current);
+      seekSettlingTimerRef.current = setTimeout(() => {
+        pendingSeekTargetRef.current = null;
+      }, 400);
+    },
+    [externalControl?.capability, isNativeEngine, isConverted, prepared]
+  );
+
   const seekTo = useCallback(
     (time: number) => {
-      const target = Math.max(0, time);
+      const maxDur = durationRef.current > 0 ? durationRef.current : Infinity;
+      const target = Math.max(0, Math.min(time, maxDur));
 
-      // The external player owns the playhead; seeking the empty local element
-      // would move a timeline nobody is watching.
-      if (externalControl?.capability === 'full') {
-        setCurrentTime(target);
-        void window.cloudstream?.externalSeek(target);
-        return;
-      }
-      if (isNativeEngine) {
-        setCurrentTime(target);
-        void window.cloudstream?.mpvSeek(target);
-        return;
-      }
+      pendingSeekTargetRef.current = target;
+      setCurrentTime(target);
 
-      const video = videoRef.current;
-      if (!video) return;
+      if (seekDebounceTimerRef.current) clearTimeout(seekDebounceTimerRef.current);
+      if (seekSettlingTimerRef.current) clearTimeout(seekSettlingTimerRef.current);
 
-      if (isConverted && prepared) {
-        setPlaybackOffset(target);
-        const wasPlaying = !video.paused;
-        video.src = atTime(prepared.playbackUrl, target);
-        video.load();
-        if (wasPlaying) void video.play().catch(() => undefined);
-        return;
-      }
-      video.currentTime = target;
+      seekDebounceTimerRef.current = setTimeout(() => {
+        commitSeek(target);
+      }, 120);
     },
-    [isConverted, prepared, externalControl?.capability, isNativeEngine]
+    [commitSeek]
   );
 
   const seekBy = useCallback(
     (delta: number) => {
-      if (externalControl?.capability === 'full' || isNativeEngine) {
-        seekTo(currentTime + delta);
-        return;
-      }
-      const video = videoRef.current;
-      if (!video) return;
-      seekTo((isConverted ? playbackOffset : 0) + video.currentTime + delta);
+      const base = pendingSeekTargetRef.current ?? currentPositionRef.current;
+      const maxDur = durationRef.current > 0 ? durationRef.current : Infinity;
+      const target = Math.max(0, Math.min(base + delta, maxDur));
+
+      pendingSeekTargetRef.current = target;
+      setCurrentTime(target);
+
+      if (seekDebounceTimerRef.current) clearTimeout(seekDebounceTimerRef.current);
+      if (seekSettlingTimerRef.current) clearTimeout(seekSettlingTimerRef.current);
+
+      seekDebounceTimerRef.current = setTimeout(() => {
+        commitSeek(target);
+      }, 120);
     },
-    [seekTo, isConverted, playbackOffset, externalControl?.capability, isNativeEngine, currentTime]
+    [commitSeek]
   );
+
+  useEffect(() => {
+    return () => {
+      if (seekDebounceTimerRef.current) clearTimeout(seekDebounceTimerRef.current);
+      if (seekSettlingTimerRef.current) clearTimeout(seekSettlingTimerRef.current);
+      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+    };
+  }, []);
 
   /**
    * Floating playback: native Picture-in-Picture, the window pin, and the
@@ -2343,8 +2394,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * the hide timer is scheduled once and must read the value at fire time, not
    * the value captured when it was created.
    *
-   * In windowed (non-fullscreen) mode, controls are kept visible. In fullscreen
-   * mode, controls auto-hide after inactivity and appear on mouse movement.
+   * Controls stay visible when playback is paused or in error, when side panels
+   * or menus are open, or when the user is hovering/interacting with controls.
+   * Otherwise, controls auto-hide after inactivity across all player modes.
    */
   const keepControls =
     panelOpen ||
@@ -2354,7 +2406,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     !isPlaying ||
     Boolean(error) ||
     isHoveringControls ||
-    (!isFullscreen && !mini);
+    isInteracting ||
+    activeMenuCount > 0;
   const keepControlsRef = useRef(keepControls);
   useEffect(() => {
     keepControlsRef.current = keepControls;
@@ -2379,12 +2432,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const native = ((event as React.MouseEvent).nativeEvent ?? event) as MouseEvent;
       const real = isRealMove(native);
       lastPointer.current = { x: native.clientX, y: native.clientY };
-      if (!real) return;
+      if (!real && controlsVisible) return;
     }
     pointerInside.current = true;
     lastActivity.current = Date.now();
     setControlsVisible(true);
-  }, []);
+  }, [controlsVisible]);
 
   /**
    * The single place the controls are allowed to hide.
@@ -2400,7 +2453,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // the chrome is just covering the picture.
       const idle = Date.now() - lastActivity.current > CONTROLS_IDLE_MS;
       if (!pointerInside.current || idle) setControlsVisible(false);
-    }, 250);
+    }, 200);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -2415,6 +2468,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     lastPointer.current = null;
     setIsHoveringControls(false);
   }, []);
+
+  const handleSurfaceClick = useCallback((_e: React.MouseEvent) => {
+    if (panelOpen || sourcePanelOpen || subtitlePanelOpen || downloadPanelOpen) {
+      setPanelOpen(false);
+      setSourcePanelOpen(false);
+      setSubtitlePanelOpen(false);
+      setDownloadPanelOpen(false);
+      return;
+    }
+
+    if (clickTimerRef.current) {
+      clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+      return;
+    }
+
+    clickTimerRef.current = setTimeout(() => {
+      clickTimerRef.current = null;
+      togglePlay();
+      revealControls();
+    }, 220);
+  }, [panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen, togglePlay, revealControls]);
+
+  const handleSurfaceDoubleClick = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    if (clickTimerRef.current) {
+      clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+    }
+    toggleFullscreen();
+    revealControls();
+  }, [toggleFullscreen, revealControls]);
 
   // --- seek bar interaction ------------------------------------------------
 
@@ -3064,6 +3149,72 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [fetchedSubtitles]
   );
 
+  const keyboardStateRef = useRef({
+    togglePlay,
+    seekBy,
+    seekTo,
+    toggleFullscreen,
+    onBack,
+    series,
+    nextEpisode,
+    previousEpisode,
+    onSelectEpisode,
+    panelOpen,
+    sourcePanelOpen,
+    subtitlePanelOpen,
+    downloadPanelOpen,
+    setPanelOpen,
+    setSourcePanelOpen,
+    setSubtitlePanelOpen,
+    setDownloadPanelOpen,
+    volume,
+    setVolume,
+    isMuted,
+    setIsMuted,
+    speed,
+    setSpeed,
+    duration,
+    activeSubtitle,
+    setActiveSubtitle,
+    allSubtitles,
+    isNativeEngine,
+    notify,
+    revealControls,
+  });
+
+  keyboardStateRef.current = {
+    togglePlay,
+    seekBy,
+    seekTo,
+    toggleFullscreen,
+    onBack,
+    series,
+    nextEpisode,
+    previousEpisode,
+    onSelectEpisode,
+    panelOpen,
+    sourcePanelOpen,
+    subtitlePanelOpen,
+    downloadPanelOpen,
+    setPanelOpen,
+    setSourcePanelOpen,
+    setSubtitlePanelOpen,
+    setDownloadPanelOpen,
+    volume,
+    setVolume,
+    isMuted,
+    setIsMuted,
+    speed,
+    setSpeed,
+    duration,
+    activeSubtitle,
+    setActiveSubtitle,
+    allSubtitles,
+    isNativeEngine,
+    notify,
+    revealControls,
+  };
+
   useEffect(() => {
     // Still mounted, but the viewer is looking at another screen. Leaving this
     // bound would make typing in a search box seek the film.
@@ -3075,6 +3226,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (hidden || mini) return;
 
     const onKey = (e: KeyboardEvent) => {
+      const state = keyboardStateRef.current;
       const target = e.target as HTMLElement | null;
       const isEditable = target && (
         target.tagName === 'INPUT' ||
@@ -3089,78 +3241,90 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         return;
       }
 
+      // If a button has focus (e.g. user previously clicked +10s), blur it on Space
+      // so the browser's default button activation doesn't fire alongside play/pause
+      if (e.key === ' ' && target && target.tagName === 'BUTTON') {
+        target.blur();
+      }
+
       switch (e.key) {
         case ' ':
         case 'k':
         case 'K':
           e.preventDefault();
-          togglePlay();
+          state.togglePlay();
+          state.revealControls();
           break;
         case 'ArrowRight':
           e.preventDefault();
-          seekBy(SKIP_SECONDS);
+          state.seekBy(SKIP_SECONDS);
+          state.revealControls();
           break;
         case 'ArrowLeft':
           e.preventDefault();
-          seekBy(-SKIP_SECONDS);
+          state.seekBy(-SKIP_SECONDS);
+          state.revealControls();
           break;
         case 'l':
         case 'L':
           e.preventDefault();
-          seekBy(30);
+          state.seekBy(SKIP_SECONDS);
+          state.revealControls();
           break;
         case 'j':
         case 'J':
           e.preventDefault();
-          seekBy(-30);
+          state.seekBy(-SKIP_SECONDS);
+          state.revealControls();
           break;
         case 'ArrowUp': {
           e.preventDefault();
-          const next = Math.min(1, Math.round((volume + 0.05) * 100) / 100);
-          setVolume(next);
-          if (isMuted) setIsMuted(false);
-          notify(`Volume: ${Math.round(next * 100)}%`);
-          revealControls();
+          const next = Math.min(1, Math.round((state.volume + 0.05) * 100) / 100);
+          state.setVolume(next);
+          if (state.isMuted) state.setIsMuted(false);
+          state.notify(`Volume: ${Math.round(next * 100)}%`);
+          state.revealControls();
           break;
         }
         case 'ArrowDown': {
           e.preventDefault();
-          const next = Math.max(0, Math.round((volume - 0.05) * 100) / 100);
-          setVolume(next);
-          if (next === 0) setIsMuted(true);
-          notify(next === 0 ? 'Muted' : `Volume: ${Math.round(next * 100)}%`);
-          revealControls();
+          const next = Math.max(0, Math.round((state.volume - 0.05) * 100) / 100);
+          state.setVolume(next);
+          if (next === 0) state.setIsMuted(true);
+          state.notify(next === 0 ? 'Muted' : `Volume: ${Math.round(next * 100)}%`);
+          state.revealControls();
           break;
         }
         case 'm':
         case 'M':
           e.preventDefault();
-          setIsMuted((v) => {
+          state.setIsMuted((v) => {
             const next = !v;
-            notify(next ? 'Muted' : `Volume: ${Math.round(volume * 100)}%`);
+            state.notify(next ? 'Muted' : `Volume: ${Math.round(state.volume * 100)}%`);
             return next;
           });
-          revealControls();
+          state.revealControls();
           break;
         case 'f':
         case 'F':
           e.preventDefault();
-          toggleFullscreen();
+          state.toggleFullscreen();
+          state.revealControls();
           break;
         case 'c':
         case 'C': {
           e.preventDefault();
-          if (activeSubtitle) {
-            setActiveSubtitle(null);
-            if (isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
-            notify('Subtitles: Off');
-          } else if (allSubtitles.length > 0) {
-            const first = allSubtitles[0];
-            setActiveSubtitle(first.url);
-            if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(first.url, first.name);
-            notify(`Subtitles: ${first.name}`);
+          if (state.activeSubtitle) {
+            state.setActiveSubtitle(null);
+            if (state.isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
+            state.notify('Subtitles: Off');
+          } else if (state.allSubtitles.length > 0) {
+            const first = state.allSubtitles[0];
+            state.setActiveSubtitle(first.url);
+            if (state.isNativeEngine) void window.cloudstream?.mpvAddSubtitle(first.url, first.name);
+            state.notify(`Subtitles: ${first.name}`);
           }
-          revealControls();
+          state.revealControls();
           break;
         }
         case '0':
@@ -3175,74 +3339,85 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         case '9': {
           e.preventDefault();
           const pct = Number(e.key) / 10;
-          const targetTime = duration * pct;
-          seekTo(targetTime);
-          notify(`${Math.round(pct * 100)}%`);
-          revealControls();
+          const targetTime = state.duration * pct;
+          state.seekTo(targetTime);
+          state.notify(`${Math.round(pct * 100)}%`);
+          state.revealControls();
           break;
         }
         case 'Home':
           e.preventDefault();
-          seekTo(0);
-          notify('0:00');
-          revealControls();
+          state.seekTo(0);
+          state.notify('0:00');
+          state.revealControls();
           break;
         case 'End':
           e.preventDefault();
-          if (duration > 0) {
-            seekTo(Math.max(0, duration - 1));
+          if (state.duration > 0) {
+            state.seekTo(Math.max(0, state.duration - 1));
           }
-          revealControls();
+          state.revealControls();
           break;
         case '>':
         case '.':
         case ']': {
           e.preventDefault();
-          const currentIndex = SPEEDS.findIndex((s) => Math.abs(s - speed) < 0.05);
+          const currentIndex = SPEEDS.findIndex((s) => Math.abs(s - state.speed) < 0.05);
           const nextIndex = currentIndex >= 0 && currentIndex < SPEEDS.length - 1 ? currentIndex + 1 : currentIndex;
-          const nextSpeed = SPEEDS[nextIndex] ?? speed;
-          setSpeed(nextSpeed);
-          notify(`Speed: ${nextSpeed}×`);
-          revealControls();
+          const nextSpeed = SPEEDS[nextIndex] ?? state.speed;
+          state.setSpeed(nextSpeed);
+          state.notify(`Speed: ${nextSpeed}×`);
+          state.revealControls();
           break;
         }
         case '<':
         case ',':
         case '[': {
           e.preventDefault();
-          const currentIndex = SPEEDS.findIndex((s) => Math.abs(s - speed) < 0.05);
+          const currentIndex = SPEEDS.findIndex((s) => Math.abs(s - state.speed) < 0.05);
           const prevIndex = currentIndex > 0 ? currentIndex - 1 : 0;
-          const prevSpeed = SPEEDS[prevIndex] ?? speed;
-          setSpeed(prevSpeed);
-          notify(`Speed: ${prevSpeed}×`);
-          revealControls();
+          const prevSpeed = SPEEDS[prevIndex] ?? state.speed;
+          state.setSpeed(prevSpeed);
+          state.notify(`Speed: ${prevSpeed}×`);
+          state.revealControls();
           break;
         }
         case 's':
         case 'S':
           e.preventDefault();
-          setSubtitlePanelOpen((v) => !v);
+          state.setSubtitlePanelOpen((v) => !v);
+          state.revealControls();
           break;
         case 'e':
         case 'E':
-          if (series) setPanelOpen((v) => !v);
+          if (state.series) {
+            e.preventDefault();
+            state.setPanelOpen((v) => !v);
+            state.revealControls();
+          }
           break;
         case 'n':
         case 'N':
-          if (nextEpisode && onSelectEpisode) onSelectEpisode(nextEpisode);
+          if (state.nextEpisode && state.onSelectEpisode) {
+            e.preventDefault();
+            state.onSelectEpisode(state.nextEpisode);
+          }
           break;
         case 'p':
         case 'P':
-          if (previousEpisode && onSelectEpisode) onSelectEpisode(previousEpisode);
+          if (state.previousEpisode && state.onSelectEpisode) {
+            e.preventDefault();
+            state.onSelectEpisode(state.previousEpisode);
+          }
           break;
         case 'Escape':
-          if (panelOpen || sourcePanelOpen || subtitlePanelOpen || downloadPanelOpen) {
-            setPanelOpen(false);
-            setSourcePanelOpen(false);
-            setSubtitlePanelOpen(false);
-            setDownloadPanelOpen(false);
+          if (state.panelOpen || state.sourcePanelOpen || state.subtitlePanelOpen || state.downloadPanelOpen) {
+            state.setPanelOpen(false);
+            state.setSourcePanelOpen(false);
+            state.setSubtitlePanelOpen(false);
+            state.setDownloadPanelOpen(false);
           } else if (!document.fullscreenElement) {
-            onBack();
+            state.onBack();
           }
           break;
         default:
@@ -3251,12 +3426,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [
-    togglePlay, seekBy, seekTo, toggleFullscreen, onBack, series, nextEpisode, previousEpisode,
-    onSelectEpisode, panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen,
-    hidden, mini, volume, isMuted, speed, duration, activeSubtitle, allSubtitles, isNativeEngine,
-    notify, revealControls,
-  ]);
+  }, [hidden, mini]);
 
   // Close any open side-panel when the user clicks outside it on the player, and reveal controls.
   const handlePlayerPointerDown = useCallback(
@@ -3515,8 +3685,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         ref={videoRef}
         className={`player__video player__video--${aspect}`}
         playsInline
-        onClick={togglePlay}
-        onDoubleClick={toggleFullscreen}
         crossOrigin="anonymous"
       >
         {/* Selection is driven by TextTrack.mode in the effect above, not by
@@ -3525,6 +3693,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <track key={sub.url} kind="subtitles" label={sub.name} src={sub.url} />
         ))}
       </video>
+
+      {/* Full-bleed click surface that cleanly delegates single-click play/pause and double-click fullscreen */}
+      {!mini && (
+        <div
+          className="player__click-surface"
+          onClick={handleSurfaceClick}
+          onDoubleClick={handleSurfaceDoubleClick}
+          role="presentation"
+        />
+      )}
 
       {/*
         One stack per anchor, laid out in flow.
@@ -3600,8 +3778,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             // Feeds the same state the `<video>` path writes, so the existing
             // save interval, the resume point and the up-next card all work
             // without knowing which engine produced the numbers.
-            setCurrentTime(position);
-            if (total > 0) setDuration(total);
+            currentPositionRef.current = position;
+            if (pendingSeekTargetRef.current === null) {
+              setCurrentTime(position);
+            }
+            if (total > 0) {
+              setDuration(total);
+              durationRef.current = total;
+            }
           }}
           /* The player's control bar is the only transport for this engine, and
              it has no element to learn from — so the engine tells it. Without
@@ -3823,10 +4007,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       <header
         className={`player__top${controlsVisible || keepControls ? '' : ' hidden'}`}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         onMouseEnter={() => setIsHoveringControls(true)}
         onMouseLeave={() => setIsHoveringControls(false)}
       >
-        <button className="icon-button" onClick={onBack} aria-label="Back">
+        <button
+          className="icon-button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onBack();
+          }}
+          aria-label="Back"
+        >
           <ArrowLeft size={22} />
         </button>
         {/*
@@ -3839,7 +4032,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {onMinimize && (
           <button
             className="icon-button"
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               /**
                * Minimise means whatever the preference says it means.
                *
@@ -3879,7 +4073,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {floating.isPipSupported && (
           <button
             className={`icon-button${floating.isPip ? ' icon-button--on' : ''}`}
-            onClick={() => void floating.togglePip()}
+            onClick={(e) => {
+              e.stopPropagation();
+              void floating.togglePip();
+            }}
             aria-label={floating.isPip ? 'Close the floating window' : 'Open in a floating window'}
             title={
               floating.isPip
@@ -4168,6 +4365,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       <footer
         className={`player__controls${controlsVisible || keepControls ? '' : ' hidden'}`}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         onMouseEnter={() => setIsHoveringControls(true)}
         onMouseLeave={() => setIsHoveringControls(false)}
       >
@@ -4177,6 +4376,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onMouseMove={onSeekHover}
           onMouseLeave={onSeekLeave}
           onClick={onSeekClick}
+          onPointerDown={() => {
+            setIsInteracting(true);
+            revealControls();
+          }}
+          onPointerUp={() => setIsInteracting(false)}
         >
           {/* The full timeline, so the ungathered part of the film is still
               represented on screen rather than simply absent. */}
@@ -4217,7 +4421,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             max={duration || 0}
             step={0.1}
             value={currentTime}
-            onChange={(e) => seekTo(Number(e.target.value))}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              setIsInteracting(true);
+              revealControls();
+            }}
+            onPointerUp={() => setIsInteracting(false)}
+            onChange={(e) => {
+              seekTo(Number(e.target.value));
+              revealControls();
+            }}
             aria-label="Seek"
           />
         </div>
@@ -4226,7 +4439,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {series && (
             <button
               className="icon-button"
-              onClick={() => previousEpisode && onSelectEpisode?.(previousEpisode)}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (previousEpisode && onSelectEpisode) onSelectEpisode(previousEpisode);
+                revealControls();
+              }}
               disabled={!previousEpisode}
               aria-label="Previous episode"
               title="Previous episode (P)"
@@ -4237,7 +4454,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           <button
             className="icon-button"
-            onClick={() => seekBy(-SKIP_SECONDS)}
+            onClick={(e) => {
+              e.stopPropagation();
+              seekBy(-SKIP_SECONDS);
+              revealControls();
+            }}
             aria-label={`Back ${SKIP_SECONDS} seconds`}
             title={`Back ${SKIP_SECONDS}s (←)`}
           >
@@ -4245,13 +4466,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <span className="icon-button__badge">{SKIP_SECONDS}</span>
           </button>
 
-          <button className="icon-button" onClick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'}>
+          <button
+            className="icon-button"
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePlay();
+              revealControls();
+            }}
+            aria-label={isPlaying ? 'Pause' : 'Play'}
+          >
             {isPlaying ? <Pause size={20} /> : <Play size={20} />}
           </button>
 
           <button
             className="icon-button"
-            onClick={() => seekBy(SKIP_SECONDS)}
+            onClick={(e) => {
+              e.stopPropagation();
+              seekBy(SKIP_SECONDS);
+              revealControls();
+            }}
             aria-label={`Forward ${SKIP_SECONDS} seconds`}
             title={`Forward ${SKIP_SECONDS}s (→)`}
           >
@@ -4262,7 +4495,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {series && (
             <button
               className="icon-button"
-              onClick={() => nextEpisode && onSelectEpisode?.(nextEpisode)}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (nextEpisode && onSelectEpisode) onSelectEpisode(nextEpisode);
+                revealControls();
+              }}
               disabled={!nextEpisode}
               aria-label="Next episode"
               title="Next episode (N)"
@@ -4275,7 +4512,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {formatTimecode(currentTime)} / {formatTimecode(duration)}
           </span>
 
-          <button className="icon-button" onClick={() => setIsMuted((v) => !v)} aria-label="Mute">
+          <button
+            className="icon-button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsMuted((v) => !v);
+              revealControls();
+            }}
+            aria-label="Mute"
+          >
             {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
           </button>
           <input
@@ -4285,9 +4530,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             max={1}
             step={0.05}
             value={isMuted ? 0 : volume}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              setIsInteracting(true);
+              revealControls();
+            }}
+            onPointerUp={() => setIsInteracting(false)}
             onChange={(e) => {
               setVolume(Number(e.target.value));
               setIsMuted(false);
+              revealControls();
             }}
             aria-label="Volume"
           />
@@ -4298,7 +4550,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               className="icon-button"
               data-panel-toggle
-              onClick={() => setPanelOpen((v) => !v)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setPanelOpen((v) => !v);
+                revealControls();
+              }}
               aria-label="Episodes"
               title="Episodes (E)"
             >
@@ -4310,7 +4566,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               className="icon-button"
               data-panel-toggle
-              onClick={() => setSourcePanelOpen((v) => !v)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSourcePanelOpen((v) => !v);
+                revealControls();
+              }}
               aria-label="Sources"
               title="Change source"
             >
@@ -4329,7 +4589,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               className="icon-button"
               data-panel-toggle
-              onClick={() => setSubtitlePanelOpen((v) => !v)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSubtitlePanelOpen((v) => !v);
+                revealControls();
+              }}
               aria-label="Search subtitles"
               title="Search subtitles online"
             >
@@ -4340,7 +4604,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {/* Button 1: Download Current Media Action Button */}
           <button
             className={`icon-button ${currentDownload ? 'active' : ''}`}
-            onClick={handleDownloadCurrentMedia}
+            onClick={(e) => {
+              e.stopPropagation();
+              void handleDownloadCurrentMedia();
+              revealControls();
+            }}
             aria-label="Download current media"
             title={
               currentDownload
@@ -4392,7 +4660,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {currentDownload.state === DownloadState.Downloading && (
                 <button
                   style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', display: 'flex', padding: 0 }}
-                  onClick={() => window.cloudstream?.pauseDownload(currentDownload.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    window.cloudstream?.pauseDownload(currentDownload.id);
+                  }}
                   title="Pause Download"
                 >
                   <Pause size={12} />
@@ -4401,7 +4672,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {(currentDownload.state === DownloadState.Paused || currentDownload.state === DownloadState.Failed) && (
                 <button
                   style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', display: 'flex', padding: 0 }}
-                  onClick={() => window.cloudstream?.resumeDownload(currentDownload.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    window.cloudstream?.resumeDownload(currentDownload.id);
+                  }}
                   title="Resume / Retry Download"
                 >
                   <Play size={12} />
@@ -4414,7 +4688,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <button
             className={`icon-button ${downloadPanelOpen ? 'active' : ''}`}
             data-panel-toggle
-            onClick={() => setDownloadPanelOpen((v) => !v)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setDownloadPanelOpen((v) => !v);
+              revealControls();
+            }}
             aria-label="Downloads Manager Panel"
             title={
               activeDownloadsCount > 0
@@ -4450,6 +4728,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               label="Quality"
               value={quality}
               onChange={setQuality}
+              onOpenChange={onMenuOpenChange}
               options={[
                 { value: AUTO_QUALITY, label: 'Auto' },
                 ...qualities.map((q) => ({ value: q.level, label: q.label, detail: q.detail })),
@@ -4462,6 +4741,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               icon={<Subtitles size={16} />}
               label="Subtitles"
               value={activeSubtitle ?? ''}
+              onOpenChange={onMenuOpenChange}
               onChange={(next) => {
                 const url = next === '' ? null : String(next);
                 setActiveSubtitle(url);
@@ -4502,6 +4782,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 label="Audio"
                 value={activeAudioTrack}
                 onChange={(val) => selectAudioTrack(val)}
+                onOpenChange={onMenuOpenChange}
                 triggerText={
                   audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
                 }
@@ -4518,6 +4799,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               label="Audio"
               value={selectedAudioIndex}
               onChange={(val) => void selectProbedAudio(Number(val))}
+              onOpenChange={onMenuOpenChange}
               triggerText={
                 probedAudioTracks.find((t) => t.index === selectedAudioIndex)?.label ?? 'Audio'
               }
@@ -4534,6 +4816,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 label="Audio"
                 value={activeAudioTrack}
                 onChange={(val) => selectAudioTrack(val)}
+                onOpenChange={onMenuOpenChange}
                 triggerText={
                   audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
                 }
@@ -4551,6 +4834,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               label="Speed"
               value={speed}
               onChange={setSpeed}
+              onOpenChange={onMenuOpenChange}
               options={SPEEDS.map((s) => ({ value: s, label: `${s}×` }))}
               triggerText={`${speed}×`}
             />
@@ -4561,6 +4845,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               label="Aspect ratio"
               value={aspect}
               onChange={setAspect}
+              onOpenChange={onMenuOpenChange}
               options={Object.values(AspectRatioMode).map((mode) => ({ value: mode, label: mode }))}
             />
           )}
@@ -4571,6 +4856,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               label="Native Player"
               value=""
               onChange={(val) => void handleOpenExternalPlayer(String(val))}
+              onOpenChange={onMenuOpenChange}
               options={externalPlayers.map((p) => ({
                 value: p.id,
                 label: p.name,
@@ -4591,6 +4877,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             activeSource={activeSource}
             allSources={sourceSession?.sources}
             download={currentDownload ?? null}
+            onOpenChange={onMenuOpenChange}
             playerState={() => ({
               position: `${Math.floor(currentTime)}s`,
               duration: duration ? `${Math.floor(duration)}s` : undefined,
@@ -4615,7 +4902,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             }}
           />
 
-          <button className="icon-button" onClick={toggleFullscreen} aria-label="Fullscreen">
+          <button
+            className="icon-button"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleFullscreen();
+              revealControls();
+            }}
+            aria-label="Fullscreen"
+            title={isFullscreen ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
+          >
             {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
           </button>
         </div>
