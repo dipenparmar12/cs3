@@ -2486,6 +2486,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     clickTimerRef.current = setTimeout(() => {
       clickTimerRef.current = null;
+      if (document.activeElement && document.activeElement !== containerRef.current) {
+        if (
+          document.activeElement.tagName === 'BUTTON' ||
+          (document.activeElement.tagName === 'INPUT' && (document.activeElement as HTMLInputElement).type === 'range')
+        ) {
+          (document.activeElement as HTMLElement).blur();
+        }
+      }
+      containerRef.current?.focus();
       togglePlay();
       revealControls();
     }, 220);
@@ -2497,6 +2506,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       clearTimeout(clickTimerRef.current);
       clickTimerRef.current = null;
     }
+    containerRef.current?.focus();
     toggleFullscreen();
     revealControls();
   }, [toggleFullscreen, revealControls]);
@@ -3149,11 +3159,69 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [fetchedSubtitles]
   );
 
+  const lastSelectedSubtitleRef = useRef<string | null>(null);
+
+  const toggleSubtitles = useCallback(() => {
+    if (allSubtitles.length === 0) {
+      notify('No subtitles available');
+      return;
+    }
+    if (activeSubtitle) {
+      lastSelectedSubtitleRef.current = activeSubtitle;
+      setActiveSubtitle(null);
+      if (isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
+      notify('Subtitles: Off');
+    } else {
+      const target =
+        (lastSelectedSubtitleRef.current &&
+          allSubtitles.find((s) => s.url === lastSelectedSubtitleRef.current)) ||
+        allSubtitles[0];
+      setActiveSubtitle(target.url);
+      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(target.url, target.name);
+      notify(`Subtitles: ${target.name}`);
+    }
+  }, [activeSubtitle, allSubtitles, isNativeEngine, notify]);
+
+  const cycleSubtitles = useCallback(() => {
+    if (allSubtitles.length === 0) {
+      notify('No subtitles available');
+      return;
+    }
+    const currentIndex = allSubtitles.findIndex((s) => s.url === activeSubtitle);
+    if (currentIndex === -1) {
+      const first = allSubtitles[0];
+      setActiveSubtitle(first.url);
+      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(first.url, first.name);
+      notify(`Subtitles: ${first.name}`);
+    } else if (currentIndex === allSubtitles.length - 1) {
+      lastSelectedSubtitleRef.current = activeSubtitle;
+      setActiveSubtitle(null);
+      if (isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
+      notify('Subtitles: Off');
+    } else {
+      const next = allSubtitles[currentIndex + 1];
+      setActiveSubtitle(next.url);
+      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(next.url, next.name);
+      notify(`Subtitles: ${next.name}`);
+    }
+  }, [activeSubtitle, allSubtitles, isNativeEngine, notify]);
+
+  const toggleMute = useCallback(() => {
+    setIsMuted((prev) => {
+      const next = !prev;
+      notify(next ? 'Muted' : `Volume: ${Math.round(volume * 100)}%`);
+      return next;
+    });
+  }, [notify, volume]);
+
   const keyboardStateRef = useRef({
     togglePlay,
     seekBy,
     seekTo,
     toggleFullscreen,
+    toggleMute,
+    toggleSubtitles,
+    cycleSubtitles,
     onBack,
     series,
     nextEpisode,
@@ -3187,6 +3255,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     seekBy,
     seekTo,
     toggleFullscreen,
+    toggleMute,
+    toggleSubtitles,
+    cycleSubtitles,
     onBack,
     series,
     nextEpisode,
@@ -3228,23 +3299,35 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const onKey = (e: KeyboardEvent) => {
       const state = keyboardStateRef.current;
       const target = e.target as HTMLElement | null;
-      const isEditable = target && (
-        target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
-        target.tagName === 'SELECT' ||
-        target.isContentEditable
-      );
-      if (isEditable) {
+
+      // True text input detection: range sliders, checkboxes, radios, and buttons are NOT text input fields.
+      const isTextInput = (el: HTMLElement | null): boolean => {
+        if (!el) return false;
+        if (el.isContentEditable) return true;
+        const tag = el.tagName;
+        if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+        if (tag === 'INPUT') {
+          const type = (el as HTMLInputElement).type?.toLowerCase();
+          return type !== 'range' && type !== 'checkbox' && type !== 'radio' && type !== 'button';
+        }
+        return false;
+      };
+
+      if (isTextInput(target)) {
         if (e.key === 'Escape') {
-          target.blur();
+          target?.blur();
         }
         return;
       }
 
-      // If a button has focus (e.g. user previously clicked +10s), blur it on Space
-      // so the browser's default button activation doesn't fire alongside play/pause
-      if (e.key === ' ' && target && target.tagName === 'BUTTON') {
+      // If a button or range slider currently has focus, blur it so browser default doesn't hijack player shortcuts
+      if (
+        target &&
+        (target.tagName === 'BUTTON' ||
+          (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'range'))
+      ) {
         target.blur();
+        containerRef.current?.focus();
       }
 
       switch (e.key) {
@@ -3256,21 +3339,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           state.revealControls();
           break;
         case 'ArrowRight':
-          e.preventDefault();
-          state.seekBy(SKIP_SECONDS);
-          state.revealControls();
-          break;
-        case 'ArrowLeft':
-          e.preventDefault();
-          state.seekBy(-SKIP_SECONDS);
-          state.revealControls();
-          break;
         case 'l':
         case 'L':
           e.preventDefault();
           state.seekBy(SKIP_SECONDS);
           state.revealControls();
           break;
+        case 'ArrowLeft':
         case 'j':
         case 'J':
           e.preventDefault();
@@ -3298,11 +3373,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         case 'm':
         case 'M':
           e.preventDefault();
-          state.setIsMuted((v) => {
-            const next = !v;
-            state.notify(next ? 'Muted' : `Volume: ${Math.round(state.volume * 100)}%`);
-            return next;
-          });
+          state.toggleMute();
           state.revealControls();
           break;
         case 'f':
@@ -3312,21 +3383,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           state.revealControls();
           break;
         case 'c':
-        case 'C': {
+        case 'C':
           e.preventDefault();
-          if (state.activeSubtitle) {
-            state.setActiveSubtitle(null);
-            if (state.isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
-            state.notify('Subtitles: Off');
-          } else if (state.allSubtitles.length > 0) {
-            const first = state.allSubtitles[0];
-            state.setActiveSubtitle(first.url);
-            if (state.isNativeEngine) void window.cloudstream?.mpvAddSubtitle(first.url, first.name);
-            state.notify(`Subtitles: ${first.name}`);
-          }
+          state.toggleSubtitles();
           state.revealControls();
           break;
-        }
+        case 'v':
+        case 'V':
+          e.preventDefault();
+          state.cycleSubtitles();
+          state.revealControls();
+          break;
         case '0':
         case '1':
         case '2':
@@ -3416,7 +3483,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             state.setSourcePanelOpen(false);
             state.setSubtitlePanelOpen(false);
             state.setDownloadPanelOpen(false);
-          } else if (!document.fullscreenElement) {
+          } else if (document.fullscreenElement) {
+            void document.exitFullscreen().catch(() => {});
+          } else {
             state.onBack();
           }
           break;
@@ -3428,10 +3497,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => window.removeEventListener('keydown', onKey);
   }, [hidden, mini]);
 
+  useEffect(() => {
+    if (!hidden && !mini) {
+      containerRef.current?.focus();
+    }
+  }, [hidden, mini]);
+
   // Close any open side-panel when the user clicks outside it on the player, and reveal controls.
   const handlePlayerPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       revealControls(e);
+      if (
+        document.activeElement &&
+        document.activeElement !== containerRef.current &&
+        !document.activeElement.closest('.player-panel')
+      ) {
+        if (
+          document.activeElement.tagName === 'BUTTON' ||
+          (document.activeElement.tagName === 'INPUT' && (document.activeElement as HTMLInputElement).type === 'range')
+        ) {
+          (document.activeElement as HTMLElement).blur();
+        }
+        containerRef.current?.focus();
+      }
       if (!panelOpen && !sourcePanelOpen && !subtitlePanelOpen && !downloadPanelOpen) return;
       const target = e.target as HTMLElement;
       // If the click is inside a .player-panel element, leave it open.
@@ -3468,6 +3556,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   return (
     <div
       ref={containerRef}
+      tabIndex={-1}
       className={
         `player${controlsVisible || keepControls ? '' : ' player--idle'}` +
         (mini ? ' player--mini' : '') +
@@ -3763,11 +3852,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         other, and the stack itself carries the blur.
       */}
       <div className="player__messages player__messages--top">
-        {incognito && (
-          <div className="player__incognito" title="Progress and history from this session are not saved.">
-            <EyeOff size={13} /> Incognito
-          </div>
-        )}
         {externalControl && (
           <div className="player__external-banner">
             <MonitorPlay size={18} />
@@ -4281,17 +4365,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </div>
           )}
         </div>
-        {stats && (
-          <div className="player__stats">
-            {isDeveloper && (
-              <span title="Peers"><Users size={14} /> {stats.peers}</span>
-            )}
-            {/* The rate stays in both modes: it is how fast the film is
-                arriving, which is a fact about their evening rather than about
-                our swarm. */}
-            <span title="Download speed"><Gauge size={14} /> {formatTransferRate(stats.downloadSpeed)}</span>
-          </div>
-        )}
+        <div className="player__top-right">
+          {incognito && (
+            <div
+              className="player__incognito-badge"
+              title="Incognito Mode: Playback progress and history are not saved"
+            >
+              <EyeOff size={13} />
+              <span>Incognito</span>
+            </div>
+          )}
+          {stats && (
+            <div className="player__stats">
+              {isDeveloper && (
+                <span title="Peers"><Users size={14} /> {stats.peers}</span>
+              )}
+              {/* The rate stays in both modes: it is how fast the film is
+                  arriving, which is a fact about their evening rather than about
+                  our swarm. */}
+              <span title="Download speed"><Gauge size={14} /> {formatTransferRate(stats.downloadSpeed)}</span>
+            </div>
+          )}
+        </div>
       </header>
 
       {showUpNext && nextEpisode && (
