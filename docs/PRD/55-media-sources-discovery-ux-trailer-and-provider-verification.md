@@ -22,7 +22,7 @@ CloudStream 3 Desktop is designed as a high-performance, Windows-first media agg
 
 While core media playback and extension execution are operational, intensive real-world testing (documented across 16 NDJSON session logs and 1,349 distinct error signatures in `docs/2026-10-05-errors_need_to_resolve.md`) has exposed significant operational friction in source discovery, navigation, media recommendations, search ergonomics, trailer handling, and scraper security challenges.
 
-This Product Requirements Document (PRD) defines the architectural specifications, lifecycle state machines, data models, IPC protocols, and UI/UX behaviors required to address 12 core areas:
+This Product Requirements Document (PRD) defines the architectural specifications, lifecycle state machines, data models, IPC protocols, and UI/UX behaviors required to address 13 core areas:
 
 1. **Persistent and Intelligent Media-Source Caching**: Eliminate destructive re-fetching when opening the "Select a Source" dialog, implementing a resilient multi-state caching layer (`VALID`, `STALE`, `TEMPORARILY_UNAVAILABLE`, `EXPIRED`, `INVALID`).
 2. **Incremental Source Discovery and Non-Destructive Refresh**: Deliver instantaneous sub-10ms initial dialog renders from cache while safely streaming background provider discoveries without wiping or shifting the user's active viewport.
@@ -35,7 +35,8 @@ This Product Requirements Document (PRD) defines the architectural specification
 9. **Trailer Mini-Player Mode & Window Persistence**: Enable floating picture-in-picture (PiP) dockability for trailers, allowing uninterrupted preview playback while continuing to browse titles across the app.
 10. **Provider Security & Anti-Bot Challenge Handling**: Detect Cloudflare Turnstile, Cloudflare IUAM (Under Attack Mode), and CAPTCHA challenge walls across scraping endpoints.
 11. **Desktop User-Assisted Verification & Session Persistence**: Launch isolated Electron partitions to present verification challenges to the user, intercepting clearance tokens (`cf_clearance`, cookies, user-agent) and synchronizing them into the sidecar OkHttp cookie jar and Node `net.fetch` network clients.
-12. **Cross-Feature Architecture, State Integrity, and Error Handling**: Establish unified IPC contracts, logging namespaces, strict isolation between concurrent scrapers, and automated test acceptance suites.
+12. **Full-Fidelity Media Persistence & Source Lineage (Zero-Reduction Architecture)**: Preserve the complete provenance from A to Z (provider identity, extension version, exact scraped URLs, episode IDs, stream codecs, audio/subtitle tracks, headers, and save/download dates) whenever media is saved to Library, History, or Downloads, enabling same-provider re-resolution and transparent UI lineage disclosure.
+13. **Cross-Feature Architecture, State Integrity, and Error Handling**: Establish unified IPC contracts, logging namespaces, strict isolation between concurrent scrapers, and automated test acceptance suites.
 
 ---
 
@@ -640,9 +641,341 @@ Upon successful clearance:
 
 ---
 
-## 12. Cross-Feature Architecture, Data Models, Observability, & Acceptance Criteria
+## 12. Complete Source Provenance and Persistent Media Metadata Architecture
 
-### 12.1 Shared TypeScript & IPC Interface Contracts
+### 12.1 Overview & Problem Statement
+A major architectural vulnerability identified in current desktop usage (e.g. searching for a title such as *"The Shawshank Redemption"* or episodic series across community extensions) is that whenever a media item, source, download, library entry, history item, bookmark, saved page, or other persistent media state is created, the application fails to preserve complete provenance:
+- **The Information Loss Defect**: When an extension discovers media and a provider returns a valid stream source, saving the item to Library, History, or Downloads causes critical information about **where that media came from** to be stripped or lost.
+- **Lost Attributes**: Currently, persistent records retain basic titles and canonical IDs, but fail to reliably record:
+  - Which extension supplied the content (`extensionId`, `extensionName`, `extensionVersion`)
+  - Which repository the extension originated from (`repositoryId`, `repositoryUrl`, `repositoryName`)
+  - Which provider supplied the source (`providerId`, `providerName`)
+  - Which source URL was originally resolved and what extractor was invoked
+  - Which source variant was actually selected by the user
+  - Which episode, season, or media variant the source belonged to
+  - Which source technical metadata (codecs, audio channels, subtitle tracks, HTTP headers) was associated with it
+  - How the source was discovered (search query, direct link, catalogue row, deep link)
+  - Which specific source and provider should be retried or refreshed when URLs expire
+- **Operational Consequences**:
+  - Incomplete records make source recovery, debugging, download recovery, and provider attribution nearly impossible.
+  - Expired links trigger unconstrained global searches across unrelated providers, causing the **cross-sourcing defect** (searching or playing a title from one provider ends up playing content from an unrelated provider or history item).
+  - Episode numbering discrepancies across scrapers (e.g. absolute vs season numbering in anime) cause wrong episode playback when provider context is lost.
+
+### 12.2 Core Principle & Philosophy
+The desktop application must treat **source provenance as first-class persistent metadata**:
+
+> **Core Principle**: Never persist a media item while throwing away the information required to understand where it came from or how it was obtained. Whenever anything related to media becomes persistent in CS3, the application must preserve the complete relationship between the media, repository, extension, provider, source, season/episode, variant, and playback/download context.
+
+The application must preserve the complete source chain:
+```text
+Media
+  ↓
+Catalog / Search Result
+  ↓
+Repository
+  ↓
+Extension
+  ↓
+Provider
+  ↓
+Media Item
+  ↓
+Season / Episode / Variant
+  ↓
+Resolved Source
+  ↓
+Playable URL / Source Metadata
+```
+
+Where information is available, it must remain permanently associated with the persisted record.
+
+### 12.3 Source Provenance as First-Class Persistent Metadata
+When a user saves any media item, the application persists its entire provenance tree:
+
+```text
+Movie / Series
+├── Title (Canonical & Original Scraped)
+├── External Metadata (TMDB, IMDb, AniList IDs)
+├── Media ID (Canonical & Provider Internal)
+├── Catalog / Discovery Context
+├── Repository (ID, URL, Name)
+├── Extension (ID, Name, Version, Hash)
+├── Provider (ID, Name, Type)
+├── Source (ID, Extractor, Quality, Resolution)
+├── Source URL (Original Webpage URL & Resolved Stream URL)
+├── Quality Tier & Bitrate
+├── Language & Audio Tracks (Codec, Channels)
+├── Subtitle Information (Tracks, Formats, URLs)
+├── Stream Type & Container (HLS, MP4, MKV, DASH, Torrent)
+└── Source Resolution Metadata & HTTP Headers
+```
+
+### 12.4 Extension and Repository Provenance
+Every persisted media item originating from an extension must retain the complete extension and repository metadata:
+- `extensionId`: Unique identifier (e.g. `com.lagradost.cloudstream3.flixhq`)
+- `extensionName`: Display name (e.g. `FlixHQ`)
+- `extensionVersion`: Semantic version string when the item was saved (e.g. `2.1.4`)
+- `repositoryId`: Origin repository catalogue identifier
+- `repositoryUrl`: HTTPS/Git URL where the extension repository is hosted
+- `repositoryName`: Human-readable repository title (e.g. `English Community Providers`)
+- `providerId`: Provider identifier within the extension (e.g. `flixhq-en`)
+- `providerName`: Provider display label
+
+This allows the application to reconstruct the exact origin chain across all persistent views:
+```text
+Repository ──► Extension ──► Provider ──► Media Item
+```
+This lineage remains fully accessible whenever media is accessed from:
+- **Library**
+- **Watch History**
+- **Downloads**
+- **Bookmarks & Saved Pages**
+- **Continue Watching**
+- **Recently Played**
+
+### 12.5 Comprehensive Source Attributes & Sensitive Data Handling
+The persistence engine captures all technical and network attributes required to understand and recover media:
+- `sourceId`: Deterministic hash or ID of the source entry
+- `originalWebpageUrl`: The exact URL scraped on the provider site
+- `resolvedStreamUrl`: The initial playable stream URL
+- `backupUrls`: Alternative mirror URLs discovered during resolution
+- `extractor`: Name of the video host/extractor (e.g. `Streamtape`, `Vidcloud`, `Filemoon`)
+- `quality`: Canonical quality token (`4K`, `1080p`, `720p`, `480p`, `Unknown`)
+- `resolution`: Pixel dimensions (e.g. `1920x1080`, `3840x2160`)
+- `videoCodec`: Codec signature (`H.265/HEVC`, `H.264/AVC`, `AV1`, `VP9`)
+- `audioTracks`: Array of audio streams (`language`, `label`, `codec`, `channels`, `isDefault`)
+- `subtitles`: Array of subtitle streams (`language`, `label`, `format`, `url`, `isDefault`)
+- `streamType`: Media protocol (`hls`, `mp4`, `mkv`, `dash`, `torrent`)
+- `container`: File container format
+- `headers`: HTTP request headers required for playback (`Referer`, `User-Agent`, `Origin`)
+- `discoveryTimestamp`: Timestamp (ms) when source was first found
+- `lastValidationTimestamp`: Timestamp (ms) of the most recent probe
+- `sourceStatus`: Current lifecycle state (`VALID`, `STALE`, `TEMPORARILY_UNAVAILABLE`, `EXPIRED`, `INVALID`)
+
+#### Sensitive Data Security Rules:
+- Sensitive credentials such as raw session cookies, auth tokens, or private user credentials must follow the security boundaries in `PRD-11` and `PRD-52`.
+- Potentially sensitive data (`cf_clearance`, private auth headers) is stored in encrypted secure vaults or referenced by domain cookie-jar key rather than embedded in plain text across logs or exports.
+- Debug logs and exports automatically redact sensitive query tokens and cookie headers.
+
+### 12.6 Original Source vs. Current Source Separation
+The persistence architecture strictly separates **original immutable provenance** from **current mutable playback state**:
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                      Persistent Record                      │
+├──────────────────────────────┬──────────────────────────────┤
+│    Original Provenance       │     Current Source State     │
+│    (Immutable Historical)    │     (Mutable / Dynamic)      │
+├──────────────────────────────┼──────────────────────────────┤
+│ Provider: FlixHQ             │ Current Playable URL: URL-B  │
+│ Extension: FlixHQ v2.1.4     │ Quality: 1080p HEVC          │
+│ Repository: Official English │ Status: REFRESHED            │
+│ Original URL: URL-A          │ Last Validated: 2 mins ago   │
+│ Selected Quality: 1080p      │ Current Expiration: 4h TTL   │
+├──────────────────────────────┴──────────────────────────────┤
+│                  Lightweight Refresh History                │
+│  [2026-10-01: Discovered URL-A] ➔ [2026-10-05: Refreshed URL-B]│
+└─────────────────────────────────────────────────────────────┘
+```
+
+The application must **never overwrite original provenance** simply because a playable CDN link was refreshed or renewed.
+
+### 12.7 Source Refresh with Provenance Invariance
+When an expired stream URL is refreshed:
+```text
+Saved Media ──► Original URL Expired ──► Re-resolve via Provider ──► New Playable URL
+```
+The refresh operation updates the temporary playback parameters (`resolvedStreamUrl`, `expiresAt`, `headers`) while preserving:
+- `originalProviderId` and `originalProviderName`
+- `originalExtensionId` and `originalExtensionVersion`
+- `originalRepositoryUrl`
+- `originalScrapedUrl`
+- `originalSourceRelationship`
+
+The refresh operation must **never** make the media appear as if it originated from an unrelated provider.
+
+### 12.8 Multiple Sources & Multi-Provider Architecture
+A media item frequently possesses multiple valid sources across different providers and qualities. The persistence model supports a multi-provider tree:
+
+```text
+The Shawshank Redemption
+├── Provider A (FlixHQ)
+│    ├── 1080p HEVC (Vidcloud) [Preferred / Original]
+│    └── 720p H.264 (UpCloud)
+├── Provider B (SuperStream)
+│    ├── 1080p (Direct CDN)
+│    └── 480p (FastStream)
+└── Provider C (1337x / BitTorrent)
+     └── 2160p UHD Remux (Torrent Infohash)
+```
+
+When a chosen source becomes temporarily unavailable, the application can switch between known alternative sources for that title while retaining the lineage of which source was originally bookmarked.
+
+### 12.9 Episodic and Seasonal Provenance
+For episodic television and anime, provenance is strictly anchored to the specific episode context:
+- `seriesCanonicalId`: Canonical series identifier
+- `seasonNumber`: Integer season index (e.g. `2`)
+- `episodeNumber`: Integer episode index (e.g. `7`)
+- `providerEpisodeId`: Provider's internal episode slug/identifier
+- `providerEpisodeUrl`: Exact webpage URL for that specific episode
+- `episodeTitle`: Episode title as published by provider
+
+Saving an episode never reduces the record to just `"Example Show"`. It preserves the exact episode-to-provider relationship, preventing cross-season mismatches and anime filler/canon numbering desync.
+
+### 12.10 Downloads Persistence & Resumable Lineage
+When media is downloaded for offline viewing:
+```text
+Media Item ──► Provider ──► Source ──► Local Download File
+```
+The download record retains:
+- Full media identity, season, and episode context
+- Provider, extension, and repository origin
+- Original source metadata (resolution, codec, audio language)
+- Original source URL and current download endpoint
+- Downloaded file path, total bytes, and checksum
+- Download timestamps and lifecycle state
+
+### 12.11 Download URL Expiration & Resumption
+If a download stalls or pauses and the signed download URL expires:
+```text
+Download Stalled ──► URL Expired ──► Provider/Source Refresh ──► New URL ──► Resumed
+```
+The new download URL is updated without erasing historical provenance:
+- Original provider/source: `Provider A / Source X`
+- Current download URL: `Refreshed URL-B`
+- Refresh Reason: `Expired signed token (HTTP 403)`
+- This enables deterministic download recovery and diagnostic auditing.
+
+### 12.12 Library, History, and Bookmarks Lineage
+- **Library Entries**: Opening `Library -> Media -> Details` immediately reconstructs the full media and source context without relying on an unconstrained global search.
+- **Watch History Entries**: History records store which extension, provider, and source variant were played. When the user clicks "Resume" or "Replay" from History, the system knows exactly which source was used.
+- **Saved Pages and Bookmarks**: Retains the discovery context, provider catalog row, and original scraped metadata, preventing bookmarks from degenerating into generic title strings.
+
+### 12.13 Player Session Integration & Auto-Refresh
+When media is played from any surface (Search, Details, Library, History, Downloads, Continue Watching), the player session receives the complete provenance bundle:
+```text
+Player Session
+├── Media Canonical Identity
+├── Origin Provider, Extension, Repository
+├── Source Variant & Quality
+├── Original Source vs Current Playable Source
+└── Refresh State & Diagnostic Ledger
+```
+When the player automatically refreshes an expired HLS or MP4 stream mid-playback or between episodes, the refreshed stream remains bound to the original source record.
+
+### 12.14 Provenance-Affinity Retry Behavior
+When retrying playback from History or Library, the retry engine follows a strict **four-stage provenance affinity protocol**:
+1. **Stage 1: Revalidate Original Source**: Probe the existing cached stream URL with a range request.
+2. **Stage 2: Refresh Original Source**: If expired, request a fresh signed URL from the original extractor/host.
+3. **Stage 3: Re-resolve via Original Provider**: If the host is dead, query the **exact same provider** using the saved `providerEpisodeUrl` and `providerEpisodeId`.
+4. **Stage 4: Controlled Fallback**: Only if the original provider is permanently unavailable (extension uninstalled or site down) does the system offer alternative providers, explicitly labeled as alternatives.
+
+### 12.15 Provider Attribution in UI
+- **Media Details Screen**: Displays an unobtrusive provenance pill beneath the title:
+  ```text
+  [📦 Source: FlixHQ (v2.1.4) · 1080p HEVC · English · Saved Oct 5, 2026]
+  ```
+  Clicking `[Source Details]` opens an inspector modal showing the repository, extension, provider URL, extractor, and audio/sub stream profiles.
+- **Video Player HUD**: Displays origin badge in the top controls: `[FlixHQ · 1080p · Original]`. In the source switcher, the original source is pinned with an `[ORIGINAL SAVED]` badge.
+- **Library & History Cards**: Thumbnail badges display provider origin (e.g. `[FlixHQ]`, `[Hindmoviez]`, `[Torrent]`).
+
+### 12.16 Diagnostics & Debugging Capabilities
+When diagnosing playback or download errors, telemetry and diagnostic views reveal the complete lineage:
+```text
+[DIAGNOSTIC] Media: The Shawshank Redemption (tmdb-278)
+             Provider: FlixHQ (v2.1.4) | Repo: Official English
+             Source: Vidcloud 1080p HEVC | Container: HLS
+             Refresh Attempts: 1 (Refreshed in 340ms)
+             HTTP Status: 200 OK | Stream Lease: Active
+```
+All sensitive cookies and auth headers are automatically redacted.
+
+### 12.17 Persistence Architecture: Immutable vs. Mutable Separation
+To prevent data corruption, persistence models are decoupled:
+- **Immutable Historical Fields**: Canonical ID, Media Type, Original Provider, Original Extension, Repository URL, Scraped Target URL, Episode Index, Original Quality, Discovery Timestamp.
+- **Mutable Dynamic Fields**: Current Stream URL, Expiration Timestamp, Availability Status, Last Validated Timestamp, Playback Position, Active Error Code.
+
+### 12.18 Cache as Single Source of Truth
+The persistent source cache (`sourceCache.ts` / `contentService.ts`) acts as the unified source of truth across all subsystems:
+- Library, History, Downloads, Player, Search, and Source Selector all reference the same underlying provenance model rather than maintaining conflicting, partial representations.
+
+### 12.19 Backup, Restore, and Data Portability
+- Application backups (`backupService.ts`) include full source provenance records.
+- Restoring a backup restores complete provider, extension, repository, and episode relationships.
+- If restored stream URLs are expired, the application retains the provider identity and episode URL to resolve fresh streams on demand.
+
+### 12.20 Versioning & Migration Strategy
+- Source metadata schemas are versioned (`schemaVersion: 2`).
+- Migration scripts detect legacy items lacking provenance:
+  - Preserves all existing data without loss.
+  - Automatically enriches records where provider context can be safely derived.
+  - Explicitly flags unknown providers as `"Unknown Provider"` rather than inventing false attribution.
+  - Newly saved items always capture full A-to-Z provenance.
+
+### 12.21 Required End-to-End Workflows
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Search as Search & Discovery
+    participant Ext as Extension / Provider
+    participant Store as Persistent Datastore
+    participant View as Detail / Player View
+
+    Note over User, Store: Initial Discovery & Persistence
+    User->>Search: Search title ("The Shawshank Redemption")
+    Search->>Ext: Query provider scrapers
+    Ext-->>Search: Return media + resolved 1080p source
+    User->>Store: Save to Library / Start Download
+    Store->>Store: Write MediaProvenanceRecord (A to Z metadata)
+
+    Note over User, View: Later Access & Playback
+    User->>View: Open title from Library / History
+    View->>Store: Fetch MediaProvenanceRecord
+    View-->>User: Display origin pill [FlixHQ · 1080p · Saved Oct 5]
+    User->>View: Press Play
+
+    Note over View, Ext: Same-Provider Refresh (If Expired)
+    alt Stream URL Still Valid
+        View-->>User: Play immediate cached stream (< 10ms)
+    else Stream URL Expired
+        View->>Ext: Refresh via EXACT provider & episode ID
+        Ext-->>View: Return new playable URL
+        View->>Store: Update current source (Preserve original provenance)
+        View-->>User: Seamless playback continues
+    end
+```
+
+### 12.22 Definition of Done Checklist
+The complete source provenance upgrade is satisfied when:
+1. Every newly persisted media item retains full source provenance without reduction.
+2. Extension ID, Name, and Version are reliably preserved.
+3. Repository ID, Name, and URL are reliably preserved.
+4. Provider ID, Name, and Type are reliably preserved.
+5. Original scraped webpage URL and resolved stream URL are preserved.
+6. Season, episode, and variant relationships are preserved.
+7. Download records retain their originating source, provider, and resolution.
+8. Library records retain their originating source and provider.
+9. History records retain their originating source and playback context.
+10. Saved pages and bookmarks retain their originating discovery context.
+11. Player sessions receive and display source provenance.
+12. Automatically refreshed URLs do not overwrite or erase original provenance.
+13. Multiple providers and source qualities can coexist for the same media item.
+14. Source cache and persistent media records use a consistent provenance model.
+15. Retry operations follow the 4-stage provenance affinity protocol (same-provider first).
+16. Diagnostic logging identifies the exact provider and extension responsible for every source.
+17. Temporary URLs expire safely without destroying underlying source identity.
+18. Sensitive session data, cookies, and tokens are protected and redacted.
+19. Backup and restore operations preserve full source provenance.
+20. Existing legacy records migrate gracefully without inventing false attribution.
+21. Persistence operations never silently discard useful media or source metadata.
+
+---
+
+## 13. Cross-Feature Architecture, Data Models, Observability, & Acceptance Criteria
+
+### 13.1 Shared TypeScript & IPC Interface Contracts
 
 ```typescript
 // --- Source Cache & Discovery Contracts ---
@@ -682,22 +1015,27 @@ export interface SourceDiscoveryProgress {
 // 'sources:cancel-discovery' -> (sessionId) => void
 // 'sources:clear-cache' -> (mediaId) => void
 // 'security:verify-provider' -> (providerId, targetUrl) => Promise<{ success: boolean; cookies: string[] }>
+// 'provenance:get' -> (canonicalId, s, e) => Promise<MediaProvenanceRecord | null>
+// 'provenance:save' -> (record: MediaProvenanceRecord) => Promise<{ ok: boolean }>
 ```
 
-### 12.2 Observability & Telemetry Standards
+### 13.2 Observability & Telemetry Standards
 All subsystem events are logged into the structured NDJSON rotating logs (`%APPDATA%/<app>/logs/`):
 - `[SOURCE_CACHE] HIT mediaId=tmdb-693134 s=0 e=0 count=8 (valid=6, stale=2)`
 - `[SOURCE_DISCOVERY] STREAM_APPEND provider=SuperStream quality=1080p count=2 total=10`
+- `[PROVENANCE] SAVED canonicalId=tmdb-278 provider=Hindmoviez quality=1080p streamUrl=https://...`
+- `[PROVENANCE] RESOLVE_AFFINITY canonicalId=tmdb-278 provider=Hindmoviez targetUrl=https://hindmoviez.to/... same_provider_matched=true`
 - `[CHALLENGE_DETECTOR] INTERCEPT provider=FlixHQ domain=flixhq.to type=cloudflare_turnstile status=403`
 - `[CHALLENGE_BRIDGE] SYNC_COOKIES provider=FlixHQ domain=flixhq.to cookie_count=3 okhttp_synced=true`
 - `[TRAILER_SEEK] ACCUMULATE offset=+10 target=42.5s duration=140.0s committed=true`
 
-### 12.3 Automated Test Suites & Acceptance Criteria
+### 13.3 Automated Test Suites & Acceptance Criteria
 
 | Subsystem | Test Suite | Acceptance Criteria |
 |---|---|---|
 | **Source Caching** | `persistentSourceCache.test.mts` | Re-opening source picker returns cached items in < 15ms without clearing list. Stale items are probed in background. Purges occur only on 404/410. |
 | **Incremental Discovery** | `incrementalDiscovery.test.mts` | Discovered sources append non-destructively; active scroll position is not reset during streaming updates. |
+| **Media Provenance & Lineage** | `mediaProvenance.test.mts` | Saving to Library/History preserves all 7 provenance dimensions from A to Z; Detail View displays origin strip; re-resolution queries exact same provider and episode ID without cross-provider contamination. |
 | **"More Like This"** | `moreLikeThisPagination.test.mts` | "Show All" opens full grid; scrolling triggers infinite page loads; deduplication ensures zero repeated titles. |
 | **Scroll to Top** | `scrollToTop.test.mts` | FAB remains hidden until 400px; clicking scrolls active container to 0 with smooth easing; button dims when idle. |
 | **Deep-Link Classifier** | `deepLinkClassifier.test.mts` | Correctly identifies `cs3://`, `stremio://`, magnets, infohashes, and URLs, routing directly without invoking text scrapers. |
@@ -709,7 +1047,7 @@ All subsystem events are logged into the structured NDJSON rotating logs (`%APPD
 
 ---
 
-## 13. Implementation Strategy & Phased Rollout
+## 14. Implementation Strategy & Phased Rollout
 
 ```mermaid
 gantt
@@ -721,19 +1059,22 @@ gantt
     Global Scroll to Top FAB Component      :         p1c, 2026-10-08, 2d
     Search Source Bulk Selection Drawer     :         p1d, 2026-10-09, 2d
 
-    section Phase 2: Source Caching & Discovery
+    section Phase 2: Source Caching & Provenance
     Persistent Multi-State Cache Layer      :         p2a, 2026-10-11, 4d
     Non-Destructive Streaming Append        :         p2b, 2026-10-14, 3d
-    More Like This Grid & Pagination Engine :         p2c, 2026-10-16, 3d
+    Full-Fidelity Provenance Persistence    :         p2c, 2026-10-16, 4d
+    Same-Provider Re-Resolution Engine      :         p2d, 2026-10-19, 3d
+    Detail View Lineage Strip & UI Badges   :         p2e, 2026-10-21, 2d
 
-    section Phase 3: Trailer Engine & Player
-    Trailer Centralized Seek Accumulator    :         p3a, 2026-10-19, 3d
-    Floating Mini-Player Docking Component  :         p3b, 2026-10-21, 3d
+    section Phase 3: Discovery & Trailers
+    More Like This Grid & Pagination Engine :         p3a, 2026-10-23, 3d
+    Trailer Centralized Seek Accumulator    :         p3b, 2026-10-25, 3d
+    Floating Mini-Player Docking Component  :         p3c, 2026-10-27, 3d
 
     section Phase 4: Anti-Bot & Provider Security
-    Challenge Detection Engine              :         p4a, 2026-10-24, 3d
-    Desktop User-Assisted Verification Win  :         p4b, 2026-10-27, 4d
-    Sidecar OkHttp Cookie Synchronization   :         p4c, 2026-10-30, 3d
+    Challenge Detection Engine              :         p4a, 2026-10-29, 3d
+    Desktop User-Assisted Verification Win  :         p4b, 2026-11-01, 4d
+    Sidecar OkHttp Cookie Synchronization   :         p4c, 2026-11-04, 3d
 ```
 
-This comprehensive specification guarantees that CloudStream 3 Desktop delivers standard-setting desktop media discovery, rock-solid source persistence, flawless trailer synchronization, and reliable anti-bot resilience without compromising performance or architectural integrity.
+This comprehensive specification guarantees that CloudStream 3 Desktop delivers standard-setting desktop media discovery, rock-solid source persistence, full-fidelity provenance preservation from A to Z, flawless trailer synchronization, and reliable anti-bot resilience without compromising performance or architectural integrity.
