@@ -9652,3 +9652,69 @@
 }
 .ott-side-menu button:hover,
 .ott-side-menu button:focus-visible { background: rgba(255, 255, 255, 0.08); }
+
+/* Player Keyboard Shortcuts display in Settings */
+.player-shortcuts-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+}
+
+.player-shortcuts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.5rem;
+  width: 100%;
+  margin-top: 0.35rem;
+}
+
+.player-shortcut-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+}
+
+.player-shortcut-row__action {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-color, #e2e8f0);
+}
+
+.player-shortcut-row__keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.player-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  height: 1.45rem;
+  padding: 0 0.4rem;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.28);
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  user-select: none;
+}
+
+.player-kbd-sep {
+  font-size: 0.68rem;
+  color: var(--text-muted, rgba(255, 255, 255, 0.45));
+}
+

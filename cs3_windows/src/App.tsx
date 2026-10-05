@@ -595,7 +595,6 @@ export const App: React.FC = () => {
     }
     const name = filePath.split(/[\\/]/).pop() ?? 'Local file';
     setPlayerHidden(false);
-    setPlayerMini(false);
     setPlayback({
       streamUrl: served.url,
       mimeType: 'video/mp4',
@@ -653,7 +652,6 @@ export const App: React.FC = () => {
     }
     const handle = result.handle;
     setPlayerHidden(false);
-    setPlayerMini(false);
     setPlayback({
       streamUrl: handle.streamUrl,
       mimeType: handle.mimeType,
@@ -1062,7 +1060,6 @@ export const App: React.FC = () => {
         },
       });
       setPlayerHidden(false);
-      setPlayerMini(false);
     },
     []
   );
@@ -1152,10 +1149,7 @@ export const App: React.FC = () => {
 
     setPlayback(null);
     setSwitchError(null);
-    // Starting something new always brings the player back to the front, even
-    // if the last one was left minimised.
     setPlayerHidden(false);
-    setPlayerMini(false);
 
     const previous = sessionRef.current;
     if (previous) await window.cloudstream.stopPlayback(previous.id, true);
@@ -2013,7 +2007,6 @@ export const App: React.FC = () => {
               onBack={handleBackToResults}
               onPlay={(request) => {
                 setPlayerHidden(false);
-                setPlayerMini(false);
                 setPlayback(request);
               }}
               onStartSession={startSession}
