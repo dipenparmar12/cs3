@@ -87,6 +87,18 @@ export class TitleOutcomeStore {
     this.datastore.setObject(KEY, entries.slice(0, MAX_ENTRIES));
   }
 
+  /**
+   * Stores the list a backup restore decided on. Expired rows are written as
+   * given and age out on the next read, exactly as they would have here.
+   */
+  public replaceAll(rows: TitleOutcome[]): void {
+    const next = rows
+      .filter((entry) => entry && typeof entry.url === 'string' && typeof entry.at === 'number')
+      .sort((a, b) => b.at - a.at)
+      .slice(0, MAX_ENTRIES);
+    this.datastore.setObject(KEY, next);
+  }
+
   public clear(): void {
     this.datastore.setObject(KEY, []);
   }

@@ -1,197 +1,180 @@
 import fs from 'fs';
 import path from 'path';
 import { describeError } from '../../src/utils/errors.ts';
+import type {
+  BackupAnalysis,
+  BackupGroup,
+  BackupSectionAnalysis,
+  ConflictItem,
+  ConflictResolution,
+  RestoreMode,
+  RestorePlan,
+  RestoreSectionResult,
+  RestoreSummary,
+  RowStatus,
+} from '../../src/types/backup.ts';
+import {
+  diffPart,
+  emptyChangeCounts,
+  emptyStatusCounts,
+  planPart,
+  projectPart,
+  type BackupPart,
+  type PartDiff,
+  type PartPlan,
+} from './backup/collection.ts';
+import {
+  BACKUP_FORMAT,
+  BACKUP_FORMAT_VERSION,
+  countRows,
+  readEnvelope,
+  upgradeSection,
+  type BackupEnvelope,
+  type ReadResult,
+  type SectionMigrations,
+} from './backup/envelope.ts';
+
+export { BACKUP_FORMAT_VERSION };
 
 /**
- * One file that is this installation, and can become it again somewhere else.
+ * One file that is this installation, and can become it again somewhere else
+ * — restored as much or as little as the reader chooses.
  *
- * There were already two export paths and neither answered this question.
- * `datastore:exportBackup` writes the **Android** wire format so a backup can
- * move between the phone app and this one — that is interoperability, and it
- * carries only the key/value store. `library:export` and `history:exportAll`
- * each carry one store. So a user moving to a new machine, or reinstalling
- * after a problem, had to find and move several files and would still lose
- * their repositories, which extensions they had switched off, their saved
- * pages, their download queue and their indexer configuration.
+ * ## A framework, not a restore
+ *
+ * Each store registers a {@link BackupSection}: what it exports, its schema
+ * version, how older shapes upgrade, and its rows as one or more keyed
+ * {@link BackupPart}s. Comparison, the three modes, conflicts, "keep both",
+ * the review counts and the summary are all derived from that description by
+ * `backup/collection.ts`. A store added later joins by declaring its rows; it
+ * cannot be added to the export and forgotten in the restore, and it cannot
+ * invent its own meaning of "merge".
  *
  * ## What is in it, and what deliberately is not
  *
- * **In:** settings, library and watch progress, watch history, saved pages,
- * search history, per-title outcomes, provider measurements, the download
- * queue, the installed repositories and extensions, which of them are switched
- * off, and indexer configuration.
+ * **In:** the library, watch progress, history, saved pages and their content,
+ * searches, the download list, repositories and extensions and what is
+ * switched off, indexer configuration, provider preferences, and every setting
+ * — split into categories a person recognises (`backup/datastoreCategories.ts`).
  *
- * **Not in — and each for its own reason:**
+ * **Not in, each for its own reason:** extension archives and downloaded media
+ * (large, and re-fetchable — the backup records *which*); tokens and device ids
+ * (filtered on the way out by `DatastoreManager.snapshot`); diagnostics and
+ * logs (they describe the machine they were captured on); caches (everything
+ * in them expires, and a stale cache is worse than an empty one).
  *
- * | Left out | Why |
- * |---|---|
- * | The `.cs3` archives themselves | Hundreds of MB of third-party binaries that re-download from their repositories. The backup records *which* ones, which is the part that cannot be recovered. |
- * | Downloaded media files | The same argument, several orders of magnitude worse. |
- * | Tokens, session and device ids | `DatastoreManager.snapshot` filters them on the way *out*, so they are never written to a file in someone's Downloads folder. |
- * | Diagnostics, the issue ledger, logs | Debugging exhaust. It describes the machine it was captured on and says nothing about the machine it would be restored to. |
- * | Caches — sources, details, discovery | Everything in them expires. Restoring a stale cache is strictly worse than an empty one. |
+ * ## Restoring
  *
- * ## Merge or replace, and the user picks
+ * 1. **Read everything before writing anything.** Every chosen section is
+ *    upgraded, validated and compared before the first write. A section that
+ *    cannot be read is skipped with its reason; it never stops the others.
+ * 2. **Save what is here first.** The chosen sections' current state is
+ *    written to a recovery file in this app's own format, and Undo replays it
+ *    with Replace. Refusing to restore when that copy cannot be written is the
+ *    point — a restore without a way back is the one this exists to prevent.
+ * 3. **Write each section once.** A part's whole intended collection is
+ *    committed in one store write, so an interrupted restore leaves each store
+ *    either as it was or as intended, never half-merged.
  *
- * **Merge** is the default and the safe one. A restore onto a running
- * installation must not delete what the backup predates: a preference added
- * since it was taken would otherwise silently revert to its default, which
- * reads as the restore having broken something rather than as it not having
- * covered it.
- *
- * **Replace** is the one people actually mean by "restore my machine". Merging
- * a library cannot remove a title watched since the backup, so a merge-only
- * restore can never reproduce the state in the file — it can only ever be a
- * superset of it. Someone reinstalling after a problem wants the file, not the
- * union.
- *
- * Two rules keep replace from being the destructive option it sounds like:
- *
- *  - **A section opts in** (`replaceable`). One that cannot meaningfully clear
- *    itself merges and *says so* in its report row, rather than silently
- *    ignoring the mode the user chose. A restore that quietly did something
- *    other than what was asked is worse than one that refused.
- *  - **Replace never deletes what the backup does not describe.** The
- *    extensions section rewrites the enable/disable lists to match exactly and
- *    leaves every `.cs3` archive on disk. Those are hundreds of megabytes of
- *    re-download, the existing undo snapshots the datastore and could not put
- *    them back, and an unrecoverable delete reached through a radio button is
- *    the wrong default at any level of confirmation.
- *
- * Every section reports how many rows it took and which mode it took them in,
- * so "restored" is a number and a claim about what happened rather than either
- * alone.
+ * Running the same restore twice changes nothing the second time: every row
+ * the first run wrote now compares as `same`.
  */
 
-/** Bumped when a section's shape changes in a way a reader must know about. */
-export const BACKUP_FORMAT_VERSION = 1;
-
-export interface BackupEnvelope {
-  format: 'cloudstream-desktop-backup';
-  formatVersion: number;
-  createdAt: number;
-  app: { version: string; platform: string };
-  /** Row counts, so a file can be described without being fully parsed. */
-  summary: Record<string, number>;
-  contents: Record<string, unknown>;
-}
-
-/**
- * How a section puts the backup's rows back.
- *
- * `merge` adds to what is here; `replace` makes what is here match the file.
- * The distinction is per section rather than per file only because a section
- * may not be able to honour `replace` — see `BackupSection.replaceable`.
- */
-export type RestoreMode = 'merge' | 'replace';
-
-export interface RestoreReport {
-  ok: boolean;
-  /** What each section restored, how, or why it did not. */
-  sections: Array<{ name: string; restored: number; note?: string; mode?: RestoreMode }>;
-  error?: string;
-}
-
-/**
- * One backup section: how to read it and how to put it back.
- *
- * A table rather than two long switch statements, so a new store is one entry
- * and cannot be added to the export while being forgotten in the restore —
- * which is the failure that turns a backup into a file that looks complete and
- * silently is not.
- */
 export interface BackupSection {
-  name: string;
-  /** Reads the current state. Throwing is caught and reported per section. */
-  collect: () => unknown;
-  /**
-   * Puts it back, returning how many rows were taken.
-   *
-   * `mode` is passed to every section, including ones that did not opt in to
-   * `replace` — they receive `'merge'`, because the service downgrades the mode
-   * before calling rather than leaving each section to remember to. A section
-   * that forgot would replace when the report said it merged.
-   */
-  restore?: (value: unknown, mode: RestoreMode) => number;
-  /**
-   * Whether this section can make the installation match the file.
-   *
-   * Opt-in, and absent means no. A section defaulting to replaceable would
-   * make every store added later silently destructive the moment someone
-   * chooses Replace, which is exactly the wrong direction for a default to
-   * fail in.
-   */
-  replaceable?: boolean;
-  /** Human label for the report. */
+  id: string;
   label: string;
+  /** One plain sentence: what restoring this brings back. */
+  description: string;
+  group: BackupGroup;
+  /** Bumped when the shape of this section's rows changes. */
+  schemaVersion: number;
+  /** `fromVersion → step`, for reading files written before a bump. */
+  migrations?: SectionMigrations;
+  parts: BackupPart[];
+  /** Carried so it can be read, never written back. */
+  exportOnly?: boolean;
+  /** The store reads it at startup; a restart completes the restore. */
+  restartAfterRestore?: boolean;
+  /** Runs after every part committed, for side effects a store owes its readers. */
+  afterRestore?: (result: RestoreSectionResult) => void | Promise<void>;
 }
 
-/** What a restore was asked to do. */
-export interface RestoreOptions {
-  /** Section names to restore. Empty or absent means all of them. */
-  only?: string[];
-  /** Defaults to `merge`, which is the mode that cannot lose data. */
-  mode?: RestoreMode;
+export interface BackupServiceOptions {
+  /** Where the pre-restore recovery copy is kept. */
+  recoveryDir: string;
+}
+
+/** Conflicts listed per section. The rest are counted and follow the default. */
+const CONFLICT_LIST_LIMIT = 200;
+const NEW_SAMPLE_LIMIT = 6;
+const RECOVERY_FILE = 'before-restore.json';
+
+interface Prepared {
+  section: BackupSection;
+  plans: Array<{ part: BackupPart; plan: PartPlan<unknown>; invalid: number }>;
+  migratedFrom?: number;
 }
 
 export class BackupService {
   /*
-   * Fields written longhand rather than as constructor parameter properties.
-   * `erasableSyntaxOnly` is set across this project so Node can strip types and
-   * run the suites directly, and that syntax is not erasable — the same reason
-   * `util/disabledSet.ts` spells its fields out.
+   * Fields written longhand rather than as constructor parameter properties:
+   * `erasableSyntaxOnly` forbids the latter, so Node can strip types and run
+   * the suites directly.
    */
   private readonly sections: BackupSection[];
   private readonly appVersion: string;
   private readonly platform: string;
+  private readonly recoveryPath: string;
+  private running = false;
 
-  constructor(sections: BackupSection[], appVersion: string, platform: string) {
+  constructor(
+    sections: BackupSection[],
+    appVersion: string,
+    platform: string,
+    options: BackupServiceOptions
+  ) {
+    const ids = new Set<string>();
+    for (const section of sections) {
+      if (ids.has(section.id)) throw new Error(`Two backup sections are named "${section.id}".`);
+      ids.add(section.id);
+    }
     this.sections = sections;
     this.appVersion = appVersion;
     this.platform = platform;
+    this.recoveryPath = path.join(options.recoveryDir, RECOVERY_FILE);
+  }
+
+  /** The categories this version can back up, in display order. */
+  public describeSections(): Array<Pick<BackupSection, 'id' | 'label' | 'description' | 'group'>> {
+    return this.sections.map(({ id, label, description, group }) => ({ id, label, description, group }));
   }
 
   /**
-   * Builds the envelope.
-   *
-   * A section that throws is recorded as absent rather than failing the whole
-   * export: a backup missing one store is far more useful than no backup, and
-   * the summary says which one is missing.
+   * Builds the envelope. A section that throws is left out and logged rather
+   * than failing the whole export: a backup missing one store is far more
+   * useful than no backup.
    */
   public collect(only?: string[]): BackupEnvelope {
-    const contents: Record<string, unknown> = {};
-    const summary: Record<string, number> = {};
-    // An empty selection means "everything", not "nothing". A caller that
-    // passed a filtered list and filtered it down to zero meant to take a
-    // backup; writing an empty file and calling it one is the worse answer.
+    // An empty selection means everything. A caller that filtered its list
+    // down to nothing still meant to take a backup.
     const wanted = only && only.length > 0 ? new Set(only) : null;
-
+    const sections: BackupEnvelope['sections'] = {};
     for (const section of this.sections) {
-      if (wanted && !wanted.has(section.name)) continue;
+      if (wanted && !wanted.has(section.id)) continue;
       try {
-        const value = section.collect();
-        contents[section.name] = value;
-        summary[section.name] = Array.isArray(value)
-          ? value.length
-          : value && typeof value === 'object'
-            ? Object.keys(value as object).length
-            : value === undefined
-              ? 0
-              : 1;
+        const data: Record<string, unknown[]> = {};
+        for (const part of section.parts) data[part.id] = part.local();
+        sections[section.id] = { schemaVersion: section.schemaVersion, count: countRows(data), data };
       } catch (error) {
-        contents[section.name] = null;
-        summary[section.name] = -1;
-        console.warn(`[backup] section "${section.name}" could not be read:`, error);
+        console.warn(`[backup] section "${section.id}" could not be read:`, error);
       }
     }
-
     return {
-      format: 'cloudstream-desktop-backup',
+      format: BACKUP_FORMAT,
       formatVersion: BACKUP_FORMAT_VERSION,
       createdAt: Date.now(),
       app: { version: this.appVersion, platform: this.platform },
-      summary,
-      contents,
+      sections,
     };
   }
 
@@ -200,11 +183,10 @@ export class BackupService {
     only?: string[]
   ): { ok: boolean; path?: string; bytes?: number; error?: string } {
     try {
-      const envelope = this.collect(only);
-      const json = JSON.stringify(envelope, null, 2);
+      const json = JSON.stringify(this.collect(only), null, 2);
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      // Written to a temp file and renamed, so an interrupted write cannot
-      // leave a half-file that looks like a backup.
+      // Temp file and rename, so an interrupted write cannot leave a
+      // half-file that looks like a backup.
       const temp = `${filePath}.part`;
       fs.writeFileSync(temp, json, 'utf-8');
       fs.renameSync(temp, filePath);
@@ -214,102 +196,278 @@ export class BackupService {
     }
   }
 
-  /** Reads a file and describes it, without restoring anything. */
-  public inspect(filePath: string): { ok: boolean; envelope?: Omit<BackupEnvelope, 'contents'>; error?: string } {
+  public read(filePath: string): ReadResult {
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as BackupEnvelope;
-      const problem = this.validate(parsed);
-      if (problem) return { ok: false, error: problem };
-      const { contents: _contents, ...rest } = parsed;
-      return { ok: true, envelope: rest };
+      parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     } catch (error) {
       return { ok: false, error: describeError(error) };
     }
+    return readEnvelope(parsed);
+  }
+
+  /** Describes a file against this installation, without changing anything. */
+  public analyze(filePath: string): { ok: true; analysis: BackupAnalysis } | { ok: false; error: string } {
+    const read = this.read(filePath);
+    if (!read.ok) return read;
+    const { envelope } = read;
+    const known = new Map(this.sections.map((section) => [section.id, section]));
+    const analyses: BackupSectionAnalysis[] = [];
+
+    // Registry order first, so the screen groups the way the app does.
+    for (const section of this.sections) {
+      const stored = envelope.sections[section.id];
+      if (stored) analyses.push(this.analyzeSection(section, stored));
+    }
+    for (const [id, stored] of Object.entries(envelope.sections)) {
+      if (known.has(id)) continue;
+      analyses.push({
+        ...blankAnalysis(id, humanise(id), '', 'settings'),
+        status: 'unsupported',
+        reason: 'This version of the app does not know this kind of data, so it is skipped.',
+        backupCount: stored.count,
+      });
+    }
+
+    return {
+      ok: true,
+      analysis: {
+        path: filePath,
+        createdAt: envelope.createdAt,
+        appVersion: envelope.app.version,
+        platform: envelope.app.platform,
+        formatVersion: envelope.migratedFrom ?? envelope.formatVersion,
+        newerFormat: envelope.formatVersion > BACKUP_FORMAT_VERSION,
+        sections: analyses,
+      },
+    };
+  }
+
+  private analyzeSection(
+    section: BackupSection,
+    stored: BackupEnvelope['sections'][string]
+  ): BackupSectionAnalysis {
+    const analysis = blankAnalysis(section.id, section.label, section.description, section.group);
+    analysis.restartAfterRestore = section.restartAfterRestore === true;
+    analysis.backupCount = stored.count;
+    const visible = section.parts.filter((part) => !part.quiet);
+    analysis.canKeepBoth = visible.some((part) => typeof part.duplicate === 'function');
+    analysis.canRemove = visible.some((part) => part.removable !== false);
+
+    if (section.exportOnly) return { ...analysis, status: 'exportOnly', reason: 'Kept for reference only.' };
+    const upgraded = upgradeSection(stored, section.schemaVersion, section.migrations);
+    if (!upgraded.ok) return { ...analysis, status: 'unsupported', reason: upgraded.reason };
+    analysis.migratedFrom = upgraded.migratedFrom;
+
+    try {
+      analysis.backupCount = 0;
+      for (const part of section.parts) {
+        if (part.quiet) continue;
+        const diff = diffPart(part, upgraded.data[part.id] ?? []);
+        addPartAnalysis(analysis, part, diff);
+      }
+    } catch (error) {
+      return {
+        ...analysis,
+        status: 'invalid',
+        reason: `What is here now could not be read: ${describeError(error)}`,
+      };
+    }
+    return analysis;
+  }
+
+  public hasUndo(): boolean {
+    return fs.existsSync(this.recoveryPath);
   }
 
   /**
-   * Refuses anything that is not one of ours.
-   *
-   * Checked by the `format` marker rather than by shape: a JSON file that
-   * happens to have a `contents` key would otherwise be fed to every section's
-   * restore, and "restored 0 rows from 9 sections" is a much worse answer than
-   * "that is not a CloudStream backup".
+   * Restores the chosen sections. Never rejects; failures are reported per
+   * section, and only a file that cannot be read at all fails the whole call.
    */
-  private validate(parsed: unknown): string | null {
-    if (!parsed || typeof parsed !== 'object') return 'That file is not readable as a backup.';
-    const envelope = parsed as Partial<BackupEnvelope>;
-    if (envelope.format !== 'cloudstream-desktop-backup') {
-      return 'That is not a CloudStream Desktop backup file.';
-    }
-    if (typeof envelope.formatVersion !== 'number') return 'That backup has no format version.';
-    if (envelope.formatVersion > BACKUP_FORMAT_VERSION) {
-      return `That backup was written by a newer version of the app (format ${envelope.formatVersion}). Update and try again.`;
-    }
-    if (!envelope.contents || typeof envelope.contents !== 'object') {
-      return 'That backup has no contents.';
-    }
-    return null;
+  public async restore(filePath: string, plan: RestorePlan): Promise<RestoreSummary> {
+    return this.run(filePath, plan, true);
   }
 
-  public restore(filePath: string, options?: RestoreOptions): RestoreReport {
-    let parsed: BackupEnvelope;
+  /**
+   * Puts back what was here before the last restore, by replaying the
+   * recovery copy with Replace. Repositories and extensions the restore added
+   * stay installed: removing them is an uninstall, and the recovery copy does
+   * not hold the archives to put back.
+   */
+  public async undo(): Promise<RestoreSummary> {
+    if (!this.hasUndo()) {
+      return { ...emptySummary(), ok: false, error: 'There is no restore to undo.' };
+    }
+    const read = this.read(this.recoveryPath);
+    if (!read.ok) return { ...emptySummary(), ok: false, error: read.error };
+    const summary = await this.run(
+      this.recoveryPath,
+      { mode: 'replace', sections: Object.keys(read.envelope.sections) },
+      false
+    );
+    if (summary.ok) {
+      // Kept beside rather than deleted, so a mistaken undo is still on disk.
+      try {
+        fs.renameSync(this.recoveryPath, `${this.recoveryPath}.undone`);
+      } catch {
+        /* An undo that ran twice changes nothing the second time. */
+      }
+    }
+    return { ...summary, undoAvailable: this.hasUndo() };
+  }
+
+  private async run(filePath: string, plan: RestorePlan, keepRecovery: boolean): Promise<RestoreSummary> {
+    if (this.running) {
+      return { ...emptySummary(), ok: false, error: 'A restore is already running.' };
+    }
+    this.running = true;
     try {
-      parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as BackupEnvelope;
-    } catch (error) {
-      return {
-        ok: false,
-        sections: [],
-        error: describeError(error),
-      };
+      return await this.runExclusive(filePath, plan, keepRecovery);
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async runExclusive(
+    filePath: string,
+    plan: RestorePlan,
+    keepRecovery: boolean
+  ): Promise<RestoreSummary> {
+    const mode: RestoreMode =
+      plan.mode === 'merge' || plan.mode === 'replace' ? plan.mode : 'smart';
+    const read = this.read(filePath);
+    if (!read.ok) return { ...emptySummary(), ok: false, error: read.error, mode };
+
+    const wanted = new Set(Array.isArray(plan.sections) ? plan.sections : []);
+    if (wanted.size === 0) {
+      return { ...emptySummary(), ok: false, error: 'Nothing was chosen to restore.', mode };
     }
 
-    const problem = this.validate(parsed);
-    if (problem) return { ok: false, sections: [], error: problem };
+    const results: RestoreSectionResult[] = [];
+    const prepared: Prepared[] = [];
 
-    const only = options?.only;
-    const requested: RestoreMode = options?.mode === 'replace' ? 'replace' : 'merge';
-    const wanted = only && only.length > 0 ? new Set(only) : null;
-    const report: RestoreReport['sections'] = [];
-
+    // Phase 1: read, upgrade and compare everything. Nothing is written yet.
     for (const section of this.sections) {
-      if (wanted && !wanted.has(section.name)) continue;
-      const value = parsed.contents[section.name];
-      if (value === undefined || value === null) {
-        report.push({ name: section.name, restored: 0, note: 'not in this backup' });
+      if (!wanted.has(section.id)) continue;
+      const result = blankResult(section);
+      results.push(result);
+      const stored = read.envelope.sections[section.id];
+      if (!stored) {
+        Object.assign(result, { status: 'skipped', reason: 'Not in this backup.' });
         continue;
       }
-      if (!section.restore) {
-        report.push({ name: section.name, restored: 0, note: 'export only' });
+      if (section.exportOnly) {
+        Object.assign(result, { status: 'skipped', reason: 'Kept for reference only.' });
         continue;
       }
-      /*
-       * The downgrade happens here, once, rather than inside each section.
-       * A section that has not opted in to replace is handed `'merge'` and
-       * cannot act on a mode it does not implement — which is the failure
-       * that would make the report's own mode column a lie.
-       */
-      const mode: RestoreMode =
-        requested === 'replace' && section.replaceable ? 'replace' : 'merge';
-      const downgraded = requested === 'replace' && mode === 'merge';
+      const upgraded = upgradeSection(stored, section.schemaVersion, section.migrations);
+      if (!upgraded.ok) {
+        Object.assign(result, { status: 'skipped', reason: upgraded.reason });
+        continue;
+      }
       try {
-        report.push({
-          name: section.name,
-          restored: section.restore(value, mode),
-          mode,
-          note: downgraded ? 'merged — this section cannot be replaced' : undefined,
+        const resolution = plan.resolutions?.[section.id];
+        const resolutionFor = (partId: string) => (rowKey: string): ConflictResolution | undefined =>
+          resolution?.items?.[`${partId}:${rowKey}`] ?? resolution?.default;
+        prepared.push({
+          section,
+          migratedFrom: upgraded.migratedFrom,
+          plans: section.parts.map((part) => {
+            const diff = diffPart(part, upgraded.data[part.id] ?? []);
+            return {
+              part,
+              plan: planPart(part, diff, mode, resolutionFor(part.id)),
+              invalid: diff.invalid,
+            };
+          }),
         });
       } catch (error) {
-        // One bad section must not abandon the rest — a restore that stops
-        // halfway leaves an installation in a state neither backup describes.
-        report.push({
-          name: section.name,
-          restored: 0,
-          note: describeError(error),
-        });
+        Object.assign(result, { status: 'failed', reason: describeError(error) });
       }
     }
 
-    return { ok: true, sections: report };
+    // Phase 2: keep a way back.
+    const touches = prepared.filter(({ plans }) =>
+      plans.some(({ plan: p }) => p.change.put.length > 0 || p.change.remove.length > 0)
+    );
+    if (keepRecovery && touches.length > 0) {
+      const saved = this.write(
+        this.recoveryPath,
+        touches.map(({ section }) => section.id)
+      );
+      if (!saved.ok) {
+        return {
+          ...emptySummary(),
+          ok: false,
+          mode,
+          error: `Nothing was restored: a copy of your current data could not be saved first (${saved.error}).`,
+        };
+      }
+    }
+
+    // Phase 3: write.
+    for (const { section, plans, migratedFrom } of prepared) {
+      const result = results.find((row) => row.id === section.id) as RestoreSectionResult;
+      result.status = 'restored';
+      if (migratedFrom !== undefined) result.notes.push('Converted from an older backup.');
+      try {
+        for (const { part, plan: partPlan, invalid } of plans) {
+          const { change } = partPlan;
+          let failedRows = 0;
+          let notNeeded = 0;
+          if (change.put.length > 0 || change.remove.length > 0) {
+            const committed = await part.commit(change);
+            if (committed?.failed?.length) {
+              result.failed.push(...committed.failed);
+              failedRows = committed.failed.length;
+            }
+            if (committed?.notes?.length) result.notes.push(...committed.notes);
+            notNeeded = Math.min(committed?.unchanged ?? 0, partPlan.updated);
+          }
+          if (part.quiet) continue;
+          // Refused rows came out of the puts, adds first: for the parts that
+          // can refuse (repositories, extensions) a put is almost always one.
+          const failedAdds = Math.min(failedRows, partPlan.added);
+          result.added += partPlan.added - failedAdds;
+          result.updated += Math.max(0, partPlan.updated - notNeeded - (failedRows - failedAdds));
+          result.removed += partPlan.removed;
+          result.unchanged += partPlan.unchanged + notNeeded;
+          result.kept += partPlan.kept + partPlan.retained;
+          result.skipped += partPlan.skipped;
+          if (partPlan.retained > 0) {
+            result.notes.push(
+              `${partPlan.retained} ${part.label} only on this computer were kept — a restore never removes these.`
+            );
+          }
+          if (invalid > 0) {
+            result.failed.push({
+              label: `${invalid} ${part.label}`,
+              reason: 'Could not be read by this version of the app.',
+            });
+          }
+        }
+        await section.afterRestore?.(result);
+      } catch (error) {
+        // One bad section must not abandon the rest.
+        result.status = 'failed';
+        result.reason = describeError(error);
+      }
+    }
+
+    const restartRecommended = prepared.some(
+      ({ section }) => {
+        if (!section.restartAfterRestore) return false;
+        const row = results.find((result) => result.id === section.id);
+        return !!row && row.status === 'restored' && row.added + row.updated + row.removed > 0;
+      }
+    );
+    return {
+      ok: true,
+      mode,
+      sections: results,
+      restartRecommended,
+      undoAvailable: this.hasUndo(),
+    };
   }
 
   /** A filename that sorts by date and says what it is. */
@@ -317,4 +475,116 @@ export class BackupService {
     const stamp = now.toISOString().slice(0, 19).replace(/[:T]/g, '-');
     return `cloudstream-backup-${stamp}.json`;
   }
+}
+
+function blankAnalysis(
+  id: string,
+  label: string,
+  description: string,
+  group: BackupGroup
+): BackupSectionAnalysis {
+  return {
+    id,
+    label,
+    description,
+    group,
+    status: 'ok',
+    backupCount: 0,
+    localCount: 0,
+    counts: emptyStatusCounts(),
+    projection: { smart: emptyChangeCounts(), merge: emptyChangeCounts(), replace: emptyChangeCounts() },
+    conflicts: [],
+    conflictTotal: 0,
+    canKeepBoth: false,
+    canRemove: true,
+    parts: [],
+    restartAfterRestore: false,
+  };
+}
+
+function addPartAnalysis(
+  analysis: BackupSectionAnalysis,
+  part: BackupPart,
+  diff: PartDiff<unknown>
+): void {
+  const counts = emptyStatusCounts();
+  counts.invalid = diff.invalid;
+  const samples: string[] = [];
+  for (const row of diff.rows) {
+    counts[row.status]++;
+    if (row.status === 'new' && samples.length < NEW_SAMPLE_LIMIT) samples.push(safeDescribe(part, row.backup));
+    if (row.status === 'conflict') {
+      analysis.conflictTotal++;
+      if (analysis.conflicts.length < CONFLICT_LIST_LIMIT) {
+        analysis.conflicts.push(conflictItem(part, row.key, row.backup, row.local));
+      }
+    }
+  }
+  for (const status of Object.keys(counts) as RowStatus[]) analysis.counts[status] += counts[status];
+  analysis.backupCount += diff.backupCount;
+  analysis.localCount += diff.localCount;
+  for (const mode of ['smart', 'merge', 'replace'] as const) {
+    const projected = projectPart(part, diff, mode);
+    const total = analysis.projection[mode];
+    for (const key of Object.keys(projected) as Array<keyof typeof projected>) total[key] += projected[key];
+  }
+  analysis.parts.push({
+    id: part.id,
+    label: part.label,
+    backupCount: diff.backupCount,
+    localCount: diff.localCount,
+    counts,
+    newSamples: samples,
+  });
+}
+
+function conflictItem(part: BackupPart, key: string, backup: unknown, local: unknown): ConflictItem {
+  const side = (row: unknown): string => {
+    try {
+      if (part.preview) return part.preview(row);
+      const at = part.updatedAt?.(row);
+      return typeof at === 'number' ? `Changed ${new Date(at).toISOString().slice(0, 10)}` : 'Different';
+    } catch {
+      return 'Different';
+    }
+  };
+  return {
+    key: `${part.id}:${key}`,
+    label: safeDescribe(part, backup ?? local),
+    backup: side(backup),
+    current: side(local),
+  };
+}
+
+function safeDescribe(part: BackupPart, row: unknown): string {
+  try {
+    return part.describe(row) || 'Untitled';
+  } catch {
+    return 'Untitled';
+  }
+}
+
+function blankResult(section: BackupSection): RestoreSectionResult {
+  return {
+    id: section.id,
+    label: section.label,
+    status: 'skipped',
+    added: 0,
+    updated: 0,
+    removed: 0,
+    unchanged: 0,
+    kept: 0,
+    skipped: 0,
+    failed: [],
+    notes: [],
+  };
+}
+
+function emptySummary(): RestoreSummary {
+  return { ok: true, sections: [], restartRecommended: false, undoAvailable: false };
+}
+
+function humanise(id: string): string {
+  const words = id.replace(/^settings\./, '').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[._-]+/g, ' ');
+  return words ? words[0].toUpperCase() + words.slice(1).toLowerCase() : id;
 }

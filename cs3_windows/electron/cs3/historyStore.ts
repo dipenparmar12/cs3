@@ -248,6 +248,14 @@ export class HistoryStore {
     return [...this.events];
   }
 
+  /** Stores the whole list a backup restore decided on, newest first. */
+  public replaceAll(events: HistoryEvent[]): void {
+    this.events = events
+      .filter((item) => item && typeof item.id === 'string' && item.title)
+      .sort((a, b) => b.timestamp - a.timestamp);
+    this.persist();
+  }
+
   public importAll(imported: HistoryEvent[]): number {
     let count = 0;
     const existingIds = new Set(this.events.map((e) => e.id));

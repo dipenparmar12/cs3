@@ -378,6 +378,26 @@ export class PageSnapshotStore {
     return this.snapshots.size;
   }
 
+  /**
+   * Replaces the *pinned* snapshots, leaving the cache around them alone.
+   *
+   * Only pinned pages travel in a backup — the rest is a cache that belongs to
+   * the machine that built it — so a restore can only speak for those.
+   */
+  public replacePinned(entries: PageSnapshot[]): void {
+    this.hydrate();
+    for (const snapshot of [...this.snapshots.values()]) {
+      if (snapshot.pinned) this.snapshots.delete(snapshot.url);
+    }
+    for (const entry of entries) {
+      if (!entry || typeof entry.url !== 'string' || !entry.url || !entry.title) continue;
+      this.snapshots.set(entry.url, { ...entry, pinned: true });
+    }
+    this.byKey.clear();
+    for (const snapshot of this.snapshots.values()) this.index(snapshot);
+    this.file.schedule();
+  }
+
   /** Replaces the whole set; used by a backup restore. */
   public replaceAll(entries: PageSnapshot[]): number {
     this.hydrate();

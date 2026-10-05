@@ -958,6 +958,41 @@ export class LibraryStore {
     };
   }
 
+  /*
+   * Whole-collection writes for a backup restore. The restore has already
+   * decided row by row what each collection should hold; these only store it,
+   * in one write each, so an interrupted restore never leaves half a merge.
+   */
+
+  public replaceEntries(rows: LibraryEntry[]): void {
+    this.entries = new Map(rows.filter((row) => row?.key).map((row) => [row.key, row]));
+    this.persistEntries();
+  }
+
+  public replaceProgress(rows: WatchProgress[]): void {
+    this.progress = new Map(rows.filter((row) => row?.key).map((row) => [progressId(row), row]));
+    this.persistProgress();
+  }
+
+  public replaceSourceMemory(rows: SourceMemory[]): void {
+    this.sources = new Map(rows.filter((row) => row?.key).map((row) => [progressId(row), row]));
+    this.persistSources();
+  }
+
+  /** Every played source, unbounded by the list limit, for a backup. */
+  public exportPlayedSources(): PlayedSource[] {
+    return [...this.loadPlayedSources().values()];
+  }
+
+  public replacePlayedSources(rows: PlayedSource[]): void {
+    const map = new Map<string, PlayedSource>();
+    for (const row of rows) {
+      if (!row?.key || !row.source) continue;
+      map.set(LibraryStore.playedSlot(row.key, row.season, row.episode), row);
+    }
+    this.persistPlayedSources(map);
+  }
+
   public importAll(payload: {
     entries?: LibraryEntry[];
     progress?: WatchProgress[];

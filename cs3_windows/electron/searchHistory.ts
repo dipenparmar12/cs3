@@ -89,6 +89,15 @@ export class SearchHistoryStore {
     return next;
   }
 
+  /** Stores the list a backup restore decided on, newest first, within the cap. */
+  public replaceAll(rows: SearchHistoryEntry[]): void {
+    const next = rows
+      .filter((entry) => entry && typeof entry.query === 'string' && entry.query.trim())
+      .sort((a, b) => (b.at ?? 0) - (a.at ?? 0))
+      .slice(0, MAX_ENTRIES);
+    this.datastore.setObject(KEY, next);
+  }
+
   public clear(): SearchHistoryEntry[] {
     this.datastore.setObject(KEY, []);
     return [];

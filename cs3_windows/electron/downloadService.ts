@@ -17,6 +17,7 @@ import { YtDlpEngine } from './ytdlpEngine';
 import { startHttpDownload } from './httpDownloader';
 import { containersAgree, overlapWindow, planResume } from './download/resumePlan.ts';
 import { fetchRemoteWindow, readLocalWindow } from './download/resumeWindow.ts';
+import { reconcileRestoredTask } from './download/restoredTask.ts';
 import type { TorrentEngine } from './torrent/torrentEngine';
 import type { ContentService } from './contentService';
 import type { AnalyticsSink } from './pluginManager';
@@ -1381,6 +1382,35 @@ export class DownloadService {
 
   public getTasks(): DownloadTask[] {
     return Array.from(this.queue.values());
+  }
+
+  /**
+   * Adds download records from a backup, each re-derived from what is on this
+   * disk (`download/restoredTask.ts`). A record already in the list is never
+   * touched — this computer's copy is the one describing this computer's file.
+   * Nothing is started.
+   */
+  public restoreTasks(tasks: DownloadTask[]): { added: number; verified: number; partial: number; missing: number } {
+    const counts = { added: 0, verified: 0, partial: 0, missing: 0 };
+    const probe = {
+      size: (filePath: string) => {
+        try {
+          return fs.statSync(filePath).size;
+        } catch {
+          return null;
+        }
+      },
+    };
+    for (const task of tasks) {
+      if (!task?.id || !task.targetFilePath || !task.link || this.queue.has(task.id)) continue;
+      const { task: restored, verdict } = reconcileRestoredTask(task, probe);
+      if (!restored.variantKey) restored.variantKey = downloadVariantKey(variantFromTask(restored));
+      this.queue.set(restored.id, restored);
+      counts.added++;
+      counts[verdict]++;
+    }
+    if (counts.added > 0) this.saveQueueToStorage();
+    return counts;
   }
 
   public stop(): void {

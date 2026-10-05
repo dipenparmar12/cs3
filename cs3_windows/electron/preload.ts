@@ -31,6 +31,7 @@ export interface SourceProfileSnapshot {
 }
 import type { NativeProviderSummary } from './cs3/nativeProviderRegistry';
 import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
+import type { BackupAnalysis, RestorePlan, RestoreSummary } from '../src/types/backup';
 import type { SwarmReport } from '../src/types/torrent';
 import type { TorrentContents } from './torrent/torrentContents';
 import type { TorrentImportRecord } from './torrent/torrentImport';
@@ -1823,40 +1824,18 @@ export interface CloudStreamElectronAPI {
    * which extensions are off, indexer configuration — so a new machine can be
    * made into this one.
    *
-   * `inspectBackup` reads a file and describes it without changing anything, so
-   * a restore can be confirmed against what is actually in the file rather than
-   * against its filename.
+   * `inspectBackup` asks for a file and compares it with this installation
+   * without changing anything: what each category holds, what each restore
+   * mode would do, and the conflicts only the reader can settle.
+   * `restoreUserData` applies a plan built from that; `undoRestore` puts back
+   * what the last restore changed.
    */
   exportUserData: (
     only?: string[]
   ) => Promise<Envelope & { path?: string; bytes?: number; cancelled?: boolean }>;
-  inspectBackup: () => Promise<
-    Envelope & {
-      cancelled?: boolean;
-      path?: string;
-      envelope?: {
-        formatVersion: number;
-        createdAt: number;
-        app: { version: string; platform: string };
-        summary: Record<string, number>;
-      };
-    }
-  >;
-  restoreUserData: (
-    filePath: string,
-    options?: { only?: string[]; mode?: 'merge' | 'replace' }
-  ) => Promise<
-    Envelope & {
-      sections?: Array<{
-        name: string;
-        restored: number;
-        note?: string;
-        mode?: 'merge' | 'replace';
-      }>;
-    }
-  >;
-  /** Puts the key/value store back as it was immediately before a restore. */
-  undoRestore: () => Promise<Envelope>;
+  inspectBackup: () => Promise<Envelope & { cancelled?: boolean; analysis?: BackupAnalysis }>;
+  restoreUserData: (filePath: string, plan: RestorePlan) => Promise<RestoreSummary>;
+  undoRestore: () => Promise<RestoreSummary>;
 
   /**
    * Making a provider a saved page names answer again.
@@ -2460,8 +2439,7 @@ const api: CloudStreamElectronAPI = {
   getStartupProfile: () => ipcRenderer.invoke('app:getStartupProfile'),
   exportUserData: (only) => ipcRenderer.invoke('backup:export', only),
   inspectBackup: () => ipcRenderer.invoke('backup:inspect'),
-  restoreUserData: (filePath, options) =>
-    ipcRenderer.invoke('backup:restore', filePath, options),
+  restoreUserData: (filePath, plan) => ipcRenderer.invoke('backup:restore', filePath, plan),
   undoRestore: () => ipcRenderer.invoke('backup:undoRestore'),
   planProviderRecovery: (provider) =>
     ipcRenderer.invoke('extension:planProviderRecovery', provider),

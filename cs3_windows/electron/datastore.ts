@@ -1,6 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
+import {
+  DATASTORE_VALUE_TYPES,
+  rowsFromBuckets,
+  type DatastoreRow,
+} from './cs3/backup/datastoreCategories.ts';
 
 export interface DatastoreBucket {
   _Bool?: Record<string, boolean>;
@@ -369,6 +374,41 @@ export class DatastoreManager {
       return out;
     };
     return { ...strip(this.data.datastore), settings: strip(this.data.settings) };
+  }
+
+  /**
+   * Every transferable key as one row each, for the backup's settings
+   * categories. Same filter as {@link snapshot}: a token never leaves.
+   */
+  public rows(): DatastoreRow[] {
+    return rowsFromBuckets({ datastore: this.data.datastore, settings: this.data.settings }).filter(
+      (row) => this.isKeyTransferable(row.key)
+    );
+  }
+
+  /**
+   * Writes and removes individual keys, durably, for a restore.
+   *
+   * A put removes the key from the bucket's other value types first: a value
+   * stored as `_String` here and `_Bool` in the backup must not end up as
+   * both, or which one a reader sees depends on the order it asks in.
+   */
+  public writeRows(put: DatastoreRow[], remove: Array<Pick<DatastoreRow, 'bucket' | 'key'>>): void {
+    const bucketOf = (name: DatastoreRow['bucket']): DatastoreBucket =>
+      name === 'settings' ? this.data.settings : this.data.datastore;
+    const clear = (bucket: DatastoreBucket, key: string) => {
+      for (const type of DATASTORE_VALUE_TYPES) delete bucket[type]?.[key];
+    };
+    for (const row of remove) clear(bucketOf(row.bucket), row.key);
+    for (const row of put) {
+      if (!this.isKeyTransferable(row.key)) continue;
+      const bucket = bucketOf(row.bucket);
+      clear(bucket, row.key);
+      const values = (bucket[row.type] ??= {}) as Record<string, unknown>;
+      values[row.key] = row.value;
+    }
+    this.save();
+    this.flushSync();
   }
 
   /**

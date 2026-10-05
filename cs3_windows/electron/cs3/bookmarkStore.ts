@@ -171,6 +171,24 @@ export class BookmarkStore {
     return bookmark;
   }
 
+  /**
+   * Stores the whole list a backup restore decided on. Rows keep their own
+   * `savedAt` and `openCount`: they are the record of when the page was saved,
+   * not of when it was restored.
+   */
+  public replaceAll(rows: Bookmark[]): void {
+    const seen = new Set<string>();
+    this.bookmarks = rows
+      .filter((row) => {
+        if (!row || typeof row.mediaUrl !== 'string' || !row.mediaUrl || seen.has(row.mediaUrl)) return false;
+        seen.add(row.mediaUrl);
+        return true;
+      })
+      .map((row) => ({ ...row, id: row.id || row.mediaUrl, openCount: row.openCount ?? 0 }))
+      .sort((a, b) => b.savedAt - a.savedAt);
+    this.persist();
+  }
+
   /** Empties the list, so a Replace restore can make it match the file. */
   public clearAll(): number {
     const count = this.list().length;

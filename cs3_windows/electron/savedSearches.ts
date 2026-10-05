@@ -175,6 +175,17 @@ export class SavedSearchStore {
     return this.searches.map((search) => ({ ...search }));
   }
 
+  /** Stores the list a backup restore decided on. */
+  public replaceAll(rows: unknown[]): void {
+    this.hydrate();
+    this.searches = rows
+      .filter(isSavedSearch)
+      .map((row) => ({ ...row, providers: row.providers ?? [], indexers: row.indexers ?? [] }))
+      .sort((a, b) => b.savedAt - a.savedAt)
+      .slice(0, MAX_SAVED_SEARCHES);
+    this.file.schedule();
+  }
+
   /** Restores records, keeping the newer of two copies of one id. */
   public importAll(rows: unknown[]): number {
     this.hydrate();

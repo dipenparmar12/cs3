@@ -37,7 +37,9 @@ startup.watch();
 const endServiceGraph = startup.span('constructServices');
 
 import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, shell } from 'electron';
-import { BackupService, type RestoreOptions } from './cs3/backupService.ts';
+import { BackupService } from './cs3/backupService.ts';
+import { createBackupSections } from './cs3/backupSections.ts';
+import type { RestorePlan } from '../src/types/backup.ts';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -144,11 +146,7 @@ import {
 import { deadlineFromUrl } from './sourceCache';
 import { HistoryStore } from './cs3/historyStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
-import {
-  PageSnapshotStore,
-  type PageSnapshot,
-  type PageSnapshotInput,
-} from './cs3/pageSnapshot.ts';
+import { PageSnapshotStore, type PageSnapshotInput } from './cs3/pageSnapshot.ts';
 import { WebViewHost, type WebViewResolveRequest } from './cs3/webViewHost';
 import { DiscoveryService } from './cs3/discovery';
 import { SourcePrefetcher } from './cs3/sourcePrefetcher';
@@ -5973,355 +5971,33 @@ ipcMain.handle('datastore:exportBackup', async () => datastore.exportBackup());
 // --- whole-app backup ------------------------------------------------------
 
 /**
- * Every store that makes an installation *this* installation.
- *
- * A table rather than two switch statements, so adding a store is one entry and
- * cannot be added to the export while being forgotten in the restore — which is
- * how a backup comes to look complete and silently not be.
- *
- * What is deliberately absent, and why, is documented on `BackupService`.
+ * Every store that makes an installation *this* installation, each registered
+ * as a section with its own rows, schema version and restore rules — see
+ * `cs3/backupSections.ts` for the table and `BackupService` for the design.
  */
 const backupService = new BackupService(
-  [
-    {
-      name: 'settings',
-      label: 'Settings and preferences',
-      collect: () => datastore.snapshot(),
-      restore: (value: unknown) => datastore.restore(value as never),
+  createBackupSections({
+    datastore,
+    library: libraryStore,
+    history: historyStore,
+    bookmarks,
+    pageSnapshots,
+    searchHistory,
+    savedSearches,
+    titleOutcomes,
+    providerAnalytics,
+    downloads: downloadService,
+    plugins: pluginManager,
+    enqueueExtensionJobs: (requests) => {
+      extensionJobs.enqueue(requests);
     },
-    {
-      name: 'library',
-      label: 'Library, watch progress and remembered sources',
-      replaceable: true,
-      collect: () => libraryStore.exportAll(),
-      restore: (value: unknown, mode) => {
-        if (mode === 'replace') libraryStore.clearAll();
-        const result = libraryStore.importAll(value as Parameters<LibraryStore['importAll']>[0]);
-        return typeof result === 'number' ? result : 1;
-      },
-    },
-    {
-      name: 'history',
-      label: 'Watch history',
-      replaceable: true,
-      collect: () => historyStore.exportAll(),
-      restore: (value: unknown, mode) => {
-        if (mode === 'replace') historyStore.clear();
-        return historyStore.importAll(value as Parameters<HistoryStore['importAll']>[0]);
-      },
-    },
-    {
-      name: 'bookmarks',
-      label: 'Saved pages',
-      replaceable: true,
-      collect: () => bookmarks.list(),
-      restore: (value: unknown, mode) => {
-        if (!Array.isArray(value)) return 0;
-        if (mode === 'replace') bookmarks.clearAll();
-        let count = 0;
-        for (const row of value) {
-          // `save` re-derives id, savedAt and openCount, so a restored row is a
-          // fresh bookmark carrying the original's identity and origin rather
-          // than a copy of a record from another machine's clock.
-          const { id: _id, savedAt: _savedAt, openCount: _openCount, ...rest } = row ?? {};
-          if (!rest?.mediaUrl) continue;
-          bookmarks.save(rest);
-          count++;
-        }
-        return count;
-      },
-    },
-    {
-      /*
-       * The pages behind the library, not just the rows in it.
-       *
-       * Restoring a library onto a new machine without these reproduces the
-       * exact failure the snapshot store exists for: every row present, every
-       * page behind it blank, until each one has been successfully re-scraped
-       * once. Bounded on export to the pages the user actually kept — the rest
-       * is a cache and belongs on the machine that built it.
-       */
-      name: 'pageSnapshots',
-      label: 'Saved page content',
-      replaceable: true,
-      collect: () => pageSnapshots.list().filter((snapshot) => snapshot.pinned),
-      restore: (value: unknown, mode) => {
-        if (!Array.isArray(value)) return 0;
-        if (mode === 'replace') return pageSnapshots.replaceAll(value as PageSnapshot[]);
-        let count = 0;
-        for (const row of value as PageSnapshot[]) {
-          if (!row?.url || !row?.title) continue;
-          // Through `capture`, so the merge rule applies: a restored copy adds
-          // what this machine is missing and never blanks what it already has.
-          pageSnapshots.capture({ ...row, verified: false });
-          pageSnapshots.setPinned({ url: row.url }, true);
-          count++;
-        }
-        return count;
-      },
-    },
-    {
-      name: 'searchHistory',
-      label: 'Past searches',
-      replaceable: true,
-      collect: () => searchHistory.list(500),
-      restore: (value: unknown, mode) => {
-        if (!Array.isArray(value)) return 0;
-        if (mode === 'replace') searchHistory.clear();
-        let count = 0;
-        // Oldest first, so the restored list keeps its original ordering — the
-        // store puts each new record at the front.
-        for (const row of [...value].reverse()) {
-          if (!row?.query) continue;
-          searchHistory.record(row.query, row.resultCount);
-          count++;
-        }
-        return count;
-      },
-    },
-    {
-      name: 'savedSearches',
-      label: 'Saved searches',
-      replaceable: true,
-      collect: () => savedSearches.exportAll(),
-      restore: (value: unknown, mode) => {
-        if (!Array.isArray(value)) return 0;
-        if (mode === 'replace') savedSearches.clear();
-        return savedSearches.importAll(value);
-      },
-    },
-    {
-      name: 'titleOutcomes',
-      label: 'What happened last time a title was opened',
-      replaceable: true,
-      collect: () => titleOutcomes.list(),
-      restore: (value: unknown, mode) => {
-        if (!value || typeof value !== 'object') return 0;
-        if (mode === 'replace') titleOutcomes.clear();
-        let count = 0;
-        for (const [url, outcome] of Object.entries(value as Record<string, { kind?: string; reason?: string }>)) {
-          if (!outcome?.kind) continue;
-          titleOutcomes.record(url, outcome.kind as never, outcome.reason);
-          count++;
-        }
-        return count;
-      },
-    },
-    {
-      name: 'providerAnalytics',
-      label: 'How each provider has behaved',
-      collect: () => ({
-        records: providerAnalytics.all(),
-        settings: providerAnalytics.getSettings(),
-        preferences: providerAnalytics.getPreferences(),
-      }),
-      restore: (value: unknown) => {
-        const payload = value as {
-          settings?: Parameters<typeof providerAnalytics.setSettings>[0];
-          preferences?: Record<string, Parameters<typeof providerAnalytics.setPreference>[1]>;
-        };
-        let count = 0;
-        // The *counts* are deliberately not restored: they are measurements of
-        // one machine's network and would misdescribe another's. The settings
-        // and the manual preferences are decisions, and those do transfer.
-        if (payload?.settings) {
-          providerAnalytics.setSettings(payload.settings);
-          count++;
-        }
-        for (const [provider, preference] of Object.entries(payload?.preferences ?? {})) {
-          providerAnalytics.setPreference(provider, preference);
-          count++;
-        }
-        return count;
-      },
-    },
-    {
-      name: 'downloads',
-      label: 'Download queue',
-      collect: () => downloadService.getTasks(),
-      // Export only: restoring a queue would point tasks at target paths and
-      // half-finished `.part` files that do not exist on the new machine, and a
-      // task that reports progress against nothing is worse than an absent one.
-      // It travels so the list can be read, not replayed.
-    },
-    {
-      name: 'extensions',
-      label: 'Repositories, extensions and what is switched off',
-      replaceable: true,
-      collect: () => ({
-        repositories: pluginManager.getInstalledRepositories(),
-        plugins: pluginManager.getInstalledPlugins().map((plugin) => ({
-          internalName: plugin.internalName,
-          name: plugin.name,
-          repositoryUrl: plugin.repositoryUrl,
-          url: plugin.url,
-          version: plugin.version,
-        })),
-        /*
-         * All three levels of the cascade, and the middle one was missing.
-         * `getDisabledExtensions` had no line here at all, so an extension
-         * switched off came back on after a restore while the provider and
-         * repository lists were reproduced exactly — a third of the state the
-         * section claims to carry, lost silently in the direction that turns
-         * sources back on.
-         */
-        disabledProviders: pluginManager.getDisabledProviders(),
-        disabledExtensions: pluginManager.getDisabledExtensions(),
-        disabledRepositories: pluginManager.getDisabledRepositories(),
-        /**
-         * What each provider was registered by, so a restored library entry
-         * addressed `cs3ext://Netflix/…` can name the extension to install.
-         * The live map only knows providers that are loaded *now*, which on a
-         * fresh machine is none of the ones a backup refers to.
-         */
-        providerOrigins: pluginManager.exportProviderOrigins(),
-        adultAllowed: bootstrap.isAdultAllowed(),
-        // `adultAllowed` alone cannot tell `ask` from `off`, so a restore would flatten it.
-        adultMode: bootstrap.adultMode(),
-      }),
-      /**
-       * The cheap half is restored; the expensive half is offered.
-       *
-       * Putting the repositories back into the user's list, and remembering
-       * which providers they had switched off, is a few fetches and a datastore
-       * write. Re-downloading the archives is tens of downloads and DEX
-       * translations per repository — not something to start inside a handler
-       * the user believes is reading a file, and the same cost split the
-       * repository catalogue already makes between Add and Install all.
-       *
-       * So a restore leaves someone with their repositories listed, their
-       * choices remembered, and one press per repository to fetch the archives.
-       * The extension *names* travel in the backup so that press can be
-       * targeted rather than "install everything this repository has now".
-       */
-      restore: (value: unknown, mode) => {
-        const payload = value as {
-          repositories?: string[];
-          plugins?: Array<{
-            internalName?: string;
-            name?: string;
-            repositoryUrl?: string;
-            url?: string;
-            version?: number;
-          }>;
-          disabledProviders?: string[];
-          disabledExtensions?: string[];
-          disabledRepositories?: string[];
-          providerOrigins?: Record<string, { internalName: string; pluginName: string }>;
-          adultAllowed?: boolean;
-          adultMode?: 'off' | 'ask' | 'on';
-        };
-        let count = 0;
-        if (payload?.adultMode === 'off' || payload?.adultMode === 'ask' || payload?.adultMode === 'on') {
-          bootstrap.setAdultMode(payload.adultMode);
-          count++;
-        } else if (typeof payload?.adultAllowed === 'boolean') {
-          bootstrap.setAdultAllowed(payload.adultAllowed);
-          count++;
-        }
-        for (const url of payload?.repositories ?? []) {
-          // Fire-and-forget: each is a network fetch, and a restore must not
-          // block on a repository whose host happens to be down today.
-          void pluginManager.addRepository(url).catch(() => {
-            /* Reported by the repositories screen when it next reads. */
-          });
-          count++;
-        }
-
-        /*
-         * The plugin list was collected from the first version of this section
-         * and read by nothing — the comment above it even said the names
-         * travel so a later press can be targeted, and no code ever took them.
-         * They are the whole basis of recovery: they are how the app knows
-         * that `cs3ext://Netflix/…` needs `NetMirror` from a particular
-         * repository, on a machine where nothing is installed yet.
-         */
-        if (payload?.plugins?.length) {
-          count += pluginManager.rememberKnownPlugins(payload.plugins);
-        }
-        if (payload?.providerOrigins) {
-          count += pluginManager.importProviderOrigins(payload.providerOrigins);
-        }
-
-        /*
-         * Replace rewrites the three disabled lists so they match the file
-         * exactly; merge only ever adds to them. Merge cannot turn a provider
-         * back *on*, which is the asymmetry that makes Replace worth having
-         * here: someone restoring a working setup onto an install where they
-         * had switched things off wants the file's answer, not the union of
-         * two sets of exclusions.
-         *
-         * Nothing is uninstalled in either mode. Archives are hundreds of
-         * megabytes of re-download and the undo snapshots only the datastore,
-         * so a delete reached through this radio button could not be undone.
-         */
-        const applyDisabled = (
-          current: string[],
-          wanted: string[],
-          setter: (names: string[], enabled: boolean) => unknown
-        ): number => {
-          if (mode === 'replace') {
-            const turnOn = current.filter((name) => !wanted.includes(name));
-            if (turnOn.length) setter(turnOn, true);
-            if (wanted.length) setter(wanted, false);
-            return turnOn.length + wanted.length;
-          }
-          if (!wanted.length) return 0;
-          setter(wanted, false);
-          return wanted.length;
-        };
-
-        count += applyDisabled(
-          pluginManager.getDisabledProviders(),
-          payload?.disabledProviders ?? [],
-          (names, enabled) => pluginManager.setProvidersEnabled(names, enabled)
-        );
-        count += applyDisabled(
-          pluginManager.getDisabledExtensions(),
-          payload?.disabledExtensions ?? [],
-          (names, enabled) => pluginManager.setExtensionsEnabled(names, enabled)
-        );
-        count += applyDisabled(
-          pluginManager.getDisabledRepositories(),
-          payload?.disabledRepositories ?? [],
-          (names, enabled) => pluginManager.setRepositoriesEnabled(names, enabled)
-        );
-        return count;
-      },
-    },
-    {
-      name: 'indexers',
-      label: 'Torrent indexer configuration',
-      replaceable: true,
-      collect: () => contentService.getRegistry().getConfigs(),
-      restore: (value: unknown, mode) => {
-        if (!Array.isArray(value)) return 0;
-        const registry = contentService.getRegistry();
-        if (mode === 'replace') {
-          registry.saveConfigs(value);
-          return value.length;
-        }
-        /*
-         * Merging is keyed on the indexer id, and the *local* row wins a
-         * collision. A Torznab entry carries an API key and a host that are
-         * this machine's, so a backup from another one would otherwise
-         * overwrite working credentials with stale ones — and the failure is
-         * a search that returns nothing rather than an error.
-         */
-        const byId = new Map(registry.getConfigs().map((config) => [config.id, config]));
-        let added = 0;
-        for (const config of value) {
-          if (!config?.id || byId.has(config.id)) continue;
-          byId.set(config.id, config);
-          added++;
-        }
-        registry.saveConfigs([...byId.values()]);
-        return added;
-      },
-    },
-  ],
+    isAdultAllowed: () => bootstrap.isAdultAllowed(),
+    indexers: contentService.getRegistry(),
+    adult: bootstrap,
+  }),
   app.getVersion(),
-  `${process.platform} ${os.release()}`
+  `${process.platform} ${os.release()}`,
+  { recoveryDir: path.join(app.getPath('userData'), 'backups') }
 );
 
 ipcMain.handle('backup:export', async (_, only?: string[]) => {
@@ -6339,7 +6015,10 @@ ipcMain.handle('backup:export', async (_, only?: string[]) => {
   }
 });
 
-/** Describes a file without changing anything, so a restore can be confirmed. */
+/**
+ * Chooses a file and compares it with this installation, changing nothing —
+ * the summary, the counts and the conflicts the restore screen shows.
+ */
 ipcMain.handle('backup:inspect', async () => {
   try {
     if (!mainWindow) return { ok: false, error: 'No window to ask from.' };
@@ -6349,22 +6028,21 @@ ipcMain.handle('backup:inspect', async () => {
       filters: [{ name: 'CloudStream backup', extensions: ['json'] }],
     });
     if (result.canceled || result.filePaths.length === 0) return { ok: false, cancelled: true };
-    const inspected = backupService.inspect(result.filePaths[0]);
-    return { ...inspected, path: result.filePaths[0] };
+    return backupService.analyze(result.filePaths[0]);
   } catch (error) {
     return fail(error);
   }
 });
 
-ipcMain.handle('backup:restore', async (_, filePath: string, options?: RestoreOptions) => {
+ipcMain.handle('backup:restore', async (_, filePath: string, plan: RestorePlan) => {
   try {
-    if (!filePath) return { ok: false, error: 'No backup file was chosen.' };
-    // A snapshot first: a restore writes over live data, and the alternative to
-    // being able to undo it is telling someone their library is gone.
-    datastore.createSnapshot();
-    return backupService.restore(filePath, options);
+    if (!filePath) return { ok: false, error: 'No backup file was chosen.', sections: [] };
+    if (!plan || !Array.isArray(plan.sections)) {
+      return { ok: false, error: 'Nothing was chosen to restore.', sections: [] };
+    }
+    return await backupService.restore(filePath, plan);
   } catch (error) {
-    return fail(error);
+    return { ...fail(error), sections: [] };
   }
 });
 
@@ -6416,12 +6094,12 @@ ipcMain.handle('extension:recoverProvider', async (_, provider: string) => {
   }
 });
 
-/** Puts back the datastore as it was immediately before the last restore. */
+/** Puts back what the last restore changed, from the copy it saved first. */
 ipcMain.handle('backup:undoRestore', async () => {
   try {
-    return { ok: datastore.rollbackSnapshot() };
+    return await backupService.undo();
   } catch (error) {
-    return fail(error);
+    return { ...fail(error), sections: [] };
   }
 });
 
