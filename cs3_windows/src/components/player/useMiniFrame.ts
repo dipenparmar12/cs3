@@ -36,26 +36,158 @@ export interface MiniFrame {
   width: number;
 }
 
+export type MiniResizeDirection =
+  | 'nw'
+  | 'ne'
+  | 'se'
+  | 'sw'
+  | 'n'
+  | 's'
+  | 'w'
+  | 'e';
+
+export interface ViewportBounds {
+  innerWidth: number;
+  innerHeight: number;
+}
+
 const STORAGE_KEY = 'cs3.miniPlayer.frame';
 
 /** Below this the controls stop fitting and the window is a thumbnail. */
-const MIN_WIDTH = 280;
-const MAX_WIDTH = 900;
-const ASPECT = 16 / 9;
+export const MIN_WIDTH = 280;
+export const MAX_WIDTH = 900;
+export const ASPECT = 16 / 9;
 
 /** Kept clear of the edges so the window never looks clipped. */
-const MARGIN = 12;
+export const MARGIN = 12;
 
-function clampFrame(frame: MiniFrame): MiniFrame {
+export function clampFrame(frame: MiniFrame, viewport?: ViewportBounds): MiniFrame {
+  const vpWidth = viewport?.innerWidth ?? (typeof window !== 'undefined' ? window.innerWidth : 1920);
+  const vpHeight = viewport?.innerHeight ?? (typeof window !== 'undefined' ? window.innerHeight : 1080);
   const width = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, frame.width));
   const height = width / ASPECT;
-  const maxX = Math.max(MARGIN, window.innerWidth - width - MARGIN);
-  const maxY = Math.max(MARGIN, window.innerHeight - height - MARGIN);
+  const maxX = Math.max(MARGIN, vpWidth - width - MARGIN);
+  const maxY = Math.max(MARGIN, vpHeight - height - MARGIN);
   return {
     width,
     x: Math.min(maxX, Math.max(MARGIN, frame.x)),
     y: Math.min(maxY, Math.max(MARGIN, frame.y)),
   };
+}
+
+export function computeResizedFrame(
+  origin: MiniFrame,
+  direction: MiniResizeDirection,
+  dx: number,
+  dy: number,
+  viewport?: ViewportBounds
+): MiniFrame {
+  const vpWidth = viewport?.innerWidth ?? (typeof window !== 'undefined' ? window.innerWidth : 1920);
+  const vpHeight = viewport?.innerHeight ?? (typeof window !== 'undefined' ? window.innerHeight : 1080);
+  const originHeight = origin.width / ASPECT;
+  const originRight = origin.x + origin.width;
+  const originBottom = origin.y + originHeight;
+
+  let width = origin.width;
+  let x = origin.x;
+  let y = origin.y;
+
+  switch (direction) {
+    case 'se': {
+      // Top-left is anchored at (origin.x, origin.y)
+      const delta = Math.abs(dx) >= Math.abs(dy * ASPECT) ? dx : dy * ASPECT;
+      const targetWidth = origin.width + delta;
+      const maxByRight = vpWidth - MARGIN - origin.x;
+      const maxByBottom = (vpHeight - MARGIN - origin.y) * ASPECT;
+      width = Math.min(targetWidth, MAX_WIDTH, maxByRight, maxByBottom);
+      width = Math.max(MIN_WIDTH, width);
+      x = origin.x;
+      y = origin.y;
+      break;
+    }
+    case 'nw': {
+      // Bottom-right is anchored at (originRight, originBottom)
+      const delta = Math.abs(-dx) >= Math.abs(-dy * ASPECT) ? -dx : -dy * ASPECT;
+      const targetWidth = origin.width + delta;
+      const maxByLeft = originRight - MARGIN;
+      const maxByTop = (originBottom - MARGIN) * ASPECT;
+      width = Math.min(targetWidth, MAX_WIDTH, maxByLeft, maxByTop);
+      width = Math.max(MIN_WIDTH, width);
+      x = originRight - width;
+      y = originBottom - width / ASPECT;
+      break;
+    }
+    case 'ne': {
+      // Bottom-left is anchored at (origin.x, originBottom)
+      const delta = Math.abs(dx) >= Math.abs(-dy * ASPECT) ? dx : -dy * ASPECT;
+      const targetWidth = origin.width + delta;
+      const maxByRight = vpWidth - MARGIN - origin.x;
+      const maxByTop = (originBottom - MARGIN) * ASPECT;
+      width = Math.min(targetWidth, MAX_WIDTH, maxByRight, maxByTop);
+      width = Math.max(MIN_WIDTH, width);
+      x = origin.x;
+      y = originBottom - width / ASPECT;
+      break;
+    }
+    case 'sw': {
+      // Top-right is anchored at (originRight, origin.y)
+      const delta = Math.abs(-dx) >= Math.abs(dy * ASPECT) ? -dx : dy * ASPECT;
+      const targetWidth = origin.width + delta;
+      const maxByLeft = originRight - MARGIN;
+      const maxByBottom = (vpHeight - MARGIN - origin.y) * ASPECT;
+      width = Math.min(targetWidth, MAX_WIDTH, maxByLeft, maxByBottom);
+      width = Math.max(MIN_WIDTH, width);
+      x = originRight - width;
+      y = origin.y;
+      break;
+    }
+    case 'e': {
+      // Left and top anchored
+      const targetWidth = origin.width + dx;
+      const maxByRight = vpWidth - MARGIN - origin.x;
+      const maxByBottom = (vpHeight - MARGIN - origin.y) * ASPECT;
+      width = Math.min(targetWidth, MAX_WIDTH, maxByRight, maxByBottom);
+      width = Math.max(MIN_WIDTH, width);
+      x = origin.x;
+      y = origin.y;
+      break;
+    }
+    case 'w': {
+      // Right and top anchored
+      const targetWidth = origin.width - dx;
+      const maxByLeft = originRight - MARGIN;
+      const maxByBottom = (vpHeight - MARGIN - origin.y) * ASPECT;
+      width = Math.min(targetWidth, MAX_WIDTH, maxByLeft, maxByBottom);
+      width = Math.max(MIN_WIDTH, width);
+      x = originRight - width;
+      y = origin.y;
+      break;
+    }
+    case 's': {
+      // Top and left anchored
+      const targetWidth = origin.width + dy * ASPECT;
+      const maxByRight = vpWidth - MARGIN - origin.x;
+      const maxByBottom = (vpHeight - MARGIN - origin.y) * ASPECT;
+      width = Math.min(targetWidth, MAX_WIDTH, maxByRight, maxByBottom);
+      width = Math.max(MIN_WIDTH, width);
+      x = origin.x;
+      y = origin.y;
+      break;
+    }
+    case 'n': {
+      // Bottom and left anchored
+      const targetWidth = origin.width - dy * ASPECT;
+      const maxByRight = vpWidth - MARGIN - origin.x;
+      const maxByTop = (originBottom - MARGIN) * ASPECT;
+      width = Math.min(targetWidth, MAX_WIDTH, maxByRight, maxByTop);
+      width = Math.max(MIN_WIDTH, width);
+      x = origin.x;
+      y = originBottom - width / ASPECT;
+      break;
+    }
+  }
+
+  return clampFrame({ x, y, width }, { innerWidth: vpWidth, innerHeight: vpHeight });
 }
 
 function defaultFrame(): MiniFrame {
@@ -83,20 +215,30 @@ function restore(): MiniFrame {
   }
 }
 
-export function useMiniFrame(active: boolean): {
+export interface UseMiniFrameReturn {
   frame: MiniFrame;
   height: number;
   isDragging: boolean;
+  isResizing: boolean;
+  resizeDirection: MiniResizeDirection | null;
   startDrag: (event: React.PointerEvent) => void;
-  startResize: (event: React.PointerEvent) => void;
+  startResize: {
+    (direction: MiniResizeDirection): (event: React.PointerEvent) => void;
+    (event: React.PointerEvent): void;
+  };
   reset: () => void;
-} {
+}
+
+export function useMiniFrame(active: boolean): UseMiniFrameReturn {
   const [frame, setFrame] = useState<MiniFrame>(() =>
     typeof window === 'undefined' ? { x: 24, y: 24, width: 420 } : restore()
   );
   const [isDragging, setIsDragging] = useState(false);
+  const [resizingDirection, setResizingDirection] = useState<MiniResizeDirection | null>(null);
+
   const gesture = useRef<{
     kind: 'drag' | 'resize';
+    direction?: MiniResizeDirection;
     pointerId: number;
     startX: number;
     startY: number;
@@ -118,6 +260,7 @@ export function useMiniFrame(active: boolean): {
     if (!active) {
       gesture.current = null;
       setIsDragging(false);
+      setResizingDirection(null);
       return;
     }
     const onResize = () => setFrame((current) => clampFrame(current));
@@ -136,24 +279,17 @@ export function useMiniFrame(active: boolean): {
       return;
     }
 
-    // Resizing from the top-left corner: the bottom-right stays put, which is
-    // what keeps a window parked in the corner of the screen from walking off
-    // it as it grows.
-    const width = activeGesture.origin.width - dx;
-    const clamped = clampFrame({
-      width,
-      x: activeGesture.origin.x + (activeGesture.origin.width - Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width))),
-      y:
-        activeGesture.origin.y +
-        (activeGesture.origin.width - Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width))) / ASPECT,
-    });
-    setFrame(clamped);
+    if (activeGesture.kind === 'resize') {
+      const direction = activeGesture.direction ?? 'nw';
+      setFrame(computeResizedFrame(activeGesture.origin, direction, dx, dy));
+    }
   }, []);
 
   const endGesture = useCallback((event: React.PointerEvent | PointerEvent) => {
     if (gesture.current && event.pointerId === gesture.current.pointerId) {
       gesture.current = null;
       setIsDragging(false);
+      setResizingDirection(null);
     }
   }, []);
 
@@ -171,42 +307,67 @@ export function useMiniFrame(active: boolean): {
     };
   }, [active, onPointerMove, endGesture]);
 
-  const begin = (kind: 'drag' | 'resize') => (event: React.PointerEvent) => {
-    // Only the primary button, and never a gesture that started on an interactive control.
+  const startDrag = useCallback((event: React.PointerEvent) => {
     if (event.button !== 0) return;
-
-    if (kind === 'drag') {
-      const target = event.target as HTMLElement | null;
-      if (
-        target?.closest(
-          'button, input, textarea, a, select, .player-mini__resize, [data-interactive], [data-no-drag]'
-        )
-      ) {
-        return;
-      }
+    const target = event.target as HTMLElement | null;
+    if (
+      target?.closest(
+        'button, input, textarea, a, select, .player-mini__resize, .player-mini__resize-edge, [data-interactive], [data-no-drag]'
+      )
+    ) {
+      return;
     }
 
     event.preventDefault();
     event.stopPropagation();
     (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
     gesture.current = {
-      kind,
+      kind: 'drag',
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
       origin: frame,
     };
-    if (kind === 'drag') {
-      setIsDragging(true);
-    }
-  };
+    setIsDragging(true);
+  }, [frame]);
+
+  const beginResize = useCallback(
+    (direction: MiniResizeDirection, event: React.PointerEvent) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+      gesture.current = {
+        kind: 'resize',
+        direction,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        origin: frame,
+      };
+      setResizingDirection(direction);
+    },
+    [frame]
+  );
+
+  const startResize = useCallback(
+    ((arg: MiniResizeDirection | React.PointerEvent = 'nw') => {
+      if (typeof arg === 'string') {
+        return (event: React.PointerEvent) => beginResize(arg, event);
+      }
+      return beginResize('nw', arg);
+    }) as UseMiniFrameReturn['startResize'],
+    [beginResize]
+  );
 
   return {
     frame,
     height: frame.width / ASPECT,
     isDragging,
-    startDrag: begin('drag'),
-    startResize: begin('resize'),
+    isResizing: resizingDirection !== null,
+    resizeDirection: resizingDirection,
+    startDrag,
+    startResize,
     reset: () => setFrame(defaultFrame()),
   };
 }

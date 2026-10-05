@@ -1194,6 +1194,7 @@
   align-items: center;
   height: 100%;
   flex-shrink: 0;
+  margin-right: 4px;
 }
 
 .player-mini__btn {
@@ -1207,6 +1208,8 @@
   color: rgba(255, 255, 255, 0.8);
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
+  position: relative;
+  z-index: 10;
 }
 
 .player-mini__btn:hover {
@@ -1227,7 +1230,7 @@
   display: flex;
   align-items: center;
   gap: 0.2rem;
-  padding: 0.3rem 0.4rem;
+  padding: 0.3rem 0.6rem;
   background: linear-gradient(to top, rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0));
   opacity: 0;
   transition: opacity 0.15s ease;
@@ -1256,7 +1259,7 @@
   bottom: 32px;
   height: 3px;
   background: rgba(255, 255, 255, 0.2);
-  z-index: 6;
+  z-index: 10;
 }
 
 .player-mini__progress input {
@@ -1334,37 +1337,145 @@
   background: transparent;
   color: #fff;
   cursor: pointer;
+  position: relative;
+  z-index: 10;
 }
 
 .player-mini__bar button:hover { background: rgba(255, 255, 255, 0.16); }
 
-/* Top-left, because the bottom-right corner of a window parked in the corner of
-   the screen is against the edge and cannot be grabbed. */
+/* ---- mini player resize handles ---------------------------------------
+   Four corners and four edges matching Windows Explorer window resizing.
+   Interactive hitboxes are generously sized (18px for corners, 6px for edges)
+   while visual affordance shows sharp corner brackets that highlight on hover/drag.
+*/
 .player-mini__resize {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 16px;
-  height: 16px;
-  cursor: nwse-resize;
-  z-index: 4;
+  width: 18px;
+  height: 18px;
+  z-index: 8;
   touch-action: none;
+  box-sizing: border-box;
 }
 
+.player-mini__resize--nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+.player-mini__resize--ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+.player-mini__resize--sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+.player-mini__resize--se {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
+}
+
+/* Visual corner brackets */
 .player-mini__resize::after {
   content: '';
   position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 7px;
-  height: 7px;
-  border-top: 2px solid rgba(255, 255, 255, 0.65);
-  border-left: 2px solid rgba(255, 255, 255, 0.65);
+  width: 8px;
+  height: 8px;
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, border-color 0.15s ease;
+  pointer-events: none;
+  box-sizing: border-box;
 }
 
-.player--mini:hover .player-mini__resize::after { opacity: 1; }
+.player-mini__resize--nw::after {
+  top: 3px;
+  left: 3px;
+  border-top: 2px solid rgba(255, 255, 255, 0.75);
+  border-left: 2px solid rgba(255, 255, 255, 0.75);
+  border-top-left-radius: 3px;
+}
+
+.player-mini__resize--ne::after {
+  top: 3px;
+  right: 3px;
+  border-top: 2px solid rgba(255, 255, 255, 0.75);
+  border-right: 2px solid rgba(255, 255, 255, 0.75);
+  border-top-right-radius: 3px;
+}
+
+.player-mini__resize--sw::after {
+  bottom: 3px;
+  left: 3px;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.75);
+  border-left: 2px solid rgba(255, 255, 255, 0.75);
+  border-bottom-left-radius: 3px;
+}
+
+.player-mini__resize--se::after {
+  bottom: 3px;
+  right: 3px;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.75);
+  border-right: 2px solid rgba(255, 255, 255, 0.75);
+  border-bottom-right-radius: 3px;
+}
+
+.player--mini:hover .player-mini__resize::after {
+  opacity: 0.85;
+}
+
+.player-mini__resize:hover::after,
+.player--resizing .player-mini__resize::after {
+  opacity: 1;
+  border-color: var(--accent-primary, #3b82f6) !important;
+}
+
+/* Edge handles */
+.player-mini__resize-edge {
+  position: absolute;
+  z-index: 7;
+  touch-action: none;
+}
+.player-mini__resize-edge--n {
+  top: 0;
+  left: 18px;
+  right: 18px;
+  height: 6px;
+  cursor: ns-resize;
+}
+.player-mini__resize-edge--s {
+  bottom: 0;
+  left: 18px;
+  right: 18px;
+  height: 6px;
+  cursor: ns-resize;
+}
+.player-mini__resize-edge--w {
+  left: 0;
+  top: 18px;
+  bottom: 18px;
+  width: 6px;
+  cursor: ew-resize;
+}
+.player-mini__resize-edge--e {
+  right: 0;
+  top: 18px;
+  bottom: 18px;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+/* Global cursor overrides during active resize drag */
+.player--resizing-nw, .player--resizing-nw * { cursor: nwse-resize !important; }
+.player--resizing-se, .player--resizing-se * { cursor: nwse-resize !important; }
+.player--resizing-ne, .player--resizing-ne * { cursor: nesw-resize !important; }
+.player--resizing-sw, .player--resizing-sw * { cursor: nesw-resize !important; }
+.player--resizing-n,  .player--resizing-n *  { cursor: ns-resize !important; }
+.player--resizing-s,  .player--resizing-s *  { cursor: ns-resize !important; }
+.player--resizing-w,  .player--resizing-w *  { cursor: ew-resize !important; }
+.player--resizing-e,  .player--resizing-e *  { cursor: ew-resize !important; }
 
 .player__video { width: 100%; height: 100%; object-fit: contain; }
 .player__video--Crop { object-fit: cover; }

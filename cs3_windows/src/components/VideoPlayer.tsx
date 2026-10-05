@@ -3481,7 +3481,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           dropped.
         */
         (mini && floatingMode === 'background' ? ' player--audio-only' : '') +
-        (mini && miniFrame.isDragging ? ' player--dragging' : '')
+        (mini && miniFrame.isDragging ? ' player--dragging' : '') +
+        (mini && miniFrame.isResizing && miniFrame.resizeDirection
+          ? ` player--resizing player--resizing-${miniFrame.resizeDirection}`
+          : '')
       }
       // `display: none` rather than unmounting: see the `hidden` prop. The
       // element keeps its buffer, its position and its decoder.
@@ -3671,12 +3674,53 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
           </div>
 
-          {/* Top-left resize handle: a window parked in the corner
-              of the screen has its bottom-right corner against the edge. */}
+          {/* Windows-style resizable corners and edges for mini player */}
           <div
-            className="player-mini__resize"
-            onPointerDown={miniFrame.startResize}
-            title="Drag to resize"
+            className="player-mini__resize player-mini__resize--nw"
+            onPointerDown={miniFrame.startResize('nw')}
+            title="Resize (Top-Left)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize player-mini__resize--ne"
+            onPointerDown={miniFrame.startResize('ne')}
+            title="Resize (Top-Right)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize player-mini__resize--sw"
+            onPointerDown={miniFrame.startResize('sw')}
+            title="Resize (Bottom-Left)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize player-mini__resize--se"
+            onPointerDown={miniFrame.startResize('se')}
+            title="Resize (Bottom-Right)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize-edge player-mini__resize-edge--n"
+            onPointerDown={miniFrame.startResize('n')}
+            title="Resize (Top)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize-edge player-mini__resize-edge--s"
+            onPointerDown={miniFrame.startResize('s')}
+            title="Resize (Bottom)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize-edge player-mini__resize-edge--w"
+            onPointerDown={miniFrame.startResize('w')}
+            title="Resize (Left)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize-edge player-mini__resize-edge--e"
+            onPointerDown={miniFrame.startResize('e')}
+            title="Resize (Right)"
             role="presentation"
           />
         </>
