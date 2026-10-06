@@ -998,7 +998,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     if (!isNativeEngine) return;
 
+    let lastState: MpvSnapshot['state'] | null = null;
     const dispose = window.cloudstream?.onMpvUpdate((snapshot: MpvSnapshot) => {
+      // Leaving `loading` means the file is open: the moment subtitle
+      // properties stop being discarded by the next `loadfile`.
+      if (lastState === 'loading' && snapshot.state !== 'loading') setMpvOpenCount((n) => n + 1);
+      lastState = snapshot.state;
       if (snapshot.state === 'playing') {
         setIsPlaying(true);
         setHasStartedPlayback(true);
@@ -2211,6 +2216,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * properties off the player root.
    */
   const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
+  const [mpvOpenCount, setMpvOpenCount] = useState(0);
 
   /**
    * The native engine gets the same appearance as the element does.
@@ -2218,12 +2224,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * Without this, routing a 4K HEVC file to mpv — which the engine does on its
    * own, without the viewer asking — would silently discard every subtitle
    * setting and show mpv's defaults instead. Re-applied on each open because
-   * properties do not survive a `loadfile`.
+   * properties do not survive a `loadfile`. `streamUrl` alone fired before
+   * the open resolved and was then wiped by it, so the open itself re-arms it.
    */
   useEffect(() => {
     if (!isNativeEngine) return;
     void window.cloudstream?.mpvSetSubtitleStyle?.(subtitleMpvProperties(subtitleStyle));
-  }, [isNativeEngine, subtitleStyle, streamUrl]);
+  }, [isNativeEngine, subtitleStyle, streamUrl, mpvOpenCount]);
+
+  /**
+   * Chromium resolves `video::cue` custom properties against the document,
+   * not reliably against the player root, so the tokens are mirrored onto
+   * `:root` while a player is mounted and withdrawn when it goes.
+   */
+  useEffect(() => {
+    const root = document.documentElement.style;
+    const vars = subtitleCssVariables(subtitleStyle);
+    for (const [name, value] of Object.entries(vars)) root.setProperty(name, value);
+    return () => { for (const name of Object.keys(vars)) root.removeProperty(name); };
+  }, [subtitleStyle]);
 
   useEffect(() => {
     let cancelled = false;
