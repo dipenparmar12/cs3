@@ -36,7 +36,7 @@ import type { SearchSnapshot } from '../electron/searchSession';
 import { describeError } from './utils/errors';
 import { pickResumePoint } from './utils/resumePoint';
 import { historyEventForTask } from './utils/historyEvent';
-import { decodeShareLink } from './utils/shareLink';
+import { decodeShareLink, SHARE_SCHEME } from './utils/shareLink';
 import { loadWatchState } from './components/player/seriesContext';
 import { usePrivacy } from './utils/usePrivacy';
 import { ScrollToTop } from './components/ScrollToTop';
@@ -871,6 +871,13 @@ export const App: React.FC = () => {
    * seconds before the slowest one has answered.
    */
   const handleSearch = useCallback(async (query: string, options?: SearchOptions) => {
+    // A pasted share link opens its page rather than being searched for as
+    // text (PRD-051 §23–27). Only our own media prefix is routed; any other
+    // URL stays a search, and a damaged link is reported by the decoder.
+    if (query.trim().toLowerCase().startsWith(`${SHARE_SCHEME}://media/`)) {
+      handleShareLink(query);
+      return;
+    }
     lastQuery.current = { query, options };
     setSavedView(null);
     setSearchQuery(query);
@@ -891,7 +898,7 @@ export const App: React.FC = () => {
     } catch (err) {
       setSearchError(describeError(err));
     }
-  }, []);
+  }, [handleShareLink]);
 
   /**
    * Abandons the running search, keeping whatever it has already found.
