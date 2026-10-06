@@ -58,6 +58,7 @@
  * settle it — that is what the harness is for.
  */
 
+import { createHash } from 'node:crypto';
 import { fetchJson } from '../torrent/http.ts';
 import {
   CreditRole,
@@ -107,6 +108,19 @@ const value = (row: Record<string, SparqlBinding>, key: string): string | undefi
 /**
  * A Commons file reference as a URL the renderer can afford to load.
  *
+ * Addressed straight at `upload.wikimedia.org`, never through
+ * `commons.wikimedia.org/wiki/Special:FilePath`. The redirect host is the one
+ * some networks refuse: measured on a user's connection, `commons.wikimedia.org`
+ * had its TLS handshake reset while `upload.wikimedia.org` and `wikidata.org`
+ * answered normally — so every Wikidata headshot failed to load and every cast
+ * card fell back to initials, with the photograph's URL sitting in the record.
+ * The thumbnail path is not a guess: Commons files a thumbnail under the first
+ * one and two hex digits of the MD5 of its file name, the same rule MediaWiki
+ * uses to write it. Skipping the redirect also saves a round trip per face.
+ *
+ * Formats whose thumbnails are not simply `<width>px-<name>` (multi-page TIFF
+ * and PDF) keep the redirect form, which is still right where it is reachable.
+ *
  * Also normalises the scheme: Wikidata publishes `http://` URIs in its data and
  * the app's CSP and proxy both expect https, so an unrewritten one fails to
  * load with nothing on screen saying why.
@@ -114,8 +128,39 @@ const value = (row: Record<string, SparqlBinding>, key: string): string | undefi
 export function commonsThumbnail(raw: string | undefined, width = IMAGE_WIDTH): string | undefined {
   if (!raw) return undefined;
   const https = raw.replace(/^http:\/\//i, 'https://');
-  if (!/Special:FilePath/i.test(https)) return https;
-  return `${https}${https.includes('?') ? '&' : '?'}width=${width}`;
+  const match = /Special:FilePath\/([^?#]+)/i.exec(https);
+  if (!match) return https;
+  const direct = uploadThumbnail(match[1], width);
+  if (direct) return direct;
+  return `${https.replace(/[?&]width=\d+/i, '')}${https.includes('?') ? '&' : '?'}width=${width}`;
+}
+
+/**
+ * Widths Wikimedia renders ahead of time. An arbitrary width is generated on
+ * demand and throttled; one of these is served from cache.
+ */
+const STANDARD_THUMB_WIDTHS = [120, 250, 330, 500, 960];
+
+function uploadThumbnail(encodedName: string, width: number): string | undefined {
+  let name: string;
+  try {
+    name = decodeURIComponent(encodedName);
+  } catch {
+    return undefined;
+  }
+  // MediaWiki's canonical file name: underscores, first letter upper-cased.
+  name = name.trim().replace(/ /g, '_');
+  if (!name) return undefined;
+  name = name.charAt(0).toUpperCase() + name.slice(1);
+  const extension = name.split('.').pop()?.toLowerCase() ?? '';
+  if (['tif', 'tiff', 'pdf', 'djvu', 'webm', 'ogv'].includes(extension)) return undefined;
+
+  const step = STANDARD_THUMB_WIDTHS.find((w) => w >= width) ?? STANDARD_THUMB_WIDTHS.at(-1)!;
+  const hash = createHash('md5').update(name).digest('hex');
+  const file = encodeURIComponent(name);
+  // An SVG thumbnail is rasterised and carries a `.png` suffix of its own.
+  const thumbName = extension === 'svg' ? `${step}px-${file}.png` : `${step}px-${file}`;
+  return `https://upload.wikimedia.org/wikipedia/commons/thumb/${hash[0]}/${hash.slice(0, 2)}/${file}/${thumbName}`;
 }
 
 /** `http://www.wikidata.org/entity/Q38111` → a page a person can actually open. */
