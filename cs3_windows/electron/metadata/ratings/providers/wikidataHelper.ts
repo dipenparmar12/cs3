@@ -1,5 +1,5 @@
 import { fetchJson } from '../../../torrent/http.ts';
-import type { WikidataReviewStatement } from '../types.ts';
+import type { WikidataReviewStatement } from '../../../../src/types/ratings.ts';
 
 const WIKIDATA_SPARQL_ENDPOINT = 'https://query.wikidata.org/sparql';
 const WIKIDATA_USER_AGENT = 'CloudStream/4.8 (contact: info@cloudstream.cfd)';

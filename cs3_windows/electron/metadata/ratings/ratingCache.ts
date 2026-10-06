@@ -1,6 +1,6 @@
 import path from 'path';
 import { JsonFileStore } from '../../util/jsonFileStore.ts';
-import type { CanonicalMediaIdentity, MediaRating } from './types.ts';
+import type { CanonicalMediaIdentity, MediaRating } from '../../../src/types/ratings.ts';
 
 const FILE_NAME = 'cs3-ratings-cache.json';
 const FRESH_MS = 7 * 24 * 60 * 60 * 1000; // 7 days freshness window
@@ -52,7 +52,7 @@ export class RatingCache {
 
   private load(): void {
     if (!this.store) return;
-    const raw = this.store.read();
+    const raw = this.store.load();
     this.entries.clear();
     const now = Date.now();
 
@@ -105,21 +105,21 @@ export class RatingCache {
     }
 
     if (this.store) {
-      this.store.scheduleWrite();
+      this.store.schedule();
     }
   }
 
   public delete(identity: CanonicalMediaIdentity): void {
     const key = buildRatingCacheKey(identity);
     if (this.entries.delete(key) && this.store) {
-      this.store.scheduleWrite();
+      this.store.schedule();
     }
   }
 
   public clear(): void {
     this.entries.clear();
     if (this.store) {
-      this.store.scheduleWrite();
+      this.store.schedule();
     }
   }
 

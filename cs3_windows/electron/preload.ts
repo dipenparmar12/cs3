@@ -50,6 +50,7 @@ import type { SaveSearchInput, SavedSearch, SavedSearchSummary } from './savedSe
 import type { MetadataDetail } from './metadataProvider';
 import type { ExtendedMetadata, PromoResolution, TitleVideo } from '../src/types/metadata';
 import type { RelatedMediaResult, RelatedMediaSearchRequest } from '../src/types/relatedMedia';
+import type { CanonicalMediaIdentity, MediaRating } from '../src/types/ratings';
 import type {
   TitleInteraction,
   TitleInteractionQuery,
@@ -287,6 +288,14 @@ export interface CloudStreamElectronAPI {
   findRelatedMedia: (
     request: RelatedMediaSearchRequest
   ) => Promise<Envelope & { results: RelatedMediaResult[]; cached?: boolean }>;
+  /** Fetches consolidated media ratings across IMDb, Rotten Tomatoes, Metacritic, and TMDB. */
+  getMediaRatings: (
+    identity: CanonicalMediaIdentity
+  ) => Promise<Envelope & { ratings: MediaRating[]; cached?: boolean }>;
+  /** Forces a fresh fetch of media ratings, bypassing the cache. */
+  refreshMediaRatings: (
+    identity: CanonicalMediaIdentity
+  ) => Promise<Envelope & { ratings: MediaRating[] }>;
   /**
    * Turns a trailer's page address into a stream the player can open.
    *
@@ -1993,6 +2002,8 @@ const api: CloudStreamElectronAPI = {
   clearExtendedMetadata: () => ipcRenderer.invoke('metadata:clearCache'),
   findTrailers: (title, year) => ipcRenderer.invoke('metadata:findTrailers', title, year),
   findRelatedMedia: (request) => ipcRenderer.invoke('metadata:findRelatedMedia', request),
+  getMediaRatings: (identity) => ipcRenderer.invoke('ratings:get', identity),
+  refreshMediaRatings: (identity) => ipcRenderer.invoke('ratings:refresh', identity),
   resolvePromoVideo: (pageUrl) => ipcRenderer.invoke('videos:resolve', pageUrl),
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),

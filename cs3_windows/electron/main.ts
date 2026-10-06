@@ -120,6 +120,8 @@ import {
 import { searchYouTubeTrailers } from './metadata/youtube';
 import { relatedMediaService } from './metadata/relatedMedia/relatedMediaService.ts';
 import type { RelatedMediaSearchRequest } from '../src/types/relatedMedia';
+import { mediaRatingService } from './metadata/ratings/mediaRatingService.ts';
+import type { CanonicalMediaIdentity } from '../src/types/ratings.ts';
 import { OttCatalogService } from './cs3/ottCatalog';
 import { TorrentImportService, classifyDroppedPath, looksLikeMagnet } from './torrent/torrentImport';
 import { parseReleaseName } from './torrent/releaseParser';
@@ -399,6 +401,8 @@ const pageSnapshots = new PageSnapshotStore(app.getPath('userData'));
 const savedSearches = new SavedSearchStore(app.getPath('userData'));
 contentService.setSnapshotStore(pageSnapshots);
 relatedMediaService.setDirectory(app.getPath('userData'));
+mediaRatingService.setDirectory(app.getPath('userData'));
+mediaRatingService.setDatastore(datastore);
 /**
  * The home screen's catalogue source, and the rows built from it.
  *
@@ -3260,6 +3264,22 @@ ipcMain.handle('metadata:findRelatedMedia', async (_, request: RelatedMediaSearc
     return res;
   } catch (error) {
     return { ...fail(error), results: [], cached: false };
+  }
+});
+
+ipcMain.handle('ratings:get', async (_, identity: CanonicalMediaIdentity) => {
+  try {
+    return await mediaRatingService.getRatings(identity);
+  } catch (error) {
+    return { ...fail(error), ok: false, ratings: [] };
+  }
+});
+
+ipcMain.handle('ratings:refresh', async (_, identity: CanonicalMediaIdentity) => {
+  try {
+    return await mediaRatingService.refreshRatings(identity);
+  } catch (error) {
+    return { ...fail(error), ok: false, ratings: [] };
   }
 });
 

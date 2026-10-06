@@ -3,7 +3,7 @@ import type {
   MediaRating,
   RatingFetchContext,
   RatingProvider,
-} from '../types.ts';
+} from '../../../../src/types/ratings.ts';
 import { fetchJson } from '../../../torrent/http.ts';
 
 interface TmdbItemResponse {

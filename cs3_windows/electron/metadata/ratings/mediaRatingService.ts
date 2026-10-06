@@ -4,7 +4,7 @@ import type {
   MediaRatingsResult,
   RatingFetchContext,
   RatingProvider,
-} from './types.ts';
+} from '../../../src/types/ratings.ts';
 import { RatingCache, buildRatingCacheKey } from './ratingCache.ts';
 import { IMDbRatingProvider } from './providers/imdbProvider.ts';
 import { RottenTomatoesRatingProvider } from './providers/rottenTomatoesProvider.ts';
@@ -12,7 +12,7 @@ import { MetacriticRatingProvider } from './providers/metacriticProvider.ts';
 import { TMDBRatingProvider } from './providers/tmdbProvider.ts';
 import { fetchWikidataReviewStatements } from './providers/wikidataHelper.ts';
 import { fetchJson } from '../../torrent/http.ts';
-import type { DatastoreService } from '../../cs3/datastore.ts';
+import type { DatastoreManager } from '../../datastore.ts';
 
 const CINEMETA_BASE = 'https://v3-cinemeta.strem.io';
 const TMDB_KEY = 'home_tmdb_api_key';
@@ -20,7 +20,7 @@ const TMDB_KEY = 'home_tmdb_api_key';
 export class MediaRatingService {
   private readonly cache = new RatingCache();
   private readonly providers: RatingProvider[];
-  private datastore: DatastoreService | null = null;
+  private datastore: DatastoreManager | null = null;
   private readonly inFlight = new Map<string, Promise<MediaRating[]>>();
 
   constructor(providers?: RatingProvider[]) {
@@ -36,7 +36,7 @@ export class MediaRatingService {
     this.cache.setDirectory(dir);
   }
 
-  public setDatastore(datastore: DatastoreService): void {
+  public setDatastore(datastore: DatastoreManager): void {
     this.datastore = datastore;
   }
 
