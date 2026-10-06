@@ -92,6 +92,12 @@
 - **Raw Exception:** `javax.net.ssl.SSLHandshakeException: PKIX path building failed: sun.security.provider.certpath.SunCertPathBuilderException: unable to find valid certification path to requested target`
 - **What is happening:** Several unofficial provider domains use custom or recently re-issued intermediate SSL certificates that are not present in the bundled JRE's `cacerts` keystore.
 - **Current App Handling:** The HTTPS connection is rejected outright before any HTTP data is sent.
+```
+[30676:1005/232641.814:ERROR:net\socket\ssl_client_socket_impl.cc:963] handshake failed; returned -1, SSL error code 1, net_error -101
+[30676:1005/232641.814:ERROR:net\socket\ssl_client_socket_impl.cc:963] handshake failed; returned -1, SSL error code 1, net_error -101
+[30676:1005/232641.834:ERROR:net\socket\ssl_client_socket_impl.cc:963] handshake failed; returned -1, SSL error code 1, net_error -101
+[30676:1005/232642.675:ERROR:net\socket\ssl_client_socket_impl.cc:963] handshake failed; returned -1, SSL error code 1, net_error -101
+```
 
 #### 8. Sidecar Process Crash (`exit code 1`)
 - **Occurrences:** **26 times**
