@@ -428,7 +428,7 @@ export interface CloudStreamElectronAPI {
      * `persistent`: keep trying on its own — every source in turn, then every
      * provider and indexer — instead of stopping to ask. Standard mode.
      */
-    options?: { persistent?: boolean }
+    options?: { persistent?: boolean; resumeKey?: string }
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
   /** Starts the best source found so far instead of waiting for every indexer. */
   /** Abandons a source that started but will not play, and tries the next. */

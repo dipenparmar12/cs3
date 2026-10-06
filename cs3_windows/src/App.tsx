@@ -34,13 +34,14 @@ import type { TorrentResult } from './types/torrent';
 import type { PlaybackSnapshot } from '../electron/playbackSession';
 import type { SearchSnapshot } from '../electron/searchSession';
 import { describeError } from './utils/errors';
-import { pickResumePoint } from './utils/resumePoint';
+import { pickResumePoint, resumeSeconds } from './utils/resumePoint';
 import { historyEventForTask } from './utils/historyEvent';
 import { decodeShareLink, SHARE_SCHEME } from './utils/shareLink';
 import { loadWatchState } from './components/player/seriesContext';
 import { usePrivacy } from './utils/usePrivacy';
 import { ScrollToTop } from './components/ScrollToTop';
 import { durableAddress } from './utils/durableAddress';
+import { canonicalKey } from '../electron/cs3/libraryStore';
 
 /**
  * Every screen except Home, loaded when it is opened.
@@ -1170,7 +1171,15 @@ export const App: React.FC = () => {
       // Standard mode keeps trying on its own, as the Android player does —
       // every source, then everywhere. Developer mode stops to show what
       // failed. See `persistent` in `playbackSession.ts`.
-      { persistent: !isDeveloper }
+      {
+        persistent: !isDeveloper,
+        // A resume asks for the source the saved position was reached on, so
+        // the timeline it belongs to is the one that plays.
+        resumeKey:
+          context.progress?.resumeAt && context.progress.resumeAt > 0
+            ? canonicalKey(context.title, context.progress.year)
+            : undefined,
+      }
     );
     if (!response.ok || !response.snapshot) {
       setSwitchError(response.error ?? 'Could not start playback.');
@@ -1346,6 +1355,19 @@ export const App: React.FC = () => {
         // one; the parent page is the durable route back. The title travels
         // too, so a widened search looks for this work rather than guessing.
         const mediaUrl = durableAddress(item.mediaUrl, item.parentMediaUrl) || item.mediaUrl;
+        // Where the viewer stopped. This path never asked, so every title
+        // reopened from History started at 0:00 with its position sitting in
+        // the store — reported on Extraction II, saved at 18 minutes in.
+        const watchState = await loadWatchState(mediaUrl, {
+          title: item.parentTitle || item.title,
+          year: item.year,
+        });
+        const resumeAt = resumeSeconds(
+          watchState,
+          item.season !== undefined || item.episode !== undefined
+            ? ({ season: item.season, episode: item.episode } as Episode)
+            : null
+        );
         await startSession({
           request: {
             mediaUrl,
@@ -1368,6 +1390,7 @@ export const App: React.FC = () => {
             posterUrl: item.posterUrl,
             season: item.season,
             episode: item.episode,
+            resumeAt,
           },
           subtitleContext: {
             season: item.season,
@@ -1811,7 +1834,18 @@ export const App: React.FC = () => {
           the next screen is the failure this split would otherwise introduce.
         */}
         <main className="view-viewport" ref={viewportRef}>
-          <Suspense fallback={<ViewSkeleton />}>
+          {/*
+            The player's own boundary, never the routes'.
+
+            They used to share one. The first visit to a screen whose code had
+            not loaded yet — Settings, Home, anything — suspended that boundary,
+            and a suspended boundary hides everything inside it and tears down
+            its effects. The player was inside it: its stream was detached, then
+            re-attached from 0:00 when the screen arrived, so stepping from a
+            mini player to another screen restarted the film. Loading a screen
+            must never reach the thing playing above it.
+          */}
+          <Suspense fallback={null}>
           {/* Active Fullscreen Video Player Overlay.
               A session takes precedence: it renders the player from the first
               click, before a stream exists, and fills it in as one resolves. */}
@@ -2017,6 +2051,9 @@ export const App: React.FC = () => {
             />
           )}
 
+          </Suspense>
+
+          <Suspense fallback={<ViewSkeleton />}>
           {/* Media Details View Overlay */}
           {selectedMedia ? (
             <DetailView
