@@ -1877,6 +1877,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         plot={detail.plot || extended?.plot}
         rating={detail.rating}
         duration={detail.duration || formatRuntimeMinutes(extended?.runtimeMinutes) || undefined}
+        tmdbId={extended?.ids?.tmdb || (detail as any)?.tmdbId}
         tags={detail.tags}
         fallbackNote={
           fellBackTo
@@ -1884,7 +1885,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
             : undefined
         }
         isSeries={isSeries}
-        provenance={{ ...provenance, imdbId: detail.imdbId }}
+        provenance={{ ...provenance, imdbId: detail.imdbId || extended?.ids?.imdb }}
         saved={saved}
         busy={startingStream}
         sourceReadiness={prefetch}

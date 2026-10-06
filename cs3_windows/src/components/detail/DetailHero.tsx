@@ -20,6 +20,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { useDismissable } from '../../utils/useDismissable';
+import { MediaRatings } from './MediaRatings';
 
 /**
  * The detail page's masthead.
@@ -93,6 +94,7 @@ interface DetailHeroProps {
   plot?: string;
   rating?: number;
   duration?: string;
+  tmdbId?: number;
   tags?: string[];
   /** Shown above the meta line when details came from a fallback source. */
   fallbackNote?: string;
@@ -161,6 +163,7 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   plot,
   rating,
   duration,
+  tmdbId,
   tags,
   fallbackNote,
   isSeries,
@@ -355,6 +358,17 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
           )}
           <span className="badge badge--muted">{type}</span>
         </div>
+
+        <MediaRatings
+          identity={{
+            title,
+            originalTitle,
+            imdbId: provenance.imdbId,
+            tmdbId,
+            year,
+            type: isSeries ? 'series' : 'movie',
+          }}
+        />
 
         {tags && tags.length > 0 && (
           <div className="detail-hero__tags">

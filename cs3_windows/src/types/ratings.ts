@@ -40,3 +40,27 @@ export interface MediaRatingsResult {
   cached?: boolean;
   error?: string;
 }
+
+export interface WikidataReviewStatement {
+  reviewer?: string;
+  reviewerLabel?: string;
+  criterion?: string;
+  criterionLabel?: string;
+  score?: string;
+  reviews?: string;
+}
+
+export interface RatingFetchContext {
+  wikidataStatements?: Promise<WikidataReviewStatement[]>;
+  cinemetaMeta?: Promise<Record<string, unknown> | null>;
+  tmdbApiKey?: string;
+}
+
+export interface RatingProvider {
+  readonly id: RatingSourceId;
+  readonly name: string;
+  fetch(
+    identity: CanonicalMediaIdentity,
+    context?: RatingFetchContext
+  ): Promise<MediaRating | null>;
+}

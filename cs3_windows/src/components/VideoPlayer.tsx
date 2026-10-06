@@ -61,7 +61,7 @@ import {
 } from '../utils/subtitleStyle';
 import { durationCloseness, subtitleFitsMedia } from '../utils/subtitleDuration';
 import { durableAddress } from '../utils/durableAddress';
-import { formatBufferAhead, loadTimeDisplayMode, rightHandSeconds, saveTimeDisplayMode, type TimeDisplayMode } from './player/timeDisplay';
+import { formatBufferAhead, formatDeltaSeconds, loadTimeDisplayMode, rightHandSeconds, saveTimeDisplayMode, type TimeDisplayMode } from './player/timeDisplay';
 import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
 
@@ -414,6 +414,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isHoveringControls, setIsHoveringControls] = useState(false);
   const [isInteracting, setIsInteracting] = useState(false);
+  const [scrubbingTime, setScrubbingTime] = useState<number | null>(null);
   const [activeMenuCount, setActiveMenuCount] = useState(0);
   const onMenuOpenChange = useCallback((open: boolean) => {
     setActiveMenuCount((c) => Math.max(0, c + (open ? 1 : -1)));
@@ -2735,7 +2736,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [sourceSession?.phase, sourceSession?.activeInfoHash]);
 
-  const progressPercent = duration ? (currentTime / duration) * 100 : 0;
+  const effectiveTime = scrubbingTime !== null ? scrubbingTime : currentTime;
+  const progressPercent = duration ? (effectiveTime / duration) * 100 : 0;
 
   /**
    * Inspects the stream and opens whatever it needs, before anything plays.
@@ -4736,6 +4738,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 </div>
               )}
               <span>{formatTimecode(hoverTime)}</span>
+              {Math.abs(hoverTime - currentTime) >= 2 && (
+                <span className="player__preview-delta">
+                  {formatDeltaSeconds(hoverTime - currentTime)}
+                </span>
+              )}
               {/* Whether a seek here lands in what is already banked (PRD-051 §31). */}
               {hoverTime >= currentTime && buffered > currentTime && (
                 <span className="player__preview-buffer">
@@ -4751,15 +4758,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             min={0}
             max={duration || 0}
             step={0.1}
-            value={currentTime}
+            value={effectiveTime}
             onPointerDown={(e) => {
               e.stopPropagation();
               setIsInteracting(true);
+              setScrubbingTime(Number((e.target as HTMLInputElement).value));
               revealControls();
             }}
-            onPointerUp={() => setIsInteracting(false)}
+            onInput={(e) => {
+              const val = Number((e.target as HTMLInputElement).value);
+              setScrubbingTime(val);
+              revealControls();
+            }}
+            onPointerUp={(e) => {
+              setIsInteracting(false);
+              const val = Number((e.target as HTMLInputElement).value);
+              seekTo(val);
+              setScrubbingTime(null);
+            }}
             onChange={(e) => {
-              seekTo(Number(e.target.value));
+              const val = Number(e.target.value);
+              seekTo(val);
+              setScrubbingTime(null);
               revealControls();
             }}
             aria-label="Seek"

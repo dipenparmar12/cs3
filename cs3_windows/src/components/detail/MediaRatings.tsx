@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { ExternalLink, RefreshCw, Star } from 'lucide-react';
+import { ExternalLink, RefreshCw } from 'lucide-react';
 import type { CanonicalMediaIdentity, MediaRating } from '../../types/ratings.ts';
 
 interface MediaRatingsProps {

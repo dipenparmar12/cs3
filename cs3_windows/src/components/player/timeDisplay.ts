@@ -50,3 +50,15 @@ export function formatBufferAhead(bufferedEnd: number, current: number): string 
   if (m > 0) return s > 0 ? `+${m}m ${s}s` : `+${m}m`;
   return `+${s}s`;
 }
+
+/** Formats a relative seek delta from current playhead (e.g. +1m 30s or -45s). */
+export function formatDeltaSeconds(delta: number): string {
+  const abs = Math.abs(Math.round(delta));
+  const sign = delta >= 0 ? '+' : '-';
+  const h = Math.floor(abs / 3600);
+  const m = Math.floor((abs % 3600) / 60);
+  const s = abs % 60;
+  if (h > 0) return `${sign}${h}h ${m}m`;
+  if (m > 0) return s > 0 ? `${sign}${m}m ${s}s` : `${sign}${m}m`;
+  return `${sign}${s}s`;
+}
