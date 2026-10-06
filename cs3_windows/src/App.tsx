@@ -40,6 +40,7 @@ import { decodeShareLink } from './utils/shareLink';
 import { loadWatchState } from './components/player/seriesContext';
 import { usePrivacy } from './utils/usePrivacy';
 import { ScrollToTop } from './components/ScrollToTop';
+import { durableAddress } from './utils/durableAddress';
 
 /**
  * Every screen except Home, loaded when it is opened.
@@ -1331,11 +1332,16 @@ export const App: React.FC = () => {
       setPreparing({ title: item.title });
 
       try {
+        // Rows written before loopback addresses were refused still carry
+        // one; the parent page is the durable route back. The title travels
+        // too, so a widened search looks for this work rather than guessing.
+        const mediaUrl = durableAddress(item.mediaUrl, item.parentMediaUrl) || item.mediaUrl;
         await startSession({
           request: {
-            mediaUrl: item.mediaUrl,
+            mediaUrl,
             season: item.season,
             episode: item.episode,
+            titleOverride: item.parentTitle || item.title,
           },
           title: item.title,
           originalTitle: item.source?.sourceName !== item.title ? item.source?.sourceName : undefined,
@@ -1347,7 +1353,7 @@ export const App: React.FC = () => {
           },
           episodeTitle: item.episodeTitle,
           progress: {
-            mediaUrl: item.mediaUrl,
+            mediaUrl,
             year: item.year,
             posterUrl: item.posterUrl,
             season: item.season,

@@ -60,6 +60,7 @@ import {
   type SubtitleStyle,
 } from '../utils/subtitleStyle';
 import { subtitleFitsMedia } from '../utils/subtitleDuration';
+import { durableAddress } from '../utils/durableAddress';
 import { formatBufferAhead, loadTimeDisplayMode, rightHandSeconds, saveTimeDisplayMode, type TimeDisplayMode } from './player/timeDisplay';
 import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
@@ -1486,7 +1487,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             year: progress?.year || series?.year,
             type: progress?.season !== undefined || series ? 'series' : 'movie',
             posterUrl: progress?.posterUrl || series?.posterUrl,
-            mediaUrl: progress?.mediaUrl || streamUrl,
+            mediaUrl: durableAddress(progress?.mediaUrl, series?.currentEpisodeUrl, series?.pageUrl, streamUrl),
             parentMediaUrl: series?.pageUrl || progress?.mediaUrl || series?.currentEpisodeUrl,
             episodeTitle,
             season: progress?.season,
@@ -1516,7 +1517,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               year: progress?.year || series?.year,
               type: progress?.season !== undefined || series ? 'series' : 'movie',
               posterUrl: progress?.posterUrl || series?.posterUrl,
-              mediaUrl: progress?.mediaUrl || streamUrl,
+              mediaUrl: durableAddress(progress?.mediaUrl, series?.currentEpisodeUrl, series?.pageUrl, streamUrl),
               parentMediaUrl: series?.pageUrl || progress?.mediaUrl || series?.currentEpisodeUrl,
               episodeTitle,
               season: progress?.season,
