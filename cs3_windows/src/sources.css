@@ -9730,3 +9730,21 @@
   color: var(--text-muted, rgba(255, 255, 255, 0.45));
 }
 
+.player__time-toggle {
+  background: none;
+  border: 0;
+  padding: 0.15rem 0.3rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.player__time.player__time-toggle { font-size: 0.8rem; color: var(--text-muted); }
+.player-mini__time.player__time-toggle { font-size: 0.68rem; color: rgba(255, 255, 255, 0.7); }
+.player__time-toggle:hover,
+.player__time-toggle:focus-visible { color: var(--text-primary, #fff); background: rgba(255, 255, 255, 0.08); }
+.player__buffer-ahead {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}

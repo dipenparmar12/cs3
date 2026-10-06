@@ -59,6 +59,7 @@ import {
   subtitleMpvProperties,
   type SubtitleStyle,
 } from '../utils/subtitleStyle';
+import { formatBufferAhead, loadTimeDisplayMode, rightHandSeconds, saveTimeDisplayMode, type TimeDisplayMode } from './player/timeDisplay';
 import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
 
@@ -340,6 +341,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [buffered, setBuffered] = useState(0);
+  const [timeMode, setTimeMode] = useState<TimeDisplayMode>(loadTimeDisplayMode);
+  const toggleTimeMode = useCallback(() => {
+    setTimeMode((prev) => {
+      const next = prev === 'total' ? 'remaining' : 'total';
+      saveTimeDisplayMode(next);
+      return next;
+    });
+  }, []);
+  const rightHand = rightHandSeconds(timeMode, currentTime, duration);
+  const rightHandLabel = `${rightHand.negative ? '-' : ''}${formatTimecode(rightHand.seconds)}`;
+  const bufferAhead = formatBufferAhead(buffered, currentTime);
   const [volume, setVolume] = useState(1);
   /** Current volume/mute, readable from effects that must not depend on them. */
   const audioSettings = useRef({ volume: 1, muted: false });
@@ -3731,9 +3743,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               onPointerDown={(e) => e.stopPropagation()}
               aria-label="Volume"
             />
-            <span className="player-mini__time">
-              {formatTimecode(currentTime)} / {formatTimecode(duration)}
-            </span>
+            <button
+              type="button"
+              className="player-mini__time player__time-toggle"
+              onClick={toggleTimeMode}
+              onPointerDown={(e) => e.stopPropagation()}
+              title={timeMode === 'total' ? 'Show remaining time' : 'Show total time'}
+            >
+              {formatTimecode(currentTime)} / {rightHandLabel}
+            </button>
             <div className="player-mini__spacer" />
             {floating.isPipSupported && (
               <button
@@ -4647,9 +4665,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </button>
           )}
 
-          <span className="player__time">
-            {formatTimecode(currentTime)} / {formatTimecode(duration)}
-          </span>
+          <button
+            type="button"
+            className="player__time player__time-toggle"
+            onClick={toggleTimeMode}
+            title={timeMode === 'total' ? 'Show remaining time' : 'Show total time'}
+          >
+            {formatTimecode(currentTime)} / {rightHandLabel}
+          </button>
+          {bufferAhead && (
+            <span className="player__buffer-ahead" title="Buffered ahead of the playhead">
+              {bufferAhead}
+            </span>
+          )}
 
           <button
             className="icon-button"
