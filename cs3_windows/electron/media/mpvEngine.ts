@@ -166,7 +166,25 @@ export const NATIVE_KEY_BINDINGS: ReadonlyArray<readonly [key: string, command: 
    * `q`, which is not bound at all.
    */
   ['ESC', 'set fullscreen no'],
+  /**
+   * Subtitle search, from the window the viewer is actually looking at.
+   *
+   * mpv plays in its own window, and the panel that finds subtitles online
+   * lives in the app's — so a viewer watching in mpv had no way to reach it
+   * short of finding the app window behind the film. `script-message` reaches
+   * every IPC client, this app included, which brings its window forward with
+   * the panel open. Fullscreen is left first, or the panel opens behind it.
+   */
+  ['s', 'set fullscreen no; script-message cs3-subtitles'],
+  ['S', 'set fullscreen no; script-message cs3-subtitles'],
 ] as const;
+
+/** What a `script-message` from mpv's window can ask the app for. */
+export type NativeAppAction = 'subtitles';
+
+export const NATIVE_APP_ACTIONS: Record<string, NativeAppAction> = {
+  'cs3-subtitles': 'subtitles',
+};
 
 /**
  * Video outputs tried in order, and why there is more than one.
@@ -189,6 +207,11 @@ export interface MpvEngineDeps {
   resolveBinary: (name: string) => string | null;
   /** Snapshots are pushed here; `main.ts` forwards them to the renderer. */
   onUpdate: (snapshot: MpvSnapshot) => void;
+  /**
+   * Something the viewer asked for from inside mpv's own window that only the
+   * app can do — see {@link NATIVE_APP_ACTIONS}.
+   */
+  onAction?: (action: NativeAppAction) => void;
   diagnostics?: {
     record(entry: {
       level: 'error' | 'warn' | 'info';
@@ -857,6 +880,15 @@ export class MpvEngine {
         if (typeof frame.name === 'string') this.properties.set(frame.name, frame.data);
         this.deriveState();
         this.emit();
+        break;
+      }
+      case 'client-message': {
+        const args = Array.isArray(frame.args) ? frame.args : [];
+        const action = NATIVE_APP_ACTIONS[String(args[0] ?? '')];
+        if (action) {
+          this.deps.onAction?.(action);
+          void this.command(['show-text', 'Subtitle search is open in CloudStream', 3000]);
+        }
         break;
       }
       case 'start-file': {
