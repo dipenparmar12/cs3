@@ -1347,8 +1347,135 @@ The complete subtitle workflow should become:
       │         │
       ▼         ▼
    Streaming  Download
-```
-
 The overall objective is to make subtitles a **reliable, validated, reusable media component**, rather than simply downloading or attaching whatever subtitle a provider happens to return.
 
 At the same time, audio/video synchronization must be treated as a **diagnose-first requirement**. If the existing playback pipeline is already synchronized correctly, preserve it. If a real synchronization bug is reproduced, identify the exact playback path and root cause before making targeted changes.
+
+---
+
+# 58. Enterprise-Grade UI/UX Design & In-Player Menu Integration
+
+The subtitle interface must feel like an integrated, enterprise-grade feature rather than an afterthought or a detached hack.
+
+### 58.1 In-Player Subtitle Menu Entry Point
+- The subtitle track menu in the player control bar must directly provide access to the online subtitle search experience.
+- When subtitles already exist on the stream, the menu lists available tracks alongside an explicit action to search online.
+- When a stream carries no subtitles at all, the player toolbar must still present the subtitle control so users can immediately discover and attach external subtitles without confusion.
+
+### 58.2 Language Selection with National Country Flags
+- The language filter must feature visual country flag iconography alongside language names to facilitate instant visual scanning.
+- Flag associations:
+  - 🌐 All Languages
+  - 🇬🇧 English
+  - 🇪🇸 Spanish
+  - 🇫🇷 French
+  - 🇩🇪 German
+  - 🇮🇹 Italian
+  - 🇵🇹 Portuguese
+  - 🇧🇷 Portuguese (BR)
+  - 🇷🇺 Russian
+  - 🇮🇳 Hindi
+  - 🇸🇦 Arabic
+  - 🇯🇵 Japanese
+  - 🇰🇷 Korean
+  - 🇨🇳 Chinese (Simplified)
+  - 🇹🇼 Chinese (Traditional)
+  - 🇮🇳 Tamil
+  - 🇮🇳 Telugu
+  - 🇮🇳 Bengali
+  - 🇮🇳 Malayalam
+  - 🇮🇳 Kannada
+  - 🇮🇳 Marathi
+  - 🇮🇳 Gujarati
+  - 🇵🇰 Urdu
+  - 🇮🇳 Punjabi
+  - 🇹🇷 Turkish
+  - 🇵🇱 Polish
+  - 🇳🇱 Dutch
+  - 🇮🇩 Indonesian
+  - 🇻🇳 Vietnamese
+  - 🇹🇭 Thai
+  - 🇬🇷 Greek
+  - 🇮🇱 Hebrew
+  - 🇸🇪 Swedish
+  - 🇳🇴 Norwegian
+  - 🇩🇰 Danish
+  - 🇫🇮 Finnish
+  - 🇷🇴 Romanian
+  - 🇺🇦 Ukrainian
+  - 🇭🇺 Hungarian
+  - 🇨🇿 Czech
+  - 🇵🇭 Tagalog / Filipino
+  - 🇲🇾 Malay
+  - 🇮🇷 Persian / Farsi
+- Selected language must instantly filter results or trigger targeted queries.
+
+### 58.3 UI Harmony with CS3 Design Philosophy
+- The panel must adhere strictly to the application's glassmorphism aesthetic:
+  - Translucent dark layered surfaces (`rgba(15, 20, 30, 0.85)` with background blur).
+  - Subtle borders and active accent highlights (`var(--accent-primary)`).
+  - Clear typography with proper tabular numerical alignment for timings.
+  - Smooth transitions and keyboard accessibility (`Escape` dismissal, `Tab` cycling, `Enter` submission).
+
+---
+
+# 59. Persistent In-Panel Search Results Caching & History
+
+Closing and reopening the subtitle panel must not discard previously retrieved results or re-trigger slow remote network scraping.
+
+### 59.1 In-Memory & Session Caching
+- Search outcomes must be cached in memory, keyed by media identity (normalized title, release year, season, and episode).
+- When a user re-opens the subtitle panel during playback, previously discovered results must render immediately without showing an empty or loading state.
+
+### 59.2 Non-Destructive Background Refresh
+- If the user explicitly modifies the title, year, season, or episode, a new search executes while preserving previous results until fresh candidates arrive.
+- Cached results remain available throughout the playback session.
+
+---
+
+# 60. Subtitle Duration Cross-Check & Reliability Badging
+
+Users must be able to visually identify whether a subtitle matches the exact cut and timing of their media before selecting it.
+
+### 60.1 Duration Validation Badging
+- Each subtitle result must display a visual duration status badge:
+  - **Match Badge:** Displayed when subtitle duration matches media duration within a normal tolerance (e.g. within 5–10% or a few minutes difference). Indicates high synchronization confidence.
+  - **Mismatch Warning Badge:** Displayed when subtitle duration significantly diverges from media duration (e.g. 2-hour subtitle for a 1-hour video). Warns the user of release cut or episode mismatches.
+- Automatic track selection and companion download features must strictly reject candidates flagged with large duration mismatches.
+
+---
+
+# 61. Subtitle Customization Architecture & Diagnosis
+
+### 61.1 Web Player (`<video>`) Styling Isolation
+- **Problem Diagnosis:** Subtitle styling settings (size, color, background, outline, lift) failed to apply to HTML5 video subtitles.
+- **Underlying Cause:** Chromium's `<video>` renders text tracks inside a closed user-agent shadow root. CSS variables applied to parent application containers are not inherited across the user-agent shadow boundary. Cues can only read variables defined on the root document level (`:root`).
+- **Required Architecture:** Customization variables must be declared on `:root` (`document.documentElement.style`) to ensure Chromium's WebVTT cue renderer resolves them.
+
+### 61.2 Native Player (`mpv`) Asynchronous IPC Synchronization
+- **Problem Diagnosis:** Subtitle styling preferences failed to apply when playing via native mpv.
+- **Underlying Cause:** mpv launches asynchronously. When the player UI sends subtitle styling commands during startup, mpv's IPC socket is not yet connected, causing configuration commands to drop. The native engine stage never re-synchronizes preferences after the process connects.
+- **Required Architecture:** The native engine stage must dispatch subtitle style commands immediately after the IPC connection is confirmed and keep properties synchronized on subsequent preference adjustments.
+
+---
+
+# 62. File Reference Directory & Module Responsibilities
+
+The following directory maps each architectural requirement to its exact location in the codebase for fast, unambiguous orientation. No source code modifications are included here; this serves as the definitive reference for upcoming implementation work.
+
+| Component / Requirement | File Path | Line Range of Interest | Responsibility / Architectural Role |
+|---|---|---|---|
+| **Subtitle Panel UI** | `cs3_windows/src/components/player/SubtitlePanel.tsx` | `L57–L555` | In-player subtitle search panel, query inputs, language filtering, saved subtitles list, and result presentation. |
+| **Subtitle Panel Styles** | `cs3_windows/src/sources.css` | `L2828–L2965`, `L9605–L9645` | Visual layout for search forms, inputs, badges, language tags, and action buttons. |
+| **Player Toolbar & Menu** | `cs3_windows/src/components/VideoPlayer.tsx` | `L4878–L4915`, `L4727–L4742` | Player toolbar Subtitle `HoverMenu`, search trigger, active track switching, and panel visibility toggling. |
+| **Subtitle Styling Application** | `cs3_windows/src/components/VideoPlayer.tsx` | `L2200–L2275`, `L3580–L3590` | Subtitle preference subscription and CSS variable injection for the media player. |
+| **Subtitle Style Tokens & mpv Translation** | `cs3_windows/src/utils/subtitleStyle.ts` | `L1–L118` | Shared definitions for size, color, background, outline, lift, CSS variable generation, and mpv property translation. |
+| **Native mpv Subtitle Execution** | `cs3_windows/src/components/player/NativeEngineStage.tsx` | `L104–L148` | Native mpv playback stage, external subtitle attachment, and initial engine style synchronization. |
+| **Native mpv IPC Engine** | `cs3_windows/electron/media/mpvEngine.ts` | `L1245–L1275`, `L605–L665` | mpv subprocess management, IPC command dispatch, subtitle track addition, and subtitle property mutation. |
+| **Online Subtitle Service** | `cs3_windows/electron/subtitleService.ts` | `L1–L286` | OpenSubtitles / Cinemeta API integration, title resolution, language code mapping, and byte-level fetching. |
+| **Subtitle Conversion & Charset Detection** | `cs3_windows/electron/subtitles/convert.ts` | `L1–L239` | Character encoding detection (BOM, UTF-8, Windows-1252), SRT-to-WebVTT conversion, and ASS parsing. |
+| **Local Subtitle Persistence** | `cs3_windows/electron/subtitles/subtitleLibrary.ts` | `L1–L198` | On-disk storage, retrieval, indexing, and deduplication of saved subtitle files. |
+| **Download Companion Subtitles** | `cs3_windows/electron/downloadService.ts` | `L815–L870` | Post-download companion file generation (`.srt` / `.vtt`) beside completed media files. |
+| **Subtitle Appearance Settings** | `cs3_windows/src/components/settings/SubtitleSettings.tsx` | `L1–L179` | User preferences UI for subtitle size, color, background, weight, and positioning. |
+| **Transcoding & Remuxing Pipeline** | `cs3_windows/electron/mediaTranscoder.ts` | `L500–L600` | FFmpeg arguments, timestamp normalization, dual-stream seeking, and live streaming output. |
+| **Media Decision Engine** | `cs3_windows/electron/media/playbackEngine.ts` | `L185–L215`, `L535–L560` | Stream format inspection, codec capability validation, and playback routing (Direct vs mpv vs Transcode). |
