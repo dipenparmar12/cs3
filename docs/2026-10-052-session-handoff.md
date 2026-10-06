@@ -49,7 +49,7 @@ and provider hydration without the JVM (startup PRD core); search-history remove
 5. **Provider verification** (051 §43–58): `webViewHost` solves challenges per resolve; no
    visible verification window, per-provider session state or resume-after-verify yet.
 6. **Startup PRD** gap audit: which remaining paths still await the network before first paint.
-7. **Buffer-ahead on seek-bar hover** (051 §31) — readout is beside the clock only.
+7. Buffer-ahead on seek-bar hover — done: the preview says "Buffered" or "Buffered to mm:ss".
 8. Errors audit Cat.1 #4–6 (`Sequence is empty`, empty date, Gofile token) are extension-side;
    PKIX/SSL is JVM truststore (bundled `cacerts`) — count before acting.
 

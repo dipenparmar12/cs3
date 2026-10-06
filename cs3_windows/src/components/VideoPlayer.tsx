@@ -4599,6 +4599,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 </div>
               )}
               <span>{formatTimecode(hoverTime)}</span>
+              {/* Whether a seek here lands in what is already banked (PRD-051 §31). */}
+              {hoverTime >= currentTime && buffered > currentTime && (
+                <span className="player__preview-buffer">
+                  {hoverTime <= buffered ? 'Buffered' : `Buffered to ${formatTimecode(buffered)}`}
+                </span>
+              )}
             </div>
           )}
 

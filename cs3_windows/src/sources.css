@@ -9802,3 +9802,9 @@
   color: inherit;
   font: inherit;
 }
+.player__preview-buffer {
+  display: block;
+  font-size: 0.66rem;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
