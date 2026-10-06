@@ -59,6 +59,7 @@ import {
   subtitleMpvProperties,
   type SubtitleStyle,
 } from '../utils/subtitleStyle';
+import { subtitleFitsMedia } from '../utils/subtitleDuration';
 import { formatBufferAhead, loadTimeDisplayMode, rightHandSeconds, saveTimeDisplayMode, type TimeDisplayMode } from './player/timeDisplay';
 import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
@@ -3125,6 +3126,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * episode, and a failure only means no subtitle — playback never waits on it.
    */
   const autoSubtitleKey = useRef<string | null>(null);
+  // Read at check time, not effect time: the online search lands after the
+  // duration is known even when `prepared` arrives before it.
+  const subtitleDurationRef = useRef(0);
+  subtitleDurationRef.current = duration;
   useEffect(() => {
     if (!prepared || activeSubtitle || subtitlesOff.current || !title) return;
     const key = `${title}|${subtitleContext?.season ?? ''}|${subtitleContext?.episode ?? ''}`;
@@ -3166,11 +3171,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const found = await api
         .searchSubtitles(imdbId || title, season, episode, progress?.mediaUrl)
         .catch(() => null);
-      const best = found?.results.find((r) => matches(r.langName));
-      if (!best || cancelled) return;
-      const fetched = await api.fetchSubtitle(best.url).catch(() => null);
-      if (!cancelled && fetched?.ok && fetched.vtt) {
+      // A subtitle whose timeline cannot fit this media belongs to another
+      // release; the next candidate in the language is tried instead, and the
+      // viewer can still pick a refused one by hand from the menu.
+      const candidates = (found?.results ?? []).filter((r) => matches(r.langName)).slice(0, 3);
+      for (const best of candidates) {
+        if (cancelled) return;
+        const fetched = await api.fetchSubtitle(best.url).catch(() => null);
+        if (cancelled || !fetched?.ok || !fetched.vtt) continue;
+        if (!subtitleFitsMedia(fetched.vtt, subtitleDurationRef.current)) continue;
         pick(URL.createObjectURL(new Blob([fetched.vtt], { type: 'text/vtt' })), best.langName);
+        return;
       }
     })();
     return () => {
