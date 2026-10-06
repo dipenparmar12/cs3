@@ -1,5 +1,5 @@
 import type { Episode } from '../../types/api';
-import { canonicalKey } from '../../../electron/cs3/libraryStore';
+import { canonicalKey } from '../../../electron/cs3/libraryStore.ts';
 
 /**
  * The series the player is currently inside.

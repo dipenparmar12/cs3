@@ -1,8 +1,15 @@
 package com.cloudstream.desktop.sidecar;
 
+import com.googlecode.d2j.Method;
 import com.googlecode.d2j.dex.Dex2jar;
+import com.googlecode.d2j.dex.DexExceptionHandler;
+import com.googlecode.d2j.node.DexMethodNode;
 import com.googlecode.d2j.reader.BaseDexFileReader;
 import com.googlecode.d2j.reader.MultiDexFileReader;
+
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -14,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -83,6 +91,52 @@ public final class DexTranslator {
      */
     private static final Object TRANSLATION_LOCK = new Object();
 
+    /**
+     * Marks a translation that failed, so the next launch does not repeat it.
+     *
+     * <p>Without it a failure was rediscovered on every launch and every call
+     * that reached the archive. For an archive whose translation exhausts the
+     * heap that is not a slow failure but a destructive one: StreamPlay filled
+     * a 4 GB heap each time, and the {@code OutOfMemoryError} took every other
+     * extension's calls down with it. Twelve abandoned {@code .jar.tmp} files
+     * for that one archive were sitting in a user's cache, one per attempt.
+     */
+    static final String FAILED_SUFFIX = ".failed";
+
+    /**
+     * A method dex2jar cannot convert becomes one that throws, instead of
+     * failing the whole archive.
+     *
+     * <p>Without a handler dex2jar throws out of the translation and the
+     * extension is lost over one method -- measured on StreamPlay, where a single
+     * method past the JVM's 64 KB limit cost all of its providers. The provider
+     * now loads and works everywhere except the path that calls that method,
+     * which fails with a reason. Same rule as the android shim: concede the
+     * type, refuse the operation.
+     */
+    private static final DexExceptionHandler REFUSE_FAILED_METHOD = new DexExceptionHandler() {
+        @Override
+        public void handleFileException(Exception e) {
+            throw new IllegalStateException(e);
+        }
+
+        @Override
+        public void handleMethodTranslateException(Method method, DexMethodNode node, MethodVisitor mv, Exception e) {
+            System.err.println("DexTranslator: " + method + " could not be translated and will throw when called: " + e);
+            int locals = (Type.getArgumentsAndReturnSizes(method.getDesc()) >> 2)
+                    - ((node.access & Opcodes.ACC_STATIC) != 0 ? 1 : 0);
+            mv.visitCode();
+            mv.visitTypeInsn(Opcodes.NEW, "java/lang/UnsupportedOperationException");
+            mv.visitInsn(Opcodes.DUP);
+            mv.visitLdcInsn("This method could not be translated for the desktop runtime: " + method.getName());
+            mv.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/UnsupportedOperationException", "<init>",
+                    "(Ljava/lang/String;)V", false);
+            mv.visitInsn(Opcodes.ATHROW);
+            mv.visitMaxs(3, Math.max(locals, 0));
+            mv.visitEnd();
+        }
+    };
+
     private final Path cacheRoot;
 
     /**
@@ -100,6 +154,7 @@ public final class DexTranslator {
         this.cacheRoot = cacheRoot;
         this.nameRepair = runtimeClasspathDir == null ? null : new KotlinNameRepair(runtimeClasspathDir);
         Files.createDirectories(cacheRoot);
+        sweepAbandonedTemps();
     }
 
     /**
@@ -169,6 +224,14 @@ public final class DexTranslator {
                     manifest.name, true, null, null);
         }
 
+        // A translation that failed for these exact bytes is not attempted again
+        // — see FAILED_SUFFIX. The archive's hash is in the name, so an update
+        // is a fresh attempt, and the generation is too, so a translator fix is.
+        Path failed = cacheRoot.resolve(sha + ".g" + CACHE_GENERATION + FAILED_SUFFIX);
+        if (Files.isRegularFile(failed)) {
+            return Outcome.failure("TRANSLATION_FAILED", readFailure(failed));
+        }
+
         synchronized (TRANSLATION_LOCK) {
             // Re-check cache under lock in case another worker thread just completed it
             if (Files.isRegularFile(out)) {
@@ -186,7 +249,13 @@ public final class DexTranslator {
             discardOtherGenerations(sha);
             try {
                 BaseDexFileReader reader = MultiDexFileReader.open(packForReader(dexes));
-                Dex2jar.from(reader)
+                Set<String> oversized = OversizedMethods.find(reader);
+                if (!oversized.isEmpty()) {
+                    System.err.println("DexTranslator: " + oversized.size()
+                            + " method(s) too large for the JVM will throw when called: " + oversized);
+                }
+                Dex2jar.from(OversizedMethods.stubbing(reader, oversized))
+                        .withExceptionHandler(REFUSE_FAILED_METHOD)
                         .skipDebug(false)
                         .topoLogicalSort()
                         .noCode(false)
@@ -202,29 +271,19 @@ public final class DexTranslator {
             } catch (Throwable t) {
                 // dex2jar throws Errors as well as Exceptions on malformed input.
                 try { Files.deleteIfExists(tmp); } catch (IOException ignored) { }
-                if (t instanceof OutOfMemoryError) {
-                    System.gc();
-                    // Attempt one retry after GC in case freed memory allows translation to succeed
-                    try {
-                        Thread.sleep(150);
-                        BaseDexFileReader reader = MultiDexFileReader.open(packForReader(dexes));
-                        Dex2jar.from(reader)
-                                .skipDebug(false)
-                                .topoLogicalSort()
-                                .noCode(false)
-                                .to(tmp);
-                        if (nameRepair != null) nameRepair.repair(tmp);
-                        Files.move(tmp, out, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-                    } catch (Throwable retryT) {
-                        try { Files.deleteIfExists(tmp); } catch (IOException ignored) { }
-                        System.gc();
-                        return Outcome.failure("TRANSLATION_FAILED",
-                                retryT.getClass().getSimpleName() + ": " + retryT.getMessage());
-                    }
-                } else {
-                    return Outcome.failure("TRANSLATION_FAILED",
-                            t.getClass().getSimpleName() + ": " + t.getMessage());
-                }
+                /*
+                 * No retry, including after OutOfMemoryError. There used to be
+                 * one, "in case freed memory allows translation to succeed" -- it
+                 * never did: the archive that exhausts the heap exhausts it again,
+                 * so the retry doubled the time the sidecar spent unable to
+                 * answer anything. The failure is written down instead.
+                 */
+                if (t instanceof OutOfMemoryError) System.gc();
+                String detail = t.getClass().getSimpleName() + ": " + t.getMessage();
+                // An I/O failure -- a locked file, a full disk -- is about this
+                // machine at this moment, not about the archive, and is retried.
+                if (!(t instanceof java.nio.file.FileSystemException)) recordFailure(failed, detail);
+                return Outcome.failure("TRANSLATION_FAILED", detail);
             }
 
             int classes = countClasses(out);
@@ -247,13 +306,51 @@ public final class DexTranslator {
         }
     }
 
-    /** Drops every cached translation. Used when the translator itself is upgraded. */
+    /** Drops every cached translation, and every recorded failure with them. */
     public int clearCache() throws IOException {
         int n = 0;
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(cacheRoot, "*.jar")) {
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(cacheRoot, "*.{jar,failed}")) {
             for (Path p : ds) { Files.deleteIfExists(p); n++; }
         }
         return n;
+    }
+
+    private static void recordFailure(Path marker, String detail) {
+        try {
+            Files.writeString(marker, detail == null ? "" : detail, StandardCharsets.UTF_8);
+        } catch (IOException ignored) {
+            // Unrecorded means it is tried again next time, which is the old behaviour.
+        }
+    }
+
+    private static String readFailure(Path marker) {
+        try {
+            String detail = Files.readString(marker, StandardCharsets.UTF_8).trim();
+            return detail.isEmpty() ? "Translation failed on an earlier attempt." : detail;
+        } catch (IOException e) {
+            return "Translation failed on an earlier attempt.";
+        }
+    }
+
+    /**
+     * Temp files a killed or out-of-memory translation left behind.
+     *
+     * Only old ones: a temp file younger than an hour may belong to a
+     * translation in progress, and deleting it would fail that run.
+     */
+    private void sweepAbandonedTemps() {
+        long cutoff = System.currentTimeMillis() - 60 * 60 * 1000L;
+        try (DirectoryStream<Path> temps = Files.newDirectoryStream(cacheRoot, "*.jar.tmp")) {
+            for (Path temp : temps) {
+                try {
+                    if (Files.getLastModifiedTime(temp).toMillis() < cutoff) Files.deleteIfExists(temp);
+                } catch (IOException ignored) {
+                    // Held or already gone.
+                }
+            }
+        } catch (IOException ignored) {
+            // No cache directory yet.
+        }
     }
 
     // --- archive reading -----------------------------------------------------

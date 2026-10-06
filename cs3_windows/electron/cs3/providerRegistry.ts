@@ -82,6 +82,18 @@ interface RegistryEntry {
   fingerprint: string;
   providers: CachedProvider[];
   recordedAt: number;
+  /**
+   * Set when the last load of these exact bytes failed for a reason that was
+   * the archive's, not the transport's. See `ProviderRegistryCache.recordFailure`.
+   */
+  failure?: CachedLoadFailure;
+}
+
+/** Why an archive would not load, last time it was asked to. */
+export interface CachedLoadFailure {
+  reason: string;
+  kind?: string;
+  at: number;
 }
 
 interface Persisted {
