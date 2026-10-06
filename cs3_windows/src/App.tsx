@@ -39,6 +39,7 @@ import { historyEventForTask } from './utils/historyEvent';
 import { decodeShareLink } from './utils/shareLink';
 import { loadWatchState } from './components/player/seriesContext';
 import { usePrivacy } from './utils/usePrivacy';
+import { ScrollToTop } from './components/ScrollToTop';
 
 /**
  * Every screen except Home, loaded when it is opened.
@@ -2211,6 +2212,9 @@ export const App: React.FC = () => {
           )}
           </Suspense>
         </main>
+        {/* Hidden while the player is on screen in any form: full-screen it has
+            nothing to scroll, and the mini window parks in the same corner. */}
+        <ScrollToTop target={viewportRef} hidden={!!session && !playerHidden} />
       </div>
 
       {/* Provider Inspector Panel Drawer — developer mode only. */}
