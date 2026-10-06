@@ -109,6 +109,7 @@ const PRESET_ALIASES = {
   jobs: ['electron/cs3/extensionJobs.test.mts'],
   'saved-searches': ['electron/savedSearches.test.mts'],
   'settings-search': ['src/components/settings/settingsSearch.test.mts'],
+  'related-media': ['electron/metadata/relatedMedia.test.mts'],
 };
 
 // Colors for terminal output

@@ -118,6 +118,8 @@ import {
   type EnrichmentRequest,
 } from './metadata/enrichmentService';
 import { searchYouTubeTrailers } from './metadata/youtube';
+import { relatedMediaService } from './metadata/relatedMedia/relatedMediaService.ts';
+import type { RelatedMediaSearchRequest } from '../src/types/relatedMedia';
 import { OttCatalogService } from './cs3/ottCatalog';
 import { TorrentImportService, classifyDroppedPath, looksLikeMagnet } from './torrent/torrentImport';
 import { parseReleaseName } from './torrent/releaseParser';
@@ -3248,6 +3250,15 @@ ipcMain.handle('metadata:findTrailers', async (_, title: string, year?: number) 
     return { ok: true, videos };
   } catch (error) {
     return { ...fail(error), videos: [] };
+  }
+});
+
+ipcMain.handle('metadata:findRelatedMedia', async (_, request: RelatedMediaSearchRequest) => {
+  try {
+    const res = await relatedMediaService.search(request);
+    return res;
+  } catch (error) {
+    return { ...fail(error), results: [], cached: false };
   }
 });
 

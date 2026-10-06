@@ -49,6 +49,7 @@ import type { ExtensionJobRequest, ExtensionJobsSnapshot } from './cs3/extension
 import type { SaveSearchInput, SavedSearch, SavedSearchSummary } from './savedSearches';
 import type { MetadataDetail } from './metadataProvider';
 import type { ExtendedMetadata, PromoResolution, TitleVideo } from '../src/types/metadata';
+import type { RelatedMediaResult, RelatedMediaSearchRequest } from '../src/types/relatedMedia';
 import type {
   TitleInteraction,
   TitleInteractionQuery,
@@ -282,6 +283,10 @@ export interface CloudStreamElectronAPI {
   clearExtendedMetadata: () => Promise<Envelope & { cleared: number }>;
   /** Searches public repositories (YouTube) keylessly for trailers and promos of any content. */
   findTrailers: (title: string, year?: number) => Promise<Envelope & { videos: TitleVideo[] }>;
+  /** Discovers on-demand reviews, explanations, recaps, and related media from public sources. */
+  findRelatedMedia: (
+    request: RelatedMediaSearchRequest
+  ) => Promise<Envelope & { results: RelatedMediaResult[]; cached?: boolean }>;
   /**
    * Turns a trailer's page address into a stream the player can open.
    *
@@ -1987,6 +1992,7 @@ const api: CloudStreamElectronAPI = {
   clearTitleVisits: () => ipcRenderer.invoke('interactions:clearVisits'),
   clearExtendedMetadata: () => ipcRenderer.invoke('metadata:clearCache'),
   findTrailers: (title, year) => ipcRenderer.invoke('metadata:findTrailers', title, year),
+  findRelatedMedia: (request) => ipcRenderer.invoke('metadata:findRelatedMedia', request),
   resolvePromoVideo: (pageUrl) => ipcRenderer.invoke('videos:resolve', pageUrl),
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),

@@ -32,6 +32,7 @@ import {
 } from '../components/detail/TitleMetadata';
 import { TrailerGallery } from '../components/detail/TrailerGallery';
 import { TrailerPopup } from '../components/detail/TrailerPopup';
+import { ReviewsAndExplanations } from '../components/detail/ReviewsAndExplanations';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { shouldRetryOnOpen } from '../utils/cardState';
 import type { ExtendedMetadata, TitleVideo } from '../types/metadata';
@@ -2018,6 +2019,19 @@ export const DetailView: React.FC<DetailViewProps> = ({
         onPlay={(video) => setTrailerId(video.id)}
         onSearchMore={handleFindMoreTrailers}
         searchingMore={searchingTrailers}
+      />
+
+      {/* On-demand reviews, explanations, recaps and related media */}
+      <ReviewsAndExplanations
+        title={detail.name}
+        originalTitle={mediaItem.originalTitle}
+        year={detail.year}
+        season={selectedEpisode?.season}
+        episode={selectedEpisode?.episode}
+        onPlayVideo={(video) => {
+          setDiscoveredVideos((prev) => mergeVideos([prev, [video]]));
+          setTrailerId(video.id);
+        }}
       />
 
       {/* Cast */}
