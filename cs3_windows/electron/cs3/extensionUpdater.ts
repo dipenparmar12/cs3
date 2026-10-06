@@ -54,6 +54,23 @@ export interface AvailableUpdate {
    * update and nothing happened".
    */
   reason: 'newer' | 'republished';
+  /** Whether this update is currently ignored (manually or auto-ignored due to provider errors). */
+  ignored?: boolean;
+  ignoredReason?: string;
+}
+
+/**
+ * An update that is suppressed because it failed persistently (provider error)
+ * or was explicitly muted by the user.
+ */
+export interface IgnoredExtensionUpdate {
+  internalName: string;
+  name?: string;
+  version: number;
+  reason: string;
+  ignoredAt: number;
+  failureCount: number;
+  isAutoIgnored?: boolean;
 }
 
 /**
@@ -83,6 +100,8 @@ export interface ExtensionNotice {
 export interface UpdateCheckResult {
   checkedAt: number;
   updates: AvailableUpdate[];
+  /** Updates currently ignored due to provider errors or user decision. */
+  ignoredUpdates?: IgnoredExtensionUpdate[];
   /**
    * Installed extensions their own maintainer has marked as not working.
    *
@@ -129,6 +148,7 @@ export interface UpdateSettings {
 
 const SETTINGS_KEY = 'extension_update_settings';
 const CACHED_UPDATES_KEY = 'extension_available_updates';
+const IGNORED_UPDATES_KEY = 'extension_ignored_updates';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -269,6 +289,53 @@ export class ExtensionUpdater {
     return Array.isArray(cached) ? cached : [];
   }
 
+  public getIgnoredUpdates(): Record<string, IgnoredExtensionUpdate> {
+    const raw = this.datastore.getObject<Record<string, IgnoredExtensionUpdate>>(
+      IGNORED_UPDATES_KEY,
+      {}
+    );
+    return raw && typeof raw === 'object' ? raw : {};
+  }
+
+  public ignoreUpdate(
+    internalName: string,
+    reason = 'Ignored by user',
+    isAutoIgnored = false
+  ): void {
+    const ignored = this.getIgnoredUpdates();
+    const candidate = this.getCachedUpdates().find((u) => u.internalName === internalName);
+    const existing = ignored[internalName];
+    const failureCount = (existing?.failureCount ?? 0) + (isAutoIgnored ? 1 : 0);
+
+    ignored[internalName] = {
+      internalName,
+      name: candidate?.name ?? existing?.name ?? internalName,
+      version: candidate?.availableVersion ?? existing?.version ?? 0,
+      reason: reason || existing?.reason || 'Ignored',
+      ignoredAt: Date.now(),
+      failureCount,
+      isAutoIgnored,
+    };
+    this.datastore.setObject(IGNORED_UPDATES_KEY, ignored);
+    logger.info('extension_update_ignored', {
+      internalName,
+      reason,
+      isAutoIgnored,
+      failureCount,
+    });
+    this.emit('extension:ignoredUpdatesChanged', ignored);
+  }
+
+  public unignoreUpdate(internalName: string): void {
+    const ignored = this.getIgnoredUpdates();
+    if (internalName in ignored) {
+      delete ignored[internalName];
+      this.datastore.setObject(IGNORED_UPDATES_KEY, ignored);
+      logger.info('extension_update_unignored', { internalName });
+      this.emit('extension:ignoredUpdatesChanged', ignored);
+    }
+  }
+
   // --- scheduling ----------------------------------------------------------
 
   /**
@@ -381,6 +448,8 @@ export class ExtensionUpdater {
       repoUrls.map((url) => this.plugins.fetchRepository(url))
     );
 
+    const ignoredMap = this.getIgnoredUpdates();
+
     fetched.forEach((outcome, index) => {
       const repoUrl = repoUrls[index];
       if (outcome.status === 'rejected') {
@@ -491,6 +560,14 @@ export class ExtensionUpdater {
           }
         }
 
+        const ignoredEntry = ignoredMap[remote.internalName];
+        const isIgnored = Boolean(
+          ignoredEntry &&
+            (ignoredEntry.version >= remoteVersion ||
+              ignoredEntry.isAutoIgnored ||
+              ignoredEntry.failureCount > 0)
+        );
+
         candidates.set(remote.internalName, {
           internalName: remote.internalName,
           name: remote.name ?? remote.internalName,
@@ -505,6 +582,8 @@ export class ExtensionUpdater {
           jarHash: remote.jarHash,
           jarFileSize: remote.jarFileSize,
           reason,
+          ignored: isIgnored,
+          ignoredReason: isIgnored ? ignoredEntry?.reason : undefined,
         });
       }
     });
@@ -513,6 +592,7 @@ export class ExtensionUpdater {
     const result: UpdateCheckResult = {
       checkedAt: Date.now(),
       updates,
+      ignoredUpdates: Object.values(ignoredMap),
       notices: [...notices.values()].sort((a, b) => a.name.localeCompare(b.name)),
       warnings,
       repositoriesChecked: repoUrls.length,
@@ -770,6 +850,11 @@ export class ExtensionUpdater {
           fromVersion: update.installedVersion,
           message: `${update.name} v${plugin.version} does not load (${verified.message}); ${rollbackMsg}`,
         };
+        this.ignoreUpdate(
+          internalName,
+          `${update.name} v${plugin.version} does not load (${verified.message})`,
+          true
+        );
         this.emit('extension:updateFinished', result);
         return result;
       }
@@ -783,12 +868,14 @@ export class ExtensionUpdater {
         reason: outcome.message,
         sourceRepository: update.repositoryUrl,
       });
+      this.ignoreUpdate(internalName, outcome.message, true);
     } else {
       logger.info('extension_update_installed', {
         plugin: internalName,
         fromVersion: update.installedVersion,
         toVersion: plugin.version,
       });
+      this.unignoreUpdate(internalName);
     }
 
     const result: UpdateOutcome = {
@@ -841,7 +928,11 @@ export class ExtensionUpdater {
        * archives anyway.
        */
       const known = (await this.checkForUpdates()).updates;
-      targets = known.map((u) => u.internalName);
+      const ignored = this.getIgnoredUpdates();
+      // Skip updates that are ignored unless explicitly passed
+      targets = known
+        .filter((u) => !ignored[u.internalName])
+        .map((u) => u.internalName);
     }
 
     logger.info('extension_update_all_started', { count: targets.length });

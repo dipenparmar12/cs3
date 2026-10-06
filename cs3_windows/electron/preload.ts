@@ -86,6 +86,7 @@ import type {
 } from '../src/types/analytics';
 import type {
   AvailableUpdate,
+  IgnoredExtensionUpdate,
   UpdateCheckResult,
   UpdateOutcome,
   UpdateSettings,
@@ -1619,6 +1620,9 @@ export interface CloudStreamElectronAPI {
   // Extension updates (over-the-air; independent of app updates)
   checkExtensionUpdates: () => Promise<Envelope & { result: UpdateCheckResult | null }>;
   getCachedExtensionUpdates: () => Promise<AvailableUpdate[]>;
+  getIgnoredExtensionUpdates: () => Promise<Record<string, IgnoredExtensionUpdate>>;
+  ignoreExtensionUpdate: (internalName: string, reason?: string) => Promise<{ ok: boolean }>;
+  unignoreExtensionUpdate: (internalName: string) => Promise<{ ok: boolean }>;
   updateExtension: (internalName: string) => Promise<UpdateOutcome>;
   updateAllExtensions: (internalNames?: string[]) => Promise<UpdateOutcome[]>;
   getUpdateSettings: () => Promise<UpdateSettings>;
@@ -2364,6 +2368,11 @@ const api: CloudStreamElectronAPI = {
 
   checkExtensionUpdates: () => ipcRenderer.invoke('extension:checkUpdates'),
   getCachedExtensionUpdates: () => ipcRenderer.invoke('extension:getCachedUpdates'),
+  getIgnoredExtensionUpdates: () => ipcRenderer.invoke('extension:getIgnoredUpdates'),
+  ignoreExtensionUpdate: (internalName, reason) =>
+    ipcRenderer.invoke('extension:ignoreUpdate', internalName, reason),
+  unignoreExtensionUpdate: (internalName) =>
+    ipcRenderer.invoke('extension:unignoreUpdate', internalName),
   updateExtension: (internalName) => ipcRenderer.invoke('extension:update', internalName),
   updateAllExtensions: (internalNames) =>
     ipcRenderer.invoke('extension:updateAll', internalNames),

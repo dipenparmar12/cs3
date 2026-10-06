@@ -5554,6 +5554,23 @@ ipcMain.handle('extension:saveUpdateSettings', async (_, patch: Partial<UpdateSe
   extensionUpdater.saveSettings(patch)
 );
 
+ipcMain.handle('extension:getIgnoredUpdates', async () =>
+  extensionUpdater.getIgnoredUpdates()
+);
+
+ipcMain.handle(
+  'extension:ignoreUpdate',
+  async (_, internalName: string, reason?: string) => {
+    extensionUpdater.ignoreUpdate(internalName, reason, false);
+    return { ok: true };
+  }
+);
+
+ipcMain.handle('extension:unignoreUpdate', async (_, internalName: string) => {
+  extensionUpdater.unignoreUpdate(internalName);
+  return { ok: true };
+});
+
 // --- library, watch progress and source memory ---------------------------
 
 ipcMain.handle('library:getEntries', async (_, status?: WatchStatus) =>

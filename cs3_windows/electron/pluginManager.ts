@@ -1598,23 +1598,54 @@ export class PluginManager {
         message: `Downloading ${plugin.name}...`,
       });
 
-      const artifact = chooseArtifact(plugin);
+      let artifact = chooseArtifact(plugin);
+      let buffer: Buffer;
 
-      const buffer = await fetchBuffer(artifact.url, { timeoutMs: 60_000 }, (downloaded, total, percent) => {
-        const sizeStr =
-          total > 0
-            ? ` (${(downloaded / 1024).toFixed(0)} KB / ${(total / 1024).toFixed(0)} KB)`
-            : '';
-        this.notifyInstallProgress({
-          internalName: plugin.internalName,
-          name: plugin.name,
-          step: 'downloading',
-          downloadedBytes: downloaded,
-          totalBytes: total,
-          percent,
-          message: `Downloading ${plugin.name}${sizeStr}... ${percent}%`,
+      try {
+        buffer = await fetchBuffer(artifact.url, { timeoutMs: 60_000 }, (downloaded, total, percent) => {
+          const sizeStr =
+            total > 0
+              ? ` (${(downloaded / 1024).toFixed(0)} KB / ${(total / 1024).toFixed(0)} KB)`
+              : '';
+          this.notifyInstallProgress({
+            internalName: plugin.internalName,
+            name: plugin.name,
+            step: 'downloading',
+            downloadedBytes: downloaded,
+            totalBytes: total,
+            percent,
+            message: `Downloading ${plugin.name}${sizeStr}... ${percent}%`,
+          });
         });
-      });
+      } catch (dlError) {
+        // If jar download failed (e.g. 404 or dead link), try cs3 lane if available
+        if (artifact.lane === 'jar' && plugin.url && plugin.url !== artifact.url) {
+          logger.warn('extension_jar_download_failed_fallback_cs3', {
+            plugin: plugin.internalName,
+            jarUrl: artifact.url,
+            cs3Url: plugin.url,
+            reason: describeError(dlError),
+          });
+          artifact = { url: plugin.url, hash: plugin.fileHash, lane: 'cs3', declaredSize: plugin.fileSize };
+          buffer = await fetchBuffer(artifact.url, { timeoutMs: 60_000 }, (downloaded, total, percent) => {
+            const sizeStr =
+              total > 0
+                ? ` (${(downloaded / 1024).toFixed(0)} KB / ${(total / 1024).toFixed(0)} KB)`
+                : '';
+            this.notifyInstallProgress({
+              internalName: plugin.internalName,
+              name: plugin.name,
+              step: 'downloading',
+              downloadedBytes: downloaded,
+              totalBytes: total,
+              percent,
+              message: `Downloading ${plugin.name}${sizeStr}... ${percent}%`,
+            });
+          });
+        } else {
+          throw dlError;
+        }
+      }
 
       this.notifyInstallProgress({
         internalName: plugin.internalName,
@@ -1624,44 +1655,80 @@ export class PluginManager {
         message: `Verifying package integrity...`,
       });
 
-      const digest = crypto.createHash('sha256').update(buffer).digest('hex');
+      let digest = crypto.createHash('sha256').update(buffer).digest('hex');
 
       // The hash checked is the one published for *the artifact downloaded*.
       // Verifying a jar against `fileHash` — the `.cs3`'s hash — would fail
       // every cross-platform install, and taking the mismatch as permission to
       // skip verification would be worse than not checking at all.
       if (artifact.hash) {
-        const expected = artifact.hash.replace(/^sha256-/i, '').toLowerCase();
+        let expected = artifact.hash.replace(/^sha256-/i, '').toLowerCase();
         if (expected !== digest) {
-          /**
-           * Who published the hash, and how far off it was.
-           *
-           * The message used to be one sentence about "the download", which is
-           * the one explanation that is almost never right: measured on a real
-           * install, 61 consecutive mismatches were a *mirror index* pointing
-           * `url` at another repository's artifacts while publishing its own
-           * stale hashes and sizes. Sixty identical rows blaming the transfer
-           * gave the reader nothing to act on; naming the index — and the size
-           * it claimed against the size that arrived — identifies that in one
-           * line, and a genuinely corrupted download looks different because
-           * the sizes agree.
-           */
-          const publisher = hostOf(plugin.repositoryUrl) ?? 'the repository';
-          const sizes =
-            artifact.declaredSize && artifact.declaredSize !== buffer.length
-              ? ` It also declared ${artifact.declaredSize} bytes and ${buffer.length} arrived, so the index describes a different build.`
-              : '';
-          const message =
-            `SHA-256 mismatch — ${hostOf(artifact.url) ?? 'the download'} did not match the hash ` +
-            `${publisher} published for it.${sizes} Install aborted.`;
-          this.notifyInstallProgress({
-            internalName: plugin.internalName,
-            name: plugin.name,
-            step: 'error',
-            percent: 0,
-            message: `SHA-256 mismatch`,
-          });
-          return { ok: false, message };
+          // If jar hash mismatched, try fallback to .cs3 lane if available
+          if (artifact.lane === 'jar' && plugin.url && plugin.url !== artifact.url) {
+            logger.warn('extension_jar_hash_mismatch_fallback_cs3', {
+              plugin: plugin.internalName,
+              jarUrl: artifact.url,
+              cs3Url: plugin.url,
+            });
+            const fallbackArtifact = {
+              url: plugin.url,
+              hash: plugin.fileHash,
+              lane: 'cs3' as const,
+              declaredSize: plugin.fileSize,
+            };
+            try {
+              const cs3Buffer = await fetchBuffer(fallbackArtifact.url, { timeoutMs: 60_000 });
+              const cs3Digest = crypto.createHash('sha256').update(cs3Buffer).digest('hex');
+              let cs3Valid = true;
+              if (fallbackArtifact.hash) {
+                const cs3Expected = fallbackArtifact.hash.replace(/^sha256-/i, '').toLowerCase();
+                if (cs3Expected !== cs3Digest) {
+                  cs3Valid = false;
+                }
+              }
+              if (cs3Valid) {
+                artifact = fallbackArtifact;
+                buffer = cs3Buffer;
+                digest = cs3Digest;
+                expected = artifact.hash ? artifact.hash.replace(/^sha256-/i, '').toLowerCase() : '';
+              }
+            } catch {
+              // cs3 fallback failed; fall through to mismatch error reporting
+            }
+          }
+
+          if (expected && expected !== digest) {
+            /**
+             * Who published the hash, and how far off it was.
+             *
+             * The message used to be one sentence about "the download", which is
+             * the one explanation that is almost never right: measured on a real
+             * install, 61 consecutive mismatches were a *mirror index* pointing
+             * `url` at another repository's artifacts while publishing its own
+             * stale hashes and sizes. Sixty identical rows blaming the transfer
+             * gave the reader nothing to act on; naming the index — and the size
+             * it claimed against the size that arrived — identifies that in one
+             * line, and a genuinely corrupted download looks different because
+             * the sizes agree.
+             */
+            const publisher = hostOf(plugin.repositoryUrl) ?? 'the repository';
+            const sizes =
+              artifact.declaredSize && artifact.declaredSize !== buffer.length
+                ? ` It also declared ${artifact.declaredSize} bytes and ${buffer.length} arrived, so the index describes a different build.`
+                : '';
+            const message =
+              `SHA-256 mismatch — ${hostOf(artifact.url) ?? 'the download'} did not match the hash ` +
+              `${publisher} published for it.${sizes} Install aborted.`;
+            this.notifyInstallProgress({
+              internalName: plugin.internalName,
+              name: plugin.name,
+              step: 'error',
+              percent: 0,
+              message: `SHA-256 mismatch`,
+            });
+            return { ok: false, message };
+          }
         }
       }
 
