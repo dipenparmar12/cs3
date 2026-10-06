@@ -583,6 +583,30 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     persist(new Set(), new Set());
   }, [persist]);
 
+  /**
+   * Flips every visible source (PRD-051 §31–32): the filtered ones when a
+   * filter is on, otherwise everything. An empty selection here means "search
+   * everything", so an invert that would empty it is not offered at all.
+   */
+  const invertTargets = isFiltered ? filteredMembers : universe;
+  const invertedSelection = useMemo(() => {
+    const nextProviders = new Set(providers);
+    const nextIndexers = new Set(chosenIndexers);
+    for (const p of invertTargets.providers) {
+      if (nextProviders.has(p)) nextProviders.delete(p);
+      else nextProviders.add(p);
+    }
+    for (const i of invertTargets.indexers) {
+      if (nextIndexers.has(i)) nextIndexers.delete(i);
+      else nextIndexers.add(i);
+    }
+    return { providers: nextProviders, indexers: nextIndexers };
+  }, [providers, chosenIndexers, invertTargets]);
+  const canInvert = invertedSelection.providers.size + invertedSelection.indexers.size > 0;
+  const invertSelection = useCallback(() => {
+    if (canInvert) persist(invertedSelection.providers, invertedSelection.indexers);
+  }, [canInvert, invertedSelection, persist]);
+
   const handleIncludeSection = useCallback((row: Row) => {
     const next = includeSection(row, providers, chosenIndexers);
     persist(next.providers, next.indexers);
@@ -715,6 +739,8 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
           onSelectAllFiltered={selectAllFiltered}
           onUnselectAllFiltered={unselectAllFiltered}
           onClearAllChosen={clearAllChosen}
+          onInvert={invertSelection}
+          canInvert={canInvert}
           hasExtensions={universe.providers.length > 0}
           hasIndexers={indexers.length > 0}
           chosenTorrentCount={chosenIndexers.size}

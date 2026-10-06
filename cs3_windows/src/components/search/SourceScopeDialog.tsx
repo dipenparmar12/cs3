@@ -390,6 +390,8 @@ export interface SourceScopeDialogProps {
   onSelectAllFiltered?: () => void;
   onUnselectAllFiltered?: () => void;
   onClearAllChosen?: () => void;
+  onInvert?: () => void;
+  canInvert?: boolean;
 
   hasExtensions: boolean;
   hasIndexers: boolean;
@@ -435,6 +437,8 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   allFilteredSelected = false,
   onSelectAllFiltered,
   onUnselectAllFiltered,
+  onInvert,
+  canInvert,
   onClearAllChosen,
   hasExtensions,
   hasIndexers,
@@ -908,6 +912,22 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
             >
               {selectAllButtonText}
             </button>
+            {onInvert && (
+              <button
+                className="btn btn-ghost"
+                onClick={onInvert}
+                disabled={!canInvert}
+                title={
+                  canInvert
+                    ? isFiltered
+                      ? 'Flip the selection of the sources matching the filter'
+                      : 'Flip the selection of every source'
+                    : 'Inverting would leave nothing selected, which searches everything'
+                }
+              >
+                Invert
+              </button>
+            )}
             <button className="btn btn-ghost" onClick={onReset} disabled={totalChosen === 0}>
               Reset
             </button>
