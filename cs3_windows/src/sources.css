@@ -7256,19 +7256,21 @@
    Default `<track>` rendering is small white text with no separation from the
    picture, which vanishes over snow, a white wall, or light credits. Android
    has had a caption editor for years; this is the desktop equivalent. */
-.player video::cue {
+.player video::cue,
+video::cue {
   /* `em` against the element's own font size, so the browser's viewport-based
      default scaling still applies and this multiplies it rather than replacing
      it with a fixed pixel size that would be wrong on every other window. */
-  font-size: calc(1em * var(--cue-scale, 1));
-  color: var(--cue-color, #fff);
-  font-weight: var(--cue-weight, 400);
-  background: var(--cue-bg, transparent);
-  text-shadow: var(--cue-shadow, none);
-  line-height: 1.35;
-  white-space: pre-line;
-  max-width: 90vw;
-  box-sizing: border-box;
+  font-size: calc(1em * var(--cue-scale, 1)) !important;
+  color: var(--cue-color, #fff) !important;
+  font-weight: var(--cue-weight, 400) !important;
+  background-color: var(--cue-bg, transparent) !important;
+  background: var(--cue-bg, transparent) !important;
+  text-shadow: var(--cue-shadow, none) !important;
+  line-height: 1.35 !important;
+  white-space: pre-line !important;
+  max-width: 90vw !important;
+  box-sizing: border-box !important;
 }
 
 /* Lifting cues clear of hard-subbed text burned into the picture, which is

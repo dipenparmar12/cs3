@@ -2261,7 +2261,47 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const root = document.documentElement.style;
     const vars = subtitleCssVariables(subtitleStyle);
     for (const [name, value] of Object.entries(vars)) root.setProperty(name, value);
-    return () => { for (const name of Object.keys(vars)) root.removeProperty(name); };
+
+    let styleTag = document.getElementById('cs3-cue-dynamic-style') as HTMLStyleElement | null;
+    if (!styleTag) {
+      styleTag = document.createElement('style');
+      styleTag.id = 'cs3-cue-dynamic-style';
+      document.head.appendChild(styleTag);
+    }
+
+    const shadow =
+      subtitleStyle.background === 'outline'
+        ? '-1px -1px 2px #000, 1px -1px 2px #000, -1px 1px 2px #000, 1px 1px 2px #000'
+        : subtitleStyle.background === 'shadow'
+          ? '0 2px 4px rgba(0, 0, 0, 0.9)'
+          : 'none';
+    const bgColor =
+      subtitleStyle.background === 'box'
+        ? 'rgba(0, 0, 0, 0.85)'
+        : 'transparent';
+
+    styleTag.textContent = `
+      .player video::cue,
+      video::cue {
+        font-size: calc(1.5rem * ${subtitleStyle.scale}) !important;
+        color: ${subtitleStyle.color} !important;
+        background-color: ${bgColor} !important;
+        background: ${bgColor} !important;
+        text-shadow: ${shadow} !important;
+        font-weight: ${subtitleStyle.weight === 'bold' ? '700' : '400'} !important;
+        line-height: 1.35 !important;
+        white-space: pre-line !important;
+      }
+      .player video::-webkit-media-text-track-container {
+        transform: translateY(-${subtitleStyle.position}%) !important;
+      }
+    `;
+
+    return () => {
+      for (const name of Object.keys(vars)) root.removeProperty(name);
+      const tag = document.getElementById('cs3-cue-dynamic-style');
+      if (tag) tag.remove();
+    };
   }, [subtitleStyle]);
 
   useEffect(() => {
@@ -3056,6 +3096,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const apply = () => {
       const selectedSub = allSubtitles.find((s) => s.url === activeSubtitle);
+      let applied = false;
 
       // 1. DOM <track> elements
       const elements = Array.from(video.querySelectorAll('track'));
@@ -3064,13 +3105,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       for (const el of elements) {
         if (!el.track) continue;
         handledTracks.add(el.track);
-        const match = Boolean(
+        const isUrlMatch = Boolean(
           activeSubtitle &&
-            (el.getAttribute('src') === activeSubtitle ||
-              el.src === activeSubtitle ||
-              (selectedSub && el.label === selectedSub.name))
+            (el.getAttribute('src') === activeSubtitle || el.src === activeSubtitle)
         );
-        el.track.mode = match ? 'showing' : 'disabled';
+        const match = !applied && isUrlMatch;
+        if (match) {
+          el.track.mode = 'showing';
+          applied = true;
+        } else {
+          el.track.mode = 'disabled';
+        }
       }
 
       // 2. Embedded in-stream text tracks not represented by <track> elements
@@ -3078,13 +3123,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       for (let i = 0; i < tracks.length; i++) {
         const track = tracks[i];
         if (handledTracks.has(track)) continue;
-        const match = Boolean(
-          activeSubtitle &&
-            selectedSub &&
-            (track.label === selectedSub.name ||
-              (track.language && selectedSub.name.toLowerCase().includes(track.language.toLowerCase())))
-        );
-        track.mode = match ? 'showing' : 'disabled';
+        const match =
+          !applied &&
+          Boolean(
+            activeSubtitle &&
+              selectedSub &&
+              (track.label === selectedSub.name ||
+                track.label === activeSubtitle ||
+                (track.language && selectedSub.name.toLowerCase() === track.language.toLowerCase()))
+          );
+        if (match) {
+          track.mode = 'showing';
+          applied = true;
+        } else {
+          track.mode = 'disabled';
+        }
       }
     };
 
