@@ -165,7 +165,10 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
           </span>
         ) : widened && phase === 'searching' ? (
           <span className="muted">
-            <Globe size={13} /> Nothing where this title was found — looking everywhere else.
+            <Globe size={13} />{' '}
+            {searchDone && sources.length > 0
+              ? 'Found elsewhere by title — check it is the right one before playing.'
+              : 'Nothing where this title was found — looking everywhere else.'}
           </span>
         ) : null}
         {phase === 'searching' && totalIndexers > 0 && !searchDone && (
@@ -248,8 +251,10 @@ export const SourceResolveOverlay: React.FC<SourceResolveOverlayProps> = ({
       */}
       {widened && phase === 'searching' && (
         <span className="muted">
-          <Globe size={13} /> No sources from where this title was found — asking every
-          provider and indexer.
+          <Globe size={13} />{' '}
+          {searchDone && sources.length > 0
+            ? 'No sources from where this title was found. These were found elsewhere by title and may be a different release or work — choose one to play.'
+            : 'No sources from where this title was found — asking every provider and indexer.'}
         </span>
       )}
 

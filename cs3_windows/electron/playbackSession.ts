@@ -418,6 +418,11 @@ export class PlaybackSessionManager {
       this.emit(session);
       return;
     }
+    // A search that widened by itself found these by title, not through the
+    // provider the viewer chose — and a title match can be a different work.
+    // They are offered, never started (errors audit, Part 2 §4): the overlay
+    // already holds "Play now" and "Choose source" for exactly this state.
+    if (session.widened) return;
     await this.beginStream(session, session.sources);
   }
 

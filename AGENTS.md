@@ -555,7 +555,7 @@ derived from their own measured latency. Scope decides which sources a search ma
 
 **Rules:**
 - **A scope selection is a strict filter, not a preference.** An unresolvable selection is *reported*, never silently widened back to everything. Providers selected ⇒ exactly those, no catalogues.
-- **Discovery defaults to `origin` scope** (only the providers that produced the row), widening to `all` automatically when nothing is found. A failed escalation leaves the narrow answer standing.
+- **Discovery defaults to `origin` scope** (only the providers that produced the row), widening to `all` automatically when nothing is found. A failed escalation leaves the narrow answer standing. **A self-widened result is offered, never auto-started** (`playbackSession.discover`): it was found by title, and a title match can be a different work (errors audit 2026-10-050, Part 2 §4).
 - **`searchOrder` falls back to the original order** if the ranking returns anything that is not the same set. Silently searching fewer sources and calling it "no results" is the worst failure this app has.
 - **`empty` ≠ `failure`.** An anime provider with nothing for *Dune* is correct.
 - **An unscored failure is not recorded at all** (`UNSCORED_FAILURE_KINDS`) — recording it in `attempts` alone still moves the success rate.
