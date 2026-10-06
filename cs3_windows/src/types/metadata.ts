@@ -521,6 +521,25 @@ export interface ExtendedMetadata {
    * first source answers, and the UI renders it rather than a spinner.
    */
   partial?: boolean;
+
+  /** The film series this title belongs to, in release order (Wikidata P179). */
+  franchise?: Franchise;
+}
+
+/** One work in a franchise, addressed by IMDb id so it opens like any catalogue item. */
+export interface FranchiseEntry {
+  imdbId: string;
+  title: string;
+  year?: number;
+  /** The series ordinal Wikidata states (P1545), when it states one. */
+  ordinal?: number;
+  /** This is the page being viewed. */
+  current: boolean;
+}
+
+export interface Franchise {
+  name: string;
+  entries: FranchiseEntry[];
 }
 
 /** Convenience shape for the UI's crew row; computed, never stored. */

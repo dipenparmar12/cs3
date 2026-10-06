@@ -767,6 +767,7 @@ export class MetadataEnrichmentService {
     return {
       url: request.url,
       ids,
+      franchise: wikidata?.franchise ?? undefined,
       originalTitle: anilist?.originalTitle ?? facts?.originalTitle,
       alternateTitles: mergeStrings([anilist?.alternateTitles]),
       // The provider's own synopsis stays on the page; this is the floor under

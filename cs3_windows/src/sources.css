@@ -9748,3 +9748,38 @@
   opacity: 0.75;
   font-variant-numeric: tabular-nums;
 }
+
+/* Franchise rail (franchise PRD): one tile per film, release order. */
+.franchise-rail {
+  display: flex;
+  gap: 0.6rem;
+  overflow-x: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0.4rem;
+}
+.franchise-rail__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 10rem;
+  max-width: 13rem;
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-primary, #fff);
+  font-family: inherit;
+  cursor: pointer;
+}
+.franchise-rail__item:hover:not(:disabled),
+.franchise-rail__item:focus-visible { background: rgba(255, 255, 255, 0.08); }
+.franchise-rail__item--current {
+  cursor: default;
+  border-color: var(--accent, #e50914);
+  background: rgba(255, 255, 255, 0.06);
+}
+.franchise-rail__index { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.7rem; color: var(--text-muted); }
+.franchise-rail__title { font-size: 0.85rem; font-weight: 600; line-height: 1.25; }
+.franchise-rail__meta { font-size: 0.72rem; color: var(--text-muted); }

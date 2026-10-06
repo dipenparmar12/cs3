@@ -63,6 +63,8 @@ import {
   CreditRole,
   MetadataSource,
   type CreditPerson,
+  type Franchise,
+  type FranchiseEntry,
   type Organisation,
 } from '../../src/types/metadata.ts';
 import { classifyJob } from './merge.ts';
@@ -392,6 +394,85 @@ async function runQuery(query: string, signal?: AbortSignal): Promise<SparqlResp
 export interface WikidataResult {
   credits: CreditPerson[];
   facts: WikidataFacts | null;
+  franchise?: Franchise | null;
+}
+
+/**
+ * Every work sharing a "part of the series" (P179) with this one, with its own
+ * IMDb id so each opens as an ordinary catalogue item. Keyless, like the rest.
+ */
+function franchiseQuery(imdbId: string): string {
+  return `
+SELECT ?series ?seriesLabel ?member ?memberLabel ?imdb ?date ?ordinal WHERE {
+  ?item wdt:P345 "${imdbId}" ; wdt:P179 ?series .
+  ?member p:P179 ?membership .
+  ?membership ps:P179 ?series .
+  ?member wdt:P345 ?imdb .
+  OPTIONAL { ?membership pq:P1545 ?ordinal . }
+  OPTIONAL { ?member wdt:P577 ?date . }
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "en" .
+    ?series rdfs:label ?seriesLabel .
+    ?member rdfs:label ?memberLabel .
+  }
+}
+LIMIT 400`;
+}
+
+/** Past this, a "series" is a universe or an episode list, not a rail. */
+const MAX_FRANCHISE_ENTRIES = 30;
+
+/**
+ * Pure. A title in several series (a trilogy *and* a cinematic universe) shows
+ * the smallest one with at least two members: the most specific answer to
+ * "what comes before and after this". Release order, then the stated ordinal;
+ * a member with several release dates (festival, then theatrical) takes the
+ * earliest.
+ */
+export function parseFranchise(response: SparqlResponse, imdbId: string): Franchise | null {
+  const bySeries = new Map<string, { name: string; members: Map<string, FranchiseEntry & { date?: string }> }>();
+  for (const row of response.results?.bindings ?? []) {
+    const series = value(row, 'series');
+    const imdb = value(row, 'imdb');
+    const title = value(row, 'memberLabel');
+    if (!series || !imdb || !/^tt\d+$/.test(imdb) || !title || /^Q\d+$/.test(title)) continue;
+    let group = bySeries.get(series);
+    if (!group) {
+      group = { name: value(row, 'seriesLabel') ?? '', members: new Map() };
+      bySeries.set(series, group);
+    }
+    const date = value(row, 'date');
+    const ordinal = Number.parseInt(value(row, 'ordinal') ?? '', 10);
+    const existing = group.members.get(imdb);
+    if (existing) {
+      if (date && (!existing.date || date < existing.date)) existing.date = date;
+      if (existing.ordinal === undefined && Number.isFinite(ordinal)) existing.ordinal = ordinal;
+      continue;
+    }
+    group.members.set(imdb, {
+      imdbId: imdb,
+      title,
+      current: imdb === imdbId,
+      date,
+      ordinal: Number.isFinite(ordinal) ? ordinal : undefined,
+    });
+  }
+
+  const candidates = [...bySeries.values()]
+    .filter((g) => g.members.size >= 2 && g.members.size <= MAX_FRANCHISE_ENTRIES && g.name && !/^Q\d+$/.test(g.name))
+    .sort((a, b) => a.members.size - b.members.size);
+  const chosen = candidates[0];
+  if (!chosen) return null;
+
+  const entries = [...chosen.members.values()]
+    .map(({ date, ...entry }) => ({ ...entry, year: date ? Number(date.slice(0, 4)) || undefined : undefined, date }))
+    .sort((a, b) =>
+      (a.date ?? '9999').localeCompare(b.date ?? '9999') ||
+      (a.ordinal ?? Infinity) - (b.ordinal ?? Infinity) ||
+      a.title.localeCompare(b.title)
+    )
+    .map(({ date: _date, ...entry }) => entry);
+  return { name: chosen.name, entries };
 }
 
 /**
@@ -427,9 +508,10 @@ export async function fetchWikidata(
     throw new Error(`Not an IMDb id: ${imdbId}`);
   }
 
-  const [credits, facts] = await Promise.allSettled([
+  const [credits, facts, franchise] = await Promise.allSettled([
     runQuery(creditsQuery(imdbId), signal),
     runQuery(factsQuery(imdbId), signal),
+    runQuery(franchiseQuery(imdbId), signal),
   ]);
 
   if (credits.status === 'rejected' && facts.status === 'rejected') {
@@ -441,5 +523,7 @@ export async function fetchWikidata(
   return {
     credits: credits.status === 'fulfilled' ? parseCredits(credits.value) : [],
     facts: facts.status === 'fulfilled' ? parseFacts(facts.value) : null,
+    // Optional by nature: a failed franchise query costs only the rail.
+    franchise: franchise.status === 'fulfilled' ? parseFranchise(franchise.value, imdbId) : null,
   };
 }

@@ -37,6 +37,7 @@ import { ShareButton } from '../components/ShareButton';
 import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
 import type { PageSnapshot } from '../../electron/cs3/pageSnapshot';
 import { detailFromSnapshot, mergeDetail, savedCopyAge } from '../utils/savedPage';
+import { FranchiseRail } from '../components/detail/FranchiseRail';
 
 /** Cards the rail is sized for before "Show all" is worth offering. */
 const RAIL_PREVIEW = 8;
@@ -1942,6 +1943,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
         providerTags={detail.tags}
         pending={metadataPending}
       />
+
+      {extended?.franchise && onSelectMedia && (
+        <FranchiseRail franchise={extended.franchise} onSelectMedia={onSelectMedia} />
+      )}
 
       {recommendations.length > 0 && onSelectMedia && (
         <section className="detail-facts">
