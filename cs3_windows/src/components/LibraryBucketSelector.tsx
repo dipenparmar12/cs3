@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bookmark, Check, ChevronDown, Trash2 } from 'lucide-react';
 import { BUCKET_LABELS, WatchStatus, type SearchResponse } from '../types/api';
 import type { TorrentResult } from '../types/torrent';
@@ -29,6 +29,14 @@ interface LibraryBucketSelectorProps {
    * batched card states can colour on their own.
    */
   deferFetch?: boolean;
+  /**
+   * Open the dropdown automatically on mouse hover (used exclusively on detail page).
+   */
+  openOnHover?: boolean;
+  /**
+   * Button and menu visual variant. 'detail-action' strictly conforms to the detail hero action buttons.
+   */
+  variant?: 'default' | 'detail-action';
 }
 
 const BUCKETS: Array<{ status: WatchStatus; label: string }> = [
@@ -49,11 +57,41 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
   showLabel = true,
   known,
   deferFetch = false,
+  openOnHover = false,
+  variant = 'default',
 }) => {
   const [open, setOpen] = useState(false);
   const [currentStatus, setCurrentStatus] = useState<WatchStatus | null>(known?.status ?? null);
   const [entryKey, setEntryKey] = useState<string | null>(known?.key ?? null);
   const [loading, setLoading] = useState(false);
+  const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleMouseEnter = useCallback(() => {
+    if (!openOnHover) return;
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+      hoverTimeoutRef.current = null;
+    }
+    setOpen(true);
+  }, [openOnHover]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (!openOnHover) return;
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+    }
+    hoverTimeoutRef.current = setTimeout(() => {
+      setOpen(false);
+    }, 180);
+  }, [openOnHover]);
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // What the caller knows wins whenever it changes; asking is the fallback.
   const knownStatus = known === undefined ? undefined : (known?.status ?? null);
@@ -156,108 +194,177 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
     }
   };
 
+  const isDetailAction = variant === 'detail-action';
+
   return (
-    <div style={{ position: 'relative', display: 'inline-block' }}>
-      <button
-        type="button"
-        className={buttonClassName || `btn ${size === 'sm' ? 'btn-secondary' : 'btn-secondary'}`}
-        style={{
-          padding: size === 'sm' ? '0.25rem 0.5rem' : '0.45rem 0.85rem',
-          fontSize: size === 'sm' ? '0.75rem' : '0.85rem',
-          gap: '0.35rem',
-          alignItems: 'center',
-          borderColor: currentStatus ? 'var(--accent-primary)' : undefined,
-          backgroundColor: currentStatus ? 'rgba(59, 130, 246, 0.15)' : undefined,
-          color: currentStatus ? '#60a5fa' : undefined,
-        }}
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
-        aria-label="Add to library bucket"
-      >
-        <Bookmark size={size === 'sm' ? 14 : 16} style={{ color: currentStatus ? '#60a5fa' : undefined }} />
-        {showLabel && (
-          <span>{currentStatus ? BUCKET_LABELS[currentStatus] : 'Add to Library'}</span>
-        )}
-        <ChevronDown size={size === 'sm' ? 12 : 14} />
-      </button>
+    <div
+      style={{ position: 'relative', display: isDetailAction ? 'inline-flex' : 'inline-block' }}
+      onMouseEnter={openOnHover ? handleMouseEnter : undefined}
+      onMouseLeave={openOnHover ? handleMouseLeave : undefined}
+    >
+      {isDetailAction ? (
+        <button
+          type="button"
+          className={`detail-action${currentStatus ? ' detail-action--on' : ''}${buttonClassName ? ` ${buttonClassName}` : ''}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label="Add to library bucket"
+          title={currentStatus ? `Library: ${BUCKET_LABELS[currentStatus]}` : 'Add to library'}
+        >
+          <Bookmark size={15} />
+          {showLabel && (
+            <span>{currentStatus ? BUCKET_LABELS[currentStatus] : 'Add to library'}</span>
+          )}
+          <ChevronDown size={13} />
+        </button>
+      ) : (
+        <button
+          type="button"
+          className={buttonClassName || `btn ${size === 'sm' ? 'btn-secondary' : 'btn-secondary'}`}
+          style={{
+            padding: size === 'sm' ? '0.25rem 0.5rem' : '0.45rem 0.85rem',
+            fontSize: size === 'sm' ? '0.75rem' : '0.85rem',
+            gap: '0.35rem',
+            alignItems: 'center',
+            borderColor: currentStatus ? 'var(--accent-primary)' : undefined,
+            backgroundColor: currentStatus ? 'rgba(59, 130, 246, 0.15)' : undefined,
+            color: currentStatus ? '#60a5fa' : undefined,
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }}
+          aria-label="Add to library bucket"
+        >
+          <Bookmark size={size === 'sm' ? 14 : 16} style={{ color: currentStatus ? '#60a5fa' : undefined }} />
+          {showLabel && (
+            <span>{currentStatus ? BUCKET_LABELS[currentStatus] : 'Add to Library'}</span>
+          )}
+          <ChevronDown size={size === 'sm' ? 12 : 14} />
+        </button>
+      )}
 
       {open && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 4px)',
-            left: 0,
-            zIndex: 99999,
-            minWidth: '160px',
-            backgroundColor: '#161b26',
-            border: '1px solid var(--border-color)',
-            borderRadius: 'var(--radius-md)',
-            boxShadow: '0 10px 30px rgba(0,0,0,0.7)',
-            padding: '0.35rem',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '0.2rem',
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-subtle)', padding: '0.2rem 0.4rem', textTransform: 'uppercase' }}>
-            Library Bucket
-          </div>
-          {BUCKETS.map((b) => {
-            const isSelected = currentStatus === b.status;
-            return (
-              <button
-                key={b.status}
-                type="button"
-                onClick={() => selectStatus(b.status)}
-                disabled={loading}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '0.4rem 0.6rem',
-                  fontSize: '0.78rem',
-                  color: isSelected ? '#60a5fa' : '#e5e7eb',
-                  backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
-                  border: 'none',
-                  borderRadius: 'var(--radius-sm)',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                }}
-              >
-                <span>{b.label}</span>
-                {isSelected && <Check size={14} style={{ color: '#60a5fa' }} />}
-              </button>
-            );
-          })}
+        isDetailAction ? (
+          <div
+            className="detail-menu detail-menu--bucket"
+            role="menu"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="detail-menu__header">Library Bucket</div>
+            {BUCKETS.map((b) => {
+              const isSelected = currentStatus === b.status;
+              return (
+                <button
+                  key={b.status}
+                  type="button"
+                  role="menuitem"
+                  className={`detail-menu__item${isSelected ? ' detail-menu__item--active' : ''}`}
+                  onClick={() => selectStatus(b.status)}
+                  disabled={loading}
+                >
+                  <span>{b.label}</span>
+                  {isSelected && <Check size={14} className="detail-menu__check" />}
+                </button>
+              );
+            })}
 
-          {currentStatus && (
-            <>
-              <div style={{ height: '1px', backgroundColor: 'var(--border-color)', margin: '0.2rem 0' }} />
-              <button
-                type="button"
-                onClick={removeEntry}
-                disabled={loading}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                  padding: '0.4rem 0.6rem',
-                  fontSize: '0.75rem',
-                  color: '#ef4444',
-                  backgroundColor: 'transparent',
-                  border: 'none',
-                  borderRadius: 'var(--radius-sm)',
-                  cursor: 'pointer',
-                }}
-              >
-                <Trash2 size={13} /> Remove from library
-              </button>
-            </>
-          )}
-        </div>
+            {currentStatus && (
+              <>
+                <div className="detail-menu__divider" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="detail-menu__item detail-menu__item--remove"
+                  onClick={removeEntry}
+                  disabled={loading}
+                >
+                  <Trash2 size={13} />
+                  <span>Remove from library</span>
+                </button>
+              </>
+            )}
+          </div>
+        ) : (
+          <div
+            style={{
+              position: 'absolute',
+              top: 'calc(100% + 4px)',
+              left: 0,
+              zIndex: 99999,
+              minWidth: '160px',
+              backgroundColor: '#161b26',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-md)',
+              boxShadow: '0 10px 30px rgba(0,0,0,0.7)',
+              padding: '0.35rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.2rem',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-subtle)', padding: '0.2rem 0.4rem', textTransform: 'uppercase' }}>
+              Library Bucket
+            </div>
+            {BUCKETS.map((b) => {
+              const isSelected = currentStatus === b.status;
+              return (
+                <button
+                  key={b.status}
+                  type="button"
+                  onClick={() => selectStatus(b.status)}
+                  disabled={loading}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '0.4rem 0.6rem',
+                    fontSize: '0.78rem',
+                    color: isSelected ? '#60a5fa' : '#e5e7eb',
+                    backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                    border: 'none',
+                    borderRadius: 'var(--radius-sm)',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  <span>{b.label}</span>
+                  {isSelected && <Check size={14} style={{ color: '#60a5fa' }} />}
+                </button>
+              );
+            })}
+
+            {currentStatus && (
+              <>
+                <div style={{ height: '1px', backgroundColor: 'var(--border-color)', margin: '0.2rem 0' }} />
+                <button
+                  type="button"
+                  onClick={removeEntry}
+                  disabled={loading}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    padding: '0.4rem 0.6rem',
+                    fontSize: '0.75rem',
+                    color: '#ef4444',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    borderRadius: 'var(--radius-sm)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Trash2 size={13} /> Remove from library
+                </button>
+              </>
+            )}
+          </div>
+        )
       )}
     </div>
   );

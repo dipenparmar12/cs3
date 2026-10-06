@@ -1008,7 +1008,17 @@ export const DetailView: React.FC<DetailViewProps> = ({
       setPickerError(undefined);
       const key = `${episode?.url ?? detail.url}|${episode?.season ?? ''}|${episode?.episode ?? ''}`;
       sourceTargetRef.current = { key, refresh: Boolean(options.refresh) };
-      const retained = retainedSources.current.get(key);
+      const prefetchMatch =
+        prefetch?.sources &&
+        (episode?.url ?? detail.url) === prefetch.mediaUrl &&
+        episode?.season === prefetch.season &&
+        episode?.episode === prefetch.episode
+          ? prefetch.sources
+          : undefined;
+      const retained = retainedSources.current.get(key) ?? prefetchMatch;
+      if (retained?.length) {
+        retainedSources.current.set(key, retained);
+      }
       setPickerData(
         retained?.length
           ? {
@@ -1019,7 +1029,19 @@ export const DetailView: React.FC<DetailViewProps> = ({
             }
           : null
       );
-      setDiscovery(null);
+      setDiscovery(
+        retained?.length && !options.refresh
+          ? {
+              id: 'retained',
+              searched: 1,
+              total: 1,
+              done: prefetch?.status === 'ready',
+              cancelled: false,
+              canWiden: false,
+              widened: false,
+            }
+          : null
+      );
 
       const response = await window.cloudstream.startSourceDiscovery(
         {
@@ -1051,12 +1073,16 @@ export const DetailView: React.FC<DetailViewProps> = ({
         widened: response.snapshot.widened,
       });
 
+      if (response.snapshot.sources?.length) {
+        applySnapshot(response.snapshot);
+      }
+
       // Anything this session emitted while the invoke was in flight. For a
       // cache hit that is the whole answer, already complete.
       const buffered = snapshotsById.current.get(sessionId);
       if (buffered) applySnapshot(buffered);
     },
-    [applySnapshot, detail, stopDiscovery]
+    [applySnapshot, detail, prefetch, stopDiscovery]
   );
 
   useEffect(() => {
@@ -1225,9 +1251,26 @@ export const DetailView: React.FC<DetailViewProps> = ({
       if (!playMediaUrl || state.mediaUrl !== playMediaUrl) return;
       if (state.season !== playSeason || state.episode !== playEpisode) return;
       setPrefetch(state);
+
+      if (state.sources && state.sources.length > 0) {
+        const key = `${state.mediaUrl}|${state.season ?? ''}|${state.episode ?? ''}`;
+        retainedSources.current.set(key, state.sources);
+        if (sourceTargetRef.current?.key === key) {
+          setPickerData((current) => ({
+            sources: state.sources!,
+            filtered: current?.filtered ?? [],
+            indexerOutcomes: current?.indexerOutcomes ?? [],
+            query: current?.query ?? {
+              title: detail?.name ?? '',
+              season: state.season,
+              episode: state.episode,
+            },
+          }));
+        }
+      }
     });
     return () => dispose?.();
-  }, [playMediaUrl, playSeason, playEpisode]);
+  }, [detail?.name, playMediaUrl, playSeason, playEpisode]);
 
   /** Queues one release for download, from either the picker or the player. */
   const downloadSource = useCallback(
@@ -1728,6 +1771,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
   }
 
   const episodesInSeason = seasons.get(activeSeason) ?? [];
+  const heroEpisode = isSeries ? (selectedEpisode ?? episodesInSeason[0] ?? null) : null;
 
   return (
     <div className="detail-view">
@@ -1849,17 +1893,13 @@ export const DetailView: React.FC<DetailViewProps> = ({
         // already found, so re-asking every provider would contradict it. An
         // empty answer is not a dead end either — the picker explains it and
         // offers the bypassing search from there.
-        onChooseSource={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
-        onDownload={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
+        onChooseSource={() => openSources(heroEpisode)}
+        onDownload={() => openSources(heroEpisode)}
         // "Find more" and "Refresh" are the same search with the cache bypassed,
         // and they stay two entries because they answer two questions people
         // actually ask: "is there anything else?" and "these links are dead".
-        onFindMoreSources={() =>
-          openSources(isSeries ? (episodesInSeason[0] ?? null) : null, { refresh: true })
-        }
-        onRefreshSources={() =>
-          openSources(isSeries ? (episodesInSeason[0] ?? null) : null, { refresh: true })
-        }
+        onFindMoreSources={() => openSources(heroEpisode, { refresh: true })}
+        onRefreshSources={() => openSources(heroEpisode, { refresh: true })}
         onSearchTitle={
           onSearch
             ? // The *full* title, not whatever is still sitting in the search
@@ -1878,6 +1918,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
             sources={pickerData?.sources || undefined}
             sourceQuery={playTarget ?? undefined}
             size="sm"
+            variant="detail-action"
+            openOnHover
           />
         }
       />

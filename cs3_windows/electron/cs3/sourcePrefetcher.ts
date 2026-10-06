@@ -1,6 +1,7 @@
 import type { ContentService, SourceQuery } from '../contentService';
 import type { DatastoreManager } from '../datastore';
 import { describeError } from '../../src/utils/errors.ts';
+import type { TorrentResult } from '../../src/types/torrent.ts';
 
 /**
  * Starts looking for sources while the viewer is still reading the synopsis.
@@ -62,6 +63,8 @@ export interface PrefetchState {
   settled?: number;
   total?: number;
   reason?: string;
+  /** Discovered sources carried directly so the UI can display them immediately. */
+  sources?: TorrentResult[];
 }
 
 export class SourcePrefetcher {
@@ -133,7 +136,13 @@ export class SourcePrefetcher {
     // Already known, so there is nothing to fetch and the viewer should be told
     // Play will be instant.
     if (this.content.hasFreshSources(request)) {
-      this.emit(request, { status: 'ready', count: 0, fromCache: true });
+      const cached = this.content.peekCachedSources(request.mediaUrl, request.season, request.episode);
+      this.emit(request, {
+        status: 'ready',
+        count: cached.length,
+        fromCache: true,
+        sources: cached,
+      });
       this.current = null;
       return;
     }
@@ -164,6 +173,7 @@ export class SourcePrefetcher {
             fromCache: false,
             settled: progress.settled,
             total: progress.totalRelevant,
+            sources: progress.results,
           });
         },
         {
@@ -192,6 +202,7 @@ export class SourcePrefetcher {
         count: response.sources.length,
         fromCache: false,
         reason: response.sources.length === 0 ? response.emptyReason : undefined,
+        sources: response.sources,
       });
     } catch (error) {
       if (controller.signal.aborted) return;

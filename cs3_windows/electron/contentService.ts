@@ -1147,7 +1147,15 @@ export class ContentService {
      * dropped here and re-resolved below.
      */
     if (!options.bypassCache) {
-      const cached = this.cache.read(this.cacheUrlFor(base, requestedScope), season, episode);
+      let cached = this.cache.read(this.cacheUrlFor(base, requestedScope), season, episode);
+      let scopeUsedForCache = requestedScope;
+      if ((!cached.hit || cached.fresh.length === 0) && requestedScope === 'origin') {
+        const allCached = this.cache.read(this.cacheUrlFor(base, 'all'), season, episode);
+        if (allCached.hit && allCached.fresh.length > 0) {
+          cached = allCached;
+          scopeUsedForCache = 'all';
+        }
+      }
       if (cached.hit && cached.fresh.length > 0) {
         let usable = cached.fresh;
         if (this.scope.isActive()) {
@@ -1172,8 +1180,8 @@ export class ContentService {
             filtered: [],
             indexerOutcomes: [],
             query: { title: request.titleOverride ?? '', season, episode },
-            scopeUsed: requestedScope,
-            canWiden: requestedScope === 'origin',
+            scopeUsed: scopeUsedForCache,
+            canWiden: scopeUsedForCache === 'origin',
           };
         }
       }

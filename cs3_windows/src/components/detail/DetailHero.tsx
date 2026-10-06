@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useIsDeveloper } from '../../utils/ExperienceModeContext';
 import { Poster } from '../Poster';
 import {
@@ -183,9 +183,35 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   const isDeveloper = useIsDeveloper();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuWrapper = useRef<HTMLDivElement | null>(null);
+  const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
   useDismissable(menuOpen, menuWrapper, closeMenu);
+
+  const handleMouseEnter = useCallback(() => {
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+      hoverTimeoutRef.current = null;
+    }
+    setMenuOpen(true);
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+    }
+    hoverTimeoutRef.current = setTimeout(() => {
+      setMenuOpen(false);
+    }, 180);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const run = (action: () => void) => () => {
     setMenuOpen(false);
@@ -420,7 +446,12 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
             <span>{isSeries ? 'Download episode' : 'Download'}</span>
           </button>
 
-          <div className="detail-action__more" ref={menuWrapper}>
+          <div
+            className="detail-action__more"
+            ref={menuWrapper}
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
+          >
             <button
               type="button"
               className="detail-action"

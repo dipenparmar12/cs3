@@ -284,16 +284,20 @@ export class PlaybackSessionManager {
     episodeTitle?: string,
     options: { bypassCache?: boolean } = {}
   ): PlaybackSnapshot {
+    const cachedSources = !options.bypassCache
+      ? this.content.peekCachedSources(request.mediaUrl, request.season, request.episode)
+      : [];
+
     const session: Session = {
       id: randomUUID(),
       request,
       title,
       episodeTitle,
       phase: 'searching',
-      sources: [],
-      searched: 0,
-      totalIndexers: 0,
-      searchDone: false,
+      sources: cachedSources,
+      searched: cachedSources.length > 0 ? 1 : 0,
+      totalIndexers: cachedSources.length > 0 ? 1 : 0,
+      searchDone: cachedSources.length > 0,
       searchCancelled: false,
       attempts: [],
       // False until discovery answers. The player shows nothing to widen while
@@ -310,6 +314,7 @@ export class PlaybackSessionManager {
       // look at the list, not to be dropped into whatever ranked first.
       started: true,
       disposed: false,
+      lastIndexerName: cachedSources.length > 0 ? 'Cached sources' : undefined,
     };
     this.sessions.set(session.id, session);
 
@@ -343,13 +348,15 @@ export class PlaybackSessionManager {
     const controller = new AbortController();
     session.discovery = controller;
 
-    session.searchDone = false;
-    session.searchCancelled = false;
-    session.searched = 0;
-    session.widened = false;
-    session.emptyReason = undefined;
-    session.diagnosis = undefined;
-    this.emit(session);
+    if (options.bypassCache || session.sources.length === 0) {
+      session.searchDone = false;
+      session.searchCancelled = false;
+      session.searched = 0;
+      session.widened = false;
+      session.emptyReason = undefined;
+      session.diagnosis = undefined;
+      this.emit(session);
+    }
 
     try {
       const response = await this.content.getSources(
