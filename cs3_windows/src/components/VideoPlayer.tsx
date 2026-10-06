@@ -2283,17 +2283,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     styleTag.textContent = `
       .player video::cue,
       video::cue {
-        font-size: calc(1.5rem * ${subtitleStyle.scale}) !important;
+        font-size: calc(1.35rem * ${subtitleStyle.scale}) !important;
         color: ${subtitleStyle.color} !important;
         background-color: ${bgColor} !important;
         background: ${bgColor} !important;
         text-shadow: ${shadow} !important;
         font-weight: ${subtitleStyle.weight === 'bold' ? '700' : '400'} !important;
-        line-height: 1.35 !important;
-        white-space: pre-line !important;
+        line-height: 1.18 !important;
+        white-space: normal !important;
+        padding: 0.1em 0.35em !important;
       }
       .player video::-webkit-media-text-track-container {
         transform: translateY(-${subtitleStyle.position}%) !important;
+      }
+      .player video::-webkit-media-text-track-display {
+        line-height: 1.18 !important;
       }
     `;
 
