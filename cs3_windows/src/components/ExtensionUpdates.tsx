@@ -1,8 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import {
+  RefreshCw,
+  ArrowUpCircle,
+  CheckCircle2,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  EyeOff,
+  RotateCcw,
+} from 'lucide-react';
 import type {
   AvailableUpdate,
   ExtensionNotice,
+  IgnoredExtensionUpdate,
   UpdateOutcome,
   UpdateSettings,
 } from '../../electron/cs3/extensionUpdater';
@@ -14,27 +24,32 @@ export interface StatusMessage {
   isError?: boolean;
 }
 
-export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdated }) => {
+export interface ExtensionUpdatesProps {
+  onUpdated?: () => void;
+  onCountsChange?: (counts: { pending: number; ignored: number; failed: number }) => void;
+}
+
+export const ExtensionUpdates: React.FC<ExtensionUpdatesProps> = ({ onUpdated, onCountsChange }) => {
   const [updates, setUpdates] = useState<AvailableUpdate[]>([]);
-  /**
-   * Extensions their own maintainer has marked as not working.
-   *
-   * Held beside the updates rather than folded into them because they call for
-   * a different response: an update is something to press, and this is
-   * something to stop debugging. Nothing is switched off on the strength of it
-   * — a status is the author's information, not the app's decision.
-   */
+  const [ignoredUpdates, setIgnoredUpdates] = useState<Record<string, IgnoredExtensionUpdate>>({});
   const [notices, setNotices] = useState<ExtensionNotice[]>([]);
   const [failedOutcomes, setFailedOutcomes] = useState<UpdateOutcome[]>([]);
   const [settings, setSettings] = useState<UpdateSettings | null>(null);
   const [checking, setChecking] = useState(false);
-  /** Only the scheduled auto-update reports this; manual updates are queue jobs. */
+  const [showIgnored, setShowIgnored] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const jobs = useExtensionJobs();
   const [message, setMessage] = useState<StatusMessage | null>(null);
-  const [isExpanded, setIsExpanded] = useState(false);
 
   const api = window.cloudstream;
+
+  const fetchIgnored = useCallback(() => {
+    if (!api?.getIgnoredExtensionUpdates) return;
+    api
+      .getIgnoredExtensionUpdates()
+      .then((res) => setIgnoredUpdates(res ?? {}))
+      .catch(() => {});
+  }, [api]);
 
   useEffect(() => {
     if (!api) return;
@@ -47,7 +62,27 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
       .getUpdateSettings()
       .then((res) => setSettings(res ?? null))
       .catch(() => {});
-  }, [api]);
+
+    fetchIgnored();
+  }, [api, fetchIgnored]);
+
+  // Separate active (pending) updates from ignored updates
+  const activeUpdates = useMemo(() => {
+    const safe = Array.isArray(updates) ? updates : [];
+    return safe.filter((u) => !u.ignored && !ignoredUpdates[u.internalName]);
+  }, [updates, ignoredUpdates]);
+
+  const ignoredList = useMemo(() => {
+    return Object.values(ignoredUpdates);
+  }, [ignoredUpdates]);
+
+  useEffect(() => {
+    onCountsChange?.({
+      pending: activeUpdates.length,
+      ignored: ignoredList.length,
+      failed: failedOutcomes.length,
+    });
+  }, [activeUpdates.length, ignoredList.length, failedOutcomes.length, onCountsChange]);
 
   useEffect(() => {
     if (!api) return;
@@ -57,19 +92,34 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
           setChecking(true);
           break;
         case 'extension:updateCheckFinished': {
-          const result = payload as { updates?: AvailableUpdate[]; warnings?: string[] };
+          const result = payload as {
+            updates?: AvailableUpdate[];
+            ignoredUpdates?: IgnoredExtensionUpdate[];
+            warnings?: string[];
+          };
           const safeUpdates = Array.isArray(result?.updates) ? result.updates : [];
           setUpdates(safeUpdates);
+          if (Array.isArray(result?.ignoredUpdates)) {
+            const map: Record<string, IgnoredExtensionUpdate> = {};
+            for (const item of result.ignoredUpdates) {
+              map[item.internalName] = item;
+            }
+            setIgnoredUpdates(map);
+          }
           setChecking(false);
-          if (safeUpdates.length > 0) setIsExpanded(true);
+          break;
+        }
+        case 'extension:ignoredUpdatesChanged': {
+          const map = payload as Record<string, IgnoredExtensionUpdate>;
+          if (map && typeof map === 'object') {
+            setIgnoredUpdates(map);
+          }
           break;
         }
         case 'extension:updateProgress':
           setProgress(payload as { current: number; total: number });
           break;
         case 'extension:autoUpdateCompleted': {
-          // Nothing else ends the scheduled run's counter, and a stale
-          // "Updating 3/3" disables Update All until the next manual one.
           setProgress(null);
           const { outcomes } = payload as { outcomes?: UpdateOutcome[] };
           const safeOutcomes = Array.isArray(outcomes) ? outcomes : [];
@@ -77,16 +127,17 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
           const failed = safeOutcomes.filter((o) => !o?.ok);
           setFailedOutcomes(failed);
           setMessage({
-            text: failed.length > 0
-              ? `Auto-updated ${ok} of ${safeOutcomes.length} extensions (${failed.length} failed).`
-              : `Auto-updated all ${ok} extension(s).`,
+            text:
+              failed.length > 0
+                ? `Auto-updated ${ok} of ${safeOutcomes.length} extensions (${failed.length} failed and ignored).`
+                : `Auto-updated all ${ok} extension(s).`,
             isError: failed.length > 0,
           });
-          if (failed.length > 0) setIsExpanded(true);
           api
             .getCachedExtensionUpdates()
             .then((res) => setUpdates(Array.isArray(res) ? res : []))
             .catch(() => {});
+          fetchIgnored();
           onUpdated?.();
           break;
         }
@@ -94,7 +145,7 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
           break;
       }
     });
-  }, [api, onUpdated]);
+  }, [api, onUpdated, fetchIgnored]);
 
   const check = useCallback(async () => {
     if (!api) return;
@@ -112,30 +163,26 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
       const safeUpdates = Array.isArray(response.result.updates) ? response.result.updates : [];
       setUpdates(safeUpdates);
       setNotices(Array.isArray(response.result.notices) ? response.result.notices : []);
-      if (safeUpdates.length > 0) setIsExpanded(true);
+      fetchIgnored();
+
+      const nonIgnoredCount = safeUpdates.filter((u) => !u.ignored).length;
       setMessage(
-        safeUpdates.length === 0
+        nonIgnoredCount === 0
           ? {
-              text: `All extensions up to date (${response.result.repositoriesChecked ?? 0} repos checked).`,
+              text: `All active extensions are up to date (${response.result.repositoriesChecked ?? 0} repos checked).`,
               isError: false,
             }
-          : null
+          : {
+              text: `Found ${nonIgnoredCount} new update(s).`,
+              isError: false,
+            }
       );
     } catch (err) {
       setChecking(false);
       setMessage({ text: `Check failed: ${describeError(err)}`, isError: true });
     }
-  }, [api]);
+  }, [api, fetchIgnored]);
 
-  /**
-   * Updates are background jobs, like installs.
-   *
-   * Each Update press — and each extension an Update-all covers — is its own
-   * job in the shared queue, so they download side by side, the rest of the
-   * screen stays usable, and one failure keeps its reason and a Retry without
-   * holding the others back. The list below reconciles from the queue as jobs
-   * finish rather than from each press's reply.
-   */
   const updateJobs = useMemo(
     () => jobs.snapshot.jobs.filter((job) => job.kind === 'update'),
     [jobs.snapshot]
@@ -145,7 +192,6 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
 
   useEffect(() => {
     const finished = updateJobs.filter((job) => job.state === 'done' || job.state === 'failed');
-    // Jobs that had already finished when this mounted are history, not news.
     if (seenJobs.current === null) {
       seenJobs.current = new Set(finished.map((job) => job.id));
       return;
@@ -167,9 +213,15 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
         message: job.message ?? 'The update did not install.',
       })),
     ]);
-    if (failed.length > 0) setIsExpanded(true);
-    if (succeeded.size > 0) onUpdated?.();
-  }, [updateJobs, onUpdated]);
+
+    if (succeeded.size > 0) {
+      onUpdated?.();
+      fetchIgnored();
+    }
+    if (failed.length > 0) {
+      fetchIgnored();
+    }
+  }, [updateJobs, onUpdated, fetchIgnored]);
 
   const isUpdating = (internalName: string) =>
     updating.some((job) => job.target === `ext:${internalName}`);
@@ -195,11 +247,6 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
     [enqueueUpdates, updates]
   );
 
-  /*
-   * "Update everything" means everything out of date *now* — a fresh check,
-   * never the persisted list, which can be arbitrarily old (see
-   * `ExtensionUpdater.updateAll`) — and then one job per extension.
-   */
   const updateEverything = useCallback(async () => {
     if (!api) return;
     setMessage(null);
@@ -208,18 +255,20 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
       const response = await api.checkExtensionUpdates();
       const fresh = response.ok && response.result ? response.result.updates ?? [] : updates;
       setUpdates(fresh);
-      if (fresh.length === 0) {
-        setMessage({ text: 'Everything is already up to date.', isError: false });
+      fetchIgnored();
+
+      const actionable = fresh.filter((u) => !u.ignored && !ignoredUpdates[u.internalName]);
+      if (actionable.length === 0) {
+        setMessage({ text: 'All active extensions are already up to date.', isError: false });
         return;
       }
-      void enqueueUpdates(fresh);
-      setIsExpanded(true);
+      void enqueueUpdates(actionable);
     } catch (err) {
       setMessage({ text: `Update all failed: ${describeError(err)}`, isError: true });
     } finally {
       setChecking(false);
     }
-  }, [api, updates, enqueueUpdates]);
+  }, [api, updates, ignoredUpdates, enqueueUpdates, fetchIgnored]);
 
   const retryFailed = useCallback(() => {
     if (failedOutcomes.length === 0) return;
@@ -232,111 +281,93 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
     );
   }, [failedOutcomes, updates, enqueueUpdates]);
 
-  /*
-   * The only way to change how updates happen.
-   *
-   * `saveUpdateSettings` was exposed from the start and called by nothing, so
-   * "turning auto-install on is one click" was true of the API and of no
-   * screen. Automatic is now the default, as it is on Android; this is where
-   * someone who wants to approve each update says so.
-   */
+  const ignoreUpdate = useCallback(
+    async (internalName: string, reason = 'Ignored by user') => {
+      if (!api?.ignoreExtensionUpdate) return;
+      try {
+        await api.ignoreExtensionUpdate(internalName, reason);
+        fetchIgnored();
+      } catch (err) {
+        setMessage({ text: `Could not ignore update: ${describeError(err)}`, isError: true });
+      }
+    },
+    [api, fetchIgnored]
+  );
+
+  const unignoreUpdate = useCallback(
+    async (internalName: string) => {
+      if (!api?.unignoreExtensionUpdate) return;
+      try {
+        await api.unignoreExtensionUpdate(internalName);
+        fetchIgnored();
+      } catch (err) {
+        setMessage({ text: `Could not restore update: ${describeError(err)}`, isError: true });
+      }
+    },
+    [api, fetchIgnored]
+  );
+
   const changeSettings = useCallback(
     async (patch: Partial<UpdateSettings>) => {
       if (!api) return;
       try {
         setSettings(await api.saveUpdateSettings(patch));
       } catch (err) {
-        setMessage({ text: `Could not save: ${describeError(err)}`, isError: true });
+        setMessage({ text: `Could not save settings: ${describeError(err)}`, isError: true });
       }
     },
     [api]
   );
 
-  const safeUpdates = Array.isArray(updates) ? updates : [];
   const lastCheckedStr = settings?.lastCheckedAt
-    ? ` (Last checked: ${new Date(settings.lastCheckedAt).toLocaleTimeString()})`
+    ? ` · Last checked ${new Date(settings.lastCheckedAt).toLocaleTimeString()}`
     : '';
 
   return (
-    <div style={{
-      background: 'var(--bg-card)',
-      border: '1px solid',
-      borderColor: failedOutcomes.length > 0
-        ? 'var(--status-error, #ef4444)'
-        : safeUpdates.length > 0
-          ? 'var(--accent-primary)'
-          : 'var(--border-color)',
-      borderRadius: 'var(--radius-md)',
-      padding: '0.6rem 1rem',
-      transition: 'all 0.2s ease'
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
-        <div
-          onClick={() => setIsExpanded(!isExpanded)}
-          style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', flex: 1 }}
-        >
+    <div className="ext-updates-container">
+      {/* Top Header Card */}
+      <div className="ext-updates-header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
           <ArrowUpCircle
-            size={16}
+            size={18}
             style={{
-              color: failedOutcomes.length > 0
-                ? 'var(--status-error, #ef4444)'
-                : safeUpdates.length > 0
-                  ? 'var(--accent-light)'
-                  : 'var(--text-subtle)',
+              color: activeUpdates.length > 0 ? 'var(--accent-light)' : 'var(--text-subtle)',
             }}
           />
-          <span style={{ fontSize: '0.83rem', fontWeight: 600, color: '#fff' }}>
-            Extension Updates{lastCheckedStr}
-          </span>
-          {failedOutcomes.length > 0 ? (
-            <span
-              className="poster-badge"
-              style={{
-                position: 'static',
-                backgroundColor: 'var(--status-error, #ef4444)',
-                color: '#fff',
-                fontSize: '0.68rem',
-              }}
-            >
-              {failedOutcomes.length} failed
-            </span>
-          ) : safeUpdates.length > 0 ? (
-            <span
-              className="poster-badge"
-              style={{
-                position: 'static',
-                backgroundColor: 'var(--accent-primary)',
-                color: '#fff',
-                fontSize: '0.68rem',
-              }}
-            >
-              {safeUpdates.length} update(s) available
-            </span>
-          ) : (
-            <span style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>Up to date</span>
-          )}
-          {isExpanded ? <ChevronUp size={14} style={{ color: 'var(--text-subtle)' }} /> : <ChevronDown size={14} style={{ color: 'var(--text-subtle)' }} />}
+          <div>
+            <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#fff' }}>
+              Extension Updates
+            </div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
+              {activeUpdates.length > 0
+                ? `${activeUpdates.length} update(s) available`
+                : 'All active extensions up to date'}
+              {lastCheckedStr}
+            </div>
+          </div>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
           <button
+            type="button"
             className="btn btn-secondary"
             onClick={check}
             disabled={checking || progress !== null}
-            style={{ fontSize: '0.73rem', padding: '0.25rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+            style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
           >
             <RefreshCw size={12} className={checking ? 'spin' : undefined} />
-            <span>{checking ? 'Checking…' : 'Check Updates'}</span>
+            <span>{checking ? 'Checking…' : 'Check for Updates'}</span>
           </button>
 
           {failedOutcomes.length > 0 && (
             <button
+              type="button"
               className="btn btn-secondary"
               onClick={retryFailed}
               disabled={progress !== null}
               style={{
-                fontSize: '0.73rem',
-                padding: '0.25rem 0.6rem',
+                fontSize: '0.75rem',
+                padding: '0.3rem 0.65rem',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '0.35rem',
@@ -344,33 +375,35 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
                 color: '#ff8888',
               }}
             >
-              <RefreshCw size={12} className={progress !== null ? 'spin' : undefined} />
+              <RotateCcw size={12} className={progress !== null ? 'spin' : undefined} />
               <span>Retry Failed ({failedOutcomes.length})</span>
             </button>
           )}
 
-          {safeUpdates.length > 0 && (
+          {activeUpdates.length > 0 && (
             <button
+              type="button"
               className="btn btn-primary"
               onClick={updateEverything}
               disabled={progress !== null || checking}
-              style={{ fontSize: '0.73rem', padding: '0.25rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+              style={{ fontSize: '0.75rem', padding: '0.3rem 0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
             >
-              <ArrowUpCircle size={12} />
+              <ArrowUpCircle size={13} />
               <span>
                 {progress
                   ? `Updating ${progress.current}/${progress.total}…`
                   : updating.length > 0
                     ? `Updating ${updating.length}…`
-                    : `Update All (${safeUpdates.length})`}
+                    : `Update All (${activeUpdates.length})`}
               </span>
             </button>
           )}
         </div>
       </div>
 
+      {/* Auto-install Settings */}
       {settings && (
-        <div className="ext-update-policy">
+        <div className="ext-update-policy" style={{ margin: 0 }}>
           <label>
             <input
               type="checkbox"
@@ -395,37 +428,32 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
         </div>
       )}
 
+      {/* Status feedback message */}
       {message && (
-        <div style={{
-          marginTop: '0.5rem',
-          padding: '0.4rem 0.65rem',
-          borderRadius: 'var(--radius-sm)',
-          background: message.isError ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.12)',
-          color: '#fff',
-          fontSize: '0.75rem',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.4rem'
-        }}>
+        <div
+          style={{
+            padding: '0.45rem 0.75rem',
+            borderRadius: 'var(--radius-sm)',
+            background: message.isError ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.12)',
+            color: '#fff',
+            fontSize: '0.78rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.45rem',
+          }}
+        >
           {message.isError ? (
-            <AlertCircle size={13} style={{ color: 'var(--status-error, #ef4444)' }} />
+            <AlertCircle size={14} style={{ color: 'var(--status-error, #ef4444)' }} />
           ) : (
-            <CheckCircle2 size={13} style={{ color: 'var(--status-success, #10b981)' }} />
+            <CheckCircle2 size={14} style={{ color: 'var(--status-success, #10b981)' }} />
           )}
           <span>{message.text}</span>
         </div>
       )}
 
-      {/*
-        What the maintainers have said about what is installed.
-
-        Always shown rather than folded behind the expander: someone whose
-        provider has been returning nothing all week is not going to go looking
-        for it, and this is the one line that ends the investigation. Not an
-        action — nothing here is switched off on the author's say-so.
-      */}
+      {/* Maintainer notices */}
       {notices.length > 0 && (
-        <div style={{ marginTop: '0.6rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
           {notices.map((notice) => (
             <div
               key={`notice-${notice.internalName}`}
@@ -434,86 +462,65 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
                 display: 'flex',
                 alignItems: 'flex-start',
                 gap: '0.45rem',
-                padding: '0.45rem 0.65rem',
+                padding: '0.5rem 0.75rem',
                 borderRadius: 'var(--radius-sm)',
                 background: 'rgba(245, 158, 11, 0.12)',
                 border: '1px solid rgba(245, 158, 11, 0.3)',
-                fontSize: '0.74rem',
+                fontSize: '0.75rem',
                 lineHeight: 1.4,
                 color: 'var(--text-main)',
               }}
             >
-              <AlertCircle size={13} style={{ color: '#f59e0b', flexShrink: 0, marginTop: '0.1rem' }} />
+              <AlertCircle size={14} style={{ color: '#f59e0b', flexShrink: 0, marginTop: '0.1rem' }} />
               <span>{notice.message}</span>
             </div>
           ))}
         </div>
       )}
 
-      {isExpanded && (safeUpdates.length > 0 || failedOutcomes.length > 0) && (
-        <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.6rem' }}>
-          {/* Failed updates with error detail and Retry button */}
-          {failedOutcomes.map((f) => (
-            <div
-              key={`failed-${f.internalName}`}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '0.4rem 0.65rem',
-                borderRadius: 'var(--radius-sm)',
-                background: 'rgba(239, 68, 68, 0.1)',
-                border: '1px solid rgba(239, 68, 68, 0.25)',
-                gap: '0.75rem',
-              }}
-            >
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <AlertCircle size={13} style={{ color: 'var(--status-error, #ef4444)', flexShrink: 0 }} />
-                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff' }}>
-                    {safeUpdates.find((u) => u.internalName === f.internalName)?.name ?? f.internalName}
-                  </span>
-                </div>
-                <div style={{ fontSize: '0.7rem', color: '#ff9999', marginTop: '0.2rem', wordBreak: 'break-word' }}>
-                  {f.message}
-                </div>
-              </div>
-              <button
-                className="btn btn-secondary"
-                onClick={() => updateOne(f.internalName)}
-                disabled={isUpdating(f.internalName) || progress !== null}
-                style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', flexShrink: 0 }}
-              >
-                {isUpdating(f.internalName) ? 'Retrying…' : 'Retry'}
-              </button>
-            </div>
-          ))}
+      {/* Active updates list */}
+      <div className="ext-updates-section">
+        <div className="ext-updates-section__title">
+          <span>Available Updates ({activeUpdates.length})</span>
+          {activeUpdates.length > 0 && (
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
+              Ready to install
+            </span>
+          )}
+        </div>
 
-          {/* Regular pending updates */}
-          {safeUpdates
-            .filter((u) => !failedOutcomes.some((f) => f.internalName === u.internalName))
-            .map((u) => (
-              <div
-                key={u.internalName}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '0.4rem 0.65rem',
-                  borderRadius: 'var(--radius-sm)',
-                  background: 'var(--bg-input)',
-                  gap: '0.75rem'
-                }}
-              >
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff' }}>{u.name}</span>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)', marginLeft: '0.5rem' }}>
-                    {/*
-                      A republish carries the same version number on both
-                      sides, so "v7 ➔ v7" reads as a bug in the updater rather
-                      than as what it is: the maintainer pushed a fix without
-                      bumping the field. Naming it is the whole difference.
-                    */}
+        {activeUpdates.length === 0 ? (
+          <div
+            style={{
+              padding: '1.5rem',
+              textAlign: 'center',
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-md)',
+              color: 'var(--text-muted)',
+              fontSize: '0.82rem',
+            }}
+          >
+            <CheckCircle2
+              size={24}
+              style={{ color: 'var(--status-success, #10b981)', marginBottom: '0.4rem', opacity: 0.9 }}
+            />
+            <div>All active extensions are up to date.</div>
+            {ignoredList.length > 0 && (
+              <div style={{ fontSize: '0.73rem', color: 'var(--text-subtle)', marginTop: '0.3rem' }}>
+                {ignoredList.length} failing extension(s) have been ignored to prevent recurring errors.
+              </div>
+            )}
+          </div>
+        ) : (
+          activeUpdates.map((u) => (
+            <div key={u.internalName} className="ext-update-card">
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#fff' }}>
+                    {u.name}
+                  </span>
+                  <span style={{ fontSize: '0.73rem', color: 'var(--text-subtle)' }}>
                     {u.reason === 'republished' ? (
                       <>
                         v{u.availableVersion} <strong>rebuilt</strong>
@@ -526,16 +533,155 @@ export const ExtensionUpdates: React.FC<{ onUpdated?: () => void }> = ({ onUpdat
                     {u.fileSize ? ` (${(u.fileSize / 1024).toFixed(0)} KB)` : ''}
                   </span>
                 </div>
+                {u.description && (
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-subtle)', marginTop: '0.2rem' }}>
+                    {u.description}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                 <button
+                  type="button"
                   className="btn btn-secondary"
+                  onClick={() => ignoreUpdate(u.internalName, 'Ignored by user')}
+                  title="Ignore this update to suppress future notifications"
+                  style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
+                >
+                  <EyeOff size={11} style={{ marginRight: '0.25rem' }} />
+                  Ignore
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
                   onClick={() => updateOne(u.internalName)}
                   disabled={isUpdating(u.internalName) || progress !== null}
-                  style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', flexShrink: 0 }}
+                  style={{ fontSize: '0.72rem', padding: '0.25rem 0.6rem' }}
                 >
                   {isUpdating(u.internalName) ? 'Updating…' : 'Update'}
                 </button>
               </div>
-            ))}
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Current session failed updates */}
+      {failedOutcomes.length > 0 && (
+        <div className="ext-updates-section">
+          <div className="ext-updates-section__title" style={{ color: 'var(--status-error, #ef4444)' }}>
+            <span>Failed Updates ({failedOutcomes.length})</span>
+            <span style={{ fontSize: '0.72rem', color: '#ff9999' }}>
+              Auto-ignored to prevent endless retries
+            </span>
+          </div>
+
+          {failedOutcomes.map((f) => (
+            <div key={`failed-${f.internalName}`} className="ext-update-card ext-update-card--failed">
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <AlertCircle size={14} style={{ color: 'var(--status-error, #ef4444)', flexShrink: 0 }} />
+                  <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#fff' }}>
+                    {updates.find((u) => u.internalName === f.internalName)?.name ?? f.internalName}
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.72rem', color: '#ff9999', marginTop: '0.2rem', wordBreak: 'break-word' }}>
+                  {f.message}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => updateOne(f.internalName)}
+                  disabled={isUpdating(f.internalName) || progress !== null}
+                  style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
+                >
+                  {isUpdating(f.internalName) ? 'Retrying…' : 'Retry'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Ignored updates section */}
+      {ignoredList.length > 0 && (
+        <div className="ext-updates-section">
+          <div
+            className="ext-ignored-banner"
+            onClick={() => setShowIgnored(!showIgnored)}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <EyeOff size={15} style={{ color: '#f59e0b' }} />
+              <div>
+                <strong>Ignored / Suppressed Updates ({ignoredList.length})</strong>
+                <span style={{ color: 'var(--text-subtle)', marginLeft: '0.4rem', fontSize: '0.72rem' }}>
+                  Failing upstream provider builds or manually muted
+                </span>
+              </div>
+            </div>
+            {showIgnored ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </div>
+
+          {showIgnored && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.25rem' }}>
+              {ignoredList.map((item) => (
+                <div key={item.internalName} className="ext-update-card ext-update-card--ignored">
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#fff' }}>
+                        {item.name ?? item.internalName}
+                      </span>
+                      {item.isAutoIgnored && (
+                        <span
+                          className="poster-badge"
+                          style={{
+                            position: 'static',
+                            backgroundColor: 'rgba(245, 158, 11, 0.2)',
+                            color: '#f59e0b',
+                            fontSize: '0.65rem',
+                            border: '1px solid rgba(245, 158, 11, 0.4)',
+                          }}
+                        >
+                          Provider Failure
+                        </span>
+                      )}
+                      {item.failureCount > 0 && (
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-subtle)' }}>
+                          ({item.failureCount} failure{item.failureCount > 1 ? 's' : ''})
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: '#ffaaaa', marginTop: '0.15rem', wordBreak: 'break-word' }}>
+                      {item.reason}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => unignoreUpdate(item.internalName)}
+                      style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
+                    >
+                      Unignore
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => updateOne(item.internalName)}
+                      disabled={isUpdating(item.internalName) || progress !== null}
+                      style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
+                    >
+                      {isUpdating(item.internalName) ? 'Retrying…' : 'Retry'}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

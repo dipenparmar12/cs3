@@ -23,7 +23,7 @@
  * originals won — `Toggle` carrying a `suppressedReason` says something the
  * reconstruction's plain switch could not.
  */
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Boxes, Library, Loader2, RefreshCw } from 'lucide-react';
 import { useExtensionCatalog } from './useExtensionCatalog';
 import { useExtensionFilters } from './useExtensionFilters';
@@ -48,12 +48,13 @@ import { useAdultState } from '../../utils/useAdultMode';
  * - **Browse** — official & community repository catalog
  * - **Built-in Sources** — native scrapers, Stremio addons, & self-hosted media servers
  */
-type Tab = 'sources' | 'repositories' | 'builtin';
+type Tab = 'sources' | 'repositories' | 'builtin' | 'updates';
 
 const TABS: Array<{ id: Tab; label: string; hint: string }> = [
   { id: 'sources', label: 'Installed', hint: 'What you have, and what will be searched' },
   { id: 'repositories', label: 'Browse', hint: 'Collections of add-ons you can install' },
   { id: 'builtin', label: 'Built-in Sources', hint: 'Ship with the app — native scrapers & servers' },
+  { id: 'updates', label: 'Updates', hint: 'Available updates, changelogs & maintenance' },
 ];
 
 export const ExtensionsScreen: React.FC = () => {
@@ -65,6 +66,44 @@ export const ExtensionsScreen: React.FC = () => {
   useOnJobsSettled(jobs.snapshot, () => void refresh());
   const [tab, setTab] = useState<Tab>('sources');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const [updateCounts, setUpdateCounts] = useState<{ pending: number; ignored: number; failed: number }>({
+    pending: 0,
+    ignored: 0,
+    failed: 0,
+  });
+
+  useEffect(() => {
+    const api = window.cloudstream;
+    if (!api) return;
+
+    const loadCounts = async () => {
+      try {
+        const [cached, ignored] = await Promise.all([
+          api.getCachedExtensionUpdates().catch(() => []),
+          api.getIgnoredExtensionUpdates?.().catch(() => ({})) ?? {},
+        ]);
+        const safeCached = Array.isArray(cached) ? cached : [];
+        const ignoredMap: Record<string, unknown> = (ignored as Record<string, unknown>) ?? {};
+        const pending = safeCached.filter((u) => !u.ignored && !ignoredMap[u.internalName]).length;
+        const ignoredCount = Object.keys(ignoredMap).length;
+        setUpdateCounts((prev) => ({ ...prev, pending, ignored: ignoredCount }));
+      } catch {
+        // Ignore background tally error
+      }
+    };
+
+    void loadCounts();
+
+    return api.onExtensionUpdateEvent?.((event, payload) => {
+      if (event === 'extension:updateCheckFinished') {
+        const result = payload as { updates?: Array<{ internalName: string; ignored?: boolean }> };
+        const safe = Array.isArray(result?.updates) ? result.updates : [];
+        const pending = safe.filter((u) => !u.ignored).length;
+        setUpdateCounts((prev) => ({ ...prev, pending }));
+      }
+    });
+  }, []);
 
   const [browsing, setBrowsing] = useState<{ name: string; url: string } | null>(null);
   const [plugins, setPlugins] = useState<SitePlugin[]>([]);
@@ -210,59 +249,59 @@ export const ExtensionsScreen: React.FC = () => {
 
       <JobsTray />
 
-      {/*
-        Extension updates, and the reason this line exists at all.
-
-        `ExtensionUpdates` was built — check, update one, update all, the
-        auto-update policy, live progress from `extension:update*` events — and
-        was imported by nothing. Every one of those channels was registered in
-        `main.ts` and exposed in `preload.ts`, so the IPC parity test was
-        perfectly happy: the surface agreed with itself and simply had no
-        caller. That is the same silent shape as the seven mismatched channels
-        found by diffing the two files, arriving from a third direction, and the
-        user-visible form is identical — a feature that exists and cannot be
-        reached.
-
-        It goes above the tabs rather than inside one, because an update is not
-        a property of what you are currently looking at: a fix published for a
-        provider matters whether you came here to browse repositories or to
-        switch something off.
-      */}
-      <ExtensionUpdates onUpdated={() => void refresh()} />
-
       <nav className="ext-tabs" role="tablist">
-        {TABS.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === entry.id}
-            className={`ext-tab${tab === entry.id ? ' ext-tab--on' : ''}`}
-            onClick={() => setTab(entry.id)}
-          >
-            <span className="ext-tab__label">{entry.label}</span>
-            <span className="ext-tab__hint">{entry.hint}</span>
-          </button>
-        ))}
+        {TABS.map((entry) => {
+          const isUpdatesTab = entry.id === 'updates';
+          return (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === entry.id}
+              className={`ext-tab${tab === entry.id ? ' ext-tab--on' : ''}`}
+              onClick={() => setTab(entry.id)}
+            >
+              <div className="ext-tab__head">
+                <span className="ext-tab__label">{entry.label}</span>
+                {isUpdatesTab && updateCounts.pending > 0 && (
+                  <span className="ext-tab__badge ext-tab__badge--accent">
+                    {updateCounts.pending}
+                  </span>
+                )}
+                {isUpdatesTab && updateCounts.pending === 0 && updateCounts.ignored > 0 && (
+                  <span
+                    className="ext-tab__badge ext-tab__badge--muted"
+                    title={`${updateCounts.ignored} update(s) ignored due to provider errors`}
+                  >
+                    {updateCounts.ignored} ignored
+                  </span>
+                )}
+              </div>
+              <span className="ext-tab__hint">{entry.hint}</span>
+            </button>
+          );
+        })}
       </nav>
 
-      <FilterBar
-        query={filters.query}
-        onQuery={filters.setQuery}
-        status={filters.status}
-        onStatus={filters.setStatus}
-        tags={filters.tags}
-        onToggleTag={filters.toggleTag}
-        languages={filters.languages}
-        onToggleLanguage={filters.toggleLanguage}
-        categories={filters.categories}
-        onToggleCategory={filters.toggleCategory}
-        facets={filters.facets}
-        activeCount={filters.activeCount}
-        onReset={filters.reset}
-        showCategories={tab !== 'builtin'}
-        scope={tab === 'repositories' ? 'repositories' : 'sources'}
-      />
+      {(tab === 'sources' || tab === 'repositories') && (
+        <FilterBar
+          query={filters.query}
+          onQuery={filters.setQuery}
+          status={filters.status}
+          onStatus={filters.setStatus}
+          tags={filters.tags}
+          onToggleTag={filters.toggleTag}
+          languages={filters.languages}
+          onToggleLanguage={filters.toggleLanguage}
+          categories={filters.categories}
+          onToggleCategory={filters.toggleCategory}
+          facets={filters.facets}
+          activeCount={filters.activeCount}
+          onReset={filters.reset}
+          showCategories={true}
+          scope={tab === 'repositories' ? 'repositories' : 'sources'}
+        />
+      )}
 
       {tab === 'sources' ? (
         <>
@@ -370,6 +409,13 @@ export const ExtensionsScreen: React.FC = () => {
 
       {tab === 'builtin' ? (
         <BuiltInSources />
+      ) : null}
+
+      {tab === 'updates' ? (
+        <ExtensionUpdates
+          onUpdated={() => void refresh()}
+          onCountsChange={(counts) => setUpdateCounts(counts)}
+        />
       ) : null}
 
 
