@@ -26,9 +26,9 @@ import {
   type SubtitleBackground,
   type SubtitleStyle,
 } from '../../utils/subtitleStyle';
-import { getLanguageFlag } from '../../utils/languageFlag';
+import { getLanguageFlag, getLanguageName } from '../../utils/languageFlag';
 
-export { getLanguageFlag };
+export { getLanguageFlag, getLanguageName };
 
 /**
  * In-player subtitle search & management.

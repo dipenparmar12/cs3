@@ -29,7 +29,7 @@ import { HoverMenu } from './player/HoverMenu';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
-import { SubtitlePanel, getLanguageFlag } from './player/SubtitlePanel';
+import { SubtitlePanel, getLanguageFlag, getLanguageName } from './player/SubtitlePanel';
 import { PlayerDownloadPanel } from './player/PlayerDownloadPanel';
 import type { PlaybackStreamResponse, SourceCapabilityModel } from '../types/media';
 import { attachClearKey, type ClearKeyAttachment } from '../utils/clearKeySession';
@@ -5113,7 +5113,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   }
                 }
                 const label = allSubtitles.find((s) => s.url === url)?.name;
-                const language = url ? label?.split(/[^A-Za-z]+/)[0] ?? '' : '';
+                const language = url
+                  ? getLanguageName('', label) || (label?.split(/[^A-Za-z]+/)[0] ?? '')
+                  : '';
                 void window.cloudstream?.setPlayerPreferences({ subtitleLanguage: language });
                 preferredSubtitleLanguage.current = language || null;
                 subtitlesOff.current = !url;
@@ -5122,10 +5124,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 if (!activeSubtitle) return 'Off';
                 const found = allSubtitles.find((s) => s.url === activeSubtitle);
                 if (!found) return 'On';
+                const langName = getLanguageName('', found.name);
+                const flag = getLanguageFlag('', found.name);
+                if (langName) {
+                  const sameLang = allSubtitles.filter(
+                    (s) => getLanguageName('', s.name) === langName
+                  );
+                  const suffix =
+                    sameLang.length > 1 ? ` #${sameLang.indexOf(found) + 1}` : '';
+                  return flag && flag !== '🌐'
+                    ? `${flag} ${langName}${suffix}`
+                    : `${langName}${suffix}`;
+                }
                 const rawName =
                   (found as { displayName?: string; name: string }).displayName || found.name;
-                const flag = getLanguageFlag('', found.name || rawName);
-                return flag && flag !== '🌐' ? `${flag} ${rawName}` : rawName;
+                const clean = (rawName || '')
+                  .replace(/\.(srt|vtt|sub|ass|ssa|idx)$/i, '')
+                  .replace(/[._]+/g, ' ')
+                  .trim();
+                const shortLabel = clean.length > 18 ? `${clean.slice(0, 16)}…` : clean || 'On';
+                return flag && flag !== '🌐' ? `${flag} ${shortLabel}` : shortLabel;
               })()}
               options={[
                 { value: '', label: 'Off' },

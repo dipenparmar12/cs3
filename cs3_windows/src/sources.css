@@ -1759,7 +1759,13 @@
   gap: 0.3rem;
   font-size: 0.78rem;
 }
-.hover-menu__value { color: #e5e7eb; }
+.hover-menu__value {
+  color: #e5e7eb;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .hover-menu__list {
   position: absolute;
   bottom: calc(100% + 6px);

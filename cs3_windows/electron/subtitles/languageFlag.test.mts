@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getLanguageFlag } from '../../src/utils/languageFlag.ts';
+import { getLanguageFlag, getLanguageName } from '../../src/utils/languageFlag.ts';
 
 test('getLanguageFlag: handles standard ISO language codes', () => {
   assert.equal(getLanguageFlag('eng'), '🇬🇧');
@@ -125,4 +125,21 @@ test('getLanguageFlag: falls back cleanly for unknown strings', () => {
   assert.equal(getLanguageFlag('', 'Off'), '🌐');
   assert.equal(getLanguageFlag('', 'Track 1'), '🌐');
   assert.equal(getLanguageFlag('und', 'Undetermined'), '🌐');
+});
+
+test('getLanguageName: returns clean human-readable language names', () => {
+  assert.equal(getLanguageName('', 'Dune.Part.Two.2024.1080p.WEBRip.x264.eng.srt'), 'English');
+  assert.equal(getLanguageName('', 'Movie.2024.720p.WEBRip.x264_spa.srt'), 'Spanish');
+  assert.equal(getLanguageName('', 'Show.S01E01.1080p.pob.srt'), 'Portuguese (BR)');
+  assert.equal(getLanguageName('', 'Portuguese (BR)'), 'Portuguese (BR)');
+  assert.equal(getLanguageName('', 'Español Latino'), 'Spanish (Latin America)');
+  assert.equal(getLanguageName('', 'English [CC]'), 'English');
+  assert.equal(getLanguageName('', '2_Spanish.srt'), 'Spanish');
+  assert.equal(getLanguageName('', '日本語'), 'Japanese');
+  assert.equal(getLanguageName('', '한국어'), 'Korean');
+  assert.equal(getLanguageName('', 'हिन्दी'), 'Hindi');
+  assert.equal(getLanguageName('', 'Spider-Man.2002.deu.vtt'), 'German');
+  assert.equal(getLanguageName('fra'), 'French');
+  assert.equal(getLanguageName(''), '');
+  assert.equal(getLanguageName('', 'UnknownTrack'), '');
 });
