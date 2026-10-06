@@ -6754,16 +6754,17 @@
    reason the page was opened — a viewer who came here to press Play should not
    have to scroll past a cast list to reach the episodes. */
 .detail-facts {
-  margin-top: 1.75rem;
-  padding-top: 1.25rem;
-  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  margin-top: 2.25rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  position: relative;
 }
 
 .detail-facts__head-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0.85rem;
+  margin-bottom: 1rem;
 }
 .detail-facts__head-row .detail-facts__heading {
   margin-bottom: 0;
@@ -6771,22 +6772,31 @@
 .trailer-gallery__more-btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  font-size: 0.76rem;
-  padding: 0.25rem 0.6rem;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 0.3rem 0.75rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--text-muted);
+  transition: all 0.18s ease;
 }
 .trailer-gallery__more-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
   color: var(--text-primary);
 }
 
 .detail-facts__heading {
-  font-size: 0.78rem;
+  font-size: 1.05rem;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-subtle);
-  margin: 0 0 0.85rem;
+  letter-spacing: -0.015em;
+  color: var(--text-primary, #f9fafb);
+  margin: 0 0 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
 }
 
 /* Wraps rather than scrolls: a cast list has no meaningful order past the
@@ -6794,7 +6804,7 @@
 .detail-facts__people {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem 0.5rem;
+  gap: 0.45rem 0.6rem;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -6803,20 +6813,25 @@
 .detail-facts__person {
   font-size: 0.82rem;
   color: var(--text-main);
-  background: var(--surface-raised, rgba(255, 255, 255, 0.05));
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 999px;
-  padding: 0.22rem 0.7rem;
+  padding: 0.28rem 0.8rem;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+.detail-facts__person:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
 }
 
 /* Same rail geometry as the home screen, so a poster is the same size and
    behaves the same way wherever it appears. */
 .detail-facts__rail {
   display: flex;
-  gap: 0.85rem;
+  gap: 0.95rem;
   overflow-x: auto;
   overflow-y: hidden;
-  padding-bottom: 0.4rem;
+  padding-bottom: 0.6rem;
   scroll-snap-type: x proximity;
   scrollbar-width: thin;
 }
@@ -6827,70 +6842,63 @@
   scroll-snap-align: start;
 }
 
-.detail-facts__rail::-webkit-scrollbar { height: 7px; }
+.detail-facts__rail::-webkit-scrollbar { height: 6px; }
 .detail-facts__rail::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.14);
   border-radius: 999px;
 }
-.detail-facts__rail::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
+.detail-facts__rail::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
 
 /* --- Detail page: extended metadata ----------------------------------------
    Cast with photographs and characters, crew, ratings, and production notes,
-   from the keyless catalogues in `electron/metadata/`. This is what replaced a
-   row of grey name chips.
+   from the keyless catalogues in `electron/metadata/`. */
 
-   The whole block draws only when there is something in it — `TitleMetadata`
-   returns null otherwise — because an empty heading reads as a lookup that
-   failed, and a large part of this app's corpus is titles no catalogue has an
-   entry for. */
-
-/* A rail rather than a wrap, unlike `.detail-facts__people`: a cast list *is*
-   ordered — billing order is meaningful for the first dozen names — and the
-   cards are tall enough that wrapping forty of them would push the episode
-   list off the bottom of the page. */
 .credit-rail {
   display: flex;
-  gap: 0.85rem;
+  gap: 0.95rem;
   overflow-x: auto;
   overflow-y: hidden;
-  padding-bottom: 0.5rem;
+  padding-bottom: 0.6rem;
   scroll-snap-type: x proximity;
   scrollbar-width: thin;
 }
 
-.credit-rail::-webkit-scrollbar { height: 7px; }
+.credit-rail::-webkit-scrollbar { height: 6px; }
 .credit-rail::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.14);
   border-radius: 999px;
 }
-.credit-rail::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
+.credit-rail::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
 
 .credit-card {
   flex: 0 0 auto;
-  width: 108px;
+  width: 116px;
   scroll-snap-align: start;
   text-decoration: none;
   color: inherit;
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.2rem;
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .credit-card--link { cursor: pointer; }
-.credit-card--link:hover .credit-card__image { border-color: var(--accent-primary); }
-.credit-card--link:hover .credit-card__name { color: var(--accent-light); }
+.credit-card--link:hover { transform: translateY(-4px); }
+.credit-card--link:hover .credit-card__portrait {
+  border-color: rgba(96, 165, 250, 0.6);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55);
+}
+.credit-card--link:hover .credit-card__name { color: var(--accent-light, #60a5fa); }
 
-/* A fixed 2:3 box so a rail of mixed portrait sources still lines up. Sources
-   here crop very differently — TVmaze publishes headshots, Wikidata resolves to
-   whatever photograph Commons holds, which is routinely a landscape red-carpet
-   shot — and `object-fit: cover` is what keeps one odd image from setting the
-   height of the whole row. */
 .credit-card__portrait {
   width: 100%;
   aspect-ratio: 2 / 3;
-  border-radius: var(--radius-md);
+  border-radius: 12px;
   overflow: hidden;
   background: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .credit-card__image {
@@ -6898,9 +6906,8 @@
   height: 100%;
   object-fit: cover;
   display: block;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  transition: var(--transition);
+  border: none;
+  border-radius: 11px;
 }
 
 .credit-card__image--empty {
@@ -6910,22 +6917,18 @@
   font-size: 1.6rem;
   font-weight: 600;
   color: var(--text-subtle);
-  background: var(--bg-card-hover);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
 }
 
 .credit-card__name {
   margin: 0.35rem 0 0;
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   font-weight: 600;
   line-height: 1.25;
-  color: var(--text-main);
+  color: #f3f4f6;
   transition: var(--transition);
 }
 
-/* The original-language spelling. Smaller, but not muted to the point of
-   illegibility — for a large part of this catalogue it is the name the viewer
-   actually recognises, and treating it as a footnote to the romanisation gets
-   that backwards. */
 .credit-card__native {
   margin: 0;
   font-size: 0.72rem;
@@ -6937,7 +6940,7 @@
   margin: 0.1rem 0 0;
   font-size: 0.74rem;
   line-height: 1.3;
-  color: var(--text-muted);
+  color: #9ca3af;
 }
 
 .credit-card__note {
@@ -6946,67 +6949,67 @@
   color: var(--text-subtle);
 }
 
-/* --- ratings --------------------------------------------------------------
-   Each chip states its own scale, because the values are not comparable: 91%
-   from Rotten Tomatoes beside 8.8/10 from IMDb is two different measurements,
-   and rendering them identically would imply they are one. */
+/* --- ratings -------------------------------------------------------------- */
 .metadata-ratings {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 0.9rem;
+  gap: 0.65rem;
+  margin-bottom: 1.25rem;
 }
 
 .metadata-rating {
   display: flex;
   flex-direction: column;
-  gap: 0.05rem;
-  padding: 0.4rem 0.75rem;
-  border-radius: var(--radius-md);
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
+  gap: 0.1rem;
+  padding: 0.55rem 0.95rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
   text-decoration: none;
   color: inherit;
-  transition: var(--transition);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .metadata-rating--link:hover {
-  border-color: var(--accent-primary);
-  background: var(--bg-card-hover);
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
 }
 
 .metadata-rating__value {
-  font-size: 0.95rem;
-  font-weight: 700;
-  color: var(--text-main);
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #fff;
   line-height: 1.1;
 }
 
 .metadata-rating__source {
   font-size: 0.68rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
+  font-weight: 600;
   color: var(--text-subtle);
 }
 
 .metadata-rating__votes {
   font-size: 0.66rem;
-  color: var(--text-subtle);
+  color: var(--text-muted);
 }
 
-/* The lookup, while it is running.
-
-   Quiet on purpose. Five third-party hosts are being asked and Wikidata alone
-   was measured at 11.3s, so this is on screen for a while — it has to be
-   legible enough to explain the wait and plain enough not to compete with the
-   page it sits on. No border and no card: it is a sentence, and it is replaced
-   by content rather than filling a space content will later occupy. */
+/* The lookup, while it is running. */
 .metadata-status {
   display: flex;
   align-items: flex-start;
-  gap: 0.45rem;
-  margin: 0 0 0.85rem;
-  font-size: 0.78rem;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+  padding: 0.65rem 0.9rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.8rem;
   line-height: 1.45;
   color: var(--text-muted);
 }
@@ -7014,119 +7017,128 @@
 .metadata-status > svg {
   flex-shrink: 0;
   margin-top: 0.15rem;
-  color: var(--accent-light);
+  color: var(--accent-light, #60a5fa);
 }
 
-/* Which catalogues have already answered. Dimmer than the sentence it follows:
-   it is reassurance that progress is being made, not the message itself. */
 .metadata-status__done { color: var(--text-subtle); }
 
-/* How many credits the rail holds. The rail scrolls, and a scroll bar cannot
-   say whether it is showing twelve of twelve or twelve of two hundred. */
 .detail-facts__count {
   margin-left: 0.5rem;
-  padding: 0.05rem 0.4rem;
+  padding: 0.12rem 0.55rem;
   border-radius: 999px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  font-size: 0.68rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.72rem;
   font-weight: 600;
   color: var(--text-muted);
   vertical-align: middle;
 }
 
-/* Genres the provider did not supply. Chips rather than a fact row: they are
-   a set with no order and no label worth repeating, and the hero above already
-   draws the provider's own tags in exactly this shape. */
 .metadata-genres {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
-  margin-bottom: 0.85rem;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
 }
 
 /* --- facts ----------------------------------------------------------------
-   A two-column definition list that collapses to one at narrow widths. The
-   label column is fixed so the values line up; without that, "Box office" and
-   "Country" push their values to different x positions and the block reads as
-   unaligned rather than as a table. */
+   Presented as a clean card grid container. */
 .metadata-facts {
-  margin: 0 0 0.85rem;
+  margin: 0 0 1.25rem;
   display: grid;
-  gap: 0.3rem 1rem;
+  gap: 0.5rem 1.5rem;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 1.15rem 1.4rem;
 }
 
 .metadata-facts--crew {
-  padding-top: 0.7rem;
-  border-top: 1px solid var(--border-color);
+  margin-top: 0.5rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .metadata-facts__row {
   display: grid;
   grid-template-columns: 8.5rem 1fr;
-  gap: 0.5rem;
-  font-size: 0.82rem;
+  gap: 0.75rem;
+  font-size: 0.84rem;
   align-items: baseline;
+  padding: 0.2rem 0;
 }
 
 .metadata-facts__row dt {
-  color: var(--text-subtle);
+  color: rgba(255, 255, 255, 0.45);
   font-size: 0.72rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
 }
 
 .metadata-facts__row dd {
   margin: 0;
-  color: var(--text-main);
+  color: #e5e7eb;
+  font-weight: 500;
 }
 
-.metadata-awards { margin-top: 0.6rem; }
+.metadata-awards {
+  margin-top: 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
 
-/* --- production notes ------------------------------------------------------
-   Wikipedia prose, so the attribution below each block is a licence obligation
-   rather than a nicety — see `ProductionNote`, which makes it a required field
-   so it cannot be dropped in a later edit. */
+/* --- production notes ------------------------------------------------------ */
 .metadata-notes {
   display: grid;
-  gap: 0.9rem;
+  gap: 1rem;
 }
 
 .metadata-note {
-  padding: 0.85rem 1rem;
-  border-radius: var(--radius-md);
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
+  padding: 1.15rem 1.4rem;
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.035) 0%, rgba(255, 255, 255, 0.015) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-left: 3.5px solid var(--accent-primary, #3b82f6);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 
 .metadata-note__heading {
-  margin: 0 0 0.4rem;
-  font-size: 0.82rem;
+  margin: 0 0 0.45rem;
+  font-size: 0.92rem;
   font-weight: 700;
-  color: var(--text-main);
+  color: #f9fafb;
 }
 
 .metadata-note__text {
   margin: 0;
-  font-size: 0.84rem;
-  line-height: 1.6;
-  color: var(--text-muted);
+  font-size: 0.86rem;
+  line-height: 1.65;
+  color: #d1d5db;
   white-space: pre-wrap;
 }
 
 .metadata-note__attribution {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  margin-top: 0.6rem;
-  font-size: 0.7rem;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+  padding: 0.22rem 0.6rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  font-size: 0.72rem;
   color: var(--text-subtle);
   text-decoration: none;
+  transition: all 0.18s ease;
 }
 
 .metadata-note__attribution:hover {
-  color: var(--accent-light);
-  text-decoration: underline;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: var(--accent-light, #60a5fa);
+  text-decoration: none;
 }
 
 
@@ -8899,10 +8911,10 @@
 
 .video-card {
   flex: 0 0 auto;
-  width: 15.5rem;
+  width: 16.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.45rem;
   padding: 0;
   background: none;
   border: none;
@@ -8917,16 +8929,18 @@
   display: block;
   width: 100%;
   aspect-ratio: 16 / 9;
-  border-radius: var(--radius-md);
+  border-radius: 12px;
   overflow: hidden;
   background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  transition: border-color 0.18s ease, transform 0.18s ease;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease, box-shadow 0.2s ease;
 }
 .video-card:hover .video-card__frame,
 .video-card:focus-visible .video-card__frame {
-  border-color: rgba(59, 130, 246, 0.55);
-  transform: translateY(-2px);
+  border-color: rgba(96, 165, 250, 0.6);
+  transform: translateY(-4px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55);
 }
 .video-card__image { width: 100%; height: 100%; object-fit: cover; display: block; }
 .video-card__placeholder {
@@ -8936,14 +8950,9 @@
   width: 100%;
   height: 100%;
   color: var(--text-subtle);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
 }
 
-/*
- * The play affordance sits on the still at all times rather than on hover.
- *
- * A thumbnail with no marker is indistinguishable from an image — which is
- * exactly what these look like beside the cast portraits above them.
- */
 .video-card__play {
   position: absolute;
   inset: 0;
@@ -8951,22 +8960,39 @@
   align-items: center;
   justify-content: center;
   color: #fff;
-  background: rgba(0, 0, 0, 0.28);
-  opacity: 0.85;
-  transition: opacity 0.18s ease, background 0.18s ease;
+  background: rgba(0, 0, 0, 0.3);
+  transition: background 0.2s ease;
 }
-.video-card:hover .video-card__play { opacity: 1; background: rgba(0, 0, 0, 0.42); }
+.video-card__play svg {
+  padding: 8px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), background 0.2s ease;
+}
+.video-card:hover .video-card__play svg {
+  transform: scale(1.12);
+  background: rgba(229, 9, 20, 0.85);
+  border-color: rgba(255, 255, 255, 0.4);
+}
 
 .video-card__duration {
   position: absolute;
-  right: 0.35rem;
-  bottom: 0.35rem;
-  padding: 0.05rem 0.3rem;
-  border-radius: var(--radius-sm, 4px);
-  background: rgba(0, 0, 0, 0.78);
+  right: 0.45rem;
+  bottom: 0.45rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(4px);
   color: #fff;
-  font-size: 0.66rem;
+  font-size: 0.68rem;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .video-card__caption { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
@@ -9752,37 +9778,82 @@
 /* Franchise rail (franchise PRD): one tile per film, release order. */
 .franchise-rail {
   display: flex;
-  gap: 0.6rem;
+  gap: 0.85rem;
   overflow-x: auto;
   list-style: none;
   margin: 0;
-  padding: 0 0 0.4rem;
+  padding: 0 0 0.6rem;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
 }
+
+.franchise-rail::-webkit-scrollbar { height: 6px; }
+.franchise-rail::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+.franchise-rail::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+
 .franchise-rail__item {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  min-width: 10rem;
-  max-width: 13rem;
-  padding: 0.6rem 0.75rem;
+  gap: 0.35rem;
+  min-width: 14rem;
+  max-width: 18rem;
+  padding: 0.9rem 1.15rem;
   text-align: left;
-  border-radius: 8px;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.045) 0%, rgba(255, 255, 255, 0.015) 100%);
   color: var(--text-primary, #fff);
   font-family: inherit;
   cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  scroll-snap-align: start;
 }
+
 .franchise-rail__item:hover:not(:disabled),
-.franchise-rail__item:focus-visible { background: rgba(255, 255, 255, 0.08); }
+.franchise-rail__item:focus-visible {
+  transform: translateY(-4px);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.03) 100%);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+}
+
 .franchise-rail__item--current {
   cursor: default;
-  border-color: var(--accent, #e50914);
-  background: rgba(255, 255, 255, 0.06);
+  border: 1.5px solid var(--accent, #e50914);
+  background: linear-gradient(145deg, rgba(229, 9, 20, 0.16) 0%, rgba(229, 9, 20, 0.04) 100%);
+  box-shadow: 0 0 20px rgba(229, 9, 20, 0.35);
 }
-.franchise-rail__index { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.7rem; color: var(--text-muted); }
-.franchise-rail__title { font-size: 0.85rem; font-weight: 600; line-height: 1.25; }
-.franchise-rail__meta { font-size: 0.72rem; color: var(--text-muted); }
+
+.franchise-rail__index {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-light, #60a5fa);
+}
+
+.franchise-rail__item--current .franchise-rail__index {
+  color: #ff5252;
+}
+
+.franchise-rail__title {
+  font-size: 0.92rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: #fff;
+}
+
+.franchise-rail__meta {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
 
 .subtitle-panel__language-filter {
   display: flex;
