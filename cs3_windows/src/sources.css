@@ -750,7 +750,13 @@
 
 /* ---- redesigned detail hero -------------------------------------------- */
 
-.detail-hero--v2 { align-items: flex-start; }
+/* Positioned with a z-index so the header's own stacking context sits above
+   the sections after it. `isolation: isolate` below makes the hero a context of
+   its own, which caps every menu inside it at the hero's level: the library and
+   "more" menus hang past the hero's bottom edge, the next section painted over
+   that part, and pointing at "Remove from library" — the lowest item — was
+   really pointing at the section, so the menu closed under the cursor. */
+.detail-hero--v2 { align-items: flex-start; position: relative; z-index: 6; }
 
 /* The backdrop sits behind the masthead and nothing else.
 
@@ -6911,6 +6917,21 @@
    Cast with photographs and characters, crew, ratings, and production notes,
    from the keyless catalogues in `electron/metadata/`. */
 
+/* A horizontal scroller clips vertically too (`overflow-x: auto` forces
+   `overflow-y` off `visible`), so a card lifted on hover lost its top edge and
+   its shadow. The headroom is padding inside the scroller, paid back with a
+   negative margin so the rail sits where it always did. Shared by every rail on
+   the detail page — they all lift their cards by the same 4px. */
+.credit-rail,
+.video-rail,
+.franchise-rail {
+  padding-top: 10px;
+  margin-top: -10px;
+  padding-inline: 6px;
+  margin-inline: -6px;
+  scroll-padding-inline: 6px;
+}
+
 .credit-rail {
   display: flex;
   gap: 0.95rem;
@@ -9839,8 +9860,8 @@
   gap: 0.85rem;
   overflow-x: auto;
   list-style: none;
-  margin: 0;
-  padding: 0 0 0.6rem;
+  margin-bottom: 0;
+  padding-bottom: 0.6rem;
   scroll-snap-type: x proximity;
   scrollbar-width: thin;
 }
