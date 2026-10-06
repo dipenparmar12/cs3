@@ -616,6 +616,7 @@ const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
 const subtitles = new SubtitleService();
+downloadService.setSubtitleFetcher((url) => subtitles.fetchAsVtt(url));
 // Beside the media downloads, so a viewer who opens the folder finds both.
 const subtitleLibrary = new SubtitleLibrary(path.join(os.homedir(), 'Downloads', 'CloudStream', 'Subtitles'));
 const mediaTranscoder = new MediaTranscoder(binaryDownloader);
