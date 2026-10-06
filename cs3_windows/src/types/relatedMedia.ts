@@ -30,6 +30,7 @@ export interface RelatedMediaSearchRequest {
   episode?: number;
   type?: RelatedMediaCategory | 'all';
   forceRefresh?: boolean;
+  cachedOnly?: boolean;
 }
 
 export interface RelatedMediaResult {

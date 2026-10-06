@@ -398,6 +398,7 @@ const bookmarks = new BookmarkStore(datastore);
 const pageSnapshots = new PageSnapshotStore(app.getPath('userData'));
 const savedSearches = new SavedSearchStore(app.getPath('userData'));
 contentService.setSnapshotStore(pageSnapshots);
+relatedMediaService.setDirectory(app.getPath('userData'));
 /**
  * The home screen's catalogue source, and the rows built from it.
  *

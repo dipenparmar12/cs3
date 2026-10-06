@@ -199,6 +199,22 @@ test('RelatedMediaService isolates provider failures and caches results', async 
   assert.equal(res2.ok, true);
   assert.equal(res2.cached, true);
 
+  // cachedOnly returns cached data immediately
+  const resCached = await service.search({ title: 'Inception', year: 2010, cachedOnly: true });
+  assert.equal(resCached.ok, true);
+  assert.equal(resCached.cached, true);
+  assert.equal(resCached.results.length, 1);
+
+  // cachedOnly on unknown title returns empty without network requests
+  const resUnknown = await service.search({ title: 'Unknown Title 123', cachedOnly: true });
+  assert.equal(resUnknown.ok, true);
+  assert.equal(resUnknown.results.length, 0);
+
+  // getCached returns the cached entry directly
+  const cachedDirect = service.getCached({ title: 'Inception', year: 2010 });
+  assert.ok(cachedDirect);
+  assert.equal(cachedDirect?.results[0].id, 'mock:1');
+
   // forceRefresh bypasses cache
   const res3 = await service.search({ title: 'Inception', year: 2010, forceRefresh: true });
   assert.equal(res3.ok, true);

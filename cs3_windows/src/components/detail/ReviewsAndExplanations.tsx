@@ -1,6 +1,8 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
+  ChevronDown,
+  ChevronRight,
   ExternalLink,
   Film,
   Loader2,
@@ -61,6 +63,7 @@ export const ReviewsAndExplanations: React.FC<ReviewsAndExplanationsProps> = ({
   episode,
   onPlayVideo,
 }) => {
+  const [isExpanded, setIsExpanded] = useState(true);
   const [status, setStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
   const [results, setResults] = useState<RelatedMediaResult[]>([]);
   const [activeCategory, setActiveCategory] = useState<RelatedMediaCategory | 'all'>('all');
@@ -68,6 +71,39 @@ export const ReviewsAndExplanations: React.FC<ReviewsAndExplanationsProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Check persistent cache on mount so returning viewers immediately have data
+  useEffect(() => {
+    let cancelled = false;
+    if (!title?.trim()) return;
+
+    void (async () => {
+      try {
+        const req: RelatedMediaSearchRequest = {
+          title,
+          originalTitle,
+          year,
+          season,
+          episode,
+          type: 'all',
+          cachedOnly: true,
+        };
+        const res = await window.cloudstream?.findRelatedMedia?.(req);
+        if (cancelled) return;
+        if (res?.ok && Array.isArray(res.results) && res.results.length > 0) {
+          setResults(res.results);
+          setStatus('loaded');
+          setVisibleCount(INITIAL_VISIBLE_COUNT);
+        }
+      } catch {
+        // Keep idle on cache lookup error
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [title, originalTitle, year, season, episode]);
 
   const handleSearch = useCallback(
     async (forceRefresh = false) => {
@@ -81,6 +117,7 @@ export const ReviewsAndExplanations: React.FC<ReviewsAndExplanationsProps> = ({
 
       setStatus('loading');
       setErrorMessage(null);
+      setIsExpanded(true);
 
       try {
         const req: RelatedMediaSearchRequest = {
@@ -180,16 +217,28 @@ export const ReviewsAndExplanations: React.FC<ReviewsAndExplanationsProps> = ({
 
   return (
     <section className="detail-facts reviews-section" aria-label="Reviews and Explanations">
-      <div className="detail-facts__head-row">
-        <h2 className="detail-facts__heading">
+      <div className="detail-facts__head-row reviews-section__head-row">
+        {/* Collapsible title button with Chevron placed immediately next to title and count */}
+        <button
+          type="button"
+          className="reviews-section__title-btn"
+          onClick={() => setIsExpanded((prev) => !prev)}
+          aria-expanded={isExpanded}
+          title={isExpanded ? 'Collapse Reviews & Explanations' : 'Expand Reviews & Explanations'}
+        >
           <MessageSquare size={18} aria-hidden />
-          <span>Reviews &amp; Explanations</span>
+          <h2 className="detail-facts__heading reviews-section__heading-inline">
+            Reviews &amp; Explanations
+          </h2>
           {status === 'loaded' && results.length > 0 && (
             <span className="detail-facts__count">{filteredResults.length}</span>
           )}
-        </h2>
+          <span className="reviews-section__chevron" aria-hidden>
+            {isExpanded ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
+          </span>
+        </button>
 
-        {status === 'loaded' && (
+        {status === 'loaded' && isExpanded && (
           <button
             type="button"
             className="btn btn-ghost btn-sm trailer-gallery__more-btn"
@@ -202,201 +251,205 @@ export const ReviewsAndExplanations: React.FC<ReviewsAndExplanationsProps> = ({
         )}
       </div>
 
-      {status === 'idle' && (
-        <div className="reviews-section__invite">
-          <p className="reviews-section__invite-text">
-            Discover reviews, ending explanations, story breakdowns, analysis, and recaps
-            publicly available across YouTube, Dailymotion, and the web.
-          </p>
-          <button
-            type="button"
-            className="btn btn-primary reviews-section__search-btn"
-            onClick={() => void handleSearch(false)}
-          >
-            <Sparkles size={16} />
-            <span>Search Reviews &amp; Explanations</span>
-          </button>
-        </div>
-      )}
-
-      {status === 'loading' && (
-        <div className="reviews-section__loading" role="status">
-          <div className="reviews-section__loading-row">
-            <Loader2 size={16} className="spin" />
-            <span>Searching public platforms for reviews and explanations…</span>
-          </div>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={handleCancel}
-            title="Cancel search"
-          >
-            <X size={14} />
-            <span>Cancel</span>
-          </button>
-        </div>
-      )}
-
-      {status === 'error' && (
-        <div className="reviews-section__error" role="alert">
-          <AlertCircle size={16} />
-          <span>{errorMessage || 'Failed to search for reviews.'}</span>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => void handleSearch(false)}
-          >
-            <RotateCw size={13} />
-            <span>Try Again</span>
-          </button>
-        </div>
-      )}
-
-      {status === 'loaded' && results.length === 0 && (
-        <div className="reviews-section__empty">
-          <p>No related reviews, explanations, or recaps were found on public platforms.</p>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => void handleSearch(true)}
-          >
-            <Search size={13} />
-            <span>Search Again</span>
-          </button>
-        </div>
-      )}
-
-      {status === 'loaded' && results.length > 0 && (
+      {isExpanded && (
         <>
-          {/* Category Filter Chips */}
-          <div className="reviews-filters" role="tablist" aria-label="Review categories">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeCategory === 'all'}
-              className={`reviews-filter-btn ${activeCategory === 'all' ? 'reviews-filter-btn--active' : ''}`}
-              onClick={() => {
-                setActiveCategory('all');
-                setVisibleCount(INITIAL_VISIBLE_COUNT);
-              }}
-            >
-              All
-              <span className="reviews-filter-count">{results.length}</span>
-            </button>
+          {status === 'idle' && (
+            <div className="reviews-section__invite">
+              <p className="reviews-section__invite-text">
+                Discover reviews, ending explanations, story breakdowns, analysis, and recaps
+                publicly available across YouTube, Dailymotion, and the web.
+              </p>
+              <button
+                type="button"
+                className="btn btn-primary reviews-section__search-btn"
+                onClick={() => void handleSearch(false)}
+              >
+                <Sparkles size={16} />
+                <span>Search Reviews &amp; Explanations</span>
+              </button>
+            </div>
+          )}
 
-            {CATEGORY_ORDER.map((cat) => {
-              const count = categoryCounts.get(cat) || 0;
-              if (count === 0) return null;
-              return (
-                <button
-                  key={cat}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeCategory === cat}
-                  className={`reviews-filter-btn ${activeCategory === cat ? 'reviews-filter-btn--active' : ''}`}
-                  onClick={() => {
-                    setActiveCategory(cat);
-                    setVisibleCount(INITIAL_VISIBLE_COUNT);
-                  }}
-                >
-                  {CATEGORY_LABELS[cat]}
-                  <span className="reviews-filter-count">{count}</span>
-                </button>
-              );
-            })}
-          </div>
+          {status === 'loading' && (
+            <div className="reviews-section__loading" role="status">
+              <div className="reviews-section__loading-row">
+                <Loader2 size={16} className="spin" />
+                <span>Searching public platforms for reviews and explanations…</span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={handleCancel}
+                title="Cancel search"
+              >
+                <X size={14} />
+                <span>Cancel</span>
+              </button>
+            </div>
+          )}
 
-          {/* Cards Grid */}
-          <div className="reviews-grid">
-            {visibleResults.map((item) => {
-              const duration = formatVideoDuration(item.durationSeconds);
-              const isVideo = item.type === 'video';
+          {status === 'error' && (
+            <div className="reviews-section__error" role="alert">
+              <AlertCircle size={16} />
+              <span>{errorMessage || 'Failed to search for reviews.'}</span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => void handleSearch(false)}
+              >
+                <RotateCw size={13} />
+                <span>Try Again</span>
+              </button>
+            </div>
+          )}
 
-              return (
-                <div
-                  key={item.id}
-                  className="reviews-card"
-                  onClick={() => handleCardClick(item)}
-                  title={item.title}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      handleCardClick(item);
-                    }
-                  }}
-                >
-                  <div className="reviews-card__frame">
-                    <Poster
-                      src={item.thumbnailUrl}
-                      title={item.title}
-                      decorative
-                      className="reviews-card__image"
-                      fallback={
-                        <div className="reviews-card__placeholder">
-                          {isVideo ? <Film size={24} /> : <MessageSquare size={24} />}
-                        </div>
-                      }
-                    />
-
-                    {isVideo ? (
-                      <div className="reviews-card__play" aria-hidden>
-                        <Play size={18} fill="currentColor" />
-                      </div>
-                    ) : (
-                      <div className="reviews-card__play" aria-hidden>
-                        <ExternalLink size={16} />
-                      </div>
-                    )}
-
-                    {duration && <span className="reviews-card__duration">{duration}</span>}
-                  </div>
-
-                  <div className="reviews-card__body">
-                    <div className="reviews-card__badges">
-                      <span className="reviews-card__source-badge">{item.source.provider}</span>
-                      <span className={`reviews-card__cat-badge reviews-card__cat-badge--${item.category}`}>
-                        {CATEGORY_LABELS[item.category] || item.category}
-                      </span>
-                    </div>
-
-                    <h3 className="reviews-card__title">{item.title}</h3>
-
-                    <div className="reviews-card__footer">
-                      <span className="reviews-card__creator">
-                        {item.creator?.name || item.source.provider}
-                      </span>
-                      {item.publishedAt && (
-                        <span className="reviews-card__date">{item.publishedAt}</span>
-                      )}
-                      <button
-                        type="button"
-                        className="reviews-card__ext-btn"
-                        onClick={(e) => handleOpenLink(item.source.url, e)}
-                        title={`Open in browser: ${item.source.url}`}
-                        aria-label="Open in external browser"
-                      >
-                        <ExternalLink size={12} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Load More Button */}
-          {hasMore && (
-            <div className="reviews-section__more-wrap">
+          {status === 'loaded' && results.length === 0 && (
+            <div className="reviews-section__empty">
+              <p>No related reviews, explanations, or recaps were found on public platforms.</p>
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={() => setVisibleCount((prev) => prev + INITIAL_VISIBLE_COUNT)}
+                onClick={() => void handleSearch(true)}
               >
-                Load more ({filteredResults.length - visibleCount} remaining)
+                <Search size={13} />
+                <span>Search Again</span>
               </button>
             </div>
+          )}
+
+          {status === 'loaded' && results.length > 0 && (
+            <>
+              {/* Category Filter Chips */}
+              <div className="reviews-filters" role="tablist" aria-label="Review categories">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeCategory === 'all'}
+                  className={`reviews-filter-btn ${activeCategory === 'all' ? 'reviews-filter-btn--active' : ''}`}
+                  onClick={() => {
+                    setActiveCategory('all');
+                    setVisibleCount(INITIAL_VISIBLE_COUNT);
+                  }}
+                >
+                  All
+                  <span className="reviews-filter-count">{results.length}</span>
+                </button>
+
+                {CATEGORY_ORDER.map((cat) => {
+                  const count = categoryCounts.get(cat) || 0;
+                  if (count === 0) return null;
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeCategory === cat}
+                      className={`reviews-filter-btn ${activeCategory === cat ? 'reviews-filter-btn--active' : ''}`}
+                      onClick={() => {
+                        setActiveCategory(cat);
+                        setVisibleCount(INITIAL_VISIBLE_COUNT);
+                      }}
+                    >
+                      {CATEGORY_LABELS[cat]}
+                      <span className="reviews-filter-count">{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Cards Grid */}
+              <div className="reviews-grid">
+                {visibleResults.map((item) => {
+                  const duration = formatVideoDuration(item.durationSeconds);
+                  const isVideo = item.type === 'video';
+
+                  return (
+                    <div
+                      key={item.id}
+                      className="reviews-card"
+                      onClick={() => handleCardClick(item)}
+                      title={item.title}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          handleCardClick(item);
+                        }
+                      }}
+                    >
+                      <div className="reviews-card__frame">
+                        <Poster
+                          src={item.thumbnailUrl}
+                          title={item.title}
+                          decorative
+                          className="reviews-card__image"
+                          fallback={
+                            <div className="reviews-card__placeholder">
+                              {isVideo ? <Film size={24} /> : <MessageSquare size={24} />}
+                            </div>
+                          }
+                        />
+
+                        {isVideo ? (
+                          <div className="reviews-card__play" aria-hidden>
+                            <Play size={18} fill="currentColor" />
+                          </div>
+                        ) : (
+                          <div className="reviews-card__play" aria-hidden>
+                            <ExternalLink size={16} />
+                          </div>
+                        )}
+
+                        {duration && <span className="reviews-card__duration">{duration}</span>}
+                      </div>
+
+                      <div className="reviews-card__body">
+                        <div className="reviews-card__badges">
+                          <span className="reviews-card__source-badge">{item.source.provider}</span>
+                          <span className={`reviews-card__cat-badge reviews-card__cat-badge--${item.category}`}>
+                            {CATEGORY_LABELS[item.category] || item.category}
+                          </span>
+                        </div>
+
+                        <h3 className="reviews-card__title">{item.title}</h3>
+
+                        <div className="reviews-card__footer">
+                          <span className="reviews-card__creator">
+                            {item.creator?.name || item.source.provider}
+                          </span>
+                          {item.publishedAt && (
+                            <span className="reviews-card__date">{item.publishedAt}</span>
+                          )}
+                          <button
+                            type="button"
+                            className="reviews-card__ext-btn"
+                            onClick={(e) => handleOpenLink(item.source.url, e)}
+                            title={`Open in browser: ${item.source.url}`}
+                            aria-label="Open in external browser"
+                          >
+                            <ExternalLink size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Load More Button */}
+              {hasMore && (
+                <div className="reviews-section__more-wrap">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setVisibleCount((prev) => prev + INITIAL_VISIBLE_COUNT)}
+                  >
+                    Load more ({filteredResults.length - visibleCount} remaining)
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </>
       )}

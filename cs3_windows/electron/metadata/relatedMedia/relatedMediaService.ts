@@ -6,6 +6,8 @@
  * (§19 Provider Isolation, §24 Related Media Cache, §25 Cache Strategy, §34 Multi-Source Search).
  */
 
+import path from 'path';
+import { JsonFileStore } from '../../util/jsonFileStore.ts';
 import type {
   RelatedMediaProvider,
   RelatedMediaResponse,
@@ -23,19 +25,60 @@ interface CacheEntry {
   timestamp: number;
 }
 
-/** Cache TTL: 6 hours. */
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+interface CacheRow {
+  key: string;
+  entry: CacheEntry;
+}
+
+/** Persistent cache file name. */
+const FILE_NAME = 'cs3-related-media-cache.json';
+
+/** Cache TTL: 7 days so returning viewers get instant cached results. */
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export class RelatedMediaService {
   private readonly providers: RelatedMediaProvider[];
   private readonly cache = new Map<string, CacheEntry>();
+  private store: JsonFileStore<CacheRow[]>;
 
-  constructor(customProviders?: RelatedMediaProvider[]) {
+  constructor(customProviders?: RelatedMediaProvider[], directory?: string) {
     this.providers = customProviders ?? [
       new YouTubeRelatedMediaProvider(),
       new DailymotionRelatedMediaProvider(),
       new PublicWebRelatedMediaProvider(),
     ];
+
+    const baseDir = directory ?? process.cwd();
+    this.store = new JsonFileStore(
+      path.join(baseDir, FILE_NAME),
+      2_000,
+      () => [...this.cache.entries()].map(([key, entry]) => ({ key, entry }))
+    );
+
+    this.restore();
+  }
+
+  /**
+   * Configures persistent directory (e.g. app.getPath('userData')) and restores entries.
+   */
+  setDirectory(directory: string): void {
+    this.store = new JsonFileStore(
+      path.join(directory, FILE_NAME),
+      2_000,
+      () => [...this.cache.entries()].map(([key, entry]) => ({ key, entry }))
+    );
+    this.restore();
+  }
+
+  private restore(): void {
+    const parsed = this.store.load();
+    if (!Array.isArray(parsed)) return;
+    const cutoff = Date.now() - CACHE_TTL_MS;
+    for (const row of parsed) {
+      if (row?.key && row.entry?.results && row.entry.timestamp >= cutoff) {
+        this.cache.set(row.key, row.entry);
+      }
+    }
   }
 
   private buildCacheKey(request: RelatedMediaSearchRequest): string {
@@ -48,15 +91,31 @@ export class RelatedMediaService {
   }
 
   /**
-   * Clears the in-memory related media cache.
+   * Clears the related media cache and schedules file update.
    */
   clearCache(): void {
     this.cache.clear();
+    this.store.schedule();
+  }
+
+  /**
+   * Checks if cached results are already present for the given request.
+   */
+  getCached(request: RelatedMediaSearchRequest): RelatedMediaResponse | null {
+    const title = request.title || request.originalTitle;
+    if (!title?.trim()) return null;
+
+    const cacheKey = this.buildCacheKey(request);
+    const cached = this.cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      return { ok: true, results: cached.results, cached: true };
+    }
+    return null;
   }
 
   /**
    * On-demand search across all configured providers concurrently.
-   * Isolates provider failures, deduplicates and ranks results.
+   * Isolates provider failures, deduplicates, ranks results, and caches to disk.
    */
   async search(
     request: RelatedMediaSearchRequest,
@@ -69,12 +128,17 @@ export class RelatedMediaService {
 
     const cacheKey = this.buildCacheKey(request);
 
-    // Return cached results if fresh and not forced to refresh
+    // Return cached results if available and not forced to refresh
     if (!request.forceRefresh) {
       const cached = this.cache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
         return { ok: true, results: cached.results, cached: true };
       }
+    }
+
+    // If caller specifically requested cached-only without network hit
+    if (request.cachedOnly) {
+      return { ok: true, results: [], cached: false };
     }
 
     // Query all providers concurrently with isolation
@@ -98,11 +162,12 @@ export class RelatedMediaService {
 
     const ranked = rankRelatedMedia(rawResults, request);
 
-    // Store in cache
+    // Store in memory and schedule persistent flush
     this.cache.set(cacheKey, {
       results: ranked,
       timestamp: Date.now(),
     });
+    this.store.schedule();
 
     return {
       ok: true,
