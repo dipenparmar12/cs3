@@ -59,7 +59,7 @@ import {
   subtitleMpvProperties,
   type SubtitleStyle,
 } from '../utils/subtitleStyle';
-import { subtitleFitsMedia } from '../utils/subtitleDuration';
+import { durationCloseness, subtitleFitsMedia } from '../utils/subtitleDuration';
 import { durableAddress } from '../utils/durableAddress';
 import { formatBufferAhead, loadTimeDisplayMode, rightHandSeconds, saveTimeDisplayMode, type TimeDisplayMode } from './player/timeDisplay';
 import { describeError } from '../utils/errors';
@@ -3187,20 +3187,46 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }
         return;
       }
+      /**
+       * One ranked search: the playing release's name, the year and the
+       * language go with it, so the file timed to *this* release comes first
+       * (`subtitleMatch.ts`). It used to search by IMDb id or bare title and
+       * take the first three English files in feed order — on a bad draw all
+       * three were another cut, the duration check refused them, and English
+       * simply did not appear.
+       */
       const found = await api
-        .searchSubtitles(imdbId || title, season, episode, progress?.mediaUrl)
+        .findSubtitles({
+          imdbId,
+          title,
+          year: progress?.year,
+          season,
+          episode,
+          mediaUrl: progress?.mediaUrl,
+          languages: wanted === 'english' ? ['eng'] : [],
+          releaseName: activeSource?.title,
+        })
         .catch(() => null);
-      // A subtitle whose timeline cannot fit this media belongs to another
-      // release; the next candidate in the language is tried instead, and the
-      // viewer can still pick a refused one by hand from the menu.
-      const candidates = (found?.results ?? []).filter((r) => matches(r.langName)).slice(0, 3);
+      const candidates = (found?.results ?? []).filter((r) => matches(r.langName)).slice(0, 5);
+      // The first that fits closely wins; failing that, the closest that fits
+      // at all. A refused file can still be picked by hand from the panel.
+      let fallback: { vtt: string; label: string; closeness: number } | null = null;
       for (const best of candidates) {
         if (cancelled) return;
         const fetched = await api.fetchSubtitle(best.url).catch(() => null);
         if (cancelled || !fetched?.ok || !fetched.vtt) continue;
         if (!subtitleFitsMedia(fetched.vtt, subtitleDurationRef.current)) continue;
-        pick(URL.createObjectURL(new Blob([fetched.vtt], { type: 'text/vtt' })), best.langName);
-        return;
+        const closeness = durationCloseness(fetched.vtt, subtitleDurationRef.current);
+        if (closeness >= 0.9 || subtitleDurationRef.current <= 0) {
+          pick(URL.createObjectURL(new Blob([fetched.vtt], { type: 'text/vtt' })), best.langName);
+          return;
+        }
+        if (!fallback || closeness > fallback.closeness) {
+          fallback = { vtt: fetched.vtt, label: best.langName, closeness };
+        }
+      }
+      if (fallback && !cancelled) {
+        pick(URL.createObjectURL(new Blob([fallback.vtt], { type: 'text/vtt' })), fallback.label);
       }
     })();
     return () => {
@@ -4551,6 +4577,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           subtitlesOff.current = !url;
         }}
         year={progress?.year}
+        releaseName={activeSource?.title}
         delay={subtitleDelay}
         onDelayChange={setSubtitleDelay}
       />

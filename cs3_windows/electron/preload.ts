@@ -110,7 +110,7 @@ import type {
 } from './cs3/libraryStore';
 import type { StreamHandle } from './torrent/torrentEngine';
 import type { PlaybackSnapshot } from './playbackSession';
-import type { SubtitleSearchResult } from './subtitleService';
+import type { SubtitleFindResult, SubtitleQuery, SubtitleSearchResult } from './subtitleService';
 import type { SavedSubtitle, SaveRequest as SubtitleSaveRequest } from './subtitles/subtitleLibrary';
 export type { SavedSubtitle };
 import type { PrivacyState, IncognitoSettings } from './cs3/privacyMode';
@@ -332,25 +332,13 @@ export interface CloudStreamElectronAPI {
    * it published with the stream, which is often the only set that exists for
    * content the catalogues have never heard of.
    */
-  searchSubtitles: (
-    imdbId: string,
-    season?: number,
-    episode?: number,
-    mediaUrl?: string
-  ) => Promise<Envelope & { results: SubtitleSearchResult[] }>;
-  /** Searches subtitles with a custom title or IMDb id query. */
-  searchSubtitlesByTitle: (
-    query: string,
-    season?: number,
-    episode?: number,
-    mediaUrl?: string
-  ) => Promise<
-    Envelope & {
-      results: SubtitleSearchResult[];
-      imdbId?: string;
-      matchedTitle?: string;
-    }
-  >;
+  /**
+   * Every subtitle worth offering, ranked, with the best per language marked.
+   * `sources` says which catalogue failed, so a failure never reads as "none".
+   */
+  findSubtitles: (
+    query: SubtitleQuery & { mediaUrl?: string }
+  ) => Promise<Envelope & Partial<SubtitleFindResult> & { results: SubtitleSearchResult[] }>;
   /** Downloads one subtitle, already converted from SubRip to WebVTT. */
   fetchSubtitle: (url: string) => Promise<Envelope & { vtt: string }>;
   /** Incognito (PRD-52): whole state on every call and every push. */
@@ -2005,10 +1993,7 @@ const api: CloudStreamElectronAPI = {
 
   suggestTitles: (query) => ipcRenderer.invoke('api:suggest', query),
   onSuggestionUpdate: (callback) => subscribe('search:suggestUpdate', callback),
-  searchSubtitles: (imdbId, season, episode, mediaUrl) =>
-    ipcRenderer.invoke('subtitles:search', imdbId, season, episode, mediaUrl),
-  searchSubtitlesByTitle: (query, season, episode, mediaUrl) =>
-    ipcRenderer.invoke('subtitles:searchByTitle', query, season, episode, mediaUrl),
+  findSubtitles: (query) => ipcRenderer.invoke('subtitles:find', query),
   fetchSubtitle: (url) => ipcRenderer.invoke('subtitles:fetch', url),
   getPrivacyState: () => ipcRenderer.invoke('privacy:getState'),
   setIncognito: (active) => ipcRenderer.invoke('privacy:setActive', active),

@@ -79,3 +79,26 @@ test('machine translation and hearing-impaired annotations rank below a clean fi
   );
   assert.deepEqual(ranked.map((r) => r.id), ['clean', 'hi', 'mt']);
 });
+
+test('a forced file — foreign dialogue only — never wins the language', () => {
+  // Measured on Extraction II: "...x264-CMRG-en-forced" ranked second of three
+  // English files on popularity, and auto-loading it shows almost nothing.
+  const ranked = rankSubtitles(
+    [
+      sub({ id: 'forced', fileName: 'Extraction.2.2023.1080p.WEB-DL-CMRG-en-forced', downloads: 900_000 }),
+      sub({ id: 'full', fileName: 'Extraction.2.2023.1080p.WEB-DL-CMRG', downloads: 20_000 }),
+    ],
+    {}
+  );
+  assert.equal(ranked[0].id, 'full');
+  assert.ok(ranked.find((r) => r.id === 'forced')?.matchReasons.includes('foreign dialogue only'));
+});
+
+test('"same release group" is said only when the group is the same', () => {
+  const [ranked] = rankSubtitles(
+    [sub({ releaseName: 'Extraction.2.2023.1080p.NF.WEB-DL.DDP5.1.Atmos.x264-CMRG' })],
+    { releaseName: 'Extraction.II.2023.1080p.NF.WEB-DL.DDP5.1.Atmos.H.264-FLUX' }
+  );
+  assert.ok(!ranked.matchReasons.includes('same release group'), ranked.matchReasons.join(', '));
+  assert.ok(ranked.matchReasons.includes('same kind of release'));
+});

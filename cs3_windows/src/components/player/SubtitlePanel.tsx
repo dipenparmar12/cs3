@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { X, Search, Loader2, Check, AlertTriangle, Subtitles, CheckCircle2, Download, RotateCcw, HardDrive, Minus, Plus } from 'lucide-react';
+import { X, Search, Loader2, Check, AlertTriangle, Subtitles, CheckCircle2, Download, RotateCcw, HardDrive, Minus, Plus, Star } from 'lucide-react';
 import type { SavedSubtitle } from '../../../electron/subtitles/subtitleLibrary';
-import type { SubtitleSearchResult } from '../../../electron/subtitleService';
+import type { SubtitleFindResult, SubtitleSearchResult } from '../../../electron/subtitleService';
 
 /**
  * In-player subtitle search & management.
@@ -45,6 +45,31 @@ interface SubtitlePanelProps {
   /** Seconds the cues are shifted by; positive shows them later. */
   delay: number;
   onDelayChange: (seconds: number) => void;
+  /** The playing source's release name; ranks the subtitle timed to it first. */
+  releaseName?: string;
+}
+
+/** Languages offered as one-press filters before a search has returned any. */
+const COMMON_LANGUAGES: Array<{ code: string; name: string }> = [
+  { code: 'eng', name: 'English' },
+  { code: 'hin', name: 'Hindi' },
+  { code: 'spa', name: 'Spanish' },
+  { code: 'fre', name: 'French' },
+  { code: 'ger', name: 'German' },
+  { code: 'ara', name: 'Arabic' },
+  { code: 'por', name: 'Portuguese' },
+  { code: 'tam', name: 'Tamil' },
+  { code: 'tel', name: 'Telugu' },
+  { code: 'mal', name: 'Malayalam' },
+];
+
+const compactCount = (value: number): string =>
+  value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M` : value >= 1_000 ? `${Math.round(value / 1_000)}k` : String(value);
+
+/** What a row is called: the release it was timed to, which is what a viewer chooses by. */
+function rowLabel(result: SubtitleSearchResult, fallback: string): string {
+  const name = result.releaseName || result.fileName?.replace(/\.(srt|ass|ssa|vtt|sub)$/i, '');
+  return name ? name.replace(/[._]+/g, ' ').trim() : fallback;
 }
 
 type DownloadState = { status: 'saving' } | { status: 'saved'; reused: boolean } | { status: 'failed'; error: string };
@@ -68,6 +93,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   year,
   delay,
   onDelayChange,
+  releaseName,
 }) => {
   const [results, setResults] = useState<SubtitleSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -138,10 +164,17 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   const [searchQuery, setSearchQuery] = useState(title || imdbId || '');
   const [searchSeason, setSearchSeason] = useState<string>(season !== undefined ? String(season) : '');
   const [searchEpisode, setSearchEpisode] = useState<string>(episode !== undefined ? String(episode) : '');
+  const [searchYear, setSearchYear] = useState<string>(year !== undefined ? String(year) : '');
   const [matchedInfo, setMatchedInfo] = useState<{ imdbId?: string; matchedTitle?: string } | null>(null);
   const [lastSearched, setLastSearched] = useState<string>('');
-  // '' shows every language; a new search keeps the filter if it still applies.
-  const [languageFilter, setLanguageFilter] = useState('');
+  /**
+   * Languages to show — several at once, because a viewer who reads two
+   * languages wants both lists, not to flip a dropdown between them. Empty is
+   * every language. Applied to what was already fetched; a search sends them
+   * too, so a language the catalogue would otherwise cut short comes back full.
+   */
+  const [languages, setLanguages] = useState<string[]>([]);
+  const [sourceNote, setSourceNote] = useState<string | null>(null);
 
   const providerCanAnswer = Boolean(mediaUrl?.startsWith('cs3ext://'));
 
@@ -160,16 +193,23 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
 
       setLoading(true);
       setError(null);
+      setSourceNote(null);
       const termToSearch = q || imdbId || title || '';
       setLastSearched(termToSearch);
+      const y = searchYear ? parseInt(searchYear, 10) : undefined;
 
       try {
-        let response;
-        if (window.cloudstream?.searchSubtitlesByTitle) {
-          response = await window.cloudstream.searchSubtitlesByTitle(termToSearch, s, e, mediaUrl);
-        } else {
-          response = await window.cloudstream?.searchSubtitles(termToSearch, s, e, mediaUrl);
-        }
+        const response = await window.cloudstream?.findSubtitles({
+          // The detected id only while the viewer is searching the detected title.
+          imdbId: q === (title || '') || !q ? imdbId : undefined,
+          title: termToSearch,
+          year: Number.isFinite(y) ? y : undefined,
+          season: s,
+          episode: e,
+          mediaUrl,
+          languages,
+          releaseName,
+        });
 
         setLoading(false);
 
@@ -179,26 +219,25 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         }
 
         setResults(response.results);
-        const resImdbId = response && 'imdbId' in response ? (response as { imdbId?: string }).imdbId : undefined;
-        const resMatchedTitle = response && 'matchedTitle' in response ? (response as { matchedTitle?: string }).matchedTitle : undefined;
+        setMatchedInfo(
+          response.imdbId || response.matchedTitle
+            ? { imdbId: response.imdbId, matchedTitle: response.matchedTitle }
+            : null
+        );
 
-        if (resImdbId || resMatchedTitle) {
-          setMatchedInfo({
-            imdbId: resImdbId,
-            matchedTitle: resMatchedTitle,
-          });
-        } else if (/^tt\d+$/i.test(termToSearch)) {
-          setMatchedInfo({
-            imdbId: termToSearch,
-            matchedTitle: termToSearch,
-          });
-        } else {
-          setMatchedInfo(null);
-        }
+        // A catalogue that could not be reached is said so, never folded into
+        // "nothing found" — the two need different things from the viewer.
+        const sources = response.sources as SubtitleFindResult['sources'] | undefined;
+        const failed = sources
+          ? Object.entries(sources).filter(([, v]) => v.status === 'failed').map(([k]) => (k === 'stremio' ? 'Stremio OpenSubtitles' : 'OpenSubtitles'))
+          : [];
+        if (failed.length) setSourceNote(`${failed.join(' and ')} could not be reached; results may be incomplete.`);
 
         if (response.results.length === 0) {
           setError(
-            `No subtitles found for "${termToSearch}". Try refining the title, checking season/episode, or searching with an exact IMDb ID (e.g. tt1234567).`
+            failed.length === 2
+              ? 'The subtitle catalogues could not be reached. Check the connection and search again.'
+              : `No subtitles found for "${termToSearch}". Try the original title, a different year, or an IMDb ID (tt1234567).`
           );
         }
       } catch (err) {
@@ -206,7 +245,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         setError(err instanceof Error ? err.message : 'Subtitle search failed.');
       }
     },
-    [searchQuery, searchSeason, searchEpisode, season, episode, imdbId, title, providerCanAnswer, mediaUrl]
+    [searchQuery, searchSeason, searchEpisode, searchYear, season, episode, imdbId, title, providerCanAnswer, mediaUrl, languages, releaseName]
   );
 
   // Sync state when props change
@@ -215,11 +254,12 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
     setSearchQuery(initial);
     setSearchSeason(season !== undefined ? String(season) : '');
     setSearchEpisode(episode !== undefined ? String(episode) : '');
+    setSearchYear(year !== undefined ? String(year) : '');
     setResults([]);
     setError(null);
     setMatchedInfo(null);
     setLastSearched('');
-  }, [title, imdbId, season, episode]);
+  }, [title, imdbId, season, episode, year]);
 
   // Searching on open rather than behind a button: the viewer opened this panel
   // because they want subtitles, and an empty list with a button is a wasted step.
@@ -272,11 +312,25 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   if (!open) return null;
 
   const byLanguage = new Map<string, SubtitleSearchResult[]>();
+  const codeFor = new Map<string, string>();
   for (const result of results) {
     const list = byLanguage.get(result.langName) ?? [];
     list.push(result);
     byLanguage.set(result.langName, list);
+    codeFor.set(result.langName, result.lang.toLowerCase());
   }
+  // Chips: every language the results carry, plus the common ones before a search.
+  const languageChips = (() => {
+    const chips = new Map<string, { code: string; name: string; count: number }>();
+    for (const [name, items] of byLanguage) {
+      const code = codeFor.get(name) ?? name;
+      chips.set(code, { code, name: name.replace(/\s*\(from this provider\)$/, ''), count: items.length });
+    }
+    if (chips.size === 0) for (const l of COMMON_LANGUAGES) chips.set(l.code, { ...l, count: 0 });
+    for (const code of languages) if (!chips.has(code)) chips.set(code, { code, name: code.toUpperCase(), count: 0 });
+    return [...chips.values()].sort((a, b) => (a.code === 'eng' ? -1 : b.code === 'eng' ? 1 : b.count - a.count || a.name.localeCompare(b.name)));
+  })();
+  const showLanguage = (name: string) => languages.length === 0 || languages.includes(codeFor.get(name) ?? '');
 
   return (
     <aside className="player-panel player-panel--subtitles" aria-label="Subtitles">
@@ -380,6 +434,19 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               aria-label="Episode number"
             />
           </div>
+          <div className="subtitle-panel__ep-field">
+            <span>Year:</span>
+            <input
+              type="number"
+              min="1900"
+              max="2100"
+              className="subtitle-panel__ep-input subtitle-panel__ep-input--year"
+              value={searchYear}
+              placeholder="Year"
+              onChange={(e) => setSearchYear(e.target.value)}
+              aria-label="Release year"
+            />
+          </div>
           <button
             type="submit"
             className="subtitle-panel__search-submit-btn"
@@ -390,21 +457,30 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         </div>
       </form>
 
-      {byLanguage.size > 1 && (
-        <label className="subtitle-panel__language-filter">
-          <span>Language</span>
-          <select value={byLanguage.has(languageFilter) ? languageFilter : ''} onChange={(e) => setLanguageFilter(e.target.value)}>
-            <option value="">All languages ({results.length})</option>
-            {[...byLanguage.entries()]
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([language, items]) => (
-                <option key={language} value={language}>
-                  {language} ({items.length})
-                </option>
-              ))}
-          </select>
-        </label>
-      )}
+      <div className="subtitle-panel__languages" role="group" aria-label="Subtitle languages">
+        <button
+          type="button"
+          className={`subtitle-panel__chip${languages.length === 0 ? ' subtitle-panel__chip--on' : ''}`}
+          onClick={() => setLanguages([])}
+        >
+          All{results.length > 0 ? ` (${results.length})` : ''}
+        </button>
+        {languageChips.map(({ code, name, count }) => {
+          const on = languages.includes(code);
+          return (
+            <button
+              key={code}
+              type="button"
+              className={`subtitle-panel__chip${on ? ' subtitle-panel__chip--on' : ''}`}
+              onClick={() => setLanguages((current) => (on ? current.filter((c) => c !== code) : [...current, code]))}
+              aria-pressed={on}
+            >
+              {name}
+              {count > 0 ? ` (${count})` : ''}
+            </button>
+          );
+        })}
+      </div>
 
       {/* Matched Title Info Tag */}
       {matchedInfo && (
@@ -515,8 +591,10 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         </p>
       )}
 
+      {sourceNote && <p className="subtitle-panel__note">{sourceNote}</p>}
+
       {[...byLanguage.entries()]
-        .filter(([language]) => !byLanguage.has(languageFilter) || language === languageFilter)
+        .filter(([language]) => showLanguage(language))
         .map(([language, items]) => (
         <div key={language} className="player-panel__sub-group">
           <div className="player-panel__sub-heading">{language}</div>
@@ -526,19 +604,37 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               return (
                 <li key={item.id} className="subtitle-panel__row">
                   <button
-                    className="player-panel__sub"
+                    className={`player-panel__sub subtitle-panel__result${item.best ? ' subtitle-panel__result--best' : ''}`}
                     onClick={() => applySubtitle(item)}
                     disabled={applying !== null}
+                    title={[
+                      item.fileName,
+                      item.best ? 'Best match for what is playing' : undefined,
+                      item.matchReasons?.length ? item.matchReasons.join(' · ') : undefined,
+                    ]
+                      .filter(Boolean)
+                      .join('\n')}
                   >
                     {applying === item.id ? (
                       <Loader2 className="spin" size={13} />
+                    ) : item.best ? (
+                      <Star size={13} className="subtitle-panel__star" fill="currentColor" />
                     ) : (
                       <Subtitles size={13} />
                     )}
-                    <span className="player-panel__sub-label">
-                      {language} {items.length > 1 ? `#${index + 1}` : ''}
+                    <span className="subtitle-panel__result-text">
+                      <span className="player-panel__sub-label">
+                        {rowLabel(item, `${language}${items.length > 1 ? ` #${index + 1}` : ''}`)}
+                      </span>
+                      <span className="subtitle-panel__result-meta">
+                        {item.best && <span className="subtitle-panel__best">Best match</span>}
+                        <span>{originLabel(item)}</span>
+                        {item.downloads ? <span>{compactCount(item.downloads)} downloads</span> : null}
+                        {item.rating ? <span>★ {item.rating.toFixed(1)}</span> : null}
+                        {item.hearingImpaired && <span title="Includes sound descriptions">HI</span>}
+                        {item.machineTranslated && <span>machine translated</span>}
+                      </span>
                     </span>
-                    <span className="player-panel__sub-tag">{originLabel(item)}</span>
                   </button>
                   <button
                     className="icon-button subtitle-panel__download"

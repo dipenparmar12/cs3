@@ -71,7 +71,7 @@ import { PlaybackSessionManager, type ResumePreference } from './playbackSession
 import { SearchSuggestionService } from './searchSuggestions';
 import { SearchHistoryStore } from './searchHistory';
 import { SavedSearchStore, type SaveSearchInput } from './savedSearches';
-import { SubtitleService } from './subtitleService';
+import { SubtitleService, languageName, type SubtitleQuery, type SubtitleSearchResult } from './subtitleService';
 import {
   PrivacyMode,
   isPrivateSession,
@@ -2115,73 +2115,29 @@ ipcMain.handle('api:suggest', async (event, query: string) => {
  * an OpenSubtitles match is for the work in general and may be out of sync.
  */
 ipcMain.handle(
-  'subtitles:search',
-  async (_, imdbIdOrQuery: string, season?: number, episode?: number, mediaUrl?: string) => {
+  'subtitles:find',
+  async (_, query: SubtitleQuery & { mediaUrl?: string }) => {
     try {
-      const trimmed = imdbIdOrQuery?.trim() ?? '';
-      const [fromProvider, fromCatalogue] = await Promise.all([
-        mediaUrl?.startsWith('cs3ext://')
-          ? pluginManager.loadSubtitles(mediaUrl).catch(() => [])
-          : Promise.resolve([]),
-        trimmed
-          ? (/^tt\d+$/i.test(trimmed)
-              ? subtitles.search(trimmed, season, episode).catch(() => [])
-              : subtitles.searchByTitle(trimmed, season, episode).then((r) => r.results).catch(() => []))
-          : Promise.resolve([]),
-      ]);
-
-      const providerResults = fromProvider.map((entry) => ({
-        id: `provider:${entry.url}`,
-        lang: entry.lang,
-        langName: `${entry.lang} (from this provider)`,
-        url: entry.url,
-      }));
-
-      return { ok: true, results: [...providerResults, ...fromCatalogue] };
+      const mediaUrl = query?.mediaUrl;
+      // Asked in parallel with the catalogues, never instead of them.
+      const providerResults: Promise<SubtitleSearchResult[]> = mediaUrl?.startsWith('cs3ext://')
+        ? pluginManager
+            .loadSubtitles(mediaUrl)
+            .then((entries) =>
+              entries.map((entry) => ({
+                id: `provider:${entry.url}`,
+                lang: entry.lang,
+                langName: languageName(entry.lang),
+                url: entry.url,
+                origin: 'provider' as const,
+              }))
+            )
+            .catch(() => [])
+        : Promise.resolve([]);
+      const found = await subtitles.find(query ?? {}, providerResults);
+      return { ok: true, ...found };
     } catch (error) {
-      return { ...fail(error), results: [] };
-    }
-  }
-);
-
-/**
- * Searches subtitles by custom movie/series title or IMDb id, returning the matched title and IMDb id.
- */
-ipcMain.handle(
-  'subtitles:searchByTitle',
-  async (_, query: string, season?: number, episode?: number, mediaUrl?: string) => {
-    try {
-      const trimmed = query?.trim() ?? '';
-      if (!trimmed && !mediaUrl?.startsWith('cs3ext://')) {
-        return { ok: true, results: [], imdbId: undefined, matchedTitle: undefined };
-      }
-
-      const [fromProvider, titleResult] = await Promise.all([
-        mediaUrl?.startsWith('cs3ext://')
-          ? pluginManager.loadSubtitles(mediaUrl).catch(() => [])
-          : Promise.resolve([]),
-        trimmed
-          ? subtitles
-              .searchByTitle(trimmed, season, episode)
-              .catch(() => ({ results: [], imdbId: undefined, matchedTitle: undefined }))
-          : Promise.resolve({ results: [], imdbId: undefined, matchedTitle: undefined }),
-      ]);
-
-      const providerResults = fromProvider.map((entry) => ({
-        id: `provider:${entry.url}`,
-        lang: entry.lang,
-        langName: `${entry.lang} (from this provider)`,
-        url: entry.url,
-      }));
-
-      return {
-        ok: true,
-        imdbId: titleResult.imdbId,
-        matchedTitle: titleResult.matchedTitle,
-        results: [...providerResults, ...titleResult.results],
-      };
-    } catch (error) {
-      return { ...fail(error), results: [], imdbId: undefined, matchedTitle: undefined };
+      return { ...fail(error), results: [], sources: undefined };
     }
   }
 );

@@ -30,6 +30,8 @@ export interface RankableSubtitle {
   year?: number;
   hearingImpaired?: boolean;
   machineTranslated?: boolean;
+  /** Translates only the lines not in the film's own language ("forced"). */
+  foreignPartsOnly?: boolean;
   trusted?: boolean;
 }
 
@@ -160,7 +162,10 @@ export function scoreSubtitle(result: RankableSubtitle, context: MatchContext): 
   const similarity = releaseSimilarity(result, context.releaseName);
   if (similarity > 0) {
     score += similarity * 40;
-    if (similarity >= 0.5) reasons.push('same release group');
+    // Named from the evidence, not from the score: a high score can be built
+    // from shared tags alone, and "same group" would then be a false claim.
+    const group = releaseGroup(context.releaseName);
+    if (group && namesOf(result).some((name) => releaseGroup(name) === group)) reasons.push('same release group');
     else if (similarity >= 0.3) reasons.push('same kind of release');
   }
 
@@ -177,6 +182,16 @@ export function scoreSubtitle(result: RankableSubtitle, context: MatchContext): 
   if (context.year && result.year && Math.abs(result.year - context.year) > 1) {
     score -= 35;
     reasons.push(`listed as ${result.year}`);
+  }
+  /**
+   * "Forced" files carry only the lines spoken in another language — a sign
+   * held up on screen, a scene in Russian. Chosen as *the* subtitle they show
+   * almost nothing, which reads as subtitles not working. Still offered, last.
+   */
+  const forced = result.foreignPartsOnly || namesOf(result).some((name) => /(^|[^a-z])forced([^a-z]|$)/i.test(name));
+  if (forced) {
+    score -= 30;
+    reasons.push('foreign dialogue only');
   }
   if (result.machineTranslated) {
     score -= 15;
