@@ -1395,7 +1395,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
       // One local datastore read, needed before the player mounts so the
       // episode list and resume point are right from the first frame.
-      const watchState = await loadWatchState(detail.url);
+      const watchState = await loadWatchState(detail.url, { title: detail.name, year: detail.year });
 
       /**
        * A null episode on a series means "Play", not "play the series URL".
@@ -1611,7 +1611,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
       });
       rememberChoice(source, pendingEpisode);
 
-      const watchState = await loadWatchState(detail.url);
+      const watchState = await loadWatchState(detail.url, { title: detail.name, year: detail.year });
 
       const others = pickerData?.sources ?? [];
 

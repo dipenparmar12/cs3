@@ -67,7 +67,7 @@ import { BinaryDownloader } from './binaryDownloader';
 import { MpvEngine } from './media/mpvEngine';
 import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
-import { PlaybackSessionManager } from './playbackSession';
+import { PlaybackSessionManager, type ResumePreference } from './playbackSession';
 import { SearchSuggestionService } from './searchSuggestions';
 import { SearchHistoryStore } from './searchHistory';
 import { SavedSearchStore, type SaveSearchInput } from './savedSearches';
@@ -3340,13 +3340,16 @@ ipcMain.handle(
     request: SourceQuery,
     title: string,
     episodeTitle?: string,
-    options?: { persistent?: boolean }
+    options?: { persistent?: boolean; resumeKey?: string }
   ) => {
     try {
       return {
         ok: true,
         snapshot: playbackSessions.start(request, title, episodeTitle, {
           persistent: Boolean(options?.persistent),
+          resume: options?.resumeKey
+            ? resumePreference(options.resumeKey, request.season, request.episode)
+            : undefined,
         }),
       };
     } catch (error) {
@@ -5784,6 +5787,23 @@ ipcMain.handle(
  *   more useful than an entry that silently vanishes, and the full source list
  *   comes back so the viewer can choose again.
  */
+/**
+ * The source a resumed title last played from, as a playback session takes it.
+ *
+ * Local reads only: a Play press must not wait on a provider to decide what to
+ * try first. A saved link that has expired is not refreshed here — the
+ * session's own discovery is already re-asking, and `pickReplacement` finds the
+ * same release in its answer.
+ */
+function resumePreference(key: string, season?: number, episode?: number): ResumePreference | undefined {
+  const record = libraryStore.getPlayedSource(key, season, episode);
+  if (!record || record.source.status === 'Unavailable') return undefined;
+  return {
+    start: isLinkUsable(record.source) ? storedSourceToTorrentResult(record.source) : undefined,
+    match: (candidates) => pickReplacement(record.source, candidates),
+  };
+}
+
 ipcMain.handle(
   'library:resolvePlayedSource',
   async (_, key: string, season?: number, episode?: number) => {

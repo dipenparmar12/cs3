@@ -172,6 +172,20 @@ interface Session {
   /** Cancels the in-flight start when a newer one supersedes it. */
   inFlight?: AbortController;
   disposed: boolean;
+  resume?: ResumePreference;
+}
+
+/**
+ * What played last time, for a Play that resumes.
+ *
+ * `start` is the remembered source while its link is still good; `match`
+ * picks the same release out of a fresh discovery when it is not. Both come
+ * from `cs3/playedSource.ts` via `main.ts`, so this module learns nothing
+ * about how a release is recognised.
+ */
+export interface ResumePreference {
+  start?: TorrentResult;
+  match?: (candidates: TorrentResult[]) => TorrentResult | null;
 }
 
 export class PlaybackSessionManager {
@@ -231,7 +245,7 @@ export class PlaybackSessionManager {
     request: SourceQuery,
     title: string,
     episodeTitle?: string,
-    options: { persistent?: boolean } = {}
+    options: { persistent?: boolean; resume?: ResumePreference } = {}
   ): PlaybackSnapshot {
     const session: Session = {
       id: randomUUID(),
@@ -257,11 +271,43 @@ export class PlaybackSessionManager {
       generation: 0,
       started: false,
       disposed: false,
+      resume: options.resume,
     };
     this.sessions.set(session.id, session);
 
+    /**
+     * A resume plays what played last time, now.
+     *
+     * The stream that carried the viewer to their saved position is the one
+     * whose timeline that position belongs to — another release of the same
+     * film can be a different cut, a different length, a different dub. While
+     * its link is still good it starts immediately; discovery runs alongside
+     * and becomes the list to fail over to, exactly as for any other start.
+     */
+    const pinned = options.resume?.start;
+    if (pinned) {
+      session.sources = [pinned];
+      void this.beginStream(session, [pinned], { immediate: true });
+    }
     void this.discover(session, { autoStartWhenDone: true });
     return this.snapshot(session);
+  }
+
+  /** `list`, with the resumed source kept at the head when discovery did not find it. */
+  private keepPinned(session: Session, list: TorrentResult[]): TorrentResult[] {
+    const pinned = session.resume?.start;
+    if (!pinned || list.some((s) => s.infoHash === pinned.infoHash)) return list;
+    return [pinned, ...list];
+  }
+
+  /**
+   * The release that played last time, first — when its saved link had expired
+   * and discovery has just produced a fresh one for it.
+   */
+  private preferResumed(session: Session, list: TorrentResult[]): TorrentResult[] {
+    const match = session.resume?.match?.(list);
+    if (!match) return list;
+    return [match, ...list.filter((s) => s !== match)];
   }
 
   /**
@@ -369,7 +415,7 @@ export class PlaybackSessionManager {
         options.widen ? { ...session.request, scope: 'all' as const } : session.request,
         (progress) => {
           if (session.disposed || controller.signal.aborted) return;
-          session.sources = progress.results;
+          session.sources = this.keepPinned(session, progress.results);
           session.searched = progress.settled;
           session.totalIndexers = progress.totalRelevant;
           session.lastIndexerName = progress.lastIndexerName || session.lastIndexerName;
@@ -394,7 +440,7 @@ export class PlaybackSessionManager {
        */
       if (controller.signal.aborted) return;
 
-      session.sources = response.sources;
+      session.sources = this.keepPinned(session, response.sources);
       session.emptyReason = response.emptyReason;
       session.diagnosis = response.diagnosis;
       session.canWiden = response.canWiden;
@@ -430,7 +476,7 @@ export class PlaybackSessionManager {
     // They are offered, never started (errors audit, Part 2 §4): the overlay
     // already holds "Play now" and "Choose source" for exactly this state.
     if (session.widened) return;
-    await this.beginStream(session, session.sources);
+    await this.beginStream(session, this.preferResumed(session, session.sources));
   }
 
   /**

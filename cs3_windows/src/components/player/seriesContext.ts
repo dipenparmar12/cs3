@@ -1,4 +1,5 @@
 import type { Episode } from '../../types/api';
+import { canonicalKey } from '../../../electron/cs3/libraryStore';
 
 /**
  * The series the player is currently inside.
@@ -57,14 +58,26 @@ export interface SeriesContext {
  * Lives here rather than in the detail view because the *card* path needs it
  * too: quick-play started every series at episode one purely because this
  * lookup was in a file it could not reach.
+ *
+ * The title is the fallback, and it is not optional in practice. Progress is
+ * written for anything played, but a library *entry* exists only for a title
+ * someone added to a bucket — so a film started from History, Search or Home
+ * and never filed anywhere had its position saved and never read back, and
+ * every return to it began at 0:00. Measured on a real install: `Extraction
+ * II` held 1,099s of 7,437 under `extraction-ii:2023` with no library entry
+ * at all. The key is the same function the store writes with.
  */
-export async function loadWatchState(mediaUrl: string): Promise<Record<string, EpisodeWatchState>> {
+export async function loadWatchState(
+  mediaUrl: string,
+  identity?: { title?: string; year?: number }
+): Promise<Record<string, EpisodeWatchState>> {
   if (!window.cloudstream) return {};
 
   const entry = await window.cloudstream.getLibraryEntryForUrl(mediaUrl);
-  if (!entry) return {};
+  const key = entry?.key ?? (identity?.title ? canonicalKey(identity.title, identity.year) : null);
+  if (!key) return {};
 
-  const rows = await window.cloudstream.getProgressForKey(entry.key);
+  const rows = await window.cloudstream.getProgressForKey(key);
   const state: Record<string, EpisodeWatchState> = {};
   for (const row of rows) {
     state[episodeKey(row.season, row.episode)] = {

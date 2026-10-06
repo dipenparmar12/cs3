@@ -1288,7 +1288,10 @@ export const App: React.FC = () => {
 
         // Both reads are local — the datastore, not a provider — so they cost
         // nothing against the round trip that just resolved the detail.
-        const watchState = await loadWatchState(item.url);
+        const watchState = await loadWatchState(item.url, {
+          title: detail?.name ?? item.name,
+          year: detail?.year ?? item.year,
+        });
         const { episode: first, resumeAt } = pickResumePoint(detail?.episodes ?? [], watchState, {
           isLive: detail?.isLive,
         });
