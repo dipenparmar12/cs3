@@ -555,7 +555,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setShowAspectControl(resizeEnabled === 'true' || customAspect === 'true');
           }
           if (showSubtitlesControlProp === undefined) {
-            setShowSubtitlesControl(subsEnabled !== 'false' && customSubs !== 'false');
+            const isAllowed = (val: unknown) => {
+              if (val === undefined || val === null) return true;
+              if (typeof val === 'boolean') return val;
+              if (typeof val === 'string') {
+                const lower = val.trim().toLowerCase();
+                return lower !== 'false' && lower !== '0' && lower !== 'off';
+              }
+              return true;
+            };
+            setShowSubtitlesControl(isAllowed(subsEnabled) && isAllowed(customSubs));
           }
           if (savedAspect && Object.values(AspectRatioMode).includes(savedAspect as AspectRatioMode)) {
             setAspect(savedAspect as AspectRatioMode);
@@ -4785,26 +4794,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </button>
           )}
 
-          {/* Subtitle search sits next to the track picker rather than inside
-              it: finding a subtitle and choosing one are different actions, and
-              a hover menu is the wrong shape for a search result list.
-              Optional control: enabled by default, can be hidden via Player Settings. */}
-          {showSubtitlesControl && (
-            <button
-              className="icon-button"
-              data-panel-toggle
-              onClick={(e) => {
-                e.stopPropagation();
-                setSubtitlePanelOpen((v) => !v);
-                revealControls();
-              }}
-              aria-label="Search subtitles"
-              title="Search subtitles online"
-            >
-              <Subtitles size={18} />
-            </button>
-          )}
-
           {/* Button 1: Download Current Media Action Button */}
           <button
             className={`icon-button ${currentDownload ? 'active' : ''}`}
@@ -4925,6 +4914,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </span>
             )}
           </button>
+
+          {/* Subtitle search sits immediately to the right side of the download panel.
+              Optional control: enabled by default, can be toggled via Player Settings. */}
+          {showSubtitlesControl && (
+            <button
+              className={`icon-button ${subtitlePanelOpen ? 'active' : ''}`}
+              data-panel-toggle
+              onClick={(e) => {
+                e.stopPropagation();
+                setSubtitlePanelOpen((v) => !v);
+                revealControls();
+              }}
+              aria-label="Search subtitles"
+              title="Search subtitles online"
+            >
+              <Subtitles size={18} />
+            </button>
+          )}
 
           {qualities.length > 1 && (
             <HoverMenu
