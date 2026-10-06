@@ -273,7 +273,38 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const [query, setQuery] = useState('');
   const searching = query.trim() !== '';
   const content = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [nothingFound, setNothingFound] = useState(false);
+
+  useEffect(() => {
+    const focusSearch = () => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    };
+    window.addEventListener('cs3:focus-settings-search', focusSearch);
+    return () => window.removeEventListener('cs3:focus-settings-search', focusSearch);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      } else if (
+        e.key === '/' &&
+        document.activeElement?.tagName !== 'INPUT' &&
+        document.activeElement?.tagName !== 'TEXTAREA'
+      ) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Read from the DOM after the rows have filtered themselves: which rows are
   // left is decided inside each row, so this is the one place that sees all of it.
   useLayoutEffect(() => {
@@ -371,12 +402,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           Sticky, so it is there however far down a section goes.
         */}
         <nav className="settings__nav" aria-label="Settings sections">
-          <label className="settings__find">
+          <div className="settings__find" onClick={() => searchInputRef.current?.focus()}>
             <Search size={14} aria-hidden />
             <input
+              ref={searchInputRef}
               type="search"
               value={query}
-              placeholder="Find a setting"
+              placeholder="Find a setting (Ctrl+F)"
               aria-label="Find a setting"
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
@@ -391,12 +423,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                 type="button"
                 className="settings__find-clear"
                 aria-label="Clear search"
-                onClick={() => setQuery('')}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setQuery('');
+                  searchInputRef.current?.focus();
+                }}
               >
                 <X size={13} />
               </button>
             ) : null}
-          </label>
+          </div>
 
           <div role="tablist" aria-orientation="vertical" className="settings__nav-list">
             {tabs.map((entry) => (

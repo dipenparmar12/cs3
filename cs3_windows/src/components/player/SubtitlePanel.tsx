@@ -357,6 +357,11 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
     [searchQuery, searchSeason, searchEpisode, searchYear, season, episode, imdbId, title, providerCanAnswer, mediaUrl, languages, releaseName]
   );
 
+  // Track if the user has manually edited or is currently typing in the search box
+  const userEditedRef = useRef(false);
+  const userTypingRef = useRef(false);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
   // Sync state when props change, guarded by ref so active typing isn't wiped
   const prevPropsRef = useRef({ title, imdbId, season, episode, year });
   useEffect(() => {
@@ -369,6 +374,9 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
       prev.year !== year;
     prevPropsRef.current = { title, imdbId, season, episode, year };
     if (!changed) return;
+
+    // Never overwrite what the user is actively typing or has edited
+    if (userEditedRef.current || userTypingRef.current) return;
 
     const initial = title || imdbId || '';
     setSearchQuery(initial);
@@ -483,23 +491,45 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         </div>
         <div className="player-panel__head-actions">
           <button
+            type="button"
             className={`icon-button subtitle-panel__config-btn${showConfig ? ' active' : ''}`}
-            onClick={() => setShowConfig((v) => !v)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowConfig((v) => !v);
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             title={showConfig ? 'Hide subtitle appearance settings' : 'Subtitle style & appearance settings'}
             aria-label="Subtitle appearance settings"
           >
             <Sliders size={18} />
           </button>
           <button
+            type="button"
             className="icon-button"
-            onClick={() => void runSearch()}
+            onClick={(e) => {
+              e.stopPropagation();
+              void runSearch();
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             disabled={loading}
             title="Search again"
             aria-label="Search subtitles again"
           >
             {loading ? <Loader2 className="spin" size={18} /> : <Search size={18} />}
           </button>
-          <button className="icon-button" onClick={onClose} aria-label="Close subtitles">
+          <button
+            type="button"
+            className="icon-button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            aria-label="Close subtitles"
+          >
             <X size={18} />
           </button>
         </div>
@@ -507,13 +537,24 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
 
       {/* In-player Subtitle Appearance Settings Drawer */}
       {showConfig && (
-        <div className="subtitle-panel__config-panel" role="region" aria-label="Subtitle appearance settings">
+        <div
+          className="subtitle-panel__config-panel"
+          role="region"
+          aria-label="Subtitle appearance settings"
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
           <div className="subtitle-panel__config-header">
             <span className="subtitle-panel__config-title">Subtitle Appearance</span>
             <button
               type="button"
               className="subtitle-panel__config-close"
-              onClick={() => setShowConfig(false)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowConfig(false);
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
               aria-label="Close subtitle settings"
             >
               <X size={14} />
@@ -640,15 +681,37 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
       )}
 
       {/* Custom Subtitle Search Form */}
-      <form className="subtitle-panel__search-form" onSubmit={handleSearchSubmit}>
-        <div className="subtitle-panel__search-bar">
+      <form
+        className="subtitle-panel__search-form"
+        onSubmit={handleSearchSubmit}
+        onPointerDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div
+          className="subtitle-panel__search-bar"
+          onClick={() => searchInputRef.current?.focus()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
           <Search size={14} style={{ flexShrink: 0, opacity: 0.6 }} />
           <input
+            ref={searchInputRef}
             type="text"
             className="subtitle-panel__search-input"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => {
+              userEditedRef.current = true;
+              setSearchQuery(e.target.value);
+            }}
+            onFocus={() => {
+              userTypingRef.current = true;
+            }}
+            onBlur={() => {
+              userTypingRef.current = false;
+            }}
             onKeyDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             placeholder="Search custom title or IMDb ID (tt...)"
             aria-label="Custom subtitle search query"
           />
@@ -656,7 +719,14 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
             <button
               type="button"
               className="subtitle-panel__search-btn"
-              onClick={() => setSearchQuery('')}
+              onClick={(e) => {
+                e.stopPropagation();
+                userEditedRef.current = true;
+                setSearchQuery('');
+                searchInputRef.current?.focus();
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
               title="Clear title query"
               aria-label="Clear query"
             >
@@ -667,10 +737,14 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
             <button
               type="button"
               className="subtitle-panel__search-btn"
-              onClick={() => {
+              onClick={(e) => {
+                e.stopPropagation();
+                userEditedRef.current = false;
                 setSearchQuery(title);
                 void runSearch(title);
               }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
               title="Search with the detected title again"
               aria-label="Reset to detected title"
             >
@@ -681,6 +755,8 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
             type="submit"
             className="subtitle-panel__search-btn"
             disabled={loading || !searchQuery.trim()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             title="Search subtitles"
             aria-label="Search"
           >
@@ -688,7 +764,11 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
           </button>
         </div>
 
-        <div className="subtitle-panel__ep-inputs">
+        <div
+          className="subtitle-panel__ep-inputs"
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
           <div className="subtitle-panel__ep-field">
             <span>Season:</span>
             <input
@@ -697,8 +777,19 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               className="subtitle-panel__ep-input"
               value={searchSeason}
               placeholder="S#"
-              onChange={(e) => setSearchSeason(e.target.value)}
+              onChange={(e) => {
+                userEditedRef.current = true;
+                setSearchSeason(e.target.value);
+              }}
+              onFocus={() => {
+                userTypingRef.current = true;
+              }}
+              onBlur={() => {
+                userTypingRef.current = false;
+              }}
               onKeyDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
               aria-label="Season number"
             />
           </div>
@@ -710,8 +801,19 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               className="subtitle-panel__ep-input"
               value={searchEpisode}
               placeholder="Ep#"
-              onChange={(e) => setSearchEpisode(e.target.value)}
+              onChange={(e) => {
+                userEditedRef.current = true;
+                setSearchEpisode(e.target.value);
+              }}
+              onFocus={() => {
+                userTypingRef.current = true;
+              }}
+              onBlur={() => {
+                userTypingRef.current = false;
+              }}
               onKeyDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
               aria-label="Episode number"
             />
           </div>
@@ -724,8 +826,19 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               className="subtitle-panel__ep-input subtitle-panel__ep-input--year"
               value={searchYear}
               placeholder="Year"
-              onChange={(e) => setSearchYear(e.target.value)}
+              onChange={(e) => {
+                userEditedRef.current = true;
+                setSearchYear(e.target.value);
+              }}
+              onFocus={() => {
+                userTypingRef.current = true;
+              }}
+              onBlur={() => {
+                userTypingRef.current = false;
+              }}
               onKeyDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
               aria-label="Release year"
             />
           </div>
@@ -733,6 +846,8 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
             type="submit"
             className="subtitle-panel__search-submit-btn"
             disabled={loading || !searchQuery.trim()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
           >
             {loading ? 'Searching...' : 'Search'}
           </button>

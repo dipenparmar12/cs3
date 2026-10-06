@@ -114,11 +114,12 @@ export const SettingGroup: React.FC<{
     const props = child.props as Partial<SettingRowProps>;
     if (!shouldShow(settingsLevel, props.level)) return false;
     if (!query || groupMatched) return true;
-    return typeof props.label === 'string' && rowMatches(query, props);
+    if (typeof props.label !== 'string') return true;
+    return rowMatches(query, props);
   });
   if (rendered.length === 0) return null;
 
-  const effectiveCollapsed = collapsible && isCollapsed;
+  const effectiveCollapsed = collapsible && isCollapsed && !query;
 
   return (
     <section className={`setting-group${effectiveCollapsed ? ' setting-group--collapsed' : ''}`}>

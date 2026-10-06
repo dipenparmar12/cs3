@@ -1925,7 +1925,7 @@
   overflow-y: auto;
   background: rgba(9, 11, 18, 0.96);
   border-left: 1px solid rgba(255, 255, 255, 0.1);
-  z-index: 7;
+  z-index: 35;
   animation: player-panel-in 0.18s ease;
 }
 @keyframes player-panel-in { from { transform: translateX(16px); opacity: 0; } }

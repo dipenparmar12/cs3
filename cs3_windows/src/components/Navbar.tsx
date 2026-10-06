@@ -143,6 +143,15 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   useEffect(() => refreshHistory(), [refreshHistory]);
 
+  useEffect(() => {
+    const handleFocusSearch = () => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    };
+    window.addEventListener('cs3:focus-navbar-search', handleFocusSearch);
+    return () => window.removeEventListener('cs3:focus-navbar-search', handleFocusSearch);
+  }, []);
+
   const mergedHistory = useMemo(() => {
     return mergeHistoryAndSaved(history, saved);
   }, [history, saved]);

@@ -1055,6 +1055,12 @@ function buildApplicationMenu(): Menu {
           click: () => void privacyMode.setActive(!privacyMode.isActive()),
         },
         { type: 'separator' },
+        {
+          label: 'Settings…',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => mainWindow?.webContents.send('app:openSettings'),
+        },
+        { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' },
       ],
     },

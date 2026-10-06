@@ -1955,6 +1955,7 @@ export interface CloudStreamElectronAPI {
    */
   onToggleInspector: (callback: () => void) => () => void;
   onShowLicences: (callback: () => void) => () => void;
+  onOpenSettings: (callback: () => void) => () => void;
   /** A file the user picked from File → Open, to be prepared and played. */
   onOpenLocalFile: (callback: (filePath: string) => void) => () => void;
   /** A `cloudstream://` link the app was opened with, or handed while running. */
@@ -2464,6 +2465,7 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('extension:recoverProviders', providers),
   onToggleInspector: (callback) => subscribe('app:toggleInspector', callback),
   onShowLicences: (callback) => subscribe('app:showLicences', callback),
+  onOpenSettings: (callback) => subscribe('app:openSettings', callback),
   onOpenLocalFile: (callback) => subscribe('app:openLocalFile', callback),
   onOpenShareLink: (callback) => subscribe('app:openShareLink', callback),
 };

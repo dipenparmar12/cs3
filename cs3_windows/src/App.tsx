@@ -546,6 +546,29 @@ export const App: React.FC = () => {
         // summon is exactly the surprise standard mode exists to prevent.
         if (!isDeveloperRef.current) return;
         setIsInspectorOpen((prev) => !prev);
+        return;
+      }
+
+      // Cmd+, or Ctrl+, opens Settings and focuses settings search
+      if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+        e.preventDefault();
+        setActiveTab('settings');
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('cs3:focus-settings-search'));
+        }, 50);
+        return;
+      }
+
+      // Ctrl+F, Cmd+F, or Ctrl+K focuses settings search (when in Settings) or navbar search
+      if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'f' || e.key.toLowerCase() === 'k')) {
+        if (activeTab === 'settings') {
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent('cs3:focus-settings-search'));
+        } else if (!document.fullscreenElement) {
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent('cs3:focus-navbar-search'));
+        }
+        return;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -553,6 +576,13 @@ export const App: React.FC = () => {
     const disposeInspector = window.cloudstream?.onToggleInspector?.(() => {
       if (!isDeveloperRef.current) return;
       setIsInspectorOpen((prev) => !prev);
+    });
+
+    const disposeSettings = window.cloudstream?.onOpenSettings?.(() => {
+      setActiveTab('settings');
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('cs3:focus-settings-search'));
+      }, 50);
     });
 
     // Help → Licences. A menu item that does nothing is worse than no menu item.
@@ -573,9 +603,10 @@ export const App: React.FC = () => {
       disposePlayback?.();
       disposeSearch?.();
       disposeInspector?.();
+      disposeSettings?.();
       disposeLicences?.();
     };
-  }, [refreshOttPlatforms]);
+  }, [refreshOttPlatforms, activeTab]);
 
   /**
    * Play a file the user already has on disk.
