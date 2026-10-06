@@ -2805,13 +2805,48 @@ export class PluginManager {
        * the JVM.
        */
       const cold: Array<PluginData & { meta: SitePlugin }> = [];
+      let hydrated = 0;
       for (const record of pending) {
+        // A load that failed for reasons of its own is reported from the record
+        // rather than paid for again — see `ProviderRegistryCache.recordFailure`.
+        const failed = this.registry?.readFailure(record.internalName, record.filePath);
+        if (failed) {
+          this.runtimeReports.set(record.internalName, {
+            tier: 'T4_BLOCKED',
+            reason: failed.reason,
+            translated: false,
+            failureKind: failed.kind,
+          });
+          continue;
+        }
         const cached = this.registry?.read(record.internalName, record.filePath);
         if (!cached) {
           cold.push(record);
           continue;
         }
         this.registerProviders(record, cached);
+        hydrated += 1;
+      }
+
+      /**
+       * A warm install does not wait for its new archives.
+       *
+       * Everything recorded is already addressable, and that is what a search,
+       * the scope picker and the extensions screen need. Holding all of them
+       * until an archive nobody has asked for yet finishes loading put one
+       * extension's worst case — StreamPlay's translation ran past its deadline
+       * and into an `OutOfMemoryError` — in front of every search. The new
+       * archives load behind, through `activate`, and their providers appear as
+       * each one registers.
+       *
+       * A first run has nothing hydrated, so it still waits: there is nothing
+       * else to search with.
+       */
+      if (cold.length > 0 && hydrated > 0) {
+        this.providersLoaded = true;
+        this.publishProvenance();
+        void this.loadColdInBackground(cold);
+        return;
       }
 
       if (cold.length === 0) {
@@ -2913,6 +2948,12 @@ export class PluginManager {
             kind: response.errorKind,
             tier: 'T4_BLOCKED',
           });
+          if (!isTransportFailure(response)) {
+            this.registry?.recordFailure(record.internalName, record.filePath, {
+              reason,
+              kind: response.errorKind,
+            });
+          }
           continue;
         }
 
@@ -3021,6 +3062,8 @@ export class PluginManager {
 
     const record = this.installedPlugins.get(internalName);
     if (!record?.filePath) return false;
+    // Recorded as broken for these bytes; the report already says why.
+    if (this.registry?.readFailure(internalName, record.filePath)) return false;
 
     const run = (async (): Promise<boolean> => {
       const started = await this.sidecar.ensureStarted();
@@ -3056,15 +3099,28 @@ export class PluginManager {
           tier: 'T4_BLOCKED',
         });
         /**
-         * The cached claim is withdrawn, not merely unused.
+         * The cached claim is replaced by the failure, not merely withdrawn.
          *
          * A row says "this archive registered these providers last time". An
          * archive that will no longer load has stopped being evidence for that,
-         * and leaving the row would advertise dead providers on every launch
-         * from now on, with the failure re-discovered each time and nothing
-         * recording that it is permanent.
+         * and leaving the row would advertise dead providers on every launch.
+         * Withdrawing it was the old answer, and it made the archive *cold* —
+         * loaded again on the next launch, on the path searches wait for. The
+         * failure is recorded instead, so it is reported without being re-paid.
+         *
+         * Unless the runtime never answered. A timeout or a crash says nothing
+         * about this archive (`rpcResult.ts`), and the row it already has stays.
          */
-        this.registry?.forget(internalName);
+        if (!isTransportFailure(response)) {
+          this.registry?.recordFailure(internalName, record.filePath, {
+            reason,
+            kind: response.errorKind,
+          });
+          for (const [name, provider] of [...this.providers.entries()]) {
+            if (provider.pluginInternalName === internalName) this.providers.delete(name);
+          }
+          this.publishProvenance();
+        }
         return false;
       }
 
@@ -3095,6 +3151,33 @@ export class PluginManager {
   }
 
   /**
+   * Archives with no recorded registration, loaded behind a usable app.
+   *
+   * Through `activate`, so a search that asks for one of these meanwhile joins
+   * the load instead of starting a second, and so a failure is recorded the
+   * same way however the load was reached. Serial for the reason everything
+   * here is: overlapping loads mis-attribute providers.
+   */
+  private async loadColdInBackground(cold: Array<PluginData & { meta: SitePlugin }>): Promise<void> {
+    this.emitLoadProgress({ loaded: 0, total: cold.length, running: true });
+    let loaded = 0;
+    for (const record of cold) {
+      this.emitLoadProgress({ current: record.meta?.name ?? record.internalName });
+      try {
+        await this.activate(record.internalName);
+      } catch (error) {
+        logger.warn('extension_cold_load_failed', {
+          plugin: record.internalName,
+          error: describeError(error),
+        });
+      }
+      loaded += 1;
+      this.emitLoadProgress({ loaded });
+    }
+    this.emitLoadProgress({ running: false, current: undefined });
+  }
+
+  /**
    * Loads everything, in the background, so a later search does not have to.
    *
    * The cold cost is unavoidable and mostly one-off — 57s of JVM class loading
@@ -3108,18 +3191,59 @@ export class PluginManager {
    * user is actually doing — a warm-up that competes with a live search for the
    * sidecar's worker pool has made things worse, not better.
    */
-  public async warmProviders(signal?: AbortSignal): Promise<void> {
+  public async warmProviders(
+    options: { signal?: AbortSignal; usage?: (providerName: string) => number } = {}
+  ): Promise<void> {
+    const { signal, usage } = options;
     // A new process holds none of the archives the last one displaced.
     this.sweepDisplacedArchives();
     await this.ensureProvidersLoaded();
-    for (const record of [...this.installedPlugins.values()]) {
+
+    /**
+     * Only what a search could actually ask, most-used first.
+     *
+     * This used to warm every installed archive, in install order — switched
+     * off, adult-gated and all. On a 468-archive install that is hundreds of
+     * loads nobody can reach, and the provider someone searches with every
+     * day waited behind them. An archive none of whose providers is enabled is
+     * skipped; it loads on demand if it is ever switched back on.
+     */
+    const enabled = new Set(this.enabledProviderNames());
+    const byArchive = new Map<string, number>();
+    for (const provider of this.providers.values()) {
+      if (!enabled.has(provider.name)) continue;
+      const score = usage?.(provider.name) ?? 0;
+      byArchive.set(
+        provider.pluginInternalName,
+        Math.max(byArchive.get(provider.pluginInternalName) ?? 0, score)
+      );
+    }
+    const queue = [...byArchive.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name);
+
+    let transportFailures = 0;
+    for (const internalName of queue) {
       if (signal?.aborted) return;
-      if (this.liveInJvm.has(record.internalName)) continue;
+      if (this.liveInJvm.has(internalName)) continue;
       // Between archives, not during one: a load that has started must finish
       // or the provider is left half-registered.
       await this.waitForSearchesToFinish(signal);
       if (signal?.aborted) return;
-      await this.activate(record.internalName);
+      const loaded = await this.activate(internalName);
+      /**
+       * A runtime that has stopped answering is not warmed further.
+       *
+       * Each call into a wedged JVM costs its full deadline, so pressing on is
+       * a minute per archive spent proving the same thing — measured at
+       * fourteen minutes on the install that found it. Whatever a search asks
+       * for still loads on demand once the runtime recovers.
+       */
+      if (!loaded && this.runtimeReports.get(internalName)?.failureKind &&
+          isTransportFailure({ ok: false, errorKind: this.runtimeReports.get(internalName)?.failureKind })) {
+        transportFailures += 1;
+        if (transportFailures >= 3) return;
+      } else if (loaded) {
+        transportFailures = 0;
+      }
       // Yield to the event loop between provider archives so background class
       // loading does not starve the main thread or cause UI stutter.
       await new Promise((resolve) => setTimeout(resolve, 100));

@@ -1740,7 +1740,24 @@ app.whenReady().then(async () => {
     label: 'Loading installed extensions',
     priority: 70,
     delayMs: PROVIDER_WARMUP_DELAY_MS,
-    run: () => pluginManager.warmProviders(),
+    /**
+     * Its own lane. On the serial one the torrent client queued behind the
+     * whole warm-up — measured at fourteen minutes on a 468-archive install
+     * whose JVM had run out of memory — so a magnet pressed in that window paid
+     * the cold start the warm-up was supposed to have done. The JVM is touched
+     * by nothing else in this queue, so serial within the lane is all the
+     * ordering provider loading needs.
+     */
+    lane: 'extensions',
+    // The providers people actually use load first; a search before the pass
+    // finishes then usually finds its archives already live.
+    run: () =>
+      pluginManager.warmProviders({
+        usage: (name) => {
+          const record = providerAnalytics.get(name);
+          return record ? providerAnalytics.totalSamples(record) : 0;
+        },
+      }),
   });
 
   background.add({

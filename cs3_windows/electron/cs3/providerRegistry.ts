@@ -92,6 +92,16 @@ interface Persisted {
 
 const WRITE_DEBOUNCE_MS = 1_000;
 
+/**
+ * How long a recorded load failure stands before the archive is tried again.
+ *
+ * A failure is mostly deterministic — a missing class, a translation the JVM
+ * cannot hold — but an extension's own `load()` can also reach the network and
+ * fail on a bad afternoon. A day retries that case without paying for it on
+ * every launch.
+ */
+export const FAILURE_RETRY_MS = 24 * 60 * 60 * 1000;
+
 export class ProviderRegistryCache {
   private readonly entries = new Map<string, RegistryEntry>();
   private readonly generation: number;
@@ -132,10 +142,26 @@ export class ProviderRegistryCache {
    */
   public read(internalName: string, filePath: string): CachedProvider[] | null {
     const entry = this.entries.get(internalName);
-    if (!entry) return null;
+    if (!entry || entry.failure) return null;
     const fingerprint = this.fingerprint(filePath);
     if (!fingerprint || entry.fingerprint !== fingerprint) return null;
     return entry.providers;
+  }
+
+  /**
+   * The recorded failure for these exact bytes, while it still stands.
+   *
+   * `null` once the archive changes (an update is a new chance), once the
+   * runtime changes (the generation is in the fingerprint), and once
+   * {@link FAILURE_RETRY_MS} has passed.
+   */
+  public readFailure(internalName: string, filePath: string, now = Date.now()): CachedLoadFailure | null {
+    const entry = this.entries.get(internalName);
+    if (!entry?.failure) return null;
+    const fingerprint = this.fingerprint(filePath);
+    if (!fingerprint || entry.fingerprint !== fingerprint) return null;
+    if (now - entry.failure.at > FAILURE_RETRY_MS) return null;
+    return entry.failure;
   }
 
   /**
@@ -167,6 +193,33 @@ export class ProviderRegistryCache {
    * cannot answer, and — worse — would keep advertising them across restarts,
    * so the app would offer a permanently dead source with no memory of why.
    */
+  /**
+   * Records that these bytes would not load, so the next launch does not ask.
+   *
+   * This used to be {@link forget}, and forgetting turned a broken archive into
+   * a *cold* one: never loaded as far as the next launch could tell, so it was
+   * loaded again — on the path every search waits on. Measured on a 468-archive
+   * install, StreamPlay's translation exhausted a 4 GB heap on every launch
+   * that way, and the JVM's `OutOfMemoryError` stalled every extension queued
+   * behind it for fourteen minutes. A failure written down is a failure paid
+   * for once.
+   *
+   * Only for an answer about the archive. A timeout or a crashed runtime says
+   * nothing about these bytes and must not be recorded — see `rpcResult.ts`.
+   */
+  public recordFailure(internalName: string, filePath: string, failure: Omit<CachedLoadFailure, 'at'>): void {
+    const fingerprint = this.fingerprint(filePath);
+    if (!fingerprint) return;
+    this.entries.set(internalName, {
+      internalName,
+      fingerprint,
+      providers: [],
+      recordedAt: Date.now(),
+      failure: { ...failure, at: Date.now() },
+    });
+    this.store.schedule();
+  }
+
   public forget(internalName: string): void {
     if (this.entries.delete(internalName)) this.store.schedule();
   }
