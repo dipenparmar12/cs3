@@ -38,6 +38,9 @@ import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
 import type { PageSnapshot } from '../../electron/cs3/pageSnapshot';
 import { detailFromSnapshot, mergeDetail, savedCopyAge } from '../utils/savedPage';
 
+/** Cards the rail is sized for before "Show all" is worth offering. */
+const RAIL_PREVIEW = 8;
+
 export interface PlaybackRequest {
   streamUrl: string;
   mimeType: string;
@@ -280,6 +283,18 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
 
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [showAllRecommendations, setShowAllRecommendations] = useState(false);
+  useEffect(() => setShowAllRecommendations(false), [mediaItem.url]);
+  // Providers repeat a title across their own rows; one card per address.
+  const recommendations = useMemo(() => {
+    const seen = new Set<string>();
+    return (detail?.recommendations ?? []).filter((item) => {
+      const key = `${item.apiName}:${item.url}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [detail?.recommendations]);
   const [pickerData, setPickerData] = useState<SourcePickerData | null>(null);
   const [pickerError, setPickerError] = useState<string | undefined>();
 
@@ -1928,11 +1943,28 @@ export const DetailView: React.FC<DetailViewProps> = ({
         pending={metadataPending}
       />
 
-      {(detail.recommendations?.length ?? 0) > 0 && onSelectMedia && (
+      {recommendations.length > 0 && onSelectMedia && (
         <section className="detail-facts">
-          <h2 className="detail-facts__heading">More like this</h2>
-          <div className="detail-facts__rail">
-            {detail.recommendations!.map((item) => (
+          <div className="detail-facts__head-row">
+            <h2 className="detail-facts__heading">
+              More like this
+              <span className="detail-facts__count">{recommendations.length}</span>
+            </h2>
+            {/* The provider answers one list with no paging, so Show all lays
+                out everything it gave rather than promising more it cannot fetch. */}
+            {recommendations.length > RAIL_PREVIEW && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm trailer-gallery__more-btn"
+                onClick={() => setShowAllRecommendations((v) => !v)}
+                aria-expanded={showAllRecommendations}
+              >
+                {showAllRecommendations ? 'Show less' : 'Show all'}
+              </button>
+            )}
+          </div>
+          <div className={showAllRecommendations ? 'poster-grid' : 'detail-facts__rail'}>
+            {recommendations.map((item) => (
               <PosterCard
                 key={`${item.apiName}:${item.url}`}
                 item={item}
