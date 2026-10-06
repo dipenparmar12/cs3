@@ -50,6 +50,8 @@ interface NativeEngineStageProps {
   onEnded?: () => void;
   /** "Play it here instead" — the ffmpeg ladder, forced. */
   onFallbackToBuiltIn?: () => void;
+  /** Opens the player's online subtitle search. */
+  onFindSubtitles?: () => void;
   onError?: (message: string) => void;
   /**
    * The engine started playing after having reported a failure.
@@ -86,6 +88,7 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
   onPausedChange,
   onEnded,
   onFallbackToBuiltIn,
+  onFindSubtitles,
   onError,
   onRecovered,
 }) => {
@@ -338,6 +341,23 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
                   ))}
                 </select>
               </label>
+            )}
+
+            {/*
+              Always offered, not only when the stream carries a track: a stream
+              with no subtitles is exactly when someone needs to search for one,
+              and that search lives in this window, not mpv's. The same panel is
+              reachable from mpv's window with `s`.
+            */}
+            {onFindSubtitles && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={onFindSubtitles}
+                title="Search subtitles online and load one into the native engine (S in its window)"
+              >
+                <Captions size={14} /> Find subtitles
+              </button>
             )}
 
             <button

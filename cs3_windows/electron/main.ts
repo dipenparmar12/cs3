@@ -674,6 +674,15 @@ const mpvEngine = new MpvEngine({
     mainWindow?.webContents.send('mpv:update', snapshot);
     mainWindow?.webContents.send('external:update', mpvToExternalSnapshot(snapshot));
   },
+  // A key pressed in mpv's window asking for something only the app has — the
+  // subtitle search. The app window comes forward so the panel is seen.
+  onAction: (action) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.send('mpv:action', action);
+  },
   diagnostics,
 });
 

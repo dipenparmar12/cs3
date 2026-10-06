@@ -787,6 +787,8 @@ export interface CloudStreamElectronAPI {
   /** A pull, for a player that mounted while something was already playing. */
   getMpvSnapshot: () => Promise<Envelope & { snapshot: MpvSnapshot }>;
   onMpvUpdate: (callback: (snapshot: MpvSnapshot) => void) => () => void;
+  /** A key pressed in mpv's own window asking the app to do something (`mpvEngine.NATIVE_APP_ACTIONS`). */
+  onMpvAction: (callback: (action: 'subtitles') => void) => () => void;
   getNativeEnginePolicy: () => Promise<
     Envelope & { policy: 'off' | 'auto' | 'aggressive'; available: boolean }
   >;
@@ -2150,6 +2152,7 @@ const api: CloudStreamElectronAPI = {
   mpvStop: () => ipcRenderer.invoke('mpv:stop'),
   getMpvSnapshot: () => ipcRenderer.invoke('mpv:snapshot'),
   onMpvUpdate: (callback) => subscribe('mpv:update', callback),
+  onMpvAction: (callback) => subscribe('mpv:action', callback),
   getNativeEnginePolicy: () => ipcRenderer.invoke('mpv:getPolicy'),
   setNativeEnginePolicy: (policy) => ipcRenderer.invoke('mpv:setPolicy', policy),
   setupMpv: () => ipcRenderer.invoke('binary:setupMpv'),

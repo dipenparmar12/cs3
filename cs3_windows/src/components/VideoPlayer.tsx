@@ -438,6 +438,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [panelOpen, setPanelOpen] = useState(false);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
   const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false);
+
+  // `s` in mpv's own window asks for the subtitle search, which lives here.
+  useEffect(
+    () =>
+      window.cloudstream?.onMpvAction?.((action) => {
+        if (action === 'subtitles') setSubtitlePanelOpen(true);
+      }),
+    []
+  );
   const [downloadPanelOpen, setDownloadPanelOpen] = useState(false);
   const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>([]);
 
@@ -3982,6 +3991,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             if (nextEpisode && onSelectEpisode && !upNextDismissed) onSelectEpisode(nextEpisode);
           }}
           onFallbackToBuiltIn={() => forceTranscodeRef.current?.()}
+          onFindSubtitles={() => {
+            setSubtitlePanelOpen(true);
+            revealControls();
+          }}
           onError={(message) => setError(message)}
           /* The engine is playing. Whatever raised the panel — this engine's own
              earlier attempt, or the rung of the ladder that handed the source
