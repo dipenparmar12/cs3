@@ -140,6 +140,8 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   const [searchEpisode, setSearchEpisode] = useState<string>(episode !== undefined ? String(episode) : '');
   const [matchedInfo, setMatchedInfo] = useState<{ imdbId?: string; matchedTitle?: string } | null>(null);
   const [lastSearched, setLastSearched] = useState<string>('');
+  // '' shows every language; a new search keeps the filter if it still applies.
+  const [languageFilter, setLanguageFilter] = useState('');
 
   const providerCanAnswer = Boolean(mediaUrl?.startsWith('cs3ext://'));
 
@@ -388,6 +390,22 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         </div>
       </form>
 
+      {byLanguage.size > 1 && (
+        <label className="subtitle-panel__language-filter">
+          <span>Language</span>
+          <select value={byLanguage.has(languageFilter) ? languageFilter : ''} onChange={(e) => setLanguageFilter(e.target.value)}>
+            <option value="">All languages ({results.length})</option>
+            {[...byLanguage.entries()]
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([language, items]) => (
+                <option key={language} value={language}>
+                  {language} ({items.length})
+                </option>
+              ))}
+          </select>
+        </label>
+      )}
+
       {/* Matched Title Info Tag */}
       {matchedInfo && (
         <div className="subtitle-panel__matched">
@@ -497,7 +515,9 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         </p>
       )}
 
-      {[...byLanguage.entries()].map(([language, items]) => (
+      {[...byLanguage.entries()]
+        .filter(([language]) => !byLanguage.has(languageFilter) || language === languageFilter)
+        .map(([language, items]) => (
         <div key={language} className="player-panel__sub-group">
           <div className="player-panel__sub-heading">{language}</div>
           <ul className="player-panel__subs">

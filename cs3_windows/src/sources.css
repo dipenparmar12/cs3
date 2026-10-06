@@ -9783,3 +9783,22 @@
 .franchise-rail__index { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.7rem; color: var(--text-muted); }
 .franchise-rail__title { font-size: 0.85rem; font-weight: 600; line-height: 1.25; }
 .franchise-rail__meta { font-size: 0.72rem; color: var(--text-muted); }
+
+.subtitle-panel__language-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.4rem 0 0.6rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.subtitle-panel__language-filter select {
+  flex: 1;
+  min-width: 0;
+  padding: 0.3rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  font: inherit;
+}
