@@ -29,7 +29,7 @@ import { HoverMenu } from './player/HoverMenu';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
-import { SubtitlePanel } from './player/SubtitlePanel';
+import { SubtitlePanel, getLanguageFlag } from './player/SubtitlePanel';
 import { PlayerDownloadPanel } from './player/PlayerDownloadPanel';
 import type { PlaybackStreamResponse, SourceCapabilityModel } from '../types/media';
 import { attachClearKey, type ClearKeyAttachment } from '../utils/clearKeySession';
@@ -5118,19 +5118,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 preferredSubtitleLanguage.current = language || null;
                 subtitlesOff.current = !url;
               }}
-              triggerText={
-                activeSubtitle
-                  ? ((allSubtitles.find((s) => s.url === activeSubtitle) as { displayName?: string; name: string } | undefined)?.displayName ??
-                     allSubtitles.find((s) => s.url === activeSubtitle)?.name ?? 'On')
-                  : 'Off'
-              }
+              triggerText={(() => {
+                if (!activeSubtitle) return 'Off';
+                const found = allSubtitles.find((s) => s.url === activeSubtitle);
+                if (!found) return 'On';
+                const rawName =
+                  (found as { displayName?: string; name: string }).displayName || found.name;
+                const flag = getLanguageFlag('', found.name || rawName);
+                return flag && flag !== '🌐' ? `${flag} ${rawName}` : rawName;
+              })()}
               options={[
                 { value: '', label: 'Off' },
-                ...allSubtitles.map((sub) => ({
-                  value: sub.url,
-                  label: (sub as { displayName?: string; name: string }).displayName || sub.name,
-                  detail: (sub as { detail?: string }).detail,
-                })),
+                ...allSubtitles.map((sub) => {
+                  const rawName =
+                    (sub as { displayName?: string; name: string }).displayName || sub.name;
+                  const flag = getLanguageFlag('', sub.name || rawName);
+                  return {
+                    value: sub.url,
+                    label: flag && flag !== '🌐' ? `${flag} ${rawName}` : rawName,
+                    detail: (sub as { detail?: string }).detail,
+                  };
+                }),
               ]}
             />
           )}

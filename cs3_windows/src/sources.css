@@ -10328,6 +10328,21 @@ video::cue {
   line-height: 1;
   vertical-align: -1px;
 }
+.subtitle-panel__heading-flag {
+  display: inline-block;
+  margin-right: 0.35rem;
+  font-size: 0.85rem;
+  line-height: 1;
+  vertical-align: -1px;
+}
+.subtitle-panel__row-flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.95rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
 .subtitle-panel__lang-toggle {
   display: inline-flex;
   align-items: center;

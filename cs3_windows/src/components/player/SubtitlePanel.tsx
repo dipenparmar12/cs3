@@ -5,11 +5,9 @@ import {
   Loader2,
   Check,
   AlertTriangle,
-  Subtitles,
   CheckCircle2,
   Download,
   RotateCcw,
-  HardDrive,
   Minus,
   Plus,
   Star,
@@ -28,51 +26,9 @@ import {
   type SubtitleBackground,
   type SubtitleStyle,
 } from '../../utils/subtitleStyle';
+import { getLanguageFlag } from '../../utils/languageFlag';
 
-export function getLanguageFlag(code: string, name?: string): string {
-  const c = (code || '').toLowerCase().trim();
-  const n = (name || '').toLowerCase().trim();
-  if (c === 'eng' || c === 'en' || n.includes('english')) return '🇬🇧';
-  if (c === 'hin' || c === 'hi' || n.includes('hindi')) return '🇮🇳';
-  if (c === 'spa' || c === 'es' || n.includes('spanish')) return '🇪🇸';
-  if (c === 'fre' || c === 'fra' || c === 'fr' || n.includes('french')) return '🇫🇷';
-  if (c === 'ger' || c === 'deu' || c === 'de' || n.includes('german')) return '🇩🇪';
-  if (c === 'ita' || c === 'it' || n.includes('italian')) return '🇮🇹';
-  if (c === 'por' || c === 'pt' || n.includes('portuguese')) return '🇵🇹';
-  if (c === 'ara' || c === 'ar' || n.includes('arabic')) return '🇸🇦';
-  if (c === 'jpn' || c === 'ja' || n.includes('japanese')) return '🇯🇵';
-  if (c === 'kor' || c === 'ko' || n.includes('korean')) return '🇰🇷';
-  if (c === 'zho' || c === 'chi' || c === 'zh' || n.includes('chinese')) return '🇨🇳';
-  if (c === 'rus' || c === 'ru' || n.includes('russian')) return '🇷🇺';
-  if (c === 'tur' || c === 'tr' || n.includes('turkish')) return '🇹🇷';
-  if (c === 'vie' || c === 'vi' || n.includes('vietnamese')) return '🇻🇳';
-  if (c === 'ind' || c === 'id' || n.includes('indonesian')) return '🇮🇩';
-  if (c === 'tha' || c === 'th' || n.includes('thai')) return '🇹🇭';
-  if (c === 'pol' || c === 'pl' || n.includes('polish')) return '🇵🇱';
-  if (c === 'dut' || c === 'nld' || c === 'nl' || n.includes('dutch')) return '🇳🇱';
-  if (c === 'swe' || c === 'sv' || n.includes('swedish')) return '🇸🇪';
-  if (c === 'nor' || c === 'no' || n.includes('norwegian')) return '🇳🇴';
-  if (c === 'dan' || c === 'da' || n.includes('danish')) return '🇩🇰';
-  if (c === 'fin' || c === 'fi' || n.includes('finnish')) return '🇫🇮';
-  if (c === 'gre' || c === 'ell' || c === 'el' || n.includes('greek')) return '🇬🇷';
-  if (c === 'heb' || c === 'he' || n.includes('hebrew')) return '🇮🇱';
-  if (c === 'tam' || c === 'ta' || n.includes('tamil')) return '🇮🇳';
-  if (c === 'tel' || c === 'te' || n.includes('telugu')) return '🇮🇳';
-  if (c === 'mal' || c === 'ml' || n.includes('malayalam')) return '🇮🇳';
-  if (c === 'kan' || c === 'kn' || n.includes('kannada')) return '🇮🇳';
-  if (c === 'ben' || c === 'bn' || n.includes('bengali')) return '🇧🇩';
-  if (c === 'mar' || c === 'mr' || n.includes('marathi')) return '🇮🇳';
-  if (c === 'guj' || c === 'gu' || n.includes('gujarati')) return '🇮🇳';
-  if (c === 'urd' || c === 'ur' || n.includes('urdu')) return '🇵🇰';
-  if (c === 'fas' || c === 'per' || c === 'fa' || n.includes('persian') || n.includes('farsi')) return '🇮🇷';
-  if (c === 'tgl' || c === 'fil' || c === 'tl' || n.includes('tagalog') || n.includes('filipino')) return '🇵🇭';
-  if (c === 'msa' || c === 'may' || c === 'ms' || n.includes('malay')) return '🇲🇾';
-  if (c === 'ron' || c === 'rum' || c === 'ro' || n.includes('romanian')) return '🇷🇴';
-  if (c === 'ces' || c === 'cze' || c === 'cs' || n.includes('czech')) return '🇨🇿';
-  if (c === 'hun' || c === 'hu' || n.includes('hungarian')) return '🇭🇺';
-  if (c === 'ukr' || c === 'uk' || n.includes('ukrainian')) return '🇺🇦';
-  return '🌐';
-}
+export { getLanguageFlag };
 
 /**
  * In-player subtitle search & management.
@@ -968,22 +924,25 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
           </button>
         </li>
 
-        {embedded.map((sub) => (
-          <li key={sub.url}>
-            <button
-              className={`player-panel__sub${activeUrl === sub.url ? ' player-panel__sub--current' : ''}`}
-              onClick={() => {
-                onSelect(sub.url, sub.name, 'in stream');
-                onClose();
-              }}
-            >
-              <Subtitles size={13} />
-              <span className="player-panel__sub-label">{sub.name}</span>
-              <span className="player-panel__sub-tag">in stream</span>
-              {activeUrl === sub.url && <Check size={14} />}
-            </button>
-          </li>
-        ))}
+        {embedded.map((sub) => {
+          const flag = getLanguageFlag('', sub.name);
+          return (
+            <li key={sub.url}>
+              <button
+                className={`player-panel__sub${activeUrl === sub.url ? ' player-panel__sub--current' : ''}`}
+                onClick={() => {
+                  onSelect(sub.url, sub.name, 'in stream');
+                  onClose();
+                }}
+              >
+                <span className="subtitle-panel__row-flag">{flag}</span>
+                <span className="player-panel__sub-label">{sub.name}</span>
+                <span className="player-panel__sub-tag">in stream</span>
+                {activeUrl === sub.url && <Check size={14} />}
+              </button>
+            </li>
+          );
+        })}
       </ul>
 
       <div className="subtitle-panel__sync" aria-label="Subtitle timing">
@@ -1019,21 +978,24 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         <div className="player-panel__sub-group">
           <div className="player-panel__sub-heading">Saved on this computer</div>
           <ul className="player-panel__subs">
-            {saved.map((entry) => (
-              <li key={entry.id}>
-                <button
-                  className="player-panel__sub"
-                  onClick={() => void applySaved(entry)}
-                  title={entry.filePath}
-                >
-                  <HardDrive size={13} />
-                  <span className="player-panel__sub-label">{entry.langName}</span>
-                  <span className="player-panel__sub-tag">
-                    saved · {entry.origin === 'opensubtitles' ? 'OpenSubtitles' : 'from source'}
-                  </span>
-                </button>
-              </li>
-            ))}
+            {saved.map((entry) => {
+              const flag = getLanguageFlag(entry.lang, entry.langName);
+              return (
+                <li key={entry.id}>
+                  <button
+                    className="player-panel__sub"
+                    onClick={() => void applySaved(entry)}
+                    title={entry.filePath}
+                  >
+                    <span className="subtitle-panel__row-flag">{flag}</span>
+                    <span className="player-panel__sub-label">{entry.langName}</span>
+                    <span className="player-panel__sub-tag">
+                      saved · {entry.origin === 'opensubtitles' ? 'OpenSubtitles' : 'from source'}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
@@ -1054,47 +1016,62 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
 
       {[...byLanguage.entries()]
         .filter(([language]) => showLanguage(language))
-        .map(([language, items]) => (
-        <div key={language} className="player-panel__sub-group">
-          <div className="player-panel__sub-heading">{language}</div>
-          <ul className="player-panel__subs">
-            {items.map((item, index) => {
-              const state = downloads[item.id];
-              return (
-                <li key={item.id} className="subtitle-panel__row">
-                  <button
-                    className={`player-panel__sub subtitle-panel__result${item.best ? ' subtitle-panel__result--best' : ''}`}
-                    onClick={() => applySubtitle(item)}
-                    disabled={applying !== null}
-                    title={[
-                      item.fileName,
-                      item.best ? 'Best match for what is playing' : undefined,
-                      item.matchReasons?.length ? item.matchReasons.join(' · ') : undefined,
-                    ]
-                      .filter(Boolean)
-                      .join('\n')}
-                  >
-                    {applying === item.id ? (
-                      <Loader2 className="spin" size={13} />
-                    ) : item.best ? (
-                      <Star size={13} className="subtitle-panel__star" fill="currentColor" />
-                    ) : (
-                      <Subtitles size={13} />
-                    )}
-                    <span className="subtitle-panel__result-text">
-                      <span className="player-panel__sub-label">
-                        {rowLabel(item, `${language}${items.length > 1 ? ` #${index + 1}` : ''}`)}
-                      </span>
-                      <span className="subtitle-panel__result-meta">
-                        {item.best && <span className="subtitle-panel__best">Best match</span>}
-                        <span>{originLabel(item)}</span>
-                        {item.downloads ? <span>{compactCount(item.downloads)} downloads</span> : null}
-                        {item.rating ? <span>★ {item.rating.toFixed(1)}</span> : null}
-                        {item.hearingImpaired && <span title="Includes sound descriptions">HI</span>}
-                        {item.machineTranslated && <span>machine translated</span>}
-                      </span>
-                    </span>
-                  </button>
+        .map(([language, items]) => {
+          const groupFlag = getLanguageFlag(codeFor.get(language) || '', language);
+          return (
+            <div key={language} className="player-panel__sub-group">
+              <div className="player-panel__sub-heading">
+                <span className="subtitle-panel__heading-flag">{groupFlag}</span>
+                <span>{language}</span>
+              </div>
+              <ul className="player-panel__subs">
+                {items.map((item, index) => {
+                  const state = downloads[item.id];
+                  const itemFlag = getLanguageFlag(
+                    item.lang,
+                    item.fileName || item.langName || item.releaseName
+                  );
+                  return (
+                    <li key={item.id} className="subtitle-panel__row">
+                      <button
+                        className={`player-panel__sub subtitle-panel__result${item.best ? ' subtitle-panel__result--best' : ''}`}
+                        onClick={() => applySubtitle(item)}
+                        disabled={applying !== null}
+                        title={[
+                          item.fileName,
+                          item.best ? 'Best match for what is playing' : undefined,
+                          item.matchReasons?.length ? item.matchReasons.join(' · ') : undefined,
+                        ]
+                          .filter(Boolean)
+                          .join('\n')}
+                      >
+                        {applying === item.id ? (
+                          <Loader2 className="spin" size={13} />
+                        ) : (
+                          <span className="subtitle-panel__row-flag">{itemFlag}</span>
+                        )}
+                        <span className="subtitle-panel__result-text">
+                          <span className="player-panel__sub-label">
+                            {item.best && (
+                              <Star
+                                size={12}
+                                className="subtitle-panel__star"
+                                fill="currentColor"
+                                style={{ marginRight: '0.3rem', verticalAlign: '-1px' }}
+                              />
+                            )}
+                            {rowLabel(item, `${language}${items.length > 1 ? ` #${index + 1}` : ''}`)}
+                          </span>
+                          <span className="subtitle-panel__result-meta">
+                            {item.best && <span className="subtitle-panel__best">Best match</span>}
+                            <span>{originLabel(item)}</span>
+                            {item.downloads ? <span>{compactCount(item.downloads)} downloads</span> : null}
+                            {item.rating ? <span>★ {item.rating.toFixed(1)}</span> : null}
+                            {item.hearingImpaired && <span title="Includes sound descriptions">HI</span>}
+                            {item.machineTranslated && <span>machine translated</span>}
+                          </span>
+                        </span>
+                      </button>
                   <button
                     className="icon-button subtitle-panel__download"
                     onClick={() => void downloadResult(item, state?.status === 'saved')}
@@ -1121,9 +1098,10 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                 </li>
               );
             })}
-          </ul>
-        </div>
-      ))}
+            </ul>
+          </div>
+        );
+      })}
     </aside>
   );
 };

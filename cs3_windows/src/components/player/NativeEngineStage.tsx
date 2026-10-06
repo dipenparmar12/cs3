@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Captions, Cpu, Loader2, Maximize, RotateCcw, Video, Volume2 } from 'lucide-react';
 import type { MpvSnapshot, MpvTrack } from '../../types/mpv';
 import type { SourceCapabilityModel } from '../../types/media';
+import { getLanguageFlag } from '../../utils/languageFlag';
 
 /**
  * The player surface for a stream the browser cannot decode.
@@ -333,12 +334,17 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
                   aria-label="Subtitles"
                 >
                   <option value="">Subtitles off</option>
-                  {snapshot?.subtitleTracks.map((track, index) => (
-                    <option key={track.id} value={track.id}>
-                      {trackLabel(track, index)}
-                      {track.external ? ' (added)' : ''}
-                    </option>
-                  ))}
+                  {snapshot?.subtitleTracks.map((track, index) => {
+                    const label = trackLabel(track, index);
+                    const flag = getLanguageFlag(track.language || '', track.title || label);
+                    const display = flag && flag !== '🌐' ? `${flag} ${label}` : label;
+                    return (
+                      <option key={track.id} value={track.id}>
+                        {display}
+                        {track.external ? ' (added)' : ''}
+                      </option>
+                    );
+                  })}
                 </select>
               </label>
             )}
