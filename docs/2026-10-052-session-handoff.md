@@ -3,8 +3,11 @@
 Scope:
 - `docs/2026-10-050-errors_need_to_resolve.md` (Errors audit, cross-sourcing root causes & fixes, A/V sync analysis)
 - `docs/2026-10-051-App-updates-prd-info.md` (Media sources, discovery, navigation, search UX, provider verification)
-- `docs/2026-10-052-subtitle-prd-requirement-tobe-implemeted.md` (A/V sync verification, subtitle validation, companion downloads, online search)
+- `docs/2026-10-052-subtitle-prd-requirement-tobe-implemeted.md` (Subtitle duration validation, companion downloads, customization styling fix, Android-parity search with country flags)
 - `docs/2026-10-052-Fast Application Startup and Persistent Extension Data Cache.md` (Local-first startup, persistent extension/repository data cache, stale-while-revalidate)
+- `docs/2026-10-052-hide only the NSFW-adult related extensions.md` (NSFW-adult repository & extension filtering rules)
+- `docs/2026-10-052-Franchise and Chronological Movie Navigation.md` (Movie franchise collections, keyless Wikidata SPARQL/Cinemeta sourcing, chronological rail UX)
+- `docs/2026-10-052-Player Buffer Ahead Indicator and VLC Time Toggle.md` (Real-time banked cache readout + VLC-style elapsed/remaining click toggle)
 
 ## Done
 
