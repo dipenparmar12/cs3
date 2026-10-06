@@ -1907,3 +1907,202 @@ Sources appear without restarting the entire workflow
 ```
 
 The overall objective is to make these systems **persistent, incremental, non-destructive, asynchronous, reusable, and resilient** rather than repeatedly clearing state, refetching everything, blocking the UI, or forcing users to repeat actions they have already completed.
+
+---
+
+# 31. Media Player: Buffer Ahead & Cache Duration Indicator
+
+## 31.1 Problem & Motivation
+In both the native mpv engine and the built-in HTML5 player, media streams buffer network packets ahead into memory. While the progress bar renders a background buffer line, users cannot accurately gauge **how much usable time is safely banked in cache**.
+- Users fast-forwarding or scrubbing blindly encounter sudden network stalls when seeking beyond the cached boundary.
+- Users on unstable network connections or high-bitrate releases cannot tell whether pausing has accumulated enough buffer to resume smooth playback.
+
+## 31.2 Core Requirement: Real-Time Buffer Ahead Readout
+The player UI must provide an explicit, human-readable indicator showing the duration of media currently cached ahead of the playhead:
+
+```text
+Playhead Position: 12:45
+Buffer Boundary:   15:15
+Buffer Ahead:      +2m 30s
+```
+
+### 31.3 Multi-Unit Adaptive Time Formatting
+The buffer ahead indicator must automatically adapt its formatting based on magnitude:
+- **Seconds ($< 60\text{s}$):** Displayed as `+45s buffered` or `Buffer: 45s`.
+- **Minutes ($1\text{m} - 59\text{m}$):** Displayed as `+2m 30s buffered` or `Buffer: 2m 30s`.
+- **Hours ($\ge 60\text{m}$):** Displayed as `+1h 15m buffered` or `Buffer: 1h 15m`.
+
+### 31.4 Visual Placement & UX Integration
+1. **Primary Control Bar Readout:** Positioned adjacent to the playback timecode or integrated into the seekbar HUD.
+2. **Timeline Scrubber Feedback:** Displayed when hovering over the buffer track on the seekbar, informing the user of the exact maximum instantaneous seek point without network wait.
+3. **Buffering State Indicator:** When playback pauses for cache, the readout dynamically highlights the accumulating buffer ahead until the target playback threshold is reached.
+4. **Subtle Enterprise Aesthetic:** Rendered with lightweight typography, non-intrusive muted coloring, and high contrast against dark video backdrops.
+
+### 31.5 Dual-Engine Synchronization
+- **Native Engine (`mpv`):** Sourced from mpv's demuxer cache duration properties (`demuxer-cache-time` / `demuxer-cache-state`), representing the active memory buffer maintained by mpv's internal readahead engine.
+- **Web Engine (`HTML5 <video>`):** Sourced from the active `TimeRanges` buffer collection of the video element (`video.buffered`), calculating the delta between current position and the contiguous buffer segment end.
+
+---
+
+# 32. Timeline Time Display Toggle: Elapsed vs. Remaining Time
+
+## 32.1 Problem & Industry Standard
+Traditional players often lock the time display to a static `Current / Total` readout. Leading desktop media software (such as VLC Media Player, MPC-HC, and modern streaming interfaces) provide an interactive time display that allows users to seamlessly switch between elapsed time and remaining time.
+
+## 32.2 Core Requirement: Click-to-Toggle Time Modes
+The timecode container in the player toolbar must be an interactive control that cycles through time display representations upon clicking:
+
+```text
+Mode 1 (Standard):
+12:45 / 1:45:00  (Elapsed Time / Total Duration)
+
+     [User Clicks Timecode]
+              ↓
+
+Mode 2 (Remaining Time):
+12:45 / -1:32:15 (Elapsed Time / Time Remaining with Negative Indicator)
+
+     [User Clicks Timecode]
+              ↓
+
+Mode 3 (Compact Remaining):
+-1:32:15         (Time Remaining Focused View)
+```
+
+### 32.3 Accessibility & Hover Feedback
+- **Cursor Affordance:** The time display must present a pointer cursor on hover with a subtle background highlight indicating interactivity.
+- **Tooltip Hint:** A tooltip must clearly communicate the action: `"Click to toggle remaining time"` or `"Click to switch time format"`.
+- **Keyboard Shortcut Support:** Optional keybinding (e.g. `t` or clicking) to toggle time modes without mouse interaction.
+
+### 32.4 State Persistence Across Sessions
+- The user's preferred time display mode (Elapsed vs Remaining) must be persisted in user preferences.
+- When navigating to another episode or starting a new movie, the player must remember the chosen mode rather than resetting to default.
+- Both the main player toolbar (`.player__time`) and the floating mini-player bar (`.player-mini__time`) must respect and synchronize with this preference.
+
+---
+
+# 33. File Reference Directory & Module Responsibilities
+
+The following directory maps the buffer ahead indicator and timeline toggle requirements to their exact files and components in the codebase. No source code modifications or implementation snippets are included; this directory provides immediate orientation for implementation.
+
+| Component / Requirement | File Path | Line Range of Interest | Responsibility / Architectural Role |
+|---|---|---|---|
+| **Player Timeline & Time Readouts** | `cs3_windows/src/components/VideoPlayer.tsx` | `L4645–L4660`, `L4520–L4560` | Primary timecode display (`player__time`), seekbar buffer track, click toggle interaction, and buffer-ahead calculations. |
+| **Mini-Player Time Display** | `cs3_windows/src/components/VideoPlayer.tsx` | `L3730–L3745` | Floating and mini-player timecode container (`player-mini__time`) and synchronized time toggle handling. |
+| **Time & Duration Formatting Utilities** | `cs3_windows/src/utils/format.ts` | `L1–L80` | Formatting functions for timecodes (`formatTimecode`), remaining time format (`-hh:mm:ss`), and adaptive buffer strings. |
+| **Player Toolbar & Seekbar Styles** | `cs3_windows/src/sources.css` | `L2810–L2840`, `L4500–L4550` | Styling for `.player__time`, interactive cursor states, tooltip feedback, and buffer ahead badge typography. |
+| **Native mpv Cache & Buffer Observation** | `cs3_windows/electron/media/mpvEngine.ts` | `L70–L92`, `L1005–L1030` | mpv property observation (`demuxer-cache-time`, `time-pos`), snapshot assembly, and buffer duration reporting over IPC. |
+| **Native Playback Snapshot Types** | `cs3_windows/src/types/mpv.ts` | `L1–L60` | Type definitions for `MpvSnapshot` including `positionSeconds`, `durationSeconds`, and `bufferedSeconds`. |
+| **Player Preferences Store** | `cs3_windows/src/types/player.ts` | `L1–L80` | Configuration schema for persisting user time display mode (`elapsed_total` vs `elapsed_remaining`). |
+| **Native Engine React Stage** | `cs3_windows/src/components/player/NativeEngineStage.tsx` | `L35–L65`, `L90–L120` | Native playback state consumption, progress synchronization, and bridge to player control bar. |
+
+---
+
+# 34. Chronological Movie Series, Franchises, and Cinematic Universes
+
+## 34.1 Problem & Motivation
+Many major film franchises do not use simple numerical titles. Instead, each installment carries a distinct subtitle:
+- **Harry Potter:** *Philosopher's Stone (2001)* $\to$ *Chamber of Secrets (2002)* $\to$ *Prisoner of Azkaban (2004)* $\to$ *Goblet of Fire (2005)* $\to$ *Order of the Phoenix (2007)* $\to$ *Half-Blood Prince (2009)* $\to$ *Deathly Hallows: Part 1 (2010)* $\to$ *Deathly Hallows: Part 2 (2011)*.
+- **Batman / The Dark Knight:** *Batman Begins (2005)* $\to$ *The Dark Knight (2008)* $\to$ *The Dark Knight Rises (2012)*.
+- **X-Men:** *X-Men (2000)* $\to$ *X2 (2003)* $\to$ *The Last Stand (2006)* $\to$ *First Class (2011)* $\to$ *Days of Future Past (2014)* $\to$ *Apocalypse (2016)* $\to$ *Logan (2017)* $\to$ *Dark Phoenix (2019)*.
+- **Spider-Man:** *Spider-Man (2002)* $\to$ *Spider-Man 2 (2004)* $\to$ *Spider-Man 3 (2007)* / *Homecoming (2017)* $\to$ *Far From Home (2019)* $\to$ *No Way Home (2021)*.
+- **Star Wars:** *A New Hope (1977)* $\to$ *The Empire Strikes Back (1980)* $\to$ *Return of the Jedi (1983)* / Prequels / Sequels.
+- **Marvel Cinematic Universe (MCU):** Character arcs such as *Iron Man (1, 2, 3)*, *Captain America*, *Thor*, and crossover films.
+
+When a viewer searches for or opens a specific title (e.g. *Harry Potter and the Chamber of Secrets*), they currently only see unrelated genre recommendations in "More like this". They have no quick way to identify:
+1. Which part of the series they are currently looking at.
+2. Which movie immediately preceded it (the prequel).
+3. Which movie immediately follows it (the sequel).
+4. The complete chronological timeline of the franchise from beginning to end.
+
+## 34.2 Core Requirement: Franchise Collection Rail
+On the media Details screen, when the active title belongs to a known movie franchise, collection, or cinematic universe, a dedicated **Chronological Series & Universe** rail must be displayed:
+
+```text
+Harry Potter and the Chamber of Secrets
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Part of the Harry Potter Series (2 of 8)
+
+┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐
+│   Part 1   │  │   Part 2   │  │   Part 3   │  │   Part 4   │
+│  (Prequel) │  │  CURRENT   │  │  (Sequel)  │  │            │
+│ Philosopher│  │  Chamber   │  │  Prisoner  │  │   Goblet   │
+│   (2001)   │  │   (2002)   │  │   (2004)   │  │   (2005)   │
+└────────────┘  └────────────┘  └────────────┘  └────────────┘
+```
+
+The user must be able to click any installment in the collection to immediately navigate to its Details screen, view its metadata, trailers, and stream or download it with one click.
+
+---
+
+# 35. Public Keyless Metadata Sourcing Strategy
+
+To adhere strictly to CS3's architectural principles (no user API keys, no bundled proprietary tokens, no license violations):
+
+### 35.1 Primary Source: Wikidata SPARQL Endpoint (100% Keyless, CC0)
+Wikidata models film series, franchises, prequels, and sequels as first-class semantic statements:
+- **`wdt:P179` (Part of the Series):** Connects an individual movie (e.g. *Chamber of Secrets*) to its overarching franchise entity (e.g. *Harry Potter film series*).
+- **`pq:P1545` (Series Ordinal):** Identifies the exact chronological sequence number (`1`, `2`, `3`...).
+- **`wdt:P155` (Follows / Preceded By):** Explicitly names the immediate prequel film.
+- **`wdt:P156` (Followed By / Sequel):** Explicitly names the immediate sequel film.
+- **`wdt:P577` (Publication Date):** Provides the official release date, enabling reliable chronological sorting by release timestamp.
+- **`wdt:P345` (IMDb ID):** Provides the universal identifier (`tt...`) to cross-reference poster artwork and media sources in CS3.
+
+Because CS3's metadata pipeline already utilizes Wikidata (`electron/metadata/wikidata.ts`), franchise queries leverage existing transport infrastructure with zero new external dependencies.
+
+### 35.2 Poster Artwork & Item Resolution via Cinemeta
+Once a franchise query produces the chronological sequence of IMDb IDs:
+- The items are cross-referenced with Cinemeta (`https://v3-cinemeta.strem.io/`) to obtain high-resolution poster art, display titles, and release years.
+- Each item is assigned its native `cs3meta://cinemeta/movie/{imdbId}` address so it integrates seamlessly with the existing navigation and playback system.
+
+### 35.3 TMDB Collection Integration (`belongs_to_collection`)
+For environments where TMDB data is available:
+- TMDB's `belongs_to_collection` object links directly to a collection ID (e.g. `1241` for Harry Potter).
+- The collection endpoint returns all `parts`, which are sorted by `release_date` ascending to guarantee chronological ordering.
+
+### 35.4 Fallback: Lexical Franchise Clustering
+If remote knowledge graphs have no collection entity for an obscure franchise:
+- The system groups titles from installed providers and Cinemeta that share significant title prefixes (e.g. `"Iron Man"`, `"Ip Man"`, `"Twilight"`).
+- Releases are ordered chronologically by release year.
+
+---
+
+# 36. Detail View UI/UX Specification for Chronological Collections
+
+### 36.1 Visual Placement & Hierarchy
+1. **Prominent Placement:** Positioned directly beneath media trailers/overview and above general "More like this" recommendations. Franchise installments are far more relevant to a viewer than generic recommendations.
+2. **Clear Contextual Heading:** Displays the franchise name and position:
+   - Example: `"Part of the Harry Potter Film Series (Part 2 of 8)"`
+   - Example: `"The Dark Knight Trilogy (Part 2 of 3)"`
+   - Example: `"Spider-Man Collection · Chronological Release Order"`
+
+### 36.2 Card Presentation & Badging
+Each movie card within the franchise rail features:
+- **Card Artwork:** High-resolution vertical poster thumbnail.
+- **Title & Year:** Film title and release year.
+- **Status Badges:**
+  - **Currently Viewing:** Highlighted border with an active indicator badge (`● Current`).
+  - **Prequel / Preceding Part:** Visual cue indicating it directly preceded the current title.
+  - **Sequel / Next Part:** Visual cue indicating it directly follows the current title.
+  - **Chronological Ordinal:** `Part 1`, `Part 2`, `Part 3`...
+
+### 36.3 Navigation & Interaction
+- **One-Click Navigation:** Clicking any card invokes `onSelectMedia`, immediately navigating to that movie's Details page without requiring manual searching.
+- **Horizontal Scroll Rail:** Smooth horizontal scrolling with mouse wheel, touch/drag, and keyboard arrow keys, matching CS3's standard media rails.
+
+---
+
+# 37. File Reference Directory & Module Responsibilities
+
+The following directory maps the chronological movie series and franchise requirements to their exact files and components in the codebase. No source code modifications or implementation snippets are included; this directory provides immediate orientation for implementation.
+
+| Component / Requirement | File Path | Line Range of Interest | Responsibility / Architectural Role |
+|---|---|---|---|
+| **Media Details Page View** | `cs3_windows/src/views/DetailView.tsx` | `L1930–L1960`, `L165–L175` | Renders the chronological franchise rail, cards, active movie badge, and installment navigation. |
+| **Poster Card Component** | `cs3_windows/src/components/PosterCard.tsx` | `L1–L120` | Renders individual movie poster cards with custom franchise badges and chronological labels. |
+| **Extended Metadata Types** | `cs3_windows/src/types/metadata.ts` | `L410–L460` | Type definitions for `ExtendedMetadata`, including `MovieCollection` and `CollectionPart` schemas. |
+| **Wikidata Franchise Enrichment** | `cs3_windows/electron/metadata/wikidata.ts` | `L60–L120`, `L200–L250` | SPARQL query definitions for series entities (`P179`), ordinals (`P1545`), prequels (`P155`), and sequels (`P156`). |
+| **Metadata Enrichment Service** | `cs3_windows/electron/metadata/enrichmentService.ts` | `L55–L110`, `L250–L310` | Coordinates franchise fetching, caching, and merging into the title's extended metadata record. |
+| **Cinemeta Metadata & Artwork** | `cs3_windows/electron/cinemeta.ts` | `L55–L85`, `L160–L200` | Resolves posters, titles, and release years for franchise IMDb IDs without requiring API keys. |
+| **Detail View Styles** | `cs3_windows/src/sources.css` | `L2800–L2850`, `L7150–L7190` | Layout, badges, and typography for `.detail-collection`, franchise headings, and active borders. |
+

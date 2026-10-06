@@ -45,6 +45,15 @@ the mini window parks in the same corner).
 10. **Fast application startup & persistent extension data cache** (`052-Fast Application Startup...`):
     - Separate cold startup from network/remote repository sync: load persisted local extension/repository state immediately into UI.
     - Run background stale-while-revalidate synchronization so remote delays never block initial app usability.
+11. **Media player buffer ahead & cache duration indicator** (051 §31):
+    - Display adaptive buffer ahead readout (`+2m 30s buffered`, `+45s`, `+1h 15m`) on control bar and seekbar hover.
+    - Synchronized across mpv (`demuxer-cache-time`) and HTML5 `<video>` (`buffered` ranges).
+12. **Timeline time display toggle: elapsed vs. remaining time** (051 §32):
+    - VLC/mpv-style click interaction on `.player__time` and `.player-mini__time` to toggle between Elapsed/Total (`12:45 / 1:45:00`) and Elapsed/Remaining (`12:45 / -1:32:15`).
+    - Persist user preference across sessions and synchronize across player sizes.
+13. **Chronological movie series, franchises, and cinematic universes** (051 §34–37):
+    - Sourced keylessly via Wikidata SPARQL (`wdt:P179`, `pq:P1545`, `wdt:P155`, `wdt:P156`, `wdt:P577`) and Cinemeta without API keys.
+    - Render dedicated chronological franchise rail in `DetailView.tsx` with prequel/current/sequel badging and one-click navigation.
 
 ## Media Playback & Audio/Video Sync Verification (050 Part 4 §1)
 
