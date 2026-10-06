@@ -911,6 +911,16 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const pendingEpisodeRef = useRef<Episode | null>(null);
   pendingEpisodeRef.current = pendingEpisode;
 
+  /**
+   * What the picker has already found, per target (PRD-051 §2–10). Reopening
+   * the picker draws this at once and merges the new run into it, so a source
+   * that answered a minute ago never blinks out while providers are asked
+   * again. A refresh keeps it on screen only until its own run finishes —
+   * refresh exists because the old answer may be wrong.
+   */
+  const retainedSources = useRef(new Map<string, PlaybackSnapshot['sources']>());
+  const sourceTargetRef = useRef<{ key: string; refresh: boolean } | null>(null);
+
   const applySnapshot = useCallback((snapshot: PlaybackSnapshot) => {
     setDiscovery((current) =>
       current && current.id === snapshot.sessionId
@@ -929,8 +939,21 @@ export const DetailView: React.FC<DetailViewProps> = ({
         : current
     );
 
+    const target = sourceTargetRef.current;
+    let sources = snapshot.sources;
+    if (target) {
+      const previous = retainedSources.current.get(target.key) ?? [];
+      const keep = !(target.refresh && snapshot.searchDone);
+      if (keep && previous.length > 0) {
+        const identity = (s: (typeof sources)[number]) => s.infoHash || s.directUrl || s.title;
+        const seen = new Set(sources.map(identity));
+        sources = [...sources, ...previous.filter((s) => !seen.has(identity(s)))];
+      }
+      retainedSources.current.set(target.key, sources);
+    }
+
     setPickerData({
-      sources: snapshot.sources,
+      sources,
       // Neither is reported by the session: `filtered` and `indexerOutcomes`
       // are batch summaries produced after everything settles, and this list
       // is deliberately being shown before that point.
@@ -978,7 +1001,19 @@ export const DetailView: React.FC<DetailViewProps> = ({
       // taking over the screen to do something nobody asked for.
       if (!options.quiet) setPickerOpen(true);
       setPickerError(undefined);
-      setPickerData(null);
+      const key = `${episode?.url ?? detail.url}|${episode?.season ?? ''}|${episode?.episode ?? ''}`;
+      sourceTargetRef.current = { key, refresh: Boolean(options.refresh) };
+      const retained = retainedSources.current.get(key);
+      setPickerData(
+        retained?.length
+          ? {
+              sources: retained,
+              filtered: [],
+              indexerOutcomes: [],
+              query: { title: detail.name, season: episode?.season, episode: episode?.episode },
+            }
+          : null
+      );
       setDiscovery(null);
 
       const response = await window.cloudstream.startSourceDiscovery(
