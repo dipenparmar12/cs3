@@ -24,7 +24,12 @@ import { Poster } from '../components/Poster';
 import { CopyErrorButton } from '../components/CopyErrorButton';
 import { ProviderRecoveryPanel } from '../components/ProviderRecoveryPanel';
 import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
-import { TitleMetadata } from '../components/detail/TitleMetadata';
+import {
+  TitleCast,
+  TitleAbout,
+  TitleBehindTheScenes,
+  TitleProvenance,
+} from '../components/detail/TitleMetadata';
 import { TrailerGallery } from '../components/detail/TrailerGallery';
 import { TrailerPopup } from '../components/detail/TrailerPopup';
 import { useTitleInteractions } from '../components/useTitleInteractions';
@@ -1964,6 +1969,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         notes, which are what they came to read. That is also where every
         streaming service puts it.
       */}
+      {/* Trailers */}
       <TrailerGallery
         videos={allVideos}
         pending={metadataPending || searchingTrailers}
@@ -1972,17 +1978,31 @@ export const DetailView: React.FC<DetailViewProps> = ({
         searchingMore={searchingTrailers}
       />
 
-      <TitleMetadata
+      {/* Cast */}
+      <TitleCast
         metadata={extended}
         fallbackActors={detail.actors}
+        pending={metadataPending}
+      />
+
+      {/* About */}
+      <TitleAbout
+        metadata={extended}
         providerTags={detail.tags}
         pending={metadataPending}
       />
 
+      {/* Franchise rail..., in release order */}
       {extended?.franchise && onSelectMedia && (
         <FranchiseRail franchise={extended.franchise} currentTitle={detail.name} onSelectMedia={onSelectMedia} />
       )}
 
+      {/* Behind the scenes */}
+      <TitleBehindTheScenes
+        metadata={extended}
+      />
+
+      {/* Related recommendations */}
       {recommendations.length > 0 && onSelectMedia && (
         <section className="detail-facts">
           <div className="detail-facts__head-row">
@@ -2019,6 +2039,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
           </div>
         </section>
       )}
+
+      {/* Metadata Provenance */}
+      <TitleProvenance
+        metadata={extended}
+      />
 
       <SourcePicker
         isOpen={pickerOpen}
