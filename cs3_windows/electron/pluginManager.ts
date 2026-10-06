@@ -2309,6 +2309,27 @@ export class PluginManager {
       });
     }
 
+    // With 18+ off, adult-only content is hidden rather than greyed out: an
+    // adult-only provider, an extension made only of them, and a repository
+    // left with nothing else (or catalogued as adult). Mixed extensions stay,
+    // their 18+ rows screened downstream. An extension with no providers yet
+    // is kept — absence of evidence is not an adult verdict.
+    if (!allowAdult) {
+      for (const [repoId, repo] of byRepo) {
+        const had = repo.extensions.length;
+        repo.extensions = repo.extensions.flatMap((ext) => {
+          if (ext.providers.length === 0) return [ext];
+          const shown = ext.providers.filter((p) => providerAdultKind(p.supportedTypes) !== 'adult');
+          if (shown.length === 0) return [];
+          if (shown.length === ext.providers.length) return [ext];
+          const tvTypes = [...new Set(shown.flatMap((p) => p.supportedTypes))].sort();
+          return [{ ...ext, providers: shown, tvTypes }];
+        });
+        const catalogued = findOfficialRepository(repo.url);
+        if ((had > 0 && repo.extensions.length === 0) || catalogued?.adult === true) byRepo.delete(repoId);
+      }
+    }
+
     const repositories = [...byRepo.values()];
     for (const repo of repositories) {
       repo.extensions.sort((a, b) => a.name.localeCompare(b.name));
