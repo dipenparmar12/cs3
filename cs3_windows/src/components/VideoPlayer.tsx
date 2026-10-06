@@ -964,7 +964,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [downloadQueue]);
   /** Subtitles fetched from the online search, as blob-backed WebVTT tracks. */
   const [fetchedSubtitles, setFetchedSubtitles] = useState<
-    Array<{ name: string; url: string }>
+    Array<{ name: string; url: string; detail?: string }>
   >([]);
   /** Source the viewer just picked, so the row shows a spinner while it starts. */
   const [pendingSourceHash, setPendingSourceHash] = useState<string | null>(null);
@@ -3069,9 +3069,40 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const embedded = (prepared?.subtitles ?? []).map((track) => ({
       name: track.label,
       url: track.url,
+      detail: 'in stream',
     }));
-    const combined = [...subtitles, ...embedded, ...fetchedSubtitles];
-    const englishFirst = combined.sort((a, b) => {
+    const combined = [
+      ...subtitles.map((s) => ({ ...s, detail: (s as { name: string; url: string; detail?: string }).detail ?? 'stream' })),
+      ...embedded,
+      ...fetchedSubtitles,
+    ];
+
+    // Disambiguate identical subtitle names (e.g. multiple "English" tracks)
+    const counts = new Map<string, number>();
+    for (const sub of combined) {
+      counts.set(sub.name, (counts.get(sub.name) ?? 0) + 1);
+    }
+    const occurrences = new Map<string, number>();
+    const enriched = combined.map((sub) => {
+      const total = counts.get(sub.name) ?? 0;
+      if (total > 1) {
+        const curr = (occurrences.get(sub.name) ?? 0) + 1;
+        occurrences.set(sub.name, curr);
+        const extra = sub.detail ? ` (${sub.detail})` : ` #${curr}`;
+        return {
+          ...sub,
+          displayName: `${sub.name}${extra}`,
+          detail: sub.detail ?? `#${curr}`,
+        };
+      }
+      return {
+        ...sub,
+        displayName: sub.name,
+        detail: sub.detail,
+      };
+    });
+
+    const englishFirst = enriched.sort((a, b) => {
       const aIsEnglish = /english|eng/i.test(a.name);
       const bIsEnglish = /english|eng/i.test(b.name);
       if (aIsEnglish && !bIsEnglish) return -1;
@@ -4605,9 +4636,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         embedded={subtitles}
         activeUrl={activeSubtitle}
         onClose={() => setSubtitlePanelOpen(false)}
-        onSelect={(url, label) => {
+        onSelect={(url, label, detail) => {
           if (url && !allSubtitles.some((s) => s.url === url)) {
-            setFetchedSubtitles((prev) => [...prev, { name: label, url }]);
+            setFetchedSubtitles((prev) => [...prev, { name: label, url, detail }]);
           }
           setActiveSubtitle(url);
 
@@ -5065,12 +5096,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               }}
               triggerText={
                 activeSubtitle
-                  ? (allSubtitles.find((s) => s.url === activeSubtitle)?.name ?? 'On')
+                  ? ((allSubtitles.find((s) => s.url === activeSubtitle) as { displayName?: string; name: string } | undefined)?.displayName ??
+                     allSubtitles.find((s) => s.url === activeSubtitle)?.name ?? 'On')
                   : 'Off'
               }
               options={[
                 { value: '', label: 'Off' },
-                ...allSubtitles.map((sub) => ({ value: sub.url, label: sub.name })),
+                ...allSubtitles.map((sub) => ({
+                  value: sub.url,
+                  label: (sub as { displayName?: string; name: string }).displayName || sub.name,
+                  detail: (sub as { detail?: string }).detail,
+                })),
               ]}
             />
           )}
