@@ -1,7 +1,10 @@
 # Session handoff — 2026-10-06
 
-Scope: `docs/2026-10-050-errors_need_to_resolve.md` (errors audit) and
-`docs/2026-10-051-App-updates-prd-info.md` (app-updates PRD).
+Scope:
+- `docs/2026-10-050-errors_need_to_resolve.md` (Errors audit, cross-sourcing root causes & fixes, A/V sync analysis)
+- `docs/2026-10-051-App-updates-prd-info.md` (Media sources, discovery, navigation, search UX, provider verification)
+- `docs/2026-10-052-subtitle-prd-requirement-tobe-implemeted.md` (A/V sync verification, subtitle validation, companion downloads, online search)
+- `docs/2026-10-052-Fast Application Startup and Persistent Extension Data Cache.md` (Local-first startup, persistent extension/repository data cache, stale-while-revalidate)
 
 ## Done
 
@@ -20,15 +23,32 @@ the mini window parks in the same corner).
    `cs3/extensionAddress.ts` (`looksLikeLinksHandle`) — same root cause as the 2026-08-27
    "saved title opens blank" fix.
 2. **Detail page background search substitution** (050 Part 2 §1 / Part 3 §3) in `DetailView.tsx`.
-3. **Persistent source cache shown immediately + background refresh** (051 §2–12). Large;
+3. **Subtitle styling customization fix** (050 Part 4 §3):
+   - Chromium shadow DOM variable isolation: inject `subtitleCssVariables` onto `:root` (`document.documentElement.style`) so `video::cue` resolves `--cue-*` variables.
+   - mpv startup race condition: invoke `mpvSetSubtitleStyle` in `NativeEngineStage` after `openInNativeEngine` resolves and on preference change.
+4. **Subtitle duration cross-check validation & companion downloader** (050 Part 4 §2):
+   - Implement `validateSubtitleDuration(vttOrSrt, mediaDurationSeconds)` comparing max cue end time against content duration. Invalidate when discrepancy > 20% or > 15m.
+   - When download completes in `downloadService.ts`, fetch validated subtitle files and save alongside media (`.srt` / `.vtt`).
+   - Suppress/invalidate mismatched subtitles in player and downloads.
+5. **Android-parity online subtitle search** (050 Part 4 §4):
+   - Add "Search Subtitles Online..." entry in player's Subtitles `HoverMenu`.
+   - Provide online search modal with editable Title, Year, Season, Episode, and multi-language dropdown selector.
+6. **Persistent source cache shown immediately + background refresh** (051 §2–12). Large;
    builds on existing `sourceCache.ts` + `sourcePrefetcher.ts` + `LibraryStore.mergeDiscoveredSources`
    rather than a new store. Non-destructive refresh rule (§10) matches the existing
    never-blank rule (`util/prune.ts`).
-4. **More Like This: Show all + infinite scroll** (051 §13–17). Reuse `CategoryGrid.tsx`.
-5. **Shareable link detection in search** (051 §23+). `searchSession` already turns pasted
+7. **More Like This: Show all + infinite scroll** (051 §13–17). Reuse `CategoryGrid.tsx`.
+8. **Shareable link detection in search** (051 §23+). `searchSession` already turns pasted
    magnets/page URLs into rows — extend that, do not add a second router.
-6. **Sidecar error classification** (050 Part 1): `Sequence is empty`, empty date parse,
+9. **Sidecar error classification** (050 Part 1): `Sequence is empty`, empty date parse,
    Gofile token, PKIX SSL — map into `failureTaxonomy.ts`; count first.
+10. **Fast application startup & persistent extension data cache** (`052-Fast Application Startup...`):
+    - Separate cold startup from network/remote repository sync: load persisted local extension/repository state immediately into UI.
+    - Run background stale-while-revalidate synchronization so remote delays never block initial app usability.
+
+## Media Playback & Audio/Video Sync Verification (050 Part 4 §1)
+
+- **A/V Sync Status:** Verified intact across mpv (`--video-sync=audio`), Chromium `<video>` (hardware PTS sync), and FFmpeg (`-avoid_negative_ts make_zero -fflags +genpts+discardcorrupt` with matched dual-input `-ss` seek). No code modifications required.
 
 ## Decision needed before touching
 
@@ -41,3 +61,4 @@ the mini window parks in the same corner).
 
 - User's SSL log snippet in `docs/2026-10-050-errors_need_to_resolve.md` (Chromium
   `net_error -101` handshake lines under §7).
+

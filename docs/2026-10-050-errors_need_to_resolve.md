@@ -315,3 +315,71 @@ To completely eliminate cross-sourcing and guarantee that the user always gets t
 | **Provider A Returns 0 Links** | Escalates to `all` $\to$ auto-plays foreign torrent without asking. | Shows honest empty state for Provider A with explicit `"Find more sources"` action. |
 | **Detail Page Fails to Open** | Auto-searches all providers $\to$ opens another show if title matches. | Reports Provider A error honestly with a retry/back option. |
 | **Search Within a Provider** | Cinemeta catalogue row overrides provider $\to$ swaps URL to torrents. | Provider's original `cs3ext://` row remains primary and plays from that provider. |
+
+---
+
+## Part 4: Media Playback, Subtitle Pipeline, Customization Diagnosis & Android-Parity Online Search
+
+### 1. Audio / Video Synchronization Deep-Dive Analysis
+- **User Requirement:** Analyze whether audio and video are properly synchronized when playing media streams. If working correctly, do not make premature changes.
+- **Investigation Findings:**
+  1. **Native Engine (mpv):** Configured with `--gpu-context=d3d11`, `--hwdec=auto-safe`, `--cache=yes`, `--demuxer-max-bytes=256MiB`, and `--demuxer-readahead-secs=30`. By default in mpv, `--video-sync=audio` is the active policy, synchronizing presentation clock strictly to hardware audio output. Out of 16 logged mpv issues, all 16 were CDN link refusals (HTTP 403/502), with zero audio/video drift or desync errors.
+  2. **Chromium `<video>` Engine:** Standard containers (MP4/H.264/AAC, WebM/VP9) utilize Chromium's native hardware decoder pipeline which locks audio and video to Presentation Timestamps (PTS).
+  3. **Live FFmpeg Transcoding Pipeline (`mediaTranscoder.ts`):** Employs `-fflags +genpts+discardcorrupt`, `-avoid_negative_ts make_zero`, and `-movflags frag_keyframe+empty_moov+default_base_moof`. For multi-input remuxing (e.g., separate video and audio streams for trailers), dual input seeking (`-ss`) is applied so both audio and video streams start at the exact same PTS offset.
+- **Conclusion:** Audio and video synchronization is correctly maintained across all media engines. Per directive, **no changes are needed or should be made to core A/V synchronization logic**.
+
+---
+
+### 2. Download Companion Subtitles & Duration Cross-Check Validation
+- **Current Problem:**
+  1. When media downloads complete in `downloadService.ts`, metadata is saved to JSON and companion `.txt` files, but companion subtitle files (`.srt` / `.vtt`) are **never actually written to disk** alongside the downloaded video file.
+  2. Downloaded and online subtitles are not validated against content duration. If an invalid or mismatched subtitle is matched (e.g., a 2-hour movie subtitle matched to a 45-minute TV episode, or a subtitle from a 3-hour director's cut matched to a 1.5-hour theatrical cut), the application currently keeps the wrong subtitle in both the streaming player and download folder.
+- **Architecture & Implementation Plan:**
+  1. **Subtitle Duration Cross-Check & Validation Engine (`validateSubtitleDuration`):**
+     - Parse the final cue end timestamp from SubRip (`.srt`), WebVTT (`.vtt`), or SubStation Alpha (`.ass`):
+       $$\text{subtitleDuration} = \max(\text{cue.endTime})$$
+     - Retrieve known media container duration ($\text{mediaDuration}$) from ffprobe probe metadata or player context.
+     - **Discrepancy Threshold:**
+       $$\Delta_{\text{duration}} = \frac{|\text{subtitleDuration} - \text{mediaDuration}|}{\text{mediaDuration}}$$
+     - If $\Delta_{\text{duration}} > 0.20$ (more than 20% variance) or $|\text{subtitleDuration} - \text{mediaDuration}| > 900\text{s}$ (15 minutes), flag the subtitle as **`INVALID_DURATION_MISMATCH`**.
+     - Drop/hide mismatched subtitles from the player's active list.
+     - Never save invalidated subtitles to disk or into the download folder.
+  2. **Automated Companion Subtitle Download in `downloadService.ts`:**
+     - Upon successful video file download completion, retrieve available subtitles for the media item (embedded, provider-supplied, or matching language).
+     - Run duration validation against the actual downloaded file duration.
+     - Write validated subtitle files directly beside the target video file:
+       `[MediaName].[lang].srt` (e.g. `Inception.2010.1080p.en.srt`).
+
+---
+
+### 3. Subtitle Settings & Customization Diagnosis (Why Modifying Did Not Work)
+- **Reported Bug:** Modifying subtitle font size, color, background, outline, or position in `SubtitleSettings` failed to apply or work consistently in the player.
+- **Root Cause Analysis:**
+  1. **Web `<video>` Engine (Chromium Shadow DOM Variable Isolation):**
+     - In `sources.css`, `.player video::cue` is styled with CSS variables:
+       `font-size: calc(1em * var(--cue-scale, 1)); color: var(--cue-color, #fff); ...`
+     - In `VideoPlayer.tsx`, these variables were passed as inline styles on `<div className="player" style={{ ...subtitleCssVariables(subtitleStyle) }}>`.
+     - **The Flaw:** In Chromium and WebKit, `<video>` renders subtitle tracks inside a closed user-agent shadow root (`#shadow-root (user-agent)`). Under Chromium's style engine, user-agent shadow roots **do not inherit CSS custom properties (`var(...)`) defined on parent HTML elements**; they only inherit custom properties defined on `:root` (`document.documentElement.style`). Because variables were placed on `.player`, `video::cue` failed to resolve them and fell back to hardcoded defaults `#fff` / `transparent` / `1em`.
+  2. **Native Engine (`mpv`) Startup Race Condition:**
+     - In `VideoPlayer.tsx`, `useEffect` called `mpvSetSubtitleStyle` when `isNativeEngine` became true.
+     - However, mpv launches asynchronously (`launchWith` $\to$ IPC pipe creation takes 200–500ms). When `isNativeEngine` triggered the style effect, mpv's IPC socket was not yet connected, so the command was dropped.
+     - `NativeEngineStage.tsx` never re-applied `mpvSetSubtitleStyle` after `openInNativeEngine` returned.
+- **Fix:**
+  - Apply `subtitleCssVariables` directly to `:root` (via `document.documentElement.style` or an injected dynamic style block) so Chromium's `video::cue` shadow root resolves them.
+  - In `NativeEngineStage.tsx`, call `mpvSetSubtitleStyle` immediately after `openInNativeEngine` succeeds and whenever preferences change.
+
+---
+
+### 4. Online Subtitle Search (Android CloudStream Parity)
+- **Current Limitation:**
+  - In `VideoPlayer.tsx`, the `HoverMenu` for subtitles only displays "Off" and whatever stream-embedded subtitles exist (often only English).
+  - The menu has no entry point to search for other languages or alternate releases.
+- **Android CloudStream Feature Parity:**
+  - Add **"Search Subtitles Online..."** directly into the Subtitles menu in the player control bar.
+  - When opened, present an online search interface:
+    1. **Title Input:** Automatically prefilled with currently playing title, fully editable, with a quick reset button.
+    2. **Year Input:** Prefilled with media year, editable.
+    3. **Season & Episode Pickers:** Auto-populated for series.
+    4. **Language Selector:** Allows filtering/searching by specific languages (English, Spanish, Hindi, French, German, Arabic, Japanese, Chinese, etc.) rather than being limited to English.
+    5. **Results with Duration Status:** Displays search results with origin tag, language, and validation badge (valid match vs duration mismatch warning).
+    6. **One-Click Apply & Download:** Instant fetch, convert, and activation on the active player session without interrupting playback.
