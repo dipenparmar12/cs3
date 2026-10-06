@@ -71,7 +71,7 @@ import {
   orderCredits,
   preferPreciseDate,
 } from './merge.ts';
-import { fetchWikidata, type WikidataResult } from './wikidata.ts';
+import { commonsThumbnail, fetchWikidata, type WikidataResult } from './wikidata.ts';
 import {
   fetchCredits as fetchTvMazeCredits,
   fetchShowFacts,
@@ -224,6 +224,28 @@ function describeVideos(
   return orderVideos(out);
 }
 
+/**
+ * Records cached before `commonsThumbnail` addressed `upload.wikimedia.org`
+ * directly still hold the `Special:FilePath` redirect, which some networks
+ * refuse. Rewritten on load so a cached page shows its faces without waiting a
+ * week for the entry to expire.
+ */
+function directCommonsImages(metadata: ExtendedMetadata): ExtendedMetadata {
+  const rewrite = (url: string | undefined) =>
+    url && /Special:FilePath/i.test(url) ? commonsThumbnail(url) : url;
+  if (!metadata.people?.some((p) => /Special:FilePath/i.test(p.imageUrl ?? ''))) {
+    return metadata;
+  }
+  return {
+    ...metadata,
+    people: metadata.people.map((person) => ({
+      ...person,
+      imageUrl: rewrite(person.imageUrl),
+      characterImageUrl: rewrite(person.characterImageUrl),
+    })),
+  };
+}
+
 /** A thrown value to one line a person can read. */
 function describe(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -285,7 +307,7 @@ export class MetadataEnrichmentService {
     for (const row of rows) {
       if (!row?.url || !row.entry?.metadata) continue;
       if (now - row.entry.at > MAX_AGE_MS) continue;
-      this.entries.set(row.url, row.entry);
+      this.entries.set(row.url, { ...row.entry, metadata: directCommonsImages(row.entry.metadata) });
     }
   }
 

@@ -207,7 +207,25 @@ test('a Commons image is requested at a width, and over https', () => {
   // drawn at 96 pixels, and this module returns up to sixty of them.
   const url = commonsThumbnail('http://commons.wikimedia.org/wiki/Special:FilePath/Leo.jpg');
   assert.ok(url?.startsWith('https://'));
-  assert.ok(url?.includes('width='));
+  assert.match(url ?? '', /\/330px-Leo\.jpg$/);
+});
+
+test('a Commons image skips the redirect host, which some networks refuse', () => {
+  // Measured: commons.wikimedia.org reset at TLS while upload.wikimedia.org
+  // answered, so every headshot behind Special:FilePath failed to load.
+  // The path is MediaWiki's own rule — md5 of the canonical file name.
+  assert.equal(
+    commonsThumbnail('http://commons.wikimedia.org/wiki/Special:FilePath/Jobethwilliams.jpg'),
+    'https://upload.wikimedia.org/wikipedia/commons/thumb/d/dc/Jobethwilliams.jpg/330px-Jobethwilliams.jpg'
+  );
+  // Spaces become underscores before hashing, and an SVG thumbnail is a PNG.
+  const svg = commonsThumbnail('https://commons.wikimedia.org/wiki/Special:FilePath/some%20logo.svg');
+  assert.match(svg ?? '', /^https:\/\/upload\.wikimedia\.org\/wikipedia\/commons\/thumb\/[0-9a-f]\/[0-9a-f]{2}\/Some_logo\.svg\/330px-Some_logo\.svg\.png$/);
+  // A format whose thumbnail is not `<width>px-<name>` keeps the redirect form.
+  assert.match(
+    commonsThumbnail('http://commons.wikimedia.org/wiki/Special:FilePath/Scan.tif') ?? '',
+    /^https:\/\/commons\.wikimedia\.org\/wiki\/Special:FilePath\/Scan\.tif\?width=320$/
+  );
 });
 
 test('a non-Commons image is left alone but still made https', () => {
