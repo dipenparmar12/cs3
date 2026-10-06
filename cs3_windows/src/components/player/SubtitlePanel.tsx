@@ -1,7 +1,78 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { X, Search, Loader2, Check, AlertTriangle, Subtitles, CheckCircle2, Download, RotateCcw, HardDrive, Minus, Plus, Star } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  X,
+  Search,
+  Loader2,
+  Check,
+  AlertTriangle,
+  Subtitles,
+  CheckCircle2,
+  Download,
+  RotateCcw,
+  HardDrive,
+  Minus,
+  Plus,
+  Star,
+  Sliders,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import type { SavedSubtitle } from '../../../electron/subtitles/subtitleLibrary';
 import type { SubtitleFindResult, SubtitleSearchResult } from '../../../electron/subtitleService';
+import {
+  DEFAULT_SUBTITLE_STYLE,
+  SUBTITLE_BACKGROUNDS,
+  SUBTITLE_COLORS,
+  SUBTITLE_SCALES,
+  subtitleCssVariables,
+  type SubtitleBackground,
+  type SubtitleStyle,
+} from '../../utils/subtitleStyle';
+
+export function getLanguageFlag(code: string, name?: string): string {
+  const c = (code || '').toLowerCase().trim();
+  const n = (name || '').toLowerCase().trim();
+  if (c === 'eng' || c === 'en' || n.includes('english')) return '🇬🇧';
+  if (c === 'hin' || c === 'hi' || n.includes('hindi')) return '🇮🇳';
+  if (c === 'spa' || c === 'es' || n.includes('spanish')) return '🇪🇸';
+  if (c === 'fre' || c === 'fra' || c === 'fr' || n.includes('french')) return '🇫🇷';
+  if (c === 'ger' || c === 'deu' || c === 'de' || n.includes('german')) return '🇩🇪';
+  if (c === 'ita' || c === 'it' || n.includes('italian')) return '🇮🇹';
+  if (c === 'por' || c === 'pt' || n.includes('portuguese')) return '🇵🇹';
+  if (c === 'ara' || c === 'ar' || n.includes('arabic')) return '🇸🇦';
+  if (c === 'jpn' || c === 'ja' || n.includes('japanese')) return '🇯🇵';
+  if (c === 'kor' || c === 'ko' || n.includes('korean')) return '🇰🇷';
+  if (c === 'zho' || c === 'chi' || c === 'zh' || n.includes('chinese')) return '🇨🇳';
+  if (c === 'rus' || c === 'ru' || n.includes('russian')) return '🇷🇺';
+  if (c === 'tur' || c === 'tr' || n.includes('turkish')) return '🇹🇷';
+  if (c === 'vie' || c === 'vi' || n.includes('vietnamese')) return '🇻🇳';
+  if (c === 'ind' || c === 'id' || n.includes('indonesian')) return '🇮🇩';
+  if (c === 'tha' || c === 'th' || n.includes('thai')) return '🇹🇭';
+  if (c === 'pol' || c === 'pl' || n.includes('polish')) return '🇵🇱';
+  if (c === 'dut' || c === 'nld' || c === 'nl' || n.includes('dutch')) return '🇳🇱';
+  if (c === 'swe' || c === 'sv' || n.includes('swedish')) return '🇸🇪';
+  if (c === 'nor' || c === 'no' || n.includes('norwegian')) return '🇳🇴';
+  if (c === 'dan' || c === 'da' || n.includes('danish')) return '🇩🇰';
+  if (c === 'fin' || c === 'fi' || n.includes('finnish')) return '🇫🇮';
+  if (c === 'gre' || c === 'ell' || c === 'el' || n.includes('greek')) return '🇬🇷';
+  if (c === 'heb' || c === 'he' || n.includes('hebrew')) return '🇮🇱';
+  if (c === 'tam' || c === 'ta' || n.includes('tamil')) return '🇮🇳';
+  if (c === 'tel' || c === 'te' || n.includes('telugu')) return '🇮🇳';
+  if (c === 'mal' || c === 'ml' || n.includes('malayalam')) return '🇮🇳';
+  if (c === 'kan' || c === 'kn' || n.includes('kannada')) return '🇮🇳';
+  if (c === 'ben' || c === 'bn' || n.includes('bengali')) return '🇧🇩';
+  if (c === 'mar' || c === 'mr' || n.includes('marathi')) return '🇮🇳';
+  if (c === 'guj' || c === 'gu' || n.includes('gujarati')) return '🇮🇳';
+  if (c === 'urd' || c === 'ur' || n.includes('urdu')) return '🇵🇰';
+  if (c === 'fas' || c === 'per' || c === 'fa' || n.includes('persian') || n.includes('farsi')) return '🇮🇷';
+  if (c === 'tgl' || c === 'fil' || c === 'tl' || n.includes('tagalog') || n.includes('filipino')) return '🇵🇭';
+  if (c === 'msa' || c === 'may' || c === 'ms' || n.includes('malay')) return '🇲🇾';
+  if (c === 'ron' || c === 'rum' || c === 'ro' || n.includes('romanian')) return '🇷🇴';
+  if (c === 'ces' || c === 'cze' || c === 'cs' || n.includes('czech')) return '🇨🇿';
+  if (c === 'hun' || c === 'hu' || n.includes('hungarian')) return '🇭🇺';
+  if (c === 'ukr' || c === 'uk' || n.includes('ukrainian')) return '🇺🇦';
+  return '🌐';
+}
 
 /**
  * In-player subtitle search & management.
@@ -40,7 +111,7 @@ interface SubtitlePanelProps {
   embedded: Array<{ name: string; url: string }>;
   activeUrl: string | null;
   onClose: () => void;
-  onSelect: (url: string | null, label: string) => void;
+  onSelect: (url: string | null, label: string, detail?: string) => void;
   year?: number;
   /** Seconds the cues are shifted by; positive shows them later. */
   delay: number;
@@ -153,12 +224,50 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         void refreshSaved();
         return;
       }
-      onSelect(URL.createObjectURL(new Blob([response.vtt], { type: 'text/vtt' })), entry.langName);
+      const detail = `saved · ${entry.origin === 'opensubtitles' ? 'OpenSubtitles' : 'from source'}`;
+      onSelect(URL.createObjectURL(new Blob([response.vtt], { type: 'text/vtt' })), entry.langName, detail);
       onClose();
     },
     [onSelect, onClose, refreshSaved]
   );
   const [applying, setApplying] = useState<string | null>(null);
+
+  // In-player subtitle style configuration & compact language selector state
+  const [showConfig, setShowConfig] = useState(false);
+  const [langMenuOpen, setLangMenuOpen] = useState(false);
+  const [style, setStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void (async () => {
+      const stored = await window.cloudstream?.getPlayerPreferences();
+      if (cancelled || !stored?.ok) return;
+      const p = stored.preferences;
+      setStyle({
+        scale: p.subtitleScale ?? DEFAULT_SUBTITLE_STYLE.scale,
+        color: p.subtitleColor ?? DEFAULT_SUBTITLE_STYLE.color,
+        background: p.subtitleBackground ?? DEFAULT_SUBTITLE_STYLE.background,
+        weight: p.subtitleWeight ?? DEFAULT_SUBTITLE_STYLE.weight,
+        position: p.subtitlePosition ?? DEFAULT_SUBTITLE_STYLE.position,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const updateStyle = (patch: Partial<SubtitleStyle>) => {
+    const next = { ...style, ...patch };
+    setStyle(next);
+    void window.cloudstream?.setPlayerPreferences({
+      subtitleScale: next.scale,
+      subtitleColor: next.color,
+      subtitleBackground: next.background,
+      subtitleWeight: next.weight,
+      subtitlePosition: next.position,
+    });
+  };
 
   // Custom search query and episode parameters
   const [searchQuery, setSearchQuery] = useState(title || imdbId || '');
@@ -248,8 +357,19 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
     [searchQuery, searchSeason, searchEpisode, searchYear, season, episode, imdbId, title, providerCanAnswer, mediaUrl, languages, releaseName]
   );
 
-  // Sync state when props change
+  // Sync state when props change, guarded by ref so active typing isn't wiped
+  const prevPropsRef = useRef({ title, imdbId, season, episode, year });
   useEffect(() => {
+    const prev = prevPropsRef.current;
+    const changed =
+      prev.title !== title ||
+      prev.imdbId !== imdbId ||
+      prev.season !== season ||
+      prev.episode !== episode ||
+      prev.year !== year;
+    prevPropsRef.current = { title, imdbId, season, episode, year };
+    if (!changed) return;
+
     const initial = title || imdbId || '';
     setSearchQuery(initial);
     setSearchSeason(season !== undefined ? String(season) : '');
@@ -303,7 +423,14 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         return;
       }
       const blob = new Blob([response.vtt], { type: 'text/vtt' });
-      onSelect(URL.createObjectURL(blob), result.langName);
+      const detailParts = [
+        result.best ? '★ Best' : undefined,
+        result.releaseName || result.fileName?.replace(/\.(srt|ass|ssa|vtt|sub)$/i, ''),
+        result.hearingImpaired ? 'HI' : undefined,
+        originLabel(result),
+      ].filter(Boolean);
+      const detail = detailParts.join(' · ');
+      onSelect(URL.createObjectURL(blob), result.langName, detail);
       onClose();
     },
     [onSelect, onClose]
@@ -332,8 +459,17 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   })();
   const showLanguage = (name: string) => languages.length === 0 || languages.includes(codeFor.get(name) ?? '');
 
+  const englishChip = languageChips.find((c) => c.code === 'eng');
+  const activeOtherChips = languageChips.filter((c) => c.code !== 'eng' && languages.includes(c.code));
+  const dropdownChips = languageChips.filter((c) => c.code !== 'eng');
+
   return (
-    <aside className="player-panel player-panel--subtitles" aria-label="Subtitles">
+    <aside
+      className="player-panel player-panel--subtitles"
+      aria-label="Subtitles"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
       <header className="player-panel__head">
         <div>
           <h3>Subtitles</h3>
@@ -346,6 +482,14 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
           </div>
         </div>
         <div className="player-panel__head-actions">
+          <button
+            className={`icon-button subtitle-panel__config-btn${showConfig ? ' active' : ''}`}
+            onClick={() => setShowConfig((v) => !v)}
+            title={showConfig ? 'Hide subtitle appearance settings' : 'Subtitle style & appearance settings'}
+            aria-label="Subtitle appearance settings"
+          >
+            <Sliders size={18} />
+          </button>
           <button
             className="icon-button"
             onClick={() => void runSearch()}
@@ -361,6 +505,140 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         </div>
       </header>
 
+      {/* In-player Subtitle Appearance Settings Drawer */}
+      {showConfig && (
+        <div className="subtitle-panel__config-panel" role="region" aria-label="Subtitle appearance settings">
+          <div className="subtitle-panel__config-header">
+            <span className="subtitle-panel__config-title">Subtitle Appearance</span>
+            <button
+              type="button"
+              className="subtitle-panel__config-close"
+              onClick={() => setShowConfig(false)}
+              aria-label="Close subtitle settings"
+            >
+              <X size={14} />
+            </button>
+          </div>
+
+          {/* Live Preview */}
+          <div className="sub-preview" style={subtitleCssVariables(style) as React.CSSProperties}>
+            <span className="sub-preview__cue">
+              They're not going to make it. We should go back.
+            </span>
+          </div>
+
+          {/* Size */}
+          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+            <div className="subtitle-panel__config-label-row">
+              <span>Size</span>
+              <span className="subtitle-panel__config-val">{Math.round(style.scale * 100)}%</span>
+            </div>
+            <div className="sub-choices">
+              {SUBTITLE_SCALES.map((scale) => (
+                <button
+                  key={scale}
+                  type="button"
+                  className={`btn btn-secondary sub-choice${style.scale === scale ? ' sub-choice--on' : ''}`}
+                  onClick={() => updateStyle({ scale })}
+                >
+                  {Math.round(scale * 100)}%
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Colour */}
+          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+            <div className="subtitle-panel__config-label-row">
+              <span>Colour</span>
+              <span className="subtitle-panel__config-val">
+                {SUBTITLE_COLORS.find((c) => c.value.toLowerCase() === style.color.toLowerCase())?.label ?? style.color}
+              </span>
+            </div>
+            <div className="sub-choices">
+              {SUBTITLE_COLORS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`sub-swatch${style.color.toLowerCase() === option.value.toLowerCase() ? ' sub-swatch--on' : ''}`}
+                  style={{ background: option.value }}
+                  title={option.label}
+                  aria-label={option.label}
+                  aria-pressed={style.color.toLowerCase() === option.value.toLowerCase()}
+                  onClick={() => updateStyle({ color: option.value })}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Background */}
+          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+            <div className="subtitle-panel__config-label-row">
+              <span>Background</span>
+              <span className="subtitle-panel__config-val">
+                {SUBTITLE_BACKGROUNDS.find((b) => b.value === style.background)?.label}
+              </span>
+            </div>
+            <div className="sub-choices">
+              {SUBTITLE_BACKGROUNDS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`btn btn-secondary sub-choice${style.background === option.value ? ' sub-choice--on' : ''}`}
+                  title={option.hint}
+                  onClick={() => updateStyle({ background: option.value as SubtitleBackground })}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Bold weight */}
+          <div className="subtitle-panel__config-row">
+            <span>Bold text</span>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={style.weight === 'bold'}
+                onChange={(e) => updateStyle({ weight: e.target.checked ? 'bold' : 'normal' })}
+              />
+              <span>{style.weight === 'bold' ? 'On' : 'Off'}</span>
+            </label>
+          </div>
+
+          {/* Vertical Lift / Position */}
+          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+            <div className="subtitle-panel__config-label-row">
+              <span>Raise from bottom</span>
+              <span className="subtitle-panel__config-val">
+                {style.position === 0 ? 'Default position' : `${style.position}% up`}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={40}
+              step={5}
+              value={style.position}
+              onChange={(e) => updateStyle({ position: Number(e.target.value) })}
+              className="subtitle-panel__range"
+            />
+          </div>
+
+          {/* Reset */}
+          <div className="subtitle-panel__config-footer">
+            <button
+              type="button"
+              className="btn btn-secondary sub-choice"
+              onClick={() => updateStyle(DEFAULT_SUBTITLE_STYLE)}
+            >
+              Reset appearance
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Custom Subtitle Search Form */}
       <form className="subtitle-panel__search-form" onSubmit={handleSearchSubmit}>
         <div className="subtitle-panel__search-bar">
@@ -370,6 +648,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
             className="subtitle-panel__search-input"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
             placeholder="Search custom title or IMDb ID (tt...)"
             aria-label="Custom subtitle search query"
           />
@@ -419,6 +698,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               value={searchSeason}
               placeholder="S#"
               onChange={(e) => setSearchSeason(e.target.value)}
+              onKeyDown={(e) => e.stopPropagation()}
               aria-label="Season number"
             />
           </div>
@@ -431,6 +711,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               value={searchEpisode}
               placeholder="Ep#"
               onChange={(e) => setSearchEpisode(e.target.value)}
+              onKeyDown={(e) => e.stopPropagation()}
               aria-label="Episode number"
             />
           </div>
@@ -444,6 +725,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               value={searchYear}
               placeholder="Year"
               onChange={(e) => setSearchYear(e.target.value)}
+              onKeyDown={(e) => e.stopPropagation()}
               aria-label="Release year"
             />
           </div>
@@ -457,29 +739,91 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         </div>
       </form>
 
+      {/* Language filter row with flags, primary choices (All, English, Active), and collapsible dropdown */}
       <div className="subtitle-panel__languages" role="group" aria-label="Subtitle languages">
         <button
           type="button"
           className={`subtitle-panel__chip${languages.length === 0 ? ' subtitle-panel__chip--on' : ''}`}
           onClick={() => setLanguages([])}
         >
+          <span className="subtitle-panel__chip-flag">🌐</span>
           All{results.length > 0 ? ` (${results.length})` : ''}
         </button>
-        {languageChips.map(({ code, name, count }) => {
-          const on = languages.includes(code);
-          return (
-            <button
-              key={code}
-              type="button"
-              className={`subtitle-panel__chip${on ? ' subtitle-panel__chip--on' : ''}`}
-              onClick={() => setLanguages((current) => (on ? current.filter((c) => c !== code) : [...current, code]))}
-              aria-pressed={on}
-            >
-              {name}
-              {count > 0 ? ` (${count})` : ''}
-            </button>
-          );
-        })}
+
+        {/* English chip (always offered as top option) */}
+        {englishChip && (
+          <button
+            type="button"
+            className={`subtitle-panel__chip${languages.includes(englishChip.code) ? ' subtitle-panel__chip--on' : ''}`}
+            onClick={() =>
+              setLanguages((current) =>
+                current.includes(englishChip.code)
+                  ? current.filter((c) => c !== englishChip.code)
+                  : [...current, englishChip.code]
+              )
+            }
+            aria-pressed={languages.includes(englishChip.code)}
+          >
+            <span className="subtitle-panel__chip-flag">🇬🇧</span>
+            {englishChip.name}
+            {englishChip.count > 0 ? ` (${englishChip.count})` : ''}
+          </button>
+        )}
+
+        {/* Active chips that aren't English */}
+        {activeOtherChips.map(({ code, name, count }) => (
+          <button
+            key={code}
+            type="button"
+            className="subtitle-panel__chip subtitle-panel__chip--on"
+            onClick={() => setLanguages((current) => current.filter((c) => c !== code))}
+            aria-pressed="true"
+          >
+            <span className="subtitle-panel__chip-flag">{getLanguageFlag(code, name)}</span>
+            {name}
+            {count > 0 ? ` (${count})` : ''}
+          </button>
+        ))}
+
+        {/* Expand / Collapse toggle for remaining languages */}
+        {dropdownChips.length > 0 && (
+          <button
+            type="button"
+            className={`subtitle-panel__lang-toggle${langMenuOpen ? ' subtitle-panel__lang-toggle--open' : ''}`}
+            onClick={() => setLangMenuOpen((v) => !v)}
+            aria-expanded={langMenuOpen}
+            aria-label="Show more subtitle languages"
+          >
+            <span>{langMenuOpen ? 'Fewer languages' : `More languages (${dropdownChips.length})`}</span>
+            {langMenuOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+        )}
+
+        {/* Collapsible Dropdown Grid */}
+        {langMenuOpen && dropdownChips.length > 0 && (
+          <div className="subtitle-panel__languages-dropdown" role="group" aria-label="More subtitle languages">
+            {dropdownChips.map(({ code, name, count }) => {
+              const on = languages.includes(code);
+              return (
+                <button
+                  key={code}
+                  type="button"
+                  className={`subtitle-panel__chip${on ? ' subtitle-panel__chip--on' : ''}`}
+                  onClick={() =>
+                    setLanguages((current) =>
+                      on ? current.filter((c) => c !== code) : [...current, code]
+                    )
+                  }
+                  aria-pressed={on}
+                >
+                  <span className="subtitle-panel__chip-flag">{getLanguageFlag(code, name)}</span>
+                  {name}
+                  {count > 0 ? ` (${count})` : ''}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Matched Title Info Tag */}
@@ -514,7 +858,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
             <button
               className={`player-panel__sub${activeUrl === sub.url ? ' player-panel__sub--current' : ''}`}
               onClick={() => {
-                onSelect(sub.url, sub.name);
+                onSelect(sub.url, sub.name, 'in stream');
                 onClose();
               }}
             >
