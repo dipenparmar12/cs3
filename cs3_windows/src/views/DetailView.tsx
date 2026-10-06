@@ -1945,7 +1945,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
       />
 
       {extended?.franchise && onSelectMedia && (
-        <FranchiseRail franchise={extended.franchise} onSelectMedia={onSelectMedia} />
+        <FranchiseRail franchise={extended.franchise} currentTitle={detail.name} onSelectMedia={onSelectMedia} />
       )}
 
       {recommendations.length > 0 && onSelectMedia && (

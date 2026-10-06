@@ -409,14 +409,17 @@ SELECT ?series ?seriesLabel ?member ?memberLabel ?imdb ?date ?ordinal WHERE {
   ?membership ps:P179 ?series .
   ?member wdt:P345 ?imdb .
   OPTIONAL { ?membership pq:P1545 ?ordinal . }
-  OPTIONAL { ?member wdt:P577 ?date . }
+  OPTIONAL {
+    ?member wdt:P577 ?date .
+    FILTER NOT EXISTS { ?member wdt:P577 ?earlier . FILTER(?earlier < ?date) }
+  }
   SERVICE wikibase:label {
     bd:serviceParam wikibase:language "en" .
     ?series rdfs:label ?seriesLabel .
     ?member rdfs:label ?memberLabel .
   }
 }
-LIMIT 400`;
+LIMIT 1500`;
 }
 
 /** Past this, a "series" is a universe or an episode list, not a rail. */
@@ -435,7 +438,12 @@ export function parseFranchise(response: SparqlResponse, imdbId: string): Franch
     const series = value(row, 'series');
     const imdb = value(row, 'imdb');
     const title = value(row, 'memberLabel');
-    if (!series || !imdb || !/^tt\d+$/.test(imdb) || !title || /^Q\d+$/.test(title)) continue;
+    if (!series || !imdb || !/^tt\d+$/.test(imdb)) continue;
+    // Measured on Avengers: Endgame, the label service can answer no label
+    // for the very title asked about. That one is kept — the page already
+    // knows its own name — and any other unlabelled member is dropped.
+    const labelled = title && !/^Q\d+$/.test(title) ? title : undefined;
+    if (!labelled && imdb !== imdbId) continue;
     let group = bySeries.get(series);
     if (!group) {
       group = { name: value(row, 'seriesLabel') ?? '', members: new Map() };
@@ -447,18 +455,23 @@ export function parseFranchise(response: SparqlResponse, imdbId: string): Franch
     if (existing) {
       if (date && (!existing.date || date < existing.date)) existing.date = date;
       if (existing.ordinal === undefined && Number.isFinite(ordinal)) existing.ordinal = ordinal;
+      if (!existing.title && labelled) existing.title = labelled;
       continue;
     }
     group.members.set(imdb, {
       imdbId: imdb,
-      title,
+      title: labelled ?? '',
       current: imdb === imdbId,
       date,
       ordinal: Number.isFinite(ordinal) ? ordinal : undefined,
     });
   }
 
+  // The query keeps only each member's earliest date: one per country used
+  // to multiply a universe's rows past the limit and cut the current title
+  // out of its own series. The current title must be in the answer.
   const candidates = [...bySeries.values()]
+    .filter((g) => g.members.has(imdbId))
     .filter((g) => g.members.size >= 2 && g.members.size <= MAX_FRANCHISE_ENTRIES && g.name && !/^Q\d+$/.test(g.name))
     .sort((a, b) => a.members.size - b.members.size);
   const chosen = candidates[0];

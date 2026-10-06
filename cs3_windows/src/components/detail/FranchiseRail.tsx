@@ -11,9 +11,12 @@ import type { SearchResponse, TvType } from '../../types/api';
  */
 export function FranchiseRail({
   franchise,
+  currentTitle,
   onSelectMedia,
 }: {
   franchise: Franchise;
+  /** The page's own name, for a current entry the catalogue left unlabelled. */
+  currentTitle: string;
   onSelectMedia: (item: SearchResponse) => void;
 }) {
   const currentIndex = franchise.entries.findIndex((entry) => entry.current);
@@ -50,7 +53,7 @@ export function FranchiseRail({
                 <span className="franchise-rail__index">
                   <Clapperboard size={13} aria-hidden="true" /> {index + 1}
                 </span>
-                <span className="franchise-rail__title">{entry.title}</span>
+                <span className="franchise-rail__title">{entry.title || (entry.current ? currentTitle : entry.imdbId)}</span>
                 <span className="franchise-rail__meta">
                   {entry.year ?? 'Year unknown'}
                   {entry.current ? ' · Viewing now' : relation ? ` · ${relation}` : ''}
