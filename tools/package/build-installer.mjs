@@ -424,6 +424,7 @@ if (SKIP_MEDIA) {
    * input, and the staged binaries are the output. `--clean` re-fetches; the
    * script's own archive cache means even that rarely touches the network.
    */
+  const stampFile = path.join(mediaDir, '.staged');
   if (
     upToDate(
       'cs3_windows/media-runtime',
@@ -431,6 +432,7 @@ if (SKIP_MEDIA) {
         path.join(mediaDir, isWindows ? `${name}.exe` : name),
       ),
       [path.join(root, 'tools', 'package', 'build-media-runtime.mjs')],
+      stampFile,
     )
   ) {
     /* nothing to do */
