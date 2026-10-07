@@ -57,9 +57,9 @@ CloudStream solves these challenges through a clean, decoupled architecture:
 
 | Target Platform | Min SDK | Target SDK | Primary Interface |
 |---|---|---|---|
-| Android Mobile & Tablets | API 23 (Android 6.0 Marshmallow) | API 36 (Android 15) | Touch / Gesture UI |
-| Android TV / Google TV | API 23 (Android 6.0 Marshmallow) | API 36 (Android 15) | DPAD Remote / Leanback UI |
-| Fire OS (Amazon FireStick/FireTV) | API 23 (Fire OS 6+) | API 36 | DPAD Remote UI |
+| Android Mobile & Tablets | API 23 (Android 6.0 Marshmallow) | API 37 (Android 16) | Touch / Gesture UI |
+| Android TV / Google TV | API 23 (Android 6.0 Marshmallow) | API 37 (Android 16) | DPAD Remote / Leanback UI |
+| Fire OS (Amazon FireStick/FireTV) | API 23 (Fire OS 6+) | API 37 | DPAD Remote UI |
 
 ---
 

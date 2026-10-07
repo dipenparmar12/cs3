@@ -47,10 +47,26 @@ Every media provider extension extends `com.lagradost.cloudstream3.MainAPI`.
 #### Essential Properties & Methods:
 * `name`: String (Human-readable provider name, e.g. "Librevox", "YouTube")
 * `mainUrl`: String (Base URL of the media service)
-* `supportedTypes`: Set<TvType> (`TvType.Movie`, `TvType.TvSeries`, `TvType.Anime`, `TvType.Cartoon`, `TvType.Live`, `TvType.Torrent`, `TvType.Audio`)
+* `supportedTypes`: Set<TvType> (`TvType.Movie`, `TvType.TvSeries`, `TvType.Anime`, `TvType.Cartoon`, `TvType.Live`, `TvType.Torrent`, `TvType.Audio`, `TvType.OVA`)
 * `hasMainPage`: Boolean (Whether provider supports home screen rows)
-* `async fun getMainPage(page: Int, request: ProviderData): MainPageResponse?`
-* `async fun search(query: String): List<SearchResponse>`
+* `hasQuickSearch`: Boolean (Whether provider supports quick search)
+* `lang`: String (IETF BCP 47 language tag, defaults to "en")
+* `hasChromecastSupport`: Boolean (Whether links can be played on Chromecast)
+* `hasDownloadSupport`: Boolean (Whether links can be downloaded)
+* `usesWebView`: Boolean (Whether provider requires WebView for certain operations)
+
+#### Timeout Configuration Properties:
+* `loadLinksTimeoutMs`: Long? (Timeout for `loadLinks()` in milliseconds)
+* `getMainPageTimeoutMs`: Long? (Timeout for `getMainPage()` in milliseconds)
+* `searchTimeoutMs`: Long? (Timeout for `search()` in milliseconds)
+* `quickSearchTimeoutMs`: Long? (Timeout for `quickSearch()` in milliseconds)
+* `loadTimeoutMs`: Long? (Timeout for `load()` in milliseconds)
+
+#### Core Methods:
+* `async fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse?`
+* `async fun search(query: String, page: Int): SearchResponseList?` (Paginated search)
+* `async fun search(query: String): List<SearchResponse>?` (Non-paginated search)
+* `async fun quickSearch(query: String): List<SearchResponse>?` (Quick search)
 * `async fun load(url: String): LoadResponse?`
 * `async fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean`
 
@@ -60,8 +76,13 @@ Used for extracting playable direct video stream URLs (HLS `.m3u8`, MP4, DASH `.
 #### Essential Properties & Methods:
 * `name`: String (Hoster name, e.g., "Filemoon")
 * `mainUrl`: String
-* `requiresReferer`: Boolean
-* `async fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit)`
+* `requiresReferer`: Boolean (Whether this extractor needs a referer header)
+* `sourcePlugin`: String? (Determines which plugin a given provider is from - full path to the plugin)
+* `async fun getUrl(url: String, referer: String? = null, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit)` (Main extraction method with callback)
+* `async fun getSafeUrl(url: String, referer: String? = null, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit)` (Wrapper that catches exceptions)
+* `open suspend fun getUrl(url: String, referer: String? = null): List<ExtractorLink>?` (Alternative method returning a list)
+
+**Note:** The `:library` module includes **104+ built-in ExtractorApi implementations** for universal video hosters like Filemoon, DoodStream, StreamSB, MixDrop, OkRu, Voe, Rabbitstream, and many others.
 
 ---
 

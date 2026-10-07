@@ -38,7 +38,7 @@ CloudStream operates outside the Google Play Store and provides an automated in-
 * **Release Checking**: `InAppUpdater.kt` queries the official GitHub Releases API for the target repository (stable or prerelease channel).
 * **APK Download**: When a new release is detected, `InAppUpdater` downloads the release APK file to the app's cache directory.
 * **Installation Execution**:
-  * Uses `PackageInstallerService` and `PackageInstaller.kt`.
+  * Uses `PackageInstallerService` (`services/PackageInstallerService.kt`) and `PackageInstaller.kt` (`utils/PackageInstaller.kt`).
   * On supported Android versions (Android 12+), uses `UPDATE_PACKAGES_WITHOUT_USER_ACTION` permission to install updates seamlessly without disrupting the user.
 
 ---
@@ -57,6 +57,8 @@ CloudStream features a resilient, background-capable file download engine:
 * **HTTP Range Requests**: Supports chunked multi-threaded HTTP downloading with resume capabilities.
 * **HLS Stream Downloading**: Converts HLS `.m3u8` playlists into single contiguous `.mp4` video files directly on device disk.
 * **Storage Provider Abstraction**: Writes download files using `SafeFile.kt`, ensuring compliance with Android Scoped Storage rules.
+* **Foreground Services**: Both `VideoDownloadService` and `DownloadQueueService` run as foreground services with persistent notifications to prevent OS from killing them.
+* **Auto-Restart**: `VideoDownloadRestartReceiver` automatically restarts interrupted downloads when device connectivity is restored.
 
 ---
 

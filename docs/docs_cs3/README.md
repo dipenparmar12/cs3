@@ -1,6 +1,6 @@
 # CloudStream Android Architecture & Codebase Documentation
 
-Welcome to the comprehensive technical documentation for **CloudStream 3** (`cloudstream_ref_android`), generated from in-depth codebase analysis of the repository located at `D:\dipen\cs3\cloudstream_ref_android`.
+Welcome to the comprehensive technical documentation for **CloudStream 3** (`cloudstream_ref_android`), generated from in-depth codebase analysis of the upstream Android reference repository.
 
 ---
 
@@ -69,8 +69,8 @@ Click on any section below to view the detailed document:
 
 | Item | Value |
 |---|---|
-| **Repository Location** | `D:\dipen\cs3\cloudstream_ref_android` |
-| **Documentation Root** | `D:\dipen\cs3\cs3_windows\docs` |
+| **Repository Location** | Upstream `cloudstream_ref_android` (vendored in this repo) |
+| **Documentation Root** | `docs/docs_cs3/` |
 | **App Name** | CloudStream (`com.lagradost.cloudstream3`) |
 | **SDK Module** | CloudStream Library (`com.lagradost.api`) |
 | **Primary Language** | Kotlin (100%), Kotlin Multiplatform (KMP) |

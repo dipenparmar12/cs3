@@ -2,7 +2,7 @@
 
 ## 1. Overview & UI Design Philosophy
 
-CloudStream uses a **Single Activity Architecture** anchored by `MainActivity.kt` and `AccountSelectActivity.kt`, backed by Android Jetpack Navigation Component, Fragments, and ViewBinding.
+CloudStream uses a **Single Activity Architecture** anchored by `MainActivity.kt`, `CommonActivity.kt`, and `AccountSelectActivity.kt`, backed by Android Jetpack Navigation Component, Fragments, and ViewBinding.
 
 The presentation layer is engineered to be **bi-functional**: it dynamically adapts its layout, navigation paradigm, and focus handling depending on whether it is running on a **Touch Device (Phone/Tablet)** or a **Television Device (Android TV, FireStick, Shield TV)**.
 
@@ -10,19 +10,22 @@ The presentation layer is engineered to be **bi-functional**: it dynamically ada
 
 ## 2. Navigation Architecture (`nav_graph.xml`)
 
-The application's view hierarchy is managed via Jetpack Navigation (`androidx.navigation`). `MainActivity` hosts a `NavHostFragment` that swaps between core application screens:
+The application's view hierarchy is managed via Jetpack Navigation (`androidx.navigation`). `MainActivity` and `CommonActivity` host `NavHostFragment` instances that swap between core application screens:
 
 ```mermaid
 graph TD
     A[AccountSelectActivity] -->|Profile Auth Passed| B[MainActivity]
-    B --> C[NavHostFragment]
-    C --> D[HomeFragment]
-    C --> E[SearchFragment]
-    C --> F[LibraryFragment]
-    C --> G[DownloadFragment]
-    C --> H[ResultFragment2]
-    C --> I[SettingsFragment]
-    H -->|Play Episode / Movie| J[PlayerActivity / ExoPlayer]
+    A -->|Profile Auth Passed| C[CommonActivity]
+    B --> D[NavHostFragment]
+    C --> D
+    D --> E[HomeFragment]
+    D --> F[SearchFragment]
+    D --> G[LibraryFragment]
+    D --> H[DownloadFragment]
+    D --> I[ResultFragment2]
+    D --> J[SettingsFragment]
+    I -->|Play Episode / Movie| K[PlayerActivity / ExoPlayer]
+    H -->|Play Downloaded| L[DownloadedPlayerActivity / ExoPlayer]
 ```
 
 ---
@@ -47,27 +50,32 @@ CloudStream detects TV environments at runtime by checking `UiModeManager` or sy
 * Initial launcher activity.
 * Supports multi-user profile switching.
 * Enforces security features:
-  * **Biometric Authentication**: Fingerprint prompt (`BiometricAuthenticator.kt`).
+  * **Biometric Authentication**: Fingerprint/face unlock prompt (`BiometricAuthenticator.kt`).
   * **PIN Code Auth**: 4-digit PIN verification overlay for locked profiles.
   * **TV QR Code Auth**: Displays a generated QR code (`qrcode-kotlin`) for quick login from mobile devices.
 
-### B. `HomeFragment.kt` & `HomeViewModel.kt`
+### B. `CommonActivity.kt`
+* Common base activity with shared functionality.
+* Used as a base for various screens that need common behavior.
+* Works alongside `MainActivity` in the Single Activity Architecture.
+
+### C. `HomeFragment.kt` & `HomeViewModel.kt`
 * Displays home rows supplied by installed plugins that have `hasMainPage = true`.
 * Supports dynamic filtering by content type (Movies, Series, Anime, Live TV) and provider.
-* Features auto-scrolling hero banners and preview cards.
+* Features hero banners and preview cards for featured content.
 
-### C. `ResultFragment2.kt` & `ResultViewModel2.kt`
+### D. `ResultFragment2.kt` & `ResultViewModel2.kt`
 * Comprehensive detail view for media titles (Movies, TV Shows, Anime).
 * Displays posters, backdrop banners, cast lists, trailers (powered by `NewPipeExtractor`), season/episode dropdowns, and download buttons.
 * Integrates **Anime-DB Filler Check** (`FillerEpisodeCheck.kt`): Highlights filler anime episodes with distinct visual badges.
 * Shows real-time synchronization status with external tracking services (AniList, MAL, SIMKL, Trakt).
 
-### D. `LibraryFragment.kt`
+### E. `LibraryFragment.kt`
 * Organizes user's saved titles into customizable list categories:
-  * *Watching*, *Completed*, *On Hold*, *Dropped*, *Plan to Watch*, *Re-watching*.
+  * *Watching*, *Completed*, *On Hold*, *Dropped*, *Plan to Watch*, *Rewatching*.
 * Supports drag-and-drop reordering, custom tags, sorting (by title, score, updated date), and backup/restore.
 
-### E. `SettingsFragment.kt` Sub-System
+### F. `SettingsFragment.kt` Sub-System
 Structured into clean, modular sub-preference screens:
 * **General Settings**: Language selections, app updates, UI layout preferences.
 * **Player Settings**: Subtitle styles, default audio languages, buffer size, hardware acceleration, skip intra/outro lengths.

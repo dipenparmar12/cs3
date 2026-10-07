@@ -24,7 +24,7 @@ CloudStream uses GitHub Actions to automate build, testing, localization, docume
 ## 3. Translation & Internationalization (i18n)
 
 * **Platform**: Hosted Weblate (`hosted.weblate.org/engage/cloudstream`).
-* **Automation**: `.github/locales.py` parses Weblate translation files and synchronizes Android XML string resources (`app/src/main/res/values-*/strings.xml`) across 40+ supported languages.
+* **Automation**: The `.github/locales.py` script parses Weblate translation files and synchronizes Android XML string resources (`app/src/main/res/values-*/strings.xml`) across 40+ supported languages.
 
 ---
 
