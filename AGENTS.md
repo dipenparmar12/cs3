@@ -179,7 +179,7 @@ It once asked `findRuntimeDir()` where to copy *from* — which answers with the
 2. Provisioning reads from **build locations only** (`findSourceComponents`) and picks **newest, not first** — `sidecar/dist/` is generated *from* `sidecar/runtime/` and goes stale the moment Maven runs again.
 3. Translations drop when the sidecar changes; an absent stamp counts as changed.
 
-**Bump `RUNTIME_GENERATION`** whenever the shim/bridge/translator changes in a way an already-provisioned copy would get wrong (currently **14**; one paragraph per generation in `runtimeProvisioner.ts`). Debugging "a class that should exist doesn't"? Compare `%APPDATA%/<app>/cs3-runtime/runtime/` against `sidecar/runtime/` first.
+**Bump `RUNTIME_GENERATION`** whenever the shim/bridge/translator changes in a way an already-provisioned copy would get wrong (currently **16**; one paragraph per generation in `runtimeProvisioner.ts`). Debugging "a class that should exist doesn't"? Compare `%APPDATA%/<app>/cs3-runtime/runtime/` against `sidecar/runtime/` first.
 
 ---
 
@@ -363,6 +363,7 @@ rather than omitting the ones nothing serves.
 | `cs3/extensionAddress.ts` | `looksLikeLinksHandle` / `looksLikePageAddress` — a links handle is not a page address. |
 | `cs3/webViewHost.ts` | Hidden `BrowserWindow` per resolve; `webRequest` watching; cookies harvested for `CloudflareKiller`. |
 | `cs3/webViewMatch.ts` | What a page's subrequests mean. Pure, tested. |
+| `cs3/clearance.ts` + `clearanceRelay.ts` | Bot-wall clearances owned by the app: the webview partition's cookie jar is the store, one solve per host (single-flight), 10-min cooldown after a failed solve, Chrome-shaped UA. Serves the JVM (`clearance.get/invalidate/fetch`) and the indexer client alike. Pure, tested (`bun run test clearance`). See §5.15. |
 | `cs3/hostDeadline.ts` | How long the host may work on a call the sidecar is waiting on. Pure, tested; **the worker stops before the waiter does**. |
 | `cs3/providerRegistry.ts` | What each archive registered, keyed `size:mtime:generation`; hydrates the provider list without starting the JVM (67s → 8ms). |
 | `cs3/providerRecovery.ts` | `planRecovery` (pure) — ordered steps to make a saved page's provider answer again; never adds an unknown repository. |
@@ -496,7 +497,7 @@ registered) · `cs3/webViewHost.ts` (Cloudflare challenges) · `cs3/extensionIss
 **Rules:**
 - **Call `ensureProviderActive(name)` before using a provider.** Loading is lazy and per-archive, deduped by an in-flight map.
 - **Provider loading cannot be parallelised** — providers self-register into a global, and overlapping loads steal each other's providers (measured: 176 mis-attributed).
-- **Bump `RUNTIME_GENERATION`** whenever the shim, bridge or translator changes (currently **14**). The app runs a *copy* in `%APPDATA%`, not what you just built.
+- **Bump `RUNTIME_GENERATION`** whenever the shim, bridge or translator changes (currently **16**). The app runs a *copy* in `%APPDATA%`, not what you just built.
 - **`cs3-provider-bridge.jar` must live in `sidecar/runtime/`** — same loader as `library-jvm.jar`, or `BasePlugin` resolves as two different classes.
 - **The sidecar's stdout carries RPC frames and nothing else.** A stray `println` desyncs the channel; logs go to stderr.
 - **Shim rule: concede the type, refuse the operation.** Never widen a parameter or return type to `Object` (it renames the method — `ShimSignatureTest` enforces this); never forge the package name; never fake a platform number.
@@ -505,6 +506,7 @@ registered) · `cs3/webViewHost.ts` (Cloudflare challenges) · `cs3/extensionIss
 - **Never reintroduce a synthetic or placeholder source.** Empty result plus a reason, always.
 - **The adult gate is `PluginManager.enabledProviderNames`** — the single funnel search, scope, discovery, playback and downloads all pass through. It removes only **adult-only** providers (`NSFW` with no general type; `NSFW, Others` counts as adult-only). A **mixed** provider (9kMovies, Mp4Moviez: `Movie, TvSeries, NSFW` — 5 of 22 NSFW providers measured) stays available with adult off; its 18+ rows and explicit titles are screened instead (`src/utils/adultContent.ts`: `screenSections`/`screenLists` in `OttService` *after* the cache, `withoutAdultTitles` on search and recommendations). Upstream publishes no per-row flag — every title in 9kMovies' "18+ Movies" is typed `Movie` — so rows are classified from their own name/handle/titles; patterns are pinned against measured row names. With adult on, such rows are flagged `sensitive` and covered (not fetched) until the once-per-launch confirmation.
 - **Built-in providers use `cs3native://`, never `cs3ext://`** (wrong-attribution failures).
+- **Clearances are the host's, not the interceptor's** (`cs3/clearance.ts`, §5.15). Never keep `cf_clearance` per caller or re-solve without asking `clearance.get` first; never relay (`clearance.fetch`) for a host the jar holds no clearance for.
 - **The WebView host must finish before the sidecar stops waiting** (`cs3/hostDeadline.ts`) — the reverse channel carries one deadline and both ends used to spend it.
 - **A failed `load()` closes its class loader, and `unload` withdraws what the plugin registered.** A leaked loader holds a Windows handle on the `.cs3`, and every later update of that extension fails its rename with `EPERM` (measured: Ultima, which fails at `load()` on every launch, could never be updated). `unload` removes the plugin's entries from `APIHolder.apis`/`allProviders` and `extractorApis` by `sourcePlugin`, as upstream's `unloadPlugin` does. `PluginUnloadTest` pins both and fails on the old code.
 - **Installs and updates from the screen are background jobs** (`cs3/extensionJobs.ts`). Downloads overlap; everything after the verified download in `installPlugin` — rename, translate, load — runs through `PluginManager.oneAtATime`, because overlapping loads mis-attribute providers. Any new install path must go through `installPlugin` or take that lock.
