@@ -523,8 +523,9 @@ export const UnifiedComponentManager: React.FC = () => {
           </div>
 
           <button
-            className="settings-card__disclosure"
-            style={{ background: 'none', border: 'none', color: 'rgba(255, 255, 255, 0.5)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.8rem' }}
+            type="button"
+            className="btn btn-ghost btn-sm settings-card__disclosure"
+            aria-expanded={Boolean(openDisclosures.runtime)}
             onClick={() => toggleDisclosure('runtime')}
           >
             {openDisclosures.runtime ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
@@ -646,8 +647,9 @@ export const UnifiedComponentManager: React.FC = () => {
           </div>
 
           <button
-            className="settings-card__disclosure"
-            style={{ background: 'none', border: 'none', color: 'rgba(255, 255, 255, 0.5)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.8rem' }}
+            type="button"
+            className="btn btn-ghost btn-sm settings-card__disclosure"
+            aria-expanded={Boolean(openDisclosures.downloads)}
             onClick={() => toggleDisclosure('downloads')}
           >
             {openDisclosures.downloads ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
@@ -768,8 +770,9 @@ export const UnifiedComponentManager: React.FC = () => {
           </div>
 
           <button
-            className="settings-card__disclosure"
-            style={{ background: 'none', border: 'none', color: 'rgba(255, 255, 255, 0.5)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.8rem' }}
+            type="button"
+            className="btn btn-ghost btn-sm settings-card__disclosure"
+            aria-expanded={Boolean(openDisclosures.media)}
             onClick={() => toggleDisclosure('media')}
           >
             {openDisclosures.media ? <ChevronDown size={13} /> : <ChevronRight size={13} />}

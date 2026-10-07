@@ -4,6 +4,7 @@ import { Tv, Play, Cpu, Download, Loader2, PictureInPicture2, Keyboard } from 'l
 import { SettingGroup, SettingRow } from './settings/SettingRow';
 import { PlayerShortcutsPanel } from './settings/PlayerShortcutsPanel';
 import { AspectRatioMode } from '../types/player';
+import { Switch } from './ui';
 
 /**
  * Settings ▸ Player.
@@ -281,15 +282,12 @@ export const PlayerSettings: React.FC = () => {
             </>
           }
         >
-          <label className="settings__switch">
-            <input
-              type="checkbox"
-              checked={alwaysOnTop}
-              onChange={(e) => void saveFloating({ alwaysOnTop: e.target.checked })}
-              aria-label="Keep the window on top"
-            />
-            <span>{alwaysOnTop ? 'Enabled' : 'Disabled'}</span>
-          </label>
+          <Switch
+            checked={alwaysOnTop}
+            onChange={(checked) => void saveFloating({ alwaysOnTop: checked })}
+            label="Keep the window on top"
+            stateLabel={alwaysOnTop ? 'Enabled' : 'Disabled'}
+          />
         </SettingRow>
 
         <SettingRow
@@ -332,15 +330,12 @@ export const PlayerSettings: React.FC = () => {
             </>
           }
         >
-          <label className="settings__switch">
-            <input
-              type="checkbox"
-              checked={showSubtitlesControl}
-              onChange={(e) => handleToggleSubtitles(e.target.checked)}
-              aria-label="Toggle subtitles control"
-            />
-            <span>{showSubtitlesControl ? 'Enabled' : 'Disabled'}</span>
-          </label>
+          <Switch
+            checked={showSubtitlesControl}
+            onChange={(checked) => handleToggleSubtitles(checked)}
+            label="Toggle subtitles control"
+            stateLabel={showSubtitlesControl ? 'Enabled' : 'Disabled'}
+          />
         </SettingRow>
 
         <SettingRow
@@ -353,15 +348,12 @@ export const PlayerSettings: React.FC = () => {
             </>
           }
         >
-          <label className="settings__switch">
-            <input
-              type="checkbox"
-              checked={showAspectControl}
-              onChange={(e) => handleToggleAspect(e.target.checked)}
-              aria-label="Toggle aspect ratio control"
-            />
-            <span>{showAspectControl ? 'Enabled' : 'Disabled'}</span>
-          </label>
+          <Switch
+            checked={showAspectControl}
+            onChange={(checked) => handleToggleAspect(checked)}
+            label="Toggle aspect ratio control"
+            stateLabel={showAspectControl ? 'Enabled' : 'Disabled'}
+          />
         </SettingRow>
 
         <SettingRow
@@ -374,15 +366,12 @@ export const PlayerSettings: React.FC = () => {
             </>
           }
         >
-          <label className="settings__switch">
-            <input
-              type="checkbox"
-              checked={showSpeedControl}
-              onChange={(e) => handleToggleSpeed(e.target.checked)}
-              aria-label="Toggle playback speed control"
-            />
-            <span>{showSpeedControl ? 'Enabled' : 'Disabled'}</span>
-          </label>
+          <Switch
+            checked={showSpeedControl}
+            onChange={(checked) => handleToggleSpeed(checked)}
+            label="Toggle playback speed control"
+            stateLabel={showSpeedControl ? 'Enabled' : 'Disabled'}
+          />
         </SettingRow>
       </SettingGroup>
 
@@ -588,15 +577,12 @@ const NativePlayerSettingsGroup: React.FC<{ flash: (msg: string) => void }> = ({
           </>
         }
       >
-        <label className="settings__switch">
-          <input
-            type="checkbox"
-            checked={showNativeButton}
-            onChange={(e) => handleToggleNativeButton(e.target.checked)}
-            aria-label="Toggle native player button"
-          />
-          <span>{showNativeButton ? 'Enabled' : 'Disabled'}</span>
-        </label>
+        <Switch
+          checked={showNativeButton}
+          onChange={(checked) => handleToggleNativeButton(checked)}
+          label="Toggle native player button"
+          stateLabel={showNativeButton ? 'Enabled' : 'Disabled'}
+        />
       </SettingRow>
 
       <SettingRow
@@ -624,8 +610,7 @@ const NativePlayerSettingsGroup: React.FC<{ flash: (msg: string) => void }> = ({
             ))}
           </div>
           <button
-            className="btn btn-secondary"
-            style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
+            className="btn btn-secondary btn-sm"
             onClick={() => {
               void loadPlayers(true);
               flash('Rescanned installed native players.');
@@ -647,8 +632,7 @@ const NativePlayerSettingsGroup: React.FC<{ flash: (msg: string) => void }> = ({
             {downloads.map((d) => (
               <button
                 key={d.id}
-                className="btn btn-secondary"
-                style={{ fontSize: '0.75rem' }}
+                className="btn btn-secondary btn-sm"
                 title={d.note}
                 onClick={() => window.cloudstream?.openExternalLink?.(d.url)}
               >

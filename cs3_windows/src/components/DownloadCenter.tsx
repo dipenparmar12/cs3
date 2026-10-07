@@ -659,8 +659,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
           {!hasBinaries && onOpenBinarySetup && (
             <button
               onClick={onOpenBinarySetup}
-              className="btn btn-secondary"
-              style={{ borderColor: 'var(--accent-primary)' }}
+              className="btn btn-primary"
             >
               <Zap size={16} style={{ color: 'var(--accent-light)' }} />
               <span>Set up faster downloads</span>
@@ -781,9 +780,8 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
               {counts.downloading > 0 && (
                 <button
                   type="button"
-                  className="btn btn-secondary"
+                  className="btn btn-secondary btn-sm"
                   onClick={handlePauseAll}
-                  style={{ fontSize: '0.76rem', padding: '0.35rem 0.65rem' }}
                   title="Pause all active downloads"
                 >
                   <Pause size={13} />
@@ -794,9 +792,8 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
               {(counts.paused > 0 || counts.failed > 0) && (
                 <button
                   type="button"
-                  className="btn btn-secondary"
+                  className="btn btn-secondary btn-sm"
                   onClick={handleResumeAll}
-                  style={{ fontSize: '0.76rem', padding: '0.35rem 0.65rem' }}
                   title="Resume all paused downloads"
                 >
                   <Play size={13} />
@@ -807,9 +804,8 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
               {counts.failed > 0 && (
                 <button
                   type="button"
-                  className="btn btn-secondary"
+                  className="btn btn-secondary btn-sm btn--danger-text"
                   onClick={handleRetryFailed}
-                  style={{ fontSize: '0.76rem', padding: '0.35rem 0.65rem', borderColor: 'rgba(239, 68, 68, 0.4)' }}
                   title="Retry all failed downloads"
                 >
                   <RotateCw size={13} style={{ color: 'var(--status-error)' }} />
@@ -820,9 +816,8 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
               {counts.completed > 0 && (
                 <button
                   type="button"
-                  className="btn btn-secondary"
+                  className="btn btn-secondary btn-sm"
                   onClick={handleClearCompleted}
-                  style={{ fontSize: '0.76rem', padding: '0.35rem 0.65rem' }}
                   title="Clear finished downloads from list"
                 >
                   <Trash2 size={13} />

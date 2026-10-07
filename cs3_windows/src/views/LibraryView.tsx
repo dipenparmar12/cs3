@@ -7,6 +7,7 @@ import { SavedSourcesList } from '../components/library/SavedSourcesList';
 import { SavedSearchesList } from '../components/library/SavedSearchesList';
 import { ScreenSearch, ScreenSearchNoMatches } from '../components/ScreenSearch';
 import { useScreenSearch } from '../utils/useScreenSearch';
+import { Button, Dialog, DialogActions, Select } from '../components/ui';
 import { matchesScreenQuery } from '../utils/screenSearch';
 import type { PlayedSource } from '../types/library';
 import type { TorrentResult } from '../types/torrent';
@@ -21,7 +22,6 @@ import {
   RotateCw,
   Database,
   ExternalLink,
-  X,
 } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
 import { TvType } from '../types/api';
@@ -482,55 +482,31 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
                   {entry.sources && entry.sources.length > 0 && (
                     <div style={{ marginTop: '0.2rem' }}>
-                      <button
-                        type="button"
+                      <Button
+                        size="compact"
+                        variant="ambient"
+                        icon={Database}
+                        className="library-card__sources"
                         onClick={(e) => {
                           e.stopPropagation();
                           setSourcesModalEntry(entry);
                         }}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.3rem',
-                          fontSize: '0.68rem',
-                          fontWeight: 600,
-                          padding: '0.15rem 0.45rem',
-                          borderRadius: '4px',
-                          backgroundColor: 'rgba(59, 130, 246, 0.12)',
-                          color: '#60a5fa',
-                          border: '1px solid rgba(59, 130, 246, 0.25)',
-                          cursor: 'pointer',
-                        }}
                         title="View saved sources"
                       >
-                        <Database size={10} />
-                        <span>{entry.sources.length} saved sources</span>
-                      </button>
+                        {entry.sources.length} saved sources
+                      </Button>
                     </div>
                   )}
 
                   <div className="library-card__actions">
-                    <select
+                    <Select
+                      size="compact"
+                      className="library-card__status"
                       value={entry.status}
                       onChange={(e) => changeStatus(entry, e.target.value as WatchStatus)}
                       aria-label={`Status for ${entry.title}`}
-                      style={{
-                        backgroundColor: 'var(--bg-input, #1b2130)',
-                        color: '#f3f4f6',
-                        border: '1px solid var(--border-color, rgba(255, 255, 255, 0.12))',
-                        borderRadius: '6px',
-                        padding: '0.25rem 0.4rem',
-                        fontSize: '0.75rem',
-                        cursor: 'pointer',
-                        flex: 1,
-                      }}
-                    >
-                      {BUCKETS.map(({ status, label }) => (
-                        <option key={status} value={status} style={{ backgroundColor: '#161b26', color: '#f3f4f6' }}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
+                      options={BUCKETS.map(({ status, label }) => ({ value: status, label }))}
+                    />
 
                     <button
                       className="icon-button"
@@ -561,143 +537,68 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </>
       )}
 
-      {/* Stored Sources Inspection Modal */}
+      {/* Stored sources for one title. */}
       {sourcesModalEntry && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 9999,
-            backgroundColor: 'rgba(0, 0, 0, 0.75)',
-            backdropFilter: 'blur(6px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '1.5rem',
-          }}
-          onClick={() => setSourcesModalEntry(null)}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: '640px',
-              maxHeight: '85vh',
-              backgroundColor: '#161b26',
-              borderRadius: 'var(--radius-lg)',
-              border: '1px solid var(--border-color)',
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'hidden',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.85)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '1.1rem 1.4rem',
-                borderBottom: '1px solid var(--border-color)',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                <div
-                  style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '8px',
-                    backgroundColor: 'rgba(59, 130, 246, 0.15)',
-                    color: '#60a5fa',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Database size={16} />
-                </div>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#fff' }}>
-                    Saved sources — {sourcesModalEntry.title}
-                  </h3>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
-                    {sourcesModalEntry.sources?.length ?? 0} kept with this title
-                  </span>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
+        <Dialog
+          size="lg"
+          icon={<Database size={18} />}
+          title={`Saved sources — ${sourcesModalEntry.title}`}
+          description={`${sourcesModalEntry.sources?.length ?? 0} kept with this title`}
+          onClose={() => setSourcesModalEntry(null)}
+          footer={
+            <DialogActions
+              start={
+                <Button
+                  size="compact"
+                  icon={RotateCw}
+                  loading={refreshingKey === sourcesModalEntry.key}
                   onClick={() => handleRefreshSources(sourcesModalEntry)}
-                  disabled={refreshingKey === sourcesModalEntry.key}
                   title="Re-check enabled providers and discover newly available sources"
                 >
-                  <RotateCw size={13} className={refreshingKey === sourcesModalEntry.key ? 'spin' : ''} />
-                  <span>{refreshingKey === sourcesModalEntry.key ? 'Refreshing…' : 'Refresh'}</span>
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => setSourcesModalEntry(null)}
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            </div>
-
-            <div style={{ padding: '1.25rem 1.4rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-              {/* What actually played comes first: it is the answer to the
-                  question the list below can only guess at. */}
-              <div className="played-source__section">
-                <h4>The source that played</h4>
-                <PlayedSourcePanel
-                  libraryKey={sourcesModalEntry.key}
-                  onPlay={(source, record) => {
-                    setSourcesModalEntry(null);
-                    onPlaySavedSource?.(source, record);
-                  }}
-                />
-              </div>
-
-              <h4 className="played-source__section-heading">Everything found for it</h4>
-              <SavedSourcesList
-                entry={sourcesModalEntry}
-                onPlay={(source, record) => {
-                  setSourcesModalEntry(null);
-                  onPlaySavedSource?.(source, record);
-                }}
-                onOpenPage={() => {
-                  openEntry(sourcesModalEntry);
-                  setSourcesModalEntry(null);
-                }}
-              />
-            </div>
-
-            <div
-              style={{
-                padding: '0.9rem 1.4rem',
-                borderTop: '1px solid var(--border-color)',
-                display: 'flex',
-                justifyContent: 'flex-end',
-                backgroundColor: 'rgba(0,0,0,0.2)',
-              }}
+                  {refreshingKey === sourcesModalEntry.key ? 'Refreshing…' : 'Refresh'}
+                </Button>
+              }
             >
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
+              <Button onClick={() => setSourcesModalEntry(null)}>Close</Button>
+              <Button
+                variant="prominent"
+                icon={ExternalLink}
                 onClick={() => {
                   openEntry(sourcesModalEntry);
                   setSourcesModalEntry(null);
                 }}
               >
-                <ExternalLink size={13} />
-                <span>Open Media Page</span>
-              </button>
-            </div>
+                Open media page
+              </Button>
+            </DialogActions>
+          }
+        >
+          {/* What actually played comes first: it is the answer to the
+              question the list below can only guess at. */}
+          <div className="played-source__section">
+            <h4>The source that played</h4>
+            <PlayedSourcePanel
+              libraryKey={sourcesModalEntry.key}
+              onPlay={(source, record) => {
+                setSourcesModalEntry(null);
+                onPlaySavedSource?.(source, record);
+              }}
+            />
           </div>
-        </div>
+
+          <h4 className="played-source__section-heading">Everything found for it</h4>
+          <SavedSourcesList
+            entry={sourcesModalEntry}
+            onPlay={(source, record) => {
+              setSourcesModalEntry(null);
+              onPlaySavedSource?.(source, record);
+            }}
+            onOpenPage={() => {
+              openEntry(sourcesModalEntry);
+              setSourcesModalEntry(null);
+            }}
+          />
+        </Dialog>
       )}
     </div>
   );

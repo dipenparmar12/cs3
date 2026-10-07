@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Loader2, Search, X } from 'lucide-react';
+import { Check, Loader2, X } from 'lucide-react';
 import './StreamingServicePicker.css';
+import { SearchInput } from './ui/Field';
 
 /**
  * Which streaming services appear in the sidebar — Android's home-screen
@@ -256,22 +257,15 @@ export const StreamingServicePicker: React.FC<Props> = ({ onClose, onChanged }) 
             </button>
           </div>
 
-          <label className="ssp__search">
-            <Search size={15} aria-hidden />
-            <input
-              ref={searchRef}
-              autoFocus
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search services, extensions, languages"
-              aria-label="Search services"
-            />
-            {query && (
-              <button className="ssp__icon-btn" onClick={() => setQuery('')} aria-label="Clear search">
-                <X size={14} />
-              </button>
-            )}
-          </label>
+          <SearchInput
+            ref={searchRef}
+            className="ssp__search"
+            autoFocus
+            label="Search services"
+            placeholder="Search services, extensions, languages"
+            value={query}
+            onChange={setQuery}
+          />
 
           {typeFacet.length > 1 && (
             <FacetRow

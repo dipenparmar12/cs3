@@ -113,7 +113,7 @@ const ProviderRow: React.FC<{
         </div>
         <button
           type="button"
-          className="ext-icon-button"
+          className="icon-button"
           title="Where this provider came from"
           aria-expanded={showDetails}
           onClick={() => setShowDetails((value) => !value)}
@@ -253,7 +253,7 @@ const ExtensionRow: React.FC<{
         </div>
         <button
           type="button"
-          className="ext-icon-button"
+          className="icon-button"
           title="Provenance and compatibility"
           aria-expanded={showDetails}
           onClick={() => setShowDetails((value) => !value)}
@@ -262,7 +262,7 @@ const ExtensionRow: React.FC<{
         </button>
         <button
           type="button"
-          className="ext-icon-button ext-icon-button--danger"
+          className="icon-button btn--danger-text"
           title="Uninstall this add-on and delete the files it downloaded"
           disabled={Boolean(active)}
           onClick={() => onUninstall(extension.internalName)}
@@ -374,7 +374,7 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
         <div className="ext-tree-toolbar__actions">
           <button
             type="button"
-            className="ext-btn"
+            className="btn btn-secondary btn-sm"
             title="Collapse all repositories and providers"
             onClick={collapseAll}
           >
@@ -382,7 +382,7 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
           </button>
           <button
             type="button"
-            className="ext-btn"
+            className="btn btn-secondary btn-sm"
             title="Expand all repositories (Level 1)"
             onClick={expandRepositories}
           >
@@ -390,7 +390,7 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
           </button>
           <button
             type="button"
-            className="ext-btn ext-btn--accent"
+            className="btn btn-primary btn-sm"
             title="Expand all repositories and all providers (Level 2)"
             onClick={expandAllWithProviders}
           >
@@ -472,7 +472,7 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
                 {expanded && extensions.length > 0 ? (
                   <button
                     type="button"
-                    className="ext-btn ext-btn--sm"
+                    className="btn btn-secondary btn-sm"
                     title={areAllRepoExtsOpen ? 'Collapse all providers' : 'Expand all providers'}
                     onClick={toggleAllRepoExts}
                   >
@@ -481,7 +481,7 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
                 ) : null}
                 <button
                   type="button"
-                  className="ext-icon-button"
+                  className="icon-button"
                   title="Where this repository came from"
                   aria-expanded={details[key] ?? false}
                   onClick={() => setDetails((current) => ({ ...current, [key]: !current[key] }))}
@@ -490,7 +490,7 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
                 </button>
                 <button
                   type="button"
-                  className="ext-icon-button ext-icon-button--danger"
+                  className="icon-button btn--danger-text"
                   title="Remove this repository and uninstall the extensions it installed"
                   disabled={busy === `remove:${repository.url}`}
                   onClick={() => onRemoveRepository(repository.url)}

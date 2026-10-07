@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useFlash } from '../../utils/useFlash';
 import { AlertTriangle, Check, Loader2, RefreshCw } from 'lucide-react';
 import { SettingRow } from './SettingRow';
+import { Switch } from '../ui';
 
 /**
  * Where the home screen's catalogue comes from, and whether it works.
@@ -119,19 +120,17 @@ export const HomeSettings: React.FC = () => {
           </>
         }
       >
-        <label className="settings__switch">
-          <input
-            type="checkbox"
-            checked={continueWatching}
-            onChange={async (event) => {
+        <Switch
+          checked={continueWatching}
+          onChange={async (checked) => {
               const response = await window.cloudstream?.setContinueWatchingEnabled?.(
-                event.target.checked
+                checked
               );
               if (response?.ok) setContinueWatching(response.enabled);
             }}
-          />
-          <span>{continueWatching ? 'Shown' : 'Hidden'}</span>
-        </label>
+          label="Show Continue watching"
+          stateLabel={continueWatching ? 'Shown' : 'Hidden'}
+        />
       </SettingRow>
 
       <SettingRow

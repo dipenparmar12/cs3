@@ -9,7 +9,8 @@
  * clears it, then closes it.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Search, X } from 'lucide-react';
+import { Search } from 'lucide-react';
+import { SearchInput } from './ui/Field';
 import { SCREEN_SEARCH_FOCUS_EVENT, claimScreenSearch } from '../utils/screenSearch';
 
 interface ScreenSearchProps {
@@ -63,51 +64,24 @@ export const ScreenSearch: React.FC<ScreenSearchProps> = ({ label, value, onChan
     );
   }
 
+  // The shared search field, in its ambient variant: same keys (Escape clears,
+  // then closes), same clear button and labelling as every other search.
   return (
-    <div className="screen-search screen-search--open" role="search" title={tooltip}>
-      <Search size={14} className="screen-search__icon" aria-hidden />
-      <input
-        ref={inputRef}
-        type="text"
-        className="screen-search__input"
-        placeholder={`Find in ${label}…`}
-        aria-label={`Find in ${label}`}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        onKeyDown={(event) => {
-          if (event.key !== 'Escape') return;
-          // Consumed only when it did something, so Escape still reaches
-          // whatever else listens for it once this has nothing left to close.
-          event.stopPropagation();
-          if (value) onChange('');
-          else inputRef.current?.blur();
-        }}
-      />
-      {value && matches !== undefined && (
-        <span className={`screen-search__count${matches === 0 ? ' screen-search__count--none' : ''}`}>
-          {matches === 0 ? 'No matches' : `${matches} found`}
-        </span>
-      )}
-      {!value && <kbd className="screen-search__kbd">Ctrl F</kbd>}
-      {value && (
-        <button
-          type="button"
-          className="screen-search__clear"
-          // Before blur, so clearing does not first collapse the field under the pointer.
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => {
-            onChange('');
-            inputRef.current?.focus();
-          }}
-          aria-label="Clear"
-          title="Clear (Esc)"
-        >
-          <X size={13} />
-        </button>
-      )}
-    </div>
+    <SearchInput
+      ref={inputRef}
+      className="screen-search screen-search--open"
+      variant="ambient"
+      label={`Find in ${label}`}
+      placeholder={`Find in ${label}…`}
+      title={tooltip}
+      value={value}
+      onChange={onChange}
+      meta={matches === undefined ? undefined : matches === 0 ? 'No matches' : `${matches} found`}
+      metaTone={matches === 0 ? 'warn' : 'default'}
+      shortcut="Ctrl F"
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+    />
   );
 };
 

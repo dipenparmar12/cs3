@@ -47,8 +47,8 @@ import {
   formatEventActionText,
 } from '../utils/historyGrouping';
 import { downloadHistoryCsv, toHistoryCsv } from '../utils/historyExport';
-import { useDismissable } from '../utils/useDismissable';
 import { ScreenSearch } from '../components/ScreenSearch';
+import { Button, Dialog, DialogActions, Menu, Select } from '../components/ui';
 import { useScreenSearch } from '../utils/useScreenSearch';
 
 interface HistoryViewProps {
@@ -167,16 +167,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Export CSV State & Dropdown
-  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const { message: exportSuccessMessage, flash: setExportSuccessMessage } = useFlash<string>(3500);
-  const exportMenuRef = useRef<HTMLDivElement | null>(null);
-
-  const closeExportMenu = useCallback(() => setExportMenuOpen(false), []);
-  useDismissable(exportMenuOpen, exportMenuRef, closeExportMenu);
 
   const handleExportFilteredCsv = () => {
-    setExportMenuOpen(false);
     if (events.length === 0) return;
     const dateStr = new Date().toISOString().slice(0, 10);
     downloadHistoryCsv(events, `cloudstream-history-filtered-${dateStr}.csv`);
@@ -184,7 +178,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   };
 
   const handleExportAllCsv = async () => {
-    setExportMenuOpen(false);
     if (!window.cloudstream) return;
     setExporting(true);
     try {
@@ -202,7 +195,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   };
 
   const handleCopyCsvToClipboard = async () => {
-    setExportMenuOpen(false);
     if (events.length === 0) return;
     const csv = toHistoryCsv(events);
     await navigator.clipboard.writeText(csv);
@@ -541,139 +533,86 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
               }
               hint="titles, episodes, years, providers, quality and errors"
             />
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
+            <Button
+              size="compact"
+              icon={RotateCw}
+              loading={refreshing}
               onClick={() => {
                 setRefreshing(true);
                 fetchHistory();
               }}
-              disabled={loading || refreshing}
+              disabled={loading}
               title="Refresh history"
             >
-              <RotateCw size={14} className={refreshing ? 'animate-spin' : ''} />
-              <span>Refresh</span>
-            </button>
+              Refresh
+            </Button>
 
-            {/* Export CSV Dropdown */}
             {events.length > 0 && (
-              <div style={{ position: 'relative' }} ref={exportMenuRef}>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => setExportMenuOpen((v) => !v)}
-                  disabled={exporting}
-                  title="Export your watch history as a spreadsheet"
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                >
-                  <FileSpreadsheet size={14} />
-                  <span>{exportSuccessMessage ? exportSuccessMessage : 'Export CSV'}</span>
-                  <ChevronDown size={12} />
-                </button>
-
-                {exportMenuOpen && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      right: 0,
-                      top: 'calc(100% + 4px)',
-                      backgroundColor: '#161b26',
-                      borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--border-color)',
-                      boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.75)',
-                      padding: '0.35rem',
-                      zIndex: 1000,
-                      minWidth: '240px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.2rem',
-                    }}
-                  >
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={handleExportFilteredCsv}
-                      style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '0.78rem', padding: '0.45rem 0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
-                    >
-                      <Download size={14} style={{ marginTop: '2px', flexShrink: 0, color: '#60a5fa' }} />
-                      <div>
-                        <div style={{ fontWeight: 600, color: '#fff' }}>Export Current View ({events.length})</div>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>Filtered & searched items</span>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={handleExportAllCsv}
-                      style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '0.78rem', padding: '0.45rem 0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
-                    >
-                      <FileSpreadsheet size={14} style={{ marginTop: '2px', flexShrink: 0, color: '#34d399' }} />
-                      <div>
-                        <div style={{ fontWeight: 600, color: '#fff' }}>Export All History ({stats.total})</div>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>Complete durable database logs</span>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={handleCopyCsvToClipboard}
-                      style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '0.78rem', padding: '0.45rem 0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
-                    >
-                      <Copy size={14} style={{ marginTop: '2px', flexShrink: 0, color: '#a78bfa' }} />
-                      <div>
-                        <div style={{ fontWeight: 600, color: '#fff' }}>Copy CSV to Clipboard</div>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>Paste into Excel, Sheets, or notes</span>
-                      </div>
-                    </button>
-                  </div>
+              <Menu
+                label="Export history"
+                trigger={(props) => (
+                  <Button {...props} size="compact" icon={FileSpreadsheet} loading={exporting}
+                    title="Export your watch history as a spreadsheet">
+                    {exportSuccessMessage ? exportSuccessMessage : 'Export CSV'}
+                    <ChevronDown size={12} aria-hidden />
+                  </Button>
                 )}
-              </div>
+                items={[
+                  {
+                    label: `Export current view (${events.length})`,
+                    description: 'The items the find and filters leave',
+                    icon: Download,
+                    onSelect: handleExportFilteredCsv,
+                  },
+                  {
+                    label: `Export all history (${stats.total})`,
+                    description: 'Every record, whatever is filtered',
+                    icon: FileSpreadsheet,
+                    onSelect: () => void handleExportAllCsv(),
+                  },
+                  {
+                    label: 'Copy CSV to clipboard',
+                    description: 'Paste into Excel, Sheets, or notes',
+                    icon: Copy,
+                    onSelect: () => void handleCopyCsvToClipboard(),
+                  },
+                ]}
+              />
             )}
 
             {events.length > 0 && (
               <>
-                <button
-                  type="button"
-                  className={`btn btn-sm ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
+                <Button
+                  size="compact"
+                  variant={selectMode ? 'prominent' : 'default'}
+                  aria-pressed={selectMode}
                   onClick={() => {
                     setSelectMode((v) => !v);
                     setSelectedIds(new Set());
                   }}
                 >
-                  {selectMode ? 'Cancel Selection' : 'Select'}
-                </button>
+                  {selectMode ? 'Cancel selection' : 'Select'}
+                </Button>
 
                 {selectMode && (
                   <>
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={selectAll}>
-                      {selectedIds.size === events.length ? 'Deselect All' : 'Select All'}
-                    </button>
+                    <Button size="compact" onClick={selectAll}>
+                      {selectedIds.size === events.length ? 'Select none' : 'Select all'}
+                    </Button>
 
                     {selectedIds.size > 0 && (
-                      <button
-                        type="button"
-                        className="btn btn-danger btn-sm"
-                        onClick={handleDeleteSelected}
-                      >
-                        <Trash2 size={14} />
-                        <span>Delete ({selectedIds.size})</span>
-                      </button>
+                      <Button size="compact" variant="destructive" icon={Trash2} onClick={handleDeleteSelected}>
+                        Delete {selectedIds.size}
+                      </Button>
                     )}
                   </>
                 )}
 
                 {!selectMode && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    style={{ color: '#fb7185', borderColor: 'rgba(244, 63, 94, 0.3)' }}
-                    onClick={() => setConfirmClearOpen(true)}
-                  >
-                    <Trash2 size={14} />
-                    <span>Clear All</span>
-                  </button>
+                  <Button size="compact" variant="ambient" icon={Trash2} className="btn--danger-text"
+                    onClick={() => setConfirmClearOpen(true)}>
+                    Clear all
+                  </Button>
                 )}
               </>
             )}
@@ -845,34 +784,34 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
           {/* Media Type Dropdown */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
             <Filter size={14} style={{ color: 'var(--text-subtle)' }} />
-            <select
+            <Select
+              size="compact"
+              aria-label="Type"
               value={mediaTypeFilter}
-              onChange={(e) => setMediaTypeFilter(e.target.value as any)}
-              className="input"
-              style={{ fontSize: '0.8rem', padding: '0.35rem 0.6rem', backgroundColor: 'rgba(255, 255, 255, 0.04)' }}
+              onChange={(e) => setMediaTypeFilter(e.target.value as typeof mediaTypeFilter)}
             >
               <option value="all">All Types</option>
               <option value="movie">Movies</option>
               <option value="series">Series</option>
               <option value="anime">Anime</option>
-            </select>
+            </Select>
           </div>
 
           {/* Sort Dropdown */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
             <ArrowUpDown size={14} style={{ color: 'var(--text-subtle)' }} />
-            <select
+            <Select
+              size="compact"
+              aria-label="Sort"
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as any)}
-              className="input"
-              style={{ fontSize: '0.8rem', padding: '0.35rem 0.6rem', backgroundColor: 'rgba(255, 255, 255, 0.04)' }}
+              onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
             >
               <option value="recent">Most Recent</option>
               <option value="oldest">Oldest First</option>
               <option value="played">Recently Played</option>
               <option value="failed">Recently Failed</option>
               <option value="downloaded">Recently Downloaded</option>
-            </select>
+            </Select>
           </div>
 
           {/* Expand/Collapse All (Grouped Mode Only) */}
@@ -2118,53 +2057,25 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
 
       {/* Confirm Clear Modal */}
       {confirmClearOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 99999,
-            backgroundColor: 'rgba(0, 0, 0, 0.75)',
-            backdropFilter: 'blur(6px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '1.5rem',
-          }}
-          onClick={() => setConfirmClearOpen(false)}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: '420px',
-              backgroundColor: '#161b26',
-              borderRadius: 'var(--radius-lg)',
-              border: '1px solid var(--border-color)',
-              padding: '1.5rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '1rem',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', color: '#fb7185' }}>
-              <AlertTriangle size={24} />
-              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
-                Clear All Media History?
-              </h3>
-            </div>
-            <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              This will permanently erase your media activity logs. Your saved Library items, downloads, and cached sources will remain untouched.
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '0.5rem' }}>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setConfirmClearOpen(false)}>
+        <Dialog
+          title="Clear all media history?"
+          description="This permanently erases your activity log. Your library, downloads and cached sources are not touched."
+          icon={<AlertTriangle size={18} />}
+          tone="danger"
+          size="sm"
+          onClose={() => setConfirmClearOpen(false)}
+          initialFocus='[data-autofocus="cancel"]'
+          footer={
+            <DialogActions>
+              <Button onClick={() => setConfirmClearOpen(false)} data-autofocus="cancel">
                 Cancel
-              </button>
-              <button type="button" className="btn btn-danger btn-sm" onClick={handleClearAll}>
-                Yes, Clear All History
-              </button>
-            </div>
-          </div>
-        </div>
+              </Button>
+              <Button variant="destructive" icon={Trash2} onClick={handleClearAll}>
+                Clear all history
+              </Button>
+            </DialogActions>
+          }
+        />
       )}
     </div>
   );

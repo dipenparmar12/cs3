@@ -32,6 +32,12 @@ interface DialogProps {
   /** Selector inside the dialog to focus on open; defaults to the first control. */
   initialFocus?: string;
   className?: string;
+  /**
+   * False while work the dialog started is running (an install, a batch
+   * download): Escape, the backdrop and the close button then do nothing,
+   * because a stray keypress must not abandon it half-way.
+   */
+  dismissable?: boolean;
 }
 
 const FOCUSABLE =
@@ -48,12 +54,15 @@ export const Dialog: React.FC<DialogProps> = ({
   footer,
   initialFocus,
   className,
+  dismissable = true,
 }) => {
   const panel = useRef<HTMLDivElement | null>(null);
   const titleId = useId();
   const descriptionId = useId();
   const close = useRef(onClose);
   close.current = onClose;
+  const canDismiss = useRef(dismissable);
+  canDismiss.current = dismissable;
 
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
@@ -67,7 +76,7 @@ export const Dialog: React.FC<DialogProps> = ({
       if (event.key === 'Escape') {
         event.stopPropagation();
         event.preventDefault();
-        close.current();
+        if (canDismiss.current) close.current();
         return;
       }
       if (event.key !== 'Tab' || !root) return;
@@ -91,7 +100,7 @@ export const Dialog: React.FC<DialogProps> = ({
   }, [initialFocus]);
 
   return (
-    <div className="modal-backdrop" onClick={onClose} role="presentation">
+    <div className="modal-backdrop" onClick={() => dismissable && onClose()} role="presentation">
       <div
         ref={panel}
         className={`ui-dialog ui-dialog--${size}${className ? ` ${className}` : ''}`}
@@ -111,7 +120,7 @@ export const Dialog: React.FC<DialogProps> = ({
               </p>
             ) : null}
           </div>
-          <button type="button" className="ui-dialog__close" onClick={onClose} aria-label="Close">
+          <button type="button" className="ui-dialog__close" onClick={onClose} aria-label="Close" disabled={!dismissable}>
             <X size={16} />
           </button>
         </header>

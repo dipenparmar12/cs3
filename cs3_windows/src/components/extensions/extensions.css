@@ -129,9 +129,7 @@
 /* --- primitives --- */
 
 .ext-check,
-.ext-disclosure,
-.ext-toggle,
-.ext-icon-button {
+.ext-disclosure {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -146,8 +144,7 @@
 }
 
 .ext-check:hover,
-.ext-disclosure:hover,
-.ext-icon-button:hover:not(:disabled) { color: var(--text-main); background: var(--bg-input); }
+.ext-disclosure:hover { color: var(--text-main); background: var(--bg-input); }
 
 .ext-check--on { color: var(--accent-primary); }
 .ext-check__partial { display: inline-flex; align-items: center; justify-content: center; border: 1.5px solid currentColor; border-radius: 3px; }
@@ -159,15 +156,8 @@
  */
 .ext-disclosure--placeholder { visibility: hidden; pointer-events: none; }
 
-.ext-toggle { color: var(--text-subtle); }
-.ext-toggle--on { color: var(--accent-primary); }
-.ext-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
-.ext-toggle:focus-visible,
 .ext-check:focus-visible,
 .ext-disclosure:focus-visible { outline: 2px solid var(--accent-light); outline-offset: 1px; }
-
-.ext-icon-button--danger:hover:not(:disabled) { color: var(--status-error); }
-.ext-icon-button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .ext-badge {
   display: inline-flex;
@@ -227,27 +217,7 @@
 
 .ext-link:hover { color: var(--accent-light); }
 
-/* --- buttons --- */
-
-.ext-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.38rem 0.7rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-color);
-  background: var(--bg-input);
-  color: var(--text-main);
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition: var(--transition);
-}
-
-.ext-btn:hover:not(:disabled) { background: var(--bg-card-hover); }
-.ext-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.ext-btn--primary { background: var(--accent-primary); border-color: var(--accent-primary); color: #fff; }
-.ext-btn--primary:hover:not(:disabled) { background: var(--accent-hover); }
-.ext-btn--danger { color: var(--status-error); }
+/* Buttons: the shared .btn family (src/styles/ui.css). The old .ext-btn set is gone. */
 
 /* --- filter bar --- */
 
@@ -264,39 +234,8 @@
 .ext-filters__row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 .ext-filters__label { font-size: 0.7rem; color: var(--text-subtle); text-transform: uppercase; letter-spacing: 0.05em; }
 
-.ext-search {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.35rem 0.6rem;
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  flex: 1;
-  min-width: 190px;
-}
-
-.ext-search__icon { color: var(--text-subtle); flex-shrink: 0; }
-
-.ext-search__input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: var(--text-main);
-  font-size: 0.83rem;
-  min-width: 0;
-}
-
-.ext-select {
-  padding: 0.35rem 0.5rem;
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  color: var(--text-main);
-  font-size: 0.8rem;
-  cursor: pointer;
-}
+/* The shared SearchInput and Select (compact); layout only. */
+.ext-search { flex: 1; min-width: 190px; }
 
 /* --- bulk action bar --- */
 
@@ -451,9 +390,8 @@
 .ext-adult em { font-style: normal; font-size: 0.72rem; color: var(--text-subtle); }
 
 @media (prefers-reduced-motion: reduce) {
-  .ext-btn,
+  .btn,
   .ext-chip,
-  .ext-toggle,
   .ext-check,
   .ext-progress__fill {
     transition: none;
@@ -576,7 +514,6 @@
 
 /* --- a repository's extensions, as a list --- */
 
-.ext-btn--icon { padding: 0.32rem 0.42rem; }
 
 .ext-list__toolbar {
   display: flex;
@@ -788,21 +725,6 @@
   align-items: center;
   gap: 0.4rem;
   flex-wrap: wrap;
-}
-
-.ext-btn--accent {
-  background: var(--accent-primary);
-  border-color: var(--accent-primary);
-  color: #fff;
-}
-
-.ext-btn--accent:hover {
-  background: var(--accent-hover, #2563eb);
-}
-
-.ext-btn--sm {
-  padding: 0.22rem 0.5rem;
-  font-size: 0.73rem;
 }
 
 /* --- parent card job status --- */

@@ -62,26 +62,8 @@
   background: var(--bg-card-hover);
 }
 
-.ssp__search {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-color);
-  background: var(--bg-card);
-  color: var(--text-muted);
-}
-
-.ssp__search input {
-  flex: 1;
-  min-width: 0;
-  background: none;
-  border: none;
-  outline: none;
-  color: #fff;
-  font-size: 0.85rem;
-}
+/* The shared SearchInput; layout only. */
+.ssp__search { width: 100%; }
 
 .ssp__chips {
   display: flex;

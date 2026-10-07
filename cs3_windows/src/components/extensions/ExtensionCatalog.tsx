@@ -93,7 +93,7 @@ const RowAction: React.FC<{
     return (
       <button
         type="button"
-        className="ext-btn ext-item__action"
+        className="btn btn-secondary btn-sm ext-item__action"
         title="Waiting for a free slot — click to cancel"
         onClick={() => onCancel(job.id)}
       >
@@ -103,7 +103,7 @@ const RowAction: React.FC<{
   }
   if (job?.state === 'running') {
     return (
-      <button type="button" className="ext-btn ext-item__action" disabled>
+      <button type="button" className="btn btn-secondary btn-sm ext-item__action" disabled>
         <Loader2 size={13} className="spin" />
         {job.kind === 'update' ? 'Updating' : 'Installing'}
         {job.percent ? ` ${Math.round(job.percent)}%` : '…'}
@@ -112,7 +112,7 @@ const RowAction: React.FC<{
   }
   if (job?.state === 'failed' && !installed) {
     return (
-      <button type="button" className="ext-btn ext-item__action" onClick={() => onRetry(job.id)}>
+      <button type="button" className="btn btn-secondary btn-sm ext-item__action" onClick={() => onRetry(job.id)}>
         <RotateCcw size={13} /> Retry
       </button>
     );
@@ -123,7 +123,7 @@ const RowAction: React.FC<{
         <Check size={13} /> Installed
         <button
           type="button"
-          className="ext-btn ext-btn--icon ext-btn--danger"
+          className="btn btn-ghost btn-sm btn-icon btn--danger-text"
           title={`Uninstall ${plugin.name}`}
           aria-label={`Uninstall ${plugin.name}`}
           disabled={uninstalling || !installed}
@@ -135,7 +135,7 @@ const RowAction: React.FC<{
     );
   }
   return (
-    <button type="button" className="ext-btn ext-btn--primary ext-item__action" onClick={onInstall}>
+    <button type="button" className="btn btn-primary btn-sm ext-item__action" onClick={onInstall}>
       <Download size={13} /> Install
     </button>
   );
@@ -384,7 +384,7 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
                   {!installed && !report ? (
                     <button
                       type="button"
-                      className="ext-btn ext-btn--icon"
+                      className="btn btn-secondary btn-sm btn-icon"
                       title={
                         technical
                           ? 'Check what this archive needs before installing it'

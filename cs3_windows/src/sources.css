@@ -3708,36 +3708,8 @@
   border: 1px solid rgba(245, 158, 11, 0.4);
 }
 
-.settings__find {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.45rem 0.6rem;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--bg-input);
-  color: var(--text-subtle);
-}
-.settings__find:focus-within { border-color: var(--accent-primary); color: var(--accent-light); }
-.settings__find input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: none;
-  color: var(--text-main);
-  font-size: 0.82rem;
-}
-.settings__find input::-webkit-search-cancel-button { display: none; }
-.settings__find-clear {
-  display: inline-flex;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--text-subtle);
-  cursor: pointer;
-}
-.settings__find-clear:hover { color: #fff; }
+/* The find field is the shared SearchInput (compact); this only places it. */
+.settings__find { width: 100%; }
 
 .settings__content { display: flex; flex-direction: column; gap: 1.1rem; min-width: 0; }
 .settings-found { display: contents; }
@@ -3895,21 +3867,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.settings__switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  cursor: pointer;
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: #fff;
-}
-.settings__switch input {
-  width: 17px;
-  height: 17px;
-  accent-color: var(--accent-primary);
-  cursor: pointer;
-}
+/* .settings__switch is gone: settings use the shared Switch (src/components/ui/Choice.tsx). */
 
 /* The explanation, only when asked for. */
 .hint {
@@ -6173,10 +6131,8 @@
    Two choices presented as equal-weight targets rather than an OK/Cancel pair,
    because they are genuinely different actions and neither is "the default".
    The destructive one is coloured, not hidden — the risk is worth seeing. */
-.delete-download { max-width: 460px; display: flex; flex-direction: column; gap: 1rem; padding: 1.25rem; }
+/* .delete-download is a ui-dialog now; its layout comes from there. */
 
-.delete-download__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
-.delete-download__head h3 { margin: 0; font-size: 1.02rem; }
 
 .delete-download__choices { display: flex; flex-direction: column; gap: .55rem; }
 
@@ -10731,64 +10687,13 @@ video::cue {
 }
 .screen-search--open {
   width: min(280px, 60vw);
-  gap: 0.4rem;
-  padding: 0 0.35rem 0 0.7rem;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  min-height: 32px;
   animation: screen-search-open 0.16s ease-out;
-}
-.screen-search--open:focus-within {
-  border-color: rgba(96, 165, 250, 0.45);
-  background: rgba(255, 255, 255, 0.06);
 }
 @keyframes screen-search-open {
   from { width: 32px; opacity: 0.4; }
   to { width: min(280px, 60vw); opacity: 1; }
 }
-.screen-search__icon { flex: 0 0 auto; color: var(--text-subtle); }
-.screen-search__input {
-  flex: 1 1 auto;
-  min-width: 0;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: var(--text-main);
-  font-size: 0.8rem;
-  font-family: inherit;
-}
-.screen-search__input::placeholder { color: var(--text-subtle); }
-.screen-search__count {
-  flex: 0 0 auto;
-  font-size: 0.68rem;
-  color: var(--text-subtle);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.screen-search__count--none { color: var(--status-warning); }
-.screen-search__kbd {
-  flex: 0 0 auto;
-  font-family: inherit;
-  font-size: 0.62rem;
-  color: var(--text-subtle);
-  padding: 0.05rem 0.35rem;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
-  margin-right: 0.25rem;
-}
-.screen-search__clear {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: none;
-  background: transparent;
-  color: var(--text-subtle);
-  cursor: pointer;
-}
-.screen-search__clear:hover { color: var(--text-main); background: rgba(255, 255, 255, 0.08); }
 
 /* A screen heading with its find control on the right. */
 .screen-head {

@@ -353,7 +353,7 @@ export const ExtensionsScreen: React.FC = () => {
         </p>
         <button
           type="button"
-          className="ext-btn"
+          className="btn btn-secondary btn-sm"
           onClick={() => void refresh()}
           disabled={state.loading || busy !== null}
         >
@@ -431,7 +431,7 @@ export const ExtensionsScreen: React.FC = () => {
             </div>
             <button
               type="button"
-              className="ext-btn ext-btn--primary"
+              className="btn btn-primary btn-sm"
               onClick={() => setTab('builtin')}
             >
               View Built-in Sources

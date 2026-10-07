@@ -74,7 +74,7 @@ export const CompatibilityReport: React.FC<{
               : verdict.detail}
           </div>
         </div>
-        <button type="button" className="ext-btn" onClick={onClose} title="Close">
+        <button type="button" className="btn btn-secondary btn-sm" onClick={onClose} title="Close">
           <X size={12} />
         </button>
       </div>

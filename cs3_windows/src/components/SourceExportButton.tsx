@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback } from 'react';
 import { useFlash } from '../utils/useFlash';
 import { Check, ChevronDown, ClipboardCopy } from 'lucide-react';
 import type { TorrentResult } from '../types/torrent';
@@ -8,7 +8,7 @@ import {
   toSourceText,
   type SourceProvenance,
 } from '../utils/sourceExport';
-import { useDismissable } from '../utils/useDismissable';
+import { Menu } from './ui/Menu';
 
 /**
  * "Copy these sources", wherever a source list is shown.
@@ -30,15 +30,9 @@ export const SourceExportButton: React.FC<{
   heading?: string;
   compact?: boolean;
 }> = ({ sources, provenanceFor, heading, compact }) => {
-  const [open, setOpen] = useState(false);
   const { message: copied, flash: setCopied } = useFlash<string>(2000);
-  const wrapper = useRef<HTMLDivElement | null>(null);
-
-  const close = useCallback(() => setOpen(false), []);
-  useDismissable(open, wrapper, close);
 
   const write = useCallback(async (label: string, text: string) => {
-    setOpen(false);
     if (!text.trim()) return;
     try {
       await navigator.clipboard.writeText(text);
@@ -54,7 +48,7 @@ export const SourceExportButton: React.FC<{
   const label = heading ?? `Sources (${sources.length})`;
 
   return (
-    <div className="source-export" ref={wrapper}>
+    <div className="source-export">
       <button
         type="button"
         className={`source-export__main${compact ? ' source-export__main--compact' : ''}`}
@@ -64,54 +58,38 @@ export const SourceExportButton: React.FC<{
         {copied ? <Check size={13} /> : <ClipboardCopy size={13} />}
         <span>{copied ? 'Copied' : `Copy ${sources.length}`}</span>
       </button>
-      <button
-        type="button"
-        className="source-export__more"
-        onClick={() => setOpen((value) => !value)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label="Other copy formats"
-        title="Other formats"
-      >
-        <ChevronDown size={13} />
-      </button>
-
-      {open && (
-        <div className="source-export__menu" role="menu">
+      <Menu
+        label="Other copy formats"
+        trigger={(props) => (
           <button
+            {...props}
             type="button"
-            role="menuitem"
-            onClick={() => void write('csv', toSourceCsv(sources, provenanceFor))}
+            className="source-export__more"
+            aria-label="Other copy formats"
+            title="Other formats"
           >
-            Copy as CSV
-            <span>Spreadsheet columns, one row per source</span>
+            <ChevronDown size={13} />
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => void write('text', toSourceText(sources, provenanceFor, label))}
-          >
-            Copy as text
-            <span>Readable in a chat window or an issue</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() =>
-              void write(
-                'links',
-                sources
-                  .map(sourceAddress)
-                  .filter(Boolean)
-                  .join('\n')
-              )
-            }
-          >
-            Copy links only
-            <span>One per line, for a downloader or a browser</span>
-          </button>
-        </div>
-      )}
+        )}
+        items={[
+          {
+            label: 'Copy as CSV',
+            description: 'Spreadsheet columns, one row per source',
+            onSelect: () => void write('csv', toSourceCsv(sources, provenanceFor)),
+          },
+          {
+            label: 'Copy as text',
+            description: 'Readable in a chat window or an issue',
+            onSelect: () => void write('text', toSourceText(sources, provenanceFor, label)),
+          },
+          {
+            label: 'Copy links only',
+            description: 'One per line, for a downloader or a browser',
+            onSelect: () =>
+              void write('links', sources.map(sourceAddress).filter(Boolean).join('\n')),
+          },
+        ]}
+      />
     </div>
   );
 };

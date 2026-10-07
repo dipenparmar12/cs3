@@ -350,10 +350,9 @@ export const ExtensionUpdates: React.FC<ExtensionUpdatesProps> = ({ onUpdated, o
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
           <button
             type="button"
-            className="btn btn-secondary"
+            className="btn btn-secondary btn-sm"
             onClick={check}
             disabled={checking || progress !== null}
-            style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
           >
             <RefreshCw size={12} className={checking ? 'spin' : undefined} />
             <span>{checking ? 'Checking…' : 'Check for Updates'}</span>
@@ -362,18 +361,9 @@ export const ExtensionUpdates: React.FC<ExtensionUpdatesProps> = ({ onUpdated, o
           {failedOutcomes.length > 0 && (
             <button
               type="button"
-              className="btn btn-secondary"
+              className="btn btn-secondary btn-sm btn--danger-text"
               onClick={retryFailed}
               disabled={progress !== null}
-              style={{
-                fontSize: '0.75rem',
-                padding: '0.3rem 0.65rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                borderColor: 'var(--status-error, #ef4444)',
-                color: '#ff8888',
-              }}
             >
               <RotateCcw size={12} className={progress !== null ? 'spin' : undefined} />
               <span>Retry Failed ({failedOutcomes.length})</span>
@@ -383,10 +373,9 @@ export const ExtensionUpdates: React.FC<ExtensionUpdatesProps> = ({ onUpdated, o
           {activeUpdates.length > 0 && (
             <button
               type="button"
-              className="btn btn-primary"
+              className="btn btn-primary btn-sm"
               onClick={updateEverything}
               disabled={progress !== null || checking}
-              style={{ fontSize: '0.75rem', padding: '0.3rem 0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
             >
               <ArrowUpCircle size={13} />
               <span>

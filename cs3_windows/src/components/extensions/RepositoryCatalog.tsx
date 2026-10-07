@@ -229,12 +229,12 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
           placeholder="https://example.com/repo.json — or a project page"
           onChange={(event) => setCustomUrl(event.target.value)}
         />
-        <button type="submit" className="ext-btn" disabled={!customUrl.trim()}>
+        <button type="submit" className="btn btn-secondary btn-sm" disabled={!customUrl.trim()}>
           Browse
         </button>
         <button
           type="button"
-          className="ext-btn"
+          className="btn btn-secondary btn-sm"
           disabled={!customUrl.trim() || working(jobFor(`repo-add:${customUrl.trim()}`))}
           title="Keep this repository in your list without installing anything"
           onClick={() => {
@@ -258,7 +258,7 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
           {expandedUrl ? (
             <button
               type="button"
-              className="ext-btn"
+              className="btn btn-secondary btn-sm"
               title="Collapse open repository"
               onClick={onCollapse}
             >
@@ -386,7 +386,7 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                 */}
                 <button
                   type="button"
-                  className="ext-btn ext-btn--primary"
+                  className="btn btn-primary btn-sm"
                   aria-expanded={open}
                   onClick={() =>
                     open
@@ -408,7 +408,7 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                 ) : (
                   <button
                     type="button"
-                    className="ext-btn"
+                    className="btn btn-secondary btn-sm"
                     disabled={working(addJob)}
                     title="Keep this repository in your list without installing anything"
                     onClick={() => onAdd(repository.rawRepoUrl, repository.name)}
@@ -418,7 +418,7 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                 )}
                 <button
                   type="button"
-                  className="ext-btn"
+                  className="btn btn-secondary btn-sm"
                   disabled={working(installJob)}
                   title="Install every extension this repository publishes, in the background"
                   onClick={() => onInstallAll(repository.rawRepoUrl, repository.name)}
@@ -428,7 +428,7 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                 {here ? (
                   <button
                     type="button"
-                    className="ext-btn ext-btn--danger"
+                    className="btn btn-secondary btn-sm btn--danger-text"
                     disabled={busy === `remove:${repository.rawRepoUrl}`}
                     onClick={() => onRemove(repository.rawRepoUrl)}
                   >

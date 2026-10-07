@@ -84,7 +84,7 @@ const JobRow: React.FC<{
       {job.state === 'queued' ? (
         <button
           type="button"
-          className="ext-btn ext-btn--icon"
+          className="btn btn-secondary btn-sm btn-icon"
           aria-label={`Cancel ${job.label}`}
           title="Cancel"
           onClick={() => onCancel(job.id)}
@@ -93,7 +93,7 @@ const JobRow: React.FC<{
         </button>
       ) : null}
       {job.state === 'failed' || job.state === 'cancelled' ? (
-        <button type="button" className="ext-btn" onClick={() => onRetry(job.id)}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onRetry(job.id)}>
           <RotateCcw size={12} /> Retry
         </button>
       ) : null}
@@ -133,18 +133,18 @@ export const JobsTray: React.FC = () => {
         <span className="ext-jobs__hint">Keeps going if you leave this screen</span>
         <span className="ext-bulk__spacer" />
         {snapshot.queued > 0 ? (
-          <button type="button" className="ext-btn" onClick={() => void cancelQueued()}>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void cancelQueued()}>
             Cancel waiting
           </button>
         ) : null}
         {finished > 0 ? (
-          <button type="button" className="ext-btn" onClick={() => void clearFinished()}>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void clearFinished()}>
             Clear finished
           </button>
         ) : null}
         <button
           type="button"
-          className="ext-btn ext-btn--icon"
+          className="btn btn-secondary btn-sm btn-icon"
           aria-expanded={open}
           aria-label={open ? 'Hide activity' : 'Show activity'}
           onClick={() => setOpen((value) => !value)}

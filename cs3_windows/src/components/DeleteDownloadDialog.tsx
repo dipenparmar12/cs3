@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { AlertTriangle, FileX, ListX, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { Checkbox, Dialog } from './ui';
+import { AlertTriangle, FileX, ListX } from 'lucide-react';
 
 export type DeletePreference = 'ask' | 'list-only' | 'list-and-file';
 
@@ -31,38 +32,12 @@ export const DeleteDownloadDialog: React.FC<{
 }> = ({ title, count = 1, hasFile, onConfirm, onCancel }) => {
   const [remember, setRemember] = useState(false);
 
-  // Escape cancels, which is the safe half of a destructive choice.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onCancel();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel]);
-
+  // Escape cancels (the safe half of a destructive choice) — the shared Dialog
+  // consumes it in the capture phase, so the player behind never sees it.
   const label = count > 1 ? `${count} downloads` : title;
 
   return (
-    <div className="modal-backdrop" onClick={onCancel} role="presentation">
-      <div
-        className="modal delete-download"
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="delete-download-title"
-      >
-        <div className="delete-download__head">
-          <h3 id="delete-download-title">Remove {label}?</h3>
-          <button
-            type="button"
-            className="btn btn-secondary btn-icon"
-            onClick={onCancel}
-            title="Cancel"
-          >
-            <X size={15} />
-          </button>
-        </div>
-
+    <Dialog title={`Remove ${label}?`} size="sm" onClose={onCancel} className="delete-download">
         <div className="delete-download__choices">
           <button
             type="button"
@@ -97,14 +72,7 @@ export const DeleteDownloadDialog: React.FC<{
           </button>
         </div>
 
-        <label className="delete-download__remember">
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={(event) => setRemember(event.target.checked)}
-          />
-          <span>Remember my choice and stop asking</span>
-        </label>
+        <Checkbox checked={remember} onChange={setRemember} label="Remember my choice and stop asking" />
 
         {remember && (
           <p className="delete-download__note">
@@ -112,7 +80,6 @@ export const DeleteDownloadDialog: React.FC<{
             You can change this again in Settings → Downloads.
           </p>
         )}
-      </div>
-    </div>
+    </Dialog>
   );
 };
