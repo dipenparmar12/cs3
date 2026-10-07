@@ -152,6 +152,8 @@ import { HistoryStore } from './cs3/historyStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
 import { PageSnapshotStore, type PageSnapshotInput } from './cs3/pageSnapshot.ts';
 import { WebViewHost, type WebViewResolveRequest } from './cs3/webViewHost';
+import { CLEARANCE_COOKIE, ClearanceService } from './cs3/clearance.ts';
+import { relayInSession } from './cs3/clearanceRelay.ts';
 import { DiscoveryService } from './cs3/discovery';
 import { SourcePrefetcher } from './cs3/sourcePrefetcher';
 import { TitleEnricher } from './cs3/titleEnricher';
@@ -308,9 +310,35 @@ const pluginManager = new PluginManager(datastore);
  * grant without also granting whatever the next method would be.
  */
 const webViewHost = new WebViewHost();
+/**
+ * Bot-wall clearances for the JVM and the indexers alike — see `clearance.ts`.
+ * The browser partition's cookie jar is the store, so a clearance earned by
+ * one is used by the other and survives a restart for as long as it is valid.
+ */
+const clearance = new ClearanceService({
+  readCookies: (url) => webViewHost.jarCookies(url),
+  removeCookie: (url, name) => webViewHost.removeCookie(url, name),
+  solve: async (url) => {
+    if (!webViewHost.isAvailable()) return { ok: false, error: 'No browser is available to solve the challenge.' };
+    // Upstream's own shape: there is no URL to wait for, only the cookie.
+    const answer = await webViewHost.resolve({ url, interceptUrl: '.^', awaitCookie: CLEARANCE_COOKIE, timeoutMs: 45_000 });
+    return { ok: answer.ok, error: answer.error };
+  },
+  userAgent: () => webViewHost.userAgent(),
+});
 pluginManager.getSidecar().setHostCallHandler(async (method, params) => {
   if (method === 'webview.resolve') {
     return webViewHost.resolve(params as unknown as WebViewResolveRequest);
+  }
+  if (method === 'clearance.get') {
+    return clearance.get(String(params.url ?? ''), { solve: params.solve !== false });
+  }
+  if (method === 'clearance.invalidate') {
+    await clearance.invalidate(String(params.url ?? ''));
+    return { ok: true };
+  }
+  if (method === 'clearance.fetch') {
+    return relayInSession(params, { clearance, host: webViewHost });
   }
   return { ok: false, error: `The desktop app does not implement ${method}.` };
 });
@@ -775,20 +803,14 @@ setHttpFetch((input, init) => resilientFetch.fetch(input, init));
  * would be challenged again, which is indistinguishable from the bypass having
  * failed.
  */
-setChallengeSolver(async (url) => {
-  if (!webViewHost.isAvailable()) return null;
-  const answer = await webViewHost.resolve({
-    url,
-    // Upstream's own choice for this: `CloudflareKiller` has no URL to
-    // intercept, so the only signal the challenge is done is the cookie.
-    interceptUrl: '.^',
-    awaitCookie: 'cf_clearance',
-    timeoutMs: 45_000,
-  });
-  const cookies = answer.cookies ?? {};
-  if (!answer.ok || !cookies.cf_clearance) return null;
+setChallengeSolver(async (url, { stale }) => {
+  // A clearance the site just refused is dropped first, or the jar would hand
+  // the same dead cookie straight back.
+  if (stale) await clearance.invalidate(url);
+  const answer = await clearance.get(url);
+  if (!answer.ok) return null;
   return {
-    cookie: Object.entries(cookies)
+    cookie: Object.entries(answer.cookies)
       .map(([name, value]) => `${name}=${value}`)
       .join('; '),
     userAgent: answer.userAgent,

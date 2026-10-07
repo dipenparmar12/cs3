@@ -37,6 +37,7 @@ import {
 } from './webViewMatch';
 import { describeError } from '../../src/utils/errors.ts';
 import { hostBudget } from './hostDeadline.ts';
+import { browserUserAgent, type JarCookie } from './clearance.ts';
 
 const log = scopedLogger('runtime', { component: 'webview' });
 
@@ -133,8 +134,6 @@ export class WebViewHost {
   private queue: Array<() => void> = [];
   private running = 0;
 
-  /** The browser's own agent, read once and reported to every caller. */
-  private defaultUserAgent: string | null = null;
 
   public isAvailable(): boolean {
     // `BrowserWindow` is undefined outside a running Electron main process,
@@ -162,6 +161,11 @@ export class WebViewHost {
      * would be a different and much worse decision.
      */
     ses.setCertificateVerifyProc((_request, callback) => callback(0));
+
+    // One agent for every window and every replay, and one a real Chrome would
+    // send — see `browserUserAgent`. A clearance is bound to the agent that
+    // earned it, so the JVM and the indexer client are handed this same value.
+    ses.setUserAgent(browserUserAgent(ses.getUserAgent()));
 
     this.ses = ses;
     return ses;
@@ -293,7 +297,6 @@ export class WebViewHost {
     });
 
     const id = win.webContents.id;
-    if (!this.defaultUserAgent) this.defaultUserAgent = win.webContents.getUserAgent();
 
     let settled = false;
     let failure: string | undefined;
@@ -381,7 +384,9 @@ export class WebViewHost {
     });
 
     try {
-      if (request.userAgent) win.webContents.setUserAgent(request.userAgent);
+      // Set explicitly: a window's agent falls back to the app-wide one, not the
+      // session's, and the app-wide one still says Electron.
+      win.webContents.setUserAgent(request.userAgent ?? ses.getUserAgent());
 
       /*
        * The script is evaluated after the DOM settles, and once more before the
@@ -420,7 +425,7 @@ export class WebViewHost {
        */
       await win.loadURL(request.url, {
         httpReferrer: request.headers?.Referer ?? request.headers?.referer,
-        userAgent: request.userAgent,
+        userAgent: request.userAgent ?? ses.getUserAgent(),
         extraHeaders: formatExtraHeaders(request.headers),
       }).catch(() => {
         // `loadURL` rejects on the same conditions `did-fail-load` reports, and
@@ -458,7 +463,7 @@ export class WebViewHost {
           error: failure,
           extra,
           cookies,
-          userAgent: this.defaultUserAgent ?? undefined,
+          userAgent: request.userAgent ?? ses.getUserAgent(),
           scriptResults,
         };
       }
@@ -467,7 +472,7 @@ export class WebViewHost {
         request: matched,
         extra,
         cookies,
-        userAgent: this.defaultUserAgent ?? undefined,
+        userAgent: request.userAgent ?? ses.getUserAgent(),
         scriptResults,
       };
     } finally {
@@ -498,6 +503,46 @@ export class WebViewHost {
       });
       return {};
     }
+  }
+
+  /** The agent every window in this partition presents. */
+  public userAgent(): string {
+    return this.ensureSession().getUserAgent();
+  }
+
+  /** The partition's cookies for `url`, with expiry, for `ClearanceService`. */
+  public async jarCookies(url: string): Promise<JarCookie[]> {
+    const jar = await this.ensureSession().cookies.get({ url });
+    return jar.map(({ name, value, expirationDate }) => ({ name, value, expirationDate }));
+  }
+
+  public async removeCookie(url: string, name: string): Promise<void> {
+    await this.ensureSession().cookies.remove(url, name);
+  }
+
+  /**
+   * A request made by this partition's own network stack.
+   *
+   * The reason it exists: a clearance can be bound to more than the cookie and
+   * the agent. Cloudflare also scores the TLS handshake, and the JVM's OkHttp
+   * does not shake hands like Chrome — so a valid `cf_clearance` replayed from
+   * the sidecar is sometimes challenged again on the very next request. Sent
+   * from here it is Chromium's handshake, Chromium's header order and the jar's
+   * own cookies, i.e. the browser that earned the clearance. Android has no
+   * equivalent: its WebView and its OkHttp are just as different, and it lives
+   * with the re-challenge.
+   */
+  public async fetchInSession(url: string, init: { method?: string; headers?: Record<string, string>; body?: Uint8Array; signal?: AbortSignal }): Promise<Response> {
+    return this.ensureSession().fetch(url, {
+      method: init.method ?? 'GET',
+      headers: init.headers,
+      body: init.body,
+      signal: init.signal,
+      redirect: 'follow',
+      // The jar's cookies — the clearance among them — are the point of sending
+      // from this session. Electron attaches them only when asked.
+      credentials: 'include',
+    });
   }
 
   /** Drops every cookie this feature has accumulated. */

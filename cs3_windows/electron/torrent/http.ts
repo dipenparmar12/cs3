@@ -50,7 +50,17 @@ const BROWSER_DOCUMENT_HEADERS: Record<string, string> = {
  * produces a failure that looks exactly like a fresh challenge and costs a
  * browser window to discover.
  */
-const clearances = new Map<string, string>();
+const clearances = new Map<string, Clearance>();
+
+/**
+ * The cookie *and* the agent that earned it. Keeping only the cookie meant the
+ * next request went out under our default agent and was challenged again — the
+ * clearance worked for exactly one request per solve.
+ */
+interface Clearance {
+  cookie: string;
+  userAgent?: string;
+}
 
 /**
  * Solves a challenge and returns the cookie header, when a browser is available.
@@ -60,7 +70,11 @@ const clearances = new Map<string, string>();
  * harnesses run the whole indexer stack with no browser at all, and they must
  * degrade to "this indexer is blocked" rather than to a crash.
  */
-type ChallengeSolver = (url: string) => Promise<{ cookie: string; userAgent?: string } | null>;
+type ChallengeSolver = (
+  url: string,
+  /** `stale`: the clearance we sent was refused, so the solver must not hand it back. */
+  context: { stale: boolean }
+) => Promise<Clearance | null>;
 let solveChallenge: ChallengeSolver | null = null;
 
 export function setChallengeSolver(solver: ChallengeSolver | null): void {
@@ -178,12 +192,12 @@ async function requestOnce(url: string, options: HttpOptions): Promise<Response>
     method: hasBody ? 'POST' : 'GET',
     body: hasBody ? JSON.stringify(options.body) : undefined,
     headers: {
-      'User-Agent': options.userAgent ?? USER_AGENT,
+      'User-Agent': options.userAgent ?? clearance?.userAgent ?? USER_AGENT,
       Accept: '*/*',
       'Accept-Language': 'en-US,en;q=0.9',
       ...(options.asDocument ? BROWSER_DOCUMENT_HEADERS : {}),
       ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
-      ...(clearance ? { Cookie: clearance } : {}),
+      ...(clearance ? { Cookie: clearance.cookie } : {}),
       ...options.headers,
     },
   });
@@ -274,9 +288,10 @@ async function withRetry(url: string, options: HttpOptions): Promise<Response> {
       if (error instanceof ChallengeError && error.solvable && !solveAttempted && solveChallenge) {
         solveAttempted = true;
         try {
-          const solved = await solveChallenge(url);
+          const stale = clearances.delete(originOf(url));
+          const solved = await solveChallenge(url, { stale });
           if (solved?.cookie) {
-            clearances.set(originOf(url), solved.cookie);
+            clearances.set(originOf(url), solved);
             // The clearance is bound to the User-Agent that earned it; sending
             // it with a different one is how a solved challenge re-challenges.
             return await requestOnce(url, { ...options, userAgent: solved.userAgent });
