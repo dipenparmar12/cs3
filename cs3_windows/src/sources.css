@@ -10702,3 +10702,218 @@ video::cue {
   font-weight: 600;
   margin-top: 1px;
 }
+
+/* --- Find on this screen (ScreenSearch) ------------------------------------
+   Quieter than the navbar's media search on purpose: an icon until wanted, a
+   short translucent field when it is. It filters what is on screen and must
+   not read as a second way to search for films. */
+.screen-search {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+.screen-search--closed {
+  width: 32px;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.screen-search--closed:hover,
+.screen-search--closed:focus-visible {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.screen-search--open {
+  width: min(280px, 60vw);
+  gap: 0.4rem;
+  padding: 0 0.35rem 0 0.7rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  animation: screen-search-open 0.16s ease-out;
+}
+.screen-search--open:focus-within {
+  border-color: rgba(96, 165, 250, 0.45);
+  background: rgba(255, 255, 255, 0.06);
+}
+@keyframes screen-search-open {
+  from { width: 32px; opacity: 0.4; }
+  to { width: min(280px, 60vw); opacity: 1; }
+}
+.screen-search__icon { flex: 0 0 auto; color: var(--text-subtle); }
+.screen-search__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-main);
+  font-size: 0.8rem;
+  font-family: inherit;
+}
+.screen-search__input::placeholder { color: var(--text-subtle); }
+.screen-search__count {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  color: var(--text-subtle);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.screen-search__count--none { color: var(--status-warning); }
+.screen-search__kbd {
+  flex: 0 0 auto;
+  font-family: inherit;
+  font-size: 0.62rem;
+  color: var(--text-subtle);
+  padding: 0.05rem 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  margin-right: 0.25rem;
+}
+.screen-search__clear {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.screen-search__clear:hover { color: var(--text-main); background: rgba(255, 255, 255, 0.08); }
+
+/* A screen heading with its find control on the right. */
+.screen-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.screen-head__titles { min-width: 0; }
+
+/* What a screen search left, said under the controls it narrows. */
+.screen-search-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.screen-search-note strong { color: var(--text-main); font-weight: 600; }
+.screen-search-note__action {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent-light);
+  cursor: pointer;
+}
+.screen-search-note__action:hover { text-decoration: underline; }
+
+/* --- Where a result came from ----------------------------------------------
+   Secondary to the title by design: small, muted, one line, ellipsised. The
+   leading dot and the +N say "there is more about where to watch this" without
+   reading as another result. */
+.poster-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  max-width: 70%;
+  padding: 0.05rem 0.4rem 0.05rem 0.35rem;
+  border-radius: var(--radius-full);
+  background: rgba(96, 165, 250, 0.08);
+  border: 1px solid rgba(96, 165, 250, 0.16);
+  color: #93c5fd;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  cursor: default;
+}
+.poster-source::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-light);
+  opacity: 0.8;
+}
+.poster-source__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.poster-source__more {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: var(--accent-light);
+}
+
+/* The per-source band under search results: noticeable, never a result. */
+.search-sources__summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.6rem;
+  padding: 0.55rem 0.8rem !important;
+  list-style: none;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid rgba(96, 165, 250, 0.55);
+  color: var(--text-muted);
+  transition: var(--transition);
+}
+.search-sources__summary::-webkit-details-marker { display: none; }
+.search-sources__summary:hover { background: rgba(255, 255, 255, 0.045); }
+.search-sources__icon { color: var(--accent-light); }
+.search-sources__label {
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-main);
+}
+.search-sources__stat {
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+}
+.search-sources__stat + .search-sources__stat::before {
+  content: '·';
+  margin-right: 0.6rem;
+  color: var(--text-subtle);
+}
+.search-sources__stat--ok { color: #6ee7b7; }
+.search-sources__stat--failed { color: #f87171; }
+.search-sources__toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.74rem;
+  color: var(--accent-light);
+}
+.search-sources__toggle svg { transition: transform 0.15s ease; }
+.search-sources__chevron--open { transform: rotate(180deg); }
+
+/* "from 12 sources" in the results heading: opens the band above. */
+.search-head__sources-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent-light);
+  text-decoration: underline dotted rgba(96, 165, 250, 0.5);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.search-head__sources-link:hover { text-decoration-style: solid; }

@@ -4,7 +4,6 @@ import {
   History as HistoryIcon,
   Play,
   Trash2,
-  Search,
   RotateCw,
   Info,
   CheckCircle2,
@@ -49,6 +48,8 @@ import {
 } from '../utils/historyGrouping';
 import { downloadHistoryCsv, toHistoryCsv } from '../utils/historyExport';
 import { useDismissable } from '../utils/useDismissable';
+import { ScreenSearch } from '../components/ScreenSearch';
+import { useScreenSearch } from '../utils/useScreenSearch';
 
 interface HistoryViewProps {
   onSelectMedia: (item: SearchResponse) => void;
@@ -144,8 +145,19 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [showAllVisitsMap, setShowAllVisitsMap] = useState<Record<string, boolean>>({});
 
-  // Filters & Search
-  const [searchQuery, setSearchQuery] = useState('');
+  // Filters & find-on-this-screen. The query is applied a beat after typing
+  // stops: the store re-filters up to ten thousand rows, and asking on every
+  // keystroke redrew the list once per letter.
+  const [searchQuery, setSearchQuery] = useScreenSearch('history');
+  const [appliedQuery, setAppliedQuery] = useState(searchQuery);
+  useEffect(() => {
+    if (searchQuery === appliedQuery) return;
+    const timer = setTimeout(() => setAppliedQuery(searchQuery), searchQuery ? 160 : 0);
+    return () => clearTimeout(timer);
+  }, [searchQuery, appliedQuery]);
+  // The full-screen spinner is for the first load only; a re-filter keeps the
+  // rows on screen until the answer replaces them.
+  const loadedOnce = useRef(false);
   const [activeStatus, setActiveStatus] = useState<HistoryStatus | 'All'>('All');
   const [mediaTypeFilter, setMediaTypeFilter] = useState<'all' | 'movie' | 'series' | 'anime'>('all');
   const [sortBy, setSortBy] = useState<'recent' | 'oldest' | 'played' | 'failed' | 'downloaded'>('recent');
@@ -209,10 +221,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
       setLoading(false);
       return;
     }
-    setLoading(true);
+    if (!loadedOnce.current) setLoading(true);
     try {
       const filter: HistoryFilter = {
-        query: searchQuery.trim() || undefined,
+        query: appliedQuery.trim() || undefined,
         status: activeStatus,
         type: mediaTypeFilter,
         sortBy,
@@ -231,10 +243,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
         setStats(statsRes);
       }
     } finally {
+      loadedOnce.current = true;
       setLoading(false);
       setRefreshing(false);
     }
-  }, [searchQuery, activeStatus, mediaTypeFilter, sortBy]);
+  }, [appliedQuery, activeStatus, mediaTypeFilter, sortBy]);
 
   useEffect(() => {
     fetchHistory();
@@ -515,6 +528,19 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
 
           {/* Action buttons */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <ScreenSearch
+              label="history"
+              value={searchQuery}
+              onChange={setSearchQuery}
+              matches={
+                searchQuery === appliedQuery && !loading
+                  ? viewMode === 'grouped'
+                    ? groupedItems.length
+                    : events.length
+                  : undefined
+              }
+              hint="titles, episodes, years, providers, quality and errors"
+            />
             <button
               type="button"
               className="btn btn-secondary btn-sm"
@@ -747,7 +773,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
         </div>
       </div>
 
-      {/* Filter, Search & View Controls Bar */}
+      {/* Filter & View Controls Bar (find lives in the header) */}
       <div
         style={{
           display: 'flex',
@@ -760,45 +786,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
         }}
       >
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Search Box */}
-          <div style={{ position: 'relative', flex: 1, minWidth: '220px' }}>
-            <Search
-              size={16}
-              style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-subtle)' }}
-            />
-            <input
-              type="text"
-              className="input"
-              placeholder="Search history by title, provider, quality, error, or release…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{
-                width: '100%',
-                paddingLeft: '2.2rem',
-                fontSize: '0.85rem',
-                backgroundColor: 'rgba(255, 255, 255, 0.04)',
-              }}
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                style={{
-                  position: 'absolute',
-                  right: '0.6rem',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--text-subtle)',
-                  cursor: 'pointer',
-                }}
-              >
-                <X size={14} />
-              </button>
-            )}
-          </div>
-
           {/* View Mode Toggle: Grouped vs Flat */}
           <div
             style={{
@@ -989,10 +976,19 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
               No history found
             </h3>
             <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)', maxWidth: '380px' }}>
-              {searchQuery || activeStatus !== 'All' || mediaTypeFilter !== 'all'
-                ? 'No media activity matches your active search and filter criteria.'
-                : 'Your playback and download attempts will appear here as you discover and stream media.'}
+              {appliedQuery.trim()
+                ? `Nothing in your history matches “${appliedQuery.trim()}”${
+                    activeStatus !== 'All' || mediaTypeFilter !== 'all' ? ' with these filters' : ''
+                  }.`
+                : activeStatus !== 'All' || mediaTypeFilter !== 'all'
+                  ? 'No media activity matches these filters.'
+                  : 'Your playback and download attempts will appear here as you discover and stream media.'}
             </p>
+            {appliedQuery.trim() && (
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSearchQuery('')}>
+                Clear find
+              </button>
+            )}
           </div>
         )}
 

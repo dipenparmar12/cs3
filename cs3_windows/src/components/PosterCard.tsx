@@ -15,6 +15,7 @@ import type { TitleInteraction } from '../types/interactions';
 import { CardBadge, badgeLabel, badgeTooltip, cardStateFor, primaryBadge } from '../utils/cardState';
 import { ContentHoverCard } from './ContentHoverCard';
 import { LibraryBucketSelector } from './LibraryBucketSelector';
+import { resultSources } from '../utils/resultSources';
 
 interface PosterCardProps {
   item: SearchResponse;
@@ -120,6 +121,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
    * rather than "Untitled" under every one; assistive tech still gets a label.
    */
   const hasName = Boolean(item?.name?.trim());
+  const sources = item ? resultSources(item) : [];
   const titleText = hasName
     ? (item?.name ?? '')
     : item?.apiName
@@ -228,9 +230,25 @@ export const PosterCard: React.FC<PosterCardProps> = ({
           </h4>
         )}
         <div className="poster-meta">
-          {item?.year && <span>{item.year}</span>}
-          {item?.apiName && (
-            <span style={{ color: 'var(--accent-light)', fontSize: '0.72rem' }}>{item.apiName}</span>
+          {item?.year ? <span>{item.year}</span> : <span />}
+          {/*
+            Where the title was found, as a quiet tag rather than a second
+            caption: the title is what the card is about. A merged row says how
+            many other providers had it too, which is otherwise invisible until
+            the details page — the tooltip names them.
+          */}
+          {sources.length > 0 && (
+            <span
+              className="poster-source"
+              title={
+                sources.length > 1
+                  ? `Found on ${sources.length} sources: ${sources.join(', ')}. Open the title to compare them.`
+                  : `Found on ${sources[0]}`
+              }
+            >
+              <span className="poster-source__name">{sources[0]}</span>
+              {sources.length > 1 && <span className="poster-source__more">+{sources.length - 1}</span>}
+            </span>
           )}
         </div>
 

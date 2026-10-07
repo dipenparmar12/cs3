@@ -42,6 +42,7 @@ import { usePrivacy } from './utils/usePrivacy';
 import { ScrollToTop } from './components/ScrollToTop';
 import { durableAddress } from './utils/durableAddress';
 import { canonicalKey } from '../electron/cs3/libraryStore';
+import { SCREEN_SEARCH_FOCUS_EVENT, forgetScreenQueries, screenSearchAvailable } from './utils/screenSearch';
 
 /**
  * Every screen except Home, loaded when it is opened.
@@ -559,11 +560,17 @@ export const App: React.FC = () => {
         return;
       }
 
-      // Ctrl+F, Cmd+F, or Ctrl+K focuses settings search (when in Settings) or navbar search
+      // Ctrl+F finds on the current screen where it has a find control
+      // (Library, History, Settings) and is the media search elsewhere. Ctrl+K
+      // is always the media search, so that one is never out of reach.
       if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'f' || e.key.toLowerCase() === 'k')) {
+        const find = e.key.toLowerCase() === 'f';
         if (activeTab === 'settings') {
           e.preventDefault();
           window.dispatchEvent(new CustomEvent('cs3:focus-settings-search'));
+        } else if (find && screenSearchAvailable() && !document.fullscreenElement) {
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent(SCREEN_SEARCH_FOCUS_EVENT));
         } else if (!document.fullscreenElement) {
           e.preventDefault();
           window.dispatchEvent(new CustomEvent('cs3:focus-navbar-search'));
@@ -1761,6 +1768,15 @@ export const App: React.FC = () => {
   const handleBinarySetupSuccess = () => {
     setHasBinaries(true);
   };
+
+  /*
+   * A screen's find-on-this-screen query survives opening a title from it
+   * (that unmounts the screen without changing tab) and is forgotten on
+   * moving to another tab, so a filter never greets the viewer on a later visit.
+   */
+  useEffect(() => {
+    forgetScreenQueries();
+  }, [activeTab]);
 
   const isIncognitoBorderActive = incognito && !isFullscreen;
 

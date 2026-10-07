@@ -5,6 +5,9 @@ import { EmptyState } from '../components/EmptyState';
 import { PlayedSourcePanel } from '../components/library/PlayedSourcePanel';
 import { SavedSourcesList } from '../components/library/SavedSourcesList';
 import { SavedSearchesList } from '../components/library/SavedSearchesList';
+import { ScreenSearch, ScreenSearchNoMatches } from '../components/ScreenSearch';
+import { useScreenSearch } from '../utils/useScreenSearch';
+import { matchesScreenQuery } from '../utils/screenSearch';
 import type { PlayedSource } from '../types/library';
 import type { TorrentResult } from '../types/torrent';
 import {
@@ -76,6 +79,31 @@ const BUCKETS: Array<{ status: WatchStatus; label: string }> = [
   { status: 'Dropped', label: 'Dropped' },
 ];
 
+/** What a shelf entry is found by: the names it goes by and what it is. */
+const entryMatches = (entry: LibraryEntry, query: string) =>
+  matchesScreenQuery(query, [
+    entry.title,
+    entry.originalTitle,
+    entry.year,
+    entry.type,
+    entry.genres,
+    BUCKETS.find((bucket) => bucket.status === entry.status)?.label,
+  ]);
+
+/** A saved page is also found by where it came from and what found it. */
+const bookmarkMatches = (bookmark: Bookmark, query: string) =>
+  matchesScreenQuery(query, [
+    bookmark.title,
+    bookmark.year,
+    bookmark.type,
+    bookmark.genres,
+    bookmark.origin.provider,
+    bookmark.origin.extensionName,
+    bookmark.origin.repositoryName,
+    bookmark.origin.searchQuery,
+    bookmark.origin.imdbId,
+  ]);
+
 function formatWatched(progress: WatchProgress | undefined): string | null {
   if (!progress || progress.durationSeconds <= 0) return null;
   const percent = Math.round((progress.positionSeconds / progress.durationSeconds) * 100);
@@ -91,26 +119,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onBrowse,
   onOpenSavedSearch,
 }) => {
-  const [entries, setEntries] = useState<LibraryEntry[]>([]);
+  /** Every entry in every bucket; the bucket and the find query narrow it on screen. */
+  const [allEntries, setAllEntries] = useState<LibraryEntry[]>([]);
+  const [query, setQuery] = useScreenSearch('library');
+  const searching = query.trim() !== '';
 
-  /**
-   * Card states for the whole shelf.
-   *
-   * Queried by each entry's first known provider URL — the aggregator answers
-   * the title-keyed halves regardless, and the address-keyed ones for the row
-   * that actually has one.
-   */
-  const { interactionFor } = useTitleInteractions(
-    useMemo(
-      () =>
-        entries.map((entry) => ({
-          url: entry.urls?.[0] ?? entry.key,
-          name: entry.title,
-          year: entry.year,
-        })),
-      [entries]
-    )
-  );
   const [mode, setMode] = useState<LibraryMode>('watching');
   const [savedSearchCount, setSavedSearchCount] = useState(0);
 
@@ -118,9 +131,43 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     void window.cloudstream?.listSavedSearches?.().then((list) => setSavedSearchCount(list?.length ?? 0));
   }, []);
   const [activeStatus, setActiveStatus] = useState<WatchStatus>('Watching');
+  const [savedSearchMatches, setSavedSearchMatches] = useState<number | undefined>(undefined);
 
+  /** Entries the query leaves, across every bucket — what the bucket chips count. */
+  const found = useMemo(
+    () => (searching ? allEntries.filter((entry) => entryMatches(entry, query)) : allEntries),
+    [allEntries, query, searching]
+  );
+  const entries = useMemo(
+    () => found.filter((entry) => entry.status === activeStatus),
+    [found, activeStatus]
+  );
+  const counts = useMemo(() => {
+    const tally: Record<string, number> = {};
+    for (const entry of found) tally[entry.status] = (tally[entry.status] ?? 0) + 1;
+    return tally;
+  }, [found]);
+
+  /**
+   * Card states for the whole shelf.
+   *
+   * Queried by each entry's first known provider URL — the aggregator answers
+   * the title-keyed halves regardless, and the address-keyed ones for the row
+   * that actually has one. Asked for every bucket at once, so neither
+   * switching buckets nor typing in the find field asks again.
+   */
+  const { interactionFor } = useTitleInteractions(
+    useMemo(
+      () =>
+        allEntries.map((entry) => ({
+          url: entry.urls?.[0] ?? entry.key,
+          name: entry.title,
+          year: entry.year,
+        })),
+      [allEntries]
+    )
+  );
   const [progressByKey, setProgressByKey] = useState<Map<string, WatchProgress>>(new Map());
-  const [counts, setCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
 
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -170,12 +217,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
    * screen until the dialog was closed and reopened.
    */
   const [sourcesModalKey, setSourcesModalKey] = useState<string | null>(null);
-  const sourcesModalEntry = entries.find((entry) => entry.key === sourcesModalKey) ?? null;
+  const sourcesModalEntry = allEntries.find((entry) => entry.key === sourcesModalKey) ?? null;
   const setSourcesModalEntry = (entry: LibraryEntry | null) => setSourcesModalKey(entry?.key ?? null);
 
-  const shownBookmarks = providerFilter
-    ? bookmarks.filter((bookmark) => bookmark.origin.provider === providerFilter)
-    : bookmarks;
+  const shownBookmarks = bookmarks.filter(
+    (bookmark) =>
+      (!providerFilter || bookmark.origin.provider === providerFilter) &&
+      (!searching || bookmarkMatches(bookmark, query))
+  );
 
   const refresh = useCallback(async () => {
     if (!window.cloudstream) {
@@ -184,18 +233,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     }
     setLoading(true);
 
-    const all = await window.cloudstream.getLibraryEntries();
-    const tally: Record<string, number> = {};
-    for (const entry of all) tally[entry.status] = (tally[entry.status] ?? 0) + 1;
-    setCounts(tally);
-    setEntries(all.filter((e) => e.status === activeStatus));
+    setAllEntries(await window.cloudstream.getLibraryEntries());
 
     // Continue-watching rows are already collapsed to one per title, which is
     // exactly the granularity a poster card needs.
     const resume = await window.cloudstream.getContinueWatching(200);
     setProgressByKey(new Map(resume.map((p) => [p.key, p])));
     setLoading(false);
-  }, [activeStatus]);
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -246,11 +291,34 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      <div>
-        <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>Library</h2>
-        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-          Titles you have watched or saved, with where you left off
-        </p>
+      <div className="screen-head">
+        <div className="screen-head__titles">
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>Library</h2>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            Titles you have watched or saved, with where you left off
+          </p>
+        </div>
+        <ScreenSearch
+          label={mode === 'searches' ? 'saved searches' : mode === 'saved' ? 'saved pages' : 'library'}
+          value={query}
+          onChange={setQuery}
+          matches={
+            mode === 'searches'
+              ? savedSearchMatches
+              : mode === 'saved'
+                ? shownBookmarks.length
+                : loading
+                  ? undefined
+                  : entries.length
+          }
+          hint={
+            mode === 'searches'
+              ? 'queries'
+              : mode === 'saved'
+                ? 'titles, years, genres and where each page came from'
+                : 'titles, original titles, years, types and genres'
+          }
+        />
       </div>
 
       <div className="library-modes" role="tablist">
@@ -284,10 +352,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <SavedSearchesList
           onOpen={(id) => onOpenSavedSearch?.(id)}
           onCount={setSavedSearchCount}
+          query={query}
+          onMatches={setSavedSearchMatches}
+          onClearQuery={() => setQuery('')}
         />
       ) : mode === 'saved' ? (
         <SavedPages
           bookmarks={shownBookmarks}
+          query={searching ? query : ''}
+          onClearQuery={() => setQuery('')}
           providers={bookmarkFacets.providers}
           providerFilter={providerFilter}
           onProviderFilter={setProviderFilter}
@@ -312,6 +385,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
       {loading ? (
         <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
+      ) : searching && entries.length === 0 ? (
+        <ScreenSearchNoMatches
+          query={query}
+          where={BUCKETS.find((bucket) => bucket.status === activeStatus)?.label ?? activeStatus}
+          onClear={() => setQuery('')}
+          elsewhere={BUCKETS.filter(({ status }) => counts[status]).map(({ status, label }) => ({
+            label: `${label} (${counts[status]})`,
+            onClick: () => setActiveStatus(status),
+          }))}
+        />
       ) : entries.length === 0 ? (
         <EmptyState
           icon={LibraryIcon}
@@ -630,14 +713,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
  */
 const SavedPages: React.FC<{
   bookmarks: Bookmark[];
+  /** The find query already applied to `bookmarks`, or empty. */
+  query: string;
+  onClearQuery: () => void;
   providers: string[];
   providerFilter: string | null;
   onProviderFilter: (provider: string | null) => void;
   onOpen: (bookmark: Bookmark) => void;
   onRemove: (bookmark: Bookmark) => void;
   onSearch?: (query: string) => void;
-}> = ({ bookmarks, providers, providerFilter, onProviderFilter, onOpen, onRemove, onSearch }) => {
-  if (bookmarks.length === 0 && !providerFilter) {
+}> = ({ bookmarks, query, onClearQuery, providers, providerFilter, onProviderFilter, onOpen, onRemove, onSearch }) => {
+  if (bookmarks.length === 0 && !providerFilter && !query) {
     return (
       <div className="library-empty">
         <BookmarkCheck size={30} />
@@ -673,7 +759,13 @@ const SavedPages: React.FC<{
         </div>
       )}
 
-      {bookmarks.length === 0 ? (
+      {bookmarks.length === 0 && query ? (
+        <ScreenSearchNoMatches
+          query={query}
+          where={providerFilter ? `saved pages from ${providerFilter}` : 'saved pages'}
+          onClear={onClearQuery}
+        />
+      ) : bookmarks.length === 0 ? (
         <p className="muted">Nothing saved from {providerFilter}.</p>
       ) : (
         <ul className="saved-list">

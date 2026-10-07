@@ -1,13 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { EmptyState } from '../components/EmptyState';
 import type { SearchResponse } from '../types/api';
 import { TYPE_TABS, matchesTab, tabsFor } from '../utils/contentTypes';
 import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/resultGroups';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
-import { AlertTriangle, Bookmark, BookmarkCheck, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, RotateCw, Search, SearchX, Target, Trash2, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Bookmark, BookmarkCheck, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, RotateCw, Search, SearchX, Server, Target, Trash2, Wrench, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
 import { partitionDeadRows } from '../utils/deadRows';
+import { resultSources } from '../utils/resultSources';
 import { FacetMenu, type FacetOption } from '../components/FacetMenu';
 import { CopyErrorButton } from '../components/CopyErrorButton';
 import { FixProvidersModal } from '../components/FixProvidersModal';
@@ -110,20 +111,10 @@ const SaveResultsButton: React.FC<{ searchId: string; onSave: () => Promise<bool
 };
 
 
-/**
- * Which sources a row came from, counting each row once per source.
- *
- * A merged row can carry alternates — the same work found by three providers —
- * and all three should be able to filter to it, because all three are a real
- * route to that title.
- */
+/** A row's sources for the Source filter, never empty so every row can be filtered to. */
 function sourcesOf(item: SearchResponse): string[] {
-  const names = new Set<string>();
-  if (item.apiName) names.add(item.apiName);
-  for (const alternate of item.alternates ?? []) {
-    if (alternate?.apiName) names.add(alternate.apiName);
-  }
-  return names.size > 0 ? [...names] : ['Unknown source'];
+  const names = resultSources(item);
+  return names.length > 0 ? names : ['Unknown source'];
 }
 
 /** "MegaRepo > Extension A" style scope line, kept to one line. */
@@ -323,6 +314,21 @@ export const SearchView: React.FC<SearchViewProps> = ({
   const scopeLabel = describeScope(search);
   const scoped = Boolean(search?.scope.active);
 
+  /*
+   * The per-source breakdown lives under the results, closed. "from 12
+   * sources" in the header opens it and brings it into view, so the one place
+   * that says which providers answered is reachable from where people look.
+   */
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const sourcesRef = useRef<HTMLDetailsElement | null>(null);
+  const showSourceSummary = Boolean(search?.done && !search.cancelled && !savedView && filtered.length > 0);
+  const revealSources = () => {
+    setSourcesOpen(true);
+    requestAnimationFrame(() =>
+      sourcesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    );
+  };
+
   // Nothing has arrived yet and nothing has been asked: the only state where a
   // full-page spinner is right, because there is genuinely nothing to show.
   if (running && results.length === 0 && (search?.settled ?? 0) === 0) {
@@ -365,7 +371,20 @@ export const SearchView: React.FC<SearchViewProps> = ({
             <span className="search-head__dot">·</span>
             <span>
               {results.length} title{results.length === 1 ? '' : 's'} from{' '}
-              {sourceOptions.length} source{sourceOptions.length === 1 ? '' : 's'}
+              {showSourceSummary ? (
+                <button
+                  type="button"
+                  className="search-head__sources-link"
+                  onClick={revealSources}
+                  title="See what each source returned"
+                >
+                  {sourceOptions.length} source{sourceOptions.length === 1 ? '' : 's'}
+                </button>
+              ) : (
+                <>
+                  {sourceOptions.length} source{sourceOptions.length === 1 ? '' : 's'}
+                </>
+              )}
             </span>
           </p>
         </div>
@@ -546,8 +565,13 @@ export const SearchView: React.FC<SearchViewProps> = ({
         />
       )}
 
-      {search?.done && !search.cancelled && !savedView && filtered.length > 0 && (
-        <SourceSummary snapshot={search} />
+      {search && showSourceSummary && (
+        <SourceSummary
+          snapshot={search}
+          open={sourcesOpen}
+          onOpenChange={setSourcesOpen}
+          anchorRef={sourcesRef}
+        />
       )}
     </div>
   );
@@ -711,10 +735,15 @@ function useTitleOutcomes(): Record<string, { kind: 'played' | 'no-sources' | 'a
  * Collapsed by default: it is the answer to "why is my provider not in here",
  * which is worth being able to reach and not worth spending a screen on.
  */
-const SourceSummary: React.FC<{ snapshot: SearchSnapshot }> = ({ snapshot }) => {
-  const [open, setOpen] = useState(false);
+const SourceSummary: React.FC<{
+  snapshot: SearchSnapshot;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  anchorRef: React.RefObject<HTMLDetailsElement | null>;
+}> = ({ snapshot, open, onOpenChange, anchorRef }) => {
   const ordered = [...snapshot.outcomes].sort((a, b) => b.count - a.count);
   const failed = ordered.filter((outcome) => outcome.state === 'failed').length;
+  const answered = ordered.filter((outcome) => outcome.count > 0).length;
   /**
    * Counted, but never as failures.
    *
@@ -726,11 +755,32 @@ const SourceSummary: React.FC<{ snapshot: SearchSnapshot }> = ({ snapshot }) => 
   const unsupported = ordered.filter((outcome) => outcome.state === 'unsupported').length;
 
   return (
-    <details className="search-sources" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
-      <summary>
-        {snapshot.outcomes.length} source{snapshot.outcomes.length === 1 ? '' : 's'} asked
-        {failed > 0 ? ` · ${failed} failed` : ''}
-        {unsupported > 0 ? ` · ${unsupported} cannot search` : ''}
+    <details
+      ref={anchorRef}
+      className="search-sources"
+      open={open}
+      onToggle={(e) => onOpenChange(e.currentTarget.open)}
+    >
+      {/* A labelled band rather than a line of grey text: this is where the
+          viewer finds out which providers had the title, and as a bare
+          `<summary>` under the grid it was read as a footer and skipped. */}
+      <summary className="search-sources__summary">
+        <Server size={13} className="search-sources__icon" aria-hidden />
+        <span className="search-sources__label">Sources</span>
+        <span className="search-sources__stat">
+          {snapshot.outcomes.length} asked
+        </span>
+        <span className="search-sources__stat search-sources__stat--ok">
+          {answered} with results
+        </span>
+        {failed > 0 && (
+          <span className="search-sources__stat search-sources__stat--failed">{failed} failed</span>
+        )}
+        {unsupported > 0 && <span className="search-sources__stat">{unsupported} browse only</span>}
+        <span className="search-sources__toggle">
+          {open ? 'Hide' : 'Show'} details
+          <ChevronDown size={13} className={open ? 'search-sources__chevron--open' : undefined} />
+        </span>
       </summary>
       {failed > 0 && (
         <div className="search-sources__copy">
