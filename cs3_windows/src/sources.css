@@ -10917,3 +10917,15 @@ video::cue {
   cursor: pointer;
 }
 .search-head__sources-link:hover { text-decoration-style: solid; }
+
+.source-picker__notice {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.45rem 1.25rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: rgba(96, 165, 250, 0.06);
+  border-bottom: 1px solid var(--border-color);
+}

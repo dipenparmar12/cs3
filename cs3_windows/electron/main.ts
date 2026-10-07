@@ -2589,6 +2589,24 @@ ipcMain.handle('sources:prefetch', async (_, request: SourceQuery) => {
   }
 });
 
+/**
+ * Clears the cached sources for one title or episode from its details page.
+ *
+ * Scoped to that title's cache entries only — `sources:clearCache` is the
+ * global one in Settings. The prefetcher is told too, so the page's "ready"
+ * badge does not keep describing sources that no longer exist.
+ */
+ipcMain.handle('sources:clearForMedia', async (_, request: SourceQuery) => {
+  try {
+    if (!request?.mediaUrl) return { ok: false, error: 'No title was given.', removed: 0 };
+    const removed = contentService.clearCachedSources(request);
+    sourcePrefetcher.forget(request);
+    return { ok: true, removed };
+  } catch (error) {
+    return { ...fail(error), removed: 0 };
+  }
+});
+
 ipcMain.handle('sources:cancelPrefetch', async () => {
   sourcePrefetcher.cancel();
   return { ok: true };

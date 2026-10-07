@@ -176,7 +176,7 @@ It once asked `findRuntimeDir()` where to copy *from* — which answers with the
           contextBridge, allow-listed, typed (electron/preload.ts)
 ┌───────────────────────────┴───────────────────────────────┐
 │                MAIN PROCESS (electron/main.ts)            │
-│  wires every service as a singleton, 334 ipcMain.handle   │
+│  wires every service as a singleton, 335 ipcMain.handle   │
 └─┬────────┬──────────┬───────────┬──────────┬──────────────┘
 Datastore Content   Plugin     Torrent   Download   Library
           Service   Manager    Engine    Service    Store
@@ -190,7 +190,7 @@ Datastore Content   Plugin     Torrent   Download   Library
 
 ### The IPC contract
 
-`electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration: false`. 334 channels in 42 namespaces (counted 2026-10-07; full generated table in `docs/docs_cs3/architecture/api-services.md`): `api: torrent: playback: search: indexer: sources: download: extension: library: datastore: binary: dialog: pages: natives: ott: issues: profiles: media: mpv: external: player: analytics: bookmarks: discover: subtitles: log: runtime: history: home: backup: network: ratings: metadata: regions: privacy: interactions: diagnostics: components: videos: window: app: shell:`.
+`electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration: false`. 335 channels in 42 namespaces (counted 2026-10-07; full generated table in `docs/docs_cs3/architecture/api-services.md`): `api: torrent: playback: search: indexer: sources: download: extension: library: datastore: binary: dialog: pages: natives: ott: issues: profiles: media: mpv: external: player: analytics: bookmarks: discover: subtitles: log: runtime: history: home: backup: network: ratings: metadata: regions: privacy: interactions: diagnostics: components: videos: window: app: shell:`.
 
 **Four things change together when crossing the boundary:** 1) service in `electron/`, 2) `ipcMain.handle('ns:name', …)` in `main.ts`, 3) method + type in `CloudStreamElectronAPI` in `preload.ts`, 4) caller in `src/`. Shared types live in `src/types/{api,plugin,torrent,download,player,media,mpv}.ts` and are imported by both sides — intentional, not a layering mistake.
 
@@ -250,7 +250,7 @@ rather than omitting the ones nothing serves.
 | `searchSession.ts` | One "the user pressed search" interaction. Push-shaped like `playback:*`: fans out per source, emits a snapshot as each answers, and can be cancelled. |
 | `searchSuggestions.ts` | Title autocomplete merged across Cinemeta + TVmaze + AniList, deduped on normalised title+year, misspelling-tolerant. Their blind spots do not overlap — see the file header for what was measured about each. `instant()` is synchronous and answers from an exact or longest-prefix cache hit with no I/O; `suggest()` publishes per source and runs the genre lookup *behind* the answer. |
 | `searchHistory.ts` | Past search *queries* (not results — a cached result set goes stale silently), stored via the datastore so backups carry it. |
-| `sourceCache.ts` | Resolved sources, with expiry tracked **per source**: magnets never expire, provider links carry a deadline read from the URL (`Expires`/`exp`/JWT claim, case-insensitively) or a short TTL. A cache hit can be partially stale — good magnets beside dead links — and `read()` reports that split. |
+| `sourceCache.ts` | Resolved sources, with expiry tracked **per source**: magnets never expire, provider links carry a deadline read from the URL (`Expires`/`exp`/JWT claim, case-insensitively) or a short TTL. A cache hit can be partially stale — good magnets beside dead links — and `read()` reports that split. `forget(keys, s, e)` clears one title/episode (both `origin` and `#all` scopes) — Media Details → Sources → *Clear cached* (`sources:clearForMedia`), which also withdraws the prefetcher's answer and the page's retained rows before re-resolving. |
 | `subtitleService.ts` | Online subtitle search via the keyless OpenSubtitles v3 Stremio addon, keyed by IMDb id. Converts SubRip to WebVTT, which is **not optional**: `<track>` rejects `.srt` silently. |
 | `media/mediaInspector.ts` | ffprobe → `MediaMetadata`; transport and DRM classified from the manifest body, never the URL. |
 | `media/decisionEngine.ts` | Pure decision: metadata + host capability + DRM → `TransformationPlan`. Tested exhaustively; see §6.3 in `media.md`. |

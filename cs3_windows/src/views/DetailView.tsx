@@ -304,6 +304,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
   }, [detail?.recommendations]);
   const [pickerData, setPickerData] = useState<SourcePickerData | null>(null);
   const [pickerError, setPickerError] = useState<string | undefined>();
+  /** One line under the picker's heading — what clearing the cache did. */
+  const [pickerNotice, setPickerNotice] = useState<string | undefined>();
 
   /**
    * The running cross-provider search behind the picker.
@@ -995,11 +997,17 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const openSources = useCallback(
     async (
       episode: Episode | null,
-      options: { refresh?: boolean; quiet?: boolean } = {}
+      /**
+       * `cleared`: the cache for this target was just emptied, so nothing held
+       * on this page — retained rows or the prefetch's — may be drawn either;
+       * they are exactly what the viewer asked to be rid of.
+       */
+      options: { refresh?: boolean; quiet?: boolean; cleared?: boolean } = {}
     ) => {
       if (!window.cloudstream || !detail) return;
 
       stopDiscovery();
+      if (!options.cleared) setPickerNotice(undefined);
 
       setPendingEpisode(episode);
       // `quiet` is the automatic retry below: it wants the search, not the
@@ -1009,7 +1017,9 @@ export const DetailView: React.FC<DetailViewProps> = ({
       setPickerError(undefined);
       const key = `${episode?.url ?? detail.url}|${episode?.season ?? ''}|${episode?.episode ?? ''}`;
       sourceTargetRef.current = { key, refresh: Boolean(options.refresh) };
+      if (options.cleared) retainedSources.current.delete(key);
       const prefetchMatch =
+        !options.cleared &&
         prefetch?.sources &&
         (episode?.url ?? detail.url) === prefetch.mediaUrl &&
         episode?.season === prefetch.season &&
@@ -1085,6 +1095,45 @@ export const DetailView: React.FC<DetailViewProps> = ({
     },
     [applySnapshot, detail, prefetch, stopDiscovery]
   );
+
+  /**
+   * Media Details → Sources → Clear cached.
+   *
+   * Clears only this title's (or this episode's) cache entries in the main
+   * process, drops every copy this page holds, then asks afresh — so what
+   * appears next was resolved now, never served from what was just cleared.
+   */
+  const clearCachedSources = useCallback(async () => {
+    if (!window.cloudstream?.clearCachedSourcesFor || !detail) return;
+    const episode = pendingEpisode;
+    const request = {
+      mediaUrl: episode?.url ?? detail.url,
+      season: episode?.season,
+      episode: episode?.episode,
+    };
+    stopDiscovery();
+    setPickerData(null);
+    setDiscovery(null);
+    setPrefetch((current) =>
+      current &&
+      current.mediaUrl === request.mediaUrl &&
+      current.season === request.season &&
+      current.episode === request.episode
+        ? null
+        : current
+    );
+    const result = await window.cloudstream.clearCachedSourcesFor(request);
+    if (!result.ok) {
+      setPickerNotice(`Could not clear the cached sources: ${result.error ?? 'unknown error'}`);
+      return;
+    }
+    setPickerNotice(
+      result.removed > 0
+        ? `Cleared ${result.removed} cached source${result.removed === 1 ? '' : 's'}. Looking for fresh ones…`
+        : 'Nothing was cached for this. Looking for fresh sources…'
+    );
+    await openSources(episode, { refresh: true, cleared: true });
+  }, [detail, openSources, pendingEpisode, stopDiscovery]);
 
   useEffect(() => {
     const buffered = snapshotsById.current;
@@ -2125,6 +2174,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
         onPlay={handlePlaySource}
         onDownload={handleDownloadSource}
         onRetry={() => openSources(pendingEpisode, { refresh: true })}
+        onClearCache={() => void clearCachedSources()}
+        notice={pickerNotice}
         onWiden={widenSources}
         canWiden={discovery?.canWiden ?? false}
         widened={discovery?.widened ?? false}

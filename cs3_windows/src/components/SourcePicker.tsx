@@ -3,7 +3,7 @@ import { useFlash } from '../utils/useFlash';
 import {
   X, Users, HardDrive, Loader2, AlertTriangle, Filter, ChevronDown,
   ChevronRight, Play, Download, Info, Zap, ShieldAlert, Square, Link2, Check,
-  ClipboardCopy, Globe, RefreshCw,
+  ClipboardCopy, Globe, RefreshCw, Eraser,
 } from 'lucide-react';
 import type { TorrentResult } from '../types/torrent';
 import type { SourceDiagnosis } from '../types/diagnostics';
@@ -76,6 +76,13 @@ interface SourcePickerProps {
   /** Asks this title's own providers again, ignoring the cache. */
   onRetry: () => void;
   /**
+   * Removes this title's cached sources and searches afresh. Scoped to the
+   * title (or episode) the picker is open for; Settings has the global clear.
+   */
+  onClearCache?: () => void;
+  /** A one-line status under the heading, e.g. what clearing the cache did. */
+  notice?: string;
+  /**
    * Look beyond the providers this title was found on.
    *
    * Absent, or present with `canWiden` false, when there is nothing wider to
@@ -128,7 +135,7 @@ function resolutionLabel(resolution: number): string {
 export const SourcePicker: React.FC<SourcePickerProps> = ({
   isOpen, isLoading, data, error, contextLabel, onClose, onPlay, onDownload, onRetry,
   searching = false, searched = 0, totalSources = 0, cancelled = false, onCancelSearch,
-  onWiden, canWiden = false, widened = false,
+  onWiden, canWiden = false, widened = false, onClearCache, notice,
 }) => {
   const [showFiltered, setShowFiltered] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -200,6 +207,12 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
             <X size={20} />
           </button>
         </header>
+
+        {notice && (
+          <p className="source-picker__notice" role="status">
+            <Eraser size={13} aria-hidden /> {notice}
+          </p>
+        )}
 
         {/*
           Progress, and the action on it.
@@ -383,6 +396,21 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                 >
                   <RefreshCw size={15} /> Refresh
                 </button>
+                {/*
+                  Refresh asks again but keeps the old answer until the new one
+                  lands, and keeps it outright if nothing answers. This is for
+                  the case where the cached list itself is wrong.
+                */}
+                {onClearCache && (
+                  <button
+                    className="btn"
+                    onClick={onClearCache}
+                    disabled={searching}
+                    title="Forget the sources cached for this title and find them again. Other titles are not affected."
+                  >
+                    <Eraser size={15} /> Clear cached
+                  </button>
+                )}
                 {/*
                   A different question, not a harder version of the same one:
                   the default search asks the providers this title was found on,

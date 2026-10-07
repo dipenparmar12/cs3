@@ -803,6 +803,12 @@ export interface CloudStreamElectronAPI {
 
   getSourceCacheStats: () => Promise<{ entries: number; sources: number }>;
   clearSourceCache: () => Promise<Envelope>;
+  /** Clears the cached sources of one title or episode only; `removed` counts them. */
+  clearCachedSourcesFor: (request: {
+    mediaUrl: string;
+    season?: number;
+    episode?: number;
+  }) => Promise<Envelope & { removed: number }>;
 
   /**
    * Opening a `.torrent` or a magnet as browsable content.
@@ -2166,6 +2172,7 @@ const api: CloudStreamElectronAPI = {
 
   getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
   clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),
+  clearCachedSourcesFor: (request) => ipcRenderer.invoke('sources:clearForMedia', request),
 
   getPathForFile: (file) => {
     try {

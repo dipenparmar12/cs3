@@ -453,6 +453,28 @@ export class SourceCache {
     this.save(this.load().filter((e) => e.key !== key));
   }
 
+  /**
+   * Drops what is cached for one title (or one episode of it), and nothing else.
+   *
+   * `cacheKeys` are the addresses the title is stored under — the page and its
+   * widened `#all` twin — so the viewer's "these sources are wrong" removes both
+   * answers rather than leaving the other scope to serve the same stale list.
+   * Returns how many sources went, so the caller can say so; zero is an
+   * ordinary answer, not an error.
+   */
+  public forget(cacheKeys: string[], season?: number, episode?: number): number {
+    const keys = new Set(cacheKeys.map((url) => SourceCache.keyFor(url, season, episode)));
+    const entries = this.load();
+    let removed = 0;
+    const kept = entries.filter((entry) => {
+      if (!keys.has(entry.key)) return true;
+      removed += entry.sources.length;
+      return false;
+    });
+    if (kept.length !== entries.length) this.save(kept);
+    return removed;
+  }
+
   public clear(): void {
     if (this.volatile) this.volatile = [];
     this.datastore.setObject(KEY, []);
