@@ -127,7 +127,7 @@ Three silent failures on the three transports this app routes to most often.
 
 ## 3. What Android CloudStream 3 does
 
-From `docs/docs_cs3/06_trackers_sync_and_data_persistence.md`: `DataStoreHelper.kt` owns
+From `docs/docs_cs3/android/06_trackers_sync_and_data_persistence.md`: `DataStoreHelper.kt` owns
 "episode playback resume timestamps" alongside bookmarks and watch history, and those
 timestamps are part of the backup payload.
 

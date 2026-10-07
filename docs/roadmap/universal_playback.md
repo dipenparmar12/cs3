@@ -274,4 +274,4 @@ that most content takes.
 - [castLabs ECS — CDM notes](https://github.com/castlabs/electron-releases/wiki/CDM)
 - [Enabling Chromium HEVC hardware decoding](https://github.com/StaZhu/enable-chromium-hevc-hardware-decoding)
 - [`node-libmpv` on npm — last published seven years ago](https://www.npmjs.com/package/node-libmpv)
-- `docs/docs_cs3/05_playback_media_and_torrent_engine.md` — the Android stack, written from source
+- `docs/docs_cs3/android/05_playback_media_and_torrent_engine.md` — the Android stack, written from source
