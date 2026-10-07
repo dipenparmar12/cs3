@@ -1,78 +1,53 @@
-# CloudStream Android Architecture & Codebase Documentation
+# CloudStream 3 Desktop — Documentation
 
-Welcome to the comprehensive technical documentation for **CloudStream 3** (`cloudstream_ref_android`), generated from in-depth codebase analysis of the upstream Android reference repository.
+Two subjects, kept apart on purpose:
 
----
+1. **CS3 Desktop** (`cs3_windows/` + `sidecar/`) — the Electron app in this repository. **Source code is the authority**;
+   these documents describe what the code does today. Start here.
+2. **Android reference** (`android/`) — the upstream CloudStream 3 Android app (v4.8.0) that the desktop app ports.
+   Useful for expected behaviour; it does **not** describe this codebase.
 
-## 📚 Master Index & Documentation Structure
+Verification status of every claim: [VERIFICATION.md](VERIFICATION.md). Root agent context: `CLAUDE.md`/`AGENTS.md`;
+intent/requirements: `docs/PRD/`; deep domain notes: `docs/agents/`.
 
-Click on any section below to view the detailed document:
+## Desktop documentation
 
-1. [**01. Executive Summary & Core Purpose**](01_executive_summary_and_purpose.md)
-   * What is CloudStream?
-   * What problems does it solve?
-   * Decoupled plugin architecture model
-   * Target devices (Android Mobile, Tablets, Android TV, FireStick)
-   * Architectural high-level diagram
+| Area | Document | Covers |
+|---|---|---|
+| **Architecture** | [overview](architecture/overview.md) | processes, services, IPC, startup, state |
+| | [core-concepts](architecture/core-concepts.md) | glossary, patterns, provenance, fallbacks |
+| | [streaming](architecture/streaming.md) | search → detail → sources → proxy → inspect → decide → player |
+| | [downloading](architecture/downloading.md) | task identity, engines, resume, verification |
+| | [providers](architecture/providers.md) | repository ▸ extension ▸ provider ▸ source, gating, ranking, OTT |
+| | [extensions](architecture/extensions.md) | sidecar runtime, loading, shim, updates |
+| | [repositories](architecture/repositories.md) | repo listings, bootstrap, regions |
+| | [search](architecture/search.md) | search sessions, suggestions, discovery, metadata |
+| | [caching](architecture/caching.md) | every cache, keys, lifetimes, startup |
+| | [persistence](architecture/persistence.md) | data stores, history, library, Incognito, backup |
+| | [player](architecture/player.md) | player components, engines, shortcuts, recovery |
+| | [api-services](architecture/api-services.md) | all 334 IPC channels + service reference |
+| **UI** | [overview](ui/overview.md) · [screens](ui/screens.md) · [components](ui/components.md) · [wireframes](ui/wireframes.md) | shell, navigation, every screen, component inventory |
+| **Debugging** | [overview](debugging/overview.md) · [troubleshooting](debugging/troubleshooting.md) | evidence sources, symptom → owner → steps |
+| **AI agents** | [coding-agent-guide](ai/coding-agent-guide.md) | tracing, where to add code, rules, verification |
+| **Development** | [setup](development/setup.md) · [conventions](development/conventions.md) · [testing](development/testing.md) | build order, packaging, conventions, tests |
 
-2. [**02. Architecture & Module Breakdown**](02_architecture_and_modules.md)
-   * Multi-module project structure (`:app` vs `:library`)
-   * Kotlin Multiplatform (KMP) setup
-   * Target SDKs, JDK 17 toolchain, build variants (`stable`, `prerelease`)
-   * MVVM & Unidirectional Data Flow patterns
+## Android reference (`android/`)
+[01 Executive summary](android/01_executive_summary_and_purpose.md) ·
+[02 Architecture & modules](android/02_architecture_and_modules.md) ·
+[03 Extension system](android/03_extension_and_plugin_system.md) ·
+[04 UI layer](android/04_ui_and_presentation_layer.md) ·
+[05 Playback & torrent engine](android/05_playback_media_and_torrent_engine.md) ·
+[06 Trackers & persistence](android/06_trackers_sync_and_data_persistence.md) ·
+[07 Security & utilities](android/07_security_services_and_utilities.md) ·
+[08 Key files](android/08_key_files_and_codebase_reference.md) ·
+[09 CI/CD & roadmap](android/09_ci_cd_devops_and_future_roadmap.md) ·
+[verification report](android/VERIFICATION_REPORT.md) (Android-only; compares those documents to the upstream Android tree).
 
-3. [**03. Extension & Plugin System Architecture**](03_extension_and_plugin_system.md)
-   * Plugin DEX packaging (`.cs3` / `.zip`)
-   * Dynamic loading at runtime via `dalvik.system.PathClassLoader`
-   * Base API contracts (`MainAPI`, `ExtractorApi`, `CloudstreamPlugin`)
-   * Repository infrastructure, SHA-256 checksum validation, auto-updates, OAT clearing
+Android docs paths such as `app/src/main/…` refer to the upstream Android repository
+(`repositories/_cloudstream_ref_android`, an **uninitialised submodule** by default), not to anything in `cs3_windows/`.
 
-4. [**04. UI & Presentation Layer Architecture**](04_ui_and_presentation_layer.md)
-   * Single Activity Pattern (`MainActivity`, `AccountSelectActivity`)
-   * Navigation Graph (`nav_graph.xml`) & ViewBinding
-   * Dual-Mode Interface: Phone/Tablet Touch UI vs Android TV Remote / Leanback UI
-   * Core UI Fragments (`HomeFragment`, `SearchFragment`, `ResultFragment2`, `LibraryFragment`, `SettingsFragment`)
-   * Anime-DB filler checking integration
-
-5. [**05. Playback Media & Torrent Engine Architecture**](05_playback_media_and_torrent_engine.md)
-   * AndroidX Media3 ExoPlayer integration
-   * Software audio decoding via `nextlib` FFmpeg extensions (AC3, EAC3, DTS)
-   * Integrated BitTorrent engine (`torrentserver`) for direct magnet streaming
-   * Custom Subtitle pipeline (SRT, VTT, SSA/ASS, JUniversalChardet encoding, timing sync)
-   * Player controls (Video Skip intro/outro, SeekBar preview, Chromecast, Picture-in-Picture)
-
-6. [**06. Trackers, Sync & Data Persistence Architecture**](06_trackers_sync_and_data_persistence.md)
-   * Local key-value storage engine (`DataStore.kt`, `DataStoreHelper.kt`)
-   * Multi-profile account isolation
-   * Third-party tracking services (AniList GraphQL, MyAnimeList REST, SIMKL, Trakt.tv, Kitsu)
-   * Cloud backup and restore (`BackupUtils.kt`)
-
-7. [**07. Security, Network Services & Utility Architecture**](07_security_services_and_utilities.md)
-   * Network stack (`NiceHttp`, Jsoup/Ksoup, Conscrypt SSL layer, DNS-over-HTTPS)
-   * In-app updater framework (`InAppUpdater.kt`, `PackageInstallerService`)
-   * Background foreground services (`VideoDownloadService`, `DownloadQueueService`)
-   * Security (Biometric unlock, PIN authentication, WakeLocks)
-
-8. [**08. Key Files & Codebase Reference Map**](08_key_files_and_codebase_reference.md)
-   * Complete directory map of `:app` and `:library`
-   * Comprehensive catalog of critical Kotlin classes, interfaces, viewmodels, and services with file path links
-
-9. [**09. CI/CD, DevOps & Future Architectural Roadmap**](09_ci_cd_devops_and_future_roadmap.md)
-   * GitHub Actions automation (`prerelease.yml`, `build_to_archive.yml`, `update_locales.yml`, `generate_dokka.yml`)
-   * Hosted Weblate localization pipeline (`locales.py`)
-   * AI contribution policy (`AI-POLICY.md`)
-   * Future architectural roadmap: MVI pattern migration, Compose Multiplatform, and KMP library adoption (`COMPOSE.md`)
-
----
-
-## 🛠️ Quick Repository Summary
-
-| Item | Value |
-|---|---|
-| **Repository Location** | Upstream `cloudstream_ref_android` (vendored in this repo) |
-| **Documentation Root** | `docs/docs_cs3/` |
-| **App Name** | CloudStream (`com.lagradost.cloudstream3`) |
-| **SDK Module** | CloudStream Library (`com.lagradost.api`) |
-| **Primary Language** | Kotlin (100%), Kotlin Multiplatform (KMP) |
-| **Target Platforms** | Android 6.0+ (Phone, Tablet, Android TV, Fire TV) |
-| **Build System** | Gradle Kotlin DSL (`build.gradle.kts` + `libs.versions.toml`) |
+## Maintenance rules
+* Code wins. When a document disagrees with the code, fix the document in the same change.
+* One authoritative document per concept; link, don't copy. Counts that change (channels, suites, indexers) are
+  stated with a date or a command to regenerate them.
+* Mark anything not confirmed in code as *requires verification* in [VERIFICATION.md](VERIFICATION.md).
