@@ -7,6 +7,8 @@ Context for AI coding agents. `CLAUDE.md` symlinks here.
 This is the core. Per-area detail lives in `docs/agents/` — see **Domain notes** below and
 read the file for the area you are about to change.
 
+**Doc shorthand** (everything under `docs/agents/`): `extensions.md` §5 · `media.md` §6 · `torrents-and-search.md` §7–8 · `library-and-ui.md` §9–11 are the domain files; **`fn:<area>`** = `field-notes/<area>.md`, area ∈ extensions · media · search · ui · metadata (dated post-mortems, verbatim, each with a contents list).
+
 Facts here are measured, not assumed. Numbers in parentheses are real measurements; keep them when editing.
 
 ---
@@ -226,7 +228,7 @@ different question at a different cost: `api:loadMedia` is what the app can
 **play** and a Play press waits for it; this is what the title **is**, from four
 third-party catalogues, and nothing waits for it. Push-shaped for the same
 reason `search:*` is — the record is emitted partial and refilled as each source
-lands. See "The cast list was a row of names" in `docs/agents/field-notes/metadata.md`.
+lands. See "The cast list was a row of names" in `fn:metadata`.
 
 `ott:*` is the streaming-service surface — `ott:listPlatforms`, `ott:getCatalog`,
 `ott:getCatalogPage`, `ott:getSearchScope`, `ott:getSuggestions`,
@@ -244,25 +246,25 @@ rather than omitting the ones nothing serves.
 | `datastore.ts` | Persistence. Reimplements **Android's 6-bucket key grammar** (`_Bool`/`_Int`/`_String`/`_Float`/`_Long`/`_StringSet`) so Android backups import losslessly. Non-transferable keys (tokens, device ids, cache paths) are filtered on import by regex. |
 | `contentService.ts` | The content pipeline orchestrator: `search → MetadataProvider → getSources → IndexerRegistry → startStream → TorrentEngine`. Extension providers are consulted first; torrents are the fallback. A `cs3ext://` media URL bypasses indexers entirely — the provider already knows its links. Also the one funnel that captures page snapshots. |
 | `playbackSession.ts` | Owns one "user pressed play" interaction. Opens the player *before* a stream exists and streams discovery progress into it, so the viewer can start the best source found so far instead of waiting for the slowest indexer. Also owns in-player source switching and refresh. Retains the `SourceQuery`, which is what makes refresh possible without navigating back. |
-| `searchScope.ts` | Which sources a search may ask. **A selection is a strict filter, not a preference** — see `docs/agents/field-notes/search.md` ("Search scope: selecting a source is a filter"). |
+| `searchScope.ts` | Which sources a search may ask. **A selection is a strict filter, not a preference** — see `fn:search` ("Search scope: selecting a source is a filter"). |
 | `searchSession.ts` | One "the user pressed search" interaction. Push-shaped like `playback:*`: fans out per source, emits a snapshot as each answers, and can be cancelled. |
 | `searchSuggestions.ts` | Title autocomplete merged across Cinemeta + TVmaze + AniList, deduped on normalised title+year, misspelling-tolerant. Their blind spots do not overlap — see the file header for what was measured about each. `instant()` is synchronous and answers from an exact or longest-prefix cache hit with no I/O; `suggest()` publishes per source and runs the genre lookup *behind* the answer. |
 | `searchHistory.ts` | Past search *queries* (not results — a cached result set goes stale silently), stored via the datastore so backups carry it. |
 | `sourceCache.ts` | Resolved sources, with expiry tracked **per source**: magnets never expire, provider links carry a deadline read from the URL (`Expires`/`exp`/JWT claim, case-insensitively) or a short TTL. A cache hit can be partially stale — good magnets beside dead links — and `read()` reports that split. |
 | `subtitleService.ts` | Online subtitle search via the keyless OpenSubtitles v3 Stremio addon, keyed by IMDb id. Converts SubRip to WebVTT, which is **not optional**: `<track>` rejects `.srt` silently. |
 | `media/mediaInspector.ts` | ffprobe → `MediaMetadata`; transport and DRM classified from the manifest body, never the URL. |
-| `media/decisionEngine.ts` | Pure decision: metadata + host capability + DRM → `TransformationPlan`. Tested exhaustively; see §6.3 in `docs/agents/media.md`. |
+| `media/decisionEngine.ts` | Pure decision: metadata + host capability + DRM → `TransformationPlan`. Tested exhaustively; see §6.3 in `media.md`. |
 | `media/playbackEngine.ts` | Inspect → decide → open, and the only way to obtain a URL to attach. Owns playback telemetry. |
-| `media/mpvEngine.ts` | The native engine. Spawns mpv, drives it over JSON-RPC, and reports snapshots. For the streams Chromium will never decode — see `docs/agents/field-notes/media.md` ("The native engine: mpv"). |
+| `media/mpvEngine.ts` | The native engine. Spawns mpv, drives it over JSON-RPC, and reports snapshots. For the streams Chromium will never decode — see `fn:media` ("The native engine: mpv"). |
 | `mediaTranscoder.ts` | Executes a `TransformationPlan` as a live fragmented-MP4 stream on loopback, plus embedded-subtitle extraction. |
 | `metadataProvider.ts` | TVmaze + AniList. **Catalogue metadata only, never streams.** Its key output is the IMDb id, which indexers match on far better than free text. |
 | `cinemeta.ts` | Stremio Cinemeta metadata provider, prioritised in search. |
-| `metadata/enrichmentService.ts` | Cast, crew, ratings, debut date and production notes, merged from four keyless catalogues. Push-shaped and cached; never on the playback path. See `docs/agents/field-notes/metadata.md`. |
+| `metadata/enrichmentService.ts` | Cast, crew, ratings, debut date and production notes, merged from four keyless catalogues. Push-shaped and cached; never on the playback path. See `fn:metadata`. |
 | `metadata/merge.ts` | Merging what several catalogues say about one title. Pure and tested — every wrong answer here is silent and plausible. |
 | `metadata/wikidata.ts` | Cast **with characters** for film, plus crew, release date and box office. The keyless answer to the one thing TMDB is usually reached for. |
 | `metadata/tvmaze.ts` | Cast and crew with real photographs, for television. Two endpoints on a host the app already talks to and had never asked. |
 | `metadata/anilist.ts` | Characters, their voice actors in every language, and staff, for anime. Both name pairs in both scripts. |
-| `metadata/wikipedia.ts` | "Behind the scenes" prose. The article is a Wikidata sitelink, **never a search** — see `docs/agents/field-notes/metadata.md`. |
+| `metadata/wikipedia.ts` | "Behind the scenes" prose. The article is a Wikidata sitelink, **never a search** — see `fn:metadata`. |
 | `metadata/cinemetaExtras.ts` | The half of Cinemeta's reply the app already pays for and drops: director, writer, `released`, country, awards, trailers. |
 | `src/utils/metadataDisplay.ts` | Rendering rules for the above. Pure; owns the partial-date trap. |
 | `pluginManager.ts` | `.cs3` repository discovery, plugin-list parsing (mirrors upstream `RepositoryManager.kt`), download + SHA-256 verification, Android-style install paths, then hands archives to the sidecar. Also owns the enable/disable cascade — see the extensions-screen section. |
@@ -273,15 +275,15 @@ rather than omitting the ones nothing serves.
 | `cs3/webViewMatch.ts` | What a page's subrequests mean. Pure and tested, because every wrong answer here is attributed to the provider instead. |
 | `cs3/extensionUpdater.ts` | Scheduled OTA extension updates. "Update all" re-checks rather than reading the persisted snapshot; an update installs into the directory the *record* names and downloads from the repository the *update* names. Auto-installs on every launch by default (Android parity); only a choice made in Settings overrides that. |
 | `cs3/bootstrap.ts` | First-run install of the bundled repositories, and the adult-content opt-in. |
-| `cs3/diagnostics.ts` | Provider failures with the context that makes them reproducible. See `docs/agents/field-notes/extensions.md` ("Diagnosability"). |
+| `cs3/diagnostics.ts` | Provider failures with the context that makes them reproducible. See `fn:extensions` ("Diagnosability"). |
 | `cs3/extensionIssues.ts` | The **durable tally** of distinct extension problems, across restarts and log rotation. `diagnostics` is one failure shaped to be pasted; the logger is a per-session transcript; this is the "count before fixing" list. See below. |
-| `cs3/providerRegistry.ts` | What each archive registered, keyed by size+mtime+runtime generation. Hydrates the provider list at launch **without starting the JVM** — the fix for a 57–67s first search. See `docs/agents/field-notes/extensions.md` ("The first search cost a minute"). |
+| `cs3/providerRegistry.ts` | What each archive registered, keyed by size+mtime+runtime generation. Hydrates the provider list at launch **without starting the JVM** — the fix for a 57–67s first search. See `fn:extensions` ("The first search cost a minute"). |
 | `cs3/providerRecovery.ts` | Making a provider a saved page names answer again. `planRecovery` is pure and returns the ordered steps, because the button has to say what it will do — a repository fetch and a DEX translation — *before* it starts. It fixes the whole enable cascade, not just the provider switch: the old handler called `setProviderEnabled` alone, which on the common post-restore state (repository off, or extension not installed at all) completed successfully and changed nothing observable. It never adds a repository the app was not already told about — a `cs3ext://` address travels in library rows, and accepting a URL out of one would make "reopen my saved page" a way to install code from anywhere. |
 | `cs3/titleOutcomes.ts` | How each title last behaved, so a dead row is not clicked twice. |
 | `cs3/ottPlatforms.ts` | The OTT platform table and the rule for deciding which provider is one. Pure and tested — a matcher one character too loose fills the Prime Video page with a torrent aggregator called PrimeWire and nothing says so. |
 | `cs3/nativeProviderRegistry.ts` | The roster of providers compiled into the app, and the native mirror of `enabledProviderNames` — the adult gate and the disable cascade, in one place. |
 | `cs3/nativeProviders/types.ts` | The `NativeProvider` interface and `cs3native://` addressing. Pure. |
-| `cs3/nativeProviders/internetArchive.ts` | ~52,000 public-domain films, documentaries and classic TV. The query form is measured, not designed — see `docs/agents/field-notes/extensions.md` ("The native provider lane"). |
+| `cs3/nativeProviders/internetArchive.ts` | ~52,000 public-domain films, documentaries and classic TV. The query form is measured, not designed — see `fn:extensions` ("The native provider lane"). |
 | `cs3/nativeProviders/peerTube.ts` | Federated video via SepiaSearch. A video's files live on its **own** instance, not the search host. |
 | `cs3/nativeProviders/iptvOrg.ts` | 17,230 free-to-air live streams from the open iptv-org dataset; ~70% answer. |
 | `cs3/nativeProviders/stremioAddon.ts` | Any Stremio addon, by manifest URL. `idPrefixes` is a hard constraint — an addon 500s on an id it does not speak. |
@@ -299,16 +301,16 @@ rather than omitting the ones nothing serves.
 | `cs3/sidecarStderr.ts` | What a line of JVM stderr *means*: level, the tag that printed it, and a cause. Pure and tested — it is the only attribution the corpus offers. |
 | `cs3/discovery.ts` | The home screen's catalogues. Stale-while-revalidate over Stremio's keyless Cinemeta catalogs (`top`/`year`/`imdbRating`, filterable by 19 genres, pageable) plus AniList for anime. Finds **nothing playable** — sources are resolved by providers when an item is opened. |
 | `cs3/titleEnricher.ts` | Resolves `Avengers End Game 720p Hindi Dubbed` to the film it is about. Conservative on purpose: a disagreeing year is disqualifying and the similarity bar is high enough that `Avengers` does not match `Avengers: Endgame`. An unenriched row is a small loss; a mislabelled one reads as data corruption. |
-| `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. Warmed at launch — see §7.1 in `docs/agents/torrents-and-search.md`. |
+| `torrent/torrentEngine.ts` | WebTorrent + loopback HTTP server with range support. Sequential pieces; the player only ever sees `http://127.0.0.1:PORT/…`. Warmed at launch — see §7.1 in `torrents-and-search.md`. |
 | `torrent/torrentMetadata.ts` | `.torrent` bytes cached by infohash, verified against it. A cache hit means `add()` has the piece hashes synchronously and the swarm is needed only for bytes. Also builds the `xs` mirror URLs. |
 | `torrent/torrentContents.ts` | What is actually *in* a torrent, as something a person can browse: seasons, episodes, samples, extras. Pure and tested for the reason `ottPlatforms.ts` is — every wrong answer is silent and plausible, and the viewer attributes it to the torrent. Extension decides the kind, never the folder; a sample is recognised by size ratio as well as by name. |
 | `torrent/dhtNodeCache.ts` | The DHT routing table, node id and port, persisted. Turns a cold bootstrap into a warm one. |
 | `torrent/indexerRegistry.ts`, `indexers/*` | 19 built-in adapters — 4 Stremio stream addons, 12 JSON/RSS APIs, 3 HTML scrapers — plus Torznab (Jackett/Prowlarr). Counted from the registry switch on 2026-10-07 (17 on 2026-09-03; older lines said 7). |
 | `torrent/ranker.ts`, `releaseParser.ts` | Release-name parsing (quality/codec/group/season/episode) and result ranking. |
-| `externalPlayerControl.ts` | Two-way control of VLC over its HTTP interface. Capability is declared per player, never assumed — see `docs/agents/field-notes/media.md` ("External players are driven"). |
+| `externalPlayerControl.ts` | Two-way control of VLC over its HTTP interface. Capability is declared per player, never assumed — see `fn:media` ("External players are driven"). |
 | `media/inspectionStore.ts` | Persists what a probe found, keyed on the origin URL. The measurement only; the verdict is recomputed. |
 | `downloadService.ts`, `aria2Engine.ts`, `ytdlpEngine.ts`, `binaryDownloader.ts` | Downloads via aria2c RPC with an HTTP fallback; portable `aria2c`/`yt-dlp` binaries are fetched on first use. |
-| `src/utils/deadRows.ts` | Which search results are worth showing. `no-sources` hides; `app-error` never does — see `docs/agents/field-notes/search.md` ("Results that resolve to nothing are held back"). |
+| `src/utils/deadRows.ts` | Which search results are worth showing. `no-sources` hides; `app-error` never does — see `fn:search` ("Results that resolve to nothing are held back"). |
 | `src/components/player/useFloatingPlayer.ts` | Picture-in-Picture, the window pin, the background policy and the Media Session record. |
 | `src/components/settings/settingsLevel.ts` | Simple versus Everything, and what `advanced` means. |
 | `savedSearches.ts` | Result sets the viewer chose to keep (Save results). Own JSON file, hydrated on first use, 50 searches × 200 rows; same query + same scope updates in place. Rows are page addresses, which do not expire. In the backup table as `savedSearches`. |
@@ -395,7 +397,7 @@ rather than omitting the ones nothing serves.
 ## Domain notes
 
 Four areas carry more hard-won detail than one file should load every session, so their depth
-lives in `docs/agents/`. **Each capsule below is self-contained**: the mechanism, the modules
+lives in the domain files. **Each capsule below is self-contained**: the mechanism, the modules
 that implement it, and the rules that must not be broken. You can work from a capsule alone.
 Open the domain file when you need the *why* — the measurement behind a number, the failure a
 rule prevents, or the history of a design you are about to change.
@@ -405,7 +407,7 @@ whichever file you are in. The domain files carry the same authority as this one
 
 ---
 
-### §5 — Extensions, the sidecar and the android shim → `docs/agents/extensions.md`
+### §5 — Extensions, the sidecar and the android shim → `extensions.md`
 
 **Mechanism.** A `.cs3` is a ZIP of Android DEX bytecode compiled against upstream's Kotlin
 provider API. `sidecar/` is a **separate JVM OS process** (not a thread), so a hanging plugin
@@ -437,13 +439,24 @@ registered) · `cs3/webViewHost.ts` (Cloudflare challenges) · `cs3/extensionIss
 - **A failed `load()` closes its class loader, and `unload` withdraws what the plugin registered.** A leaked loader holds a Windows handle on the `.cs3`, and every later update of that extension fails its rename with `EPERM` (measured: Ultima, which fails at `load()` on every launch, could never be updated). `unload` removes the plugin's entries from `APIHolder.apis`/`allProviders` and `extractorApis` by `sourcePlugin`, as upstream's `unloadPlugin` does. `PluginUnloadTest` pins both and fails on the old code.
 - **Installs and updates from the screen are background jobs** (`cs3/extensionJobs.ts`). Downloads overlap; everything after the verified download in `installPlugin` — rename, translate, load — runs through `PluginManager.oneAtATime`, because overlapping loads mis-attribute providers. Any new install path must go through `installPlugin` or take that lock.
 - **Replacing an archive goes through `cs3/archivePlacement.ts`.** Retry the rename for ~1.5s, then place the update beside the held file (`Name.hash.<sha12>.cs3`) and point the record at it; the held copy goes on `extension_displaced_archives` and is swept once released. Read an extension's archive from `record.filePath` (`archivePathFor`), never from the canonical path.
-- **Extension updates install automatically on every launch by default** — Android parity; see `docs/agents/field-notes/extensions.md` ("Extension updates: three reasons \"Update all\" did nothing").
+- **Extension updates install automatically on every launch by default** — Android parity; see `fn:extensions` ("Extension updates: three reasons \"Update all\" did nothing").
 - **Nothing installs until the viewer picks regions** (PRD-54, `cs3/regions.ts`; first-run modal pre-ticked from the locale; existing installs asked once). Every matching verified repository is *added*; starter extensions (≤16, working before beta before slow, nothing marked down — `starterPlugins.ts`) are *installed* from repositories matched through a named region (any language) and from **bundled** global ones (filtered to the selection's languages). Unbundled global repos are added only; adult repos added only when allowed, never installed from. **Cross-region** (default on, `cs3_content_regions_cross`): every unmatched non-adult repo is searched for plugins whose `language` is *exactly* a selected one (`strictLanguage`) and removed again if none were found. The region system only adds — an installed repository is skipped, so a manual off is never undone; removal returns a list to review.
 - The upstream jar lane exists but only **1.9%** of the corpus publishes one — don't plan work assuming it.
+- **Shims, measured:** `android.net.Uri` is implemented (RFC 3986, never validates — `java.net.URI` throws on scraped URLs); `Handler` works (one executor per handler) and `Looper.getMainLooper()` is non-null; `Context.getSystemService` returns `null` (Android's contract); UI types throw `UnsupportedAndroidApiException` (demotes the tier, not a crash); `Intent`/`AlertDialog.Builder` build fine and refuse at `startActivity`/`show`.
+- **A Kotlin companion is not inherited:** `CloudStreamApp.Companion` and `AcraApplication.Companion` each carry the methods; `PluginHost.invokeLoad` points both at the plugin's context before `load()`.
+- `describeProvider`/`diffProviders` isolate per-provider failures — one unlistable provider must not discard the `ExtractorApi`s registered beside it.
+- **Provider links are read, not guessed:** `ExtractorLinkType`/`isDash` come from the provider; torrent/magnet links go to the torrent engine with `fileIndex` unset; a playlist is numbered rows (`part 2 of 3`), never one truncated row.
+- **Platform-page search** is scoped by `SearchOptions.providers` through `SearchScopeStore.override` and is never persisted. `Disney+ Hotstar` → Hotstar and `JioHotstar` are pinned by name, not by declaration order.
+- **Updates:** a same-version republish counts only from the extension's own repository (a mirror's hash describes a different build); version bumps stay cross-repository; download from the *update's* repository, install into the *record's* directory; "Update all" re-checks live, never the persisted snapshot.
+- **A timeout is not a verdict:** `PluginManager.inspect` returns `null` for `TRANSPORT_ERROR_KINDS`, never `T4_BLOCKED` (which triggers an update rollback).
+- Provider origins are persisted (`cs3_provider_origins`) so a saved `cs3ext://` address can still say which extension owned it.
+- Stremio `externalUrl`/`ytId` streams are dropped, not offered; a Jellyfin key bound to no user gives an empty `/Users`, reported as that, not "no results".
+- A cloud container's egress proxy 403s provider hosts (`net52.cc`…): the streaming half of a repository can't be verified there — never set `bundled: true` from a cloud run. `diagnostics` `mode: 'current'` selects by context and says so when it falls back to recent history.
+- More: `fn:extensions`.
 
 ---
 
-### §6 — Playback and the media engine → `docs/agents/media.md`
+### §6 — Playback and the media engine → `media.md`
 
 **Mechanism.** Chromium cannot decode much of what people stream — **AC-3, E-AC-3 and DTS return `""`**, and bare `video/x-matroska` reports `"maybe"` then drops audio silently; no HEVC without platform decoders. So playback is **inspect → decide → execute**: ffprobe produces `MediaMetadata`, a *pure* decision function turns metadata + renderer capabilities + host encoder into a `TransformationPlan`, and the plan is executed as live fragmented-MP4 on loopback, played natively, or handed to **mpv** (its own window, driven over JSON IPC, hardware decode). `MediaProxy` serves everything from loopback because a browser cannot send the provider's `Referer`.
 
@@ -465,10 +478,20 @@ registered) · `cs3/webViewHost.ts` (Cloudflare challenges) · `cs3/extensionIss
 - **Probes are cached by *origin* URL; verdicts are always recomputed** — a verdict depends on this machine's decoders.
 - **A loopback URL returned from `wrap` is untouched**, or output gets double-wrapped one hop per call.
 - **PRD-40.1's `sourceLease.ts` and `playbackTelemetry.ts` are built, tested and never wired** — green suites over unreachable code. See §6.11 before touching either.
+- **ClearKey:** browser-decodable payload → `EME_NATIVE`; undecodable → ladder with `-decryption_keys`, **progressive only** (FFmpeg's DASH demuxer answers `Option decryption_key not found`, fatal to the whole command line); encrypted DASH plays only through Shaka `DASH_NATIVE`.
+- **The forced retry** in `PlaybackEngine.prepare` routes to `NATIVE_MPV` when available and policy ≠ `off` (not for `EME_NATIVE`/DRM) and rewrites the returned capability, or `VideoPlayer` hands the URL back to the element that just failed.
+- **`MediaProxy`:** `Accept-Ranges` is stated, never forwarded; a 200 answering a mid-file range is refused; never-served routes are evicted after served ones, newest first (`createdAt` vs `lastAccess`); bodies are read as bytes and decoded only to sniff; the reader is cancelled and upstream fetches carry an `AbortSignal` tied to the client socket; tokens are 16 random bytes and a non-loopback `Host` is refused.
+- `wrap(url, headers, { boundedRanges: true })` is for hosts that refuse unbounded Range (YouTube DASH): first window 64 KB, total from `Content-Range`, status mirrors what was asked, a refused window is halved down to 64 KB.
+- Never pass `--force-seekable` to mpv (a Range-ignoring origin makes it grind the whole file); never pass `--untimed` in the matrix (hides a stream that can't hold realtime).
+- **Volume has two writers:** ignore incoming engine audio for `AUDIO_ECHO_MS` (700 ms) after a local change and never send an engine's own level back (`engineAudio`, cleared when the engine changes); `clampVolume` on element and mpv — `video.volume` throws outside [0,1].
+- The native stage reports `onPausedChange` upward (element events never fire there) and does not forward buffering into `isBuffering` (that overlay is a torrent's story).
+- `build-media-runtime.mjs` fails the build on a missing required component (`--allow-missing` overrides); mpv is `required: false` off Windows on purpose (the distro package is wired to VA-API/VideoToolbox).
+- A test origin on 127.0.0.1 is never proxied (`wrap` leaves loopback alone) and measures nothing; verify a proxy regression test fails with the fix reverted. googleusercontent links expire (8 h signed, then `HTTP 400`) — re-resolving is correct, not a bug.
+- More: `fn:media`.
 
 ---
 
-### §7–8 — Torrents, indexers, search and ranking → `docs/agents/torrents-and-search.md`
+### §7–8 — Torrents, indexers, search and ranking → `torrents-and-search.md`
 
 **Mechanism.** Torrents run on WebTorrent with a loopback HTTP server doing range requests and
 sequential pieces, warmed at launch because the costs are cold-client costs (DHT bootstrap,
@@ -493,8 +516,16 @@ derived from their own measured latency. Scope decides which sources a search ma
 - **DHT: saved contacts go through `addNode()`, never `bootstrap`**; `dhtPort` is pinned to 6882.
 - **All sources is a mode, not an erasure** — it must never throw away a saved selection.
 - **Zero-pad episode terms** (`S01E02`); `S1E2` matches nothing and reads as "the indexer has nothing".
+- **Ranking on a maintainer's `status`:** weight **0.4**, `minSamples` **0** (a declaration is not a sample); it loses to the counters as soon as they have anything to say.
+- An unresolvable scope selection is reported (`missingProviders`/`missingIndexers`), never ignored.
+- `sharedDiscovery.ts`: cancel by consensus (stop only when every caller withdrew); an aborted run is never joined; the prefetcher is the only caller passing `autoWiden: false`. The fan-out's `load(base)` may fail when `titleOverride` is known (enrichment only).
+- `SourceCache`: removing the last source removes the entry (`hit: true` with nothing in it skips discovery); a 403 is never definitive (expiry/hotlink), 404/410 drop at once, three other failures drop.
+- **Stremio addons:** an addon whose `idPrefixes` can't address an id is skipped (it 500s), not counted failing; search is attempted whatever `extra` declares; two deployments of one addon are two providers (the host is in the local id). A direct `url` stream gets `seeders: 1`, no `fileIdx`, and `directSourceIdentity` (shared with extensions).
+- **yt-dlp** rows need audio **and** video (except manifests); `--no-playlist`; `resolve` answers with a reason; a pasted page URL becomes its own search row and is resolved when opened; typing never triggers a page fetch.
+- A prefix match is not charged for the untyped remainder; `SOURCE_PRECEDENCE`, not arrival order, decides which candidate names a merged work. `bun run test repositories` pins what the catalogue may claim; liveness is `survey-repositories.mjs`, run deliberately.
+- More: `fn:search`.
 
-### Field notes — the dated post-mortems → `docs/agents/field-notes/`
+### Field notes — the dated post-mortems → `fn:<area>`
 
 Moved **verbatim** out of this file (nothing rewritten; each file opens with a contents list). Read the one for the area you are changing when you need the *why*: the measurement behind a number, the failure a rule prevents, how a design came to be. Section numbers (§5.1, §5.2, §5.3 …) are unchanged inside them.
 
@@ -507,7 +538,7 @@ Moved **verbatim** out of this file (nothing rewritten; each file opens with a c
 | `metadata.md` | Trailers (PRD-45) and the cast list / extended metadata (Wikidata, TVmaze, AniList, Cinemeta, Wikipedia) incl. merge rules and live verification; §5.3 metadata harness |
 ---
 
-### §9–11 — Library, downloads, UI and lifecycle → `docs/agents/library-and-ui.md`
+### §9–11 — Library, downloads, UI and lifecycle → `library-and-ui.md`
 
 **Mechanism.** The library keys on `canonicalKey(title, year)` plus season and episode — never
 on a URL, so nothing is orphaned when an address dies. Every detail page opened is written down
@@ -534,6 +565,15 @@ screen groups by subject and filters by *level*. All teardown happens on `before
 - **Escape is consumed in capture phase, only when it actually closed something** — otherwise closing a menu ends playback.
 - **Never name a `.tsx` and `.ts` alike but for casing** — one name on Windows; the wrong resolution blanked the whole window.
 - **Four reachability guards exist** (channel invoked/registered, component mounted, module constructed) — see §10.
+- **Cards:** `visited` is a dimming, never a badge; failure always marked, success almost never; a failure the viewer disproved is retired. `Unsupported` is absence of evidence → `unknown`; nothing tells a viewer an extension *will* work.
+- **A privacy control is never held back** by mode or level (`ProviderRankingPanel`'s data and erase button stay in both). `advanced` means the *label* needs knowledge of how the app is built, not "rare"; an unclassified row is basic.
+- **PiP** only where it can work (`isPipSupported`: element is what plays, `readyState`, native engine not holding the stream); the window pin unapplies itself on unmount; the `<video>` is never remounted in any mode.
+- **aria2** reports `complete`, not `completed` (handle `removed`/`paused` too); its port probes upward from 6800 and success is claimed only once RPC answers.
+- `PlayedSource` is recorded after 10 s of real playback, not on selection; a direct link with no recorded deadline counts as expired.
+- Bootstrap runs once (`BOOTSTRAP_VERSION`; a bump installs only what is new), caps at `PLUGINS_PER_REPOSITORY`, never blocks.
+- **Lifecycle:** shutdown is raced against 5 s and logs `shutdown_timeout` naming the pending service; a dropped file never navigates the window (`will-navigate`); DevTools is `Ctrl+Shift+I` only (F12 is the app's), Reload is gated on `!app.isPackaged`.
+- **Metadata:** Wikidata `P161` + qualifier `P453` is performer and role as one fact; Commons images are always `?width=`, the raw URL never reaches the renderer; `assemble` source order is precedence (characters/photos first); Wikidata `P1651` is **not** a trailer; trailer duration/date aren't fetched; a field populated and never read is a defect (`backdropUrl` was drawn by nothing until `DetailHero`).
+- More: `fn:ui`, `fn:metadata`.
 
 ---
 
@@ -577,8 +617,8 @@ screen groups by subject and filters by *level*. All teardown happens on `before
 | `docs/PRD/41` | **Proposed, nothing built** — read instead of 39. §2 is a measured Android-ecosystem account worth reading standalone |
 | `docs/PRD/43` | Research 2026-09-03; items 1–4 built. §6's rule: a direct HTTP link is not an indexer result |
 | `docs/PRD/44` | Research + proposal, §6–§8 not built. §5 is an 8-shape failure taxonomy from a 6,180-record log; read §6.1 before any failure-UI design |
-| `docs/agents/field-notes/*.md` | The dated post-mortems, measurements and "why" behind every rule — moved verbatim from this file; five files by area (see **Field notes** above) |
-| `docs/agents/*.md` | **The other half of this document.** `extensions.md` (§5) · `media.md` (§6) · `torrents-and-search.md` (§7–8) · `library-and-ui.md` (§9–11). Same authority as this file |
+| `fn:*` (`docs/agents/field-notes/*.md`) | The dated post-mortems, measurements and "why" behind every rule — moved verbatim from this file; five files by area (see **Field notes** above) |
+| domain files (`docs/agents/*.md`) | **The other half of this document.** `extensions.md` (§5) · `media.md` (§6) · `torrents-and-search.md` (§7–8) · `library-and-ui.md` (§9–11). Same authority as this file |
 | `docs/docs_cs3/` | Android app architecture, 9 documents, written from source |
 | `docs/roadmap/product-hardening-backlog.md` | Backlog. Items marked `needs-app-run` are **unverified in a running Electron app — don't report as done** |
 
@@ -597,7 +637,7 @@ Requirement ids in code comments (`ARCH-2`, `SEC-7`, `DROP-12`, `DSK-57`, `AC-D4
 - **Keep these files current.** Changing the IPC surface, adding a service, moving the sidecar
   contract, or finding a stale section — update it in the same commit. **Put it in the right
   file**: `AGENTS.md` for the map, the build, the IPC contract and rules that apply everywhere;
-  `docs/agents/<area>.md` for detail only that area needs (a new dated post-mortem goes in `docs/agents/field-notes/<area>.md`, never here). Adding domain detail here is how the
+  the domain file for detail only that area needs (a new dated post-mortem goes in `fn:<area>`, never here). Adding domain detail here is how the
   core grows back into something every session pays for. **Keep it dense**: facts, rules and
   measurements, not narrative — a post-mortem is worth one rule plus its number, not its story.
 - **Do not vendor or commit**: `.cs3` archives, `library-jvm.jar`, `node_modules/`, `target/`, `dist/`, `dist-electron/`, downloaded `aria2c`/`yt-dlp` binaries. A `jar xf`'d sidecar jar is build output too — one branch merge carried 28 stray `.class` files beside their `.java` sources, and a stale compiled copy in the tree reads as a second, authoritative build.
