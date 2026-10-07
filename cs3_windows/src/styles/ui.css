@@ -1,0 +1,76 @@
+/* ===========================================================================
+   Shared UI components (src/components/ui/*).
+   Loaded after index.css and sources.css so these definitions are the ones
+   that hold where an older rule targets the same class.
+   =========================================================================== */
+
+/* --- Dialog ---------------------------------------------------------------- */
+.ui-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: 86vh;
+  width: min(520px, 100%);
+  background: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85);
+  overflow: hidden;
+}
+.ui-dialog--sm { width: min(420px, 100%); }
+.ui-dialog--lg { width: min(720px, 100%); }
+.ui-dialog__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1.1rem 1.25rem 0.9rem;
+}
+.ui-dialog__icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--accent-light);
+}
+.ui-dialog__icon--danger { background: rgba(239, 68, 68, 0.14); color: #f87171; }
+.ui-dialog__titles { flex: 1 1 auto; min-width: 0; }
+.ui-dialog__titles h3 { margin: 0; font-size: 1rem; font-weight: 700; color: var(--text-main); }
+.ui-dialog__description { margin: 0.3rem 0 0; font-size: 0.82rem; line-height: 1.45; color: var(--text-muted); }
+.ui-dialog__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.ui-dialog__close:hover { background: rgba(255, 255, 255, 0.08); color: var(--text-main); }
+.ui-dialog__close:focus-visible { outline: 2px solid var(--accent-light); outline-offset: 1px; }
+.ui-dialog__body {
+  padding: 0 1.25rem 1rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.ui-dialog__foot {
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.18);
+}
+.ui-dialog__actions { display: flex; align-items: center; gap: 0.75rem; }
+.ui-dialog__actions-start { flex: 1 1 auto; min-width: 0; font-size: 0.8rem; color: var(--text-muted); }
+.ui-dialog__actions-end { display: flex; gap: 0.5rem; margin-left: auto; }
+
+/* --- Button states shared by every variant -------------------------------- */
+.btn--loading { cursor: progress; }

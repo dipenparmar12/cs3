@@ -35,6 +35,7 @@ import type { SitePlugin } from '../../src/types/plugin';
 export type ExtensionJobRequest =
   | { kind: 'install'; plugin: SitePlugin; repositoryUrl: string }
   | { kind: 'update'; internalName: string; name?: string }
+  | { kind: 'uninstall'; internalName: string; name?: string }
   | { kind: 'addRepository'; url: string; name?: string }
   | { kind: 'installRepository'; url: string; name?: string; limit?: number };
 
@@ -106,6 +107,7 @@ export function targetOf(request: ExtensionJobRequest): string {
     case 'install':
       return `ext:${request.plugin.internalName}`;
     case 'update':
+    case 'uninstall':
       return `ext:${request.internalName}`;
     // Separate targets: adding is one cheap fetch, and pressing Install all
     // while an Add is still running must install, not quietly join the Add.
@@ -121,6 +123,7 @@ function labelOf(request: ExtensionJobRequest): string {
     case 'install':
       return request.plugin.name || request.plugin.internalName;
     case 'update':
+    case 'uninstall':
       return request.name || request.internalName;
     case 'addRepository':
     case 'installRepository':
@@ -129,6 +132,35 @@ function labelOf(request: ExtensionJobRequest): string {
 }
 
 const isActive = (job: ExtensionJob) => job.state === 'queued' || job.state === 'running';
+
+/**
+ * Whether a second request may join an active job on the same target.
+ *
+ * Install and update both put an archive in place, so a press of either joins
+ * the other. Uninstall is the opposite act: joining it to an install would
+ * report one as the other, and queuing it behind would race the same file —
+ * so it is refused while the other runs, and says why.
+ */
+function joins(active: ExtensionJobKind, incoming: ExtensionJobKind): boolean {
+  if (active === incoming) return true;
+  const replaces = (kind: ExtensionJobKind) => kind === 'install' || kind === 'update';
+  return replaces(active) && replaces(incoming);
+}
+
+const DOING: Record<ExtensionJobKind, string> = {
+  install: 'being installed',
+  update: 'being updated',
+  uninstall: 'being uninstalled',
+  addRepository: 'being added',
+  installRepository: 'being installed',
+};
+
+/** A request the queue would not take, and why. */
+export interface RefusedRequest {
+  target: string;
+  label: string;
+  reason: string;
+}
 
 export class ExtensionJobQueue {
   private readonly run: JobRunner;
@@ -155,13 +187,27 @@ export class ExtensionJobQueue {
    *
    * A request for a target that already has a queued or running job joins it
    * rather than adding a second; the returned ids name whichever job will do
-   * the work, in request order.
+   * the work, in request order. A request that conflicts with the active job
+   * (an uninstall during an install) is refused and listed in `refused`.
    */
-  public enqueue(requests: ExtensionJobRequest[]): { ids: string[]; snapshot: ExtensionJobsSnapshot } {
+  public enqueue(requests: ExtensionJobRequest[]): {
+    ids: string[];
+    refused: RefusedRequest[];
+    snapshot: ExtensionJobsSnapshot;
+  } {
     const ids: string[] = [];
+    const refused: RefusedRequest[] = [];
     for (const request of requests) {
       const target = targetOf(request);
       const existing = this.jobs.find((job) => job.target === target && isActive(job));
+      if (existing && !joins(existing.kind, request.kind)) {
+        refused.push({
+          target,
+          label: labelOf(request),
+          reason: `${existing.label} is ${DOING[existing.kind]}. Try again when that finishes.`,
+        });
+        continue;
+      }
       if (existing) {
         ids.push(existing.id);
         continue;
@@ -187,7 +233,7 @@ export class ExtensionJobQueue {
     }
     this.pump();
     this.changed();
-    return { ids, snapshot: this.snapshot() };
+    return { ids, refused, snapshot: this.snapshot() };
   }
 
   /** Cancels a job that has not started. A running job is left to finish. */

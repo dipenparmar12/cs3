@@ -17,6 +17,7 @@ import { plainMessage } from '../../utils/experienceMode';
 const KIND_LABEL: Record<ExtensionJob['kind'], string> = {
   install: 'Install',
   update: 'Update',
+  uninstall: 'Uninstall',
   addRepository: 'Add repository',
   installRepository: 'Install repository',
 };

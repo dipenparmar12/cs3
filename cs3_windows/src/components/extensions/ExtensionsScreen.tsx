@@ -30,6 +30,20 @@ import { useExtensionFilters } from './useExtensionFilters';
 import { FilterBar } from './FilterBar';
 import { ExtensionUpdates } from '../ExtensionUpdates';
 import { BulkActionBar } from './BulkActionBar';
+import { BulkConfirmDialog, type BulkVerb } from './BulkConfirmDialog';
+import {
+  extKey,
+  filterTree,
+  invertSelection,
+  planBulk,
+  provKey,
+  selectEverything,
+  selectMatching,
+  splitSelection,
+  NO_FILTER,
+  type SelectionKey,
+} from './bulkSelection';
+import type { ProviderTreeExtension, ProviderTreeProvider } from '../../types/plugin';
 import { SourceTree } from './SourceTree';
 import { BuiltInSources } from './BuiltInSources';
 import { RepositoryCatalog } from './RepositoryCatalog';
@@ -65,7 +79,13 @@ export const ExtensionsScreen: React.FC = () => {
   // The tree is re-read, never predicted, once background work lands.
   useOnJobsSettled(jobs.snapshot, () => void refresh());
   const [tab, setTab] = useState<Tab>('sources');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  /**
+   * Extensions (`ext:`) and providers (`prov:`), kept across filter changes;
+   * an action only ever reaches the part on screen (see `bulkSelection.ts`).
+   */
+  const [selected, setSelected] = useState<Set<SelectionKey>>(new Set());
+  const [confirming, setConfirming] = useState<BulkVerb | null>(null);
+  const [bulkNotice, setBulkNotice] = useState<string | null>(null);
 
   const [updateCounts, setUpdateCounts] = useState<{ pending: number; ignored: number; failed: number }>({
     pending: 0,
@@ -139,24 +159,120 @@ export const ExtensionsScreen: React.FC = () => {
     return { repositories: state.tree.length, extensions, providers, answering };
   }, [state.tree]);
 
-  const toggleSelected = useCallback((name: string) => {
+  const visibleTree = useMemo(() => filterTree(state.tree, filters.state), [state.tree, filters.state]);
+
+  /** Extensions a queued or running job is holding, with what the job is doing. */
+  const busyExtensions = useMemo(() => {
+    const doing: Record<string, string> = {
+      install: 'being installed',
+      update: 'being updated',
+      uninstall: 'being uninstalled',
+    };
+    const map = new Map<string, string>();
+    for (const job of jobs.snapshot.jobs) {
+      if ((job.state === 'queued' || job.state === 'running') && job.target.startsWith('ext:')) {
+        map.set(job.target.slice(4), doing[job.kind] ?? 'busy');
+      }
+    }
+    return map;
+  }, [jobs.snapshot]);
+
+  const plan = useMemo(
+    () => planBulk(selected, visibleTree, busyExtensions),
+    [selected, visibleTree, busyExtensions]
+  );
+  const matching = useMemo(() => selectMatching(visibleTree), [visibleTree]);
+
+  const toggleExtension = useCallback((extension: ProviderTreeExtension) => {
     setSelected((current) => {
       const next = new Set(current);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
+      const key = extKey(extension.internalName);
+      const wasOn = next.has(key);
+      // The extension stands for its providers; individual picks are folded in.
+      for (const provider of extension.providers) next.delete(provKey(provider.name));
+      if (wasOn) next.delete(key);
+      else next.add(key);
       return next;
     });
   }, []);
 
-  const selectAllProviders = useCallback(() => {
-    const names = new Set<string>();
-    for (const repository of state.tree) {
-      for (const extension of repository.extensions) {
-        for (const provider of extension.providers) names.add(provider.name);
+  const toggleProvider = useCallback(
+    (provider: ProviderTreeProvider, extension: ProviderTreeExtension, shown: ProviderTreeProvider[]) => {
+      setSelected((current) => {
+        const next = new Set(current);
+        const ext = extKey(extension.internalName);
+        if (next.has(ext)) {
+          // Narrowing from "the whole extension" to "these providers but this one".
+          next.delete(ext);
+          for (const other of shown) if (other.name !== provider.name) next.add(provKey(other.name));
+          return next;
+        }
+        const key = provKey(provider.name);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      });
+    },
+    []
+  );
+
+  /** Runs the confirmed action: enable/disable at once, uninstall through the queue. */
+  const runBulk = useCallback(
+    async (verb: BulkVerb) => {
+      setConfirming(null);
+      setBulkNotice(null);
+      const api = window.cloudstream;
+      if (!api) return;
+      try {
+        if (verb === 'uninstall') {
+          const refused = await jobs.enqueue(
+            plan.uninstall.map((extension) => ({
+              kind: 'uninstall' as const,
+              internalName: extension.internalName,
+              name: extension.name,
+            }))
+          );
+          if (refused.length > 0) {
+            setBulkNotice(refused.map((entry) => `${entry.label}: ${entry.reason}`).join(' '));
+          }
+        } else {
+          const enabled = verb === 'enable';
+          const part = plan[verb];
+          if (part.extensions.length > 0) {
+            await api.setExtensionsEnabled(part.extensions.map((extension) => extension.internalName), enabled);
+          }
+          if (part.providers.length > 0) {
+            await api.setProvidersEnabled(part.providers.map((provider) => provider.name), enabled);
+          }
+          await refresh();
+        }
+        // What was acted on leaves the selection; hidden and busy items stay.
+        setSelected((current) => {
+          const { hidden } = splitSelection(current, visibleTree);
+          const busyKeys = [...current].filter((key) => key.startsWith('ext:') && busyExtensions.has(key.slice(4)));
+          return new Set([...hidden, ...busyKeys]);
+        });
+      } catch (error) {
+        setBulkNotice(describeError(error));
       }
-    }
-    setSelected(names);
-  }, [state.tree]);
+    },
+    [jobs, plan, refresh, visibleTree, busyExtensions]
+  );
+
+  /**
+   * Uninstalls asked for by name — a row's own button, or Browse's selection —
+   * through the same confirmation and the same queue as the bulk one. Planned
+   * over the unfiltered tree: these were named explicitly, not selected through
+   * a filter.
+   */
+  const [namedUninstall, setNamedUninstall] = useState<string[] | null>(null);
+  const namedPlan = useMemo(
+    () =>
+      namedUninstall
+        ? planBulk(new Set(namedUninstall.map(extKey)), filterTree(state.tree, NO_FILTER), busyExtensions)
+        : null,
+    [namedUninstall, state.tree, busyExtensions]
+  );
 
   /**
    * Open a repository's extension list without leaving the page.
@@ -323,51 +439,71 @@ export const ExtensionsScreen: React.FC = () => {
           </div>
 
           {/*
-            Bulk actions apply to providers, which is the level the enable
-            cascade actually gates. Offering them for extensions as well would
-            need a second selection model, and two selections on one screen is
-            how the old Providers tab came to disagree with the tree.
+            One selection model over both levels the actions work at: an
+            extension (enable, disable, uninstall) or a provider (enable,
+            disable). The tree, the bar and the confirmation all read the same
+            plan from `bulkSelection.ts`, so they cannot disagree about what an
+            action will reach.
           */}
-          {selected.size > 0 ? (
-            <BulkActionBar
-              count={selected.size}
-              noun="provider"
-              busy={busy === 'providers:bulk' ? 'Applying…' : null}
-              onClear={() => setSelected(new Set())}
-              onSelectAll={selectAllProviders}
-              actions={[
-                {
-                  label: 'Enable',
-                  tone: 'primary',
-                  onRun: () => {
-                    void actions.setProvidersEnabled([...selected], true);
-                    setSelected(new Set());
-                  },
-                },
-                {
-                  label: 'Disable',
-                  onRun: () => {
-                    void actions.setProvidersEnabled([...selected], false);
-                    setSelected(new Set());
-                  },
-                },
-              ]}
-            />
+          <BulkActionBar
+            plan={plan}
+            matchingCount={matching.size}
+            everythingCount={selectEverything(state.tree).size}
+            filtersActive={filters.activeCount > 0 || filters.query.trim() !== ''}
+            onSelectMatching={() => setSelected(new Set([...splitSelection(selected, visibleTree).hidden, ...matching]))}
+            onSelectEverything={() => setSelected(selectEverything(state.tree))}
+            onInvert={() => setSelected((current) => invertSelection(current, visibleTree))}
+            onClear={() => setSelected(new Set())}
+            onClearHidden={() => setSelected((current) => splitSelection(current, visibleTree).shown)}
+            onAction={(verb) => setConfirming(verb)}
+          />
+          {bulkNotice ? (
+            <p className="ext-error" role="status">
+              {bulkNotice}
+            </p>
           ) : null}
 
           <SourceTree
             tree={state.tree}
-            filters={filters.state}
+            visible={visibleTree}
             busy={busy}
             selected={selected}
-            onToggleSelected={toggleSelected}
+            onToggleExtension={toggleExtension}
+            onToggleProvider={toggleProvider}
+            jobFor={(internalName) => jobs.jobFor(`ext:${internalName}`)}
             onRepositoryToggle={(id, enabled) => void actions.setRepositoryEnabled(id, enabled)}
             onExtensionToggle={(name, enabled) => void actions.setExtensionEnabled(name, enabled)}
             onProviderToggle={(name, enabled) => void actions.setProviderEnabled(name, enabled)}
-            onUninstall={(name) => void actions.uninstallPlugin(name)}
+            onUninstall={(name) => setNamedUninstall([name])}
             onRemoveRepository={(url) => void actions.removeRepository(url)}
           />
+
+          {confirming ? (
+            <BulkConfirmDialog
+              verb={confirming}
+              plan={plan}
+              onCancel={() => setConfirming(null)}
+              onConfirm={() => void runBulk(confirming)}
+            />
+          ) : null}
         </>
+      ) : null}
+
+      {namedPlan && (namedPlan.uninstall.length > 0 || namedPlan.busy.length > 0) ? (
+        <BulkConfirmDialog
+          verb="uninstall"
+          plan={namedPlan}
+          onCancel={() => setNamedUninstall(null)}
+          onConfirm={() => {
+            const targets = namedPlan.uninstall;
+            setNamedUninstall(null);
+            void jobs
+              .enqueue(targets.map((target) => ({ kind: 'uninstall' as const, internalName: target.internalName, name: target.name })))
+              .then((refused) =>
+                setBulkNotice(refused.length ? refused.map((r) => `${r.label}: ${r.reason}`).join(' ') : null)
+              );
+          }}
+        />
       ) : null}
 
       {tab === 'repositories' ? (
@@ -396,7 +532,7 @@ export const ExtensionsScreen: React.FC = () => {
               jobFor={(internalName) => jobs.jobFor(`ext:${internalName}`)}
               embedded
               onInstall={install}
-              onUninstall={(name) => void actions.uninstallPlugin(name)}
+              onUninstall={(names) => setNamedUninstall(names)}
               onCancelJob={(id) => void jobs.cancel(id)}
               onRetryJob={(id) => void jobs.retry(id)}
             />

@@ -571,6 +571,8 @@ const extensionJobs: ExtensionJobQueue = new ExtensionJobQueue({
         return pluginManager.installPlugin(request.plugin, request.repositoryUrl);
       case 'update':
         return extensionUpdater.updatePlugin(request.internalName);
+      case 'uninstall':
+        return pluginManager.uninstallPluginExclusive(request.internalName);
       case 'addRepository':
         return pluginManager.addRepository(request.url);
       case 'installRepository': {
@@ -5189,8 +5191,8 @@ ipcMain.handle('extension:addRepository', async (_, repoUrl: string) => {
  */
 ipcMain.handle('extension:enqueueJobs', async (_, requests: ExtensionJobRequest[]) => {
   try {
-    const { snapshot } = extensionJobs.enqueue(Array.isArray(requests) ? requests : []);
-    return { ok: true, snapshot };
+    const { snapshot, refused } = extensionJobs.enqueue(Array.isArray(requests) ? requests : []);
+    return { ok: true, snapshot, refused };
   } catch (error) {
     return { ...fail(error), snapshot: extensionJobs.snapshot() };
   }

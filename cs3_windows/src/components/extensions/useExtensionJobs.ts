@@ -13,9 +13,10 @@ import {
   type ExtensionJob,
   type ExtensionJobRequest,
   type ExtensionJobsSnapshot,
+  type RefusedRequest,
 } from '../../../electron/cs3/extensionJobs';
 
-export type { ExtensionJob, ExtensionJobRequest, ExtensionJobsSnapshot };
+export type { ExtensionJob, ExtensionJobRequest, ExtensionJobsSnapshot, RefusedRequest };
 export { targetOf };
 
 const EMPTY: ExtensionJobsSnapshot = { jobs: [], queued: 0, running: 0, failed: 0 };
@@ -113,10 +114,12 @@ export function jobsForRepo(
 export function useExtensionJobs() {
   const snapshot = useSyncExternalStore(subscribe, read);
 
-  const enqueue = useCallback(async (requests: ExtensionJobRequest[]) => {
-    if (requests.length === 0) return;
+  /** Resolves with the requests the queue refused (a conflicting job holds them). */
+  const enqueue = useCallback(async (requests: ExtensionJobRequest[]): Promise<RefusedRequest[]> => {
+    if (requests.length === 0) return [];
     const response = await window.cloudstream?.enqueueExtensionJobs?.(requests);
     publish(response?.snapshot);
+    return response?.refused ?? [];
   }, []);
 
   const cancel = useCallback(async (id: string) => {

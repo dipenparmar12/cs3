@@ -46,7 +46,7 @@ import type {
   TorrentStreamStats,
 } from '../src/types/torrent';
 import type { OfficialRepository } from './officialRepositories';
-import type { ExtensionJobRequest, ExtensionJobsSnapshot } from './cs3/extensionJobs';
+import type { ExtensionJobRequest, ExtensionJobsSnapshot, RefusedRequest } from './cs3/extensionJobs';
 import type { SaveSearchInput, SavedSearch, SavedSearchSummary } from './savedSearches';
 import type { MetadataDetail } from './metadataProvider';
 import type { ExtendedMetadata, PromoResolution, TitleVideo } from '../src/types/metadata';
@@ -1617,7 +1617,7 @@ export interface CloudStreamElectronAPI {
    */
   enqueueExtensionJobs: (
     requests: ExtensionJobRequest[]
-  ) => Promise<Envelope & { snapshot: ExtensionJobsSnapshot }>;
+  ) => Promise<Envelope & { snapshot: ExtensionJobsSnapshot; refused?: RefusedRequest[] }>;
   getExtensionJobs: () => Promise<ExtensionJobsSnapshot>;
   cancelExtensionJob: (id: string) => Promise<ExtensionJobsSnapshot>;
   cancelQueuedExtensionJobs: () => Promise<ExtensionJobsSnapshot>;

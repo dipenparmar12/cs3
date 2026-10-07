@@ -256,29 +256,6 @@ export function useExtensionFilters(
 
 // --- matchers ---------------------------------------------------------------
 
-/**
- * Tag matching is OR within the tag set, and AND across different facets.
- *
- * Selecting Movies and Anime means "either", because they are alternatives at
- * the same level. Selecting Anime *and* German means "both", because they are
- * different questions. That is the behaviour of every faceted filter people
- * already use, and getting it backwards makes multi-select feel broken.
- */
-export function matchesTags(itemTags: string[] | undefined, selected: Set<string>): boolean {
-  if (selected.size === 0) return true;
-  if (!itemTags || itemTags.length === 0) return false;
-  return itemTags.some((tag) => selected.has(String(tag).toUpperCase()));
-}
-
-export function matchesLanguages(
-  language: string | undefined,
-  selected: Set<string>
-): boolean {
-  if (selected.size === 0) return true;
-  return !!language && selected.has(language.toLowerCase());
-}
-
-export function matchesQuery(query: string, ...fields: Array<string | undefined>): boolean {
-  if (!query) return true;
-  return fields.some((field) => field && field.toLowerCase().includes(query));
-}
+// Pure, so they live beside the tree filter and the bulk-selection rules that
+// use them (`bulkSelection.ts`, tested under Node); re-exported for the views.
+export { matchesTags, matchesLanguages, matchesQuery } from './bulkSelection';

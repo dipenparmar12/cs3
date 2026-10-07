@@ -232,3 +232,66 @@ test('enqueued jobs preserve their repositoryUrl', () => {
   assert.equal(jobs[0].repositoryUrl, 'https://example.test/repo.json');
   assert.equal(jobs[1].repositoryUrl, 'https://r.test/repo.json');
 });
+
+// --- uninstall and conflicts ----------------------------------------------
+
+const uninstall = (name: string): ExtensionJobRequest => ({ kind: 'uninstall', internalName: name });
+
+test('an uninstall is a job on the same target as an install', () => {
+  assert.equal(targetOf(uninstall('pluginA')), targetOf(install('pluginA')));
+});
+
+test('an uninstall while that extension installs is refused, with the reason', () => {
+  const gate = gatedRunner();
+  const queue = new ExtensionJobQueue({ run: gate.run, concurrency: 2 });
+  queue.enqueue([install('pluginA')]);
+
+  const { ids, refused } = queue.enqueue([uninstall('pluginA'), uninstall('pluginB')]);
+  assert.equal(ids.length, 1, 'pluginB is queued; pluginA is not');
+  assert.equal(refused.length, 1);
+  assert.equal(refused[0].target, 'ext:pluginA');
+  assert.match(refused[0].reason, /being installed/);
+  assert.deepEqual(
+    queue.snapshot().jobs.map((job) => `${job.kind}:${job.target}`),
+    ['install:ext:pluginA', 'uninstall:ext:pluginB']
+  );
+});
+
+test('an install while that extension uninstalls is refused too', () => {
+  const gate = gatedRunner();
+  const queue = new ExtensionJobQueue({ run: gate.run });
+  queue.enqueue([uninstall('pluginA')]);
+  const { refused } = queue.enqueue([install('pluginA')]);
+  assert.equal(refused.length, 1);
+  assert.match(refused[0].reason, /being uninstalled/);
+});
+
+test('pressing Uninstall twice joins the job that exists', () => {
+  const gate = gatedRunner();
+  const queue = new ExtensionJobQueue({ run: gate.run });
+  const first = queue.enqueue([uninstall('pluginA')]);
+  const second = queue.enqueue([uninstall('pluginA')]);
+  assert.deepEqual(second.ids, first.ids);
+  assert.equal(second.refused.length, 0);
+});
+
+test('once the blocking job finishes, the refused request is accepted', async () => {
+  const gate = gatedRunner();
+  const queue = new ExtensionJobQueue({ run: gate.run });
+  queue.enqueue([install('pluginA')]);
+  assert.equal(queue.enqueue([uninstall('pluginA')]).refused.length, 1);
+  await gate.finish('ext:pluginA');
+  assert.equal(queue.enqueue([uninstall('pluginA')]).refused.length, 0);
+});
+
+test('a bulk uninstall keeps going past one failure, and says which failed', async () => {
+  const gate = gatedRunner();
+  const queue = new ExtensionJobQueue({ run: gate.run, concurrency: 3 });
+  queue.enqueue([uninstall('a'), uninstall('b'), uninstall('c')]);
+  await gate.finish('ext:a');
+  await gate.finish('ext:b', { ok: false, message: 'locked by another program' });
+  await gate.finish('ext:c');
+  const states = Object.fromEntries(queue.snapshot().jobs.map((job) => [job.target, job.state]));
+  assert.deepEqual(states, { 'ext:a': 'done', 'ext:b': 'failed', 'ext:c': 'done' });
+  assert.equal(queue.snapshot().failed, 1);
+});

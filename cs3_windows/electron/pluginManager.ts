@@ -1821,6 +1821,23 @@ export class PluginManager {
     }
   }
 
+  /**
+   * Uninstall as a background job: under the same lock as an install's place-
+   * and-load step, so an `unload` never lands in the middle of another
+   * extension's `load` (providers self-register into one global).
+   */
+  public uninstallPluginExclusive(internalName: string): Promise<{ ok: boolean; message: string }> {
+    return this.oneAtATime(async () => {
+      if (!this.installedPlugins.has(internalName)) {
+        return { ok: false, message: 'It is not installed any more.' };
+      }
+      const removed = this.uninstallPlugin(internalName);
+      return removed
+        ? { ok: true, message: 'Uninstalled' }
+        : { ok: false, message: 'Could not be uninstalled.' };
+    });
+  }
+
   public uninstallPlugin(internalName: string): boolean {
     const record = this.installedPlugins.get(internalName);
     if (!record) return false;
