@@ -982,6 +982,11 @@ export class ContentService {
    * same key discovery reads (`stripQuery` + season/episode, then `origin` and
    * `#all`), so nothing else in the cache moves. Returns how many went.
    */
+  /** Empties the provider detail-page cache (re-creatable; refetched on open). */
+  public clearDetailCache(): void {
+    this.details.clear();
+  }
+
   public clearCachedSources(request: SourceQuery): number {
     const base = stripQuery(request.mediaUrl);
     if (!base || base.startsWith('magnet:')) return 0;

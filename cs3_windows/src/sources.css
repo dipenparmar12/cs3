@@ -10929,3 +10929,14 @@ video::cue {
   background: rgba(96, 165, 250, 0.06);
   border-bottom: 1px solid var(--border-color);
 }
+
+/* Storage panel (Settings → Advanced → Storage). */
+.storage-path {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.68rem;
+  color: var(--text-subtle);
+  word-break: break-all;
+  user-select: text;
+}
+.storage-message { margin: 0.4rem 0 0; font-size: 0.78rem; color: var(--text-muted); }

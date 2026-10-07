@@ -148,6 +148,8 @@ import {
   storedSourceToTorrentResult,
 } from './cs3/libraryStore';
 import { deadlineFromUrl } from './sourceCache';
+import { configureAppStorage, migratePath } from './storage/appStorage.ts';
+import { areaSize, sweepCacheArea, sweepTemp } from './storage/storageCleanup.ts';
 import { HistoryStore } from './cs3/historyStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
 import { PageSnapshotStore, type PageSnapshotInput } from './cs3/pageSnapshot.ts';
@@ -188,6 +190,43 @@ app.name = APP_NAME;
 app.setAppUserModelId(APP_ID);
 
 let mainWindow: BrowserWindow | null = null;
+
+/**
+ * Where everything lives on disk — configured before any service that stores
+ * something is constructed. See `storage/appStorage.ts` for the layout.
+ *
+ * Downloads: an existing `~/Downloads/CloudStream` is kept (that is where
+ * every earlier build put things, and moving a person's films is not ours to
+ * do); otherwise the platform's own Downloads folder, which follows a
+ * redirected or localised one where a home-directory guess would not.
+ */
+const legacyDownloadsDir = path.join(os.homedir(), 'Downloads', 'CloudStream');
+const downloadsDir = fs.existsSync(legacyDownloadsDir)
+  ? legacyDownloadsDir
+  : path.join(app.getPath('downloads'), 'CloudStream');
+/** The viewer's chosen folder (Settings → Downloads), else the default above. */
+const DOWNLOAD_DIRECTORY_KEY = 'download_directory';
+const storage = configureAppStorage({
+  root: app.getPath('userData'),
+  downloads: () => datastore.getString(DOWNLOAD_DIRECTORY_KEY, '', true) || downloadsDir,
+});
+/*
+ * Re-creatable caches that earlier builds wrote beside the persistent data.
+ * Moved once into `cache/`, before the services below read them; a file that
+ * cannot be moved stays put and its service starts a fresh cache.
+ */
+const CACHE_FILES = [
+  'cs3-detail-cache.json',
+  'cs3-discovery-cache.json',
+  'cs3-metadata-cache.json',
+  'cs3-related-media-cache.json',
+  'cs3-ratings-cache.json',
+  'cs3-catalogue-cache.json',
+  'cs3-repository-listings.json',
+  'cs3-ffmpeg-capabilities.json',
+] as const;
+for (const name of CACHE_FILES) storage.migrateIntoCache(path.join(storage.dataDir, name));
+migratePath(path.join(storage.dataDir, 'torrent-state'), path.join(storage.cacheRoot, 'torrent-state'));
 
 const datastore = new DatastoreManager();
 // Constructed before every store that records activity, so the first write any
@@ -344,7 +383,10 @@ pluginManager.getSidecar().setHostCallHandler(async (method, params) => {
 });
 const binaryDownloader = new BinaryDownloader();
 const torrentEngine = new TorrentEngine({
-  downloadPath: datastore.getString('torrent_cache_path', '', true) || undefined,
+  // The viewer's chosen folder, else `cache/torrent-pieces` — never the
+  // system temp directory, which is where every earlier build put it.
+  downloadPath:
+    datastore.getString('torrent_cache_path', '', true) || storage.cacheDir('torrent-pieces'),
   /**
    * Warm-start state lives under `userData`, never under the piece cache.
    *
@@ -354,7 +396,7 @@ const torrentEngine = new TorrentEngine({
    * cold start on the next launch, so they are deliberately somewhere that
    * button cannot reach.
    */
-  statePath: path.join(app.getPath('userData'), 'torrent-state'),
+  statePath: storage.cacheDir('torrent-state'),
   /**
    * A getter, not a value. Read once at construction this would need a restart
    * to take effect, and a privacy switch that only applies next launch is one
@@ -398,16 +440,14 @@ const titleEnricher = new TitleEnricher();
 // provider's file name — see `ContentService.searchTitleFor`.
 contentService.setTitleResolver((raw, hint) => titleEnricher.resolve(raw, hint));
 
-const metadataEnrichment = new MetadataEnrichmentService(undefined, titleEnricher);
+const metadataEnrichment = new MetadataEnrichmentService(storage.cacheDir(), titleEnricher);
 metadataEnrichment.setListener((metadata) =>
   mainWindow?.webContents.send('metadata:extendedUpdate', metadata)
 );
 
-const catalogueCache = new CatalogueCache(
-  path.join(app.getPath('userData'), 'cs3-catalogue-cache.json')
-);
+const catalogueCache = new CatalogueCache(storage.cacheFile('cs3-catalogue-cache.json'));
 const repositoryListings = new RepositoryListingCache(
-  path.join(app.getPath('userData'), 'cs3-repository-listings.json')
+  storage.cacheFile('cs3-repository-listings.json')
 );
 const ottService = new OttService(pluginManager, datastore, catalogueCache);
 /** Metadata catalogues for the platforms no installed provider can describe. */
@@ -428,8 +468,8 @@ const bookmarks = new BookmarkStore(datastore);
 const pageSnapshots = new PageSnapshotStore(app.getPath('userData'));
 const savedSearches = new SavedSearchStore(app.getPath('userData'));
 contentService.setSnapshotStore(pageSnapshots);
-relatedMediaService.setDirectory(app.getPath('userData'));
-mediaRatingService.setDirectory(app.getPath('userData'));
+relatedMediaService.setDirectory(storage.cacheDir());
+mediaRatingService.setDirectory(storage.cacheDir());
 mediaRatingService.setDatastore(datastore);
 /**
  * The home screen's catalogue source, and the rows built from it.
@@ -449,7 +489,7 @@ const homeProviders = new HomeProviderRegistry(datastore);
  */
 const discovery = new DiscoveryService(
   homeProviders,
-  undefined,
+  storage.cacheDir(),
   contentService.getNativeProviders()
 );
 /**
@@ -653,7 +693,7 @@ const searchHistory = new SearchHistoryStore(datastore);
 const subtitles = new SubtitleService();
 downloadService.setSubtitleFetcher((url) => subtitles.fetchAsVtt(url));
 // Beside the media downloads, so a viewer who opens the folder finds both.
-const subtitleLibrary = new SubtitleLibrary(path.join(os.homedir(), 'Downloads', 'CloudStream', 'Subtitles'));
+const subtitleLibrary = new SubtitleLibrary(path.join(downloadsDir, 'Subtitles'));
 const mediaTranscoder = new MediaTranscoder(binaryDownloader);
 /**
  * Lets `resolvePromoVideo` mux a video and an audio address into one stream.
@@ -871,7 +911,7 @@ async function refreshFfmpegOptionSupport(): Promise<void> {
    * on a cold cache — the 1.1–1.8s freeze every cold launch log recorded as its
    * worst stall. See `media/toolCapabilities.ts`.
    */
-  const file = path.join(app.getPath('userData'), 'cs3-ffmpeg-capabilities.json');
+  const file = storage.cacheFile('cs3-ffmpeg-capabilities.json');
   let known: ToolCapabilities = {};
   try {
     known = (JSON.parse(fs.readFileSync(file, 'utf8')) as ToolCapabilities) ?? {};
@@ -1820,6 +1860,15 @@ app.whenReady().then(async () => {
   // session never says "Reading the list…". Own lane: it shares nothing with
   // the JVM warm-up, and one failing repository costs only itself.
   background.add({
+    id: 'storage-sweep',
+    label: 'Tidying the app’s cache and temporary files',
+    priority: 10,
+    delayMs: 45_000,
+    lane: 'storage',
+    run: runStorageSweep,
+  });
+
+  background.add({
     id: 'repository-listings',
     label: 'Refreshing the lists of add-ons you can install',
     priority: 20,
@@ -1987,6 +2036,9 @@ app.on('before-quit', async (event) => {
       error: describeError(error),
     });
   }
+  // Every service has let go of its working files by now. Anything still
+  // locked stays, and the next launch's sweep removes it.
+  storage.disposeSession();
   // Last, and synchronous: nothing after this point gets written.
   logger.shutdown();
   app.exit(0);
@@ -3940,7 +3992,8 @@ ipcMain.handle('mpv:addSubtitle', async (_, url: string, title?: string, languag
   let target = url;
   if (url && (url.startsWith('WEBVTT') || url.includes('-->') || url.startsWith('blob:'))) {
     try {
-      const tempPath = path.join(os.tmpdir(), `cs3-sub-${Date.now()}-${Math.random().toString(36).slice(2)}.vtt`);
+      // This launch's temp directory: removed on quit, swept after a crash.
+      const tempPath = storage.tempFile('mpv-subtitle', 'vtt');
       fs.writeFileSync(tempPath, url, 'utf8');
       target = tempPath;
     } catch {
@@ -4055,6 +4108,158 @@ ipcMain.handle('binary:setupMpv', async () => {
   } catch (error) {
     return { ...fail(error), status: await mpvEngine.status() };
   }
+});
+
+// --- storage: where things live, and cleaning what may be cleaned ---------
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/*
+ * The caches the storage report lists and the sweep looks after. Each names
+ * the owning service's own clear, because emptying a JSON store's file while
+ * the service holds it in memory would be undone by its next write.
+ */
+storage.registerCacheArea({
+  id: 'torrent-pieces',
+  label: 'Torrent streaming cache',
+  path: torrentEngine.getCachePath(),
+  kind: 'dir',
+  // Pieces of something streamed a week ago are not worth keeping, and a
+  // runaway cache must not fill a disk: oldest go first beyond 20 GB.
+  maxAgeMs: 7 * DAY_MS,
+  maxBytes: 20 * 1024 ** 3,
+  isActive: (entry) => torrentEngine.isCacheEntryActive(path.basename(entry)),
+  clear: () => torrentEngine.clearCache(),
+});
+storage.registerCacheArea({
+  id: 'torrent-state',
+  label: 'Torrent metadata and DHT contacts',
+  path: storage.cacheDir('torrent-state'),
+  // `torrentMetadata` sweeps its own files; DHT contacts are rewritten live.
+  kind: 'self-managed',
+});
+storage.registerCacheArea({
+  id: 'yt-dlp',
+  label: 'Video page helper cache',
+  path: storage.cacheDir('yt-dlp'),
+  kind: 'dir',
+  maxAgeMs: 30 * DAY_MS,
+  // yt-dlp re-creates it on the next run; nothing in it is ever in use between runs.
+  clear: () => fs.promises.rm(storage.cacheDir('yt-dlp'), { recursive: true, force: true }),
+});
+const selfManaged: Array<[string, string, string, (() => unknown) | undefined]> = [
+  ['details', 'Title pages', 'cs3-detail-cache.json', () => contentService.clearDetailCache()],
+  ['home', 'Home rows', 'cs3-discovery-cache.json', () => discovery.invalidate()],
+  ['metadata', 'Cast, crew and production notes', 'cs3-metadata-cache.json', () => metadataEnrichment.clear()],
+  ['related', 'Related titles', 'cs3-related-media-cache.json', () => relatedMediaService.clearCache()],
+  ['ratings', 'Ratings', 'cs3-ratings-cache.json', () => mediaRatingService.clearCache()],
+  ['catalogues', 'Streaming-service catalogues', 'cs3-catalogue-cache.json', undefined],
+  ['repository-listings', 'Add-on lists', 'cs3-repository-listings.json', undefined],
+  ['ffmpeg', 'Media tool capabilities', 'cs3-ffmpeg-capabilities.json', undefined],
+];
+for (const [id, label, file, clear] of selfManaged) {
+  storage.registerCacheArea({ id, label, path: storage.cacheFile(file), kind: 'self-managed', clear });
+}
+
+/** Where every earlier build put the piece cache: the system temp directory. */
+const LEGACY_TEMP_DIRS = ['torrent-cache', 'torrent-state'].map((name) =>
+  path.join(os.tmpdir(), 'cloudstream-desktop', name)
+);
+
+/**
+ * The background sweep: abandoned temp sessions, aged JVM temp files, and the
+ * piece cache's age and size rules. Never on the path to the first frame, and
+ * every step tolerates locked or vanished files.
+ */
+async function runStorageSweep(): Promise<void> {
+  // Sessions only. The JVM's temp area is aged by the supervisor just before
+  // the runtime starts, when nothing can be holding a file in it.
+  const temp = await sweepTemp(storage.tempRoot, { currentPid: storage.processId });
+  let freed = temp.freedBytes;
+  const errors = [...temp.errors];
+  for (const area of storage.cacheAreas()) {
+    const swept = await sweepCacheArea(area, storage.cacheRoot);
+    freed += swept.freedBytes;
+    errors.push(...swept.errors);
+  }
+  logger.info('app', 'storage_sweep', {
+    removedTemp: temp.removed.length,
+    freedBytes: freed,
+    errors: errors.length,
+  });
+}
+
+/**
+ * Where CS3 keeps cache, temp, downloads and data, with sizes. Read-shaped;
+ * the Storage panel in Settings draws it, and the Developer view shows paths.
+ */
+ipcMain.handle('storage:getReport', async () => {
+  try {
+    const areas = await Promise.all(
+      storage.cacheAreas().map(async (area) => ({
+        id: area.id,
+        label: area.label,
+        path: area.path,
+        kind: area.kind,
+        managed: area.managed,
+        clearable: Boolean(area.clear),
+        bytes: await areaSize(area),
+        maxAgeDays: area.maxAgeMs ? Math.round(area.maxAgeMs / DAY_MS) : undefined,
+        maxBytes: area.maxBytes,
+      }))
+    );
+    const tempBytes = await areaSize({ path: storage.tempRoot });
+    const legacy = await Promise.all(
+      LEGACY_TEMP_DIRS.filter((dir) => fs.existsSync(dir)).map(async (dir) => ({
+        path: dir,
+        bytes: await areaSize({ path: dir }),
+      }))
+    );
+    return { ok: true, locations: storage.locations(), areas, tempBytes, legacy };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/** Empties one cache area through its owning service. Nothing persistent is reachable from here. */
+ipcMain.handle('storage:clearArea', async (_, id: string) => {
+  const area = storage.cacheArea(String(id));
+  if (!area?.clear) return { ok: false, error: 'That cache cannot be cleared from here.' };
+  try {
+    await area.clear();
+    return { ok: true };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/**
+ * Removes what earlier builds left in the system temp directory.
+ *
+ * Only on the viewer's request, and only the exact folders those builds
+ * created — a name match alone is not ownership enough to delete on a timer.
+ */
+ipcMain.handle('storage:removeLegacyTemp', async () => {
+  let removed = 0;
+  for (const dir of LEGACY_TEMP_DIRS) {
+    if (!fs.existsSync(dir)) continue;
+    try {
+      await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 1 });
+      removed += 1;
+    } catch {
+      // Held by something; it stays and is offered again next time.
+    }
+  }
+  return { ok: true, removed };
+});
+
+ipcMain.handle('storage:openLocation', async (_, which: string) => {
+  const where = storage.locations() as Record<string, string>;
+  const target = where[String(which)];
+  if (!target) return { ok: false, error: 'Unknown location.' };
+  fs.mkdirSync(target, { recursive: true });
+  const error = await shell.openPath(target);
+  return error ? { ok: false, error } : { ok: true };
 });
 
 ipcMain.handle('sources:getCacheStats', async () => contentService.getCache().stats());
@@ -4697,7 +4902,7 @@ ipcMain.handle('download:cancelBatch', async (_, batchId: string) =>
 ipcMain.handle('download:getActiveBatches', async () => batchDownloader.getActive());
 
 ipcMain.handle('download:revealInFolder', async (_, targetPath?: string) => {
-  const defaultDir = path.join(os.homedir(), 'Downloads', 'CloudStream');
+  const defaultDir = storage.downloadsDir();
   const target = targetPath || defaultDir;
   try {
     const normalized = path.normalize(target);
@@ -6198,6 +6403,33 @@ ipcMain.handle('backup:undoRestore', async () => {
     return await backupService.undo();
   } catch (error) {
     return { ...fail(error), sections: [] };
+  }
+});
+
+/**
+ * Where new downloads go. It used to be a field in Settings that remembered
+ * nothing and changed nothing while saying "Download folder updated."
+ * Existing downloads keep their paths; this decides new ones only.
+ */
+ipcMain.handle('download:getDirectory', async () => ({
+  ok: true,
+  directory: storage.downloadsDir(),
+  isDefault: !datastore.getString(DOWNLOAD_DIRECTORY_KEY, '', true),
+}));
+
+ipcMain.handle('download:setDirectory', async (_, directory: string | null) => {
+  try {
+    if (directory) {
+      const resolved = path.resolve(String(directory));
+      fs.mkdirSync(resolved, { recursive: true });
+      fs.accessSync(resolved, fs.constants.W_OK);
+      datastore.setString(DOWNLOAD_DIRECTORY_KEY, resolved, true);
+    } else {
+      datastore.setString(DOWNLOAD_DIRECTORY_KEY, '', true);
+    }
+    return { ok: true, directory: storage.downloadsDir() };
+  } catch (error) {
+    return { ...fail(error), directory: storage.downloadsDir() };
   }
 });
 

@@ -55,6 +55,8 @@ export class DatastoreManager {
     /auth_bearer/i,
     /ephemeral_/i,
     /cache_path/i,
+    // A folder on this machine; on another it names nothing, or someone else's.
+    /download_directory/i,
     // Paths on this machine awaiting deletion; on another machine they name
     // nothing, or something that is not ours to delete.
     /displaced_archives/i

@@ -35,6 +35,7 @@ import type { BackupAnalysis, RestorePlan, RestoreSummary } from '../src/types/b
 import type { SwarmReport } from '../src/types/torrent';
 import type { TorrentContents } from './torrent/torrentContents';
 import type { TorrentImportRecord } from './torrent/torrentImport';
+import type { StorageReport } from './storage/appStorage.ts';
 import type { SitePlugin, PluginCompatibilityReport, ProviderTreeRepository } from '../src/types/plugin';
 import type {
   IndexerConfig,
@@ -803,6 +804,18 @@ export interface CloudStreamElectronAPI {
 
   getSourceCacheStats: () => Promise<{ entries: number; sources: number }>;
   clearSourceCache: () => Promise<Envelope>;
+
+  // Storage — where cache, temp, downloads and data live (storage/appStorage.ts)
+  getStorageReport: () => Promise<Envelope & Partial<StorageReport>>;
+  /** Empties one cache area through its owning service. */
+  clearStorageArea: (id: string) => Promise<Envelope>;
+  /** Removes the folders earlier builds left in the system temp directory. */
+  removeLegacyTemp: () => Promise<Envelope & { removed?: number }>;
+  openStorageLocation: (which: 'data' | 'cache' | 'temp' | 'downloads' | 'logs') => Promise<Envelope>;
+  /** Where new downloads are written; `isDefault` when the viewer has not chosen one. */
+  getDownloadDirectory: () => Promise<Envelope & { directory: string; isDefault: boolean }>;
+  /** Sets the folder for new downloads; null returns to the default. */
+  setDownloadDirectory: (directory: string | null) => Promise<Envelope & { directory: string }>;
   /** Clears the cached sources of one title or episode only; `removed` counts them. */
   clearCachedSourcesFor: (request: {
     mediaUrl: string;
@@ -2172,6 +2185,12 @@ const api: CloudStreamElectronAPI = {
 
   getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
   clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),
+  getStorageReport: () => ipcRenderer.invoke('storage:getReport'),
+  clearStorageArea: (id) => ipcRenderer.invoke('storage:clearArea', id),
+  removeLegacyTemp: () => ipcRenderer.invoke('storage:removeLegacyTemp'),
+  openStorageLocation: (which) => ipcRenderer.invoke('storage:openLocation', which),
+  getDownloadDirectory: () => ipcRenderer.invoke('download:getDirectory'),
+  setDownloadDirectory: (directory) => ipcRenderer.invoke('download:setDirectory', directory),
   clearCachedSourcesFor: (request) => ipcRenderer.invoke('sources:clearForMedia', request),
 
   getPathForFile: (file) => {

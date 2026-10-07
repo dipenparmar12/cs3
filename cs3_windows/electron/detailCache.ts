@@ -1,4 +1,4 @@
-import { app } from 'electron';
+import { appStorage } from './storage/appStorage.ts';
 import path from 'path';
 import { JsonFileStore } from './util/jsonFileStore';
 import type { MetadataDetail } from './metadataProvider';
@@ -65,7 +65,7 @@ export class DetailCache {
   private store: JsonFileStore<CacheRow[]>;
 
   constructor(directory?: string) {
-    const base = directory ?? (app ? app.getPath('userData') : process.cwd());
+    const base = directory ?? appStorage().cacheDir();
     this.store = new JsonFileStore(path.join(base, FILE_NAME), 2_000, () =>
       [...this.entries.entries()].map(([url, entry]) => ({ url, entry }))
     );

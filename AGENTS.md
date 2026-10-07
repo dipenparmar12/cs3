@@ -176,7 +176,7 @@ It once asked `findRuntimeDir()` where to copy *from* — which answers with the
           contextBridge, allow-listed, typed (electron/preload.ts)
 ┌───────────────────────────┴───────────────────────────────┐
 │                MAIN PROCESS (electron/main.ts)            │
-│  wires every service as a singleton, 335 ipcMain.handle   │
+│  wires every service as a singleton, 341 ipcMain.handle   │
 └─┬────────┬──────────┬───────────┬──────────┬──────────────┘
 Datastore Content   Plugin     Torrent   Download   Library
           Service   Manager    Engine    Service    Store
@@ -190,7 +190,7 @@ Datastore Content   Plugin     Torrent   Download   Library
 
 ### The IPC contract
 
-`electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration: false`. 335 channels in 42 namespaces (counted 2026-10-07; full generated table in `docs/docs_cs3/architecture/api-services.md`): `api: torrent: playback: search: indexer: sources: download: extension: library: datastore: binary: dialog: pages: natives: ott: issues: profiles: media: mpv: external: player: analytics: bookmarks: discover: subtitles: log: runtime: history: home: backup: network: ratings: metadata: regions: privacy: interactions: diagnostics: components: videos: window: app: shell:`.
+`electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration: false`. 341 channels in 43 namespaces (counted 2026-10-07; full generated table in `docs/docs_cs3/architecture/api-services.md`): `api: torrent: playback: search: indexer: sources: download: extension: library: datastore: binary: dialog: pages: natives: ott: issues: profiles: media: mpv: external: player: analytics: bookmarks: discover: subtitles: log: runtime: history: home: backup: network: ratings: metadata: regions: privacy: interactions: diagnostics: components: videos: window: app: shell: storage:`.
 
 **Four things change together when crossing the boundary:** 1) service in `electron/`, 2) `ipcMain.handle('ns:name', …)` in `main.ts`, 3) method + type in `CloudStreamElectronAPI` in `preload.ts`, 4) caller in `src/`. Shared types live in `src/types/{api,plugin,torrent,download,player,media,mpv}.ts` and are imported by both sides — intentional, not a layering mistake.
 
@@ -349,6 +349,7 @@ rather than omitting the ones nothing serves.
 | `torrent/http.ts` | **The injected fetch** — Electron's `net.fetch`. See §12. |
 | `externalPlayer.ts`, `externalPlayerControl.ts` | Detection + two-way VLC control over HTTP; capability declared per player. |
 | `logging/logger.ts`, `redact.ts` | NDJSON per-launch transcript, buffered, flushed on a timer. |
+| `storage/appStorage.ts` + `storageCleanup.ts` | **Where everything lives on disk.** `<userData>/` is persistent (datastore, library, extensions, runtime copy, logs, backups — unchanged); `cache/` is re-creatable (torrent pieces, torrent-state, yt-dlp, the `cs3-*-cache.json` stores, moved there once from `userData` root on first launch); `temp/session-<t>-<pid>/` is this launch's working files (removed on `before-quit`); `temp/jvm/` is the sidecar's `java.io.tmpdir`. Downloads: the viewer's folder (`download_directory`, Settings → Downloads — previously a placeholder that saved nothing), else an existing `~/Downloads/CloudStream`, else `app.getPath('downloads')/CloudStream`. Cleanup deletes **only inside a directory carrying `.cs3-owned.json`**, a temp session only when its marker's pid is dead, never an `isActive` entry, never a folder the viewer chose. Background sweep 45s after launch; Settings → Advanced → Storage shows sizes, paths (developer mode) and per-area Clear via the owning service. Tested (`bun run test storageCleanup`). |
 | `util/jsonFileStore.ts` | Debounced persistence (5 copies unified). |
 | `util/disabledSet.ts` | The enable-cascade toggle (3 copies unified). |
 | `startupProfile.ts` | What this launch cost, and where the main thread stopped answering. Stages, marks and **stalls** — the last is the only one that tells "busy" from "frozen". Imports nothing, and is the first import in `main.ts`. |
@@ -582,6 +583,7 @@ screen groups by subject and filters by *level*. All teardown happens on `before
 
 - **Nothing is decided from a URL string.** Transport, codec, DRM and container all come from the body or the provider's own declaration. (Violated historically in `mediaInspector`, `ytdlpSources`, `providerLinks` — all fixed.)
 - **A capability check ends in an allowlist, not a denylist.** `!UNSUPPORTED.has(x)` answers *yes* for everything it has never heard of, which is how an unknown codec was reported directly playable and failed in the element (§6.16). Absent information is not the same as unrecognised information: no codec means "do not block", a named unknown means "assume not". Same rule as `canPlayContainer`, which got it right first.
+- **Files the app creates go through `storage/appStorage.ts`**: `cacheDir()`/`cacheFile()` for re-creatable data, `tempFile()` for a working file, never `os.tmpdir()` or a path built from `userData` in a feature. The exceptions are deliberate and commented: a Unix socket whose app-data path would exceed `sun_path` (mpv), and the unconfigured test fallback.
 - **Anything reaching a third-party host goes through `electron/torrent/http.ts`**, which swaps in Electron's `net.fetch` (honouring `app.configureHostResolver` and the system proxy). **Node's `fetch` honours neither** — 5 call sites used global `fetch` and the DNS-over-HTTPS setting silently did nothing for them. `externalPlayerControl` keeps global `fetch` deliberately (loopback VLC control, no DNS or proxy involved).
 - **DNS defaults to `automatic` DoH (Cloudflare, Google) with system fallback** (`networkSettings.ts`); an explicit choice is kept. 2,454 `ERR_NAME_NOT_RESOLVED` for raw.githubusercontent.com in one install's logs — an ISP DNS block that stopped every repository fetch.
 - **`net.fetch` runs with `referrerPolicy: 'unsafe-url'`** (`resilientFetch.primary` in `main.ts`). Under Chromium's default policy a full-path `Referer` on a *cross-site* request is refused with `ERR_BLOCKED_BY_CLIENT`, not trimmed — 159 blocked requests in 36 logs (workers.dev/Hindmoviez 117, freecdn34/NetMirror 37). aria2 never goes through Chromium, which is why those sources "downloaded but would not stream".

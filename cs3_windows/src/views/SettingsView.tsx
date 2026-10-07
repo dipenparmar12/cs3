@@ -48,6 +48,7 @@ import { StartupProfilePanel } from '../components/settings/StartupProfilePanel'
 import { CardStatusLegend } from '../components/settings/CardStatusLegend';
 import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPanel';
 import { AboutPanel } from '../components/settings/AboutPanel';
+import { StoragePanel } from '../components/settings/StoragePanel';
 import { BackupPanel } from '../components/settings/BackupPanel';
 
 /**
@@ -108,7 +109,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const level: SettingsLevel = settingsLevelFor(mode);
   const changeLevel = (next: SettingsLevel) =>
     setMode(next === 'everything' ? 'developer' : 'standard');
-  const [downloadDir, setDownloadDir] = useState('%USERPROFILE%\\Downloads\\CloudStream');
+  /** The real folder, asked of the main process — no longer a placeholder string. */
+  const [downloadDir, setDownloadDir] = useState('');
+  const [downloadDirIsDefault, setDownloadDirIsDefault] = useState(true);
+  useEffect(() => {
+    void window.cloudstream?.getDownloadDirectory?.().then((answer) => {
+      if (!answer?.ok) return;
+      setDownloadDir(answer.directory);
+      setDownloadDirIsDefault(answer.isDefault);
+    });
+  }, []);
   /**
    * The delete-behaviour preference, resettable here.
    *
@@ -241,12 +251,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
     );
   };
 
-  const handleSelectDirectory = async () => {
-    const path = await window.cloudstream?.selectDirectory();
-    if (path) {
-      setDownloadDir(path);
-      flash('Download folder updated.');
-    }
+  const handleSelectDirectory = async (reset = false) => {
+    const chosen = reset ? null : await window.cloudstream?.selectDirectory();
+    if (!reset && !chosen) return;
+    const answer = await window.cloudstream?.setDownloadDirectory?.(chosen ?? null);
+    if (!answer) return;
+    setDownloadDir(answer.directory);
+    setDownloadDirIsDefault(reset);
+    flash(answer.ok ? 'Download folder updated.' : `Could not use that folder: ${answer.error ?? 'not writable'}`);
   };
 
   const handleImportBackup = async () => {
@@ -637,9 +649,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
               stacked
               hint="Where finished downloads are written. Existing downloads stay where they are; this only affects new ones."
             >
-              <button onClick={handleSelectDirectory} className="btn btn-secondary">
+              <button onClick={() => void handleSelectDirectory()} className="btn btn-secondary">
                 Change folder
               </button>
+              {!downloadDirIsDefault && (
+                <button onClick={() => void handleSelectDirectory(true)} className="btn btn-ghost">
+                  Use default
+                </button>
+              )}
             </SettingRow>
           </SettingGroup>
 
@@ -852,6 +869,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
               <DiagnosticsPanel />
             </SettingsSection>
           )}
+
+          <SettingGroup
+            title="Storage"
+            icon={<HardDrive size={15} />}
+            keywords="storage cache temp temporary disk space folder location downloads clear"
+          >
+            <StoragePanel />
+          </SettingGroup>
 
           <SettingGroup title="Migration" icon={<RefreshCw size={15} />} level="advanced">
             <SettingRow

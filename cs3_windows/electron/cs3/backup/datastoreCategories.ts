@@ -82,6 +82,7 @@ const EXCLUDED_KEYS = new Set([
   'media_inspection_v1',
   'torrent_http_metadata_cache',
   'torrent_cache_path',
+  'download_directory',
   'extension_available_updates',
   'extension_displaced_archives',
   'cs3_bootstrap_completed_version',

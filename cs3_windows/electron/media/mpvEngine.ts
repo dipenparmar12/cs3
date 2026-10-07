@@ -13,6 +13,10 @@ import type {
 import { scopedLogger } from '../logging/logger.ts';
 import { describeError } from '../../src/utils/errors.ts';
 import { COALESCE_MS, isSignificantChange } from './mpvEmitPolicy.ts';
+import { appStorage } from '../storage/appStorage.ts';
+
+/** `sun_path` is 104 bytes on macOS and 108 on Linux; leave room for the terminator. */
+const MAX_SOCKET_PATH_BYTES = 100;
 
 const log = scopedLogger('mpv');
 
@@ -729,9 +733,18 @@ export class MpvEngine {
 
   private ipcPath(): string {
     const unique = `cs3-mpv-${process.pid}-${Date.now().toString(36)}`;
-    return process.platform === 'win32'
-      ? `\\\\.\\pipe\\${unique}`
-      : path.join(os.tmpdir(), `${unique}.sock`);
+    if (process.platform === 'win32') return `\\\\.\\pipe\\${unique}`;
+    // In this launch's temp directory, so a crash leaves nothing in the system
+    // one — unless that path is too long for a Unix socket (104 bytes on
+    // macOS, whose app-data path is long), where the system temp is the only
+    // place that fits.
+    try {
+      const owned = path.join(appStorage().sessionTempDir(), `${unique}.sock`);
+      if (Buffer.byteLength(owned) <= MAX_SOCKET_PATH_BYTES) return owned;
+    } catch {
+      // Unwritable app data: fall through to the system temp directory.
+    }
+    return path.join(os.tmpdir(), `${unique}.sock`);
   }
 
   /**

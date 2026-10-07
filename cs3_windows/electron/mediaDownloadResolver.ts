@@ -3,18 +3,22 @@ import os from 'os';
 import type { DownloadTask } from '../src/types/download';
 import { Aria2Engine } from './aria2Engine';
 import { variantPathSegment } from '../src/utils/downloadIdentity.ts';
+import { appStorage } from './storage/appStorage.ts';
 
 export class MediaDownloadResolver {
   private aria2: Aria2Engine;
-  private defaultDownloadDir: string;
 
   constructor(aria2: Aria2Engine) {
     this.aria2 = aria2;
-    this.defaultDownloadDir = path.join(os.homedir(), 'Downloads', 'CloudStream');
   }
 
+  /**
+   * Asked per download rather than fixed at construction: it is a setting, and
+   * `appStorage` answers with the viewer's choice or the platform's Downloads.
+   * The home-directory guess is only the unconfigured (test) fallback.
+   */
   public getDefaultDirectory(): string {
-    return this.defaultDownloadDir;
+    return appStorage().downloadsDir() || path.join(os.homedir(), 'Downloads', 'CloudStream');
   }
 
   public sanitizeFilename(name: string): string {
@@ -69,7 +73,7 @@ export class MediaDownloadResolver {
    * which keeps the layout unchanged for the ordinary single-source case.
    */
   public generateTargetFilePath(task: Partial<DownloadTask>, customBaseDir?: string): string {
-    const base = customBaseDir || this.defaultDownloadDir;
+    const base = customBaseDir || this.getDefaultDirectory();
     // Episodes belong in a series folder; a film is a single file, not a show.
     const isEpisode = task.episodeNumber !== undefined || task.seasonNumber !== undefined;
     const category = isEpisode ? 'Shows' : 'Movies';
