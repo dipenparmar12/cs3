@@ -106,8 +106,8 @@ cs3/
 | Build | `cs3_windows/` | `bun run build` (`tsc && vite build`) |
 | Typecheck | `cs3_windows/` | `bun run typecheck` — **`tsc -b`**, see trap below |
 | Lint | `cs3_windows/` | `bunx oxlint` (devDependency; deliberately no `lint` script) |
-| All main-process tests | `cs3_windows/` | `bun run test` / `test:electron` (57 suites) |
-| Fast tests | `cs3_windows/` | `bun run test --fast` (56 suites, ~10s; skips real ffmpeg/mpv) |
+| All main-process tests | `cs3_windows/` | `bun run test` / `test:electron` (suite count: `bun run test --list`) |
+| Fast tests | `cs3_windows/` | `bun run test --fast` (skips real ffmpeg/mpv) |
 | One suite | `cs3_windows/` | `bun run test <name>` — see alias list in `scripts/test-runner.mjs` |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `lib/` + android shim → `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (50 tests) |
@@ -193,7 +193,7 @@ It once asked `findRuntimeDir()` where to copy *from* — which answers with the
           contextBridge, allow-listed, typed (electron/preload.ts)
 ┌───────────────────────────┴───────────────────────────────┐
 │                MAIN PROCESS (electron/main.ts)            │
-│  wires every service as a singleton, ~70 ipcMain.handle   │
+│  wires every service as a singleton, 334 ipcMain.handle   │
 └─┬────────┬──────────┬───────────┬──────────┬──────────────┘
 Datastore Content   Plugin     Torrent   Download   Library
           Service   Manager    Engine    Service    Store
@@ -207,7 +207,7 @@ Datastore Content   Plugin     Torrent   Download   Library
 
 ### The IPC contract
 
-`electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration: false`. Namespaces: `api: torrent: playback: search: indexer: sources: download: extension: library: datastore: binary: dialog: pages: natives: ott: issues: profiles: media: mpv: external: player: analytics: bookmarks: discover: subtitles: log: runtime:`.
+`electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration: false`. 334 channels in 42 namespaces (counted 2026-10-07; full generated table in `docs/docs_cs3/architecture/api-services.md`): `api: torrent: playback: search: indexer: sources: download: extension: library: datastore: binary: dialog: pages: natives: ott: issues: profiles: media: mpv: external: player: analytics: bookmarks: discover: subtitles: log: runtime: history: home: backup: network: ratings: metadata: regions: privacy: interactions: diagnostics: components: videos: window: app: shell:`.
 
 **Four things change together when crossing the boundary:** 1) service in `electron/`, 2) `ipcMain.handle('ns:name', …)` in `main.ts`, 3) method + type in `CloudStreamElectronAPI` in `preload.ts`, 4) caller in `src/`. Shared types live in `src/types/{api,plugin,torrent,download,player,media,mpv}.ts` and are imported by both sides — intentional, not a layering mistake.
 
@@ -4454,7 +4454,7 @@ question was asked from — the scroll position, the filter chips, and the neigh
 repositories being compared against. Comparing two catalogues cost three tab switches. It is
 now a full-width panel under the repository's own card (`grid-column: 1 / -1`, so a
 twenty-extension list does not render inside one 290px column and read as belonging to the
-card's neighbours), and the tab is gone. Two tabs remain: **Installed** and **Browse**.
+card's neighbours), and the tab is gone. Four tabs remain (`ExtensionsScreen.tsx` `TABS`, verified 2026-10-07): **Installed**, **Browse**, **Built-in Sources**, **Updates**.
 
 **Search reaches through a repository.** The query matched a repository's own name,
 description, language and shortcode and nothing else — so looking for a provider you know you
